@@ -259,13 +259,17 @@ export function Playground({
       }
       if (task === "Images") {
         const start = performance.now();
-        const r = await api("images/generations", {
-          model,
-          prompt: draft,
-          n: 1,
-          size: "512x512",
-          response_format: "b64_json",
-        });
+        const r = await api(
+          "images/generations",
+          {
+            model,
+            prompt: draft,
+            n: 1,
+            size: "512x512",
+            response_format: "b64_json",
+          },
+          abort.current.signal,
+        );
         const data = r.data?.[0];
         setImage(
           data?.b64_json
@@ -358,6 +362,7 @@ export function Playground({
     const r = await fetch("/v1/audio/speech", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      signal: abort.current?.signal,
       body: JSON.stringify({
         model: target,
         input: text,
@@ -640,7 +645,7 @@ export function Playground({
             ))}
           </>
         )}
-        {task !== "Speak" && audio && <audio controls src={audio} />}
+        {task === "Chat" && audio && <audio controls src={audio} />}
         <div ref={end} />
       </div>
       <div className="composer-area">
@@ -726,10 +731,24 @@ export function Playground({
                 <Button
                   variant="outline"
                   size="icon-sm"
-                  aria-label="Stop generation"
+                  aria-label={
+                    task === "Images" || task === "Speak"
+                      ? "Generating media"
+                      : "Stop generation"
+                  }
+                  disabled={task === "Images" || task === "Speak"}
+                  title={
+                    task === "Images" || task === "Speak"
+                      ? "This media request completes before another can start"
+                      : "Stop generation"
+                  }
                   onClick={() => abort.current?.abort()}
                 >
-                  <Square size={14} />
+                  {task === "Images" || task === "Speak" ? (
+                    <LoaderCircle className="spin" size={14} />
+                  ) : (
+                    <Square size={14} />
+                  )}
                 </Button>
               ) : (
                 <Button

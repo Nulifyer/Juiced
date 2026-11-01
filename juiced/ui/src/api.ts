@@ -32,9 +32,14 @@ export type Thread = {
   cache_state?: string;
   retain_cache?: boolean;
 };
-export async function api<T = any>(path: string, body?: unknown): Promise<T> {
+export async function api<T = any>(
+  path: string,
+  body?: unknown,
+  signal?: AbortSignal,
+): Promise<T> {
   const r = await fetch("/v1/" + path, {
     method: body === undefined ? "GET" : "POST",
+    signal,
     headers: body === undefined ? {} : { "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
