@@ -39,6 +39,7 @@ export function Acquisition({
     [busy, setBusy] = useState(false),
     [file, setFile] = useState<File>(),
     [recipe, setRecipe] = useState("llamacpp"),
+    [purpose, setPurpose] = useState("chat"),
     [path, setPath] = useState(""),
     [uploadProgress, setUploadProgress] = useState(""),
     [importJobs, setImportJobs] = useState<any[]>([]);
@@ -170,6 +171,7 @@ export function Acquisition({
         id: job.id,
         name: name || file.name.replace(/\.gguf$/i, ""),
         recipe,
+        purpose,
       });
       notify("GGUF registered. It remains On demand and unloaded.");
       await refresh();
@@ -196,7 +198,7 @@ export function Acquisition({
   }
   async function serverImport() {
     try {
-      await api("juiced/import/server", { path, name, recipe });
+      await api("juiced/import/server", { path, name, recipe, purpose });
       notify("Server GGUF registered without copying the original.");
       await refresh();
     } catch (e) {
@@ -228,8 +230,8 @@ export function Acquisition({
       </div>
       {tab === "discover" && (
         <>
-          <section className="settings-section">
-            <h2>Runtime catalog</h2>
+          <details className="settings-section">
+            <summary>Browse runtime catalog</summary>
             <p className="page-note">
               Ready-to-download models across all supported services.
             </p>
@@ -296,7 +298,7 @@ export function Acquisition({
                 Next
               </Button>
             </div>
-          </section>
+          </details>
           <h2>Hugging Face search</h2>
           <form
             className="search-row"
@@ -571,6 +573,19 @@ export function Acquisition({
                 <option value="whispercpp">Whisper.cpp</option>
               </select>
             </label>
+            {recipe === "llamacpp" && (
+              <label>
+                Model service
+                <select
+                  value={purpose}
+                  onChange={(e) => setPurpose(e.target.value)}
+                >
+                  <option value="chat">Chat</option>
+                  <option value="embedding">Embeddings</option>
+                  <option value="reranking">Rerank</option>
+                </select>
+              </label>
+            )}
             <div className="row-actions">
               <Button
                 disabled={busy || !file || !name}

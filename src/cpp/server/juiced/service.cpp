@@ -696,6 +696,11 @@ void JuicedService::import_file(const httplib::Request &req,
       if (recipe != "llamacpp" && recipe != "asr4all" && recipe != "parakeet" &&
           recipe != "whispercpp")
         throw std::invalid_argument("Unsupported GGUF backend");
+      const auto purpose = body.value("purpose", "chat");
+      if (recipe == "llamacpp" && purpose != "chat" && purpose != "embedding" &&
+          purpose != "reranking")
+        throw std::invalid_argument(
+            "Choose Chat, Embeddings or Rerank for llama.cpp imports");
       auto name = body.value("name", file.stem().string());
       if (!safe_name(name))
         throw std::invalid_argument(
@@ -720,7 +725,7 @@ void JuicedService::import_file(const httplib::Request &req,
         std::filesystem::rename(file, dest);
         file = dest;
       }
-      auto labels = recipe == "llamacpp" ? json::array({"chat"})
+      auto labels = recipe == "llamacpp" ? json::array({purpose})
                                          : json::array({"transcription"});
       json model = {{"recipe", recipe},
                     {"source", "local_path"},
