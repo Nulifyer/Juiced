@@ -7,7 +7,7 @@ processes and serving policy. Agent tools/workspaces remain in a separate stack.
 ## Development
 
 - Manager: `cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_WEB_APP=OFF -DBUILD_TAURI_APP=OFF`, then `cmake --build build -j4 --target lemond`.
-- UI: `cd juiced/ui && npm ci && npm run build`.
+- UI: `cd juiced/ui && bun install --frozen-lockfile && bun run build`.
 - Native API tests: `python3 juiced/tests/test_api.py build/lemond`.
 - Container: `docker build -f juiced/Dockerfile -t juiced:development .`.
 

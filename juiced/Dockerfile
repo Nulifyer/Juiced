@@ -7,12 +7,14 @@ COPY . .
 RUN printf '2026.44.1-juiced\n' > .version && cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_WEB_APP=OFF -DBUILD_TAURI_APP=OFF -DBUILD_TESTING=ON && cmake --build build -j4 --target lemond lemonade test_backend_mode_contract && ctest --test-dir build --output-on-failure -R '^BackendModeContractTest$'
 RUN python3 juiced/tests/test_api.py build/lemond
 
+FROM oven/bun:1.3.12 AS bun
 FROM node:22-bookworm-slim AS ui
+COPY --from=bun /usr/local/bin/bun /usr/local/bin/bun
 WORKDIR /ui
-COPY juiced/ui/package.json juiced/ui/package-lock.json ./
-RUN npm ci
+COPY juiced/ui/package.json juiced/ui/bun.lock ./
+RUN bun install --frozen-lockfile
 COPY juiced/ui/ ./
-RUN npm run build
+RUN bun run build
 
 FROM manager AS futo
 RUN mkdir -p /native && curl --fail --location --retry 3 'https://gitlab.futo.org/api/v4/projects/keyboard%2Ftranscribe.cpp/repository/archive.tar.gz?sha=26d75933c16b2cec228e34c69e92a6c3c154b97c' | tar -xz --strip-components=1 -C /native
