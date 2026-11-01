@@ -9,8 +9,8 @@ export default defineConfig({
   build: { outDir: "../../web", emptyOutDir: true },
   server: {
     proxy: {
-      "/v1": "http://127.0.0.1:13305",
-      "/.well-known": "http://127.0.0.1:13305",
+      "/v1": process.env.JUICED_DEV_API || "http://127.0.0.1:13305",
+      "/.well-known": process.env.JUICED_DEV_API || "http://127.0.0.1:13305",
     },
   },
 });

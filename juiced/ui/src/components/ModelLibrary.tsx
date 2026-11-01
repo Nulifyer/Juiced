@@ -1,6 +1,9 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import {
   DndContext,
+  DragOverlay,
+  pointerWithin,
+  rectIntersection,
   PointerSensor,
   KeyboardSensor,
   useSensor,
@@ -12,8 +15,6 @@ import {
 import { ContextMenu } from "@base-ui/react/context-menu";
 import { Menu } from "@base-ui/react/menu";
 import {
-  ChevronDown,
-  ChevronRight,
   MoreHorizontal,
   MessageSquare,
   Image,
@@ -23,26 +24,56 @@ import {
   Lightbulb,
   LoaderCircle,
   Search,
+  GripVertical,
+  Play,
+  Flame,
+  Power,
+  Clock3,
+  Database,
+  ArrowUpRight,
+  SlidersHorizontal,
 } from "lucide-react";
 import { Button } from "./t3/button";
 import { api, bytes, type Model } from "../api";
+import "./ModelLibrary.css";
 export const policyNames = {
   hot: "Hot",
   "on-demand": "On demand",
   disabled: "Disabled",
 };
+export const serviceNames: Record<string, string> = {
+  Chat: "Chat",
+  Transcribe: "Transcription",
+  Speak: "Speech",
+  Images: "Images",
+};
+export function ServiceIcon({
+  service,
+  size = 18,
+}: {
+  service: string;
+  size?: number;
+}) {
+  const Icon =
+    (
+      {
+        Chat: MessageSquare,
+        Transcribe: Mic,
+        Speak: Volume2,
+        Images: Image,
+      } as Record<string, typeof Mic>
+    )[service] || Database;
+  return <Icon size={size} />;
+}
 export function CapabilityIcons({ model }: { model: Model }) {
-  const labels = model.labels || [];
-  const caps: [
-    [boolean, string, typeof Mic],
-    ...Array<[boolean, string, typeof Mic]>,
-  ] = [
+  const caps: [boolean, string, typeof Mic][] = [
     [model.service === "Chat", "Chat", MessageSquare],
-    [labels.includes("vision"), "Vision", Image],
-    [labels.includes("tool-calling"), "Tool calls", Wrench],
-    [labels.includes("reasoning"), "Reasoning", Lightbulb],
+    [model.labels.includes("vision"), "Vision", Image],
+    [model.labels.includes("tool-calling"), "Tool calls", Wrench],
+    [model.labels.includes("reasoning"), "Reasoning", Lightbulb],
     [model.service === "Transcribe", "Transcription", Mic],
     [model.service === "Speak", "Speech synthesis", Volume2],
+    [model.service === "Images", "Image generation", Image],
   ];
   return (
     <span className="capabilities">
@@ -57,61 +88,66 @@ export function CapabilityIcons({ model }: { model: Model }) {
     </span>
   );
 }
-function DropGroup({
+const policies = [
+  {
+    id: "hot",
+    title: "Hot",
+    description: "Load at startup. Keep ready and recover if a worker stops.",
+    Icon: Flame,
+  },
+  {
+    id: "on-demand",
+    title: "On demand",
+    description: "Load when requested. Keep the weights available.",
+    Icon: Clock3,
+  },
+  {
+    id: "disabled",
+    title: "Disabled",
+    description: "Keep the files. Exclude the model from new requests.",
+    Icon: Power,
+  },
+] as const;
+function DropArea({
   id,
-  label,
-  count,
+  className,
   children,
 }: {
   id: string;
-  label: string;
-  count: number;
+  className: string;
   children: ReactNode;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id });
-  const [open, setOpen] = useState(true);
   return (
     <section
       ref={setNodeRef}
-      className={"model-group " + (isOver ? "drop-over" : "")}
+      className={className + (isOver ? " drop-over" : "")}
     >
-      <button
-        className="shelf-heading"
-        onClick={() => setOpen(!open)}
-        aria-expanded={open}
-      >
-        {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-        <span>{label}</span>
-        <span className="count">{count}</span>
-        {isOver && (
-          <span className="drop-label">
-            {id.startsWith("policy:")
-              ? "Set " + label
-              : label === "Loaded"
-                ? "Load model"
-                : "Unload model"}
-          </span>
-        )}
-      </button>
-      {open && children}
+      {children}
     </section>
   );
 }
-function Row({
-  model,
-  onAction,
-  onInspect,
+function ModelRow({
+  model: m,
+  policy,
   selected,
   onSelect,
+  onAction,
+  onInspect,
+  onPlay,
 }: {
   model: Model;
-  onAction: (model: Model, action: string) => void;
-  onInspect: (model: Model) => void;
+  policy: boolean;
   selected: boolean;
   onSelect: () => void;
+  onAction: (m: Model, a: string) => void;
+  onInspect: (m: Model) => void;
+  onPlay: (m: Model) => void;
 }) {
-  const { attributes, listeners, setNodeRef, transform, isDragging } =
-    useDraggable({ id: model.id });
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
+    id: m.id,
+    disabled: Boolean(m.operation?.pending),
+  });
   const items = (Item: any) => (
     <>
       <div className="menu-label">Loading policy</div>
@@ -119,22 +155,26 @@ function Row({
         <Item
           key={p}
           className="menu-item"
-          onClick={() => onAction(model, "policy:" + p)}
+          onClick={() => onAction(m, "policy:" + p)}
         >
-          {model.policy === p ? "✓ " : ""}
+          {m.policy === p ? "✓ " : ""}
           {label}
         </Item>
       ))}
       <div className="menu-separator" />
       <Item
         className="menu-item"
-        disabled={model.policy === "disabled" || model.operation?.pending}
-        onClick={() => onAction(model, model.loaded ? "unload" : "load")}
+        disabled={
+          m.policy === "disabled" ||
+          m.operation?.pending ||
+          (m.loaded && m.policy === "hot")
+        }
+        onClick={() => onAction(m, m.loaded ? "unload" : "load")}
       >
-        {model.loaded ? "Unload" : "Load"}
+        {m.loaded ? "Unload model" : "Load model"}
       </Item>
-      <Item className="menu-item" onClick={() => onInspect(model)}>
-        Inspect model…
+      <Item className="menu-item" onClick={() => onInspect(m)}>
+        Model details…
       </Item>
     </>
   );
@@ -143,63 +183,132 @@ function Row({
       <ContextMenu.Trigger render={<div />} className="model-context">
         <div
           ref={setNodeRef}
-          className={"model-row " + (isDragging ? "dragging" : "")}
-          style={{
-            transform: transform
-              ? `translate3d(${transform.x}px,${transform.y}px,0)`
-              : undefined,
-          }}
+          className={`deployment-row ${policy ? "policy-model" : m.loaded ? "running-model" : "available-model"} ${isDragging ? "is-dragging" : ""}`}
         >
+          <button
+            className="drag-handle"
+            aria-label={"Drag " + m.id}
+            {...attributes}
+            {...listeners}
+          >
+            <GripVertical size={14} />
+          </button>
           <input
             type="checkbox"
-            aria-label={"Select " + model.id}
+            aria-label={"Select " + m.id}
             checked={selected}
             onChange={onSelect}
           />
-          <div className="model-body" {...attributes} {...listeners}>
-            <div className="model-title">
-              <span
-                className={
-                  "state-dot " +
-                  (model.operation?.pending
-                    ? "pending"
-                    : model.loaded
-                      ? "loaded"
-                      : "")
-                }
-              />
-              <strong title={model.id}>{model.id}</strong>
-              {model.operation?.pending && (
-                <LoaderCircle size={13} className="spin" />
+          {!policy && m.loaded && (
+            <span className="service-mark">
+              <ServiceIcon service={m.service} />
+            </span>
+          )}
+          <div className="deployment-identity">
+            <button
+              className="model-name"
+              title={m.id}
+              onClick={() => onInspect(m)}
+            >
+              {m.id}
+            </button>
+            <div className="deployment-caption">
+              <span>{m.recipe}</span>
+              <CapabilityIcons model={m} />
+              {policy ? (
+                <span
+                  className={
+                    "runtime-indicator " + (m.loaded ? "is-ready" : "")
+                  }
+                >
+                  <i />
+                  {m.operation?.state ||
+                    (m.loaded
+                      ? m.runtime?.is_busy
+                        ? "Busy"
+                        : "Loaded"
+                      : "Unloaded")}
+                </span>
+              ) : (
+                <>
+                  {m.service === "Chat" && m.context_length ? (
+                    <span>
+                      {m.context_length.toLocaleString()} total context budget
+                    </span>
+                  ) : null}
+                  {m.size ? <span>{bytes(m.size * 1e9)}</span> : null}
+                </>
               )}
             </div>
-            <div className="model-detail">
-              <span>{model.recipe}</span>
-              <CapabilityIcons model={model} />
-              <span className="badge">{policyNames[model.policy]}</span>
-              <span>{model.operation?.state || model.state}</span>
-              {model.size && <span>{bytes(model.size * 1e9)}</span>}
-            </div>
-            {model.operation?.error && (
-              <p className="inline-error">{model.operation.error}</p>
+            {m.operation?.error && (
+              <p className="inline-error">{m.operation.error}</p>
             )}
           </div>
-          <div className="row-actions">
-            <Button
-              size="compact"
-              variant="ghost"
-              disabled={model.policy === "disabled" || model.operation?.pending}
-              onClick={() => onAction(model, model.loaded ? "unload" : "load")}
-            >
-              {model.loaded ? "Unload" : "Load"}
-            </Button>
+          {!policy && (
+            <span className={"runtime-status " + (m.loaded ? "is-ready" : "")}>
+              <i />
+              {m.operation?.pending ? (
+                <>
+                  <LoaderCircle size={12} className="spin" />
+                  {m.operation.state}
+                </>
+              ) : m.loaded ? (
+                m.runtime?.is_busy ? (
+                  "Busy"
+                ) : (
+                  "Ready"
+                )
+              ) : (
+                policyNames[m.policy]
+              )}
+            </span>
+          )}
+          <div className="deployment-actions">
+            {!policy &&
+              m.loaded &&
+              ["Chat", "Transcribe", "Speak", "Images"].includes(m.service) && (
+                <Button
+                  variant="outline"
+                  size="compact"
+                  onClick={() => onPlay(m)}
+                >
+                  Try
+                  <ArrowUpRight size={13} />
+                </Button>
+              )}
+            {!policy && (
+              <Button
+                size="compact"
+                variant="ghost"
+                disabled={
+                  m.policy === "disabled" ||
+                  m.operation?.pending ||
+                  (m.loaded && m.policy === "hot")
+                }
+                title={
+                  m.loaded && m.policy === "hot"
+                    ? "Change to On demand before unloading a Hot model"
+                    : undefined
+                }
+                onClick={() => onAction(m, m.loaded ? "unload" : "load")}
+              >
+                {m.loaded ? (
+                  "Unload"
+                ) : (
+                  <>
+                    <Play size={12} />
+                    Load
+                  </>
+                )}
+              </Button>
+            )}
             <Menu.Root>
               <Menu.Trigger
                 render={
                   <Button
                     size="icon-xs"
                     variant="ghost"
-                    aria-label={"Actions for " + model.id}
+                    aria-label={"Actions for " + m.id}
                   />
                 }
               >
@@ -233,6 +342,8 @@ export function ModelLibrary({
   notify,
   refresh,
   onInspect,
+  onPlay,
+  onPolicy,
 }: {
   models: Model[];
   policy: boolean;
@@ -240,67 +351,86 @@ export function ModelLibrary({
   notify: (s: string) => void;
   refresh: () => Promise<void>;
   onInspect: (m: Model) => void;
+  onPlay: (m: Model) => void;
+  onPolicy: () => void;
 }) {
   const [q, setQ] = useState(""),
     [sort, setSort] = useState("name"),
     [selected, setSelected] = useState<Set<string>>(new Set()),
-    [limit, setLimit] = useState(100);
+    [limit, setLimit] = useState(60),
+    [dragged, setDragged] = useState<Model>();
+  useEffect(() => {
+    setSelected(new Set());
+    setLimit(60);
+  }, [policy, service]);
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 7 } }),
     useSensor(KeyboardSensor),
   );
-  const visible = models
-    .filter(
-      (m) =>
-        m.downloaded &&
-        m.available !== false &&
-        (service === "All services" || m.service === service) &&
-        [m.id, m.recipe, m.policy, ...m.labels]
-          .join(" ")
-          .toLowerCase()
-          .includes(q.toLowerCase()),
+  const eligible = models.filter(
+    (m) =>
+      m.downloaded &&
+      m.available !== false &&
+      (service === "All services" || m.service === service),
+  );
+  const visible = eligible
+    .filter((m) =>
+      [m.id, m.recipe, m.policy, ...m.labels]
+        .join(" ")
+        .toLowerCase()
+        .includes(q.toLowerCase()),
     )
     .sort((a, b) =>
       sort === "size"
         ? (b.size || 0) - (a.size || 0)
         : a.id.localeCompare(b.id),
     );
+  const running = visible.filter((m) => m.loaded || m.operation?.pending),
+    unloaded = visible.filter((m) => !m.loaded && !m.operation?.pending);
   async function action(m: Model, a: string) {
+    if (a === "unload" && m.policy === "hot") {
+      notify("Change this model to On demand before unloading it.");
+      return;
+    }
     try {
-      if (a.startsWith("policy:"))
-        await api("juiced/policy", { model: m.id, policy: a.slice(7) });
-      else await api("juiced/operation", { model: m.id, action: a });
-      notify(
+      await api(
+        a.startsWith("policy:") ? "juiced/policy" : "juiced/operation",
         a.startsWith("policy:")
-          ? "Saved loading policy for " + m.id
-          : "Requested " + a + " for " + m.id,
+          ? { model: m.id, policy: a.slice(7) }
+          : { model: m.id, action: a },
       );
       await refresh();
+      notify(
+        a.startsWith("policy:")
+          ? `Saved ${policyNames[a.slice(7) as keyof typeof policyNames]} policy for ${m.id}.`
+          : `Requested ${a} for ${m.id}.`,
+      );
     } catch (e) {
       notify((e as Error).message);
     }
   }
   function drop(e: DragEndEvent) {
+    setDragged(undefined);
     if (!e.over) return;
     const m = models.find((x) => x.id === e.active.id);
-    if (!m) return;
-    const id = String(e.over.id);
-    void action(
-      m,
-      id.startsWith("policy:")
-        ? id
-        : "runtime:Loaded" === id
-          ? "load"
-          : "unload",
-    );
+    if (m)
+      void action(
+        m,
+        String(e.over.id).startsWith("policy:")
+          ? String(e.over.id)
+          : e.over.id === "runtime:Loaded"
+            ? "load"
+            : "unload",
+      );
   }
   async function bulk(a: string) {
     let ok = 0;
     const errors: string[] = [];
-    for (const id of selected) {
-      const m = models.find((x) => x.id === id);
-      if (!m) continue;
+    for (const id of selected)
       try {
+        const m = models.find((m) => m.id === id);
+        if (a === "unload" && m?.policy === "hot")
+          throw Error("Change Hot policy before unloading");
         await api(
           a.startsWith("policy:") ? "juiced/policy" : "juiced/operation",
           a.startsWith("policy:")
@@ -311,51 +441,83 @@ export function ModelLibrary({
       } catch (e) {
         errors.push(id + ": " + (e as Error).message);
       }
-    }
     await refresh();
     notify(
-      `${ok} model changes accepted.` +
+      `${ok} changes accepted.` +
         (errors.length ? " " + errors.join("; ") : ""),
     );
     setSelected(new Set());
   }
-  const groups = policy
-    ? Object.keys(policyNames).map((p) => ({
-        id: "policy:" + p,
-        label: policyNames[p as keyof typeof policyNames],
-        items: visible.filter((m) => m.policy === p),
-      }))
-    : [
-        {
-          id: "runtime:Loaded",
-          label: "Loaded",
-          items: visible.filter((m) => m.loaded || m.operation?.pending),
-        },
-        {
-          id: "runtime:Unloaded",
-          label: "Unloaded",
-          items: visible.filter((m) => !m.loaded && !m.operation?.pending),
-        },
-      ];
+  const row = (m: Model) => (
+    <ModelRow
+      key={m.id}
+      model={m}
+      policy={policy}
+      selected={selected.has(m.id)}
+      onSelect={() =>
+        setSelected((prev) => {
+          const s = new Set(prev);
+          s.has(m.id) ? s.delete(m.id) : s.add(m.id);
+          return s;
+        })
+      }
+      onAction={action}
+      onInspect={onInspect}
+      onPlay={onPlay}
+    />
+  );
   return (
-    <>
+    <div className={policy ? "policy-workspace" : "runtime-workspace"}>
       <header className="page-heading">
         <div>
-          <h1>{policy ? "Loading policy" : "Models"}</h1>
+          <h1>{policy ? "Loading policy" : "Model services"}</h1>
           <p>
             {policy
-              ? "Saved intent, separate from current runtime state."
-              : "Actual runtime state, grouped by service."}
+              ? "Decide which models stay ready, load when needed, or stay out of the way."
+              : "See what is ready to serve. Load another model when you need it."}
           </p>
         </div>
-        <span className="count">{visible.length} models</span>
+        {!policy && (
+          <Button variant="outline" size="compact" onClick={onPolicy}>
+            <SlidersHorizontal size={14} />
+            Edit loading policy
+          </Button>
+        )}
       </header>
-      <div className="search-row">
+      {!policy && (
+        <div className="runtime-summary">
+          <span>
+            <i className="state-dot loaded" />
+            <strong>{eligible.filter((m) => m.loaded).length}</strong> loaded
+          </span>
+          <span>
+            <strong>
+              {eligible.filter((m) => m.operation?.pending).length}
+            </strong>{" "}
+            changing
+          </span>
+          <span>
+            <strong>{eligible.filter((m) => m.policy === "hot").length}</strong>{" "}
+            kept Hot
+          </span>
+          <span className="runtime-summary-note">
+            {service === "All services"
+              ? "All services"
+              : serviceNames[service] || service}
+          </span>
+        </div>
+      )}
+      <div className="workspace-toolbar">
         <label className="search-input">
-          <Search size={16} />
+          <Search size={15} />
           <input
+            aria-label="Search models"
             value={q}
-            placeholder="Search name, backend or capability…"
+            placeholder={
+              policy
+                ? "Find a model to change its policy…"
+                : "Find a model by name, backend or capability…"
+            }
             onChange={(e) => setQ(e.target.value)}
           />
         </label>
@@ -373,15 +535,18 @@ export function ModelLibrary({
           <span>{selected.size} selected</span>
           <select
             aria-label="Bulk operation"
-            defaultValue=""
+            value=""
             onChange={(e) => {
               if (e.target.value) void bulk(e.target.value);
-              e.target.value = "";
             }}
           >
             <option value="">Choose action…</option>
-            <option value="load">Load</option>
-            <option value="unload">Unload</option>
+            {!policy && (
+              <>
+                <option value="load">Load</option>
+                <option value="unload">Unload</option>
+              </>
+            )}
             {Object.entries(policyNames).map(([p, l]) => (
               <option key={p} value={"policy:" + p}>
                 Set {l}
@@ -397,46 +562,138 @@ export function ModelLibrary({
           </Button>
         </div>
       )}
-      <DndContext sensors={sensors} onDragEnd={drop}>
-        {groups.map((g) => (
-          <DropGroup
-            key={g.id}
-            id={g.id}
-            label={g.label}
-            count={g.items.length}
-          >
-            {g.items.slice(0, limit).map((m) => (
-              <Row
-                key={m.id}
-                model={m}
-                onAction={action}
-                onInspect={onInspect}
-                selected={selected.has(m.id)}
-                onSelect={() =>
-                  setSelected((prev) => {
-                    const s = new Set(prev);
-                    s.has(m.id) ? s.delete(m.id) : s.add(m.id);
-                    return s;
-                  })
-                }
-              />
-            ))}
-            {g.items.length === 0 && (
-              <p className="empty-state">No models in this group.</p>
-            )}
-            {g.items.length > limit && (
-              <Button variant="ghost" onClick={() => setLimit(limit + 100)}>
-                Show 100 more
-              </Button>
-            )}
-          </DropGroup>
-        ))}
+      <DndContext
+        sensors={sensors}
+        collisionDetection={(args) => {
+          const hits = pointerWithin(args);
+          return hits.length ? hits : rectIntersection(args);
+        }}
+        onDragStart={(e) =>
+          setDragged(models.find((m) => m.id === e.active.id))
+        }
+        onDragEnd={drop}
+        onDragCancel={() => setDragged(undefined)}
+      >
+        {policy ? (
+          <>
+            <div className="policy-board">
+              {policies.map(({ id, title, description, Icon }) => {
+                const items = visible.filter((m) => m.policy === id);
+                return (
+                  <DropArea
+                    id={"policy:" + id}
+                    className={"policy-lane policy-" + id}
+                    key={id}
+                  >
+                    <header className="policy-lane-heading">
+                      <div>
+                        <Icon size={17} />
+                        <h2>{title}</h2>
+                        <span>{items.length}</span>
+                      </div>
+                      <p>{description}</p>
+                    </header>
+                    <div className="policy-lane-models">
+                      {items.slice(0, limit).map(row)}
+                      {!items.length && (
+                        <div className="policy-empty">
+                          <Icon size={23} />
+                          <p>
+                            {q ? "No matching models" : "Drop a model here"}
+                          </p>
+                          <small>Or change its policy from the ⋯ menu.</small>
+                        </div>
+                      )}
+                      {items.length > limit && (
+                        <Button
+                          variant="ghost"
+                          onClick={() => setLimit(limit + 60)}
+                        >
+                          Show more
+                        </Button>
+                      )}
+                    </div>
+                  </DropArea>
+                );
+              })}
+            </div>
+            <p className="page-note">
+              Drag a model between groups or use its menu. Changing policy keeps
+              downloaded files. On demand models can remain loaded until you
+              unload them.
+            </p>
+          </>
+        ) : (
+          <>
+            <DropArea id="runtime:Loaded" className="runtime-live">
+              <div className="section-heading">
+                <h2>Loaded</h2>
+                <span>{running.length} models</span>
+              </div>
+              {!running.length && (
+                <div className="workspace-empty">
+                  <Power size={24} />
+                  <h3>
+                    {q ? "No loaded models match" : "No models are loaded"}
+                  </h3>
+                  <p>Load one from the downloaded models below.</p>
+                </div>
+              )}
+              {Array.from(new Set(running.map((m) => m.service)))
+                .sort(
+                  (a, b) =>
+                    ["Chat", "Transcribe", "Speak", "Images"].indexOf(a) -
+                    ["Chat", "Transcribe", "Speak", "Images"].indexOf(b),
+                )
+                .map((s) => (
+                  <section className="live-service" key={s}>
+                    <header>
+                      <ServiceIcon service={s} size={15} />
+                      <h3>{serviceNames[s] || s}</h3>
+                      <span>
+                        {running.filter((m) => m.service === s).length}
+                      </span>
+                    </header>
+                    {running.filter((m) => m.service === s).map(row)}
+                  </section>
+                ))}
+            </DropArea>
+            <DropArea id="runtime:Unloaded" className="runtime-shelf">
+              <div className="section-heading">
+                <div>
+                  <h2>Unloaded</h2>
+                  <p>Downloaded and available when you need them.</p>
+                </div>
+                <span>{unloaded.length} models</span>
+              </div>
+              <div className="inventory-column-head">
+                <span>Model / backend</span>
+                <span>Loading policy</span>
+                <span>Action</span>
+              </div>
+              {unloaded.slice(0, limit).map(row)}
+              {!unloaded.length && (
+                <p className="empty-state">
+                  No unloaded models match this view.
+                </p>
+              )}
+              {unloaded.length > limit && (
+                <Button variant="ghost" onClick={() => setLimit(limit + 60)}>
+                  Show more
+                </Button>
+              )}
+            </DropArea>
+          </>
+        )}
+        <DragOverlay>
+          {dragged && (
+            <div className="model-drag-preview">
+              <GripVertical size={14} />
+              {dragged.id}
+            </div>
+          )}
+        </DragOverlay>
       </DndContext>
-      <p className="page-note">
-        {policy
-          ? "Drag between groups to save policy. On demand can remain loaded until explicitly unloaded. Disabled models reject new work."
-          : "Drag to request load/unload. Hot models need a policy change before unloading. Right-click or use ⋯ for all actions."}
-      </p>
-    </>
+    </div>
   );
 }

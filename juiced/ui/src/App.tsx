@@ -16,6 +16,10 @@ import {
   Plus,
   RefreshCw,
   AlertCircle,
+  Search,
+  Download,
+  Upload,
+  HardDrive,
 } from "lucide-react";
 import { Menu } from "@base-ui/react/menu";
 import { ContextMenu } from "@base-ui/react/context-menu";
@@ -29,6 +33,7 @@ import {
 } from "./components/t3/sidebar";
 import { ModelLibrary, policyNames } from "./components/ModelLibrary";
 import { Acquisition } from "./components/Acquisition";
+import { CacheWorkspace } from "./components/CacheWorkspace";
 import { Playground } from "./components/Playground";
 import { api, type Model, type Thread } from "./api";
 const destinations = [
@@ -64,7 +69,8 @@ export default function App() {
     [options, setOptions] = useState(""),
     [cache, setCache] = useState<any>(),
     [saving, setSaving] = useState(false),
-    [threadSearch, setThreadSearch] = useState("");
+    [threadSearch, setThreadSearch] = useState(""),
+    [preferredModel, setPreferredModel] = useState("");
   useEffect(() => {
     if (!notice) return;
     const timer = setTimeout(() => setNotice(""), 8000);
@@ -204,14 +210,6 @@ export default function App() {
       setSaving(false);
     }
   }
-  async function saveCache() {
-    try {
-      setCache(await api("juiced/cache", cache.settings));
-      notify("Cache settings saved.");
-    } catch (e) {
-      notify((e as Error).message);
-    }
-  }
   const activeJobs = jobs.filter(
     (j) => j.running || j.status === "interrupted",
   );
@@ -231,7 +229,6 @@ export default function App() {
           </Button>
           <span className="brand-mark">◒</span>
           <strong>Juiced</strong>
-          <span className="version">0.1.0</span>
         </div>
         <div className="topbar-right">
           <span className={"connection " + (online ? "" : "offline")}>
@@ -279,51 +276,129 @@ export default function App() {
             ))}
           </SidebarMenu>
         </SidebarHeader>
-        <SidebarGroup>
-          <div className="sidebar-label">Services</div>
-          {(screen === "playground"
-            ? tasks
-            : ([
-                ["All services", Server],
-                ...tasks.filter((t) => t[0] !== "Compare"),
-                ...[...new Set(models.map((m) => m.service))]
-                  .filter((s) => !tasks.some((t) => t[0] === s))
-                  .sort()
-                  .map((s) => [s, Database] as const),
-              ] as const)
-          ).map(([label, Icon]) => (
-            <button
-              key={label}
-              className={
-                "sidebar-link " +
-                ((screen === "playground" ? task : service) === label
-                  ? "active"
-                  : "")
-              }
-              onClick={() => {
-                if (screen === "playground") {
-                  setTask(label);
+        {(screen === "playground" ||
+          screen === "models" ||
+          screen === "policy") && (
+          <SidebarGroup>
+            <div className="sidebar-label">
+              {screen === "playground" ? "Try a service" : "Service filters"}
+            </div>
+            {(screen === "playground"
+              ? tasks
+              : ([
+                  ["All services", Server],
+                  ...tasks.filter(
+                    (t) =>
+                      t[0] !== "Compare" &&
+                      models.some(
+                        (m) =>
+                          m.downloaded &&
+                          m.available !== false &&
+                          m.service === t[0],
+                      ),
+                  ),
+                  ...[
+                    ...new Set(
+                      models
+                        .filter((m) => m.downloaded && m.available !== false)
+                        .map((m) => m.service),
+                    ),
+                  ]
+                    .filter((s) => !tasks.some((t) => t[0] === s))
+                    .map((s) => [s, Database]),
+                ] as [string, typeof Server][])
+            ).map(([label, Icon]) => (
+              <button
+                key={label}
+                className={
+                  "sidebar-link " +
+                  ((screen === "playground" ? task : service) === label
+                    ? "active"
+                    : "")
+                }
+                onClick={() => {
+                  if (screen === "playground") setTask(label);
+                  else setService(label);
                   setMobile(false);
-                } else setService(label);
-              }}
-            >
-              <Icon size={15} />
-              <span>{label}</span>
-              {screen !== "playground" && (
-                <span className="count">
-                  {
-                    models.filter(
-                      (m) =>
-                        m.downloaded &&
-                        (screen === "library" || m.available !== false) &&
-                        (label === "All services" || m.service === label),
-                    ).length
-                  }
-                </span>
-              )}
-            </button>
-          ))}
-        </SidebarGroup>
+                }}
+              >
+                <Icon size={15} />
+                <span>{label}</span>
+                {screen !== "playground" && (
+                  <span className="count">
+                    {
+                      models.filter(
+                        (m) =>
+                          m.downloaded &&
+                          m.available !== false &&
+                          (label === "All services" || m.service === label),
+                      ).length
+                    }
+                  </span>
+                )}
+              </button>
+            ))}
+          </SidebarGroup>
+        )}
+        {screen === "library" && (
+          <SidebarGroup>
+            <div className="sidebar-label">Your library</div>
+            {[
+              ["discover", "Discover models", Search],
+              ["downloaded", "Downloaded", HardDrive],
+              ["transfers", "Downloads", Download],
+              ["import", "Import GGUF", Upload],
+            ].map(([id, label, Icon]: any) => (
+              <button
+                key={id}
+                className={
+                  "sidebar-link " + (libraryTab === id ? "active" : "")
+                }
+                onClick={() => {
+                  setLibraryTab(id);
+                  setService("All services");
+                  setMobile(false);
+                }}
+              >
+                <Icon size={15} />
+                <span>{label}</span>
+                {id === "downloaded" && (
+                  <span className="count">
+                    {models.filter((m) => m.downloaded).length}
+                  </span>
+                )}
+                {id === "transfers" && activeJobs.length > 0 && (
+                  <span className="count">{activeJobs.length}</span>
+                )}
+              </button>
+            ))}
+          </SidebarGroup>
+        )}
+        {screen === "cache" && (
+          <SidebarGroup>
+            <div className="sidebar-label">Saved computation</div>
+            <div className="sidebar-context-note">
+              <Database size={20} />
+              <strong>
+                {cache?.settings?.mode === "persistent"
+                  ? "Disk snapshots enabled"
+                  : cache?.settings?.mode === "memory"
+                    ? "Memory caching"
+                    : cache?.settings?.mode === "off"
+                      ? "Caching off"
+                      : "Loading settings…"}
+              </strong>
+              <p>
+                Messages and model weights are kept separately from reusable
+                computation.
+              </p>
+              <span>
+                {cache?.settings?.retention_days || 7} day expiry ·{" "}
+                {cache?.settings?.disk_budget_gib || 8} GiB budget
+              </span>
+            </div>
+          </SidebarGroup>
+        )}
         {screen === "playground" && task === "Chat" && (
           <SidebarGroup>
             <Button
@@ -469,6 +544,13 @@ export default function App() {
             notify={notify}
             refresh={refresh}
             onInspect={setInspected}
+            onPolicy={() => setScreen("policy")}
+            onPlay={(m) => {
+              setPreferredModel(m.id);
+              setThread(null);
+              setTask(m.service);
+              setScreen("playground");
+            }}
           />
         )}
         {screen === "library" && (
@@ -480,6 +562,7 @@ export default function App() {
             refresh={refresh}
             tab={libraryTab}
             setTab={setLibraryTab}
+            onInspect={setInspected}
           />
         )}
         {screen === "playground" && (
@@ -487,189 +570,21 @@ export default function App() {
             models={models}
             thread={thread}
             task={task}
+            initialModel={preferredModel}
             notify={notify}
             onThread={updateThread}
             openModels={() => setScreen("models")}
           />
         )}
         {screen === "cache" && (
-          <>
-            <header className="page-heading">
-              <div>
-                <h1>Cache</h1>
-                <p>
-                  Retained computation is separate from thread history and model
-                  weights.
-                </p>
-              </div>
-            </header>
-            {cache && (
-              <>
-                <div className="settings-grid">
-                  <label>
-                    Cache mode
-                    <select
-                      value={cache.settings.mode}
-                      onChange={(e) =>
-                        setCache({
-                          ...cache,
-                          settings: { ...cache.settings, mode: e.target.value },
-                        })
-                      }
-                    >
-                      <option value="memory">Memory only</option>
-                      <option value="off">Off for playground requests</option>
-                      <option
-                        value="persistent"
-                        disabled={!cache.persistent_supported}
-                      >
-                        Persistent{" "}
-                        {cache.persistent_supported ? "" : "· not qualified"}
-                      </option>
-                    </select>
-                  </label>
-                  <label>
-                    Retention after last use
-                    <input
-                      type="number"
-                      min="1"
-                      max="365"
-                      value={cache.settings.retention_days}
-                      onChange={(e) =>
-                        setCache({
-                          ...cache,
-                          settings: {
-                            ...cache.settings,
-                            retention_days: Number(e.target.value),
-                          },
-                        })
-                      }
-                    />
-                    <small>
-                      Days · applies when persistent snapshots are enabled
-                    </small>
-                  </label>
-                  <label>
-                    Snapshot disk budget
-                    <input
-                      type="number"
-                      min="1"
-                      max="256"
-                      value={cache.settings.disk_budget_gib}
-                      onChange={(e) =>
-                        setCache({
-                          ...cache,
-                          settings: {
-                            ...cache.settings,
-                            disk_budget_gib: Number(e.target.value),
-                          },
-                        })
-                      }
-                    />
-                    <small>GiB · separate from downloaded weights</small>
-                  </label>
-                </div>
-                <Button onClick={() => void saveCache()}>
-                  Save cache settings
-                </Button>
-                <div className="callout">
-                  <Database size={17} />
-                  <div>
-                    <strong>
-                      {cache.persistent_supported
-                        ? "Persistent snapshots available"
-                        : "Persistent resume is not enabled on this release"}
-                    </strong>
-                    <p>{cache.reason}</p>
-                    <p>
-                      Live prompt reuse can help while the same engine keeps
-                      compatible state. Reopening a thread after restart may
-                      require a cold prefill.
-                    </p>
-                  </div>
-                </div>
-              </>
-            )}
-            {cache?.settings?.last_error && (
-              <p className="inline-error">
-                Last snapshot: {cache.settings.last_error}
-              </p>
-            )}
-            {threads.map((t) => {
-              const snapshots = (cache?.snapshots || []).filter(
-                (s: any) => s.thread === t.id,
-              );
-              const snapshot = snapshots.sort(
-                (a: any, b: any) => b.last_used - a.last_used,
-              )[0];
-              return (
-                <article className="simple-row" key={t.id}>
-                  <div>
-                    <strong>{t.title}</strong>
-                    <p>{t.model || "No model selected"} · messages retained</p>
-                    <p>
-                      {snapshot
-                        ? `${snapshot.retained ? "Retained" : "Saved"} · ${(snapshot.bytes / 1024 ** 2).toFixed(1)} MiB · ${snapshot.tokens?.toLocaleString() || 0} tokens`
-                        : "No saved snapshot · live memory reuse may still apply"}
-                    </p>
-                  </div>
-                  <div className="row-actions cache-actions">
-                    <Button
-                      variant="ghost"
-                      size="compact"
-                      onClick={() => void openThread(t.id)}
-                    >
-                      Open
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="compact"
-                      onClick={async () => {
-                        try {
-                          const current = await api<Thread>(
-                            "juiced/thread?id=" + encodeURIComponent(t.id),
-                          );
-                          await api("juiced/thread", {
-                            ...current,
-                            retain_cache: !current.retain_cache,
-                          });
-                          await refreshThreads();
-                          setCache(await api("juiced/cache"));
-                          notify(
-                            current.retain_cache
-                              ? "Released snapshot protection."
-                              : "This thread’s next compatible snapshot will be retained within its disk budget.",
-                          );
-                        } catch (e) {
-                          notify((e as Error).message);
-                        }
-                      }}
-                    >
-                      {t.retain_cache ? "Release" : "Retain"}
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="compact"
-                      disabled={!snapshot}
-                      onClick={async () => {
-                        try {
-                          await api("juiced/cache/forget", { thread: t.id });
-                          setCache(await api("juiced/cache"));
-                          notify(
-                            "Saved computation forgotten. Messages and model weights remain; live engine prefixes may remain until replaced.",
-                          );
-                        } catch (e) {
-                          notify((e as Error).message);
-                        }
-                      }}
-                    >
-                      Forget saved
-                    </Button>
-                  </div>
-                </article>
-              );
-            })}
-          </>
+          <CacheWorkspace
+            cache={cache}
+            setCache={setCache}
+            threads={threads}
+            refreshThreads={refreshThreads}
+            openThread={openThread}
+            notify={notify}
+          />
         )}
         {!ready && screen !== "playground" && (
           <p className="page-note">

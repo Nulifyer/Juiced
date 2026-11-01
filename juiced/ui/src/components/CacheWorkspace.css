@@ -1,0 +1,316 @@
+.cache-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 270px;
+  gap: 40px;
+  align-items: start;
+}
+.cache-inventory {
+  min-width: 0;
+}
+.storage-overview {
+  padding: 20px 0 26px;
+}
+.storage-title {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+}
+.storage-icon {
+  width: 48px;
+  height: 48px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  color: #acbad0;
+}
+.storage-title h2 {
+  font-size: 24px;
+  font-weight: 550;
+  letter-spacing: -0.5px;
+}
+.storage-title h2 > span {
+  font-size: 12px;
+  color: var(--muted-foreground);
+  font-weight: 400;
+  letter-spacing: 0;
+}
+.storage-title p {
+  font-size: 11px;
+  margin-top: 5px;
+  color: var(--muted-foreground);
+}
+.storage-overview progress {
+  margin: 20px 0 9px;
+  height: 6px;
+}
+.storage-caption {
+  display: flex;
+  justify-content: space-between;
+  gap: 15px;
+  font-size: 10px;
+  color: var(--muted-foreground);
+}
+.cache-filters {
+  display: flex;
+  gap: 18px;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.cache-filters button {
+  display: flex;
+  gap: 7px;
+  font-size: 11px;
+  color: var(--muted-foreground);
+  padding: 12px 0;
+  border-bottom: 2px solid transparent;
+}
+.cache-filters button[aria-pressed="true"] {
+  color: var(--foreground);
+  border-bottom-color: var(--foreground);
+}
+.cache-filters button > span {
+  color: var(--muted-foreground);
+  font-size: 10px;
+}
+.cache-search {
+  margin: 20px 0 12px;
+}
+.cache-table-heading,
+.cache-thread {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 115px 90px;
+  gap: 15px;
+  align-items: center;
+  padding: 12px 10px;
+}
+.cache-table-heading {
+  font-size: 10px;
+  color: var(--muted-foreground);
+  border-bottom: 1px solid var(--border);
+}
+.cache-thread {
+  width: 100%;
+  text-align: left;
+  border-bottom: 1px solid #ffffff0b;
+  min-height: 80px;
+  border-radius: 5px;
+}
+.cache-thread:hover,
+.cache-thread.selected {
+  background: var(--card);
+}
+.cache-thread-name {
+  min-width: 0;
+}
+.cache-thread-name strong {
+  display: block;
+  font-weight: 500;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.cache-thread-name small {
+  display: block;
+  font-size: 10px;
+  margin-top: 5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cache-thread-state {
+  font-size: 11px;
+  display: block;
+}
+.cache-thread-state > svg {
+  display: inline;
+  margin-right: 5px;
+  color: #d6b987;
+}
+.cache-thread-state small {
+  display: block;
+  font-size: 10px;
+  margin-top: 5px;
+}
+.cache-thread-age {
+  display: flex;
+  gap: 9px;
+  font-size: 10px;
+  align-items: center;
+  color: var(--muted-foreground);
+}
+.cache-thread-age svg {
+  margin-left: auto;
+}
+.cache-settings {
+  padding: 20px 0 0 24px;
+  border-left: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+.cache-settings h2 {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  color: var(--foreground);
+  font-size: 13px;
+}
+.cache-settings label {
+  display: grid;
+  gap: 7px;
+  font-size: 11px;
+  color: var(--foreground);
+  margin: 22px 0 9px;
+}
+.cache-settings select,
+.cache-settings input {
+  width: 100%;
+  font-size: 12px;
+}
+.cache-settings form p {
+  font-size: 11px;
+  line-height: 1.8;
+}
+.cache-settings small {
+  font-size: 10px;
+  line-height: 1.7;
+  color: var(--muted-foreground);
+}
+.cache-settings form > button {
+  margin-top: 15px;
+}
+.cache-settings .unsaved-note {
+  display: block;
+  margin-top: 8px;
+  color: #d6b987;
+}
+.cache-explainer {
+  border-top: 1px solid var(--border);
+  margin-top: 28px;
+  padding-top: 24px;
+  line-height: 1.8;
+}
+.cache-explainer h3 {
+  font-size: 12px;
+  color: var(--foreground);
+  font-weight: 500;
+  margin: 8px 0;
+}
+.cache-explainer p {
+  margin-bottom: 10px;
+}
+.cache-explainer details {
+  margin-top: 15px;
+}
+.cache-explainer summary {
+  cursor: pointer;
+  color: var(--foreground);
+}
+.cache-explainer details p {
+  margin-top: 12px;
+}
+.cache-selection {
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-top: 22px;
+  background: var(--card);
+}
+.cache-selection h2 {
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.cache-selection p {
+  font-size: 12px;
+  color: var(--muted-foreground);
+  line-height: 1.8;
+}
+.cache-selection-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 18px 0 12px;
+}
+.cache-selection small {
+  font-size: 10px;
+}
+@media (max-width: 1150px) {
+  .cache-layout {
+    grid-template-columns: minmax(0, 1fr) 235px;
+    gap: 20px;
+  }
+  .cache-table-heading,
+  .cache-thread {
+    grid-template-columns: minmax(0, 1fr) 95px;
+  }
+  .cache-table-heading > span:last-child,
+  .cache-thread-age {
+    display: none;
+  }
+  .storage-title h2 > span {
+    display: block;
+    margin-top: 3px;
+  }
+  .storage-caption {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .cache-settings {
+    padding-left: 18px;
+  }
+  .cache-filters {
+    gap: 12px;
+  }
+}
+@media (max-width: 850px) {
+  .cache-layout {
+    grid-template-columns: 1fr;
+  }
+  .cache-settings {
+    border-left: 0;
+    border-top: 1px solid var(--border);
+    padding: 24px 0 0;
+  }
+  .cache-settings form {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0 20px;
+  }
+  .cache-settings form > label:first-child,
+  .cache-settings form > p {
+    grid-column: 1/-1;
+  }
+  .cache-settings form > button {
+    width: max-content;
+  }
+  .storage-title h2 > span {
+    display: inline;
+  }
+  .cache-table-heading,
+  .cache-thread {
+    grid-template-columns: minmax(0, 1fr) 110px;
+  }
+  .cache-filters {
+    gap: 18px;
+  }
+  .cache-selection {
+    padding: 16px;
+  }
+}
+
+.cache-thread-drawer .cache-selection {
+  border: 0;
+  background: none;
+  padding: 0;
+  margin: 0;
+}
+.cache-thread-drawer .cache-selection-actions {
+  flex-direction: column;
+  align-items: stretch;
+}
+.cache-thread-drawer .cache-selection-actions > button {
+  justify-content: center;
+}
+.cache-thread-drawer .cache-selection small {
+  display: block;
+  line-height: 1.8;
+}

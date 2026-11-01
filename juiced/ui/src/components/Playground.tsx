@@ -8,7 +8,12 @@ import {
   LoaderCircle,
   X,
   Image as ImageIcon,
+  Copy,
+  Download,
+  Upload,
+  Columns2,
 } from "lucide-react";
+import "./Playground.css";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Button } from "./t3/button";
@@ -20,6 +25,7 @@ type Props = {
   notify: (s: string) => void;
   onThread: (t: Thread, activate?: boolean) => void;
   openModels: () => void;
+  initialModel?: string;
 };
 function textOf(m: Message) {
   return typeof m.content === "string"
@@ -36,9 +42,10 @@ export function Playground({
   notify,
   onThread,
   openModels,
+  initialModel,
 }: Props) {
   const [cacheMode, setCacheMode] = useState("memory");
-  const [model, setModel] = useState(""),
+  const [model, setModel] = useState(initialModel || ""),
     [draft, setDraft] = useState(""),
     [working, setWorking] = useState(false),
     [content, setContent] = useState(""),
@@ -53,7 +60,12 @@ export function Playground({
     [thinkingMode, setThinkingMode] = useState("profile"),
     [compareModels, setCompareModels] = useState<string[]>([]),
     [comparison, setComparison] = useState<any[]>([]),
-    [advanced, setAdvanced] = useState(false);
+    [advanced, setAdvanced] = useState(false),
+    [sourceAudio, setSourceAudio] = useState(""),
+    [sourceName, setSourceName] = useState(""),
+    [compareCurrent, setCompareCurrent] = useState("");
+  const currentTask = useRef(task);
+  currentTask.current = task;
   const activeTurn = useRef<{ thread: string | null; task: string } | null>(
     null,
   );
@@ -104,6 +116,12 @@ export function Playground({
     setReceipt(undefined);
     setContent("");
     setReasoning("");
+    if (recorder.current?.state === "recording") {
+      recorder.current.onstop = null;
+      recorder.current.stop();
+      media.current?.getTracks().forEach((track) => track.stop());
+      setRecording(false);
+    }
   }, [thread?.id, task]);
   useEffect(
     () => () => {
@@ -120,6 +138,12 @@ export function Playground({
       if (audio) URL.revokeObjectURL(audio);
     };
   }, [audio]);
+  useEffect(
+    () => () => {
+      if (sourceAudio) URL.revokeObjectURL(sourceAudio);
+    },
+    [sourceAudio],
+  );
   function edit(s: string) {
     setDraft(s);
     drafts.current[task === "Chat" ? thread?.id || task : task] = s;
@@ -296,6 +320,7 @@ export function Playground({
       if (task === "Compare") {
         setComparison([]);
         for (const id of compareModels) {
+          setCompareCurrent(id);
           const out = await completion(
             id,
             [message],
@@ -353,6 +378,7 @@ export function Playground({
       setWorking(false);
       abort.current = null;
       activeTurn.current = null;
+      setCompareCurrent("");
     }
   }
   async function speak(text: string, id?: string) {
@@ -361,6 +387,7 @@ export function Playground({
       notify("Load a speech model first.");
       return;
     }
+    const start = performance.now();
     const r = await fetch("/v1/audio/speech", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -376,6 +403,7 @@ export function Playground({
     const blob = await r.blob();
     if (!blob.size) throw Error("The speech backend returned no audio.");
     setAudio(URL.createObjectURL(blob));
+    setReceipt({ model: target, total_ms: performance.now() - start });
   }
   async function transcribe(blob: Blob) {
     const target = task === "Transcribe" ? model : transcribers[0]?.id;
@@ -384,6 +412,10 @@ export function Playground({
       return;
     }
     setWorking(true);
+    if (task === "Transcribe") {
+      setSourceAudio(URL.createObjectURL(blob));
+      setSourceName(blob instanceof File ? blob.name : "Microphone recording");
+    }
     try {
       const wav = await wav16k(blob),
         form = new FormData();
@@ -399,7 +431,12 @@ export function Playground({
       const j = await r.json();
       if (!r.ok)
         throw Error(j.error?.message || j.error || "Transcription failed");
-      edit(j.text || "");
+      if (currentTask.current === task) edit(j.text || "");
+      else {
+        drafts.current[task === "Chat" ? thread?.id || task : task] =
+          j.text || "";
+        return;
+      }
       setReceipt({ model: target, total_ms: performance.now() - start });
       notify("Transcript ready to review.");
     } catch (e) {
@@ -441,6 +478,457 @@ export function Playground({
       notify((e as Error).message);
     }
   }
+  function copyText() {
+    void navigator.clipboard
+      .writeText(draft)
+      .then(() => notify("Transcript copied."))
+      .catch(() =>
+        notify("Could not copy. Select the text and copy it manually."),
+      );
+  }
+  const downloadText = () => {
+    const url = URL.createObjectURL(new Blob([draft], { type: "text/plain" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "transcript.txt";
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+  if (task !== "Chat")
+    return (
+      <div className={"service-workspace task-" + task.toLowerCase()}>
+        <header className="page-heading">
+          <div>
+            <h1>
+              {
+                {
+                  Transcribe: "Transcribe audio",
+                  Speak: "Text to speech",
+                  Images: "Generate an image",
+                  Compare: "Compare models",
+                }[task]
+              }
+            </h1>
+            <p>
+              {
+                {
+                  Transcribe: "Turn a recording into editable text.",
+                  Speak:
+                    "Write a script, choose a voice and listen to the result.",
+                  Images: "Describe the scene and preview the generated image.",
+                  Compare:
+                    "Run the same prompt through your loaded chat models.",
+                }[task]
+              }
+            </p>
+          </div>
+          <Button variant="outline" size="compact" onClick={openModels}>
+            Manage models
+          </Button>
+        </header>
+        {task !== "Compare" && (
+          <div className="service-model-bar">
+            <label>
+              Model
+              <select
+                aria-label="Loaded model"
+                value={model}
+                onChange={(e) => setModel(e.target.value)}
+                disabled={working}
+              >
+                {!eligible.length && (
+                  <option value="">No loaded model for this service</option>
+                )}
+                {eligible.map((m) => (
+                  <option key={m.id}>{m.id}</option>
+                ))}
+              </select>
+            </label>
+            <span
+              className={"runtime-indicator " + (selected ? "is-ready" : "")}
+            >
+              <i />
+              {selected ? "Loaded" : "Load a model to begin"}
+            </span>
+          </div>
+        )}
+        {task === "Transcribe" && (
+          <div className="transcription-studio">
+            <section className="audio-source">
+              <h2>Source audio</h2>
+              <div
+                className="audio-drop"
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  const f = e.dataTransfer.files[0];
+                  if (f && !working && model) void transcribe(f);
+                }}
+              >
+                <Upload size={25} />
+                <h3>Drop an audio file</h3>
+                <p>Or select a recording from your computer.</p>
+                <Button
+                  variant="outline"
+                  disabled={working || !model}
+                  onClick={() => audioInput.current?.click()}
+                >
+                  Choose audio
+                </Button>
+                <small>English · up to 2 minutes</small>
+              </div>
+              <div className="source-divider">
+                <span>or</span>
+              </div>
+              <Button
+                variant={recording ? "default" : "outline"}
+                disabled={working || !model}
+                onClick={() => void toggleMic()}
+              >
+                {recording ? <Square size={14} /> : <Mic size={15} />}
+                {recording ? "Stop recording" : "Record microphone"}
+              </Button>
+              {sourceAudio && (
+                <div className="source-recording">
+                  <strong>{sourceName}</strong>
+                  <audio controls src={sourceAudio} />
+                </div>
+              )}
+              <p className="studio-footnote">
+                Your recording is converted locally before transcription.
+              </p>
+            </section>
+            <section className="transcript-output">
+              <header>
+                <h2>Transcript</h2>
+                <div>
+                  <Button
+                    size="icon-sm"
+                    variant="ghost"
+                    aria-label="Copy transcript"
+                    disabled={!draft}
+                    onClick={copyText}
+                  >
+                    <Copy size={15} />
+                  </Button>
+                  <Button
+                    size="icon-sm"
+                    variant="ghost"
+                    aria-label="Download transcript"
+                    disabled={!draft}
+                    onClick={downloadText}
+                  >
+                    <Download size={15} />
+                  </Button>
+                </div>
+              </header>
+              <textarea
+                aria-label="Transcript"
+                value={draft}
+                onChange={(e) => edit(e.target.value)}
+                placeholder={
+                  working
+                    ? "Transcribing your recording…"
+                    : "Your transcript will appear here. You can edit it before copying or downloading."
+                }
+              />
+              <footer>
+                <span>
+                  {working ? (
+                    <>
+                      <LoaderCircle className="spin" size={13} />
+                      Transcribing…
+                    </>
+                  ) : draft ? (
+                    `${draft.trim().split(/\s+/).length} words`
+                  ) : (
+                    "No recording transcribed yet"
+                  )}
+                </span>
+                {receipt && (
+                  <span>{(receipt.total_ms / 1000).toFixed(2)} s</span>
+                )}
+              </footer>
+            </section>
+          </div>
+        )}
+        {(task === "Speak" || task === "Images") && (
+          <div className="generation-studio">
+            <section className="generation-input">
+              <h2>{task === "Speak" ? "Your script" : "Image prompt"}</h2>
+              <textarea
+                aria-label={task === "Speak" ? "Text to speak" : "Image prompt"}
+                value={draft}
+                onChange={(e) => edit(e.target.value)}
+                placeholder={
+                  task === "Speak"
+                    ? "Write something you would like to hear…"
+                    : "A scene, subject, lighting and any details that matter…"
+                }
+              />
+              <div className="generation-controls">
+                {task === "Speak" ? (
+                  <label>
+                    Voice
+                    <input
+                      aria-label="Speech voice"
+                      value={voice}
+                      onChange={(e) => setVoice(e.target.value)}
+                    />
+                  </label>
+                ) : (
+                  <span className="output-size">
+                    Output size <strong>512 × 512</strong>
+                  </span>
+                )}
+                <small>{draft.length.toLocaleString()} characters</small>
+              </div>
+              <Button
+                disabled={working || !model || !draft.trim()}
+                onClick={() => void send()}
+              >
+                {working ? (
+                  <LoaderCircle className="spin" size={15} />
+                ) : task === "Speak" ? (
+                  <Volume2 size={15} />
+                ) : (
+                  <ImageIcon size={15} />
+                )}
+                {working
+                  ? "Generating…"
+                  : task === "Speak"
+                    ? "Generate speech"
+                    : "Generate image"}
+              </Button>
+              <p className="studio-footnote">
+                {task === "Speak"
+                  ? "Audio is generated by the selected speech model."
+                  : "The selected model’s saved generation profile supplies the remaining settings."}
+              </p>
+            </section>
+            <section
+              className={
+                "generation-output " +
+                (task === "Images" ? "image-canvas" : "speech-preview")
+              }
+            >
+              <header>
+                <h2>{task === "Speak" ? "Listen" : "Preview"}</h2>
+                {(task === "Speak" ? audio : image) && (
+                  <a
+                    className="output-download"
+                    href={task === "Speak" ? audio : image}
+                    download={
+                      task === "Speak" ? "speech.wav" : "generated-image.png"
+                    }
+                  >
+                    <Download size={14} />
+                    Download
+                  </a>
+                )}
+              </header>
+              {task === "Speak" ? (
+                audio ? (
+                  <div className="speech-result">
+                    <Volume2 size={38} />
+                    <h3>Your audio is ready</h3>
+                    <audio controls src={audio} />
+                    <p>WAV audio · {voice}</p>
+                  </div>
+                ) : (
+                  <div className="studio-placeholder">
+                    <Volume2 size={34} />
+                    <h3>Hear your model</h3>
+                    <p>
+                      Generate speech to listen here and download the audio.
+                    </p>
+                  </div>
+                )
+              ) : image ? (
+                <img
+                  className="generated-image"
+                  src={image}
+                  alt="Generated image"
+                />
+              ) : (
+                <div className="studio-placeholder">
+                  <ImageIcon size={34} />
+                  <h3>Your image goes here</h3>
+                  <p>Describe a scene, then generate a preview.</p>
+                </div>
+              )}
+              {receipt && (
+                <footer>
+                  {working
+                    ? "Generating…"
+                    : `Generated in ${(receipt.total_ms / 1000).toFixed(2)} s`}
+                </footer>
+              )}
+            </section>
+          </div>
+        )}
+        {task === "Compare" && (
+          <div className="comparison-workspace">
+            <aside className="comparison-setup">
+              <h2>Choose models</h2>
+              <p>Select two or more to compare their responses.</p>
+              {eligible.map((m) => (
+                <label key={m.id}>
+                  <input
+                    type="checkbox"
+                    disabled={working}
+                    checked={compareModels.includes(m.id)}
+                    onChange={(e) =>
+                      setCompareModels((p) =>
+                        e.target.checked
+                          ? [...p, m.id]
+                          : p.filter((x) => x !== m.id),
+                      )
+                    }
+                  />
+                  <span>
+                    {m.id}
+                    <small>{m.recipe}</small>
+                  </span>
+                </label>
+              ))}
+              {!eligible.length && <p>No chat models loaded.</p>}
+              <div className="comparison-settings">
+                <label>
+                  Maximum output tokens
+                  <input
+                    type="number"
+                    min={1}
+                    max={16384}
+                    value={maxTokens}
+                    onChange={(e) =>
+                      setMaxTokens(
+                        Math.max(
+                          1,
+                          Math.min(16384, Number(e.target.value) || 1),
+                        ),
+                      )
+                    }
+                  />
+                </label>
+                <label>
+                  Thinking
+                  <select
+                    value={thinkingMode}
+                    onChange={(e) => setThinkingMode(e.target.value)}
+                  >
+                    <option value="profile">Model profile</option>
+                    <option value="off">Off</option>
+                    <option value="on">On</option>
+                  </select>
+                </label>
+              </div>
+              <p className="studio-footnote">
+                Models run one at a time to avoid competing for the same
+                hardware.
+              </p>
+            </aside>
+            <section className="comparison-main">
+              <div className="comparison-prompt">
+                <label htmlFor="compare-prompt">Shared prompt</label>
+                <textarea
+                  id="compare-prompt"
+                  value={draft}
+                  onChange={(e) => edit(e.target.value)}
+                  placeholder="Give each model exactly the same task…"
+                />
+                <div>
+                  <span>{compareModels.length} models selected</span>
+                  {working ? (
+                    <Button
+                      variant="outline"
+                      onClick={() => abort.current?.abort()}
+                    >
+                      <Square size={13} />
+                      Stop comparison
+                    </Button>
+                  ) : (
+                    <Button
+                      disabled={
+                        !model || compareModels.length < 2 || !draft.trim()
+                      }
+                      onClick={() => void send()}
+                    >
+                      <Columns2 size={14} />
+                      Run comparison
+                    </Button>
+                  )}
+                </div>
+              </div>
+              {!comparison.length && !working ? (
+                <div className="comparison-empty">
+                  <Columns2 size={30} />
+                  <h3>One prompt. Responses side by side.</h3>
+                  <p>
+                    Compare the output and observed response time without
+                    switching conversations.
+                  </p>
+                </div>
+              ) : (
+                <div className="comparison-results">
+                  {(working ? compareModels : comparison.map((r) => r.id)).map(
+                    (id) => {
+                      const r = comparison.find((r) => r.id === id);
+                      return (
+                        <article key={id}>
+                          <header>
+                            <strong>{id}</strong>
+                            <span>
+                              {r
+                                ? `${(r.receipt.total_ms / 1000).toFixed(2)} s`
+                                : compareCurrent === id
+                                  ? "Generating…"
+                                  : "Waiting"}
+                            </span>
+                          </header>
+                          {r ? (
+                            <>
+                              <div className="markdown">
+                                <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                  {r.answer}
+                                </ReactMarkdown>
+                              </div>
+                              {r.thinking && (
+                                <details className="thinking">
+                                  <summary>Reasoning</summary>
+                                  <pre>{r.thinking}</pre>
+                                </details>
+                              )}
+                            </>
+                          ) : (
+                            <p className="page-note">
+                              {compareCurrent === id
+                                ? "The model is working on your prompt."
+                                : "This model runs after the current response."}
+                            </p>
+                          )}
+                        </article>
+                      );
+                    },
+                  )}
+                </div>
+              )}
+            </section>
+          </div>
+        )}
+        <input
+          ref={audioInput}
+          type="file"
+          hidden
+          accept="audio/*"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) void transcribe(f);
+            e.target.value = "";
+          }}
+        />
+      </div>
+    );
   const history = task === "Chat" ? thread?.messages || [] : [];
   return (
     <div className="playground-layout">
@@ -453,11 +941,34 @@ export function Playground({
           </h1>
           <p>
             {task === "Chat"
-              ? "Direct model interaction · no agent tools"
+              ? "Chat with your loaded models"
               : task === "Compare"
                 ? "Identical prompt, sequential runs to avoid interference"
                 : "Use an eligible loaded deployment"}
           </p>
+        </div>
+        <div className="model-picker">
+          <select
+            aria-label="Loaded model"
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+            disabled={working}
+          >
+            {!model &&
+              thread?.model &&
+              task === "Chat" &&
+              eligible.length > 0 && (
+                <option value="">{thread.model} · unloaded</option>
+              )}
+            {eligible.length === 0 ? (
+              <option value="">No eligible loaded models</option>
+            ) : (
+              eligible.map((m) => <option key={m.id}>{m.id}</option>)
+            )}
+          </select>
+          <Button variant="outline" size="compact" onClick={openModels}>
+            Load another…
+          </Button>
         </div>
         <Button
           size="compact"
@@ -468,29 +979,6 @@ export function Playground({
           Settings
         </Button>
       </header>
-      <div className="model-picker">
-        <select
-          aria-label="Loaded model"
-          value={model}
-          onChange={(e) => setModel(e.target.value)}
-          disabled={working}
-        >
-          {!model &&
-            thread?.model &&
-            task === "Chat" &&
-            eligible.length > 0 && (
-              <option value="">{thread.model} · unloaded</option>
-            )}
-          {eligible.length === 0 ? (
-            <option value="">No eligible loaded models</option>
-          ) : (
-            eligible.map((m) => <option key={m.id}>{m.id}</option>)
-          )}
-        </select>
-        <Button variant="outline" size="compact" onClick={openModels}>
-          Load another…
-        </Button>
-      </div>
       {advanced && (
         <div className="inline-settings">
           <label>
@@ -595,63 +1083,12 @@ export function Playground({
         {!history.length && !working && task === "Chat" && (
           <div className="chat-empty">
             <MessageSquareIcon />
-            <h2>Test a model directly.</h2>
+            <h2>Start a conversation</h2>
             <p>
-              Select a loaded model, then send text, attach a supported image or
-              dictate a message.
+              Ask a question, bring an image or dictate a message. Your test
+              conversations are saved in the sidebar.
             </p>
           </div>
-        )}
-        {task === "Transcribe" && (
-          <div className="media-panel">
-            <Button
-              variant="outline"
-              onClick={() => audioInput.current?.click()}
-            >
-              <UploadIcon />
-              Choose audio
-            </Button>
-            <p>
-              Audio is converted in your browser to 16 kHz WAV. English, up to
-              120 seconds.
-            </p>
-            <p>The editable transcript appears below.</p>
-          </div>
-        )}
-        {task === "Speak" && audio && <audio controls src={audio} />}
-        {task === "Images" && image && (
-          <img className="generated-image" src={image} alt="Generated image" />
-        )}
-        {task === "Compare" && (
-          <>
-            <div className="compare-choices">
-              {eligible.map((m) => (
-                <label key={m.id}>
-                  <input
-                    type="checkbox"
-                    checked={compareModels.includes(m.id)}
-                    onChange={(e) =>
-                      setCompareModels((p) =>
-                        e.target.checked
-                          ? [...p, m.id]
-                          : p.filter((x) => x !== m.id),
-                      )
-                    }
-                  />
-                  {m.id}
-                </label>
-              ))}
-            </div>
-            {comparison.map((r) => (
-              <article className="compare-answer" key={r.id}>
-                <h2>{r.id}</h2>
-                <ReactMarkdown>{r.answer}</ReactMarkdown>
-                <p className="page-note">
-                  {(r.receipt.total_ms / 1000).toFixed(2)} s total
-                </p>
-              </article>
-            ))}
-          </>
         )}
         {task === "Chat" && audio && <audio controls src={audio} />}
         <div ref={end} />
@@ -688,19 +1125,12 @@ export function Playground({
             aria-label="Message"
             value={draft}
             onChange={(e) => edit(e.target.value)}
-            placeholder={
-              task === "Speak"
-                ? "Text to speak…"
-                : task === "Transcribe"
-                  ? "Editable transcript…"
-                  : "Ask a question or test a model…"
-            }
+            placeholder="Ask a question or test a model…"
             onKeyDown={(e) => {
               if (
                 e.key === "Enter" &&
                 !e.shiftKey &&
-                !e.nativeEvent.isComposing &&
-                task !== "Transcribe"
+                !e.nativeEvent.isComposing
               ) {
                 e.preventDefault();
                 if (!working) void send();
@@ -734,45 +1164,26 @@ export function Playground({
                   ? "Enter to send · Shift+Enter for newline"
                   : "Review before sending"}
             </span>
-            {task !== "Transcribe" &&
-              (working ? (
-                <Button
-                  variant="outline"
-                  size="icon-sm"
-                  aria-label={
-                    task === "Images" || task === "Speak"
-                      ? "Generating media"
-                      : "Stop generation"
-                  }
-                  disabled={task === "Images" || task === "Speak"}
-                  title={
-                    task === "Images" || task === "Speak"
-                      ? "This media request completes before another can start"
-                      : "Stop generation"
-                  }
-                  onClick={() => abort.current?.abort()}
-                >
-                  {task === "Images" || task === "Speak" ? (
-                    <LoaderCircle className="spin" size={14} />
-                  ) : (
-                    <Square size={14} />
-                  )}
-                </Button>
-              ) : (
-                <Button
-                  variant="default"
-                  size="icon-sm"
-                  aria-label="Send message"
-                  disabled={
-                    !model ||
-                    (!draft.trim() && !attachments.length) ||
-                    (task === "Compare" && !compareModels.length)
-                  }
-                  onClick={() => void send()}
-                >
-                  <ArrowUp size={17} />
-                </Button>
-              ))}
+            {working ? (
+              <Button
+                variant="outline"
+                size="icon-sm"
+                aria-label="Stop generation"
+                onClick={() => abort.current?.abort()}
+              >
+                <Square size={14} />
+              </Button>
+            ) : (
+              <Button
+                variant="default"
+                size="icon-sm"
+                aria-label="Send message"
+                disabled={!model || (!draft.trim() && !attachments.length)}
+                onClick={() => void send()}
+              >
+                <ArrowUp size={17} />
+              </Button>
+            )}
           </div>
         </div>
         {receipt && (
@@ -834,19 +1245,6 @@ function MessageSquareIcon() {
       stroke="currentColor"
     >
       <path d="M3 3h18v13H9l-6 5z" />
-    </svg>
-  );
-}
-function UploadIcon() {
-  return (
-    <svg
-      width="16"
-      height="16"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-    >
-      <path d="M12 16V3m-5 5 5-5 5 5M3 16v5h18v-5" />
     </svg>
   );
 }

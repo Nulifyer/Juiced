@@ -11,6 +11,8 @@ import {
 } from "lucide-react";
 import { Dialog } from "@base-ui/react/dialog";
 import { Button } from "./t3/button";
+import { CapabilityIcons, ServiceIcon, serviceNames } from "./ModelLibrary";
+import "./Acquisition.css";
 import { api, bytes, type Model } from "../api";
 export function Acquisition({
   models,
@@ -20,6 +22,7 @@ export function Acquisition({
   refresh,
   tab,
   setTab,
+  onInspect,
 }: {
   models: Model[];
   service: string;
@@ -28,10 +31,14 @@ export function Acquisition({
   refresh: () => Promise<void>;
   tab: string;
   setTab: (s: string) => void;
+  onInspect: (m: Model) => void;
 }) {
   const [query, setQuery] = useState(""),
+    [inventoryQuery, setInventoryQuery] = useState(""),
+    [inventoryService, setInventoryService] = useState("All services"),
     [catalogQuery, setCatalogQuery] = useState(""),
     [catalogPage, setCatalogPage] = useState(0),
+    [searched, setSearched] = useState(false),
     [results, setResults] = useState<any[]>([]),
     [variants, setVariants] = useState<any>(),
     [variant, setVariant] = useState(""),
@@ -46,6 +53,9 @@ export function Acquisition({
     [importJobs, setImportJobs] = useState<any[]>([]);
   const uploading = useRef<AbortController | null>(null);
   useEffect(() => setCatalogPage(0), [service]);
+  useEffect(() => {
+    if (tab === "import") void loadImports();
+  }, [tab]);
   async function search() {
     if (query.trim().length < 3) {
       notify("Enter at least three characters.");
@@ -59,6 +69,7 @@ export function Acquisition({
           "&format=gguf",
       );
       setResults(j.results || []);
+      setSearched(true);
     } catch (e) {
       notify((e as Error).message);
     } finally {
@@ -210,150 +221,257 @@ export function Acquisition({
     <>
       <header className="page-heading">
         <div>
-          <h1>Library</h1>
-          <p>Find weights, review variants and track acquisition.</p>
+          <h1>
+            {
+              {
+                discover: "Discover models",
+                downloaded: "Downloaded weights",
+                transfers: "Downloads",
+                import: "Import a model",
+              }[tab]
+            }
+          </h1>
+          <p>
+            {
+              {
+                discover:
+                  "Find a model, review its files and choose a variant.",
+                downloaded:
+                  "Your local collection. Inspect files and capabilities without changing what is running.",
+                transfers:
+                  "Follow active transfers and pick up interrupted downloads.",
+                import:
+                  "Add a GGUF from your computer or register one already on the server.",
+              }[tab]
+            }
+          </p>
         </div>
-      </header>
-      <div className="tabs" role="tablist">
-        {["discover", "downloaded", "transfers", "import"].map((t) => (
-          <button
-            key={t}
-            role="tab"
-            aria-selected={tab === t}
-            onClick={() => {
-              setTab(t);
-              if (t === "import") void loadImports();
-            }}
+        {tab !== "import" && (
+          <Button
+            variant="outline"
+            size="compact"
+            onClick={() => setTab("import")}
           >
-            {t === "import" ? "Import GGUF" : t[0].toUpperCase() + t.slice(1)}
-          </button>
-        ))}
-      </div>
+            <Upload size={14} />
+            Import GGUF
+          </Button>
+        )}
+      </header>
       {tab === "discover" && (
         <>
-          <details className="settings-section">
-            <summary>Browse runtime catalog</summary>
-            <p className="page-note">
-              Ready-to-download models across all supported services.
-            </p>
-            <input
-              aria-label="Filter runtime catalog"
-              placeholder="Filter catalog models…"
-              value={catalogQuery}
-              onChange={(e) => {
-                setCatalogQuery(e.target.value);
-                setCatalogPage(0);
-              }}
-            />
-            {models
-              .filter(
-                (m) =>
-                  !m.downloaded &&
-                  m.available !== false &&
-                  (service === "All services" || m.service === service) &&
-                  m.id.toLowerCase().includes(catalogQuery.toLowerCase()),
-              )
-              .slice(catalogPage * 30, (catalogPage + 1) * 30)
-              .map((m) => (
-                <article className="simple-row" key={m.id}>
-                  <div>
-                    <strong>{m.id}</strong>
-                    <p>
-                      {m.service} · {m.recipe} · {bytes((m.size || 0) * 1e9)}
-                    </p>
+          <div className="discovery-layout">
+            <div className="discovery-primary">
+              <div className="discovery-search-heading">
+                <span className="source-mark">Hf</span>
+                <div>
+                  <h2>Search Hugging Face</h2>
+                  <p>
+                    Publisher repositories, quantizations and companion files.
+                  </p>
+                </div>
+              </div>
+              <form
+                className="search-row"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void search();
+                }}
+              >
+                <label className="search-input">
+                  <Search size={16} />
+                  <input
+                    placeholder="Search Hugging Face…"
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                  />
+                </label>
+                <Button disabled={busy} type="submit">
+                  {busy ? (
+                    <LoaderCircle size={16} className="spin" />
+                  ) : (
+                    "Search"
+                  )}
+                </Button>
+              </form>
+              <p className="page-note">
+                Search checks repository metadata. Inspect files before choosing
+                a compatible backend.
+              </p>
+              {results.length === 0 && !busy && (
+                <div className="discovery-start">
+                  <Search size={25} />
+                  <h3>
+                    {searched
+                      ? "No matching repositories"
+                      : "What would you like to run?"}
+                  </h3>
+                  <p>
+                    Use a model name or repository, then review available files
+                    before downloading.
+                  </p>
+                  <div className="search-suggestions">
+                    {["Qwen", "Ornith", "Whisper"].map((term) => (
+                      <button key={term} onClick={() => setQuery(term)}>
+                        {term}
+                      </button>
+                    ))}
                   </div>
-                  <Button
-                    size="compact"
-                    variant="outline"
-                    onClick={() => void pull(m.id)}
-                  >
-                    <Download size={14} /> Download
-                  </Button>
+                </div>
+              )}
+              {results.map((r) => (
+                <article className="search-result" key={r.repository_id}>
+                  <div>
+                    <strong>{r.display_name || r.repository_id}</strong>
+                    <p>
+                      {r.repository_id} · {r.downloads?.toLocaleString() || 0}{" "}
+                      downloads
+                    </p>
+                    <p>{r.description?.slice(0, 220)}</p>
+                  </div>
+                  <div className="row-actions">
+                    <a
+                      href={"https://huggingface.co/" + r.repository_id}
+                      target="_blank"
+                      rel="noreferrer"
+                      title="Open model card"
+                    >
+                      <ExternalLink size={15} />
+                    </a>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={busy}
+                      onClick={() => void inspect(r.repository_id)}
+                    >
+                      Review files
+                    </Button>
+                  </div>
                 </article>
               ))}
-            <div className="row-actions">
-              <Button
-                size="compact"
-                variant="ghost"
-                disabled={catalogPage === 0}
-                onClick={() => setCatalogPage(catalogPage - 1)}
-              >
-                Previous
-              </Button>
-              <span>Page {catalogPage + 1}</span>
-              <Button
-                size="compact"
-                variant="ghost"
-                disabled={
-                  models.filter(
+              <details className="catalog-browser">
+                <summary>Browse the runtime catalog</summary>
+                <p className="page-note">
+                  Ready-to-download models across all supported services.
+                </p>
+                <input
+                  aria-label="Filter runtime catalog"
+                  placeholder="Filter catalog models…"
+                  value={catalogQuery}
+                  onChange={(e) => {
+                    setCatalogQuery(e.target.value);
+                    setCatalogPage(0);
+                  }}
+                />
+                {models
+                  .filter(
                     (m) =>
                       !m.downloaded &&
                       m.available !== false &&
                       (service === "All services" || m.service === service) &&
                       m.id.toLowerCase().includes(catalogQuery.toLowerCase()),
-                  ).length <=
-                  (catalogPage + 1) * 30
-                }
-                onClick={() => setCatalogPage(catalogPage + 1)}
-              >
-                Next
-              </Button>
+                  )
+                  .slice(catalogPage * 30, (catalogPage + 1) * 30)
+                  .map((m) => (
+                    <article className="simple-row" key={m.id}>
+                      <div>
+                        <strong>{m.id}</strong>
+                        <p>
+                          {m.service} · {m.recipe} ·{" "}
+                          {bytes((m.size || 0) * 1e9)}
+                        </p>
+                      </div>
+                      <Button
+                        size="compact"
+                        variant="outline"
+                        onClick={() => void pull(m.id)}
+                      >
+                        <Download size={14} /> Download
+                      </Button>
+                    </article>
+                  ))}
+                <div className="row-actions">
+                  <Button
+                    size="compact"
+                    variant="ghost"
+                    disabled={catalogPage === 0}
+                    onClick={() => setCatalogPage(catalogPage - 1)}
+                  >
+                    Previous
+                  </Button>
+                  <span>Page {catalogPage + 1}</span>
+                  <Button
+                    size="compact"
+                    variant="ghost"
+                    disabled={
+                      models.filter(
+                        (m) =>
+                          !m.downloaded &&
+                          m.available !== false &&
+                          (service === "All services" ||
+                            m.service === service) &&
+                          m.id
+                            .toLowerCase()
+                            .includes(catalogQuery.toLowerCase()),
+                      ).length <=
+                      (catalogPage + 1) * 30
+                    }
+                    onClick={() => setCatalogPage(catalogPage + 1)}
+                  >
+                    Next
+                  </Button>
+                </div>
+              </details>
             </div>
-          </details>
-          <h2>Hugging Face search</h2>
-          <form
-            className="search-row"
-            onSubmit={(e) => {
-              e.preventDefault();
-              void search();
-            }}
-          >
-            <label className="search-input">
-              <Search size={16} />
-              <input
-                placeholder="Search Hugging Face…"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-              />
-            </label>
-            <Button disabled={busy} type="submit">
-              {busy ? <LoaderCircle size={16} className="spin" /> : "Search"}
-            </Button>
-          </form>
-          <p className="page-note">
-            Search checks repository metadata. Inspect files before choosing a
-            compatible backend.
-          </p>
-          {results.map((r) => (
-            <article className="search-result" key={r.repository_id}>
-              <div>
-                <strong>{r.display_name || r.repository_id}</strong>
+            <aside className="discovery-guide">
+              <section>
+                <Download size={20} />
+                <h3>Choose the right files</h3>
                 <p>
-                  {r.repository_id} · {r.downloads?.toLocaleString() || 0}{" "}
-                  downloads
+                  Review quantization and size. Vision models may also need a
+                  projector.
                 </p>
-                <p>{r.description?.slice(0, 220)}</p>
-              </div>
-              <div className="row-actions">
-                <a
-                  href={"https://huggingface.co/" + r.repository_id}
-                  target="_blank"
-                  rel="noreferrer"
-                  title="Open model card"
-                >
-                  <ExternalLink size={15} />
-                </a>
+                <p>
+                  Downloads add weights to your library. They do not load a
+                  model into memory.
+                </p>
+              </section>
+              <section>
+                <Upload size={20} />
+                <h3>Already have a GGUF?</h3>
+                <p>
+                  Upload a file from your computer or register an existing
+                  server file.
+                </p>
                 <Button
                   variant="outline"
-                  size="sm"
-                  disabled={busy}
-                  onClick={() => void inspect(r.repository_id)}
+                  size="compact"
+                  onClick={() => setTab("import")}
                 >
-                  Review files
+                  Import a model
                 </Button>
-              </div>
-            </article>
-          ))}
+              </section>
+              {jobs.some((j) => j.running || j.status === "interrupted") && (
+                <section>
+                  <h3>Transfers in progress</h3>
+                  <p>
+                    {
+                      jobs.filter(
+                        (j) => j.running || j.status === "interrupted",
+                      ).length
+                    }{" "}
+                    downloads need attention.
+                  </p>
+                  <Button
+                    variant="ghost"
+                    size="compact"
+                    onClick={() => setTab("transfers")}
+                  >
+                    View downloads
+                  </Button>
+                </section>
+              )}
+            </aside>
+          </div>
           {variants && (
             <Dialog.Root
               open
@@ -431,30 +549,78 @@ export function Acquisition({
         </>
       )}
       {tab === "downloaded" && (
-        <div className="library-list">
+        <div className="weights-inventory">
+          <div className="workspace-toolbar">
+            <label className="search-input">
+              <Search size={15} />
+              <input
+                aria-label="Search downloaded weights"
+                placeholder="Search your local collection…"
+                value={inventoryQuery}
+                onChange={(e) => setInventoryQuery(e.target.value)}
+              />
+            </label>
+            <select
+              aria-label="Filter downloaded services"
+              value={inventoryService}
+              onChange={(e) => setInventoryService(e.target.value)}
+            >
+              <option>All services</option>
+              {[
+                ...new Set(
+                  models.filter((m) => m.downloaded).map((m) => m.service),
+                ),
+              ].map((v) => (
+                <option key={v}>{v}</option>
+              ))}
+            </select>
+          </div>
+          <div className="weights-table-heading">
+            <span>Model</span>
+            <span>Service</span>
+            <span>Download size</span>
+            <span>Backend</span>
+          </div>
           {models
             .filter(
               (m) =>
                 m.downloaded &&
-                (service === "All services" || m.service === service),
+                (inventoryService === "All services" ||
+                  m.service === inventoryService) &&
+                [m.id, m.recipe]
+                  .join(" ")
+                  .toLowerCase()
+                  .includes(inventoryQuery.toLowerCase()),
             )
             .map((m) => (
-              <article className="simple-row" key={m.id}>
-                <div>
-                  <strong>{m.id}</strong>
-                  <p>
-                    {m.recipe} · {m.service} · {bytes((m.size || 0) * 1e9)}
-                    {m.unavailable_reason ? " · " + m.unavailable_reason : ""}
-                  </p>
-                </div>
-                <span className="badge">
-                  {m.available === false
-                    ? "Backend unavailable"
-                    : m.loaded
-                      ? "Loaded"
-                      : "Unloaded"}
+              <button
+                className="weight-row"
+                key={m.id}
+                onClick={() => onInspect(m)}
+              >
+                <span className="weight-identity">
+                  <span className="weight-icon">
+                    <ServiceIcon service={m.service} />
+                  </span>
+                  <span>
+                    <strong>{m.id}</strong>
+                    <small>
+                      <CapabilityIcons model={m} />
+                      {m.available === false
+                        ? "Backend unavailable"
+                        : "Downloaded"}
+                    </small>
+                  </span>
                 </span>
-              </article>
+                <span className="weight-service">
+                  {serviceNames[m.service] || m.service}
+                </span>
+                <span>{m.size ? bytes(m.size * 1e9) : "Not reported"}</span>
+                <span>
+                  {m.recipe}
+                  <ExternalLink size={12} />
+                </span>
+              </button>
             ))}
         </div>
       )}
@@ -465,84 +631,95 @@ export function Acquisition({
               No transfers. Search for a model or import a GGUF.
             </div>
           ) : (
-            jobs.map((j) => (
-              <article className="transfer-row" key={j.id}>
-                <div className="row-spread">
-                  <strong>{j.model_name}</strong>
-                  <span className="badge">{j.status}</span>
-                </div>
-                <progress max={100} value={j.percent || 0} />
-                <div className="row-spread">
-                  <small>
-                    {j.file_index || 0} / {j.total_files || 0} files ·{" "}
-                    {bytes(
-                      j.overall_bytes_downloaded || j.bytes_downloaded || 0,
-                    )}
-                    {j.total_download_size
-                      ? " / " + bytes(j.total_download_size)
-                      : ""}
-                  </small>
-                  <div className="row-actions">
-                    {j.complete && (
-                      <Button
-                        size="compact"
-                        variant="outline"
-                        onClick={async () => {
-                          try {
-                            await api("juiced/operation", {
-                              model: j.model_name,
-                              action: "load",
-                            });
-                            notify("Model queued for loading.");
-                            await refresh();
-                          } catch (e) {
-                            notify((e as Error).message);
-                          }
-                        }}
-                      >
-                        <Play size={13} />
-                        Load
-                      </Button>
-                    )}
-                    {j.running ? (
-                      <>
-                        <Button
-                          size="compact"
-                          variant="ghost"
-                          onClick={() => void control(j, "pause")}
-                        >
-                          <Pause size={13} />
-                          Pause
-                        </Button>
-                        <Button
-                          size="compact"
-                          variant="ghost"
-                          onClick={() => void control(j, "cancel")}
-                        >
-                          <X size={13} />
-                          Cancel
-                        </Button>
-                      </>
-                    ) : [
-                        "paused",
-                        "error",
-                        "interrupted",
-                        "cancelled",
-                      ].includes(j.status) ? (
-                      <Button
-                        size="compact"
-                        variant="outline"
-                        onClick={() => void control(j, "resume")}
-                      >
-                        <Play size={13} />
-                        Resume / retry
-                      </Button>
-                    ) : null}
+            [...jobs]
+              .sort(
+                (a, b) =>
+                  Number(Boolean(b.running)) - Number(Boolean(a.running)),
+              )
+              .map((j) => (
+                <article className="transfer-row" key={j.id}>
+                  <div className="row-spread">
+                    <strong>{j.model_name}</strong>
+                    <span className="badge">{j.status}</span>
                   </div>
-                </div>
-                {j.error && <p className="inline-error">{j.error}</p>}
-              </article>
-            ))
+                  {!j.complete && (
+                    <progress
+                      aria-label={"Download progress for " + j.model_name}
+                      max={100}
+                      value={j.percent || 0}
+                    />
+                  )}
+                  <div className="row-spread">
+                    <small>
+                      {j.file_index || 0} / {j.total_files || 0} files ·{" "}
+                      {bytes(
+                        j.overall_bytes_downloaded || j.bytes_downloaded || 0,
+                      )}
+                      {j.total_download_size
+                        ? " / " + bytes(j.total_download_size)
+                        : ""}
+                    </small>
+                    <div className="row-actions">
+                      {j.complete && (
+                        <Button
+                          size="compact"
+                          variant="outline"
+                          onClick={async () => {
+                            try {
+                              await api("juiced/operation", {
+                                model: j.model_name,
+                                action: "load",
+                              });
+                              notify("Model queued for loading.");
+                              await refresh();
+                            } catch (e) {
+                              notify((e as Error).message);
+                            }
+                          }}
+                        >
+                          <Play size={13} />
+                          Load
+                        </Button>
+                      )}
+                      {j.running ? (
+                        <>
+                          <Button
+                            size="compact"
+                            variant="ghost"
+                            onClick={() => void control(j, "pause")}
+                          >
+                            <Pause size={13} />
+                            Pause
+                          </Button>
+                          <Button
+                            size="compact"
+                            variant="ghost"
+                            onClick={() => void control(j, "cancel")}
+                          >
+                            <X size={13} />
+                            Cancel
+                          </Button>
+                        </>
+                      ) : [
+                          "paused",
+                          "error",
+                          "interrupted",
+                          "cancelled",
+                        ].includes(j.status) ? (
+                        <Button
+                          size="compact"
+                          variant="outline"
+                          onClick={() => void control(j, "resume")}
+                        >
+                          <Play size={13} />
+                          Resume / retry
+                        </Button>
+                      ) : null}
+                    </div>
+                  </div>
+                  {j.error && <p className="inline-error">{j.error}</p>}
+                </article>
+              ))
           )}
           <p className="page-note">
             Completed models remain On demand and unloaded. Loading is a
@@ -553,10 +730,21 @@ export function Acquisition({
       {tab === "import" && (
         <>
           <div className="import-grid">
-            <label className="upload-zone">
+            <label
+              className="upload-zone"
+              onDragOver={(e) => e.preventDefault()}
+              onDrop={(e) => {
+                e.preventDefault();
+                const f = e.dataTransfer.files[0];
+                if (f) {
+                  setFile(f);
+                  setName(f.name.replace(/\.gguf$/i, ""));
+                }
+              }}
+            >
               <Upload size={22} />
               <strong>{file?.name || "Choose a GGUF file"}</strong>
-              <small>Chunked upload with restart-safe received offsets</small>
+              <small>Drag a file here, or browse your computer.</small>
               <input
                 type="file"
                 accept=".gguf"
@@ -623,8 +811,8 @@ export function Acquisition({
               Face workflow for split weights and vision companions.
             </p>
           </div>
-          <section className="settings-section">
-            <h2>Files already on Mage</h2>
+          <details className="server-import settings-section">
+            <summary>Register a file already on the server</summary>
             <p className="page-note">
               Import a regular GGUF from the read-only /library mount without
               sending it over the VPN.
@@ -644,7 +832,7 @@ export function Acquisition({
             >
               Inspect and register server file
             </Button>
-          </section>
+          </details>
           {importJobs.map((j) => (
             <article className="simple-row" key={j.id}>
               <div>

@@ -12,6 +12,8 @@ processes and serving policy. Agent tools/workspaces remain in a separate stack.
 - Actual engine cache gate: `python3 juiced/tests/test_engine_cache.py --help`; uses a checksum-verified tiny CPU fixture in release CI, then real-model acceptance on Mage.
 - Container: `docker build -f juiced/Dockerfile -t juiced:development .`.
 
+The dev server can proxy a remote runtime with `JUICED_DEV_API=https://your-runtime.example bun run dev`. Its default target is the local manager on port13305.
+
 The UI build produces root `web/`; the image copies it into native resources.
 The C++ server serves the UI and APIs on port8080. Models are downloaded to a
 persistent HF cache, not embedded into the image. No Docker socket is required.
@@ -24,7 +26,21 @@ Make, CMake, Node, Bun and other build tools are excluded and checked before
 publication. Backends that require a JIT compiler, such as vLLM/Triton, need an
 explicitly provisioned runtime variant and are outside this default native image.
 
-## Initial scope
+## Workspaces
+
+| Screen | Purpose and layout |
+| --- | --- |
+| Models | Operate live services: ready/busy models grouped by service, followed by a compact unloaded inventory. Try opens the selected model and service. |
+| Loading policy | Set residency in three drag-and-drop lanes: Hot, On demand and Disabled. Menus and bulk actions offer the same commands. |
+| Library | Search Hugging Face and review files; inspect downloaded weights in a table; follow transfers; upload or register a GGUF in a dedicated import form. |
+| Cache | Inspect saved computation and thread storage separately from retention, mode and disk-budget settings. Unsaved settings survive background refreshes. |
+| Playground | Chat has a conversation and anchored composer. Transcribe pairs an audio source with an editable/exportable transcript. Speak pairs a script with playback. Images pairs a prompt with a preview. Compare places responses beside each other after sequential requests. |
+
+The sidebar follows the current task: service filters for operations, acquisition
+navigation for Library, cache information for storage, and task/thread navigation
+for Playground. Wide workspaces collapse into a single column on narrow screens.
+
+## Serving behavior
 
 Models shows actual Loaded/Unloaded state and operation status. Loading policy
 separates Hot/On demand/Disabled intent. Native C++ reconciliation recovers hot
