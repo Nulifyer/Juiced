@@ -194,3 +194,7 @@ CLAUDE.local.md
 /juiced/ui/node_modules/
 /juiced/ui/*.tsbuildinfo
 /web/
+
+# The UI source utility module is not a generated native library.
+!/juiced/ui/src/lib/
+!/juiced/ui/src/lib/**
