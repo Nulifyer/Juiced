@@ -136,11 +136,17 @@ json JuicedService::cache_profile(const std::string &requested) {
     if (l.value("model_name", "") == name) {
       address = l.value("backend_url", "");
       identity["options"] = l.value("recipe_options", json::object());
+      identity["options"].erase(
+          "pinned"); // Residency policy does not alter engine state format.
       break;
     }
   if (address.empty())
     throw std::invalid_argument(
         "Load the model before qualifying its prompt-state profile");
+  if (address.size() >= 3 && address.substr(address.size() - 3) == "/v1")
+    address.resize(
+        address.size() -
+        3); // Backend inference base includes /v1; state APIs are at its root.
   auto props = utils::HttpClient::get(
       address + "/props", {}, 10, utils::HttpSecurityPolicy::TrustedLoopback);
   if (props.status_code != 200)
