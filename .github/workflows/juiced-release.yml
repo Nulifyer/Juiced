@@ -49,7 +49,7 @@ jobs:
         run: |
           image=ghcr.io/nulifyer/juiced:${{ github.ref_type == 'tag' && github.ref_name || 'development' }}
           docker push "$image"
-          if [ "${{ github.ref_type }}" = tag ]; then docker tag "$image" ghcr.io/nulifyer/juiced:latest; docker push ghcr.io/nulifyer/juiced:latest; fi
+          if [ "${{ github.ref_type }}" = tag ] && [[ "${{ github.ref_name }}" != *-* ]]; then docker tag "$image" ghcr.io/nulifyer/juiced:latest; docker push ghcr.io/nulifyer/juiced:latest; fi
           docker inspect "$image" --format '{{json .RepoDigests}}' > image-digest.json
       - uses: actions/upload-artifact@v4
         with:

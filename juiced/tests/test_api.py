@@ -8,6 +8,8 @@ class ApiContract(unittest.TestCase):
   cls.temp=tempfile.TemporaryDirectory(prefix='juiced-test-');cls.root=pathlib.Path(cls.temp.name);(cls.root/'config').mkdir();(cls.root/'cache').mkdir();(cls.root/'run').mkdir()
   with socket.socket() as s:s.bind(('127.0.0.1',0));cls.port=s.getsockname()[1]
   (cls.root/'config/config.json').write_text(json.dumps({'port':cls.port,'broadcast':False,'disable_model_filtering':True,'auto_check_model_updates':False}))
+  cls.external=cls.root/'external.bin';cls.external.write_bytes(b'preserve this external artifact')
+  (cls.root/'config/user_models.json').write_text(json.dumps({'ZZExternalFile':{'recipe':'whispercpp','source':'local_path','checkpoints':{'main':str(cls.external)},'labels':['transcription']}}))
   cls.log=open(cls.root/'server.log','w');cls.process=subprocess.Popen([BINARY,str(cls.root/'cache'),str(cls.root/'config'),'--host','127.0.0.1','--port',str(cls.port)],stdout=cls.log,stderr=cls.log,env={**os.environ,'HOME':str(cls.root),'XDG_RUNTIME_DIR':str(cls.root/'run')})
   for _ in range(150):
    try:
@@ -64,6 +66,10 @@ class ApiContract(unittest.TestCase):
   s,_=self.request('juiced/import/chunk?id='+j['id']+'&offset=0',b'x'*32,True);self.assertEqual(s,200)
   s,_=self.request('juiced/import/finish',{'id':j['id'],'name':'BadFixture'});self.assertEqual(s,400)
   s,_=self.request('juiced/import/cancel',{'id':j['id']});self.assertEqual(s,200)
+ def test_local_path_delete_preserves_file(self):
+  before=self.external.read_bytes();s,_=self.request('delete',{'model_name':'user.ZZExternalFile'});self.assertEqual(s,200)
+  self.assertEqual(self.external.read_bytes(),before)
+  self.assertNotIn('ZZExternalFile',json.loads((self.root/'config/user_models.json').read_text()))
  def test_upload_path_rejected(self):
   s,_=self.request('juiced/import/start',{'filename':'../escape.gguf','size':32});self.assertEqual(s,400)
 if __name__=='__main__':unittest.main(verbosity=2)

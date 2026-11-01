@@ -6689,6 +6689,16 @@ void ModelManager::delete_model(const std::string& model_name) {
                                  "Delete the file directly from: " + info.checkpoint());
     }
 
+    // Local-path registrations refer to user-managed files. Removing their
+    // catalog entry must not run Hugging Face cache deletion on an external path.
+    if (info.source == "local_path") {
+        if (!is_user_model_name(canonical_model_name)) {
+            throw std::runtime_error("External model files are user-managed");
+        }
+        unregister_user_model(canonical_model_name);
+        return;
+    }
+
     const ModelResolver resolve_now = [this](const ModelInfo& candidate) {
         ModelInfo fresh = candidate;
         fresh.resolved_paths.clear();

@@ -117,11 +117,9 @@ json JuicedService::cache_profile(const std::string &requested) {
         "Persistent prompt state requires a qualified llama.cpp deployment");
   const auto name = server_.model_manager_->get_public_model_name(
       server_.model_manager_->resolve_model_name(requested));
-  json identity = {{"model", name},
-                   {"recipe", info.recipe},
-                   {"checkpoints", info.checkpoints},
-                   {"engine", "unknown"},
-                   {"files", json::object()}};
+  json identity = {{"profile_schema", 1},   {"model", name},
+                   {"recipe", info.recipe}, {"checkpoints", info.checkpoints},
+                   {"engine", "unknown"},   {"files", json::object()}};
   for (const auto &[role, path] : info.resolved_paths) {
     auto canonical = std::filesystem::canonical(path);
     identity["files"][role] = {
