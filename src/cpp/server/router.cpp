@@ -3021,7 +3021,7 @@ json Router::get_pinned_helper_counts() const {
 void Router::set_model_pinned(const std::string& model_name, bool pinned) {
     std::unique_lock<std::mutex> lock(load_mutex_);
     wait_for_slot_clearance(lock);
-    WrappedServer* server = find_server_by_model_name(model_name);
+    WrappedServer* server = find_server_by_model_name(resolve_model_name(model_name));
     if (!server) {
         throw std::runtime_error("Model not loaded: " + model_name);
     }

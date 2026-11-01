@@ -313,8 +313,12 @@ void JuicedService::reconcile() {
     ordered.emplace_back(item.key(), item.value());
   auto weight = [&](const std::string &name) {
     for (const auto &m : catalog)
-      if (m.value("id", "") == name)
+      if (m.value("id", "") == name) {
+        if (m.value("service", "") == "Speak" ||
+            m.value("service", "") == "Transcribe")
+          return 0.0;
         return m.value("size", 1000.0);
+      }
     return 1000.0;
   };
   std::stable_sort(ordered.begin(), ordered.end(),
