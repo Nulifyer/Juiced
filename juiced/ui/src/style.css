@@ -1200,3 +1200,11 @@ audio {
   margin: 0;
   border-radius: 0;
 }
+
+.notice {
+  top: 60px;
+  bottom: auto;
+  left: auto;
+  right: 16px;
+  width: min(420px, calc(100vw - 32px));
+}

@@ -96,7 +96,7 @@ export function Playground({
         activeTurn.current.task !== task)
     )
       abort.current?.abort();
-    setDraft(drafts.current[thread?.id || task] || "");
+    setDraft(drafts.current[task === "Chat" ? thread?.id || task : task] || "");
     setAttachments([]);
     setReceipt(undefined);
     setContent("");
@@ -119,7 +119,7 @@ export function Playground({
   }, [audio]);
   function edit(s: string) {
     setDraft(s);
-    drafts.current[thread?.id || task] = s;
+    drafts.current[task === "Chat" ? thread?.id || task : task] = s;
   }
   async function save(t: Thread, activate = true) {
     const result = await api<Thread>("juiced/thread", t);

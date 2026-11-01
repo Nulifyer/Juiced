@@ -65,6 +65,11 @@ export default function App() {
     [cache, setCache] = useState<any>(),
     [saving, setSaving] = useState(false),
     [threadSearch, setThreadSearch] = useState("");
+  useEffect(() => {
+    if (!notice) return;
+    const timer = setTimeout(() => setNotice(""), 8000);
+    return () => clearTimeout(timer);
+  }, [notice]);
   const notify = useCallback((s: string) => setNotice(s), []);
   const refresh = useCallback(async () => {
     const [catalog, transfers] = await Promise.all([
