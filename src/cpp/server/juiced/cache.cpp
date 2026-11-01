@@ -84,8 +84,12 @@ bool JuicedService::unleased_protocol(const httplib::Request &req,
                                       httplib::Response &res) {
   try {
     auto body = json::parse(req.body);
+    auto requested = body.value("model", "");
+    if (requested.size() > 7 &&
+        requested.substr(requested.size() - 7) == ":latest")
+      requested.resize(requested.size() - 7);
     auto name = server_.model_manager_->get_public_model_name(
-        server_.model_manager_->resolve_model_name(body.value("model", "")));
+        server_.model_manager_->resolve_model_name(requested));
     std::lock_guard<std::mutex> lock(mutex_);
     bool qualified = false;
     for (const auto &[fingerprint, profile] :

@@ -127,8 +127,8 @@ export default function App() {
       return () => document.removeEventListener("keydown", close);
     }
   }, [mobile]);
-  const updateThread = useCallback((t: Thread) => {
-    setThread(t);
+  const updateThread = useCallback((t: Thread, activate = true) => {
+    setThread((current) => (activate || current?.id === t.id ? t : current));
     setThreads((prev) =>
       [t, ...prev.filter((x) => x.id !== t.id)].sort(
         (a, b) => (b.updated || 0) - (a.updated || 0),

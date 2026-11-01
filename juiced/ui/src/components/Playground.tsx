@@ -18,7 +18,7 @@ type Props = {
   thread: Thread | null;
   task: string;
   notify: (s: string) => void;
-  onThread: (t: Thread) => void;
+  onThread: (t: Thread, activate?: boolean) => void;
   openModels: () => void;
 };
 function textOf(m: Message) {
@@ -53,6 +53,9 @@ export function Playground({
     [compareModels, setCompareModels] = useState<string[]>([]),
     [comparison, setComparison] = useState<any[]>([]),
     [advanced, setAdvanced] = useState(false);
+  const activeTurn = useRef<{ thread: string | null; task: string } | null>(
+    null,
+  );
   const abort = useRef<AbortController | null>(null),
     recorder = useRef<MediaRecorder | null>(null),
     media = useRef<MediaStream | null>(null),
@@ -87,6 +90,12 @@ export function Playground({
       );
   }, [models, task, thread?.id]);
   useEffect(() => {
+    if (
+      activeTurn.current &&
+      (activeTurn.current.thread !== (thread?.id || null) ||
+        activeTurn.current.task !== task)
+    )
+      abort.current?.abort();
     setDraft(drafts.current[thread?.id || task] || "");
     setAttachments([]);
     setReceipt(undefined);
@@ -112,9 +121,9 @@ export function Playground({
     setDraft(s);
     drafts.current[thread?.id || task] = s;
   }
-  async function save(t: Thread) {
+  async function save(t: Thread, activate = true) {
     const result = await api<Thread>("juiced/thread", t);
-    onThread(result);
+    onThread(result, activate);
     return result;
   }
   async function attach(files: FileList | null) {
@@ -236,6 +245,7 @@ export function Playground({
     setReasoning("");
     setReceipt(undefined);
     abort.current = new AbortController();
+    activeTurn.current = { thread: thread?.id || null, task };
     try {
       if (task === "Speak") {
         await speak(draft, model);
@@ -292,6 +302,7 @@ export function Playground({
           model,
           messages: [],
         }));
+      activeTurn.current = { thread: t.id, task };
       t = await save({ ...t, model, messages: [...t.messages, message] });
       edit("");
       setAttachments([]);
@@ -306,17 +317,20 @@ export function Playground({
         t.id,
       );
       setReceipt(out.receipt);
-      await save({
-        ...t,
-        messages: [
-          ...t.messages,
-          {
-            role: "assistant",
-            content: out.answer,
-            ...(out.thinking ? { reasoning_content: out.thinking } : {}),
-          },
-        ],
-      });
+      await save(
+        {
+          ...t,
+          messages: [
+            ...t.messages,
+            {
+              role: "assistant",
+              content: out.answer,
+              ...(out.thinking ? { reasoning_content: out.thinking } : {}),
+            },
+          ],
+        },
+        false,
+      );
       setContent("");
       setReasoning("");
     } catch (e) {
@@ -326,6 +340,7 @@ export function Playground({
     } finally {
       setWorking(false);
       abort.current = null;
+      activeTurn.current = null;
     }
   }
   async function speak(text: string, id?: string) {

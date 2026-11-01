@@ -1,7 +1,8 @@
 # syntax=docker/dockerfile:1
-FROM ubuntu:24.04 AS manager
+FROM ubuntu:24.04 AS toolchain
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends build-essential cmake ninja-build libssl-dev libcurl4-openssl-dev libzstd-dev pkg-config libdrm-dev git python3 curl ca-certificates && rm -rf /var/lib/apt/lists/*
+FROM toolchain AS manager
 WORKDIR /src
 COPY . .
 RUN printf '2026.44.1-juiced\n' > .version && cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_WEB_APP=OFF -DBUILD_TAURI_APP=OFF -DBUILD_TESTING=ON && cmake --build build -j4 --target lemond lemonade test_backend_mode_contract && ctest --test-dir build --output-on-failure -R '^BackendModeContractTest$'
@@ -16,19 +17,22 @@ RUN bun install --frozen-lockfile
 COPY juiced/ui/ ./
 RUN bun run build
 
-FROM manager AS futo
+FROM toolchain AS futo
 RUN mkdir -p /native && curl --fail --location --retry 3 'https://gitlab.futo.org/api/v4/projects/keyboard%2Ftranscribe.cpp/repository/archive.tar.gz?sha=26d75933c16b2cec228e34c69e92a6c3c154b97c' -o /tmp/transcribe.tar.gz && tar -xzf /tmp/transcribe.tar.gz --strip-components=1 -C /native && rm /tmp/transcribe.tar.gz
 RUN cmake -S /native -B /native/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=OFF -DTRANSCRIBE_BUILD_TESTS=OFF -DTRANSCRIBE_USE_SYSTEM_BLAS=OFF -DTRANSCRIBE_VULKAN=OFF -DTRANSCRIBE_CUDA=OFF -DTRANSCRIBE_HIP=OFF -DTRANSCRIBE_METAL=OFF -DTRANSCRIBE_BUILD_SHARED=ON && cmake --build /native/build --target transcribe-cli -j4
-RUN mkdir -p /out/futo/lib /out/futo/licenses && g++ -std=c++17 -O2 -pthread -I/native/include -I/native/examples/common -I/src/build/_deps/httplib-src -I/src/build/_deps/json-src/single_include /src/juiced/runtime/futo_server.cpp -L/native/build/src -ltranscribe -Wl,-rpath-link,/native/build/ggml/src -o /out/futo/futo-server && find /native/build -name '*.so*' -exec cp -L '{}' /out/futo/lib/ ';' && cp /native/LICENSE /out/futo/licenses/transcribe.txt && cp /native/THIRD-PARTY-LICENSES.md /out/futo/licenses/ && cp /native/ggml/LICENSE /out/futo/licenses/ggml.txt
+COPY --from=manager /src/build/_deps/httplib-src/httplib.h /include/httplib.h
+COPY --from=manager /src/build/_deps/json-src/single_include/ /include/
+COPY juiced/runtime/futo_server.cpp /adapter/futo_server.cpp
+RUN mkdir -p /out/futo/lib /out/futo/licenses && g++ -std=c++17 -O2 -pthread -I/native/include -I/native/examples/common -I/include /adapter/futo_server.cpp -L/native/build/src -ltranscribe -Wl,-rpath-link,/native/build/ggml/src -o /out/futo/futo-server && find /native/build -name '*.so*' -exec cp -L '{}' /out/futo/lib/ ';' && cp /native/LICENSE /out/futo/licenses/transcribe.txt && cp /native/THIRD-PARTY-LICENSES.md /out/futo/licenses/ && cp /native/ggml/LICENSE /out/futo/licenses/ggml.txt
 RUN printf '#!/bin/sh\nexport LD_LIBRARY_PATH=/opt/juiced/futo/lib\nexec /opt/juiced/futo/futo-server "$@"\n' > /out/futo/futo-asr-server && chmod 755 /out/futo/futo-asr-server
 
-FROM manager AS parakeet
+FROM toolchain AS parakeet
 RUN git clone --recursive https://github.com/mudler/parakeet.cpp.git /native && cd /native && git checkout da8bb4c45d08e081e759849bc6ee0a38720eb0b9 && git submodule update --init --recursive
 RUN cmake -S /native -B /native/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=OFF -DPARAKEET_BUILD_SERVER=ON -DPARAKEET_BUILD_TESTS=ON && cmake --build /native/build -j4 && ctest --test-dir /native/build --output-on-failure -LE model && mkdir -p /out/parakeet/bin /out/parakeet/lib /out/parakeet/licenses && cp /native/build/examples/server/parakeet-server /out/parakeet/bin/ && find /native/build -name '*.so*' -exec cp -L '{}' /out/parakeet/lib/ ';' && cp /native/LICENSE /out/parakeet/licenses/parakeet.txt
 RUN printf '#!/bin/sh\nexport LD_LIBRARY_PATH=/opt/juiced/parakeet/lib\nexec /opt/juiced/parakeet/bin/parakeet-server "$@"\n' > /out/parakeet/parakeet-server && chmod 755 /out/parakeet/parakeet-server
 
 # This pin includes checkpoint/draft persistence missing from the stock Vulkan pin.
-FROM manager AS llama
+FROM toolchain AS llama
 RUN apt-get update && apt-get install -y --no-install-recommends libvulkan-dev glslc spirv-headers && rm -rf /var/lib/apt/lists/*
 RUN git clone https://github.com/ggml-org/llama.cpp.git /native && cd /native && git checkout 785322d17f2d51e5185cf996a1f4e46d87640841
 RUN cmake -S /native -B /native/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DGGML_VULKAN=ON -DGGML_NATIVE=OFF -DLLAMA_CURL=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_SERVER=ON && cmake --build /native/build --target llama-server -j4 && mkdir -p /out/llama/bin /out/llama/lib /out/llama/licenses && cp /native/build/bin/llama-server /out/llama/bin/ && find /native/build -name '*.so*' -exec cp -L '{}' /out/llama/lib/ ';' && cp /native/LICENSE /out/llama/licenses/llama.txt

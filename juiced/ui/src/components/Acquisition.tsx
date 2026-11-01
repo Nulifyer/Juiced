@@ -101,6 +101,12 @@ export function Acquisition({
       main: variants.checkpoint + ":" + variant,
     };
     if (projector) checkpoints.mmproj = variants.checkpoint + ":" + projector;
+    if (models.some((m) => m.id === name)) {
+      notify(
+        "This name already exists. Include the publisher quantization in the variant name before downloading.",
+      );
+      return;
+    }
     await pull("user." + name, {
       recipe: variants.recipe || "llamacpp",
       checkpoints,
