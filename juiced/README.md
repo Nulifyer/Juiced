@@ -52,7 +52,9 @@ Upstream Lemonade base: v2026.44.1, commit69948a7d40afbf91f6ad990d8b863c83ce5cc7
 The root LICENSE and existing upstream history are retained. T3 UI extraction is
 pinned with its MIT notice in `juiced/ui/LICENSE.t3code` and `T3-SOURCES.json`.
 FUTO and Parakeet run as native subprocesses with their real backend identities;
-each runtime bundle includes its source-license notices. Weights retain their
+each runtime bundle includes its source-license notices. Browser dependency
+notices are generated from bundled modules at `/THIRD_PARTY_NOTICES.txt`.
+Native build-dependency notices are retained under `/opt/juiced/licenses`. Weights retain their
 publisher licenses and are not included in the image.
 
 ## Release and deployment

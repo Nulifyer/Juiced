@@ -7,6 +7,7 @@ WORKDIR /src
 COPY . .
 RUN printf '2026.44.1-juiced\n' > .version && cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_WEB_APP=OFF -DBUILD_TAURI_APP=OFF -DBUILD_TESTING=ON && cmake --build build -j4 --target lemond lemonade test_backend_mode_contract && ctest --test-dir build --output-on-failure -R '^BackendModeContractTest$'
 RUN python3 juiced/tests/test_api.py build/lemond
+RUN mkdir -p /out/licenses && cd /src/build/_deps && find . -maxdepth 2 -type f \( -iname 'license*' -o -iname 'copying*' -o -iname 'notice*' \) -exec cp --parents '{}' /out/licenses/ ';'
 
 FROM oven/bun:1.4.3 AS bun
 FROM node:22-bookworm-slim AS ui
@@ -29,6 +30,7 @@ RUN printf '#!/bin/sh\nexport LD_LIBRARY_PATH=/opt/juiced/futo/lib\nexec /opt/ju
 FROM toolchain AS parakeet
 RUN git clone --recursive https://github.com/mudler/parakeet.cpp.git /native && cd /native && git checkout da8bb4c45d08e081e759849bc6ee0a38720eb0b9 && git submodule update --init --recursive
 RUN cmake -S /native -B /native/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=OFF -DPARAKEET_BUILD_SERVER=ON -DPARAKEET_BUILD_TESTS=ON && cmake --build /native/build -j4 && ctest --test-dir /native/build --output-on-failure -LE model && mkdir -p /out/parakeet/bin /out/parakeet/lib /out/parakeet/licenses && cp /native/build/examples/server/parakeet-server /out/parakeet/bin/ && find /native/build -name '*.so*' -exec cp -L '{}' /out/parakeet/lib/ ';' && cp /native/LICENSE /out/parakeet/licenses/parakeet.txt
+RUN cd /native && find . -type f \( -iname 'license*' -o -iname 'copying*' -o -iname 'notice*' \) -not -path './build/*' -not -path './.git/*' -exec cp --parents '{}' /out/parakeet/licenses/ ';'
 RUN printf '#!/bin/sh\nexport LD_LIBRARY_PATH=/opt/juiced/parakeet/lib\nexec /opt/juiced/parakeet/bin/parakeet-server "$@"\n' > /out/parakeet/parakeet-server && chmod 755 /out/parakeet/parakeet-server
 
 # Verified upstream release, including checkpoint/draft persistence. No local engine fork.
@@ -43,6 +45,7 @@ ARG SERVICE_VERSION=development
 LABEL org.opencontainers.image.title="Juiced" org.opencontainers.image.source="https://github.com/Nulifyer/Juiced" org.opencontainers.image.revision="${SOURCE_REVISION}" org.opencontainers.image.version="${SERVICE_VERSION}" org.opencontainers.image.description="Local multi-backend model appliance derived from Lemonade; T3-derived model library and playground"
 COPY --from=manager /src/build/lemond /src/build/lemonade /opt/lemonade/
 COPY --from=manager /src/build/resources/ /opt/lemonade/resources/
+COPY --from=manager /out/licenses/ /opt/juiced/licenses/build-dependencies/
 COPY --from=ui /web/ /opt/lemonade/resources/juiced/
 COPY --from=futo /out/ /opt/juiced/
 COPY --from=parakeet /out/ /opt/juiced/
@@ -51,7 +54,7 @@ COPY LICENSE /opt/juiced/licenses/lemonade-Apache-2.0.txt
 COPY juiced/ui/LICENSE.t3code juiced/ui/T3-SOURCES.json /opt/juiced/licenses/
 RUN mkdir -p /data/config /data/cache /data/huggingface /data/prompt-state /library && chown -R 10001:10001 /data /opt/juiced && chmod 700 /data/config /data/prompt-state
 COPY juiced/runtime/defaults.json /opt/juiced/defaults.json
-ENV HOME=/opt/lemonade HF_HOME=/data/huggingface LEMONADE_DEFAULTS_PATH=/opt/juiced/defaults.json
+ENV HOME=/opt/lemonade HF_HOME=/data/huggingface XDG_CACHE_HOME=/data/cache/xdg LEMONADE_DEFAULTS_PATH=/opt/juiced/defaults.json
 USER 10001:10001
 WORKDIR /opt/lemonade
 EXPOSE 8080

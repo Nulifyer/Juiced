@@ -22,7 +22,8 @@ def engine(address,path,body=None):
  return json.loads(subprocess.check_output(cmd,text=True))
 def wait_loaded(loaded):
  for _ in range(120):
-  m=next(x for x in call('juiced/catalog')['data'] if x['id']==model)
+  m=next((x for x in call('juiced/catalog')['data'] if x['id']==model),None)
+  if m is None:time.sleep(.1);continue
   if m['loaded']==loaded:return m
   if m.get('operation',{}).get('state')=='failed':raise AssertionError(m['operation'])
   time.sleep(.1)
@@ -49,7 +50,7 @@ proof['restored']=engine(address,'/slots/0?action=restore',{'filename':'engine-a
 proof['reuse']=engine(address,'/v1/chat/completions',{**body,'id_slot':0});assert proof['reuse']['timings']['cache_n']>30,proof
 assert proof['reuse']['choices'][0]['message']['content']==proof['cold']['choices'][0]['message']['content'],proof
 call('juiced/cache/qualify',{'model':model,'fingerprint':profile2['fingerprint'],'evidence':'Real CPU engine save/reload/restore, >30 reused tokens and identical greedy output; test_engine_cache.py'})
-call('juiced/cache',{'mode':'persistent'})
+call('juiced/cache',{'mode':'persistent','disk_budget_gib':1})
 def ask(thread,stream,cache_prompt=True):
  q=urllib.request.Request(base+'chat/completions',data=json.dumps({**body,'cache_prompt':cache_prompt,'stream':stream,'stream_options':{'include_usage':True}}).encode(),headers={'Content-Type':'application/json','X-Juiced-Thread-Id':thread})
  with urllib.request.urlopen(q,timeout=180) as r:
