@@ -371,14 +371,6 @@ summary:focus-visible {
   font-size: 10px;
   color: var(--muted-foreground);
 }
-.capabilities {
-  display: inline-flex;
-  gap: 5px;
-  align-items: center;
-}
-.capabilities span {
-  display: inline-flex;
-}
 .badge {
   font-size: 10px;
   border: 1px solid var(--border);

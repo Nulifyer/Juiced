@@ -1,3 +1,13 @@
+/* Keep hidden labels inside list clipping instead of the document's scroll area. */
+.capabilities {
+  position: relative;
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+}
+.capabilities span {
+  display: inline-flex;
+}
 .workspace-toolbar {
   display: flex;
   gap: 10px;
