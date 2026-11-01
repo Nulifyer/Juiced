@@ -227,7 +227,13 @@ export default function App() {
           >
             <MenuIcon size={18} />
           </Button>
-          <span className="brand-mark">◒</span>
+          <img
+            className="brand-mark"
+            src="/juiced-icon.svg"
+            alt=""
+            width="26"
+            height="26"
+          />
           <strong>Juiced</strong>
         </div>
         <div className="topbar-right">
