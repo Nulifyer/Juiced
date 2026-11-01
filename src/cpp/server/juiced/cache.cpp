@@ -149,7 +149,7 @@ json JuicedService::cache_profile(const std::string &requested) {
   auto options = identity["options"].dump();
   bool configured =
       options.find(snapshot_directory_.string()) != std::string::npos &&
-      identity["engine"].get<std::string>().find("785322d") !=
+      identity["engine"].get<std::string>().find("dde879b") !=
           std::string::npos;
   auto fingerprint = digest(identity.dump());
   bool qualified;

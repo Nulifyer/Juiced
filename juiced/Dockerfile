@@ -31,12 +31,10 @@ RUN git clone --recursive https://github.com/mudler/parakeet.cpp.git /native && 
 RUN cmake -S /native -B /native/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=OFF -DPARAKEET_BUILD_SERVER=ON -DPARAKEET_BUILD_TESTS=ON && cmake --build /native/build -j4 && ctest --test-dir /native/build --output-on-failure -LE model && mkdir -p /out/parakeet/bin /out/parakeet/lib /out/parakeet/licenses && cp /native/build/examples/server/parakeet-server /out/parakeet/bin/ && find /native/build -name '*.so*' -exec cp -L '{}' /out/parakeet/lib/ ';' && cp /native/LICENSE /out/parakeet/licenses/parakeet.txt
 RUN printf '#!/bin/sh\nexport LD_LIBRARY_PATH=/opt/juiced/parakeet/lib\nexec /opt/juiced/parakeet/bin/parakeet-server "$@"\n' > /out/parakeet/parakeet-server && chmod 755 /out/parakeet/parakeet-server
 
-# This pin includes checkpoint/draft persistence missing from the stock Vulkan pin.
+# Verified upstream release, including checkpoint/draft persistence. No local engine fork.
 FROM toolchain AS llama
-RUN apt-get update && apt-get install -y --no-install-recommends libvulkan-dev glslc spirv-headers && rm -rf /var/lib/apt/lists/*
-RUN git clone https://github.com/ggml-org/llama.cpp.git /native && cd /native && git checkout 785322d17f2d51e5185cf996a1f4e46d87640841
-RUN cmake -S /native -B /native/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DGGML_VULKAN=ON -DGGML_NATIVE=OFF -DLLAMA_CURL=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_SERVER=ON && cmake --build /native/build --target llama-server -j4 && mkdir -p /out/llama/bin /out/llama/lib /out/llama/licenses && cp /native/build/bin/llama-server /out/llama/bin/ && find /native/build -name '*.so*' -exec cp -L '{}' /out/llama/lib/ ';' && cp /native/LICENSE /out/llama/licenses/llama.txt
-RUN printf '#!/bin/sh\nexport LD_LIBRARY_PATH=/opt/juiced/llama/lib\nexec /opt/juiced/llama/bin/llama-server "$@"\n' > /out/llama/llama-server && chmod 755 /out/llama/llama-server && printf '785322d17f2d51e5185cf996a1f4e46d87640841\n' > /out/llama/source-revision
+RUN mkdir -p /out/llama/bin /out/llama/licenses && curl --fail --location --retry 3 https://github.com/ggml-org/llama.cpp/releases/download/b12032/llama-b12032-bin-ubuntu-vulkan-x64.tar.gz -o /tmp/llama.tar.gz && echo 'f75e7107f9450034c5467492c41e9ed91816e2d815fc4b802c6bd58de7d5b126  /tmp/llama.tar.gz' | sha256sum -c - && tar -xzf /tmp/llama.tar.gz --strip-components=1 -C /out/llama/bin && cp /out/llama/bin/LICENSE /out/llama/licenses/llama.txt && rm /tmp/llama.tar.gz
+RUN printf '#!/bin/sh\nexport LD_LIBRARY_PATH=/opt/juiced/llama/bin\nexec /opt/juiced/llama/bin/llama-server "$@"\n' > /out/llama/llama-server && chmod 755 /out/llama/llama-server && printf 'b12032 dde879bc4f954b809892fd0d660515f42536394a\n' > /out/llama/source-revision
 
 FROM ghcr.io/lemonade-sdk/lemonade-server@sha256:4602f637446980aeb25c3b6350d4fe414770f10f8372b459d7ba32b577347185
 USER root

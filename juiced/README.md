@@ -35,7 +35,8 @@ There are no shell, browser, MCP or autonomous agent tools in this application.
 
 Cache capability is reported explicitly. Memory reuse is engine-owned. Persistent
 Chat Completions reuse is opt-in and applies only to exact qualified engine/model
-profiles. The acceptance fixture must verify useful reuse after save/restart/
+profiles. The image uses the checksum-verified upstream llama.cpp b12032 Vulkan
+release, not a locally patched engine. The acceptance fixture must verify useful reuse after save/restart/
 restore before an operator records qualification. A saved file alone does not
 qualify it. Playground requests supply stable thread IDs; snapshots have matching
 prefix/profile keys, checksums, expiry and a retained-state disk budget. Temporary

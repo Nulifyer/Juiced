@@ -9,6 +9,7 @@ import {
   ExternalLink,
   LoaderCircle,
 } from "lucide-react";
+import { Dialog } from "@base-ui/react/dialog";
 import { Button } from "./t3/button";
 import { api, bytes, type Model } from "../api";
 export function Acquisition({
@@ -354,65 +355,78 @@ export function Acquisition({
             </article>
           ))}
           {variants && (
-            <div className="variant-panel">
-              <div className="dialog-heading">
-                <h2>{variants.suggested_name}</h2>
-                <Button
-                  size="icon-xs"
-                  variant="ghost"
-                  aria-label="Close file review"
-                  onClick={() => setVariants(undefined)}
-                >
-                  <X size={16} />
-                </Button>
-              </div>
-              <p className="page-note">
-                Choose the downloaded variant and companion projector. Names
-                remain publisher names.
-              </p>
-              <label>
-                Model name
-                <input value={name} onChange={(e) => setName(e.target.value)} />
-              </label>
-              <label>
-                Quantization
-                <select
-                  value={variant}
-                  onChange={(e) => setVariant(e.target.value)}
-                >
-                  {variants.variants?.map((v: any) => (
-                    <option value={v.name} key={v.name}>
-                      {v.name} · {bytes(v.size_bytes || 0)} ·{" "}
-                      {v.files?.length || 1} file(s)
-                    </option>
-                  ))}
-                </select>
-              </label>
-              {variants.mmproj_files?.length > 0 && (
-                <label>
-                  Vision projector
-                  <select
-                    value={projector}
-                    onChange={(e) => setProjector(e.target.value)}
+            <Dialog.Root
+              open
+              onOpenChange={(open) => {
+                if (!open) setVariants(undefined);
+              }}
+            >
+              <Dialog.Portal>
+                <Dialog.Backdrop className="dialog-backdrop" />
+                <Dialog.Popup className="model-drawer variant-panel">
+                  <div className="dialog-heading">
+                    <Dialog.Title>{variants.suggested_name}</Dialog.Title>
+                    <Button
+                      size="icon-xs"
+                      variant="ghost"
+                      aria-label="Close file review"
+                      onClick={() => setVariants(undefined)}
+                    >
+                      <X size={16} />
+                    </Button>
+                  </div>
+                  <p className="page-note">
+                    Choose the downloaded variant and companion projector. Names
+                    remain publisher names.
+                  </p>
+                  <label>
+                    Model name
+                    <input
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
+                    />
+                  </label>
+                  <label>
+                    Quantization
+                    <select
+                      value={variant}
+                      onChange={(e) => setVariant(e.target.value)}
+                    >
+                      {variants.variants?.map((v: any) => (
+                        <option value={v.name} key={v.name}>
+                          {v.name} · {bytes(v.size_bytes || 0)} ·{" "}
+                          {v.files?.length || 1} file(s)
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  {variants.mmproj_files?.length > 0 && (
+                    <label>
+                      Vision projector
+                      <select
+                        value={projector}
+                        onChange={(e) => setProjector(e.target.value)}
+                      >
+                        <option value="">Text only</option>
+                        {variants.mmproj_files.map((f: string) => (
+                          <option key={f}>{f}</option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
+                  <p className="page-note">
+                    Backend: {variants.recipe}. Requires architecture support;
+                    repository tags are not conformance tests.
+                  </p>
+                  <Button
+                    onClick={() => void download()}
+                    disabled={!variant || !name}
                   >
-                    <option value="">Text only</option>
-                    {variants.mmproj_files.map((f: string) => (
-                      <option key={f}>{f}</option>
-                    ))}
-                  </select>
-                </label>
-              )}
-              <p className="page-note">
-                Backend: {variants.recipe}. Requires architecture support;
-                repository tags are not conformance tests.
-              </p>
-              <Button
-                onClick={() => void download()}
-                disabled={!variant || !name}
-              >
-                <Download size={15} /> Download selected variant
-              </Button>
-            </div>
+                    <Download size={15} /> Download selected variant
+                  </Button>
+                </Dialog.Popup>
+              </Dialog.Portal>
+            </Dialog.Root>
           )}
         </>
       )}

@@ -1195,3 +1195,8 @@ audio {
   flex-wrap: wrap;
   justify-content: flex-end;
 }
+
+.model-drawer.variant-panel {
+  margin: 0;
+  border-radius: 0;
+}
