@@ -9,6 +9,7 @@ processes and serving policy. Agent tools/workspaces remain in a separate stack.
 - Manager: `cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_WEB_APP=OFF -DBUILD_TAURI_APP=OFF`, then `cmake --build build -j4 --target lemond`.
 - UI: `cd juiced/ui && bun install --frozen-lockfile && bun run build`.
 - Native API tests: `python3 juiced/tests/test_api.py build/lemond`.
+- Actual engine cache gate: `python3 juiced/tests/test_engine_cache.py --help`; uses a checksum-verified tiny CPU fixture in release CI, then real-model acceptance on Mage.
 - Container: `docker build -f juiced/Dockerfile -t juiced:development .`.
 
 The UI build produces root `web/`; the image copies it into native resources.
@@ -42,7 +43,7 @@ qualify it. Playground requests supply stable thread IDs; snapshots have matchin
 prefix/profile keys, checksums, expiry and a retained-state disk budget. Temporary
 snapshot writes require additional free disk. Retain/release and forget affect
 saved computation independently of messages or weights. Requests without a stable
-thread ID do not create persistent snapshots. Other inference protocols are not
+thread ID do not create persistent snapshots. Snapshot misses, invalid files and incompatible prefixes rebuild inside their leased slot. An unavailable admission path returns a retryable503 instead of racing another request. Other inference protocols are not
 qualified for persistent session snapshots in this first release.
 
 ## Provenance
