@@ -46,8 +46,8 @@ jobs:
           python3 -c 'import json; assert json.load(open("state.json"))["version"] == "0.1.0"; assert "data" in json.load(open("catalog.json"))'
           curl --fail --location --silent --show-error --retry 3 https://huggingface.co/ggml-org/models/resolve/main/tinyllamas/stories15M-q4_0.gguf -o stories15M-q4_0.gguf
           echo '66967fbece6dbe97886593fdbb73589584927e29119ec31f08090732d1861739  stories15M-q4_0.gguf' | sha256sum -c -
-          docker cp stories15M-q4_0.gguf juiced-smoke:/tmp/stories15M-q4_0.gguf
-          python3 juiced/tests/test_engine_cache.py --url http://127.0.0.1:18080 --container juiced-smoke --model-file /tmp/stories15M-q4_0.gguf --snapshots /data/prompt-state --out engine-cache-proof.json
+          docker cp stories15M-q4_0.gguf juiced-smoke:/library/stories15M-q4_0.gguf
+          python3 juiced/tests/test_engine_cache.py --url http://127.0.0.1:18080 --container juiced-smoke --model-file /library/stories15M-q4_0.gguf --snapshots /data/prompt-state --out engine-cache-proof.json
           docker stop juiced-smoke
       - name: Publish accepted container
         run: |

@@ -266,6 +266,17 @@ void JuicedService::cache_api(const httplib::Request &req,
     auto mode = body.value("mode", state_["cache"].value("mode", "memory"));
     if (mode != "memory" && mode != "off" && mode != "persistent")
       throw std::invalid_argument("Invalid cache mode");
+    if (mode != state_["cache"].value("mode", "memory")) {
+      for (const auto &[model, slots] : active_slots_)
+        if (!slots.empty()) {
+          output(
+              res,
+              {{"error",
+                "Finish or stop active requests before changing cache mode"}},
+              409);
+          return;
+        }
+    }
     if (mode == "persistent" && state_["qualified_profiles"].empty()) {
       output(
           res,
@@ -361,10 +372,12 @@ void JuicedService::chat(const httplib::Request &original,
       return;
     }
     const auto thread = original.get_header_value("X-Juiced-Thread-Id");
-    const bool identified =
+    const bool has_thread =
         !thread.empty() && thread.size() < 160 &&
         thread.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRS"
                                  "TUVWXYZ0123456789._-") == std::string::npos;
+    const bool reuse_enabled = request.value("cache_prompt", true);
+    const bool identified = has_thread && reuse_enabled;
     const auto identity = digest(original.get_header_value("Authorization"));
     json semantics = json::object();
     for (const std::string key : {"tools", "tool_choice", "response_format",
@@ -377,7 +390,7 @@ void JuicedService::chat(const httplib::Request &original,
     json saved;
     {
       std::lock_guard<std::mutex> lock(mutex_);
-      if (identified && active_snapshots_.count(key)) {
+      if (has_thread && active_snapshots_.count(key)) {
         active_slots_[model].erase(slot);
         output(res,
                {{"error",
@@ -387,14 +400,19 @@ void JuicedService::chat(const httplib::Request &original,
         return;
       }
       prune_cache_locked();
-      active_snapshots_.insert(key);
+      if (has_thread)
+        active_snapshots_.insert(key);
       if (identified && state_["snapshots"].contains(key))
         saved = state_["snapshots"][key];
     }
-    auto release = [this, model, slot, key] {
+    auto released = std::make_shared<std::atomic<bool>>(false);
+    auto release = [this, model, slot, key, has_thread, released] {
+      if (released->exchange(true))
+        return;
       std::lock_guard<std::mutex> lock(mutex_);
       active_slots_[model].erase(slot);
-      active_snapshots_.erase(key);
+      if (has_thread)
+        active_snapshots_.erase(key);
     };
     // Shared RAII guard survives the streaming content-provider lifetime.
     auto guard = std::shared_ptr<int>(new int(slot), [release](int *p) {
@@ -402,7 +420,7 @@ void JuicedService::chat(const httplib::Request &original,
       delete p;
     });
     auto messages = request.value("messages", json::array());
-    std::string restore = "cold";
+    std::string restore = reuse_enabled ? "cold" : "off";
     if (!saved.is_null()) {
       auto count = saved.value("prefix_messages", size_t(0));
       auto file = snapshot_directory_ / (key + ".bin");
@@ -426,7 +444,7 @@ void JuicedService::chat(const httplib::Request &original,
     }
     res.set_header("X-Juiced-Cache", restore);
     request["id_slot"] = slot;
-    request["cache_prompt"] = true;
+    request["cache_prompt"] = reuse_enabled;
     auto req = std::make_shared<httplib::Request>(original);
     req->body = request.dump();
     auto finish = [this, guard, identified, key, thread, model, profile,
@@ -523,41 +541,67 @@ void JuicedService::chat(const httplib::Request &original,
     server_.handle_chat_completions(*req, res);
     if (res.content_provider_) {
       struct StreamStatus {
-        std::string pending;
-        bool complete = false, failed = false;
+        std::string pending, terminal;
+        bool complete = false, failed = false, transport_failed = false,
+             done = false;
+        httplib::Headers trailers;
       };
       auto status = std::make_shared<StreamStatus>();
       auto provider = std::move(res.content_provider_);
-      res.content_provider_ = [provider, status](size_t offset, size_t length,
-                                                 httplib::DataSink &sink) {
+      res.content_provider_ = [provider, status, finish,
+                               release](size_t offset, size_t length,
+                                        httplib::DataSink &sink) {
         httplib::DataSink observed;
         observed.write = [&sink, status](const char *data, size_t size) {
-          if (!sink.write(data, size))
-            return false;
           status->pending.append(data, size);
-          size_t cut;
-          while ((cut = status->pending.find('\n')) != std::string::npos) {
-            auto line = status->pending.substr(0, cut);
-            status->pending.erase(0, cut + 1);
-            if (line.rfind("data:", 0) != 0)
-              continue;
-            auto payload = line.substr(5);
-            auto first = payload.find_first_not_of(" \t");
-            if (first == std::string::npos)
-              continue;
-            payload.erase(0, first);
-            if (!payload.empty() && payload.back() == '\r')
-              payload.pop_back();
-            if (payload == "[DONE]")
-              status->complete = true;
-            else {
-              auto event = json::parse(payload, nullptr, false);
-              if (event.is_object() && event.contains("error"))
-                status->failed = true;
+          for (;;) {
+            auto cut = status->pending.find("\n\n");
+            auto crlf = status->pending.find("\r\n\r\n");
+            size_t delimiter = 2;
+            if (crlf != std::string::npos &&
+                (cut == std::string::npos || crlf < cut)) {
+              cut = crlf;
+              delimiter = 4;
+            }
+            if (cut == std::string::npos)
+              break;
+            auto frame = status->pending.substr(0, cut + delimiter);
+            status->pending.erase(0, cut + delimiter);
+            bool terminal = false;
+            std::istringstream lines(frame);
+            std::string line;
+            while (std::getline(lines, line)) {
+              if (line.rfind("data:", 0) != 0)
+                continue;
+              auto payload = line.substr(5);
+              auto first = payload.find_first_not_of(" \t");
+              if (first == std::string::npos)
+                continue;
+              payload.erase(0, first);
+              if (!payload.empty() && payload.back() == '\r')
+                payload.pop_back();
+              if (payload == "[DONE]") {
+                status->complete = true;
+                terminal = true;
+              } else {
+                auto event = json::parse(payload, nullptr, false);
+                if (event.is_object() && event.contains("error"))
+                  status->failed = true;
+              }
+            }
+            if (terminal)
+              status->terminal += frame;
+            else if (!sink.write(frame.data(), frame.size())) {
+              status->transport_failed = true;
+              return false;
             }
           }
           if (status->pending.size() > 128 * 1024) {
             status->failed = true;
+            if (!sink.write(status->pending.data(), status->pending.size())) {
+              status->transport_failed = true;
+              return false;
+            }
             status->pending.clear();
           }
           return true;
@@ -565,24 +609,38 @@ void JuicedService::chat(const httplib::Request &original,
         observed.is_writable = [&sink] {
           return !sink.is_writable || sink.is_writable();
         };
-        observed.done = [&sink] {
-          if (sink.done)
-            sink.done();
+        observed.done = [status] { status->done = true; };
+        observed.done_with_trailer = [status](const httplib::Headers &headers) {
+          status->done = true;
+          status->trailers = headers;
         };
-        observed.done_with_trailer = [&sink](const httplib::Headers &headers) {
-          if (sink.done_with_trailer)
-            sink.done_with_trailer(headers);
+        const bool ok = provider(offset, length, observed);
+        // The turn settles only after its snapshot and lease do. Clients may
+        // immediately send another turn when they receive the terminal SSE
+        // event.
+        finish(status->complete && !status->failed &&
+               !status->transport_failed);
+        release();
+        if (!status->pending.empty() &&
+            !sink.write(status->pending.data(), status->pending.size()))
+          return false;
+        if (!status->terminal.empty() &&
+            !sink.write(status->terminal.data(), status->terminal.size()))
+          return false;
+        if (status->done) {
+          if (!status->trailers.empty() && sink.done_with_trailer)
+            sink.done_with_trailer(status->trailers);
           else if (sink.done)
             sink.done();
-        };
-        return provider(offset, length, observed);
+        }
+        return ok && !status->transport_failed;
       };
       auto previous = std::move(res.content_provider_resource_releaser_);
-      res.content_provider_resource_releaser_ = [previous, finish, guard, req,
-                                                 status](bool ok) {
+      res.content_provider_resource_releaser_ = [previous, release, guard,
+                                                 req](bool ok) {
         if (previous)
           previous(ok);
-        finish(status->complete && !status->failed);
+        release();
       };
     } else
       finish(res.status == -1 || (res.status >= 200 && res.status < 300));
