@@ -1,0 +1,12 @@
+.git
+build
+build-*
+web
+**/node_modules
+**/target
+**/dist
+**/__pycache__
+**/*.tsbuildinfo
+.env
+*.gguf
+*.safetensors

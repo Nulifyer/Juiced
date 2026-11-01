@@ -1,0 +1,60 @@
+name: Juiced container release
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+  packages: write
+concurrency:
+  group: juiced-container-publication
+  cancel-in-progress: false
+jobs:
+  image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build tested image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: juiced/Dockerfile
+          load: true
+          tags: ghcr.io/nulifyer/juiced:${{ github.ref_type == 'tag' && github.ref_name || 'development' }}
+          build-args: |
+            SOURCE_REVISION=${{ github.sha }}
+            SERVICE_VERSION=${{ github.ref_type == 'tag' && github.ref_name || 'development' }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Verify default container
+        run: |
+          image=ghcr.io/nulifyer/juiced:${{ github.ref_type == 'tag' && github.ref_name || 'development' }}
+          docker run -d --name juiced-smoke -p 127.0.0.1:18080:8080 "$image"
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:18080/v1/juiced/state > state.json; then break; fi
+            sleep 2
+          done
+          curl --fail --silent http://127.0.0.1:18080/ | grep -q '<title>Juiced</title>'
+          curl --fail --silent http://127.0.0.1:18080/v1/juiced/catalog > catalog.json
+          python3 -c 'import json; assert json.load(open("state.json"))["version"] == "0.1.0"; assert "data" in json.load(open("catalog.json"))'
+          docker stop juiced-smoke
+      - name: Publish accepted container
+        run: |
+          image=ghcr.io/nulifyer/juiced:${{ github.ref_type == 'tag' && github.ref_name || 'development' }}
+          docker push "$image"
+          if [ "${{ github.ref_type }}" = tag ]; then docker tag "$image" ghcr.io/nulifyer/juiced:latest; docker push ghcr.io/nulifyer/juiced:latest; fi
+          docker inspect "$image" --format '{{json .RepoDigests}}' > image-digest.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-identity
+          path: |
+            image-digest.json
+            state.json
+            catalog.json

@@ -189,3 +189,8 @@ CLAUDE.local.md
 # WiX Toolset build artifacts
 *.msi
 *.wixpdb
+
+# Juiced generated UI
+/juiced/ui/node_modules/
+/juiced/ui/*.tsbuildinfo
+/web/

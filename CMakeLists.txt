@@ -201,6 +201,8 @@ set(LEMON_BACKENDS
     "llamacpp|llamacpp"
     "llamacpp-hrx|hrx"
     "whispercpp|whispercpp"
+    "asr4all|asr4all"
+    "parakeet|parakeet"
     "moonshine|moonshine"
     "kokoro|kokoro"
     "sd-cpp|sdcpp"
@@ -1023,6 +1025,7 @@ include_directories(
 # ============================================================
 set(SOURCES_CORE
     src/cpp/server/server.cpp
+    src/cpp/server/juiced/service.cpp
     src/cpp/server/collection_orchestrator.cpp
     src/cpp/server/jobs/job_ops.cpp
     src/cpp/server/jobs/job_manager.cpp

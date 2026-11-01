@@ -46,7 +46,9 @@ struct RouterDispatchResult {
     Decision decision;
 };
 
+class JuicedService;
 class Server {
+    friend class JuicedService;
 public:
     Server(std::shared_ptr<RuntimeConfig> config,
            const std::string& cache_dir,
@@ -380,6 +382,7 @@ private:
     std::unique_ptr<UpgradableFrontServer> http_front_;
     std::unique_ptr<UpgradableFrontServer> http_front_v6_;
 
+    std::unique_ptr<JuicedService> juiced_;
     std::unique_ptr<Router> router_;
     std::unique_ptr<AliasManager> alias_manager_;
     std::unique_ptr<ModelManager> model_manager_;

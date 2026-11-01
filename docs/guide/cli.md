@@ -396,6 +396,20 @@ The following options are available depending on the recipe being used:
 | `--whispercpp BACKEND` | WhisperCpp backend to use | Auto-detected |
 | `--whispercpp-args ARGS` | Custom arguments to pass to whisper-server | `""` |
 
+#### FUTO transcribe.cpp (`asr4all` recipe)
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--asr4all-threads N` | CPU inference threads | `4` |
+| `--asr4all-commit N` | Committed encoder frames per window | `256` |
+| `--asr4all-right N` | Right context frames | `32` |
+
+#### Parakeet Redux (`parakeet` recipe)
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--parakeet-threads N` | CPU inference threads | `4` |
+
 #### Moonshine (`moonshine` recipe)
 
 | Option | Description | Default |

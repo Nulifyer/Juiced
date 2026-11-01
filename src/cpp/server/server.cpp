@@ -12,6 +12,7 @@
 #include "lemon/routing_policy.h"
 #include "lemon/routing_policy_parser.h"
 #include "lemon/config_file.h"
+#include "lemon/juiced/service.h"
 #include "lemon/jobs/job_manager.h"
 #include "lemon/mcp_server.h"
 #include "lemon/ollama_api.h"
@@ -760,6 +761,7 @@ Server::Server(std::shared_ptr<RuntimeConfig> config,
         admin_api_key_ = api_key_;
     }
 
+    juiced_ = std::make_unique<JuicedService>(*this);
     setup_http_servers();
 
     // Initialize WebSocket server for realtime API and log streaming
@@ -917,6 +919,7 @@ void Server::stop_http_listeners() {
 }
 
 Server::~Server() {
+    if (juiced_) juiced_->stop();
     cancel_download_jobs();
     if (model_manager_) {
         model_manager_->cancel_sync();
@@ -1058,7 +1061,10 @@ httplib::Server::HandlerResponse Server::authenticate_request(const httplib::Req
                         (req.path.rfind("/v0/", 0) == 0) ||
                         (req.path.rfind("/v1/", 0) == 0) ||
                         (req.path == "/mcp");
-    bool is_internal_route = (req.path.rfind("/internal/", 0) == 0);
+    bool is_internal_route = (req.path.rfind("/internal/", 0) == 0) ||
+        (req.path.find("/juiced/") != std::string::npos &&
+         req.path.find("/juiced/catalog") == std::string::npos &&
+         req.path.find("/juiced/state") == std::string::npos);
     bool is_metrics_route = (req.path == "/metrics");
 
     // Authentication hierarchy. Two credentials gate two classes of endpoints:
@@ -1114,6 +1120,7 @@ httplib::Server::HandlerResponse Server::authenticate_request(const httplib::Req
 
 
 void Server::setup_routes(httplib::Server &web_server) {
+    if (juiced_) juiced_->routes(web_server);
     // Add pre-routing handler to log ALL incoming requests (except health checks)
     web_server.set_pre_routing_handler([this](const httplib::Request& req, httplib::Response& res) {
         this->log_request(req);
@@ -2523,6 +2530,9 @@ void Server::auto_load_model_if_needed(
     const std::string& requested_model,
     const json& request_options,
     LoadPurpose load_purpose) {
+    if (juiced_ && !juiced_->allows(requested_model)) {
+        throw std::invalid_argument("This model is disabled by its Juiced loading policy");
+    }
     // A live process follows its current use without a reload: routing work
     // promotes it to RoutingHelper, while direct inference demotes it into the
     // counted Standard pool. Destination-pool admission remains authoritative.
@@ -6259,6 +6269,12 @@ void Server::handle_load(const httplib::Request& req, httplib::Response& res) {
 
     try {
         model_name = request_json["model_name"];
+        if (juiced_ && !juiced_->allows(model_name)) {
+            res.status=409;
+            res.set_content(json{{"error","Model is disabled by its Juiced loading policy"}}.dump(),"application/json");
+            return;
+        }
+
 
         // Cloud models are registered automatically at cache build / cloud-auth
         // / install time, so a cloud model reaching /load is already in the

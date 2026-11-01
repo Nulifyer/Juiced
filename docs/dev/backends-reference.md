@@ -10,6 +10,7 @@ the generator instead. Prose outside the markers is preserved. -->
 | Recipe | Name | Selectable backend | Uses ctx_size | Backends |
 |--------|------|--------------------|---------------|----------|
 | `acestep` | ACE-Step | yes | no | cuda, rocm, vulkan |
+| `asr4all` | FUTO transcribe.cpp | no | no | cpu |
 | `ds4` | DwarfStar4 | no | yes | rocm |
 | `flm` | FastFlowLM NPU | no | yes | npu |
 | `kokoro` | Kokoro | no | no | cpu, metal |
@@ -18,6 +19,7 @@ the generator instead. Prose outside the markers is preserved. -->
 | `moonshine` | Moonshine | no | no | cpu |
 | `onnxruntime` | ONNX Runtime | no | no | cpu |
 | `openmoss` | OpenMOSS TTS | yes | no | cuda, vulkan |
+| `parakeet` | Parakeet Redux | no | no | cpu |
 | `ryzenai-llm` | Ryzen AI LLM | no | yes | npu |
 | `sd-cpp` | StableDiffusion.cpp | yes | no | cpu, cuda, metal, rocm, vulkan |
 | `thenoise` | TheNoise ROCm | yes | no | rocm |
@@ -37,6 +39,7 @@ Each backend has a tier and a format; see [Backend Tiers and Formats](../api/lem
 | `acestep` | cuda | experimental | native | linux, windows | nvidia_gpu |
 | `acestep` | vulkan | experimental | native | linux, windows | amd_gpu; cpu (x86_64); nvidia_gpu |
 | `acestep` | rocm | experimental | native | linux, windows | amd_gpu (gfx103X, gfx110X, gfx1150, gfx1151, gfx1152, gfx120X) |
+| `asr4all` | cpu | experimental | native | linux | cpu (x86_64) |
 | `ds4` | rocm | guest | native | linux | amd_gpu (gfx1151) |
 | `flm` | npu | core | native | linux, windows | amd_npu (XDNA2) |
 | `kokoro` | metal | core | native | macos | metal |
@@ -56,6 +59,7 @@ Each backend has a tier and a format; see [Backend Tiers and Formats](../api/lem
 | `onnxruntime` | cpu | experimental | native | macos | cpu (arm64) |
 | `openmoss` | cuda | experimental | native | linux, windows | nvidia_gpu |
 | `openmoss` | vulkan | experimental | native | linux, windows | amd_gpu; cpu (x86_64); nvidia_gpu |
+| `parakeet` | cpu | experimental | native | linux | cpu (x86_64) |
 | `ryzenai-llm` | npu | core | native | windows | amd_npu (XDNA2) |
 | `sd-cpp` | metal | core | native | macos | metal |
 | `sd-cpp` | cuda | core | native | linux, windows | nvidia_gpu (sm_100, sm_120, sm_121, sm_75, sm_80, sm_86, sm_89, sm_90) |
@@ -92,6 +96,14 @@ Each backend has a tier and a format; see [Backend Tiers and Formats](../api/lem
 | Option | CLI flag | Type | Default | Description |
 |--------|----------|------|---------|-------------|
 | `acestep_backend` | `--acestep` | BACKEND | "" | ACE-Step backend to use |
+
+#### `asr4all` — FUTO transcribe.cpp
+
+| Option | CLI flag | Type | Default | Description |
+|--------|----------|------|---------|-------------|
+| `asr4all_threads` | `--asr4all-threads` | N | 4 | CPU inference threads |
+| `asr4all_commit` | `--asr4all-commit` | N | 256 | Committed encoder frames per window |
+| `asr4all_right` | `--asr4all-right` | N | 32 | Right context frames |
 
 #### `ds4` — DwarfStar4
 
@@ -140,6 +152,12 @@ Each backend has a tier and a format; see [Backend Tiers and Formats](../api/lem
 | Option | CLI flag | Type | Default | Description |
 |--------|----------|------|---------|-------------|
 | `openmoss_backend` | `--openmoss` | BACKEND | "" | OpenMOSS TTS backend to use |
+
+#### `parakeet` — Parakeet Redux
+
+| Option | CLI flag | Type | Default | Description |
+|--------|----------|------|---------|-------------|
+| `parakeet_threads` | `--parakeet-threads` | N | 4 | CPU inference threads |
 
 #### `sd-cpp` — StableDiffusion.cpp
 

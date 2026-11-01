@@ -1,0 +1,31 @@
+{
+  "repository": "https://github.com/pingdotgg/t3code",
+  "revision": "3fd2b855c5c6b9169cdfe3733b34011c1c5ed4b7",
+  "license": "MIT; LICENSE.t3code",
+  "files": {
+    "apps/web/src/components/ui/button.tsx": {
+      "sha256": "c3c48c2aed5e91cfb8a69bccdc7b95e2cf4e984e4383a1182ac8dcda3abc83e8",
+      "use": "button/sidebar primitives extracted; composer/drag/theme adapted to runtime-only presentation"
+    },
+    "apps/web/src/components/ui/sidebar.tsx": {
+      "sha256": "e05949d9f2e14ce21233cf14049151f30c29a48050b2bfd9d70ac4fa43c717dd",
+      "use": "button/sidebar primitives extracted; composer/drag/theme adapted to runtime-only presentation"
+    },
+    "apps/web/src/components/chat/ChatComposer.tsx": {
+      "sha256": "35c5b70f662e20adb6bf4f657b59b12506605b0d79a6ca8a3e717c1c9c6177a6",
+      "use": "button/sidebar primitives extracted; composer/drag/theme adapted to runtime-only presentation"
+    },
+    "apps/web/src/components/chat/ComposerAttachmentStrip.tsx": {
+      "sha256": "a35cbaab6a2991043247d9e129e92d285342b2d60701c8597c16ab1a00b431f8",
+      "use": "button/sidebar primitives extracted; composer/drag/theme adapted to runtime-only presentation"
+    },
+    "apps/web/src/components/Sidebar.drag.ts": {
+      "sha256": "83fb06ee0f5ef5727879dbb395645769c69b346716c5fce08ed66d107f8e57e0",
+      "use": "button/sidebar primitives extracted; composer/drag/theme adapted to runtime-only presentation"
+    },
+    "apps/web/src/index.css": {
+      "sha256": "f237e04f887f59b2d63ddd0d653bf60b3b6762634880a7de22b57bdc1597f99d",
+      "use": "button/sidebar primitives extracted; composer/drag/theme adapted to runtime-only presentation"
+    }
+  }
+}

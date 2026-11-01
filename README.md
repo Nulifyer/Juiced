@@ -1,3 +1,15 @@
+# Juiced model appliance
+
+Juiced is a Lemonade-derived local model service with a T3-derived model library
+and direct chat/audio/image playground. It keeps model serving separate from
+agent tools and workspaces.
+
+See [Juiced development and release documentation](juiced/README.md) for current
+scope, source/license provenance and build instructions. Runtime weights and
+state persist outside the image. The original upstream documentation follows.
+
+---
+
 ## 🍋 Lemonade: Refreshingly fast local AI
 
 <p align="center">
@@ -209,7 +221,7 @@ Lemonade supports multiple inference engines for LLM, speech, TTS, and image gen
       <td>Linux</td>
     </tr>
     <tr>
-      <td rowspan="6"><strong>Speech-to-text</strong></td>
+      <td rowspan="8"><strong>Speech-to-text</strong></td>
       <td rowspan="5"><code>whispercpp</code></td>
       <td><code>npu</code></td>
       <td>XDNA2 NPU</td>
@@ -234,6 +246,18 @@ Lemonade supports multiple inference engines for LLM, speech, TTS, and image gen
       <td><code>cpu</code></td>
       <td><code>x86_64</code> CPU</td>
       <td>Windows, Linux</td>
+    </tr>
+    <tr>
+      <td rowspan="1"><code>asr4all</code></td>
+      <td><code>cpu</code>†</td>
+      <td><code>x86_64</code> CPU</td>
+      <td>Linux</td>
+    </tr>
+    <tr>
+      <td rowspan="1"><code>parakeet</code></td>
+      <td><code>cpu</code>†</td>
+      <td><code>x86_64</code> CPU</td>
+      <td>Linux</td>
     </tr>
     <tr>
       <td rowspan="1"><code>moonshine</code></td>

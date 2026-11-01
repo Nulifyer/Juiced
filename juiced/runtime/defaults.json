@@ -1,0 +1,14 @@
+{
+  "broadcast": false,
+  "auto_check_model_updates": false,
+  "asr4all": {
+    "cpu_bin": "/opt/juiced/futo"
+  },
+  "parakeet": {
+    "cpu_bin": "/opt/juiced/parakeet"
+  },
+  "max_loaded_models": 4,
+  "llamacpp": {
+    "vulkan_bin": "/opt/juiced/llama"
+  }
+}
