@@ -29,7 +29,7 @@ RUN printf '#!/bin/sh\nexport LD_LIBRARY_PATH=/opt/juiced/parakeet/lib\nexec /op
 
 # This pin includes checkpoint/draft persistence missing from the stock Vulkan pin.
 FROM manager AS llama
-RUN apt-get update && apt-get install -y --no-install-recommends libvulkan-dev glslc && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends libvulkan-dev glslc spirv-headers && rm -rf /var/lib/apt/lists/*
 RUN git clone https://github.com/ggml-org/llama.cpp.git /native && cd /native && git checkout 785322d17f2d51e5185cf996a1f4e46d87640841
 RUN cmake -S /native -B /native/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DGGML_VULKAN=ON -DGGML_NATIVE=OFF -DLLAMA_CURL=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_SERVER=ON && cmake --build /native/build --target llama-server -j4 && mkdir -p /out/llama/bin /out/llama/lib /out/llama/licenses && cp /native/build/bin/llama-server /out/llama/bin/ && find /native/build -name '*.so*' -exec cp -L '{}' /out/llama/lib/ ';' && cp /native/LICENSE /out/llama/licenses/llama.txt
 RUN printf '#!/bin/sh\nexport LD_LIBRARY_PATH=/opt/juiced/llama/lib\nexec /opt/juiced/llama/bin/llama-server "$@"\n' > /out/llama/llama-server && chmod 755 /out/llama/llama-server && printf '785322d17f2d51e5185cf996a1f4e46d87640841\n' > /out/llama/source-revision
