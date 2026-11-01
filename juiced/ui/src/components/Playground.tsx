@@ -85,12 +85,14 @@ export function Playground({
   useEffect(() => {
     if (!eligible.some((m) => m.id === model))
       setModel(
-        eligible.find((m) => m.id === thread?.model)?.id ||
-          eligible[0]?.id ||
-          "",
+        task === "Chat" && thread?.model
+          ? eligible.find((m) => m.id === thread.model)?.id || ""
+          : eligible[0]?.id || "",
       );
   }, [models, task, thread?.id]);
   useEffect(() => {
+    if (task === "Chat" && thread?.model)
+      setModel(eligible.find((m) => m.id === thread.model)?.id || "");
     if (
       activeTurn.current &&
       (activeTurn.current.thread !== (thread?.id || null) ||
@@ -473,6 +475,12 @@ export function Playground({
           onChange={(e) => setModel(e.target.value)}
           disabled={working}
         >
+          {!model &&
+            thread?.model &&
+            task === "Chat" &&
+            eligible.length > 0 && (
+              <option value="">{thread.model} · unloaded</option>
+            )}
           {eligible.length === 0 ? (
             <option value="">No eligible loaded models</option>
           ) : (

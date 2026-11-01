@@ -483,7 +483,7 @@ export function Acquisition({
                       : ""}
                   </small>
                   <div className="row-actions">
-                    {j.status === "complete" && (
+                    {j.complete && (
                       <Button
                         size="compact"
                         variant="outline"

@@ -318,13 +318,15 @@ void JuicedService::chat(const httplib::Request &original,
   bool inference_started = false;
   try {
     auto request = json::parse(original.body);
-    const auto model = request.at("model").get<std::string>();
-    if (server_.model_manager_->get_model_info(model).recipe != "llamacpp") {
+    const auto requested_model = request.at("model").get<std::string>();
+    if (server_.model_manager_->get_model_info(requested_model).recipe !=
+        "llamacpp") {
       server_.handle_chat_completions(original, res);
       return;
     }
-    server_.auto_load_model_if_needed(model);
-    auto profile = cache_profile(model);
+    server_.auto_load_model_if_needed(requested_model);
+    auto profile = cache_profile(requested_model);
+    const auto model = profile.at("model").get<std::string>();
     if (!profile.value("qualified", false)) {
       res.set_header("X-Juiced-Cache", "unqualified-profile");
       server_.handle_chat_completions(original, res);
@@ -530,7 +532,7 @@ void JuicedService::chat(const httplib::Request &original,
         finish(ok);
       };
     } else
-      finish(res.status >= 200 && res.status < 300);
+      finish(res.status == -1 || (res.status >= 200 && res.status < 300));
   } catch (const std::exception &e) {
     {
       std::lock_guard<std::mutex> lock(mutex_);
