@@ -50,6 +50,7 @@ export function Playground({
     [image, setImage] = useState(""),
     [receipt, setReceipt] = useState<any>(),
     [maxTokens, setMaxTokens] = useState(2048),
+    [thinkingMode, setThinkingMode] = useState("profile"),
     [compareModels, setCompareModels] = useState<string[]>([]),
     [comparison, setComparison] = useState<any[]>([]),
     [advanced, setAdvanced] = useState(false);
@@ -174,6 +175,11 @@ export function Playground({
         stream: true,
         stream_options: { include_usage: true },
         cache_prompt: cacheMode !== "off",
+        ...(thinkingMode === "profile"
+          ? {}
+          : {
+              chat_template_kwargs: { enable_thinking: thinkingMode === "on" },
+            }),
       }),
       signal,
     });
@@ -488,6 +494,21 @@ export function Playground({
               }
             />
           </label>
+          {(task === "Chat" || task === "Compare") && (
+            <label>
+              Thinking
+              <select
+                value={thinkingMode}
+                onChange={(e) => setThinkingMode(e.target.value)}
+              >
+                <option value="profile">Saved model profile</option>
+                <option value="off">Off · faster replies</option>
+                <option value="on">
+                  On · uses the model's reasoning budget
+                </option>
+              </select>
+            </label>
+          )}
           <label>
             Speech voice
             <input value={voice} onChange={(e) => setVoice(e.target.value)} />

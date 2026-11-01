@@ -315,6 +315,7 @@ void JuicedService::chat(const httplib::Request &original,
     server_.handle_chat_completions(original, res);
     return;
   }
+  bool inference_started = false;
   try {
     auto request = json::parse(original.body);
     const auto model = request.at("model").get<std::string>();
@@ -518,6 +519,7 @@ void JuicedService::chat(const httplib::Request &original,
         }
       }
     };
+    inference_started = true;
     server_.handle_chat_completions(*req, res);
     if (res.content_provider_) {
       auto previous = std::move(res.content_provider_resource_releaser_);
@@ -530,10 +532,22 @@ void JuicedService::chat(const httplib::Request &original,
     } else
       finish(res.status >= 200 && res.status < 300);
   } catch (const std::exception &e) {
-    output(res,
-           {{"error",
-             {{"message", e.what()}, {"type", "cache_preparation_error"}}}},
-           400);
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      state_["cache"]["last_error"] = e.what();
+      try {
+        persist_locked();
+      } catch (...) {
+      }
+    }
+    if (!inference_started) {
+      res.set_header("X-Juiced-Cache", "cold-fallback");
+      server_.handle_chat_completions(original, res);
+    } else {
+      output(res,
+             {{"error", {{"message", e.what()}, {"type", "inference_error"}}}},
+             500);
+    }
   }
 }
 } // namespace lemon
