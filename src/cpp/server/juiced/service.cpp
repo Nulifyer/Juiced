@@ -85,7 +85,6 @@ std::string service(const json &m) {
 JuicedService::JuicedService(Server &server)
     : server_(server),
       directory_(std::filesystem::path(server.config_dir_) / "juiced") {
-  std::filesystem::create_directories(directory_ / "threads");
   std::filesystem::create_directories(directory_ / "imports");
   state_ = read_json(
       directory_ / "state.json",
@@ -127,13 +126,13 @@ bool JuicedService::allows(const std::string &requested) const {
   auto model = server_.model_manager_->get_public_model_name(
       server_.model_manager_->resolve_model_name(requested));
   std::lock_guard<std::mutex> lock(mutex_);
-  return state_["policies"].value(model, "on-demand") != "disabled";
+  return state_["policies"].value(model, "disabled") != "disabled";
 }
 bool JuicedService::hot(const std::string &requested) const {
   auto model = server_.model_manager_->get_public_model_name(
       server_.model_manager_->resolve_model_name(requested));
   std::lock_guard<std::mutex> lock(mutex_);
-  return state_["policies"].value(model, "on-demand") == "hot";
+  return state_["policies"].value(model, "disabled") == "hot";
 }
 void JuicedService::set_hot(const std::string &requested, bool pinned) {
   auto model = server_.model_manager_->get_public_model_name(
@@ -142,7 +141,7 @@ void JuicedService::set_hot(const std::string &requested, bool pinned) {
   server_.model_manager_->update_saved_model_options(model,
                                                      {{"pinned", pinned}});
   std::lock_guard<std::mutex> lock(mutex_);
-  if (pinned || state_["policies"].value(model, "on-demand") != "disabled")
+  if (pinned || state_["policies"].value(model, "disabled") != "disabled")
     state_["policies"][model] = pinned ? "hot" : "on-demand";
   persist_locked();
   wake_.notify_all();
@@ -276,7 +275,7 @@ void JuicedService::execute(const json &command) {
       std::string policy;
       {
         std::lock_guard<std::mutex> lock(mutex_);
-        policy = state_["policies"].value(name, "on-demand");
+        policy = state_["policies"].value(name, "disabled");
       }
       server_.router_->load_model(
           name, info, RecipeOptions(info.recipe, json::object()), true, false,
@@ -396,6 +395,8 @@ void JuicedService::routes(httplib::Server &http) {
     });
   }
   for (const std::string prefix : {"/api/v0/", "/api/v1/", "/v0/", "/v1/"}) {
+    http.Get(prefix + "audio/voices",
+             [this](const auto &q, auto &r) { handle(q, r, "voices"); });
     for (const std::string operation : {"catalog", "state", "threads", "thread",
                                         "cache", "imports", "transfers"})
       http.Get(prefix + "juiced/" + operation,
@@ -404,7 +405,7 @@ void JuicedService::routes(httplib::Server &http) {
                });
     for (const std::string operation :
          {"operation", "policy", "thread", "cache", "cache/forget",
-          "cache/profile", "cache/qualify"})
+          "cache/profile", "cache/qualify", "cache/retain"})
       http.Post(prefix + "juiced/" + operation,
                 [this, operation](const auto &q, auto &r) {
                   handle(q, r, operation);
@@ -428,12 +429,60 @@ void JuicedService::handle(const httplib::Request &req, httplib::Response &res,
                            const std::string &op) {
   try {
     json body = req.body.empty() ? json::object() : json::parse(req.body);
+    if (op == "voices") {
+      const auto requested = req.get_param_value("model");
+      if (requested.empty())
+        throw std::invalid_argument("Specify a speech model");
+      const auto info = server_.model_manager_->get_model_info(requested);
+      const auto name = server_.model_manager_->get_public_model_name(
+          server_.model_manager_->resolve_model_name(requested));
+      if (info.recipe != "kokoro") {
+        reply(res, {{"error", "This backend does not expose voice discovery"}},
+              501);
+        return;
+      }
+      std::string address;
+      for (const auto &loaded : server_.router_->get_all_loaded_models())
+        if (loaded.value("model_name", "") == name) {
+          address = loaded.value("backend_url", "");
+          break;
+        }
+      if (address.empty()) {
+        reply(res,
+              {{"error", "Load the speech model before listing its voices"}},
+              409);
+        return;
+      }
+      if (address.size() >= 3 && address.substr(address.size() - 3) == "/v1")
+        address.resize(address.size() - 3);
+      try {
+        auto response =
+            utils::HttpClient::get(address + "/v1/audio/voices", {}, 10,
+                                   utils::HttpSecurityPolicy::TrustedLoopback);
+        if (response.status_code != 200)
+          throw std::runtime_error(
+              "Voice discovery failed at the speech backend");
+        auto data = json::parse(response.body);
+        if (!data.contains("voices") || !data["voices"].is_array())
+          throw std::runtime_error(
+              "Speech backend returned an invalid voice list");
+        std::set<std::string> voices;
+        for (const auto &voice : data["voices"])
+          if (voice.is_string())
+            voices.insert(voice.get<std::string>());
+        reply(res,
+              {{"model", name}, {"voices", voices}, {"source", "backend"}});
+      } catch (const std::exception &e) {
+        reply(res, {{"error", e.what()}}, 502);
+      }
+      return;
+    }
     if (op == "catalog") {
       std::lock_guard<std::mutex> lock(mutex_);
       auto data = catalog_;
       for (auto &m : data) {
         auto name = m.value("id", "");
-        m["policy"] = state_["policies"].value(name, "on-demand");
+        m["policy"] = state_["policies"].value(name, "disabled");
         if (operations_.contains(name))
           m["operation"] = operations_[name];
       }
@@ -485,7 +534,7 @@ void JuicedService::handle(const httplib::Request &req, httplib::Response &res,
       {
         std::lock_guard<std::mutex> lock(mutex_);
         if (action == "unload" &&
-            state_["policies"].value(model, "on-demand") == "hot") {
+            state_["policies"].value(model, "disabled") == "hot") {
           reply(res,
                 {{"error", "Change Hot policy to On demand before unloading"}},
                 409);
@@ -496,64 +545,15 @@ void JuicedService::handle(const httplib::Request &req, httplib::Response &res,
       reply(res, {{"accepted", true}}, 202);
       return;
     }
-    if (op == "threads") {
-      json result = json::array();
-      for (const auto &f :
-           std::filesystem::directory_iterator(directory_ / "threads"))
-        if (f.path().extension() == ".json") {
-          auto t = read_json(f.path(), json::object());
-          t.erase("messages");
-          result.push_back(t);
-        }
-      reply(res, {{"data", result}});
-      return;
-    }
-    if (op == "thread") {
-      auto id = req.method == "GET" ? req.get_param_value("id")
-                                    : body.value("id", identifier());
-      if (!safe_name(id))
-        throw std::invalid_argument("Invalid thread identity");
-      auto path = directory_ / "threads" / (id + ".json");
-      std::lock_guard<std::mutex> lock(mutex_);
-      auto t = read_json(path, {{"id", id},
-                                {"title", "New chat"},
-                                {"shelf", "working"},
-                                {"messages", json::array()},
-                                {"revision", 0},
-                                {"cache_state", "memory"}});
-      if (req.method != "GET") {
-        if (body.contains("revision") && body["revision"] != t["revision"]) {
-          reply(res,
-                {{"error", "Thread changed elsewhere; refresh before saving"}},
-                409);
-          return;
-        }
-        for (const std::string k : {"title", "shelf", "model", "messages",
-                                    "retain_cache", "cache_state"})
-          if (body.contains(k))
-            t[k] = body[k];
-        if (!t["messages"].is_array() || t["messages"].size() > 2000 ||
-            t.dump().size() > 16 * 1024 * 1024)
-          throw std::invalid_argument(
-              "Thread exceeds the retained history limit");
-        if (t.value("shelf", "") != "working" &&
-            t.value("shelf", "") != "settled")
-          throw std::invalid_argument("Invalid thread shelf");
-        t["updated"] = now();
-        t["revision"] = t.value("revision", 0) + 1;
-        atomic_json(path, t);
-        if (body.contains("retain_cache")) {
-          for (auto &[key, snapshot] : state_["snapshots"].items())
-            if (snapshot.value("thread", "") == id)
-              snapshot["retained"] = t.value("retain_cache", false);
-          persist_locked();
-        }
-      }
-      reply(res, t);
+    if (op == "threads" || op == "thread") {
+      reply(res,
+            {{"error", "Juiced does not store conversations. Downstream "
+                       "clients own chat history."}},
+            410);
       return;
     }
     if (op == "cache" || op == "cache/forget" || op == "cache/profile" ||
-        op == "cache/qualify") {
+        op == "cache/qualify" || op == "cache/retain") {
       cache_api(req, res, op);
       return;
     }
@@ -754,7 +754,7 @@ void JuicedService::import_file(const httplib::Request &req,
       wake_.notify_all();
       reply(res,
             {{"model", name},
-             {"policy", "on-demand"},
+             {"policy", "disabled"},
              {"loaded", false},
              {"path", file.string()}},
             201);

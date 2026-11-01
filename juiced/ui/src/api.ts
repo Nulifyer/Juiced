@@ -18,19 +18,9 @@ export type Model = {
 export type Message = {
   role: "user" | "assistant" | "system";
   content:
-    string | { type: string; text?: string; image_url?: { url: string } }[];
+    | string
+    | { type: string; text?: string; image_url?: { url: string } }[];
   reasoning_content?: string;
-};
-export type Thread = {
-  id: string;
-  title: string;
-  shelf: "working" | "settled";
-  model?: string;
-  messages: Message[];
-  revision: number;
-  updated?: number;
-  cache_state?: string;
-  retain_cache?: boolean;
 };
 export async function api<T = any>(
   path: string,

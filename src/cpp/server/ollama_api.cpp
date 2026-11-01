@@ -149,8 +149,8 @@ static void map_ollama_options(const json& ollama_request, json& openai_req) {
     }
 }
 
-OllamaApi::OllamaApi(Router* router, ModelManager* model_manager, RequestGuard guard, ModelLoader loader)
-    : guard_(std::move(guard)), loader_(std::move(loader)), router_(router), model_manager_(model_manager) {
+OllamaApi::OllamaApi(Router* router, ModelManager* model_manager, RequestGuard guard, ModelLoader loader, ModelVisibility visible)
+    : guard_(std::move(guard)), loader_(std::move(loader)), visible_(std::move(visible)), router_(router), model_manager_(model_manager) {
 }
 
 void OllamaApi::register_routes(httplib::Server& server) {
@@ -1103,7 +1103,8 @@ void OllamaApi::handle_tags(const httplib::Request& req, httplib::Response& res)
         response["models"] = json::array();
 
         for (const auto& [id, info] : models) {
-            response["models"].push_back(build_ollama_model_entry(id, info));
+            if (!visible_ || visible_(id))
+                response["models"].push_back(build_ollama_model_entry(id, info));
         }
 
         res.set_content(response.dump(), "application/json");

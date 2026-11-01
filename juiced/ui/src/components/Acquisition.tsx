@@ -1,3 +1,4 @@
+import { groupRepositories, quantization } from "./modelDiscovery";
 import { useEffect, useRef, useState } from "react";
 import {
   Search,
@@ -185,7 +186,7 @@ export function Acquisition({
         recipe,
         purpose,
       });
-      notify("GGUF registered. It remains On demand and unloaded.");
+      notify("GGUF registered. It remains Disabled until you enable it.");
       await refresh();
       await loadImports();
     } catch (e) {
@@ -259,10 +260,21 @@ export function Acquisition({
       </header>
       {tab === "discover" && (
         <>
-          <div className="discovery-layout">
+          <div
+            className={
+              "discovery-layout" + (results.length ? " has-results" : "")
+            }
+          >
             <div className="discovery-primary">
               <div className="discovery-search-heading">
-                <span className="source-mark">Hf</span>
+                <span className="source-mark">
+                  <img
+                    src="/huggingface.svg"
+                    alt="Hugging Face"
+                    width="32"
+                    height="32"
+                  />
+                </span>
                 <div>
                   <h2>Search Hugging Face</h2>
                   <p>
@@ -318,36 +330,75 @@ export function Acquisition({
                   </div>
                 </div>
               )}
-              {results.map((r) => (
-                <article className="search-result" key={r.repository_id}>
-                  <div>
-                    <strong>{r.display_name || r.repository_id}</strong>
-                    <p>
-                      {r.repository_id} · {r.downloads?.toLocaleString() || 0}{" "}
-                      downloads
-                    </p>
-                    <p>{r.description?.slice(0, 220)}</p>
-                  </div>
-                  <div className="row-actions">
-                    <a
-                      href={"https://huggingface.co/" + r.repository_id}
-                      target="_blank"
-                      rel="noreferrer"
-                      title="Open model card"
+              {results.length > 0 && (
+                <div className="discovery-result-summary">
+                  <span>{groupRepositories(results).length} models</span>
+                  <span>
+                    {results.length} repositories · grouped by publisher and
+                    model
+                  </span>
+                </div>
+              )}
+              <div
+                className="discovery-results"
+                aria-label="Model search results"
+              >
+                {groupRepositories(results).map((group) => (
+                  <article className="discovery-model" key={group.key}>
+                    <header>
+                      <div>
+                        <h3>{group.name}</h3>
+                        <p>
+                          Published by <strong>{group.publisher}</strong>
+                        </p>
+                      </div>
+                      <span className="discovery-downloads">
+                        <Download size={13} />
+                        {group.repositories
+                          .reduce((sum, r) => sum + (r.downloads || 0), 0)
+                          .toLocaleString()}{" "}
+                        downloads
+                        {group.repositories.length > 1
+                          ? ` across ${group.repositories.length} repositories`
+                          : ""}
+                      </span>
+                    </header>
+                    <div
+                      className="discovery-quants"
+                      aria-label={"Quantizations for " + group.name}
                     >
-                      <ExternalLink size={15} />
-                    </a>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={busy}
-                      onClick={() => void inspect(r.repository_id)}
-                    >
-                      Review files
-                    </Button>
-                  </div>
-                </article>
-              ))}
+                      {group.repositories.map((r) => (
+                        <Button
+                          key={r.repository_id}
+                          variant="outline"
+                          size="compact"
+                          disabled={busy}
+                          title={r.repository_id}
+                          onClick={() => void inspect(r.repository_id)}
+                        >
+                          {quantization(
+                            r.repository_id.split("/").pop() || "",
+                          ) || "Browse quants"}
+                        </Button>
+                      ))}
+                    </div>
+                    <details className="discovery-sources">
+                      <summary>Repository sources</summary>
+                      {group.repositories.map((r) => (
+                        <a
+                          key={r.repository_id}
+                          href={"https://huggingface.co/" + r.repository_id}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          {r.repository_id}
+                          <ExternalLink size={12} />
+                        </a>
+                      ))}
+                    </details>
+                  </article>
+                ))}
+              </div>
               <details className="catalog-browser">
                 <summary>Browse the runtime catalog</summary>
                 <p className="page-note">
@@ -494,8 +545,18 @@ export function Acquisition({
                     </Button>
                   </div>
                   <p className="page-note">
-                    Choose the downloaded variant and companion projector. Names
+                    Review the source, weight size and optional companion
+                    projector. Downloads remain Disabled until enabled. Names
                     remain publisher names.
+                  </p>
+                  <p className="variant-source">
+                    <a
+                      href={"https://huggingface.co/" + variants.checkpoint}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      {variants.checkpoint} <ExternalLink size={12} />
+                    </a>
                   </p>
                   <label>
                     Model name
@@ -504,20 +565,28 @@ export function Acquisition({
                       onChange={(e) => setName(e.target.value)}
                     />
                   </label>
-                  <label>
-                    Quantization
-                    <select
-                      value={variant}
-                      onChange={(e) => setVariant(e.target.value)}
-                    >
+                  <fieldset className="quant-options">
+                    <legend>Quantization</legend>
+                    <div>
                       {variants.variants?.map((v: any) => (
-                        <option value={v.name} key={v.name}>
-                          {v.name} · {bytes(v.size_bytes || 0)} ·{" "}
-                          {v.files?.length || 1} file(s)
-                        </option>
+                        <label
+                          key={v.name}
+                          className={variant === v.name ? "is-selected" : ""}
+                        >
+                          <input
+                            type="radio"
+                            name="quantization"
+                            value={v.name}
+                            checked={variant === v.name}
+                            onChange={() => setVariant(v.name)}
+                          />
+                          <strong>{v.name}</strong>
+                          <span>{bytes(v.size_bytes || 0)}</span>
+                          <small>{v.files?.length || 1} file(s)</small>
+                        </label>
                       ))}
-                    </select>
-                  </label>
+                    </div>
+                  </fieldset>
                   {variants.mmproj_files?.length > 0 && (
                     <label>
                       Vision projector
@@ -722,7 +791,7 @@ export function Acquisition({
               ))
           )}
           <p className="page-note">
-            Completed models remain On demand and unloaded. Loading is a
+            Completed models remain Disabled until you enable them. Loading is a
             separate operation.
           </p>
         </>

@@ -4,7 +4,8 @@ import {
   DragOverlay,
   pointerWithin,
   rectIntersection,
-  PointerSensor,
+  MouseSensor,
+  TouchSensor,
   KeyboardSensor,
   useSensor,
   useSensors,
@@ -183,16 +184,34 @@ function ModelRow({
       <ContextMenu.Trigger render={<div />} className="model-context">
         <div
           ref={setNodeRef}
+          {...attributes}
+          {...listeners}
+          role="group"
+          aria-label={"Drag " + m.id}
+          onMouseDown={(event) => {
+            if (
+              (event.target as HTMLElement).closest(
+                "button:not(.model-name), input, select, a",
+              )
+            )
+              return;
+            listeners?.onMouseDown?.(event);
+          }}
+          onTouchStart={(event) => {
+            if (
+              (event.target as HTMLElement).closest(
+                "button:not(.model-name), input, select, a",
+              )
+            )
+              return;
+            listeners?.onTouchStart?.(event);
+          }}
+          onKeyDown={(event) => {
+            if (event.target === event.currentTarget)
+              listeners?.onKeyDown?.(event);
+          }}
           className={`deployment-row ${policy ? "policy-model" : m.loaded ? "running-model" : "available-model"} ${isDragging ? "is-dragging" : ""}`}
         >
-          <button
-            className="drag-handle"
-            aria-label={"Drag " + m.id}
-            {...attributes}
-            {...listeners}
-          >
-            <GripVertical size={14} />
-          </button>
           <input
             type="checkbox"
             aria-label={"Select " + m.id}
@@ -364,7 +383,10 @@ export function ModelLibrary({
     setLimit(60);
   }, [policy, service]);
   const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 7 } }),
+    useSensor(MouseSensor, { activationConstraint: { distance: 7 } }),
+    useSensor(TouchSensor, {
+      activationConstraint: { delay: 220, tolerance: 6 },
+    }),
     useSensor(KeyboardSensor),
   );
   const eligible = models.filter(

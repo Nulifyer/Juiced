@@ -3,15 +3,13 @@ import {
   Database,
   Search,
   Pin,
-  ArrowUpRight,
-  History,
   Settings2,
   Clock3,
   Trash2,
   ChevronRight,
 } from "lucide-react";
 import { Dialog } from "@base-ui/react/dialog";
-import { api, bytes, type Thread } from "../api";
+import { api, bytes } from "../api";
 import { Button } from "./t3/button";
 import "./CacheWorkspace.css";
 function age(value?: number) {
@@ -22,16 +20,10 @@ function age(value?: number) {
 export function CacheWorkspace({
   cache,
   setCache,
-  threads,
-  refreshThreads,
-  openThread,
   notify,
 }: {
   cache: any;
   setCache: (value: any) => void;
-  threads: Thread[];
-  refreshThreads: () => Promise<void>;
-  openThread: (id: string) => void;
   notify: (s: string) => void;
 }) {
   const [q, setQ] = useState(""),
@@ -46,47 +38,32 @@ export function CacheWorkspace({
   const snapshots: any[] = cache?.snapshots || [],
     total = snapshots.reduce((sum, s) => sum + (s.bytes || 0), 0),
     budget = (cache?.settings?.disk_budget_gib || 0) * 1024 ** 3;
-  const rows = threads.map((t) => ({
-    t,
-    saved: snapshots
-      .filter((s) => s.thread === t.id)
-      .sort((a, b) => b.last_used - a.last_used)[0],
-  }));
-  const visible = rows.filter(
-    ({ t, saved }) =>
-      [t.title, t.model].join(" ").toLowerCase().includes(q.toLowerCase()) &&
-      (filter === "all" ||
-        (filter === "saved" && saved) ||
-        (filter === "retained" && t.retain_cache) ||
-        (filter === "history" && !saved)),
+  const visible = snapshots.filter(
+    (s) =>
+      [s.session || s.thread, s.model, s.profile]
+        .join(" ")
+        .toLowerCase()
+        .includes(q.toLowerCase()) &&
+      (filter === "all" || s.retained),
   );
-  const current = rows.find(({ t }) => t.id === selected);
+  const current = snapshots.find((s) => s.id === selected);
   async function refresh() {
     setCache(await api("juiced/cache"));
-    await refreshThreads();
   }
-  async function retain(t: Thread) {
-    try {
-      const full = await api<Thread>(
-        "juiced/thread?id=" + encodeURIComponent(t.id),
-      );
-      await api("juiced/thread", { ...full, retain_cache: !full.retain_cache });
-      await refresh();
-      notify(
-        full.retain_cache
-          ? "Snapshot protection released."
-          : "Compatible saved state will be retained within the disk budget.",
-      );
-    } catch (e) {
-      notify((e as Error).message);
-    }
-  }
-  async function forget(t: Thread) {
+  async function control(s: any, action: "retain" | "forget") {
     setBusy(true);
     try {
-      await api("juiced/cache/forget", { thread: t.id });
+      await api("juiced/cache/" + action, {
+        snapshot: s.id,
+        ...(action === "retain" ? { retained: !s.retained } : {}),
+      });
+      if (action === "forget") setSelected(undefined);
       await refresh();
-      notify("Saved computation removed. Conversation messages are preserved.");
+      notify(
+        action === "forget"
+          ? "Saved computation removed. Client history is managed by its owner."
+          : "Snapshot retention updated.",
+      );
     } catch (e) {
       notify((e as Error).message);
     } finally {
@@ -115,8 +92,8 @@ export function CacheWorkspace({
     <div className="cache-workspace">
       <header className="page-heading">
         <div>
-          <h1>Thread cache</h1>
-          <p>Keep useful computation for the conversations you come back to.</p>
+          <h1>Runtime cache</h1>
+          <p>Manage reusable computation for downstream consumer sessions.</p>
         </div>
         <Button size="compact" variant="outline" onClick={() => void refresh()}>
           Refresh
@@ -134,8 +111,8 @@ export function CacheWorkspace({
                   {bytes(total)} <span>saved computation</span>
                 </h2>
                 <p>
-                  {rows.filter((r) => r.saved).length} conversations with saved
-                  state · {cache?.settings?.disk_budget_gib || 0} GiB budget
+                  {snapshots.length} snapshots ·{" "}
+                  {cache?.settings?.disk_budget_gib || 0} GiB budget
                 </p>
               </div>
             </div>
@@ -145,94 +122,77 @@ export function CacheWorkspace({
               value={Math.min(total, budget)}
             />
             <div className="storage-caption">
-              <span>Model weights and messages use separate storage.</span>
+              <span>
+                Model weights use separate storage. Clients own conversation
+                history.
+              </span>
               <span>
                 {budget ? Math.round((100 * total) / budget) : 0}% used
               </span>
             </div>
           </div>
-          <div className="cache-filters" aria-label="Thread cache filters">
-            {[
-              ["all", "All threads"],
-              ["saved", "Saved"],
-              ["retained", "Retained"],
-              ["history", "History only"],
-            ].map(([id, label]) => (
-              <button
-                key={id}
-                aria-pressed={filter === id}
-                onClick={() => setFilter(id)}
-              >
-                {label}
-                <span>
-                  {
-                    rows.filter(
-                      (r) =>
-                        id === "all" ||
-                        (id === "saved" && r.saved) ||
-                        (id === "retained" && r.t.retain_cache) ||
-                        (id === "history" && !r.saved),
-                    ).length
-                  }
-                </span>
-              </button>
-            ))}
+          <div className="cache-filters" aria-label="Snapshot filters">
+            <button
+              aria-pressed={filter === "all"}
+              onClick={() => setFilter("all")}
+            >
+              All snapshots <span>{snapshots.length}</span>
+            </button>
+            <button
+              aria-pressed={filter === "retained"}
+              onClick={() => setFilter("retained")}
+            >
+              Retained <span>{snapshots.filter((s) => s.retained).length}</span>
+            </button>
           </div>
           <label className="search-input cache-search">
             <Search size={15} />
             <input
-              aria-label="Search cached threads"
-              placeholder="Find a conversation or model…"
+              aria-label="Search cached sessions"
+              placeholder="Find a consumer session or model…"
               value={q}
               onChange={(e) => setQ(e.target.value)}
             />
           </label>
           <div className="cache-table-heading">
-            <span>Conversation</span>
+            <span>Session / model</span>
             <span>Saved state</span>
-            <span>Last activity</span>
+            <span>Last used</span>
           </div>
-          <div className="cache-thread-list">
-            {visible.map(({ t, saved }) => (
+          <div className="cache-entry-list">
+            {visible.map((s) => (
               <button
-                key={t.id}
+                key={s.id}
                 className={
-                  "cache-thread " + (selected === t.id ? "selected" : "")
+                  "cache-entry " + (selected === s.id ? "selected" : "")
                 }
-                onClick={() => setSelected(t.id)}
+                onClick={() => setSelected(s.id)}
               >
-                <span className="cache-thread-name">
-                  <strong>{t.title}</strong>
-                  <small title={t.model}>
-                    {t.model || "No model selected"}
-                  </small>
+                <span className="cache-entry-name">
+                  <strong>{s.session || s.thread}</strong>
+                  <small title={s.model}>{s.model}</small>
                 </span>
-                <span className="cache-thread-state">
-                  {t.retain_cache && <Pin size={12} />}
-                  {saved ? bytes(saved.bytes) : "History only"}
-                  <small>
-                    {saved
-                      ? `${(saved.tokens || 0).toLocaleString()} tokens`
-                      : "Rebuild when reopened"}
-                  </small>
+                <span className="cache-entry-state">
+                  {s.retained && <Pin size={12} />} {bytes(s.bytes)}
+                  <small>{(s.tokens || 0).toLocaleString()} tokens</small>
                 </span>
-                <span className="cache-thread-age">
-                  {age(t.updated)}
+                <span className="cache-entry-age">
+                  {age(s.last_used)}
                   <ChevronRight size={14} />
                 </span>
               </button>
             ))}
             {!visible.length && (
               <div className="workspace-empty">
-                <History size={25} />
+                <Database size={25} />
                 <h3>
                   {q || filter !== "all"
-                    ? "No conversations match"
-                    : "Your conversations will appear here"}
+                    ? "No snapshots match"
+                    : "No saved session state"}
                 </h3>
                 <p>
-                  Start a chat in Playground. Messages are kept even without a
-                  disk snapshot.
+                  Compatible clients can reuse computation with a stable session
+                  ID. Temporary UI tests do not create disk snapshots.
                 </p>
               </div>
             )}
@@ -246,10 +206,10 @@ export function CacheWorkspace({
             >
               <Dialog.Portal>
                 <Dialog.Backdrop className="dialog-backdrop" />
-                <Dialog.Popup className="model-drawer cache-thread-drawer">
+                <Dialog.Popup className="model-drawer cache-entry-drawer">
                   <section className="cache-selection">
                     <div className="section-heading">
-                      <Dialog.Title>{current.t.title}</Dialog.Title>
+                      <Dialog.Title>Session cache</Dialog.Title>
                       <Button
                         variant="ghost"
                         size="compact"
@@ -258,41 +218,49 @@ export function CacheWorkspace({
                         Close
                       </Button>
                     </div>
-                    <p>
-                      {current.saved
-                        ? `Saved state can be reused with its unchanged model profile. Last cache use: ${age(current.saved.last_used)}.`
-                        : "The messages are saved. Reopening this conversation may require the model to process them again."}
-                    </p>
+                    <Dialog.Description>
+                      Reusable computation, independent of the consumer's saved
+                      history.
+                    </Dialog.Description>
+                    <dl className="model-facts">
+                      <dt>Session</dt>
+                      <dd>{current.session || current.thread}</dd>
+                      <dt>Model</dt>
+                      <dd>{current.model}</dd>
+                      <dt>Size</dt>
+                      <dd>{bytes(current.bytes)}</dd>
+                      <dt>Tokens</dt>
+                      <dd>{(current.tokens || 0).toLocaleString()}</dd>
+                      <dt>Profile</dt>
+                      <dd>{current.profile}</dd>
+                      <dt>Last used</dt>
+                      <dd>{age(current.last_used)}</dd>
+                    </dl>
                     <div className="cache-selection-actions">
                       <Button
                         size="compact"
-                        onClick={() => openThread(current.t.id)}
-                      >
-                        Open conversation
-                        <ArrowUpRight size={13} />
-                      </Button>
-                      <Button
-                        size="compact"
                         variant="outline"
-                        onClick={() => void retain(current.t)}
+                        disabled={busy}
+                        onClick={() => void control(current, "retain")}
                       >
                         <Pin size={13} />
-                        {current.t.retain_cache
+                        {current.retained
                           ? "Release protection"
-                          : "Retain cache"}
+                          : "Retain snapshot"}
                       </Button>
                       <Button
                         size="compact"
                         variant="ghost"
-                        disabled={!current.saved || busy}
-                        onClick={() => void forget(current.t)}
+                        disabled={busy}
+                        onClick={() => void control(current, "forget")}
                       >
                         <Trash2 size={13} />
                         Forget saved computation
                       </Button>
                     </div>
                     <small>
-                      Forget preserves messages and downloaded model files.
+                      Snapshot changes do not delete model weights or alter the
+                      consumer's data.
                     </small>
                   </section>
                 </Dialog.Popup>
@@ -332,10 +300,10 @@ export function CacheWorkspace({
               </label>
               <p>
                 {draft.mode === "persistent"
-                  ? "Reuse qualified thread state after a model or server restart."
+                  ? "Reuse qualified consumer session state after a model or server restart."
                   : draft.mode === "memory"
                     ? "Reuse compatible state while the engine stays loaded."
-                    : "Playground requests do not reuse prompt state."}
+                    : "Chat Completions requests bypass prompt reuse."}
               </p>
               <label>
                 Expire after
@@ -350,7 +318,7 @@ export function CacheWorkspace({
                   }
                 />
                 <small>
-                  Days since last use. Retained threads are protected.
+                  Days since last use. Retained snapshots are protected.
                 </small>
               </label>
               <label>
@@ -393,12 +361,13 @@ export function CacheWorkspace({
             <Clock3 size={17} />
             <h3>What gets reused?</h3>
             <p>
-              Snapshots belong to an exact model, engine and load profile. A
-              changed profile or edited prefix can require a fresh prefill.
+              Snapshots belong to a consumer session and an exact model, engine
+              and load profile. A changed profile or edited prefix can require a
+              fresh prefill.
             </p>
             <p>
-              Saving a thread keeps its messages. Retaining its cache protects
-              the saved computation from ordinary expiry.
+              Clients own their history. Retaining a snapshot protects its
+              computation from ordinary expiry.
             </p>
             <details>
               <summary>Compatibility details</summary>

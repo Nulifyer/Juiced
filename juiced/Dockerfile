@@ -16,7 +16,7 @@ WORKDIR /ui
 COPY juiced/ui/package.json juiced/ui/bun.lock ./
 RUN bun install --frozen-lockfile
 COPY juiced/ui/ ./
-RUN bun run build
+RUN bun test test/ && bun run build
 
 FROM toolchain AS futo
 RUN mkdir -p /native && curl --fail --location --retry 3 'https://gitlab.futo.org/api/v4/projects/keyboard%2Ftranscribe.cpp/repository/archive.tar.gz?sha=26d75933c16b2cec228e34c69e92a6c3c154b97c' -o /tmp/transcribe.tar.gz && tar -xzf /tmp/transcribe.tar.gz --strip-components=1 -C /native && rm /tmp/transcribe.tar.gz

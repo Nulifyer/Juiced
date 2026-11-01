@@ -11,9 +11,6 @@ import {
   Columns2,
   Menu as MenuIcon,
   X,
-  ChevronDown,
-  MoreHorizontal,
-  Plus,
   RefreshCw,
   AlertCircle,
   Search,
@@ -21,8 +18,6 @@ import {
   Upload,
   HardDrive,
 } from "lucide-react";
-import { Menu } from "@base-ui/react/menu";
-import { ContextMenu } from "@base-ui/react/context-menu";
 import { Dialog } from "@base-ui/react/dialog";
 import { Button } from "./components/t3/button";
 import {
@@ -35,13 +30,15 @@ import { ModelLibrary, policyNames } from "./components/ModelLibrary";
 import { Acquisition } from "./components/Acquisition";
 import { CacheWorkspace } from "./components/CacheWorkspace";
 import { Playground } from "./components/Playground";
-import { api, type Model, type Thread } from "./api";
+import { api, type Model } from "./api";
+import { ServiceEndpoints } from "./components/ServiceEndpoints";
 const destinations = [
-  ["playground", "Playground", MessageSquare],
   ["models", "Models", Server],
   ["policy", "Loading policy", SlidersHorizontal],
   ["library", "Library", Library],
   ["cache", "Cache", Database],
+  ["services", "Service APIs", Server],
+  ["playground", "Test services", MessageSquare],
 ] as const;
 const tasks = [
   ["Chat", MessageSquare],
@@ -58,8 +55,6 @@ export default function App() {
     [service, setService] = useState("All services"),
     [task, setTask] = useState("Chat"),
     [jobs, setJobs] = useState<any[]>([]),
-    [threads, setThreads] = useState<Thread[]>([]),
-    [thread, setThread] = useState<Thread | null>(null),
     [notice, setNotice] = useState(""),
     [online, setOnline] = useState(false),
     [ready, setReady] = useState(false),
@@ -69,7 +64,6 @@ export default function App() {
     [options, setOptions] = useState(""),
     [cache, setCache] = useState<any>(),
     [saving, setSaving] = useState(false),
-    [threadSearch, setThreadSearch] = useState(""),
     [preferredModel, setPreferredModel] = useState("");
   useEffect(() => {
     if (!notice) return;
@@ -87,20 +81,11 @@ export default function App() {
     setOnline(true);
     setReady(Boolean(catalog.data?.length));
   }, []);
-  const refreshThreads = useCallback(async () => {
-    const j = await api("juiced/threads");
-    setThreads(
-      (j.data || []).sort(
-        (a: Thread, b: Thread) => (b.updated || 0) - (a.updated || 0),
-      ),
-    );
-  }, []);
   useEffect(() => {
     void refresh().catch((e) => {
       notify(e.message);
       setOnline(false);
     });
-    void refreshThreads().catch((e) => notify(e.message));
     void api("juiced/cache")
       .then(setCache)
       .catch((e) => notify(e.message));
@@ -108,7 +93,7 @@ export default function App() {
       void refresh().catch(() => setOnline(false));
     }, 3000);
     return () => clearInterval(timer);
-  }, [refresh, refreshThreads, notify]);
+  }, [refresh, notify]);
   useEffect(() => {
     localStorage.setItem("juiced.screen", screen);
     setMobile(false);
@@ -138,60 +123,6 @@ export default function App() {
       return () => document.removeEventListener("keydown", close);
     }
   }, [mobile]);
-  const updateThread = useCallback((t: Thread, activate = true) => {
-    setThread((current) => (activate || current?.id === t.id ? t : current));
-    setThreads((prev) =>
-      [t, ...prev.filter((x) => x.id !== t.id)].sort(
-        (a, b) => (b.updated || 0) - (a.updated || 0),
-      ),
-    );
-  }, []);
-  async function openThread(id: string) {
-    try {
-      const t = await api<Thread>("juiced/thread?id=" + encodeURIComponent(id));
-      setThread(t);
-      setScreen("playground");
-      setTask("Chat");
-      setMobile(false);
-    } catch (e) {
-      notify((e as Error).message);
-    }
-  }
-  async function shelf(t: Thread, value: "working" | "settled") {
-    try {
-      const current = await api<Thread>(
-        "juiced/thread?id=" + encodeURIComponent(t.id),
-      );
-      const updated = await api<Thread>("juiced/thread", {
-        ...current,
-        shelf: value,
-      });
-      if (thread?.id === t.id) setThread(updated);
-      await refreshThreads();
-    } catch (e) {
-      notify((e as Error).message);
-    }
-  }
-  function threadMenu(t: Thread, Item: any) {
-    return (
-      <>
-        <Item className="menu-item" onClick={() => void openThread(t.id)}>
-          Open thread
-        </Item>
-        <Item
-          className="menu-item"
-          onClick={() =>
-            void shelf(t, t.shelf === "settled" ? "working" : "settled")
-          }
-        >
-          Move to {t.shelf === "settled" ? "Working" : "Settled"}
-        </Item>
-        <Item className="menu-item" onClick={() => setScreen("cache")}>
-          Cache settings…
-        </Item>
-      </>
-    );
-  }
   async function saveOptions() {
     if (!inspected) return;
     setSaving(true);
@@ -395,8 +326,8 @@ export default function App() {
                       : "Loading settings…"}
               </strong>
               <p>
-                Messages and model weights are kept separately from reusable
-                computation.
+                Consumer session state can be reused independently of model
+                residency.
               </p>
               <span>
                 {cache?.settings?.retention_days || 7} day expiry ·{" "}
@@ -405,116 +336,12 @@ export default function App() {
             </div>
           </SidebarGroup>
         )}
-        {screen === "playground" && task === "Chat" && (
+        {screen === "playground" && (
           <SidebarGroup>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="new-chat"
-              onClick={() => {
-                setThread(null);
-                setMobile(false);
-              }}
-            >
-              <Plus size={14} />
-              New chat
-            </Button>
-            <input
-              className="thread-search"
-              aria-label="Search threads"
-              placeholder="Search threads…"
-              value={threadSearch}
-              onChange={(e) => setThreadSearch(e.target.value)}
-            />
-            {(["working", "settled"] as const).map((group) => (
-              <details
-                className="thread-shelf"
-                open
-                key={group}
-                onDragOver={(e) => {
-                  e.preventDefault();
-                  e.currentTarget.classList.add("drop-over");
-                }}
-                onDragLeave={(e) =>
-                  e.currentTarget.classList.remove("drop-over")
-                }
-                onDrop={(e) => {
-                  e.preventDefault();
-                  e.currentTarget.classList.remove("drop-over");
-                  const t = threads.find(
-                    (t) => t.id === e.dataTransfer.getData("juiced/thread"),
-                  );
-                  if (t) void shelf(t, group);
-                }}
-              >
-                <summary>
-                  <ChevronDown size={12} />
-                  {group === "working" ? "Working" : "Settled"}
-                  <span className="count">
-                    {threads.filter((t) => t.shelf === group).length}
-                  </span>
-                </summary>
-                {threads
-                  .filter(
-                    (t) =>
-                      t.shelf === group &&
-                      t.title
-                        .toLowerCase()
-                        .includes(threadSearch.toLowerCase()),
-                  )
-                  .map((t) => (
-                    <ContextMenu.Root key={t.id}>
-                      <ContextMenu.Trigger render={<div />}>
-                        <div
-                          className={
-                            "thread-row " +
-                            (thread?.id === t.id ? "selected" : "")
-                          }
-                          draggable
-                          onDragStart={(e) =>
-                            e.dataTransfer.setData("juiced/thread", t.id)
-                          }
-                        >
-                          <button
-                            className="thread-open"
-                            title={t.title}
-                            onClick={() => void openThread(t.id)}
-                          >
-                            {t.title}
-                          </button>
-                          <Menu.Root>
-                            <Menu.Trigger
-                              render={
-                                <Button
-                                  size="icon-micro"
-                                  variant="ghost"
-                                  aria-label={"Actions for " + t.title}
-                                />
-                              }
-                            >
-                              <MoreHorizontal size={14} />
-                            </Menu.Trigger>
-                            <Menu.Portal>
-                              <Menu.Positioner align="end">
-                                <Menu.Popup className="menu-popup">
-                                  {threadMenu(t, Menu.Item)}
-                                </Menu.Popup>
-                              </Menu.Positioner>
-                            </Menu.Portal>
-                          </Menu.Root>
-                        </div>
-                      </ContextMenu.Trigger>
-                      <ContextMenu.Portal>
-                        <ContextMenu.Positioner>
-                          <ContextMenu.Popup className="menu-popup">
-                            {threadMenu(t, ContextMenu.Item)}
-                          </ContextMenu.Popup>
-                        </ContextMenu.Positioner>
-                      </ContextMenu.Portal>
-                    </ContextMenu.Root>
-                  ))}
-              </details>
-            ))}
+            <p className="sidebar-context-note">
+              Temporary service tests. Results are cleared when you leave or
+              reload this page.
+            </p>
           </SidebarGroup>
         )}
         <footer className="sidebar-footer">
@@ -553,7 +380,6 @@ export default function App() {
             onPolicy={() => setScreen("policy")}
             onPlay={(m) => {
               setPreferredModel(m.id);
-              setThread(null);
               setTask(m.service);
               setScreen("playground");
             }}
@@ -574,23 +400,17 @@ export default function App() {
         {screen === "playground" && (
           <Playground
             models={models}
-            thread={thread}
             task={task}
             initialModel={preferredModel}
             notify={notify}
-            onThread={updateThread}
             openModels={() => setScreen("models")}
           />
         )}
+        {screen === "services" && (
+          <ServiceEndpoints models={models} notify={notify} />
+        )}
         {screen === "cache" && (
-          <CacheWorkspace
-            cache={cache}
-            setCache={setCache}
-            threads={threads}
-            refreshThreads={refreshThreads}
-            openThread={openThread}
-            notify={notify}
-          />
+          <CacheWorkspace cache={cache} setCache={setCache} notify={notify} />
         )}
         {!ready && screen !== "playground" && (
           <p className="page-note">

@@ -97,13 +97,14 @@ bool JuicedService::unleased_protocol(const httplib::Request &req,
       if (profile.value("model", "") == name)
         qualified = true;
     if (state_["cache"].value("mode", "memory") == "persistent" && qualified) {
-      output(res,
-             {{"error",
-               {{"message", "This deployment uses persistent thread slots. Use "
-                            "Chat Completions, or select memory cache mode "
-                            "before using Responses/Completions."},
-                {"type", "invalid_request_error"}}}},
-             409);
+      output(
+          res,
+          {{"error",
+            {{"message", "This deployment uses persistent session slots. Use "
+                         "Chat Completions, or select memory cache mode "
+                         "before using Responses/Completions."},
+             {"type", "invalid_request_error"}}}},
+          409);
       return true;
     }
   } catch (const std::exception &) {
@@ -234,31 +235,47 @@ void JuicedService::cache_api(const httplib::Request &req,
     output(res, profile);
     return;
   }
-  if (op == "cache/forget") {
-    auto thread = body.at("thread").get<std::string>();
+  if (op == "cache/retain" || op == "cache/forget") {
+    const auto snapshot = body.value("snapshot", "");
+    const auto session = body.value("session", body.value("thread", ""));
+    if (snapshot.empty() && session.empty())
+      throw std::invalid_argument("Specify a snapshot or consumer session");
+    if (op == "cache/retain" &&
+        (!body.contains("retained") || !body["retained"].is_boolean()))
+      throw std::invalid_argument("retained must be a boolean");
     std::lock_guard<std::mutex> lock(mutex_);
     std::vector<std::string> ids;
-    for (const auto &[id, j] : state_["snapshots"].items())
-      if (j.value("thread", "") == thread) {
+    for (const auto &[id, j] : state_["snapshots"].items()) {
+      if ((!snapshot.empty() && id == snapshot) ||
+          (snapshot.empty() &&
+           j.value("session", j.value("thread", "")) == session)) {
         if (active_snapshots_.count(id)) {
           output(res,
                  {{"error",
-                   "Thread state is in use; retry after generation finishes"}},
+                   "Session cache is in use; retry after generation finishes"}},
                  409);
           return;
         }
         ids.push_back(id);
       }
+    }
+    if (ids.empty()) {
+      output(res, {{"error", "Snapshot not found"}}, 404);
+      return;
+    }
     for (const auto &id : ids) {
-      std::filesystem::remove(snapshot_directory_ / (id + ".bin"));
-      state_["snapshots"].erase(id);
+      if (op == "cache/retain")
+        state_["snapshots"][id]["retained"] = body.at("retained");
+      else {
+        std::filesystem::remove(snapshot_directory_ / (id + ".bin"));
+        state_["snapshots"].erase(id);
+      }
     }
     persist_locked();
-    output(res,
-           {{"forgotten", ids.size()},
-            {"messages_preserved", true},
-            {"memory_note", "Forget removes saved computation; live engine "
-                            "prefixes may remain until replaced or unloaded"}});
+    output(res, {{op == "cache/retain" ? "updated" : "forgotten", ids.size()},
+                 {"memory_note",
+                  "Snapshot operations affect saved computation. Live engine "
+                  "prefixes may remain until replaced or unloaded."}});
     return;
   }
   std::lock_guard<std::mutex> lock(mutex_);
@@ -300,8 +317,12 @@ void JuicedService::cache_api(const httplib::Request &req,
     persist_locked();
   }
   json entries = json::array();
-  for (const auto &[id, j] : state_["snapshots"].items())
-    entries.push_back(j);
+  for (const auto &[id, j] : state_["snapshots"].items()) {
+    auto entry = j;
+    entry["session"] = j.value("session", j.value("thread", ""));
+    entry.erase("thread");
+    entries.push_back(entry);
+  }
   output(res, {{"settings", state_["cache"]},
                {"persistent_supported", !state_["qualified_profiles"].empty()},
                {"reason",
@@ -371,7 +392,11 @@ void JuicedService::chat(const httplib::Request &original,
              429);
       return;
     }
-    const auto thread = original.get_header_value("X-Juiced-Thread-Id");
+    const auto requested_session =
+        original.get_header_value("X-Juiced-Session-Id");
+    const auto thread = requested_session.empty()
+                            ? original.get_header_value("X-Juiced-Thread-Id")
+                            : requested_session;
     const bool has_thread =
         !thread.empty() && thread.size() < 160 &&
         thread.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRS"
@@ -394,8 +419,9 @@ void JuicedService::chat(const httplib::Request &original,
         active_slots_[model].erase(slot);
         output(res,
                {{"error",
-                 {{"message", "This thread already has a turn in progress"},
-                  {"type", "thread_busy"}}}},
+                 {{"message",
+                   "This consumer session already has a request in progress"},
+                  {"type", "session_busy"}}}},
                409);
         return;
       }
@@ -504,17 +530,11 @@ void JuicedService::chat(const httplib::Request &original,
           throw std::runtime_error("Retained snapshots fill the budget; change "
                                    "retention or forget a snapshot");
         std::filesystem::rename(file, snapshot_directory_ / (key + ".bin"));
-        bool retained = false;
-        auto threadfile = directory_ / "threads" / (thread + ".json");
-        if (std::filesystem::exists(threadfile)) {
-          std::ifstream f(threadfile);
-          json t;
-          f >> t;
-          retained = t.value("retain_cache", false);
-        }
+        const bool retained = state_["snapshots"].contains(key) &&
+                              state_["snapshots"][key].value("retained", false);
         state_["snapshots"][key] = {
             {"id", key},
-            {"thread", thread},
+            {"session", thread},
             {"model", model},
             {"profile", profile["fingerprint"]},
             {"bytes", size},

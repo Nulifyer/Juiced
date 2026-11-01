@@ -77,7 +77,7 @@
   margin: 20px 0 12px;
 }
 .cache-table-heading,
-.cache-thread {
+.cache-entry {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 115px 90px;
   gap: 15px;
@@ -89,27 +89,27 @@
   color: var(--muted-foreground);
   border-bottom: 1px solid var(--border);
 }
-.cache-thread {
+.cache-entry {
   width: 100%;
   text-align: left;
   border-bottom: 1px solid #ffffff0b;
   min-height: 80px;
   border-radius: 5px;
 }
-.cache-thread:hover,
-.cache-thread.selected {
+.cache-entry:hover,
+.cache-entry.selected {
   background: var(--card);
 }
-.cache-thread-name {
+.cache-entry-name {
   min-width: 0;
 }
-.cache-thread-name strong {
+.cache-entry-name strong {
   display: block;
   font-weight: 500;
   font-size: 12px;
   overflow-wrap: anywhere;
 }
-.cache-thread-name small {
+.cache-entry-name small {
   display: block;
   font-size: 10px;
   margin-top: 5px;
@@ -117,28 +117,28 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.cache-thread-state {
+.cache-entry-state {
   font-size: 11px;
   display: block;
 }
-.cache-thread-state > svg {
+.cache-entry-state > svg {
   display: inline;
   margin-right: 5px;
   color: #d6b987;
 }
-.cache-thread-state small {
+.cache-entry-state small {
   display: block;
   font-size: 10px;
   margin-top: 5px;
 }
-.cache-thread-age {
+.cache-entry-age {
   display: flex;
   gap: 9px;
   font-size: 10px;
   align-items: center;
   color: var(--muted-foreground);
 }
-.cache-thread-age svg {
+.cache-entry-age svg {
   margin-left: auto;
 }
 .cache-settings {
@@ -239,11 +239,11 @@
     gap: 20px;
   }
   .cache-table-heading,
-  .cache-thread {
+  .cache-entry {
     grid-template-columns: minmax(0, 1fr) 95px;
   }
   .cache-table-heading > span:last-child,
-  .cache-thread-age {
+  .cache-entry-age {
     display: none;
   }
   .storage-title h2 > span {
@@ -286,7 +286,7 @@
     display: inline;
   }
   .cache-table-heading,
-  .cache-thread {
+  .cache-entry {
     grid-template-columns: minmax(0, 1fr) 110px;
   }
   .cache-filters {
@@ -297,20 +297,20 @@
   }
 }
 
-.cache-thread-drawer .cache-selection {
+.cache-entry-drawer .cache-selection {
   border: 0;
   background: none;
   padding: 0;
   margin: 0;
 }
-.cache-thread-drawer .cache-selection-actions {
+.cache-entry-drawer .cache-selection-actions {
   flex-direction: column;
   align-items: stretch;
 }
-.cache-thread-drawer .cache-selection-actions > button {
+.cache-entry-drawer .cache-selection-actions > button {
   justify-content: center;
 }
-.cache-thread-drawer .cache-selection small {
+.cache-entry-drawer .cache-selection small {
   display: block;
   line-height: 1.8;
 }

@@ -1,3 +1,4 @@
+import { VoicePicker } from "./VoicePicker";
 import { useEffect, useRef, useState } from "react";
 import {
   ArrowUp,
@@ -17,13 +18,11 @@ import "./Playground.css";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Button } from "./t3/button";
-import { api, wav16k, type Model, type Message, type Thread } from "../api";
+import { api, wav16k, type Model, type Message } from "../api";
 type Props = {
   models: Model[];
-  thread: Thread | null;
   task: string;
   notify: (s: string) => void;
-  onThread: (t: Thread, activate?: boolean) => void;
   openModels: () => void;
   initialModel?: string;
 };
@@ -37,14 +36,13 @@ function textOf(m: Message) {
 }
 export function Playground({
   models,
-  thread,
   task,
   notify,
-  onThread,
   openModels,
   initialModel,
 }: Props) {
   const [cacheMode, setCacheMode] = useState("memory");
+  const [history, setHistory] = useState<Message[]>([]);
   const [model, setModel] = useState(initialModel || ""),
     [draft, setDraft] = useState(""),
     [working, setWorking] = useState(false),
@@ -64,11 +62,7 @@ export function Playground({
     [sourceAudio, setSourceAudio] = useState(""),
     [sourceName, setSourceName] = useState(""),
     [compareCurrent, setCompareCurrent] = useState("");
-  const currentTask = useRef(task);
-  currentTask.current = task;
-  const activeTurn = useRef<{ thread: string | null; task: string } | null>(
-    null,
-  );
+  const [resetKey, setResetKey] = useState(0);
   const abort = useRef<AbortController | null>(null),
     recorder = useRef<MediaRecorder | null>(null),
     media = useRef<MediaStream | null>(null),
@@ -95,23 +89,14 @@ export function Playground({
       .catch(() => {});
   }, []);
   useEffect(() => {
-    if (!eligible.some((m) => m.id === model))
-      setModel(
-        task === "Chat" && thread?.model
-          ? eligible.find((m) => m.id === thread.model)?.id || ""
-          : eligible[0]?.id || "",
-      );
-  }, [models, task, thread?.id]);
+    if (!eligible.some((m) => m.id === model)) setModel(eligible[0]?.id || "");
+  }, [models, task]);
   useEffect(() => {
-    if (task === "Chat" && thread?.model)
-      setModel(eligible.find((m) => m.id === thread.model)?.id || "");
-    if (
-      activeTurn.current &&
-      (activeTurn.current.thread !== (thread?.id || null) ||
-        activeTurn.current.task !== task)
-    )
-      abort.current?.abort();
-    setDraft(drafts.current[task === "Chat" ? thread?.id || task : task] || "");
+    abort.current?.abort();
+    abort.current = null;
+    setWorking(false);
+    setHistory([]);
+    setDraft(drafts.current[task] || "");
     setAttachments([]);
     setReceipt(undefined);
     setContent("");
@@ -122,7 +107,7 @@ export function Playground({
       media.current?.getTracks().forEach((track) => track.stop());
       setRecording(false);
     }
-  }, [thread?.id, task]);
+  }, [task, model, resetKey]);
   useEffect(
     () => () => {
       abort.current?.abort();
@@ -146,12 +131,7 @@ export function Playground({
   );
   function edit(s: string) {
     setDraft(s);
-    drafts.current[task === "Chat" ? thread?.id || task : task] = s;
-  }
-  async function save(t: Thread, activate = true) {
-    const result = await api<Thread>("juiced/thread", t);
-    onThread(result, activate);
-    return result;
+    drafts.current[task] = s;
   }
   async function attach(files: FileList | null) {
     if (!selected?.labels.includes("vision")) {
@@ -181,7 +161,6 @@ export function Playground({
     messages: Message[],
     signal: AbortSignal,
     onDelta: (c: string, r: string) => void,
-    threadId?: string,
   ) {
     const start = performance.now();
     let first: number | undefined,
@@ -192,7 +171,6 @@ export function Playground({
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        ...(threadId ? { "X-Juiced-Thread-Id": threadId } : {}),
       },
       body: JSON.stringify({
         model: id,
@@ -225,6 +203,7 @@ export function Playground({
       if (!line.startsWith("data:")) return;
       const raw = line.slice(5).trim();
       if (raw === "[DONE]" || !raw) return;
+      signal.throwIfAborted();
       const j = JSON.parse(raw);
       if (j.error) throw Error(j.error.message || String(j.error));
       const delta = j.choices?.[0]?.delta || {};
@@ -276,8 +255,8 @@ export function Playground({
     setContent("");
     setReasoning("");
     setReceipt(undefined);
-    abort.current = new AbortController();
-    activeTurn.current = { thread: thread?.id || null, task };
+    const controller = new AbortController();
+    abort.current = controller;
     try {
       if (task === "Speak") {
         await speak(draft, model);
@@ -294,8 +273,9 @@ export function Playground({
             size: "512x512",
             response_format: "b64_json",
           },
-          abort.current.signal,
+          controller.signal,
         );
+        controller.signal.throwIfAborted();
         const data = r.data?.[0];
         setImage(
           data?.b64_json
@@ -324,61 +304,49 @@ export function Playground({
           const out = await completion(
             id,
             [message],
-            abort.current.signal,
+            controller.signal,
             () => {},
           );
+          controller.signal.throwIfAborted();
           setComparison((p) => [...p, { ...out, id }]);
         }
         return;
       }
-      let t =
-        thread ||
-        (await api<Thread>("juiced/thread", {
-          title: draft.slice(0, 64) || "Image test",
-          shelf: "working",
-          model,
-          messages: [],
-        }));
-      activeTurn.current = { thread: t.id, task };
-      t = await save({ ...t, model, messages: [...t.messages, message] });
+      const messages = [...history, message];
+      setHistory(messages);
       edit("");
       setAttachments([]);
       const out = await completion(
         model,
-        t.messages,
-        abort.current.signal,
+        messages,
+        controller.signal,
         (c, r) => {
           setContent(c);
           setReasoning(r);
         },
-        t.id,
       );
+      controller.signal.throwIfAborted();
       setReceipt(out.receipt);
-      await save(
+      setHistory([
+        ...messages,
         {
-          ...t,
-          messages: [
-            ...t.messages,
-            {
-              role: "assistant",
-              content: out.answer,
-              ...(out.thinking ? { reasoning_content: out.thinking } : {}),
-            },
-          ],
+          role: "assistant",
+          content: out.answer,
+          ...(out.thinking ? { reasoning_content: out.thinking } : {}),
         },
-        false,
-      );
+      ]);
       setContent("");
       setReasoning("");
     } catch (e) {
-      if ((e as Error).name === "AbortError")
-        notify("Generation stopped. The submitted user message is retained.");
+      if (abort.current !== controller) return;
+      if ((e as Error).name === "AbortError") notify("Generation stopped.");
       else notify((e as Error).message);
     } finally {
-      setWorking(false);
-      abort.current = null;
-      activeTurn.current = null;
-      setCompareCurrent("");
+      if (abort.current === controller) {
+        setWorking(false);
+        abort.current = null;
+        setCompareCurrent("");
+      }
     }
   }
   async function speak(text: string, id?: string) {
@@ -387,11 +355,13 @@ export function Playground({
       notify("Load a speech model first.");
       return;
     }
+    const controller = abort.current || new AbortController();
+    abort.current = controller;
     const start = performance.now();
     const r = await fetch("/v1/audio/speech", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      signal: abort.current?.signal,
+      signal: controller.signal,
       body: JSON.stringify({
         model: target,
         input: text,
@@ -402,6 +372,7 @@ export function Playground({
     if (!r.ok) throw Error("Speech synthesis failed (" + r.status + ").");
     const blob = await r.blob();
     if (!blob.size) throw Error("The speech backend returned no audio.");
+    controller.signal.throwIfAborted();
     setAudio(URL.createObjectURL(blob));
     setReceipt({ model: target, total_ms: performance.now() - start });
   }
@@ -411,6 +382,8 @@ export function Playground({
       notify("Load a recognizer before using audio input.");
       return;
     }
+    const controller = new AbortController();
+    abort.current = controller;
     setWorking(true);
     if (task === "Transcribe") {
       setSourceAudio(URL.createObjectURL(blob));
@@ -427,22 +400,22 @@ export function Playground({
         r = await fetch("/v1/audio/transcriptions", {
           method: "POST",
           body: form,
+          signal: controller.signal,
         });
       const j = await r.json();
       if (!r.ok)
         throw Error(j.error?.message || j.error || "Transcription failed");
-      if (currentTask.current === task) edit(j.text || "");
-      else {
-        drafts.current[task === "Chat" ? thread?.id || task : task] =
-          j.text || "";
-        return;
-      }
+      controller.signal.throwIfAborted();
+      edit(j.text || "");
       setReceipt({ model: target, total_ms: performance.now() - start });
       notify("Transcript ready to review.");
     } catch (e) {
-      notify((e as Error).message);
+      if (abort.current === controller) notify((e as Error).message);
     } finally {
-      setWorking(false);
+      if (abort.current === controller) {
+        setWorking(false);
+        abort.current = null;
+      }
     }
   }
   async function toggleMic() {
@@ -668,14 +641,12 @@ export function Playground({
               />
               <div className="generation-controls">
                 {task === "Speak" ? (
-                  <label>
-                    Voice
-                    <input
-                      aria-label="Speech voice"
-                      value={voice}
-                      onChange={(e) => setVoice(e.target.value)}
-                    />
-                  </label>
+                  <VoicePicker
+                    model={model}
+                    value={voice}
+                    onChange={setVoice}
+                    disabled={working}
+                  />
                 ) : (
                   <span className="output-size">
                     Output size <strong>512 × 512</strong>
@@ -929,23 +900,12 @@ export function Playground({
         />
       </div>
     );
-  const history = task === "Chat" ? thread?.messages || [] : [];
   return (
     <div className="playground-layout">
       <header className="chat-header">
         <div>
-          <h1>
-            {task === "Chat"
-              ? thread?.title || "New chat"
-              : task + " playground"}
-          </h1>
-          <p>
-            {task === "Chat"
-              ? "Chat with your loaded models"
-              : task === "Compare"
-                ? "Identical prompt, sequential runs to avoid interference"
-                : "Use an eligible loaded deployment"}
-          </p>
+          <h1>Test chat</h1>
+          <p>Temporary chat test. Cleared when you leave or reload.</p>
         </div>
         <div className="model-picker">
           <select
@@ -954,12 +914,6 @@ export function Playground({
             onChange={(e) => setModel(e.target.value)}
             disabled={working}
           >
-            {!model &&
-              thread?.model &&
-              task === "Chat" &&
-              eligible.length > 0 && (
-                <option value="">{thread.model} · unloaded</option>
-              )}
             {eligible.length === 0 ? (
               <option value="">No eligible loaded models</option>
             ) : (
@@ -970,6 +924,17 @@ export function Playground({
             Load another…
           </Button>
         </div>
+        <Button
+          size="compact"
+          variant="outline"
+          onClick={() => {
+            drafts.current = {};
+            setResetKey((k) => k + 1);
+            setAudio("");
+          }}
+        >
+          Clear test
+        </Button>
         <Button
           size="compact"
           variant="ghost"
@@ -1010,10 +975,12 @@ export function Playground({
               </select>
             </label>
           )}
-          <label>
-            Speech voice
-            <input value={voice} onChange={(e) => setVoice(e.target.value)} />
-          </label>
+          <VoicePicker
+            model={speakers[0]?.id || ""}
+            value={voice}
+            onChange={setVoice}
+            disabled={working}
+          />
           <p className="page-note">
             Sampling and context use the selected deployment’s saved profile.
             Incompatible requests return an error.
@@ -1024,7 +991,7 @@ export function Playground({
         {history.map((m, i) => (
           <article className={"chat-message " + m.role} key={i}>
             <div className="message-meta">
-              {m.role === "user" ? "You" : thread?.model || "Model"}
+              {m.role === "user" ? "You" : model || "Model"}
             </div>
             {m.reasoning_content && (
               <details className="thinking">
@@ -1085,8 +1052,8 @@ export function Playground({
             <MessageSquareIcon />
             <h2>Start a conversation</h2>
             <p>
-              Ask a question, bring an image or dictate a message. Your test
-              conversations are saved in the sidebar.
+              Send a test prompt, image or recording. This page keeps results
+              only while it is open.
             </p>
           </div>
         )}

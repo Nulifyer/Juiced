@@ -1556,7 +1556,8 @@ void Server::setup_routes(httplib::Server &web_server) {
     // Register Ollama-compatible API routes
     auto ollama_api = std::make_shared<OllamaApi>(router_.get(), model_manager_.get(),
         [this](const httplib::Request& req, httplib::Response& res) { return juiced_ && juiced_->inference_guard(req, res); },
-        [this](const std::string& model, const nlohmann::json& options) { auto_load_model_if_needed(model, options); });
+        [this](const std::string& model, const nlohmann::json& options) { auto_load_model_if_needed(model, options); },
+        [this](const std::string& model) { return !juiced_ || juiced_->allows(model); });
     ollama_api->register_routes(web_server);
 
     // Register MCP gateway (POST /mcp). NOTE: /mcp is an INTENTIONAL EXCEPTION

@@ -327,3 +327,136 @@
     margin-top: 12px;
   }
 }
+
+.discovery-layout.has-results {
+  grid-template-columns: minmax(0, 1fr);
+}
+.discovery-layout.has-results .discovery-guide {
+  display: none;
+}
+.source-mark img {
+  display: block;
+}
+.discovery-result-summary {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--border);
+}
+.discovery-model {
+  padding: 24px 0;
+  border-bottom: 1px solid var(--border);
+}
+.discovery-model header {
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+  align-items: start;
+}
+.discovery-model h3 {
+  font-size: 15px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+.discovery-model header p {
+  font-size: 11px;
+  color: var(--muted-foreground);
+  margin-top: 7px;
+}
+.discovery-model header strong {
+  color: var(--foreground);
+  font-weight: 400;
+}
+.discovery-downloads {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--muted-foreground);
+  white-space: nowrap;
+}
+.discovery-quants {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 16px;
+}
+.discovery-sources {
+  font-size: 10px;
+  color: var(--muted-foreground);
+  margin-top: 14px;
+}
+.discovery-sources summary {
+  cursor: pointer;
+}
+.discovery-sources a {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 9px;
+  overflow-wrap: anywhere;
+}
+.quant-options {
+  margin: 20px 0;
+  padding: 0;
+  border: 0;
+}
+.quant-options legend {
+  font-size: 12px;
+  margin-bottom: 10px;
+}
+.quant-options > div {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.quant-options label {
+  position: relative;
+  display: grid;
+  grid-template-columns: 15px minmax(0, 1fr);
+  gap: 5px 8px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.quant-options label.is-selected {
+  border-color: var(--ring);
+  background: var(--secondary);
+}
+.quant-options input {
+  width: 13px;
+  height: 13px;
+  margin: 2px 0 0;
+}
+.quant-options strong {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.quant-options span,
+.quant-options small {
+  grid-column: 2;
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+.variant-source {
+  font-size: 11px;
+  overflow-wrap: anywhere;
+  margin: 14px 0;
+}
+.variant-source svg {
+  display: inline;
+}
+@media (max-width: 650px) {
+  .discovery-model header {
+    flex-direction: column;
+    gap: 10px;
+  }
+  .discovery-downloads {
+    white-space: normal;
+  }
+}

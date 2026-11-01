@@ -691,3 +691,15 @@
     padding: 35px 20px;
   }
 }
+
+.voice-picker-note {
+  display: block;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  line-height: 1.6;
+  max-width: 45ch;
+}
+.voice-picker select {
+  width: 100%;
+  min-width: 180px;
+}

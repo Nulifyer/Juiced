@@ -1,7 +1,7 @@
 # Juiced
 
 A local model appliance derived from Lemonade, with a T3-derived model library
-and direct multimodal playground. The model runtime owns weights, backend
+and temporary multimodal service tests. The model runtime owns weights, backend
 processes and serving policy. Agent tools/workspaces remain in a separate stack.
 
 ## Development
@@ -33,12 +33,13 @@ explicitly provisioned runtime variant and are outside this default native image
 | Models | Operate live services: ready/busy models grouped by service, followed by a compact unloaded inventory. Try opens the selected model and service. |
 | Loading policy | Set residency in three drag-and-drop lanes: Hot, On demand and Disabled. Menus and bulk actions offer the same commands. |
 | Library | Search Hugging Face and review files; inspect downloaded weights in a table; follow transfers; upload or register a GGUF in a dedicated import form. |
-| Cache | Inspect saved computation and thread storage separately from retention, mode and disk-budget settings. Unsaved settings survive background refreshes. |
-| Playground | Chat has a conversation and anchored composer. Transcribe pairs an audio source with an editable/exportable transcript. Speak pairs a script with playback. Images pairs a prompt with a preview. Compare places responses beside each other after sequential requests. |
+| Service APIs | Copy client endpoints and inspect enabled-service counts and session-cache requirements. |
+| Cache | Inspect consumer-session computation snapshots separately from retention, mode and disk-budget settings. Unsaved settings survive background refreshes. |
+| Test services | Chat has a conversation and anchored composer. Transcribe pairs an audio source with an editable/exportable transcript. Speak pairs a script with playback. Images pairs a prompt with a preview. Compare places responses beside each other after sequential requests. |
 
 The sidebar follows the current task: service filters for operations, acquisition
-navigation for Library, cache information for storage, and task/thread navigation
-for Playground. Wide workspaces collapse into a single column on narrow screens.
+navigation for Library, cache information for storage, and task navigation
+for temporary tests. Wide workspaces collapse into a single column on narrow screens.
 
 ## Serving behavior
 
@@ -51,11 +52,10 @@ Library provides native Hugging Face search/variant review and transfers, plus
 chunked single-file GGUF uploads and approved-directory server import. Split
 weights and vision companions use managed HF downloads in this release. The
 transfer journal retains interrupted work across restart and retries through
-the native downloader. Downloading does not imply loading.
+the native downloader. New, unconfigured, downloaded and imported models default to Disabled. Explicitly choose On demand or Hot to permit inference. Disabled models reject inference and are excluded from OpenAI and Ollama discovery.
 
-Playground uses eligible loaded deployments for chat, speech and images. Chat
-streams, retains ordinary test threads and supports images when declared by the
-model. English audio is converted in-browser to16kHz WAV for the CPU recognizers.
+Test services uses eligible loaded deployments for chat, speech and images. Chat
+streams and supports images when declared by the model. Messages remain only in page memory and clear on navigation, reload, model change or Clear test. There is no conversation library or persistent chat API. Downstream clients own history. English audio is converted in-browser to16kHz WAV for the CPU recognizers.
 There are no shell, browser, MCP or autonomous agent tools in this application.
 
 Cache capability is reported explicitly. Memory reuse is engine-owned. Persistent
@@ -63,12 +63,14 @@ Chat Completions reuse is opt-in and applies only to exact qualified engine/mode
 profiles. The image uses the checksum-verified upstream llama.cpp b12032 Vulkan
 release, not a locally patched engine. The acceptance fixture must verify useful reuse after save/restart/
 restore before an operator records qualification. A saved file alone does not
-qualify it. Playground requests supply stable thread IDs; snapshots have matching
+qualify it. External clients send full history and a stable `X-Juiced-Session-Id`; snapshots have matching
 prefix/profile keys, checksums, expiry and a retained-state disk budget. Temporary
 snapshot writes require additional free disk. Retain/release and forget affect
-saved computation independently of messages or weights. Requests without a stable
-thread ID do not create persistent snapshots. Snapshot misses, invalid files and incompatible prefixes rebuild inside their leased slot. An unavailable admission path returns a retryable503 instead of racing another request. Other inference protocols are not
+saved computation independently of client-owned messages or weights. Requests without a stable
+session ID do not create persistent snapshots. Temporary UI requests do not send session IDs. The older `X-Juiced-Thread-Id` header remains an alias. Snapshot misses, invalid files and incompatible prefixes rebuild inside their leased slot. An unavailable admission path returns a retryable503 instead of racing another request. Other inference protocols are not
 qualified for persistent session snapshots in this first release.
+
+Legacy prototype conversation routes return HTTP410. Existing files are preserved, never extended or used as a cache index. Cache retention and forgetting use snapshot IDs or opaque consumer-session IDs.
 
 ## Provenance
 
@@ -92,3 +94,7 @@ key handling when configured. Do not mount another manager's writable config.
 
 Homelab deployment/evidence is owned by the separate Homelab repository. Existing
 HA and other clients are deliberately not migrated during initial user testing.
+
+Discovery groups GGUF quantization repositories under the exact model and publisher. File review shows selectable weight sizes. Model rows support dragging from their name or body, with independent checkbox/menu actions. `GET /v1/audio/voices?model=kokoro-v1` reads available voices from the loaded Kokoro backend. The speech selector uses that list; unsupported backends explain the limitation and accept an explicit voice ID.
+
+Hugging Face logo: official brand asset from https://huggingface.co/brand, stored locally under `juiced/ui/public/huggingface.svg`. The mark belongs to Hugging Face.

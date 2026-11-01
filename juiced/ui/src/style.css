@@ -689,51 +689,6 @@ progress::-webkit-progress-value {
   overflow-wrap: anywhere;
   margin-top: 15px;
 }
-.new-chat {
-  width: 100%;
-  justify-content: start;
-}
-.thread-search {
-  font-size: 11px !important;
-  width: 100%;
-  margin: 10px 0;
-}
-.thread-shelf {
-  margin: 8px 0 17px;
-}
-.thread-shelf summary {
-  list-style: none;
-  display: flex;
-  gap: 7px;
-  align-items: center;
-  cursor: pointer;
-  font-size: 11px;
-  color: var(--muted-foreground);
-  padding: 8px 4px;
-}
-.thread-shelf .count {
-  margin-left: auto;
-}
-.thread-row {
-  display: flex;
-  gap: 4px;
-  align-items: center;
-  border-radius: 5px;
-  padding: 7px 6px;
-}
-.thread-row.selected,
-.thread-row:hover {
-  background: var(--secondary);
-}
-.thread-open {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  text-align: left;
-  font-size: 11px;
-  min-width: 0;
-}
 .playground-main {
   padding: 0;
   overflow: hidden;

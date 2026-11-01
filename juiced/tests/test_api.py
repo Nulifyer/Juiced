@@ -34,7 +34,7 @@ class ApiContract(unittest.TestCase):
   except urllib.error.HTTPError as r:
    with r:return r.code,json.load(r)
  def test_catalog(self):
-  s,x=self.request('juiced/catalog');self.assertEqual(s,200);self.assertTrue(x['data']);self.assertTrue(all(m['policy']=='on-demand' for m in x['data']));self.assertTrue(all('state'in m and'service'in m for m in x['data']))
+  s,x=self.request('juiced/catalog');self.assertEqual(s,200);self.assertTrue(x['data']);self.assertTrue(all(m['policy']=='disabled' for m in x['data']));self.assertTrue(all('state'in m and'service'in m for m in x['data']))
  def test_policy_validation_and_revision(self):
   s,x=self.request('juiced/policy',{'model':self.model,'policy':'invalid'});self.assertEqual(s,400)
   _,c=self.request('juiced/catalog');s,_=self.request('juiced/policy',{'model':self.model,'policy':'disabled','revision':c['revision']});self.assertEqual(s,200)
@@ -50,12 +50,30 @@ class ApiContract(unittest.TestCase):
   _,catalog=self.request('juiced/catalog');m=next(x for x in catalog['data'] if x['id']==self.model);self.assertEqual(m['policy'],'on-demand')
  def test_hot_unload_protection(self):
   self.request('juiced/policy',{'model':self.model,'policy':'hot'});s,_=self.request('juiced/operation',{'model':self.model,'action':'unload'});self.assertEqual(s,409);self.request('juiced/policy',{'model':self.model,'policy':'on-demand'})
- def test_thread_revision_and_path(self):
-  s,t=self.request('juiced/thread',{'id':'test-thread','title':'Retained fixture','messages':[{'role':'user','content':'hello'}]});self.assertEqual(s,200)
-  s,updated=self.request('juiced/thread',{**t,'shelf':'settled'});self.assertEqual(s,200);self.assertEqual(updated['shelf'],'settled')
-  s,_=self.request('juiced/thread',t);self.assertEqual(s,409)
-  s,_=self.request('juiced/thread',{'id':'../escape'});self.assertEqual(s,400)
-  _,got=self.request('juiced/thread?id=test-thread');self.assertEqual(got['messages'],t['messages'])
+ def test_conversation_storage_is_retired(self):
+  for prefix in ['/api/v0/','/api/v1/','/v0/','/v1/']:
+   for endpoint in ['juiced/threads','juiced/thread?id=test-thread']:
+    status,_=self.request(prefix+endpoint);self.assertEqual(status,410)
+   status,_=self.request(prefix+'juiced/thread',{'id':'test-thread','messages':[{'role':'user','content':'do not persist'}]});self.assertEqual(status,410)
+  self.assertFalse((self.root/'config/juiced/threads').exists())
+ def test_voice_discovery_validation(self):
+  for prefix in ['/api/v0/','/api/v1/','/v0/','/v1/']:
+   status,_=self.request(prefix+'audio/voices');self.assertEqual(status,400)
+   status,_=self.request(prefix+'audio/voices?model='+self.model);self.assertEqual(status,501)
+   status,_=self.request(prefix+'audio/voices?model=kokoro-v1');self.assertEqual(status,409)
+ def test_disabled_model_discovery(self):
+  model='ZZExternalFile'
+  self.request('juiced/policy',{'model':model,'policy':'disabled'})
+  _,j=self.request('models');self.assertNotIn(model,[m['id'] for m in j['data']])
+  _,tags=self.request('/api/tags');self.assertFalse(any(model in m['name'] for m in tags['models']))
+  self.request('juiced/policy',{'model':model,'policy':'on-demand'})
+  _,tags=self.request('/api/tags');self.assertTrue(any(model in m['name'] for m in tags['models']))
+  _,j=self.request('models');self.assertIn(model,[m['id'] for m in j['data']])
+  self.request('juiced/policy',{'model':model,'policy':'disabled'})
+ def test_cache_snapshot_validation(self):
+  for prefix in ['/api/v0/','/api/v1/','/v0/','/v1/']:
+   status,_=self.request(prefix+'juiced/cache/retain',{'snapshot':'missing','retained':True});self.assertEqual(status,404)
+   status,_=self.request(prefix+'juiced/cache/retain',{'snapshot':'missing','retained':'yes'});self.assertEqual(status,400)
  def test_cache_validation(self):
   s,_=self.request('juiced/cache',{'mode':'persistent'});self.assertEqual(s,422)
   s,_=self.request('juiced/cache',{'retention_days':-1});self.assertEqual(s,400)

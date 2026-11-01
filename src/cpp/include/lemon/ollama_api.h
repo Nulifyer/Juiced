@@ -18,7 +18,8 @@ class OllamaApi : public std::enable_shared_from_this<OllamaApi> {
 public:
     using RequestGuard = std::function<bool(const httplib::Request&, httplib::Response&)>;
     using ModelLoader = std::function<void(const std::string&, const json&)>;
-    OllamaApi(Router* router, ModelManager* model_manager, RequestGuard guard = {}, ModelLoader loader = {});
+    using ModelVisibility = std::function<bool(const std::string&)>;
+    OllamaApi(Router* router, ModelManager* model_manager, RequestGuard guard = {}, ModelLoader loader = {}, ModelVisibility visible = {});
 
     // Must be called on a shared_ptr instance (uses shared_from_this internally)
     void register_routes(httplib::Server& server);
@@ -26,6 +27,7 @@ public:
 private:
     RequestGuard guard_;
     ModelLoader loader_;
+    ModelVisibility visible_;
     Router* router_;
     ModelManager* model_manager_;
 
