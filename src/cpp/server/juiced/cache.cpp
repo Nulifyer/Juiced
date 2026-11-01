@@ -80,6 +80,32 @@ std::string prefix_hash(const json &messages, size_t n) {
   return digest(prefix.dump());
 }
 } // namespace
+bool JuicedService::unleased_protocol(const httplib::Request &req,
+                                      httplib::Response &res) {
+  try {
+    auto body = json::parse(req.body);
+    auto name = server_.model_manager_->get_public_model_name(
+        server_.model_manager_->resolve_model_name(body.value("model", "")));
+    std::lock_guard<std::mutex> lock(mutex_);
+    bool qualified = false;
+    for (const auto &[fingerprint, profile] :
+         state_["qualified_profiles"].items())
+      if (profile.value("model", "") == name)
+        qualified = true;
+    if (state_["cache"].value("mode", "memory") == "persistent" && qualified) {
+      output(res,
+             {{"error",
+               {{"message", "This deployment uses persistent thread slots. Use "
+                            "Chat Completions, or select memory cache mode "
+                            "before using Responses/Completions."},
+                {"type", "invalid_request_error"}}}},
+             409);
+      return true;
+    }
+  } catch (const std::exception &) {
+  }
+  return false;
+}
 json JuicedService::cache_profile(const std::string &requested) {
   auto info = server_.model_manager_->get_model_info(requested);
   if (info.recipe != "llamacpp")

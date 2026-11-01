@@ -1159,7 +1159,9 @@ void Server::setup_routes(httplib::Server &web_server) {
             }
         }
 
-        return authenticate_request(req, res);
+        auto auth = authenticate_request(req, res);
+        if (auth == httplib::Server::HandlerResponse::Handled) return auth;
+        return httplib::Server::HandlerResponse::Unhandled;
     });
 
     web_server.Get("/live", [this](const httplib::Request& req, httplib::Response& res) {
@@ -1185,6 +1187,11 @@ void Server::setup_routes(httplib::Server &web_server) {
 
     auto register_post = [this, &web_server](const std::string& endpoint,
                                 std::function<void(const httplib::Request&, httplib::Response&)> handler) {
+        auto actual = std::move(handler);
+        handler = [this, actual](const httplib::Request& req, httplib::Response& res) {
+            if (juiced_ && juiced_->inference_guard(req, res)) return;
+            actual(req, res);
+        };
         web_server.Post("/api/v0/" + endpoint, handler);
         web_server.Post("/api/v1/" + endpoint, handler);
         web_server.Post("/v0/" + endpoint, handler);
@@ -1288,6 +1295,7 @@ void Server::setup_routes(httplib::Server &web_server) {
 
     // Completions
     register_post("completions", [this](const httplib::Request& req, httplib::Response& res) {
+        if (juiced_ && juiced_->unleased_protocol(req, res)) return;
         handle_completions(req, res);
     });
 
@@ -1366,6 +1374,7 @@ void Server::setup_routes(httplib::Server &web_server) {
     });
     // Responses endpoint
     register_post("responses", [this](const httplib::Request& req, httplib::Response& res) {
+        if (juiced_ && juiced_->unleased_protocol(req, res)) return;
         handle_responses(req, res);
     });
 
@@ -1545,7 +1554,9 @@ void Server::setup_routes(httplib::Server &web_server) {
     });
 
     // Register Ollama-compatible API routes
-    auto ollama_api = std::make_shared<OllamaApi>(router_.get(), model_manager_.get());
+    auto ollama_api = std::make_shared<OllamaApi>(router_.get(), model_manager_.get(),
+        [this](const httplib::Request& req, httplib::Response& res) { return juiced_ && juiced_->inference_guard(req, res); },
+        [this](const std::string& model, const nlohmann::json& options) { auto_load_model_if_needed(model, options); });
     ollama_api->register_routes(web_server);
 
     // Register MCP gateway (POST /mcp). NOTE: /mcp is an INTENTIONAL EXCEPTION
@@ -2599,7 +2610,7 @@ void Server::auto_load_model_if_needed(
     router_->load_model(requested_model, info,
                         RecipeOptions(info.recipe, request_options), true,
                         /*allow_reload_on_option_change=*/false,
-                        /*pinned=*/std::nullopt,
+                        /*pinned=*/juiced_ ? std::optional<bool>(juiced_->hot(requested_model)) : std::nullopt,
                         load_purpose);
     LOG(INFO, "Server") << "Model loaded successfully: " << requested_model << std::endl;
 }
@@ -6383,7 +6394,7 @@ void Server::handle_load(const httplib::Request& req, httplib::Response& res) {
             // differ)
             router_->load_model(model_name, info, options, true,
                                 /*allow_reload_on_option_change=*/true,
-                                pinned_opt);
+                                juiced_ ? std::optional<bool>(juiced_->hot(model_name)) : pinned_opt);
 
             // Return success response
             nlohmann::json response = {
@@ -6514,7 +6525,8 @@ void Server::handle_pin(const httplib::Request& req, httplib::Response& res) {
         bool pinned = request_json["pinned"].get<bool>();
 
         std::string canonical_name = model_manager_->resolve_model_name(model_name);
-        router_->set_model_pinned(canonical_name, pinned);
+        if (juiced_) juiced_->set_hot(canonical_name, pinned);
+        if (router_->is_model_loaded(canonical_name)) router_->set_model_pinned(canonical_name, pinned);
 
         nlohmann::json response = {
             {"status", "success"},

@@ -281,6 +281,10 @@ export default function App() {
             : ([
                 ["All services", Server],
                 ...tasks.filter((t) => t[0] !== "Compare"),
+                ...[...new Set(models.map((m) => m.service))]
+                  .filter((s) => !tasks.some((t) => t[0] === s))
+                  .sort()
+                  .map((s) => [s, Database] as const),
               ] as const)
           ).map(([label, Icon]) => (
             <button
@@ -306,6 +310,7 @@ export default function App() {
                     models.filter(
                       (m) =>
                         m.downloaded &&
+                        (screen === "library" || m.available !== false) &&
                         (label === "All services" || m.service === label),
                     ).length
                   }
@@ -464,6 +469,7 @@ export default function App() {
         {screen === "library" && (
           <Acquisition
             models={models}
+            service={service}
             jobs={jobs}
             notify={notify}
             refresh={refresh}

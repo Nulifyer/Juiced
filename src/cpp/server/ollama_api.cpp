@@ -149,8 +149,8 @@ static void map_ollama_options(const json& ollama_request, json& openai_req) {
     }
 }
 
-OllamaApi::OllamaApi(Router* router, ModelManager* model_manager)
-    : router_(router), model_manager_(model_manager) {
+OllamaApi::OllamaApi(Router* router, ModelManager* model_manager, RequestGuard guard, ModelLoader loader)
+    : guard_(std::move(guard)), loader_(std::move(loader)), router_(router), model_manager_(model_manager) {
 }
 
 void OllamaApi::register_routes(httplib::Server& server) {
@@ -239,6 +239,7 @@ std::string OllamaApi::normalize_model_name(const std::string& name) {
 // ============================================================================
 void OllamaApi::auto_load_model(const std::string& model, const json& request_options) {
     std::string name = normalize_model_name(model);
+    if (loader_) { loader_(name, request_options); return; }
 
     if (router_->ensure_loaded_model_residency(
             name, LoadPurpose::UserInference)) {
@@ -707,6 +708,7 @@ void OllamaApi::stream_sse_to_ndjson(const std::string& openai_body,
 // POST /api/chat — Ollama chat completion
 // ============================================================================
 void OllamaApi::handle_chat(const httplib::Request& req, httplib::Response& res) {
+    if (guard_ && guard_(req, res)) return;
     try {
         auto request_json = json::parse(req.body);
 
@@ -843,6 +845,7 @@ void OllamaApi::handle_chat(const httplib::Request& req, httplib::Response& res)
 // POST /api/generate — Ollama text generation
 // ============================================================================
 void OllamaApi::handle_generate(const httplib::Request& req, httplib::Response& res) {
+    if (guard_ && guard_(req, res)) return;
     try {
         auto request_json = json::parse(req.body);
 
@@ -1304,6 +1307,7 @@ void OllamaApi::handle_pull(const httplib::Request& req, httplib::Response& res)
 // POST /api/embed — Embeddings (new format, returns array of embeddings)
 // ============================================================================
 void OllamaApi::handle_embed(const httplib::Request& req, httplib::Response& res) {
+    if (guard_ && guard_(req, res)) return;
     try {
         auto request_json = json::parse(req.body);
 
@@ -1374,6 +1378,7 @@ void OllamaApi::handle_embed(const httplib::Request& req, httplib::Response& res
 // POST /api/embeddings — Legacy embeddings (returns single embedding)
 // ============================================================================
 void OllamaApi::handle_embeddings(const httplib::Request& req, httplib::Response& res) {
+    if (guard_ && guard_(req, res)) return;
     try {
         auto request_json = json::parse(req.body);
 

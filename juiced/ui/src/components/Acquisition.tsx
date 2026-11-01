@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Search,
   Upload,
@@ -13,6 +13,7 @@ import { Button } from "./t3/button";
 import { api, bytes, type Model } from "../api";
 export function Acquisition({
   models,
+  service,
   jobs,
   notify,
   refresh,
@@ -20,6 +21,7 @@ export function Acquisition({
   setTab,
 }: {
   models: Model[];
+  service: string;
   jobs: any[];
   notify: (s: string) => void;
   refresh: () => Promise<void>;
@@ -27,6 +29,8 @@ export function Acquisition({
   setTab: (s: string) => void;
 }) {
   const [query, setQuery] = useState(""),
+    [catalogQuery, setCatalogQuery] = useState(""),
+    [catalogPage, setCatalogPage] = useState(0),
     [results, setResults] = useState<any[]>([]),
     [variants, setVariants] = useState<any>(),
     [variant, setVariant] = useState(""),
@@ -39,6 +43,7 @@ export function Acquisition({
     [uploadProgress, setUploadProgress] = useState(""),
     [importJobs, setImportJobs] = useState<any[]>([]);
   const uploading = useRef<AbortController | null>(null);
+  useEffect(() => setCatalogPage(0), [service]);
   async function search() {
     if (query.trim().length < 3) {
       notify("Enter at least three characters.");
@@ -99,7 +104,12 @@ export function Acquisition({
     await pull("user." + name, {
       recipe: variants.recipe || "llamacpp",
       checkpoints,
-      labels: ["chat", ...(projector ? ["vision"] : [])],
+      labels: [
+        ...new Set([
+          ...(variants.suggested_labels || []),
+          ...(projector ? ["vision"] : []),
+        ]),
+      ],
     });
   }
   async function control(j: any, action: string) {
@@ -212,6 +222,76 @@ export function Acquisition({
       </div>
       {tab === "discover" && (
         <>
+          <section className="settings-section">
+            <h2>Runtime catalog</h2>
+            <p className="page-note">
+              Ready-to-download models across all supported services.
+            </p>
+            <input
+              aria-label="Filter runtime catalog"
+              placeholder="Filter catalog models…"
+              value={catalogQuery}
+              onChange={(e) => {
+                setCatalogQuery(e.target.value);
+                setCatalogPage(0);
+              }}
+            />
+            {models
+              .filter(
+                (m) =>
+                  !m.downloaded &&
+                  m.available !== false &&
+                  (service === "All services" || m.service === service) &&
+                  m.id.toLowerCase().includes(catalogQuery.toLowerCase()),
+              )
+              .slice(catalogPage * 30, (catalogPage + 1) * 30)
+              .map((m) => (
+                <article className="simple-row" key={m.id}>
+                  <div>
+                    <strong>{m.id}</strong>
+                    <p>
+                      {m.service} · {m.recipe} · {bytes((m.size || 0) * 1e9)}
+                    </p>
+                  </div>
+                  <Button
+                    size="compact"
+                    variant="outline"
+                    onClick={() => void pull(m.id)}
+                  >
+                    <Download size={14} /> Download
+                  </Button>
+                </article>
+              ))}
+            <div className="row-actions">
+              <Button
+                size="compact"
+                variant="ghost"
+                disabled={catalogPage === 0}
+                onClick={() => setCatalogPage(catalogPage - 1)}
+              >
+                Previous
+              </Button>
+              <span>Page {catalogPage + 1}</span>
+              <Button
+                size="compact"
+                variant="ghost"
+                disabled={
+                  models.filter(
+                    (m) =>
+                      !m.downloaded &&
+                      m.available !== false &&
+                      (service === "All services" || m.service === service) &&
+                      m.id.toLowerCase().includes(catalogQuery.toLowerCase()),
+                  ).length <=
+                  (catalogPage + 1) * 30
+                }
+                onClick={() => setCatalogPage(catalogPage + 1)}
+              >
+                Next
+              </Button>
+            </div>
+          </section>
+          <h2>Hugging Face search</h2>
           <form
             className="search-row"
             onSubmit={(e) => {
@@ -331,17 +411,26 @@ export function Acquisition({
       {tab === "downloaded" && (
         <div className="library-list">
           {models
-            .filter((m) => m.downloaded)
+            .filter(
+              (m) =>
+                m.downloaded &&
+                (service === "All services" || m.service === service),
+            )
             .map((m) => (
               <article className="simple-row" key={m.id}>
                 <div>
                   <strong>{m.id}</strong>
                   <p>
                     {m.recipe} · {m.service} · {bytes((m.size || 0) * 1e9)}
+                    {m.unavailable_reason ? " · " + m.unavailable_reason : ""}
                   </p>
                 </div>
                 <span className="badge">
-                  {m.loaded ? "Loaded" : "Unloaded"}
+                  {m.available === false
+                    ? "Backend unavailable"
+                    : m.loaded
+                      ? "Loaded"
+                      : "Unloaded"}
                 </span>
               </article>
             ))}
@@ -372,6 +461,27 @@ export function Acquisition({
                       : ""}
                   </small>
                   <div className="row-actions">
+                    {j.status === "complete" && (
+                      <Button
+                        size="compact"
+                        variant="outline"
+                        onClick={async () => {
+                          try {
+                            await api("juiced/operation", {
+                              model: j.model_name,
+                              action: "load",
+                            });
+                            notify("Model queued for loading.");
+                            await refresh();
+                          } catch (e) {
+                            notify((e as Error).message);
+                          }
+                        }}
+                      >
+                        <Play size={13} />
+                        Load
+                      </Button>
+                    )}
                     {j.running ? (
                       <>
                         <Button

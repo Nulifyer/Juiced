@@ -1141,6 +1141,7 @@ void OllamaApi::stream_openai_sse_to_anthropic_sse(const std::string& openai_bod
 }
 
 void OllamaApi::handle_anthropic_messages(const httplib::Request& req, httplib::Response& res) {
+    if (guard_ && guard_(req, res)) return;
     try {
         auto request_json = json::parse(req.body);
         std::vector<std::string> warnings;

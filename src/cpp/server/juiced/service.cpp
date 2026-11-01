@@ -6,6 +6,7 @@
 #include "lemon/server.h"
 #include "lemon/utils/http_client.h"
 #include "lemon/utils/path_utils.h"
+#include <algorithm>
 #include <chrono>
 #include <fstream>
 #include <iomanip>
@@ -69,8 +70,16 @@ std::string service(const json &m) {
       return "Embeddings";
     if (l == "reranking")
       return "Rerank";
+    if (l == "audio-generation")
+      return "Audio";
+    if (l == "3d")
+      return "3D";
+    if (l == "classification")
+      return "Classify";
   }
-  return "Chat";
+  if (std::find(labels.begin(), labels.end(), "chat") != labels.end())
+    return "Chat";
+  return "Other";
 }
 } // namespace
 JuicedService::JuicedService(Server &server)
@@ -120,6 +129,55 @@ bool JuicedService::allows(const std::string &requested) const {
   std::lock_guard<std::mutex> lock(mutex_);
   return state_["policies"].value(model, "on-demand") != "disabled";
 }
+bool JuicedService::hot(const std::string &requested) const {
+  auto model = server_.model_manager_->get_public_model_name(
+      server_.model_manager_->resolve_model_name(requested));
+  std::lock_guard<std::mutex> lock(mutex_);
+  return state_["policies"].value(model, "on-demand") == "hot";
+}
+void JuicedService::set_hot(const std::string &requested, bool pinned) {
+  auto model = server_.model_manager_->get_public_model_name(
+      server_.model_manager_->resolve_model_name(requested));
+  server_.model_manager_->get_model_info(model);
+  server_.model_manager_->update_saved_model_options(model,
+                                                     {{"pinned", pinned}});
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (pinned || state_["policies"].value(model, "on-demand") != "disabled")
+    state_["policies"][model] = pinned ? "hot" : "on-demand";
+  persist_locked();
+  wake_.notify_all();
+}
+bool JuicedService::inference_guard(const httplib::Request &req,
+                                    httplib::Response &res) {
+  if (req.method != "POST")
+    return false;
+  const auto last = req.path.substr(req.path.find_last_of('/') + 1);
+  const bool inference =
+      last == "completions" || last == "responses" || last == "messages" ||
+      last == "chat" || last == "generate" || last == "embeddings" ||
+      last == "embed" || last == "rerank" || last == "reranking" ||
+      last == "classify" || last == "generations" || last == "speech";
+  if (!inference)
+    return false;
+  try {
+    auto body = json::parse(req.body);
+    auto model = body.value("model", "");
+    if (model.size() > 7 && model.substr(model.size() - 7) == ":latest")
+      model.resize(model.size() - 7);
+    if (!model.empty() && !allows(model)) {
+      reply(res,
+            {{"error",
+              {{"message", "Model is disabled by its loading policy"},
+               {"type", "invalid_request_error"}}}},
+            409);
+      return true;
+    }
+  } catch (const std::exception &) {
+  }
+  if (req.path.find("/chat/completions") == std::string::npos)
+    return unleased_protocol(req, res);
+  return false;
+}
 void JuicedService::enqueue(const json &command) {
   std::lock_guard<std::mutex> lock(mutex_);
   auto m = command.at("model").get<std::string>();
@@ -152,6 +210,34 @@ void JuicedService::refresh() {
         break;
       }
     result.push_back(std::move(m));
+  }
+  // Unsupported stored deployments remain visible in Library, without inventing
+  // a runtime.
+  auto definitions =
+      read_json(std::filesystem::path(server_.config_dir_) / "user_models.json",
+                json::object());
+  for (const auto &[name, definition] : definitions.items()) {
+    if (!definition.value("juiced_existing_artifact", false) ||
+        server_.model_manager_->model_exists("user." + name))
+      continue;
+    try {
+      json m = {
+          {"id", name},
+          {"recipe", definition.value("recipe", "")},
+          {"labels", definition.value("labels", json::array())},
+          {"checkpoints", definition.value("checkpoints", json::object())},
+          {"size", definition.value("size", 0.0)},
+          {"downloaded", true},
+          {"loaded", false},
+          {"state", "unsupported"},
+          {"available", false},
+          {"unavailable_reason",
+           "Weights preserved from the previous manager; this optional "
+           "backend is not included in Juiced"}};
+      m["service"] = service(m);
+      result.push_back(m);
+    } catch (const std::exception &) {
+    }
   }
   json transfers = json::object();
   {
@@ -192,9 +278,9 @@ void JuicedService::execute(const json &command) {
         std::lock_guard<std::mutex> lock(mutex_);
         policy = state_["policies"].value(name, "on-demand");
       }
-      server_.router_->load_model(name, info,
-                                  RecipeOptions(info.recipe, json::object()),
-                                  true, false, policy == "hot");
+      server_.router_->load_model(
+          name, info, RecipeOptions(info.recipe, json::object()), true, false,
+          policy == "hot", LoadPurpose::UserInference, &stopping_);
     } else {
       auto active = server_.router_->get_all_loaded_models();
       for (const auto &l : active)
@@ -222,11 +308,28 @@ void JuicedService::reconcile() {
     policies = state_["policies"];
     catalog = catalog_;
   }
-  for (const auto &[name, p] : policies.items()) {
+  std::vector<std::pair<std::string, json>> ordered;
+  for (const auto &item : policies.items())
+    ordered.emplace_back(item.key(), item.value());
+  auto weight = [&](const std::string &name) {
+    for (const auto &m : catalog)
+      if (m.value("id", "") == name)
+        return m.value("size", 1000.0);
+    return 1000.0;
+  };
+  std::stable_sort(ordered.begin(), ordered.end(),
+                   [&](const auto &a, const auto &b) {
+                     return weight(a.first) < weight(b.first);
+                   });
+  for (const auto &[name, p] : ordered) {
     bool loaded = false, downloaded = false;
     for (const auto &m : catalog)
       if (m.value("id", "") == name) {
         loaded = m.value("loaded", false);
+        if (loaded &&
+            m.value("runtime", json::object()).value("pinned", false) !=
+                (p == "hot"))
+          server_.router_->set_model_pinned(name, p == "hot");
         downloaded = m.value("downloaded", false);
         break;
       }
@@ -364,6 +467,8 @@ void JuicedService::handle(const httplib::Request &req, httplib::Response &res,
           state_["policies"][model] = policy;
           persist_locked();
         }
+        server_.model_manager_->update_saved_model_options(
+            model, {{"pinned", policy == "hot"}});
         if (server_.router_->is_model_loaded(model))
           server_.router_->set_model_pinned(model, policy == "hot");
         wake_.notify_all();
@@ -522,6 +627,14 @@ void JuicedService::import_file(const httplib::Request &req,
                   {"received", 0}, {"status", "uploading"}, {"created", now()}};
       {
         std::lock_guard<std::mutex> lock(mutex_);
+        uint64_t reserved = 0;
+        for (const auto &[key, previous] : state_["imports"].items())
+          if (previous.value("status", "") == "uploading")
+            reserved += previous.value("size", uint64_t(0)) -
+                        previous.value("received", uint64_t(0));
+        if (reserved > free || size + 1024ULL * 1024 * 1024 > free - reserved)
+          throw std::invalid_argument(
+              "Insufficient free disk after pending uploads");
         state_["imports"][id] = job;
         persist_locked();
       }
@@ -587,7 +700,10 @@ void JuicedService::import_file(const httplib::Request &req,
       if (!safe_name(name))
         throw std::invalid_argument(
             "Use the proper model name without path separators");
-      if (server_.model_manager_->model_exists(name))
+      auto stored = read_json(std::filesystem::path(server_.config_dir_) /
+                                  "user_models.json",
+                              json::object());
+      if (server_.model_manager_->model_exists(name) || stored.contains(name))
         throw std::invalid_argument(
             "That model name is already registered. Use a distinct "
             "publisher/quant variant name; working models are not overwritten "
@@ -611,7 +727,14 @@ void JuicedService::import_file(const httplib::Request &req,
                     {"checkpoints", {{"main", file.string()}}},
                     {"labels", labels},
                     {"size", std::filesystem::file_size(file) / 1e9}};
-      server_.model_manager_->register_user_model(name, model, "local_path");
+      try {
+        server_.model_manager_->register_user_model(name, model, "local_path");
+      } catch (...) {
+        if (op == "finish")
+          std::filesystem::rename(file,
+                                  directory_ / "imports" / (id + ".part"));
+        throw;
+      }
       if (op == "finish") {
         std::lock_guard<std::mutex> lock(mutex_);
         auto &j = state_["imports"][id];

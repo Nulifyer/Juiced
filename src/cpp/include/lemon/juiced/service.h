@@ -18,6 +18,10 @@ public:
   void stop();
   void routes(httplib::Server &http);
   bool allows(const std::string &model) const;
+  bool hot(const std::string &model) const;
+  void set_hot(const std::string &model, bool pinned);
+  bool inference_guard(const httplib::Request &, httplib::Response &);
+  bool unleased_protocol(const httplib::Request &, httplib::Response &);
 
 private:
   friend class Server;

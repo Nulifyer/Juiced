@@ -26,7 +26,7 @@ class ApiContract(unittest.TestCase):
  @classmethod
  def request(cls,path,body=None,raw=False):
   data=body if raw else None if body is None else json.dumps(body).encode()
-  q=urllib.request.Request(f'http://127.0.0.1:{cls.port}/v1/'+path,data=data,headers={'Content-Type':'application/octet-stream' if raw else 'application/json'})
+  q=urllib.request.Request(f'http://127.0.0.1:{cls.port}'+(path if path.startswith('/') else '/v1/'+path),data=data,headers={'Content-Type':'application/octet-stream' if raw else 'application/json'})
   try:
    with urllib.request.urlopen(q,timeout=15) as r:return r.status,json.load(r)
   except urllib.error.HTTPError as r:
@@ -38,6 +38,14 @@ class ApiContract(unittest.TestCase):
   _,c=self.request('juiced/catalog');s,_=self.request('juiced/policy',{'model':self.model,'policy':'disabled','revision':c['revision']});self.assertEqual(s,200)
   s,_=self.request('juiced/policy',{'model':self.model,'policy':'hot','revision':c['revision']});self.assertEqual(s,409)
   self.request('juiced/policy',{'model':self.model,'policy':'on-demand'})
+ def test_disabled_inference_and_pin_policy(self):
+  self.request('juiced/policy',{'model':self.model,'policy':'disabled'})
+  for endpoint in ['chat/completions','responses','completions','/api/chat','/api/generate','/v1/messages']:
+   s,error=self.request(endpoint,{'model':self.model,'messages':[]});self.assertEqual(s,409,(endpoint,self.model,error))
+  s,_=self.request('/internal/pin',{'model':self.model,'pinned':True});self.assertEqual(s,200)
+  _,catalog=self.request('juiced/catalog');m=next(x for x in catalog['data'] if x['id']==self.model);self.assertEqual(m['policy'],'hot')
+  self.request('/internal/pin',{'model':self.model,'pinned':False})
+  _,catalog=self.request('juiced/catalog');m=next(x for x in catalog['data'] if x['id']==self.model);self.assertEqual(m['policy'],'on-demand')
  def test_hot_unload_protection(self):
   self.request('juiced/policy',{'model':self.model,'policy':'hot'});s,_=self.request('juiced/operation',{'model':self.model,'action':'unload'});self.assertEqual(s,409);self.request('juiced/policy',{'model':self.model,'policy':'on-demand'})
  def test_thread_revision_and_path(self):

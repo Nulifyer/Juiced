@@ -16,12 +16,16 @@ using json = nlohmann::json;
 
 class OllamaApi : public std::enable_shared_from_this<OllamaApi> {
 public:
-    OllamaApi(Router* router, ModelManager* model_manager);
+    using RequestGuard = std::function<bool(const httplib::Request&, httplib::Response&)>;
+    using ModelLoader = std::function<void(const std::string&, const json&)>;
+    OllamaApi(Router* router, ModelManager* model_manager, RequestGuard guard = {}, ModelLoader loader = {});
 
     // Must be called on a shared_ptr instance (uses shared_from_this internally)
     void register_routes(httplib::Server& server);
 
 private:
+    RequestGuard guard_;
+    ModelLoader loader_;
     Router* router_;
     ModelManager* model_manager_;
 

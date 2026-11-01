@@ -253,6 +253,7 @@ export function ModelLibrary({
     .filter(
       (m) =>
         m.downloaded &&
+        m.available !== false &&
         (service === "All services" || m.service === service) &&
         [m.id, m.recipe, m.policy, ...m.labels]
           .join(" ")

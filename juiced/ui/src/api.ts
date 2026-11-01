@@ -4,6 +4,8 @@ export type Model = {
   labels: string[];
   service: string;
   downloaded: boolean;
+  available?: boolean;
+  unavailable_reason?: string;
   loaded: boolean;
   state: string;
   policy: "hot" | "on-demand" | "disabled";
