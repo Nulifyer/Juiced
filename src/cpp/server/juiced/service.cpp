@@ -63,9 +63,9 @@ std::string service(const json &m) {
       return "Transcribe";
     if (l == "tts")
       return "Speak";
-    if (l == "image")
+    if (l == "image" || l == "image-generation")
       return "Images";
-    if (l == "embedding")
+    if (l == "embedding" || l == "embeddings")
       return "Embeddings";
     if (l == "reranking")
       return "Rerank";
@@ -93,6 +93,14 @@ JuicedService::JuicedService(Server &server)
       j["running"] = false;
       j["status"] = "interrupted";
     }
+  const char *snapshots = std::getenv("JUICED_SNAPSHOT_DIR");
+  snapshot_directory_ =
+      snapshots ? std::filesystem::path(snapshots) : directory_ / "snapshots";
+  std::filesystem::create_directories(snapshot_directory_);
+  if (!state_.contains("snapshots"))
+    state_["snapshots"] = json::object();
+  if (!state_.contains("qualified_profiles"))
+    state_["qualified_profiles"] = json::object();
   worker_ = std::thread([this] { run(); });
 }
 JuicedService::~JuicedService() { stop(); }
@@ -250,6 +258,13 @@ void JuicedService::run() {
       if (!cmd.is_null())
         execute(cmd);
       refresh();
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto count = state_["snapshots"].size();
+        prune_cache_locked();
+        if (count != state_["snapshots"].size())
+          persist_locked();
+      }
       reconcile();
     } catch (const std::exception &e) {
       std::lock_guard<std::mutex> lock(mutex_);
@@ -281,7 +296,8 @@ void JuicedService::routes(httplib::Server &http) {
                  handle(q, r, operation);
                });
     for (const std::string operation :
-         {"operation", "policy", "thread", "cache", "cache/forget"})
+         {"operation", "policy", "thread", "cache", "cache/forget",
+          "cache/profile", "cache/qualify"})
       http.Post(prefix + "juiced/" + operation,
                 [this, operation](const auto &q, auto &r) {
                   handle(q, r, operation);
@@ -417,50 +433,19 @@ void JuicedService::handle(const httplib::Request &req, httplib::Response &res,
         t["updated"] = now();
         t["revision"] = t.value("revision", 0) + 1;
         atomic_json(path, t);
+        if (body.contains("retain_cache")) {
+          for (auto &[key, snapshot] : state_["snapshots"].items())
+            if (snapshot.value("thread", "") == id)
+              snapshot["retained"] = t.value("retain_cache", false);
+          persist_locked();
+        }
       }
       reply(res, t);
       return;
     }
-    if (op == "cache") {
-      std::lock_guard<std::mutex> lock(mutex_);
-      if (req.method != "GET") {
-        if (body.value("mode", "memory") == "persistent") {
-          reply(res,
-                {{"error", "Persistent restore has not been qualified on this "
-                           "engine/profile; memory caching remains available"}},
-                422);
-          return;
-        }
-        if (body.contains("mode") && body["mode"] != "memory" &&
-            body["mode"] != "off")
-          throw std::invalid_argument("Invalid cache mode");
-        if (body.contains("retention_days") &&
-            (!body["retention_days"].is_number_integer() ||
-             body["retention_days"] < 1 || body["retention_days"] > 365))
-          throw std::invalid_argument(
-              "Retention must be between 1 and 365 days");
-        if (body.contains("disk_budget_gib") &&
-            (!body["disk_budget_gib"].is_number() ||
-             body["disk_budget_gib"] < 1 || body["disk_budget_gib"] > 256))
-          throw std::invalid_argument(
-              "Disk budget must be between 1 and 256 GiB");
-        for (const auto &k : {"mode", "retention_days", "disk_budget_gib"})
-          if (body.contains(k))
-            state_["cache"][k] = body[k];
-        persist_locked();
-      }
-      reply(res, {{"settings", state_["cache"]},
-                  {"persistent_supported", false},
-                  {"reason", "Exact-profile save/restart/restore useful-reuse "
-                             "acceptance pending"}});
-      return;
-    }
-    if (op == "cache/forget") {
-      reply(res,
-            {{"error", "This release keeps engine-owned in-memory prefixes. "
-                       "Unload the selected model to clear them; individual "
-                       "persistent snapshots are not enabled."}},
-            422);
+    if (op == "cache" || op == "cache/forget" || op == "cache/profile" ||
+        op == "cache/qualify") {
+      cache_api(req, res, op);
       return;
     }
     if (op == "transfers") {
@@ -602,6 +587,11 @@ void JuicedService::import_file(const httplib::Request &req,
       if (!safe_name(name))
         throw std::invalid_argument(
             "Use the proper model name without path separators");
+      if (server_.model_manager_->model_exists(name))
+        throw std::invalid_argument(
+            "That model name is already registered. Use a distinct "
+            "publisher/quant variant name; working models are not overwritten "
+            "by import.");
       if (op == "finish") {
         auto dir = directory_ / "artifacts" / id;
         std::filesystem::create_directories(dir);

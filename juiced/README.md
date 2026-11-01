@@ -34,8 +34,15 @@ model. English audio is converted in-browser to16kHz WAV for the CPU recognizers
 There are no shell, browser, MCP or autonomous agent tools in this application.
 
 Cache capability is reported explicitly. Memory reuse is engine-owned. Persistent
-resume must pass save/restart/restore useful-reuse checks for the exact engine and
-model profile before being enabled; a saved file alone does not qualify it.
+Chat Completions reuse is opt-in and applies only to exact qualified engine/model
+profiles. The acceptance fixture must verify useful reuse after save/restart/
+restore before an operator records qualification. A saved file alone does not
+qualify it. Playground requests supply stable thread IDs; snapshots have matching
+prefix/profile keys, checksums, expiry and a retained-state disk budget. Temporary
+snapshot writes require additional free disk. Retain/release and forget affect
+saved computation independently of messages or weights. Requests without a stable
+thread ID do not create persistent snapshots. Other inference protocols are not
+qualified for persistent session snapshots in this first release.
 
 ## Provenance
 

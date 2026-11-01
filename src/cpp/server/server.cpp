@@ -1282,7 +1282,8 @@ void Server::setup_routes(httplib::Server &web_server) {
 
     // Chat completions (OpenAI compatible)
     register_post("chat/completions", [this](const httplib::Request& req, httplib::Response& res) {
-        handle_chat_completions(req, res);
+        if (juiced_) juiced_->chat(req, res);
+        else handle_chat_completions(req, res);
     });
 
     // Completions
@@ -2982,6 +2983,7 @@ void Server::handle_models(const httplib::Request& req, httplib::Response& res) 
     response["object"] = "list";
 
     for (const auto& [model_id, model_info] : models) {
+        if (!show_all && juiced_ && !juiced_->allows(model_id)) continue;
         response["data"].push_back(model_info_to_json(model_id, model_info));
     }
 
@@ -2996,6 +2998,7 @@ void Server::handle_models(const httplib::Request& req, httplib::Response& res) 
                 ultimate_target = *resolved;
             }
             std::string canonical_target = model_manager_->resolve_model_name(ultimate_target);
+            if (!show_all && juiced_ && !juiced_->allows(canonical_target)) continue;
             if (models.count(canonical_target) > 0) {
                 response["data"].push_back(model_info_to_json(alias_id, models.at(canonical_target)));
             } else if (models.count(ultimate_target) > 0) {

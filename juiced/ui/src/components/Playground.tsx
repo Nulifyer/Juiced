@@ -145,6 +145,7 @@ export function Playground({
     messages: Message[],
     signal: AbortSignal,
     onDelta: (c: string, r: string) => void,
+    threadId?: string,
   ) {
     const start = performance.now();
     let first: number | undefined,
@@ -153,7 +154,10 @@ export function Playground({
       usage: any;
     const r = await fetch("/v1/chat/completions", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...(threadId ? { "X-Juiced-Thread-Id": threadId } : {}),
+      },
       body: JSON.stringify({
         model: id,
         messages,
@@ -210,11 +214,19 @@ export function Playground({
         total_ms: performance.now() - start,
         first_ms: first,
         usage,
+        cache: r.headers.get("X-Juiced-Cache"),
+        restored_tokens: r.headers.get("X-Juiced-Restored-Tokens"),
       },
     };
   }
   async function send() {
     if (!draft.trim() && !attachments.length) return;
+    if (attachments.length && !selected?.labels.includes("vision")) {
+      notify(
+        "Remove the images or choose a loaded vision model before sending.",
+      );
+      return;
+    }
     if (!model) {
       notify("Load an eligible model first.");
       return;
@@ -291,6 +303,7 @@ export function Playground({
           setContent(c);
           setReasoning(r);
         },
+        t.id,
       );
       setReceipt(out.receipt);
       await save({
@@ -707,6 +720,15 @@ export function Playground({
             <div>Model: {receipt.model}</div>
             {receipt.first_ms !== undefined && (
               <div>First output: {(receipt.first_ms / 1000).toFixed(2)} s</div>
+            )}
+            {receipt.cache && (
+              <div>
+                Prompt state: {receipt.cache}
+                {receipt.restored_tokens
+                  ? ` · ${Number(receipt.restored_tokens).toLocaleString()} tokens restored`
+                  : ""}
+                . Actual reuse is reported separately by the engine.
+              </div>
             )}
             {receipt.usage && (
               <pre>{JSON.stringify(receipt.usage, null, 2)}</pre>

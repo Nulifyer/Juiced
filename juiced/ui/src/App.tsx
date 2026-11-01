@@ -103,6 +103,16 @@ export default function App() {
     setMobile(false);
   }, [screen]);
   useEffect(() => {
+    if (screen !== "cache") return;
+    const load = () =>
+      void api("juiced/cache")
+        .then(setCache)
+        .catch((e) => notify(e.message));
+    load();
+    const timer = setInterval(load, 3000);
+    return () => clearInterval(timer);
+  }, [screen, notify]);
+  useEffect(() => {
     if (!inspected) return;
     setOptions(
       JSON.stringify((inspected as any).recipe_options || {}, null, 2),
@@ -223,7 +233,7 @@ export default function App() {
             <span className="state-dot loaded" />
             {online
               ? ready
-                ? "Model service ready"
+                ? "Catalog ready"
                 : "Preparing catalog…"
               : "Reconnecting…"}
           </span>
@@ -569,21 +579,85 @@ export default function App() {
                 </div>
               </>
             )}
-            {threads.map((t) => (
-              <article className="simple-row" key={t.id}>
-                <div>
-                  <strong>{t.title}</strong>
-                  <p>{t.model || "No model selected"} · messages retained</p>
-                </div>
-                <Button
-                  variant="ghost"
-                  size="compact"
-                  onClick={() => void openThread(t.id)}
-                >
-                  Open thread
-                </Button>
-              </article>
-            ))}
+            {cache?.settings?.last_error && (
+              <p className="inline-error">
+                Last snapshot: {cache.settings.last_error}
+              </p>
+            )}
+            {threads.map((t) => {
+              const snapshots = (cache?.snapshots || []).filter(
+                (s: any) => s.thread === t.id,
+              );
+              const snapshot = snapshots.sort(
+                (a: any, b: any) => b.last_used - a.last_used,
+              )[0];
+              return (
+                <article className="simple-row" key={t.id}>
+                  <div>
+                    <strong>{t.title}</strong>
+                    <p>{t.model || "No model selected"} · messages retained</p>
+                    <p>
+                      {snapshot
+                        ? `${snapshot.retained ? "Retained" : "Saved"} · ${(snapshot.bytes / 1024 ** 2).toFixed(1)} MiB · ${snapshot.tokens?.toLocaleString() || 0} tokens`
+                        : "No saved snapshot · live memory reuse may still apply"}
+                    </p>
+                  </div>
+                  <div className="row-actions cache-actions">
+                    <Button
+                      variant="ghost"
+                      size="compact"
+                      onClick={() => void openThread(t.id)}
+                    >
+                      Open
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="compact"
+                      onClick={async () => {
+                        try {
+                          const current = await api<Thread>(
+                            "juiced/thread?id=" + encodeURIComponent(t.id),
+                          );
+                          await api("juiced/thread", {
+                            ...current,
+                            retain_cache: !current.retain_cache,
+                          });
+                          await refreshThreads();
+                          setCache(await api("juiced/cache"));
+                          notify(
+                            current.retain_cache
+                              ? "Released snapshot protection."
+                              : "This thread’s next compatible snapshot will be retained within its disk budget.",
+                          );
+                        } catch (e) {
+                          notify((e as Error).message);
+                        }
+                      }}
+                    >
+                      {t.retain_cache ? "Release" : "Retain"}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="compact"
+                      disabled={!snapshot}
+                      onClick={async () => {
+                        try {
+                          await api("juiced/cache/forget", { thread: t.id });
+                          setCache(await api("juiced/cache"));
+                          notify(
+                            "Saved computation forgotten. Messages and model weights remain; live engine prefixes may remain until replaced.",
+                          );
+                        } catch (e) {
+                          notify((e as Error).message);
+                        }
+                      }}
+                    >
+                      Forget saved
+                    </Button>
+                  </div>
+                </article>
+              );
+            })}
           </>
         )}
         {!ready && screen !== "playground" && (

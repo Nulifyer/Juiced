@@ -1,0 +1,503 @@
+#include "lemon/juiced/service.h"
+#include "lemon/model_manager.h"
+#include "lemon/router.h"
+#include "lemon/server.h"
+#include "lemon/utils/http_client.h"
+#include <algorithm>
+#include <fstream>
+#include <iomanip>
+#include <mbedtls/md.h>
+#include <sstream>
+namespace lemon {
+namespace {
+using json = nlohmann::json;
+long long timestamp() {
+  return std::chrono::duration_cast<std::chrono::seconds>(
+             std::chrono::system_clock::now().time_since_epoch())
+      .count();
+}
+std::string digest(const std::string &data) {
+  unsigned char out[32];
+  if (mbedtls_md(mbedtls_md_info_from_type(MBEDTLS_MD_SHA256),
+                 reinterpret_cast<const unsigned char *>(data.data()),
+                 data.size(), out) != 0)
+    throw std::runtime_error("Cannot fingerprint prompt state");
+  std::ostringstream s;
+  for (auto c : out)
+    s << std::hex << std::setw(2) << std::setfill('0') << int(c);
+  return s.str();
+}
+std::string file_digest(const std::filesystem::path &file) {
+  mbedtls_md_context_t ctx;
+  mbedtls_md_init(&ctx);
+  struct Cleanup {
+    mbedtls_md_context_t *c;
+    ~Cleanup() { mbedtls_md_free(c); }
+  } cleanup{&ctx};
+  if (mbedtls_md_setup(&ctx, mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), 0) !=
+          0 ||
+      mbedtls_md_starts(&ctx) != 0)
+    throw std::runtime_error("Cannot checksum prompt state");
+  std::ifstream in(file, std::ios::binary);
+  char b[65536];
+  while (in) {
+    in.read(b, sizeof(b));
+    if (in.gcount() &&
+        mbedtls_md_update(&ctx, reinterpret_cast<const unsigned char *>(b),
+                          in.gcount()) != 0)
+      throw std::runtime_error("Snapshot checksum failed");
+  }
+  if (!in.eof())
+    throw std::runtime_error("Cannot read snapshot");
+  unsigned char out[32];
+  if (mbedtls_md_finish(&ctx, out) != 0)
+    throw std::runtime_error("Snapshot checksum failed");
+  std::ostringstream s;
+  for (auto c : out)
+    s << std::hex << std::setw(2) << std::setfill('0') << int(c);
+  return s.str();
+}
+void output(httplib::Response &r, const json &j, int code = 200) {
+  r.status = code;
+  r.set_content(j.dump(), "application/json");
+  r.set_header("Cache-Control", "no-store");
+}
+json post_engine(const std::string &address, const std::string &path,
+                 const json &body) {
+  auto r = utils::HttpClient::post(address + path, body.dump(),
+                                   {{"Content-Type", "application/json"}}, 120,
+                                   utils::HttpSecurityPolicy::TrustedLoopback);
+  if (r.status_code != 200)
+    throw std::runtime_error("Engine state operation failed (" +
+                             std::to_string(r.status_code) +
+                             "): " + r.body.substr(0, 400));
+  return json::parse(r.body);
+}
+std::string prefix_hash(const json &messages, size_t n) {
+  json prefix = json::array();
+  for (size_t i = 0; i < std::min(n, messages.size()); i++)
+    prefix.push_back(messages[i]);
+  return digest(prefix.dump());
+}
+} // namespace
+json JuicedService::cache_profile(const std::string &requested) {
+  auto info = server_.model_manager_->get_model_info(requested);
+  if (info.recipe != "llamacpp")
+    throw std::invalid_argument(
+        "Persistent prompt state requires a qualified llama.cpp deployment");
+  const auto name = server_.model_manager_->get_public_model_name(
+      server_.model_manager_->resolve_model_name(requested));
+  json identity = {{"model", name},
+                   {"recipe", info.recipe},
+                   {"checkpoints", info.checkpoints},
+                   {"engine", "unknown"},
+                   {"files", json::object()}};
+  for (const auto &[role, path] : info.resolved_paths) {
+    auto canonical = std::filesystem::canonical(path);
+    identity["files"][role] = {
+        {"path", canonical.string()},
+        {"size", std::filesystem::file_size(canonical)},
+        {"mtime", std::filesystem::last_write_time(canonical)
+                      .time_since_epoch()
+                      .count()}};
+  }
+  std::string address;
+  for (const auto &l : server_.router_->get_all_loaded_models())
+    if (l.value("model_name", "") == name) {
+      address = l.value("backend_url", "");
+      identity["options"] = l.value("recipe_options", json::object());
+      break;
+    }
+  if (address.empty())
+    throw std::invalid_argument(
+        "Load the model before qualifying its prompt-state profile");
+  auto props = utils::HttpClient::get(
+      address + "/props", {}, 10, utils::HttpSecurityPolicy::TrustedLoopback);
+  if (props.status_code != 200)
+    throw std::runtime_error("Cannot inspect the engine state format");
+  identity["engine"] = json::parse(props.body).value("build_info", "unknown");
+  auto options = identity["options"].dump();
+  bool configured =
+      options.find(snapshot_directory_.string()) != std::string::npos &&
+      identity["engine"].get<std::string>().find("785322d") !=
+          std::string::npos;
+  auto fingerprint = digest(identity.dump());
+  bool qualified;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    qualified =
+        configured && state_["qualified_profiles"].contains(fingerprint);
+  }
+  return {{"model", name},          {"fingerprint", fingerprint},
+          {"address", address},     {"configured", configured},
+          {"qualified", qualified}, {"identity", identity}};
+}
+void JuicedService::prune_cache_locked() {
+  auto budget = static_cast<uint64_t>(
+      state_["cache"].value("disk_budget_gib", 8.0) * 1024 * 1024 * 1024);
+  auto ttl = state_["cache"].value("retention_days", 7) * 86400LL;
+  uint64_t total = 0;
+  std::vector<std::pair<std::string, json>> entries;
+  for (const auto &[id, j] : state_["snapshots"].items())
+    entries.emplace_back(id, j);
+  std::sort(entries.begin(), entries.end(), [](const auto &a, const auto &b) {
+    return a.second.value("last_used", 0LL) < b.second.value("last_used", 0LL);
+  });
+  std::vector<std::string> remove;
+  for (const auto &[id, j] : entries) {
+    if (active_snapshots_.count(id))
+      continue;
+    auto file = snapshot_directory_ / (id + ".bin");
+    if (!std::filesystem::exists(file) ||
+        (!j.value("retained", false) &&
+         timestamp() - j.value("last_used", 0LL) > ttl)) {
+      std::filesystem::remove(file);
+      remove.push_back(id);
+    } else
+      total += std::filesystem::file_size(file);
+  }
+  for (const auto &[id, j] : entries) {
+    if (total <= budget)
+      break;
+    if (active_snapshots_.count(id) || j.value("retained", false) ||
+        std::find(remove.begin(), remove.end(), id) != remove.end())
+      continue;
+    auto file = snapshot_directory_ / (id + ".bin");
+    if (std::filesystem::exists(file)) {
+      total -= std::filesystem::file_size(file);
+      std::filesystem::remove(file);
+    }
+    remove.push_back(id);
+  }
+  for (const auto &id : remove)
+    state_["snapshots"].erase(id);
+}
+void JuicedService::cache_api(const httplib::Request &req,
+                              httplib::Response &res, const std::string &op) {
+  auto body = req.body.empty() ? json::object() : json::parse(req.body);
+  if (op == "cache/profile" || op == "cache/qualify") {
+    auto profile = cache_profile(body.at("model").get<std::string>());
+    if (op == "cache/qualify") {
+      if (!profile.value("configured", false))
+        throw std::invalid_argument(
+            "Load options must use the Juiced snapshot directory");
+      if (body.value("fingerprint", "") != profile.value("fingerprint", ""))
+        throw std::invalid_argument(
+            "The tested profile changed; repeat acceptance");
+      if (body.value("evidence", "").empty())
+        throw std::invalid_argument(
+            "Record the exact-profile save/restart/restore evidence before "
+            "qualification");
+      std::lock_guard<std::mutex> lock(mutex_);
+      state_["qualified_profiles"]
+            [profile.at("fingerprint").get<std::string>()] = {
+                {"model", profile["model"]},
+                {"evidence", body["evidence"]},
+                {"qualified_at", timestamp()}};
+      persist_locked();
+      profile["qualified"] = true;
+    }
+    output(res, profile);
+    return;
+  }
+  if (op == "cache/forget") {
+    auto thread = body.at("thread").get<std::string>();
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::vector<std::string> ids;
+    for (const auto &[id, j] : state_["snapshots"].items())
+      if (j.value("thread", "") == thread) {
+        if (active_snapshots_.count(id)) {
+          output(res,
+                 {{"error",
+                   "Thread state is in use; retry after generation finishes"}},
+                 409);
+          return;
+        }
+        ids.push_back(id);
+      }
+    for (const auto &id : ids) {
+      std::filesystem::remove(snapshot_directory_ / (id + ".bin"));
+      state_["snapshots"].erase(id);
+    }
+    persist_locked();
+    output(res,
+           {{"forgotten", ids.size()},
+            {"messages_preserved", true},
+            {"memory_note", "Forget removes saved computation; live engine "
+                            "prefixes may remain until replaced or unloaded"}});
+    return;
+  }
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (req.method != "GET") {
+    auto mode = body.value("mode", state_["cache"].value("mode", "memory"));
+    if (mode != "memory" && mode != "off" && mode != "persistent")
+      throw std::invalid_argument("Invalid cache mode");
+    if (mode == "persistent" && state_["qualified_profiles"].empty()) {
+      output(
+          res,
+          {{"error",
+            "No deployment has passed exact-profile useful-reuse acceptance"}},
+          422);
+      return;
+    }
+    if (body.contains("retention_days") &&
+        (!body["retention_days"].is_number_integer() ||
+         body["retention_days"] < 1 || body["retention_days"] > 365))
+      throw std::invalid_argument("Retention must be between 1 and 365 days");
+    if (body.contains("disk_budget_gib") &&
+        (!body["disk_budget_gib"].is_number() || body["disk_budget_gib"] < 1 ||
+         body["disk_budget_gib"] > 256))
+      throw std::invalid_argument("Disk budget must be between 1 and 256 GiB");
+    for (const std::string k : {"mode", "retention_days", "disk_budget_gib"})
+      if (body.contains(k))
+        state_["cache"][k] = body[k];
+    prune_cache_locked();
+    persist_locked();
+  }
+  json entries = json::array();
+  for (const auto &[id, j] : state_["snapshots"].items())
+    entries.push_back(j);
+  output(res, {{"settings", state_["cache"]},
+               {"persistent_supported", !state_["qualified_profiles"].empty()},
+               {"reason",
+                state_["qualified_profiles"].empty()
+                    ? "No exact model/engine profile has passed "
+                      "save/restart/restore useful-reuse acceptance"
+                    : "Persistent mode applies only to qualified unchanged "
+                      "profiles; other requests use memory caching"},
+               {"snapshots", entries},
+               {"qualified_profiles", state_["qualified_profiles"]}});
+}
+void JuicedService::chat(const httplib::Request &original,
+                         httplib::Response &res) {
+  bool persistent = false;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    persistent = state_["cache"].value("mode", "memory") == "persistent";
+  }
+  if (!persistent) {
+    server_.handle_chat_completions(original, res);
+    return;
+  }
+  try {
+    auto request = json::parse(original.body);
+    const auto model = request.at("model").get<std::string>();
+    if (server_.model_manager_->get_model_info(model).recipe != "llamacpp") {
+      server_.handle_chat_completions(original, res);
+      return;
+    }
+    server_.auto_load_model_if_needed(model);
+    auto profile = cache_profile(model);
+    if (!profile.value("qualified", false)) {
+      res.set_header("X-Juiced-Cache", "unqualified-profile");
+      server_.handle_chat_completions(original, res);
+      return;
+    }
+    const auto address = profile.at("address").get<std::string>();
+    auto sr = utils::HttpClient::get(
+        address + "/slots", {}, 10, utils::HttpSecurityPolicy::TrustedLoopback);
+    if (sr.status_code != 200)
+      throw std::runtime_error("Cannot reserve a prompt-state slot");
+    auto slots = json::parse(sr.body);
+    if (!slots.is_array())
+      throw std::runtime_error("Unsupported slot inventory");
+    int slot = -1;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      for (const auto &s : slots) {
+        int id = s.at("id").get<int>();
+        if (!active_slots_[model].count(id) &&
+            !s.value("is_processing", false)) {
+          slot = id;
+          active_slots_[model].insert(id);
+          break;
+        }
+      }
+    }
+    if (slot < 0) {
+      res.set_header("Retry-After", "1");
+      output(res,
+             {{"error",
+               {{"message", "All prompt-state slots are busy; retry shortly"},
+                {"type", "capacity_exceeded"}}}},
+             429);
+      return;
+    }
+    const auto thread = original.get_header_value("X-Juiced-Thread-Id");
+    const bool identified =
+        !thread.empty() && thread.size() < 160 &&
+        thread.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRS"
+                                 "TUVWXYZ0123456789._-") == std::string::npos;
+    const auto identity = digest(original.get_header_value("Authorization"));
+    json semantics = json::object();
+    for (const std::string key : {"tools", "tool_choice", "response_format",
+                                  "chat_template_kwargs", "reasoning"})
+      if (request.contains(key))
+        semantics[key] = request[key];
+    const auto key = digest(
+        json::array({identity, thread, profile.at("fingerprint"), semantics})
+            .dump());
+    json saved;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (identified && active_snapshots_.count(key)) {
+        active_slots_[model].erase(slot);
+        output(res,
+               {{"error",
+                 {{"message", "This thread already has a turn in progress"},
+                  {"type", "thread_busy"}}}},
+               409);
+        return;
+      }
+      prune_cache_locked();
+      active_snapshots_.insert(key);
+      if (identified && state_["snapshots"].contains(key))
+        saved = state_["snapshots"][key];
+    }
+    auto release = [this, model, slot, key] {
+      std::lock_guard<std::mutex> lock(mutex_);
+      active_slots_[model].erase(slot);
+      active_snapshots_.erase(key);
+    };
+    // Shared RAII guard survives the streaming content-provider lifetime.
+    auto guard = std::shared_ptr<int>(new int(slot), [release](int *p) {
+      release();
+      delete p;
+    });
+    auto messages = request.value("messages", json::array());
+    std::string restore = "cold";
+    if (!saved.is_null()) {
+      auto count = saved.value("prefix_messages", size_t(0));
+      auto file = snapshot_directory_ / (key + ".bin");
+      if (count > 0 && count <= messages.size() &&
+          saved.value("prefix_digest", "") == prefix_hash(messages, count) &&
+          std::filesystem::exists(file)) {
+        try {
+          if (file_digest(file) != saved.value("checksum", ""))
+            throw std::runtime_error("Snapshot checksum mismatch");
+          auto restored = post_engine(
+              address, "/slots/" + std::to_string(slot) + "?action=restore",
+              {{"filename", key + ".bin"}});
+          restore = "restored";
+          res.set_header("X-Juiced-Restored-Tokens",
+                         std::to_string(restored.value("n_restored", 0)));
+        } catch (const std::exception &) {
+          restore = "rebuild-invalid-snapshot";
+        }
+      } else
+        restore = "rebuild-changed-prefix";
+    }
+    res.set_header("X-Juiced-Cache", restore);
+    request["id_slot"] = slot;
+    request["cache_prompt"] = true;
+    auto req = std::make_shared<httplib::Request>(original);
+    req->body = request.dump();
+    auto finish = [this, guard, identified, key, thread, model, profile,
+                   address, slot, messages](bool success) {
+      if (!success || !identified)
+        return;
+      const auto pending = key + ".pending";
+      auto file = snapshot_directory_ / pending;
+      try {
+        uint64_t budget;
+        {
+          std::lock_guard<std::mutex> lock(mutex_);
+          if (state_["cache"].value("mode", "") != "persistent")
+            return;
+          budget = uint64_t(state_["cache"].value("disk_budget_gib", 8.0) *
+                            1024 * 1024 * 1024);
+        }
+        if (std::filesystem::space(snapshot_directory_).available <
+            budget + 1024ULL * 1024 * 1024)
+          throw std::runtime_error(
+              "Insufficient free disk for a snapshot temporary file");
+        auto result = post_engine(
+            address, "/slots/" + std::to_string(slot) + "?action=save",
+            {{"filename", pending}});
+        auto size = std::filesystem::file_size(file);
+        if (size > budget)
+          throw std::runtime_error(
+              "Snapshot exceeds retained-state disk budget");
+        const auto checksum = file_digest(file);
+        std::lock_guard<std::mutex> lock(mutex_);
+        prune_cache_locked();
+        uint64_t total = size;
+        for (const auto &[id, j] : state_["snapshots"].items())
+          if (id != key)
+            total += j.value("bytes", uint64_t(0));
+        if (total > budget) {
+          auto entries = state_["snapshots"];
+          std::vector<std::pair<std::string, json>> order;
+          for (const auto &[id, j] : entries.items())
+            if (id != key && !j.value("retained", false) &&
+                !active_snapshots_.count(id))
+              order.emplace_back(id, j);
+          std::sort(order.begin(), order.end(),
+                    [](const auto &a, const auto &b) {
+                      return a.second.value("last_used", 0LL) <
+                             b.second.value("last_used", 0LL);
+                    });
+          for (const auto &[id, j] : order) {
+            if (total <= budget)
+              break;
+            std::filesystem::remove(snapshot_directory_ / (id + ".bin"));
+            total -= j.value("bytes", uint64_t(0));
+            state_["snapshots"].erase(id);
+          }
+        }
+        if (total > budget)
+          throw std::runtime_error("Retained snapshots fill the budget; change "
+                                   "retention or forget a snapshot");
+        std::filesystem::rename(file, snapshot_directory_ / (key + ".bin"));
+        bool retained = false;
+        auto threadfile = directory_ / "threads" / (thread + ".json");
+        if (std::filesystem::exists(threadfile)) {
+          std::ifstream f(threadfile);
+          json t;
+          f >> t;
+          retained = t.value("retain_cache", false);
+        }
+        state_["snapshots"][key] = {
+            {"id", key},
+            {"thread", thread},
+            {"model", model},
+            {"profile", profile["fingerprint"]},
+            {"bytes", size},
+            {"tokens", result.value("n_saved", 0)},
+            {"checksum", checksum},
+            {"prefix_messages", messages.size()},
+            {"prefix_digest", prefix_hash(messages, messages.size())},
+            {"last_used", timestamp()},
+            {"retained", retained},
+            {"state", "saved"}};
+        persist_locked();
+      } catch (const std::exception &e) {
+        std::error_code ec;
+        std::filesystem::remove(file, ec);
+        std::lock_guard<std::mutex> lock(mutex_);
+        state_["cache"]["last_error"] = e.what();
+        try {
+          persist_locked();
+        } catch (...) {
+        }
+      }
+    };
+    server_.handle_chat_completions(*req, res);
+    if (res.content_provider_) {
+      auto previous = std::move(res.content_provider_resource_releaser_);
+      res.content_provider_resource_releaser_ = [previous, finish, guard,
+                                                 req](bool ok) {
+        if (previous)
+          previous(ok);
+        finish(ok);
+      };
+    } else
+      finish(res.status >= 200 && res.status < 300);
+  } catch (const std::exception &e) {
+    output(res,
+           {{"error",
+             {{"message", e.what()}, {"type", "cache_preparation_error"}}}},
+           400);
+  }
+}
+} // namespace lemon

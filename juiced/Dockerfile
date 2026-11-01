@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 FROM ubuntu:24.04 AS manager
 ENV DEBIAN_FRONTEND=noninteractive
-RUN apt-get update && apt-get install -y --no-install-recommends build-essential cmake ninja-build libssl-dev libcurl4-openssl-dev libzstd-dev pkg-config libdrm-dev git python3 ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential cmake ninja-build libssl-dev libcurl4-openssl-dev libzstd-dev pkg-config libdrm-dev git python3 curl ca-certificates && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 COPY . .
 RUN printf '2026.44.1-juiced\n' > .version && cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_WEB_APP=OFF -DBUILD_TAURI_APP=OFF -DBUILD_TESTING=ON && cmake --build build -j4 --target lemond lemonade test_backend_mode_contract && ctest --test-dir build --output-on-failure -R '^BackendModeContractTest$'
@@ -17,7 +17,7 @@ COPY juiced/ui/ ./
 RUN bun run build
 
 FROM manager AS futo
-RUN mkdir -p /native && curl --fail --location --retry 3 'https://gitlab.futo.org/api/v4/projects/keyboard%2Ftranscribe.cpp/repository/archive.tar.gz?sha=26d75933c16b2cec228e34c69e92a6c3c154b97c' | tar -xz --strip-components=1 -C /native
+RUN mkdir -p /native && curl --fail --location --retry 3 'https://gitlab.futo.org/api/v4/projects/keyboard%2Ftranscribe.cpp/repository/archive.tar.gz?sha=26d75933c16b2cec228e34c69e92a6c3c154b97c' -o /tmp/transcribe.tar.gz && tar -xzf /tmp/transcribe.tar.gz --strip-components=1 -C /native && rm /tmp/transcribe.tar.gz
 RUN cmake -S /native -B /native/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=OFF -DTRANSCRIBE_BUILD_TESTS=OFF -DTRANSCRIBE_USE_SYSTEM_BLAS=OFF -DTRANSCRIBE_VULKAN=OFF -DTRANSCRIBE_CUDA=OFF -DTRANSCRIBE_HIP=OFF -DTRANSCRIBE_METAL=OFF -DTRANSCRIBE_BUILD_SHARED=ON && cmake --build /native/build --target transcribe-cli -j4
 RUN mkdir -p /out/futo/lib /out/futo/licenses && g++ -std=c++17 -O2 -pthread -I/native/include -I/native/examples/common -I/src/build/_deps/httplib-src -I/src/build/_deps/json-src/single_include /src/juiced/runtime/futo_server.cpp -L/native/build/src -ltranscribe -Wl,-rpath-link,/native/build/ggml/src -o /out/futo/futo-server && find /native/build -name '*.so*' -exec cp -L '{}' /out/futo/lib/ ';' && cp /native/LICENSE /out/futo/licenses/transcribe.txt && cp /native/THIRD-PARTY-LICENSES.md /out/futo/licenses/ && cp /native/ggml/LICENSE /out/futo/licenses/ggml.txt
 RUN printf '#!/bin/sh\nexport LD_LIBRARY_PATH=/opt/juiced/futo/lib\nexec /opt/juiced/futo/futo-server "$@"\n' > /out/futo/futo-asr-server && chmod 755 /out/futo/futo-asr-server

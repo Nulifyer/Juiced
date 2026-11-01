@@ -4,8 +4,10 @@
 #include <deque>
 #include <filesystem>
 #include <httplib.h>
+#include <map>
 #include <mutex>
 #include <nlohmann/json.hpp>
+#include <set>
 #include <thread>
 namespace lemon {
 class Server;
@@ -18,6 +20,7 @@ public:
   bool allows(const std::string &model) const;
 
 private:
+  friend class Server;
   using json = nlohmann::json;
   Server &server_;
   std::filesystem::path directory_;
@@ -27,6 +30,13 @@ private:
   std::deque<json> pending_;
   std::atomic<bool> stopping_{false};
   std::thread worker_;
+  std::map<std::string, std::set<int>> active_slots_;
+  std::set<std::string> active_snapshots_;
+  std::filesystem::path snapshot_directory_;
+  json cache_profile(const std::string &model);
+  void cache_api(const httplib::Request &, httplib::Response &,
+                 const std::string &);
+  void prune_cache_locked();
   void persist_locked();
   void reconcile();
   void refresh();

@@ -1190,3 +1190,8 @@ audio {
     transition: none !important;
   }
 }
+
+.cache-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
