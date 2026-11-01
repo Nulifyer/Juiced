@@ -304,7 +304,7 @@ void set_route_decision_sse_content_provider(
                 [&request_body, &stream_fn](httplib::DataSink& route_sink) {
                     stream_fn(request_body, route_sink);
                 });
-            return false;
+            return true; // sink.done() ends a successful stream; false means provider failure.
         });
 }
 

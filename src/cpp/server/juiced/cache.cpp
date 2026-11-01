@@ -524,12 +524,67 @@ void JuicedService::chat(const httplib::Request &original,
     inference_started = true;
     server_.handle_chat_completions(*req, res);
     if (res.content_provider_) {
+      struct StreamStatus {
+        std::string pending;
+        bool complete = false, failed = false;
+      };
+      auto status = std::make_shared<StreamStatus>();
+      auto provider = std::move(res.content_provider_);
+      res.content_provider_ = [provider, status](size_t offset, size_t length,
+                                                 httplib::DataSink &sink) {
+        httplib::DataSink observed;
+        observed.write = [&sink, status](const char *data, size_t size) {
+          if (!sink.write(data, size))
+            return false;
+          status->pending.append(data, size);
+          size_t cut;
+          while ((cut = status->pending.find('\n')) != std::string::npos) {
+            auto line = status->pending.substr(0, cut);
+            status->pending.erase(0, cut + 1);
+            if (line.rfind("data:", 0) != 0)
+              continue;
+            auto payload = line.substr(5);
+            auto first = payload.find_first_not_of(" \t");
+            if (first == std::string::npos)
+              continue;
+            payload.erase(0, first);
+            if (!payload.empty() && payload.back() == '\r')
+              payload.pop_back();
+            if (payload == "[DONE]")
+              status->complete = true;
+            else {
+              auto event = json::parse(payload, nullptr, false);
+              if (event.is_object() && event.contains("error"))
+                status->failed = true;
+            }
+          }
+          if (status->pending.size() > 128 * 1024) {
+            status->failed = true;
+            status->pending.clear();
+          }
+          return true;
+        };
+        observed.is_writable = [&sink] {
+          return !sink.is_writable || sink.is_writable();
+        };
+        observed.done = [&sink] {
+          if (sink.done)
+            sink.done();
+        };
+        observed.done_with_trailer = [&sink](const httplib::Headers &headers) {
+          if (sink.done_with_trailer)
+            sink.done_with_trailer(headers);
+          else if (sink.done)
+            sink.done();
+        };
+        return provider(offset, length, observed);
+      };
       auto previous = std::move(res.content_provider_resource_releaser_);
-      res.content_provider_resource_releaser_ = [previous, finish, guard,
-                                                 req](bool ok) {
+      res.content_provider_resource_releaser_ = [previous, finish, guard, req,
+                                                 status](bool ok) {
         if (previous)
           previous(ok);
-        finish(ok);
+        finish(status->complete && !status->failed);
       };
     } else
       finish(res.status == -1 || (res.status >= 200 && res.status < 300));
@@ -543,8 +598,15 @@ void JuicedService::chat(const httplib::Request &original,
       }
     }
     if (!inference_started) {
-      res.set_header("X-Juiced-Cache", "cold-fallback");
-      server_.handle_chat_completions(original, res);
+      // A miss or invalid snapshot already rebuilds inside its slot lease.
+      // If admission itself fails, retry instead of racing a leased engine
+      // slot.
+      res.set_header("Retry-After", "1");
+      output(
+          res,
+          {{"error",
+            {{"message", e.what()}, {"type", "cache_admission_unavailable"}}}},
+          503);
     } else {
       output(res,
              {{"error", {{"message", e.what()}, {"type", "inference_error"}}}},
