@@ -16,6 +16,14 @@ The UI build produces root `web/`; the image copies it into native resources.
 The C++ server serves the UI and APIs on port8080. Models are downloaded to a
 persistent HF cache, not embedded into the image. No Docker socket is required.
 
+The Dockerfile keeps manager, UI and native engine builds in separate stages.
+Its final `runtime` target starts from Ubuntu24.04 and copies only compiled
+binaries, resources and license notices. It installs runtime libraries, Mesa's
+Vulkan driver, hardware discovery and archive/download tools. Compilers, headers,
+Make, CMake, Node, Bun and other build tools are excluded and checked before
+publication. Backends that require a JIT compiler, such as vLLM/Triton, need an
+explicitly provisioned runtime variant and are outside this default native image.
+
 ## Initial scope
 
 Models shows actual Loaded/Unloaded state and operation status. Loading policy

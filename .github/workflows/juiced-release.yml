@@ -26,6 +26,7 @@ jobs:
         with:
           context: .
           file: juiced/Dockerfile
+          target: runtime
           load: true
           tags: ghcr.io/nulifyer/juiced:${{ github.ref_type == 'tag' && github.ref_name || 'development' }}
           build-args: |
@@ -36,6 +37,7 @@ jobs:
       - name: Verify default container
         run: |
           image=ghcr.io/nulifyer/juiced:${{ github.ref_type == 'tag' && github.ref_name || 'development' }}
+          docker run --rm --entrypoint /bin/sh -v "$PWD/juiced/tests/test_runtime_image.sh:/test_runtime_image.sh:ro" "$image" /test_runtime_image.sh
           docker run -d --name juiced-smoke -e JUICED_SNAPSHOT_DIR=/data/prompt-state -p 127.0.0.1:18080:8080 "$image"
           for attempt in $(seq 1 60); do
             if curl --fail --silent http://127.0.0.1:18080/v1/juiced/state > state.json; then break; fi

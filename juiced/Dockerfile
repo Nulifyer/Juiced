@@ -38,23 +38,29 @@ FROM toolchain AS llama
 RUN mkdir -p /out/llama/bin /out/llama/licenses && curl --fail --location --retry 3 https://github.com/ggml-org/llama.cpp/releases/download/b12032/llama-b12032-bin-ubuntu-vulkan-x64.tar.gz -o /tmp/llama.tar.gz && echo 'f75e7107f9450034c5467492c41e9ed91816e2d815fc4b802c6bd58de7d5b126  /tmp/llama.tar.gz' | sha256sum -c - && tar -xzf /tmp/llama.tar.gz --strip-components=1 -C /out/llama/bin && cp /out/llama/bin/LICENSE /out/llama/licenses/llama.txt && rm /tmp/llama.tar.gz
 RUN printf '#!/bin/sh\nexport LD_LIBRARY_PATH=/opt/juiced/llama/bin\nexec /opt/juiced/llama/bin/llama-server "$@"\n' > /out/llama/llama-server && chmod 755 /out/llama/llama-server && printf 'b12032 dde879bc4f954b809892fd0d660515f42536394a\n' > /out/llama/source-revision
 
-FROM ghcr.io/lemonade-sdk/lemonade-server@sha256:4602f637446980aeb25c3b6350d4fe414770f10f8372b459d7ba32b577347185
-USER root
+FROM ubuntu:24.04 AS runtime
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates curl libatomic1 libcurl4t64 libdrm-amdgpu1 libgomp1 \
+    libreadline8t64 libssl3t64 libstdc++6 libvulkan1 libzstd1 \
+    mesa-vulkan-drivers tar unzip vulkan-tools xz-utils zlib1g \
+    && rm -rf /var/lib/apt/lists/*
+RUN groupadd --gid 10001 juiced && useradd --uid 10001 --gid 10001 \
+    --home-dir /opt/lemonade --no-create-home --shell /usr/sbin/nologin juiced
 ARG SOURCE_REVISION=development
 ARG SERVICE_VERSION=development
 LABEL org.opencontainers.image.title="Juiced" org.opencontainers.image.source="https://github.com/Nulifyer/Juiced" org.opencontainers.image.revision="${SOURCE_REVISION}" org.opencontainers.image.version="${SERVICE_VERSION}" org.opencontainers.image.description="Local multi-backend model appliance derived from Lemonade; T3-derived model library and playground"
-COPY --from=manager /src/build/lemond /src/build/lemonade /opt/lemonade/
-COPY --from=manager /src/build/resources/ /opt/lemonade/resources/
-COPY --from=manager /out/licenses/ /opt/juiced/licenses/build-dependencies/
-COPY --from=ui /web/ /opt/lemonade/resources/juiced/
-COPY --from=futo /out/ /opt/juiced/
-COPY --from=parakeet /out/ /opt/juiced/
-COPY --from=llama /out/ /opt/juiced/
-COPY LICENSE /opt/juiced/licenses/lemonade-Apache-2.0.txt
-COPY juiced/ui/LICENSE.t3code juiced/ui/T3-SOURCES.json /opt/juiced/licenses/
-RUN mkdir -p /data/config /data/cache /data/huggingface /data/prompt-state /library && chown -R 10001:10001 /data /opt/juiced && chmod 700 /data/config /data/prompt-state
-COPY juiced/runtime/defaults.json /opt/juiced/defaults.json
-ENV HOME=/opt/lemonade HF_HOME=/data/huggingface XDG_CACHE_HOME=/data/cache/xdg LEMONADE_DEFAULTS_PATH=/opt/juiced/defaults.json
+COPY --chown=10001:10001 --from=manager /src/build/lemond /src/build/lemonade /opt/lemonade/
+COPY --chown=10001:10001 --from=manager /src/build/resources/ /opt/lemonade/resources/
+COPY --chown=10001:10001 --from=manager /out/licenses/ /opt/juiced/licenses/build-dependencies/
+COPY --chown=10001:10001 --from=ui /web/ /opt/lemonade/resources/juiced/
+COPY --chown=10001:10001 --from=futo /out/ /opt/juiced/
+COPY --chown=10001:10001 --from=parakeet /out/ /opt/juiced/
+COPY --chown=10001:10001 --from=llama /out/ /opt/juiced/
+COPY --chown=10001:10001 LICENSE /opt/juiced/licenses/lemonade-Apache-2.0.txt
+COPY --chown=10001:10001 juiced/ui/LICENSE.t3code juiced/ui/T3-SOURCES.json /opt/juiced/licenses/
+RUN mkdir -p /data/config /data/cache /data/huggingface /data/prompt-state /library /run/lemonade && chown 10001:10001 /data /data/config /data/cache /data/huggingface /data/prompt-state /opt/lemonade /run/lemonade && chmod 700 /data/config /data/prompt-state /run/lemonade
+COPY --chown=10001:10001 juiced/runtime/defaults.json /opt/juiced/defaults.json
+ENV HOME=/opt/lemonade HF_HOME=/data/huggingface XDG_CACHE_HOME=/data/cache/xdg XDG_RUNTIME_DIR=/run/lemonade LEMONADE_DEFAULTS_PATH=/opt/juiced/defaults.json PATH="/opt/lemonade:${PATH}"
 USER 10001:10001
 WORKDIR /opt/lemonade
 EXPOSE 8080
