@@ -172,11 +172,28 @@ bool JuicedService::inference_guard(const httplib::Request &req,
             409);
       return true;
     }
+    if (!model.empty()) {
+      const auto canonical = server_.model_manager_->get_public_model_name(
+          server_.model_manager_->resolve_model_name(model));
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (operations_.contains(canonical) &&
+          operations_[canonical].value("pending", false)) {
+        res.set_header("Retry-After", "2");
+        reply(res,
+              {{"error",
+                "Model settings or residency are changing; retry shortly"}},
+              503);
+        return true;
+      }
+    }
     if ((req.path == "/api/chat" || req.path == "/api/generate") &&
         body.contains("keep_alive") && body["keep_alive"] == 0 &&
         body.value("messages", json::array()).empty() &&
         body.value("prompt", "").empty() && hot(model)) {
-      reply(res, {{"error", "Hot models cannot be unloaded by client keep_alive hints"}}, 409);
+      reply(res,
+            {{"error",
+              "Hot models cannot be unloaded by client keep_alive hints"}},
+            409);
       return true;
     }
   } catch (const std::exception &) {
@@ -214,6 +231,19 @@ void JuicedService::refresh() {
                         {"backend_url", l.value("backend_url", "")},
                         {"is_busy", l.value("is_busy", false)},
                         {"pinned", l.value("pinned", false)}};
+        auto applied = server_.router_->get_model_recipe_options(m["id"])
+                           .to_resolved_json();
+        auto desired = server_.router_
+                           ->resolve_effective_options(
+                               info, RecipeOptions(info.recipe, json::object()))
+                           .to_resolved_json();
+        applied.erase("pinned");
+        desired.erase("pinned");
+        if (desired.value("ctx_size", json(nullptr)) == -1) {
+          applied.erase("ctx_size");
+          desired.erase("ctx_size");
+        }
+        m["runtime"]["settings_pending"] = applied != desired;
         break;
       }
     result.push_back(std::move(m));
@@ -269,13 +299,14 @@ void JuicedService::execute(const json &command) {
   try {
     {
       std::lock_guard<std::mutex> lock(mutex_);
-      operations_[name] = {
-          {"pending", true},
-          {"state", action == "load" ? "loading" : "unloading"},
-          {"updated", now()}};
+      operations_[name] = {{"pending", true},
+                           {"state", action == "reload" ? "reloading"
+                                     : action == "load" ? "loading"
+                                                        : "unloading"},
+                           {"updated", now()}};
     }
     auto info = server_.model_manager_->get_model_info(name);
-    if (action == "load") {
+    if (action == "load" || action == "reload") {
       if (!allows(name))
         throw std::invalid_argument("Model is disabled");
       if (!server_.model_manager_->is_model_downloaded(name))
@@ -284,6 +315,16 @@ void JuicedService::execute(const json &command) {
       {
         std::lock_guard<std::mutex> lock(mutex_);
         policy = state_["policies"].value(name, "disabled");
+      }
+      if (action == "reload") {
+        for (const auto &l : server_.router_->get_all_loaded_models())
+          if (l.value("model_name", "") == name && l.value("is_busy", false))
+            throw std::runtime_error(
+                "Model is busy; retry after active requests finish");
+        server_.router_->unload_model(name);
+        if (server_.router_->is_model_loaded(name))
+          throw std::runtime_error(
+              "Model is still draining; retry after requests finish");
       }
       server_.router_->load_model(
           name, info, RecipeOptions(info.recipe, json::object()), true, false,
@@ -405,6 +446,8 @@ void JuicedService::routes(httplib::Server &http) {
     });
   }
   for (const std::string prefix : {"/api/v0/", "/api/v1/", "/v0/", "/v1/"}) {
+    http.Get(prefix + "juiced/devices",
+             [this](const auto &q, auto &r) { execution_devices(q, r); });
     http.Get(prefix + "audio/voices",
              [this](const auto &q, auto &r) { handle(q, r, "voices"); });
     for (const std::string operation :
@@ -550,8 +593,24 @@ void JuicedService::handle(const httplib::Request &req, httplib::Response &res,
         return;
       }
       const auto action = body.at("action").get<std::string>();
-      if (action != "load" && action != "unload")
+      if (action != "load" && action != "unload" && action != "reload")
         throw std::invalid_argument("Unknown operation");
+      if (action == "reload") {
+        if (!allows(model) || !server_.router_->is_model_loaded(model)) {
+          reply(res, {{"error", "Enable and load this model before reloading"}},
+                409);
+          return;
+        }
+        for (const auto &loaded : server_.router_->get_all_loaded_models())
+          if (loaded.value("model_name", "") == model &&
+              loaded.value("is_busy", false)) {
+            reply(res,
+                  {{"error",
+                    "Model is busy; retry after active requests finish"}},
+                  409);
+            return;
+          }
+      }
       {
         std::lock_guard<std::mutex> lock(mutex_);
         if (action == "unload" &&

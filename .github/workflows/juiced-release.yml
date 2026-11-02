@@ -50,6 +50,7 @@ jobs:
           echo '66967fbece6dbe97886593fdbb73589584927e29119ec31f08090732d1861739  stories15M-q4_0.gguf' | sha256sum -c -
           docker cp stories15M-q4_0.gguf juiced-smoke:/library/stories15M-q4_0.gguf
           python3 juiced/tests/test_engine_cache.py --url http://127.0.0.1:18080 --container juiced-smoke --model-file /library/stories15M-q4_0.gguf --snapshots /data/prompt-state --out engine-cache-proof.json
+          python3 juiced/tests/test_model_tuning.py --url http://127.0.0.1:18080 --out model-tuning-proof.json
           python3 -m venv /tmp/juiced-clients
           /tmp/juiced-clients/bin/pip install -r juiced/tests/client-requirements.txt
           /tmp/juiced-clients/bin/python juiced/tests/test_clients.py --url http://127.0.0.1:18080 --model Stories15M-Q4_0 --out client-proof.json
@@ -68,4 +69,5 @@ jobs:
             state.json
             catalog.json
             engine-cache-proof.json
+            model-tuning-proof.json
             client-proof.json

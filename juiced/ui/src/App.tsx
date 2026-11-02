@@ -4,7 +4,7 @@ import {
 } from "./components/RuntimeMetrics";
 import { RuntimeLogs, RuntimeActivity } from "./components/RuntimeLogs";
 import { useLogStream } from "./logs/useLogStream";
-import { ModelRemoval } from "./components/ModelRemoval";
+import { ModelWorkspace } from "./components/ModelWorkspace";
 import { useCallback, useEffect, useState } from "react";
 import {
   MessageSquare,
@@ -26,7 +26,6 @@ import {
   HardDrive,
   Terminal,
 } from "lucide-react";
-import { Dialog } from "@base-ui/react/dialog";
 import { Button } from "./components/t3/button";
 import {
   SidebarHeader,
@@ -34,16 +33,18 @@ import {
   SidebarMenu,
   SidebarMenuItem,
 } from "./components/t3/sidebar";
-import { ModelLibrary, policyNames } from "./components/ModelLibrary";
+import { ModelLibrary } from "./components/ModelLibrary";
 import { Acquisition } from "./components/Acquisition";
 import { CacheWorkspace } from "./components/CacheWorkspace";
 import { Playground } from "./components/Playground";
 import { api, type Model } from "./api";
 import { ServiceEndpoints } from "./components/ServiceEndpoints";
+import { BackendInventory } from "./components/BackendInventory";
 const destinations = [
   ["models", "Models", Server],
   ["policy", "Loading policy", SlidersHorizontal],
   ["library", "Library", Library],
+  ["backends", "Backends & hardware", Server],
   ["cache", "Cache", Database],
   ["services", "Service APIs", Server],
   ["logs", "Logs", Terminal],
@@ -72,9 +73,8 @@ export default function App() {
     [mobile, setMobile] = useState(false),
     [libraryTab, setLibraryTab] = useState("discover"),
     [inspected, setInspected] = useState<Model | null>(null),
-    [options, setOptions] = useState(""),
+    [acquireRepo, setAcquireRepo] = useState<{ repo: string }>(),
     [cache, setCache] = useState<any>(),
-    [saving, setSaving] = useState(false),
     [removalRequested, setRemovalRequested] = useState(false),
     [preferredModel, setPreferredModel] = useState("");
   useEffect(() => {
@@ -121,12 +121,6 @@ export default function App() {
     return () => clearInterval(timer);
   }, [screen, notify]);
   useEffect(() => {
-    if (!inspected) return;
-    setOptions(
-      JSON.stringify((inspected as any).recipe_options || {}, null, 2),
-    );
-  }, [inspected]);
-  useEffect(() => {
     if (mobile) {
       const close = (e: KeyboardEvent) => {
         if (e.key === "Escape") setMobile(false);
@@ -135,24 +129,6 @@ export default function App() {
       return () => document.removeEventListener("keydown", close);
     }
   }, [mobile]);
-  async function saveOptions() {
-    if (!inspected) return;
-    setSaving(true);
-    try {
-      await api(
-        "models/" + encodeURIComponent(inspected.id) + "/options",
-        JSON.parse(options),
-      );
-      notify(
-        "Saved deployment options. Unload/reload to apply load-time changes.",
-      );
-      await refresh();
-    } catch (e) {
-      notify((e as Error).message);
-    } finally {
-      setSaving(false);
-    }
-  }
   const activeJobs = jobs.filter(
     (j) => j.running || j.status === "interrupted",
   );
@@ -410,6 +386,8 @@ export default function App() {
         {screen === "library" && (
           <Acquisition
             models={models}
+            initialRepository={acquireRepo}
+            onRepositoryOpened={() => setAcquireRepo(undefined)}
             service={service}
             jobs={jobs}
             notify={notify}
@@ -432,6 +410,7 @@ export default function App() {
           />
         )}
         {screen === "logs" && <RuntimeLogs logs={logs} />}
+        {screen === "backends" && <BackendInventory />}
         {screen === "services" && (
           <ServiceEndpoints models={models} notify={notify} />
         )}
@@ -466,85 +445,36 @@ export default function App() {
           </Button>
         </div>
       )}
-      <Dialog.Root
-        open={!!inspected}
-        onOpenChange={(open) => {
-          if (!open) {
+      {inspected && (
+        <ModelWorkspace
+          key={inspected.id}
+          model={models.find((m) => m.id === inspected.id) || inspected}
+          models={models}
+          removalRequested={removalRequested}
+          onClose={() => {
             setInspected(null);
             setRemovalRequested(false);
-          }
-        }}
-      >
-        <Dialog.Portal>
-          <Dialog.Backdrop className="dialog-backdrop" />
-          <Dialog.Popup className="model-drawer">
-            <div className="dialog-heading">
-              <Dialog.Title>{inspected?.id}</Dialog.Title>
-              <Dialog.Close
-                render={
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    aria-label="Close model details"
-                  />
-                }
-              >
-                <X size={17} />
-              </Dialog.Close>
-            </div>
-            <Dialog.Description>
-              Native model identity, deployment and saved load options.
-            </Dialog.Description>
-            {inspected && (
-              <>
-                <dl className="model-facts">
-                  <dt>Service</dt>
-                  <dd>{inspected.service}</dd>
-                  <dt>Backend</dt>
-                  <dd>{inspected.recipe}</dd>
-                  <dt>Policy</dt>
-                  <dd>{policyNames[inspected.policy]}</dd>
-                  <dt>State</dt>
-                  <dd>{inspected.operation?.state || inspected.state}</dd>
-                  <dt>Context</dt>
-                  <dd>
-                    {inspected.context_length?.toLocaleString() || "Unknown"}{" "}
-                    tokens
-                  </dd>
-                </dl>
-                <h2>Saved deployment options</h2>
-                <p className="page-note">
-                  These options affect the next load. Saving does not restart a
-                  running model.
-                </p>
-                <textarea
-                  className="options-editor"
-                  aria-label="Deployment options JSON"
-                  value={options}
-                  onChange={(e) => setOptions(e.target.value)}
-                  spellCheck={false}
-                />
-                <Button disabled={saving} onClick={() => void saveOptions()}>
-                  Save deployment options
-                </Button>
-                <ModelRemoval
-                  model={inspected}
-                  focusRequested={removalRequested}
-                  notify={notify}
-                  onRemoved={async () => {
-                    setInspected(null);
-                    await refresh();
-                  }}
-                />
-                <details className="raw-details">
-                  <summary>Complete catalog record</summary>
-                  <pre>{JSON.stringify(inspected, null, 2)}</pre>
-                </details>
-              </>
-            )}
-          </Dialog.Popup>
-        </Dialog.Portal>
-      </Dialog.Root>
+          }}
+          onInspect={(m) => {
+            setRemovalRequested(false);
+            setInspected(m);
+          }}
+          onBrowse={(repo) => {
+            setInspected(null);
+            setAcquireRepo({ repo });
+            setLibraryTab("discover");
+            setScreen("library");
+          }}
+          onTest={(m) => {
+            setInspected(null);
+            setPreferredModel(m.id);
+            setTask(m.service);
+            setScreen("playground");
+          }}
+          refresh={refresh}
+          notify={notify}
+        />
+      )}
     </div>
   );
 }

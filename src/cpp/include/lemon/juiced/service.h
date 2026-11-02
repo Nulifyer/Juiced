@@ -52,6 +52,7 @@ private:
   void reconcile();
   void reconcile_voice();
   void compatibility_routes(httplib::Server &http);
+  void execution_devices(const httplib::Request &, httplib::Response &);
   void image_compatibility(const httplib::Request &, httplib::Response &,
                            const std::string &operation);
   json protocols();

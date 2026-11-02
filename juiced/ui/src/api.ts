@@ -12,14 +12,15 @@ export type Model = {
   size?: number;
   context_length?: number;
   checkpoints?: Record<string, string>;
+  checkpoint?: string;
+  recipe_options?: Record<string, unknown>;
   operation?: { state: string; error?: string; pending: boolean };
-  runtime?: { pid: number; is_busy: boolean };
+  runtime?: { pid: number; is_busy: boolean; settings_pending?: boolean };
 };
 export type Message = {
   role: "user" | "assistant" | "system";
   content:
-    | string
-    | { type: string; text?: string; image_url?: { url: string } }[];
+    string | { type: string; text?: string; image_url?: { url: string } }[];
   reasoning_content?: string;
 };
 export async function api<T = any>(

@@ -1,4 +1,10 @@
-import { groupRepositories, quantization } from "./modelDiscovery";
+import {
+  existingVariant,
+  groupRepositories,
+  modelQuant,
+  quantization,
+  variantName,
+} from "./modelDiscovery";
 import { useEffect, useRef, useState } from "react";
 import {
   Search,
@@ -24,6 +30,8 @@ export function Acquisition({
   tab,
   setTab,
   onInspect,
+  initialRepository,
+  onRepositoryOpened,
 }: {
   models: Model[];
   service: string;
@@ -33,6 +41,8 @@ export function Acquisition({
   tab: string;
   setTab: (s: string) => void;
   onInspect: (m: Model) => void;
+  initialRepository?: { repo: string };
+  onRepositoryOpened?: () => void;
 }) {
   const [query, setQuery] = useState(""),
     [inventoryQuery, setInventoryQuery] = useState(""),
@@ -44,6 +54,7 @@ export function Acquisition({
     [variants, setVariants] = useState<any>(),
     [variant, setVariant] = useState(""),
     [name, setName] = useState(""),
+    [customName, setCustomName] = useState(false),
     [projector, setProjector] = useState(""),
     [busy, setBusy] = useState(false),
     [file, setFile] = useState<File>(),
@@ -53,7 +64,28 @@ export function Acquisition({
     [uploadProgress, setUploadProgress] = useState(""),
     [importJobs, setImportJobs] = useState<any[]>([]);
   const uploading = useRef<AbortController | null>(null);
+  const selectedVariant = variants?.variants?.find(
+    (v: any) => v.name === variant,
+  );
+  const installedVariant =
+    selectedVariant &&
+    existingVariant(
+      models,
+      variants.checkpoint,
+      selectedVariant,
+      variants.recipe || "llamacpp",
+      projector,
+    );
+  const nameConflict =
+    !installedVariant &&
+    models.some((m) => m.id === name || m.id === "user." + name);
   useEffect(() => setCatalogPage(0), [service]);
+  useEffect(() => {
+    if (initialRepository)
+      void inspect(initialRepository.repo).finally(() =>
+        onRepositoryOpened?.(),
+      );
+  }, [initialRepository]);
   useEffect(() => {
     if (tab === "import") void loadImports();
   }, [tab]);
@@ -85,7 +117,13 @@ export function Acquisition({
       );
       setVariants(j);
       setVariant(j.variants?.[0]?.name || "");
-      setName(j.suggested_name || repo.split("/").pop());
+      setName(
+        variantName(
+          j.suggested_name || repo.split("/").pop(),
+          j.variants?.[0]?.name || "GGUF",
+        ),
+      );
+      setCustomName(false);
       setProjector(j.mmproj_files?.[0] || "");
     } catch (e) {
       notify((e as Error).message);
@@ -111,11 +149,18 @@ export function Acquisition({
   }
   async function download() {
     if (!variants || !variant) return;
+    if (installedVariant) {
+      if (installedVariant.downloaded) {
+        setVariants(undefined);
+        onInspect(installedVariant);
+      } else await pull(installedVariant.id);
+      return;
+    }
     const checkpoints: Record<string, string> = {
       main: variants.checkpoint + ":" + variant,
     };
     if (projector) checkpoints.mmproj = variants.checkpoint + ":" + projector;
-    if (models.some((m) => m.id === name)) {
+    if (nameConflict) {
       notify(
         "This name already exists. Include the publisher quantization in the variant name before downloading.",
       );
@@ -544,33 +589,59 @@ export function Acquisition({
                       {variants.checkpoint} <ExternalLink size={12} />
                     </a>
                   </p>
-                  <label>
-                    Model name
-                    <input
-                      value={name}
-                      onChange={(e) => setName(e.target.value)}
-                    />
-                  </label>
+                  <p className="variant-registration">
+                    <strong>{installedVariant?.id || name}</strong>
+                    <span>
+                      {installedVariant?.downloaded
+                        ? "Already in your library"
+                        : "New variants stay Disabled until enabled"}
+                    </span>
+                  </p>
                   <fieldset className="quant-options">
                     <legend>Quantization</legend>
                     <div>
-                      {variants.variants?.map((v: any) => (
-                        <label
-                          key={v.name}
-                          className={variant === v.name ? "is-selected" : ""}
-                        >
-                          <input
-                            type="radio"
-                            name="quantization"
-                            value={v.name}
-                            checked={variant === v.name}
-                            onChange={() => setVariant(v.name)}
-                          />
-                          <strong>{v.name}</strong>
-                          <span>{bytes(v.size_bytes || 0)}</span>
-                          <small>{v.files?.length || 1} file(s)</small>
-                        </label>
-                      ))}
+                      {variants.variants?.map((v: any) => {
+                        const existing = existingVariant(
+                          models,
+                          variants.checkpoint,
+                          v,
+                          variants.recipe || "llamacpp",
+                          projector,
+                        );
+                        return (
+                          <label
+                            key={v.name}
+                            className={variant === v.name ? "is-selected" : ""}
+                          >
+                            <input
+                              type="radio"
+                              name="quantization"
+                              value={v.name}
+                              checked={variant === v.name}
+                              onChange={() => {
+                                setVariant(v.name);
+                                if (!customName)
+                                  setName(
+                                    variantName(
+                                      variants.suggested_name ||
+                                        variants.checkpoint.split("/").pop(),
+                                      v.name,
+                                    ),
+                                  );
+                              }}
+                            />
+                            <strong>{v.name}</strong>
+                            <span>{bytes(v.size_bytes || 0)}</span>
+                            <small>
+                              {existing?.downloaded
+                                ? "Downloaded"
+                                : existing
+                                  ? "Registered"
+                                  : `${v.files?.length || 1} file(s)`}
+                            </small>
+                          </label>
+                        );
+                      })}
                     </div>
                   </fieldset>
                   {variants.mmproj_files?.length > 0 && (
@@ -591,11 +662,38 @@ export function Acquisition({
                     Backend: {variants.recipe}. Requires architecture support;
                     repository tags are not conformance tests.
                   </p>
+                  <details>
+                    <summary>Registration name</summary>
+                    <label>
+                      Model name
+                      <input
+                        value={name}
+                        onChange={(e) => {
+                          setCustomName(true);
+                          setName(e.target.value);
+                        }}
+                      />
+                    </label>
+                    <p className="page-note">
+                      The publisher name and quant identify each variant
+                      independently. Changing this name does not rename another
+                      model.
+                    </p>
+                  </details>
+                  {nameConflict && (
+                    <p className="inline-error" role="alert">
+                      This name belongs to a different checkpoint. Choose a
+                      distinct registration name above.
+                    </p>
+                  )}
                   <Button
                     onClick={() => void download()}
-                    disabled={!variant || !name}
+                    disabled={!variant || !name || nameConflict}
                   >
-                    <Download size={15} /> Download selected variant
+                    <Download size={15} />{" "}
+                    {installedVariant?.downloaded
+                      ? "Open installed variant"
+                      : `Download ${variant}`}
                   </Button>
                 </Dialog.Popup>
               </Dialog.Portal>
@@ -632,7 +730,7 @@ export function Acquisition({
           </div>
           <div className="weights-table-heading">
             <span>Model</span>
-            <span>Service</span>
+            <span>Quant / service</span>
             <span>Download size</span>
             <span>Backend</span>
           </div>
@@ -668,6 +766,9 @@ export function Acquisition({
                   </span>
                 </span>
                 <span className="weight-service">
+                  {modelQuant(m) && (
+                    <strong className="quant-badge">{modelQuant(m)}</strong>
+                  )}
                   {serviceNames[m.service] || m.service}
                 </span>
                 <span>{m.size ? bytes(m.size * 1e9) : "Not reported"}</span>

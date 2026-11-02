@@ -52,6 +52,18 @@ class ApiContract(unittest.TestCase):
   _,catalog=self.request('juiced/catalog');m=next(x for x in catalog['data'] if x['id']==self.model);self.assertEqual(m['policy'],'on-demand')
  def test_hot_unload_protection(self):
   self.request('juiced/policy',{'model':self.model,'policy':'hot'});s,_=self.request('juiced/operation',{'model':self.model,'action':'unload'});self.assertEqual(s,409);self.request('juiced/policy',{'model':self.model,'policy':'on-demand'})
+ def test_reload_requires_enabled_loaded_model(self):
+  self.request('juiced/policy',{'model':self.model,'policy':'disabled'})
+  s,_=self.request('juiced/operation',{'model':self.model,'action':'reload'});self.assertEqual(s,409)
+  self.request('juiced/policy',{'model':self.model,'policy':'hot'})
+  s,_=self.request('juiced/operation',{'model':self.model,'action':'reload'});self.assertEqual(s,409)
+  _,catalog=self.request('juiced/catalog');self.assertEqual(next(m['policy'] for m in catalog['data'] if m['id']==self.model),'hot')
+  self.request('juiced/policy',{'model':self.model,'policy':'on-demand'})
+ def test_device_enumeration_validation(self):
+  for prefix in ['/api/v0/','/api/v1/','/v0/','/v1/']:
+   s,d=self.request(prefix+'juiced/devices?recipe=llamacpp&backend=cpu');self.assertEqual(s,200);self.assertEqual(d['devices'],[{'id':'none','name':'CPU'}])
+   s,_=self.request(prefix+'juiced/devices?recipe=llamacpp&backend=invalid');self.assertEqual(s,400)
+   s,_=self.request(prefix+'juiced/devices?recipe=vllm&backend=rocm');self.assertEqual(s,501)
  def test_conversation_storage_is_retired(self):
   for prefix in ['/api/v0/','/api/v1/','/v0/','/v1/']:
    for endpoint in ['juiced/threads','juiced/thread?id=test-thread']:
@@ -95,6 +107,10 @@ class ApiContract(unittest.TestCase):
       self.assertEqual(request(path),401,path)
       self.assertEqual(request(path,{'Authorization':'Bearer wrong'}),401,path)
       self.assertEqual(request(path,{'Authorization':'Bearer fixture-regular'}),200,path)
+     device_path='/v1/juiced/devices?recipe=llamacpp&backend=cpu'
+     self.assertEqual(request(device_path),401)
+     self.assertEqual(request(device_path,{'Authorization':'Bearer fixture-regular'}),401)
+     self.assertEqual(request(device_path,{'Authorization':'Bearer fixture-admin'}),200)
      self.assertEqual(request('/v1/models',{'x-api-key':'fixture-regular','anthropic-version':'2023-06-01'}),200)
      self.assertEqual(request('/v1/messages/count_tokens',{'x-api-key':'fixture-regular'},{}),400)
      self.assertEqual(request('/v1/messages/count_tokens',{'x-api-key':'wrong'},{}),401)

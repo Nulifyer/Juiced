@@ -37,6 +37,7 @@ import {
 import { Button } from "./t3/button";
 import { api, bytes, type Model } from "../api";
 import "./ModelLibrary.css";
+import { modelQuant } from "./modelDiscovery";
 export const policyNames = {
   hot: "Hot",
   "on-demand": "On demand",
@@ -176,8 +177,21 @@ function ModelRow({
       >
         {m.loaded ? "Unload model" : "Load model"}
       </Item>
+      {m.loaded && (
+        <Item
+          className="menu-item"
+          disabled={
+            m.operation?.pending ||
+            m.runtime?.is_busy ||
+            m.policy === "disabled"
+          }
+          onClick={() => onAction(m, "reload")}
+        >
+          Reload with saved settings
+        </Item>
+      )}
       <Item className="menu-item" onClick={() => onInspect(m)}>
-        Model details…
+        Settings & variants…
       </Item>
       <Item className="menu-item" onClick={() => onRemove(m)}>
         Remove model…
@@ -237,6 +251,9 @@ function ModelRow({
               {m.id}
             </button>
             <div className="deployment-caption">
+              {modelQuant(m) && (
+                <span className="quant-badge">{modelQuant(m)}</span>
+              )}
               <span>{m.recipe}</span>
               <CapabilityIcons model={m} />
               {policy ? (
@@ -266,6 +283,9 @@ function ModelRow({
             </div>
             {m.operation?.error && (
               <p className="inline-error">{m.operation.error}</p>
+            )}
+            {m.runtime?.settings_pending && (
+              <p className="settings-pending">Saved settings need reload</p>
             )}
           </div>
           {!policy && (

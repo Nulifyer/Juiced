@@ -1027,6 +1027,7 @@ set(SOURCES_CORE
     src/cpp/server/server.cpp
     src/cpp/server/juiced/service.cpp
     src/cpp/server/juiced/compatibility.cpp
+    src/cpp/server/juiced/execution.cpp
     src/cpp/server/juiced/cache.cpp
     src/cpp/server/juiced/removal.cpp
     src/cpp/server/collection_orchestrator.cpp

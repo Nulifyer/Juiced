@@ -1,0 +1,275 @@
+import { useEffect, useState } from "react";
+import { api, type Model } from "../api";
+import { runtimeFields, setArg, type Options } from "./modelSettings";
+
+export type RuntimeInfo = {
+  display_name: string;
+  modality: string;
+  default_backend?: string;
+  options?: { name: string; type_name: string; help: string }[];
+  backends: Record<
+    string,
+    { state: string; message?: string; devices?: string[]; version?: string }
+  >;
+};
+export type SystemInfo = {
+  recipes: Record<string, RuntimeInfo>;
+  devices: Record<string, any>;
+};
+export const runtimeName = (id: string, info?: RuntimeInfo) =>
+  id === "llamacpp"
+    ? "llama.cpp"
+    : id === "vllm"
+      ? "vLLM"
+      : info?.display_name || id;
+export const acceleratorName = (name: string) =>
+  ({
+    cpu: "CPU",
+    vulkan: "GPU · Vulkan",
+    rocm: "GPU · ROCm",
+    cuda: "GPU · CUDA",
+    metal: "GPU · Metal",
+    npu: "NPU",
+    system: "System runtime",
+  })[name] || name;
+export function useSystemInfo() {
+  const [info, setInfo] = useState<SystemInfo>();
+  const [error, setError] = useState("");
+  useEffect(() => {
+    const controller = new AbortController();
+    void api<SystemInfo>("system-info", undefined, controller.signal)
+      .then(setInfo)
+      .catch((e) => {
+        if (!controller.signal.aborted) setError(e.message);
+      });
+    return () => controller.abort();
+  }, []);
+  return { info, error };
+}
+export function ExecutionTarget({
+  model,
+  effective,
+  draft,
+  update,
+  disabled,
+}: {
+  model: Model;
+  effective: Options;
+  draft: Options;
+  update: (key: string, value: any) => void;
+  disabled?: boolean;
+}) {
+  const { info, error } = useSystemInfo();
+  const recipe = info?.recipes[model.recipe];
+  const backendKey = Object.keys(effective).find((k) => k.endsWith("_backend"));
+  const backend = String(
+    backendKey
+      ? (draft[backendKey] ??
+          effective[backendKey] ??
+          recipe?.default_backend ??
+          "")
+      : recipe?.default_backend || Object.keys(recipe?.backends || {})[0] || "",
+  );
+  const supported = recipe?.backends[backend];
+  const device = Object.prototype.hasOwnProperty.call(draft, "llamacpp_device")
+    ? String(draft.llamacpp_device || "")
+    : String(effective.llamacpp_device || "");
+  const [devices, setDevices] = useState<{ id: string; name: string }[]>([]);
+  const [deviceError, setDeviceError] = useState("");
+  useEffect(() => {
+    setDevices([]);
+    setDeviceError("");
+    if (
+      model.recipe !== "llamacpp" ||
+      backend === "cpu" ||
+      supported?.state !== "installed"
+    )
+      return;
+    const controller = new AbortController();
+    void api(
+      `juiced/devices?recipe=${encodeURIComponent(model.recipe)}&backend=${encodeURIComponent(backend)}`,
+      undefined,
+      controller.signal,
+    )
+      .then((result) => setDevices(result.devices || []))
+      .catch((e) => {
+        if (!controller.signal.aborted) setDeviceError(e.message);
+      });
+    return () => controller.abort();
+  }, [model.recipe, backend, supported?.state]);
+  const deviceNames = (supported?.devices || []).flatMap((id) => {
+    const d = info?.devices[id];
+    return (Array.isArray(d) ? d : [d])
+      .filter((d) => d?.available)
+      .map((d) => d.name);
+  });
+  const alternatives = Object.entries(info?.recipes || {}).filter(
+    ([id, r]) => id !== model.recipe && r.modality === recipe?.modality,
+  );
+  function choose(value: string) {
+    if (!backendKey) return;
+    update(backendKey, value);
+    if (model.recipe === "llamacpp") {
+      update("llamacpp_device", null);
+      update(
+        "llamacpp_args",
+        setArg(
+          String(draft.llamacpp_args ?? effective.llamacpp_args ?? ""),
+          runtimeFields.find((f) => f.key === "gpu")!,
+          value === "cpu" ? "0" : "999",
+        ),
+      );
+    }
+  }
+  return (
+    <fieldset className="settings-section execution-target" disabled={disabled}>
+      <legend>Runtime & hardware</legend>
+      <p>
+        Runtime compatibility belongs to the model registration. Choose an
+        installed execution backend for that runtime, then reload to apply it.
+      </p>
+      {error && (
+        <p className="inline-error" role="alert">
+          Hardware inventory unavailable: {error}. No new hardware choices are
+          assumed.
+        </p>
+      )}
+      <div className="settings-grid">
+        <label>
+          Model runtime
+          <select
+            aria-label="Model runtime"
+            value={model.recipe}
+            onChange={() => {}}
+          >
+            <option value={model.recipe}>
+              {runtimeName(model.recipe, recipe)}
+            </option>
+            {alternatives.map(([id, r]) => (
+              <option key={id} value={id} disabled>
+                {runtimeName(id, r)} · requires a compatible registration
+              </option>
+            ))}
+          </select>
+          <small>
+            Registered for {runtimeName(model.recipe, recipe)}. Weights are not
+            automatically converted for another runtime.
+          </small>
+        </label>
+        <label>
+          Run on
+          <select
+            aria-label="Run on"
+            value={backend}
+            disabled={!recipe || !backendKey}
+            onChange={(e) => choose(e.target.value)}
+          >
+            {!recipe ? (
+              <option value={backend}>
+                {backend || "Reading runtime inventory…"}
+              </option>
+            ) : (
+              Object.entries(recipe.backends).map(([id, b]) => (
+                <option value={id} key={id} disabled={b.state !== "installed"}>
+                  {acceleratorName(id)}
+                  {b.state === "installed"
+                    ? ""
+                    : ` · ${b.state === "installable" ? "not installed" : "unavailable"}`}
+                </option>
+              ))
+            )}
+            {recipe && !recipe.backends.npu && (
+              <option value="unavailable-npu" disabled>
+                NPU · no compatible runtime path
+              </option>
+            )}
+            <option value="unavailable-hybrid" disabled>
+              Hybrid NPU + GPU · not implemented by this runtime
+            </option>
+          </select>
+          <small>
+            {deviceNames.join(", ") ||
+              supported?.message ||
+              (!recipe
+                ? "Reading the server's detected hardware…"
+                : "No selectable acceleration variant for this registration.")}
+          </small>
+        </label>
+      </div>
+      {model.recipe === "llamacpp" && backend !== "cpu" && (
+        <label className="execution-device">
+          Accelerator device
+          <select
+            aria-label="Accelerator device"
+            value={device}
+            onChange={(e) => update("llamacpp_device", e.target.value || null)}
+          >
+            <option value="">Automatic GPU selection</option>
+            {devices.map((d) => (
+              <option key={d.id} value={d.id}>
+                {d.id} · {d.name}
+              </option>
+            ))}
+            {device && !devices.some((d) => d.id === device) && (
+              <option value={device}>
+                {device} · current explicit selection
+              </option>
+            )}
+          </select>
+          <small>
+            {deviceError ||
+              "Device IDs are reported by the selected runtime. Existing selections are preserved until changed."}
+          </small>
+        </label>
+      )}
+      {info?.devices.amd_npu?.available &&
+        !supported?.devices?.includes("amd_npu") && (
+          <p className="page-note">
+            The server detects an NPU. This model registration has no installed
+            NPU execution path. Hybrid execution needs a runtime that explicitly
+            supports both devices.
+          </p>
+        )}
+      <details>
+        <summary>Why are other execution paths unavailable?</summary>
+        <ul className="execution-reasons">
+          {Object.entries(recipe?.backends || {})
+            .filter(([, b]) => b.state !== "installed")
+            .map(([id, b]) => (
+              <li key={id}>
+                <strong>{acceleratorName(id)}</strong>
+                <span>
+                  {b.message ||
+                    (b.state === "installable"
+                      ? "Supported by this host, but the runtime package is not installed."
+                      : "Not supported in this runtime environment.")}
+                </span>
+              </li>
+            ))}
+          {alternatives.map(([id, r]) => (
+            <li key={id}>
+              <strong>{runtimeName(id, r)}</strong>
+              <span>
+                {Object.values(r.backends).some((b) => b.state === "installed")
+                  ? "Installed for other registrations."
+                  : Object.values(r.backends).some(
+                        (b) => b.state === "installable",
+                      )
+                    ? "Runtime package is not installed."
+                    : "Unavailable in the current runtime environment."}{" "}
+                This model has no compatible registration for this runtime.
+              </span>
+            </li>
+          ))}
+          <li>
+            <strong>Hybrid NPU + GPU</strong>
+            <span>
+              The current model runtime does not implement this execution path.
+              Selecting two devices cannot enable it.
+            </span>
+          </li>
+        </ul>
+      </details>
+    </fieldset>
+  );
+}

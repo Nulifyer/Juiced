@@ -15,6 +15,48 @@ export function quantization(name: string) {
     )?.[1]
     ?.toUpperCase();
 }
+export function modelQuant(model: {
+  id: string;
+  checkpoints?: Record<string, string>;
+  checkpoint?: string;
+}) {
+  const source = model.checkpoints?.main || model.checkpoint || "";
+  const selector = source.slice(source.lastIndexOf(":") + 1);
+  return quantization(selector) || quantization(model.id) || "";
+}
+export function variantName(base: string, quant: string) {
+  const current = quantization(base);
+  return current === quant.toUpperCase()
+    ? base
+    : `${current ? base.slice(0, -current.length).replace(/[-.]$/, "") : base}-${quant}`;
+}
+export function existingVariant<
+  T extends {
+    recipe: string;
+    checkpoints?: Record<string, string>;
+    checkpoint?: string;
+  },
+>(
+  models: T[],
+  repo: string,
+  variant: { name: string; files?: string[]; primary_file?: string },
+  recipe: string,
+  projector: string,
+) {
+  const matches = new Set([
+    `${repo}:${variant.name}`,
+    ...[...(variant.files || []), variant.primary_file]
+      .filter(Boolean)
+      .map((file) => `${repo}:${file}`),
+  ]);
+  return models.find(
+    (model) =>
+      model.recipe === recipe &&
+      matches.has(model.checkpoints?.main || model.checkpoint || "") &&
+      (model.checkpoints?.mmproj || "") ===
+        (projector ? `${repo}:${projector}` : ""),
+  );
+}
 export function groupRepositories(repositories: Repository[]) {
   const groups = new Map<
     string,

@@ -33,6 +33,8 @@ explicitly provisioned runtime variant and are outside this default native image
 | Models | Runtime dashboard with readiness counters, service cards and an expandable unloaded inventory. Try opens a temporary service test. |
 | Loading policy | Set residency in three drag-and-drop lanes: Hot, On demand and Disabled. Menus and bulk actions offer the same commands. |
 | Library | Search Hugging Face and review files; inspect downloaded weights in a table; follow transfers; upload or register a GGUF in a dedicated import form. |
+| Model settings | Model-specific workspace with Settings, Weights & variants and Manage tabs. Common load/sampling controls, execution backend/device choices, staged setting copy between quants and explicit save/reload actions. |
+| Backends & hardware | Detected CPU/GPU/NPU and native runtime installation/support inventory. Availability is separate from compatibility with a particular model registration. |
 | Service APIs | Copy client endpoints and inspect enabled-service counts and session-cache requirements. |
 | Logs | Live raw output and client-parsed fields, search, severity/component filters, pause/follow, filtered export and tab-local clear. |
 | Cache | Inspect consumer-session computation snapshots separately from retention, mode and disk-budget settings. Unsaved settings survive background refreshes. |
@@ -43,6 +45,43 @@ navigation for Library, cache information for storage, and task navigation
 for temporary tests. Wide workspaces collapse into a single column on narrow screens.
 
 ## Serving behavior
+
+Hugging Face downloads identify each quant independently. The suggested name
+includes the actual quant; existing checkpoint/projector/backend combinations
+open their registration instead of colliding with another quant's base name.
+Existing public model IDs are preserved. New variants still default Disabled.
+
+Model settings reads the native per-model options API, shows common llama.cpp
+context, slot, batch, thread, offload/cache and sampling controls, and preserves
+advanced backend arguments. Copy settings stages a draft from another installed
+quant using the same source/runtime. Saving sends only changed option keys and
+does not write the policy-owned pin state. The UI detects stale edits before
+saving, retains drafts during background refresh, and confirms discarding edits.
+
+Save for next load leaves the current process running. Save and reload uses the
+native operation queue without changing Hot/On-demand policy. A busy reload is
+refused; new JSON inference requests receive retryable503 while an operation is pending.
+Pending settings and operation failures remain visible in the model workspace.
+Reload changes only that model; cache profiles continue to include exact model,
+runtime and settings identity. Quants do not share incompatible snapshots.
+
+Execution choices come from native system-info recipe/backend/hardware status.
+Installed variants are selectable; missing/unsupported variants show reasons.
+Accelerator device IDs come from the installed llama.cpp binary's bounded
+`--list-devices` query through `GET /v1/juiced/devices`. This is an administrative
+route when separate API/admin keys are configured.
+The endpoint is registered under all four standard prefixes. It does not load
+weights or install a runtime. CPU selection clears the GPU device override and
+sets zero GPU layers. GPU selection enables offload and uses automatic device
+selection unless the user picks an enumerated device.
+
+A model registration retains its runtime recipe. Other runtimes require compatible
+registrations; selecting a different engine never converts weights or asserts
+architecture support. The inventory screen is read-only. No vLLM installation,
+new NPU runtime, or hybrid execution engine is introduced by these controls.
+The current llama.cpp deployment has no NPU/hybrid path; these choices remain
+unavailable with an explanation instead of pretending that hardware detection
+alone makes them usable.
 
 Models shows actual Loaded/Unloaded state and operation status. Loading policy
 separates Hot/On demand/Disabled intent. Native C++ reconciliation recovers hot
