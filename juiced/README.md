@@ -134,3 +134,63 @@ The bottom metrics strip reads native `/system-stats` and `/stats` every two sec
 Model details and row menus offer removal. `GET /v1/juiced/removal?model=...` previews the current file-ownership plan. `POST /v1/juiced/removal` requires that exact preview and confirmation of the model name. Disable/unload the model and finish active downloads first. Managed downloads use the existing model manager's shared-variant cleanup. An unshared uploaded GGUF is deleted from Juiced storage. External/shared local files and retained unsupported artifacts are unregistered without deleting source files. Caches remain separately managed. Built-in catalog definitions can be downloaded again.
 
 Removal routes use all four native version prefixes. The older delete route also requires a Disabled, unloaded model. Release gates cover disposable uploaded/external/shared-cache fixtures, wrong/stale confirmations, Hot protection, and the upstream shared-repository deletion contract.
+
+## Direct client protocols
+
+All interfaces use the same model registry, loading policy and backend workers.
+`GET /v1/juiced/protocols` reports implemented subsets and listener process state;
+the Service APIs screen shows their addresses and exclusions. Registration of a
+route does not establish conformance for every model or client feature.
+
+| Client protocol | Address | Implemented subset |
+| --- | --- | --- |
+| OpenAI | HTTP base plus `/v1` | Models, Chat Completions, Responses, embeddings, image generation, transcription and speech. Actual model/backend support applies. |
+| Ollama | HTTP origin | Chat/generate, tags/show/ps, embeddings. Discovery contains enabled downloaded chat and embedding models. |
+| Anthropic | HTTP origin | Messages and streaming tool use; token counting delegates to the selected supported backend. Native llama.cpp b12032 counts without generation. SDK model discovery uses its expected list envelope. Unknown release timestamps are omitted. |
+| AUTOMATIC1111 / sd.cpp clients | HTTP origin | `/sdapi/v1/sd-models`, options, txt2img, sampler/scheduler discovery and progress. Native sd-cpp handles image controls and image bytes. |
+| Wyoming | Private TCP port10300 | Optional English transcription and Kokoro speech through the same HTTP/model workers. |
+
+Ollama clients cannot download/delete weights through these compatibility routes.
+Use Juiced management, which applies ownership and Hot-model protections.
+`keep_alive:0` cannot unload Hot models. Disabled models are excluded from
+discovery and reject serving. OpenAI discovery also supports
+`?service=chat|transcribe|speak|images|embeddings`; the native catalog remains complete.
+API-key authentication covers `/sdapi/*`; Anthropic clients can use `x-api-key`
+for Messages and model discovery. Administration continues to require the
+configured admin credential.
+
+For SD API generation, specify `model`, use `override_settings.sd_model_checkpoint`,
+or select the global default with `POST /sdapi/v1/options`. Multiple enabled
+image models require an explicit choice. Requests capture that model independently
+of later changes to the default. Juiced does not expose arbitrary scripts,
+file-based LoRAs, server-side image saving, hires processing or global interrupt.
+Unsupported fields return an error. It does not claim full WebUI or ComfyUI support.
+Sampler/scheduler discovery requires the selected model to be loaded; querying
+progress does not load it. Disabled choices never enable themselves.
+
+Enable the packaged speech listener with `JUICED_WYOMING_ENABLED=true` and optionally
+`JUICED_WYOMING_URI=tcp://0.0.0.0:10300`. The container must join the consumer's
+private network; publishing a host port is not required for HA on that network.
+Wyoming has no protocol authentication and must not be exposed publicly.
+The pinned upstream `wyoming_openai`0.8.0 implementation runs as a supervised
+child of lemond. A model-policy change refreshes its speech catalog by restarting
+the listener. Keep Kokoro Hot for voice discovery at startup. English Kokoro voices
+are read from the live backend; no separate model/voice configuration is required.
+Normal speech content is excluded from its default WARNING-level logging.
+
+The runtime contains a Python interpreter and a pinned speech environment, but
+no pip, setuptools, compiler or build toolchain. Installation happens in the voice
+builder stage. The default listener is disabled, so existing speech adapters can
+remain in service until an isolated client test and deliberate network cutover.
+
+Persistent session snapshots remain qualified only for Chat Completions. Other
+chat protocols require Memory mode for a qualified model; per-model overrides
+let a utility model coexist with persistent coding-model snapshots. Responses
+and media features still depend on backend support. Provider-hosted tools and
+conversation storage are outside this compatibility contract.
+
+`juiced/tests/test_clients.py` uses pinned OpenAI, Anthropic and Ollama SDKs against
+a real enabled model. It checks discovery, JSON/streaming chat, token counting
+and Responses. `--tools` adds real tool-result round trips and needs a capable
+model. CI uses Stories15M only for protocol/engine behavior, not quality or tool
+ability. Production-model and unchanged consumer acceptance are separate checks.

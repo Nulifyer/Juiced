@@ -1,10 +1,12 @@
 #pragma once
+#include "lemon/server_process.h"
 #include <atomic>
 #include <condition_variable>
 #include <deque>
 #include <filesystem>
 #include <httplib.h>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <nlohmann/json.hpp>
 #include <set>
@@ -34,6 +36,10 @@ private:
   std::deque<json> pending_;
   std::atomic<bool> stopping_{false};
   std::thread worker_;
+  std::unique_ptr<NativeProcess> voice_process_;
+  std::string voice_signature_;
+  long long voice_retry_after_ = 0;
+  json voice_status_ = {{"enabled", false}, {"process_running", false}};
   std::map<std::string, std::set<int>> active_slots_;
   std::set<std::string> active_snapshots_;
   std::filesystem::path snapshot_directory_;
@@ -44,6 +50,12 @@ private:
   void prune_cache_locked();
   void persist_locked();
   void reconcile();
+  void reconcile_voice();
+  void compatibility_routes(httplib::Server &http);
+  void image_compatibility(const httplib::Request &, httplib::Response &,
+                           const std::string &operation);
+  json protocols();
+  std::string image_model(const std::string &requested);
   void refresh();
   void execute(const json &command);
   void enqueue(const json &command);

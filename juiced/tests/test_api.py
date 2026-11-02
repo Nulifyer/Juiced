@@ -28,9 +28,9 @@ class ApiContract(unittest.TestCase):
   except subprocess.TimeoutExpired:cls.process.kill();cls.process.wait()
   cls.log.close();cls.temp.cleanup()
  @classmethod
- def request(cls,path,body=None,raw=False):
+ def request(cls,path,body=None,raw=False,headers=None,method=None):
   data=body if raw else None if body is None else json.dumps(body).encode()
-  q=urllib.request.Request(f'http://127.0.0.1:{cls.port}'+(path if path.startswith('/') else '/v1/'+path),data=data,headers={'Content-Type':'application/octet-stream' if raw else 'application/json'})
+  q=urllib.request.Request(f'http://127.0.0.1:{cls.port}'+(path if path.startswith('/') else '/v1/'+path),data=data,headers={'Content-Type':'application/octet-stream' if raw else 'application/json',**(headers or {})},method=method)
   try:
    with urllib.request.urlopen(q,timeout=15) as r:return r.status,json.load(r)
   except urllib.error.HTTPError as r:
@@ -69,9 +69,70 @@ class ApiContract(unittest.TestCase):
   _,j=self.request('models');self.assertNotIn(model,[m['id'] for m in j['data']])
   _,tags=self.request('/api/tags');self.assertFalse(any(model in m['name'] for m in tags['models']))
   self.request('juiced/policy',{'model':model,'policy':'on-demand'})
-  _,tags=self.request('/api/tags');self.assertTrue(any(model in m['name'] for m in tags['models']))
+  _,tags=self.request('/api/tags');self.assertFalse(any(model in m['name'] for m in tags['models']))
   _,j=self.request('models');self.assertIn(model,[m['id'] for m in j['data']])
   self.request('juiced/policy',{'model':model,'policy':'disabled'})
+ def test_protocol_authentication(self):
+  with tempfile.TemporaryDirectory(prefix='juiced-auth-') as tmp:
+   root=pathlib.Path(tmp);(root/'config').mkdir();(root/'cache').mkdir();(root/'run').mkdir()
+   with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
+   (root/'config/config.json').write_text(json.dumps({'port':port,'broadcast':False,'auto_check_model_updates':False}))
+   with open(root/'server.log','w') as log:
+    process=subprocess.Popen([BINARY,str(root/'cache'),str(root/'config'),'--host','127.0.0.1','--port',str(port)],stdout=log,stderr=log,env={**os.environ,'HOME':str(root),'XDG_RUNTIME_DIR':str(root/'run'),'LEMONADE_API_KEY':'fixture-regular','LEMONADE_ADMIN_API_KEY':'fixture-admin'})
+    def request(path,headers=None,body=None):
+     q=urllib.request.Request(f'http://127.0.0.1:{port}'+path,headers=headers or {},data=None if body is None else json.dumps(body).encode())
+     try:
+      with urllib.request.urlopen(q,timeout=10) as response:return response.status
+     except urllib.error.HTTPError as response:return response.code
+    try:
+     for _ in range(100):
+      try:
+       if request('/v1/models')==401:break
+      except OSError:pass
+      time.sleep(.1)
+     else:self.fail('Authenticated fixture did not start')
+     for path in ['/v1/juiced/protocols','/sdapi/v1/sd-models','/api/tags']:
+      self.assertEqual(request(path),401,path)
+      self.assertEqual(request(path,{'Authorization':'Bearer wrong'}),401,path)
+      self.assertEqual(request(path,{'Authorization':'Bearer fixture-regular'}),200,path)
+     self.assertEqual(request('/v1/models',{'x-api-key':'fixture-regular','anthropic-version':'2023-06-01'}),200)
+     self.assertEqual(request('/v1/messages/count_tokens',{'x-api-key':'fixture-regular'},{}),400)
+     self.assertEqual(request('/v1/messages/count_tokens',{'x-api-key':'wrong'},{}),401)
+    finally:
+     process.terminate()
+     try:process.wait(timeout=20)
+     except subprocess.TimeoutExpired:process.kill();process.wait()
+ def test_protocol_manifest(self):
+  for prefix in ['/api/v0/','/api/v1/','/v0/','/v1/']:
+   status,data=self.request(prefix+'juiced/protocols');self.assertEqual(status,200)
+   protocols={p['id']:p for p in data['protocols']};self.assertEqual(set(protocols),{'openai','ollama','anthropic','automatic1111','wyoming'})
+   self.assertFalse(protocols['wyoming']['listener']['enabled'])
+ def test_sdapi_policy_and_validation(self):
+  status,data=self.request('/sdapi/v1/sd-models');self.assertEqual(status,200);self.assertEqual(data,[])
+  for endpoint in ['txt2img','options']:
+   status,_=self.request('/sdapi/v1/'+endpoint,{'model':'kokoro-v1','prompt':'A lighthouse'});self.assertIn(status,[400,409])
+  status,_=self.request('/sdapi/v1/txt2img',[]);self.assertEqual(status,409)
+  for endpoint in ['interrupt','img2img']:
+   status,_=self.request('/sdapi/v1/'+endpoint,{});self.assertEqual(status,501)
+ def test_ollama_lifecycle_cannot_bypass_manager(self):
+  status,_=self.request('/api/delete',{'model':'ZZExternalFile'},method='DELETE');self.assertEqual(status,501);self.assertTrue(self.external.exists())
+  status,_=self.request('/api/pull',{'model':'Fixture/ShouldNotDownload'});self.assertEqual(status,501)
+  status,_=self.request('/api/show',{'model':'kokoro-v1'});self.assertEqual(status,404)
+  self.request('juiced/policy',{'model':self.model,'policy':'hot'})
+  for endpoint in ['chat','generate']:
+   status,_=self.request('/api/'+endpoint,{'model':self.model,'keep_alive':0});self.assertEqual(status,409)
+  self.request('juiced/policy',{'model':self.model,'policy':'disabled'})
+ def test_anthropic_count_policy(self):
+  status,_=self.request('/v1/messages/count_tokens',{});self.assertEqual(status,400)
+  self.request('juiced/policy',{'model':self.model,'policy':'disabled'})
+  status,_=self.request('/v1/messages/count_tokens',{'model':self.model,'messages':[]});self.assertEqual(status,409)
+ def test_model_projections(self):
+  status,data=self.request('models',headers={'anthropic-version':'2023-06-01'});self.assertEqual(status,200);self.assertFalse(data['has_more'])
+  self.assertTrue(all(x['type']=='model' and x['display_name']==x['id'] for x in data['data']))
+  self.request('juiced/policy',{'model':'ZZRemovalExternal','policy':'on-demand'})
+  _,data=self.request('models?service=transcribe');self.assertIn('ZZRemovalExternal',[m['id'] for m in data['data']])
+  _,data=self.request('models?service=chat');self.assertNotIn('ZZRemovalExternal',[m['id'] for m in data['data']])
+  self.request('juiced/policy',{'model':'ZZRemovalExternal','policy':'disabled'})
  def test_cache_snapshot_validation(self):
   for prefix in ['/api/v0/','/api/v1/','/v0/','/v1/']:
    status,_=self.request(prefix+'juiced/cache/retain',{'snapshot':'missing','retained':True});self.assertEqual(status,404)

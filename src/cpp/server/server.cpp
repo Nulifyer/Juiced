@@ -1055,15 +1055,17 @@ httplib::Server::HandlerResponse Server::authenticate_request(const httplib::Req
 
     // Check if path requires authentication (API routes and internal endpoints).
     // /mcp is included here so that LEMONADE_API_KEY enforcement covers the MCP
-    // gateway (Critical Invariant #10). It is the only API route outside the
-    // /api/, /v0/, /v1/ prefixes — see register_routes() in McpServer for why.
+    // gateway (Critical Invariant #10). MCP and SD API use their fixed protocol
+    // paths outside the versioned OpenAI prefixes.
     bool is_api_route = (req.path.rfind("/api/", 0) == 0) ||
                         (req.path.rfind("/v0/", 0) == 0) ||
                         (req.path.rfind("/v1/", 0) == 0) ||
-                        (req.path == "/mcp");
+                        (req.path == "/mcp") ||
+                        (req.path.rfind("/sdapi/", 0) == 0);
     bool is_internal_route = (req.path.rfind("/internal/", 0) == 0) ||
         (req.path.find("/juiced/") != std::string::npos &&
          req.path.find("/juiced/catalog") == std::string::npos &&
+         req.path.find("/juiced/protocols") == std::string::npos &&
          req.path.find("/juiced/state") == std::string::npos);
     bool is_metrics_route = (req.path == "/metrics");
 
@@ -1089,6 +1091,9 @@ httplib::Server::HandlerResponse Server::authenticate_request(const httplib::Req
                 auth_token = httplib::get_bearer_token_auth(req);
             }
             // Silently ignore malformed/short Authorization headers
+        } else if (req.has_header("x-api-key") &&
+                   (req.path.rfind("/v1/messages", 0) == 0 || req.path.rfind("/v1/models", 0) == 0)) {
+            auth_token = req.get_header_value("x-api-key");
         }
     } catch (const std::exception& e) {
         LOG(DEBUG, "Server") << "Failed to parse Authorization header: " << e.what() << std::endl;
@@ -2980,6 +2985,12 @@ void Server::handle_models(const httplib::Request& req, httplib::Response& res) 
 
     // Check if we should show all models (for CLI list command) or only downloaded (OpenAI API behavior)
     bool show_all = req.has_param("show_all") && req.get_param_value("show_all") == "true";
+    const std::map<std::string, ModelType> service_types = {{"chat", ModelType::LLM}, {"transcribe", ModelType::TRANSCRIPTION}, {"speak", ModelType::TTS}, {"images", ModelType::IMAGE}, {"embeddings", ModelType::EMBEDDING}};
+    if (req.has_param("service") && !service_types.count(req.get_param_value("service"))) {
+        res.status = 400;
+        res.set_content(R"({"error":{"message":"Unknown model service filter","type":"invalid_request_error"}})", "application/json");
+        return;
+    }
 
     // OPTIMIZATION: For OpenAI API mode, use get_downloaded_models() which filters first
     // Only use get_supported_models() when we need to show ALL models
@@ -2996,10 +3007,15 @@ void Server::handle_models(const httplib::Request& req, httplib::Response& res) 
 
     for (const auto& [model_id, model_info] : models) {
         if (!show_all && juiced_ && !juiced_->allows(model_id)) continue;
+        if (req.has_header("anthropic-version") && model_info.type != ModelType::LLM) continue;
+        if (req.has_param("service")) {
+            const auto service = req.get_param_value("service");
+            if (model_info.type != service_types.at(service)) continue;
+        }
         response["data"].push_back(model_info_to_json(model_id, model_info));
     }
 
-    if (alias_manager_) {
+    if (alias_manager_ && !req.has_param("service") && !req.has_header("anthropic-version")) {
         auto all_aliases = alias_manager_->get_all_aliases();
         for (const auto& [alias_id, target_name] : all_aliases) {
             if (models.count(alias_id) > 0) {
@@ -3019,6 +3035,12 @@ void Server::handle_models(const httplib::Request& req, httplib::Response& res) 
         }
     }
 
+    if (req.has_header("anthropic-version")) {
+        json data = json::array();
+        for (const auto &model : response["data"])
+            data.push_back({{"id", model["id"]}, {"type", "model"}, {"display_name", model["id"]}});
+        response = {{"data", data}, {"has_more", false}, {"first_id", data.empty() ? json(nullptr) : data.front()["id"]}, {"last_id", data.empty() ? json(nullptr) : data.back()["id"]}};
+    }
     res.set_content(response.dump(), "application/json");
 }
 
@@ -3418,6 +3440,20 @@ nlohmann::json Server::model_info_to_json(const std::string& model_id, const Mod
 
 void Server::handle_model_by_id(const httplib::Request& req, httplib::Response& res) {
     std::string model_id = utils::normalize_model_name(req.matches[1]);
+
+    if (req.has_header("anthropic-version")) {
+        if (model_manager_->model_exists(model_id) && (!juiced_ || juiced_->allows(model_id))) {
+            const auto info = model_manager_->get_model_info(model_id);
+            if (info.type == ModelType::LLM && info.downloaded) {
+                const auto name = model_manager_->get_public_model_name(model_manager_->resolve_model_name(model_id));
+                res.set_content(json{{"id", name}, {"type", "model"}, {"display_name", name}}.dump(), "application/json");
+                return;
+            }
+        }
+        res.status = 404;
+        res.set_content(R"({"type":"error","error":{"type":"not_found_error","message":"Enabled chat model not found"}})", "application/json");
+        return;
+    }
 
     if (model_manager_->model_exists(model_id)) {
         auto info = model_manager_->get_model_info(model_id);

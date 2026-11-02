@@ -179,11 +179,21 @@ void OllamaApi::register_routes(httplib::Server& server) {
 
     // Delete model
     server.Delete("/api/delete", [self](const httplib::Request& req, httplib::Response& res) {
+        if (self->visible_) {
+            res.status = 501;
+            res.set_content(R"({"error":"Use Juiced model management to remove weights"})", "application/json");
+            return;
+        }
         self->handle_delete(req, res);
     });
 
     // Pull (download) model
     server.Post("/api/pull", [self](const httplib::Request& req, httplib::Response& res) {
+        if (self->visible_) {
+            res.status = 501;
+            res.set_content(R"({"error":"Use Juiced model management to download weights"})", "application/json");
+            return;
+        }
         self->handle_pull(req, res);
     });
 
@@ -1103,7 +1113,7 @@ void OllamaApi::handle_tags(const httplib::Request& req, httplib::Response& res)
         response["models"] = json::array();
 
         for (const auto& [id, info] : models) {
-            if (!visible_ || visible_(id))
+            if ((!visible_ || visible_(id)) && (info.type == ModelType::LLM || info.type == ModelType::EMBEDDING))
                 response["models"].push_back(build_ollama_model_entry(id, info));
         }
 
@@ -1133,7 +1143,7 @@ void OllamaApi::handle_show(const httplib::Request& req, httplib::Response& res)
             return;
         }
 
-        if (!model_manager_->model_exists(name)) {
+        if (!model_manager_->model_exists(name) || (visible_ && !visible_(name))) {
             res.status = 404;
             json error = {{"error", "model '" + name + "' not found"}};
             res.set_content(error.dump(), "application/json");

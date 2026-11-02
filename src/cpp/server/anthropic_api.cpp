@@ -404,6 +404,41 @@ void OllamaApi::register_anthropic_routes(httplib::Server& server, const std::sh
     server.Post("/v1/messages", [self](const httplib::Request& req, httplib::Response& res) {
         self->handle_anthropic_messages(req, res);
     });
+    server.Post("/v1/messages/count_tokens", [self](const auto& req, auto& res) {
+        self->handle_anthropic_count_tokens(req, res);
+    });
+}
+
+void OllamaApi::handle_anthropic_count_tokens(const httplib::Request& req, httplib::Response& res) {
+    try {
+        auto body = json::parse(req.body);
+        const auto model = normalize_model_name(body.value("model", ""));
+        if (model.empty() || !body.contains("messages") || !body["messages"].is_array()) {
+            res.status = 400;
+            res.set_content(R"({"type":"error","error":{"type":"invalid_request_error","message":"model and messages are required"}})", "application/json");
+            return;
+        }
+        if (visible_ && !visible_(model)) {
+            res.status = 409;
+            res.set_content(R"({"type":"error","error":{"type":"invalid_request_error","message":"Model is disabled by its loading policy"}})", "application/json");
+            return;
+        }
+        body["model"] = model;
+        auto_load_model(model);
+        auto result = router_->count_anthropic_tokens(body);
+        if (!result.contains("input_tokens") || !result["input_tokens"].is_number_unsigned()) {
+            res.status = result.contains("error") ? 501 : 502;
+            result = {{"type", "error"}, {"error", {{"type", "api_error"},
+                {"message", "The selected backend cannot count this Messages request"}}}};
+        }
+        res.set_content(result.dump(), "application/json");
+    } catch (const json::exception&) {
+        res.status = 400;
+        res.set_content(R"({"type":"error","error":{"type":"invalid_request_error","message":"Invalid Messages token-count request"}})", "application/json");
+    } catch (const std::exception& e) {
+        res.status = 400;
+        res.set_content(json{{"type", "error"}, {"error", {{"type", "invalid_request_error"}, {"message", e.what()}}}}.dump(), "application/json");
+    }
 }
 
 json OllamaApi::convert_anthropic_to_openai_chat(const json& anthropic_request, std::vector<std::string>& warnings) {

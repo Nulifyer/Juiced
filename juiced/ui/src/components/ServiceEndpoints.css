@@ -7,6 +7,36 @@
   border-radius: 8px;
   margin: 30px 0;
 }
+.endpoint-intro {
+  color: var(--muted-foreground);
+  font-size: 12px;
+  margin: 8px 0 14px;
+}
+.protocol-list { margin-bottom: 28px; border-top: 1px solid var(--border); }
+.protocol-entry { border-bottom: 1px solid var(--border); }
+.protocol-entry summary {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) minmax(180px, 2fr) auto;
+  align-items: center;
+  gap: 14px;
+  padding: 15px 4px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.protocol-entry summary:hover { background: var(--card); }
+.protocol-entry summary:focus-visible { outline: 2px solid var(--ring); }
+.protocol-entry summary code { font-size: 11px; overflow-wrap: anywhere; }
+.protocol-status { color: var(--muted-foreground); font-size: 11px; }
+.protocol-label { display: flex; align-items: center; gap: 7px; }
+.protocol-entry[open] .protocol-label svg { transform: rotate(90deg); }
+.protocol-body { padding: 0 4px 18px; max-width: 850px; }
+.protocol-features { display: flex; flex-wrap: wrap; gap: 6px; }
+.protocol-features code { font-size: 11px; padding: 4px 7px; background: var(--card); border-radius: 4px; }
+.protocol-body ul, .protocol-body p { font-size: 12px; line-height: 1.7; color: var(--muted-foreground); }
+@media (max-width: 800px) {
+  .protocol-entry summary { grid-template-columns: minmax(0, 1fr) auto; gap: 7px; }
+  .protocol-entry summary code { grid-row: 2; grid-column: 1 / -1; }
+}
 .endpoint-primary > div {
   flex: 1;
   min-width: 0;

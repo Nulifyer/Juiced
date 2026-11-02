@@ -492,6 +492,20 @@ json SDServer::responses(const json& /* request */) {
     );
 }
 
+json SDServer::image_sdapi(const json& request) {
+    json body = request;
+    body.erase("model");
+    for (const auto& key : {"width", "height", "steps", "cfg_scale", "seed", "clip_skip"}) {
+        if (!body.contains(key) && recipe_options_.has_option(key)) {
+            body[key] = recipe_options_.get_option(key);
+        }
+    }
+    if (!body.contains("sampler_name") && recipe_options_.has_option("sampling_method")) {
+        body["sampler_name"] = recipe_options_.get_option("sampling_method");
+    }
+    return forward_request("/sdapi/v1/txt2img", body, -1);
+}
+
 json SDServer::image_generations(const json& request) {
     // sd-server uses OpenAI-compatible format.
     //

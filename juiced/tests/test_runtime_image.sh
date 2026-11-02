@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-for tool in cc gcc g++ c++ make cmake ninja git node npm bun cargo rustc python python3; do
+for tool in cc gcc g++ c++ make cmake ninja git node npm bun cargo rustc pip pip3; do
     if command -v "$tool" >/dev/null 2>&1; then
         echo "Unexpected build tool in runtime image: $tool" >&2
         exit 1
@@ -32,4 +32,6 @@ test -f /opt/lemonade/resources/juiced/index.html
 test -x /opt/juiced/futo/futo-asr-server
 test -x /opt/juiced/parakeet/parakeet-server
 test -x /opt/juiced/llama/llama-server
+/opt/juiced/voice/bin/python3 -c 'import wyoming_openai, wyoming; import importlib.util; assert importlib.util.find_spec("pip") is None; assert importlib.util.find_spec("setuptools") is None'
+test -f /opt/juiced/voice/launcher.py
 echo 'PASS: runtime excludes build tools and resolves native binary dependencies'

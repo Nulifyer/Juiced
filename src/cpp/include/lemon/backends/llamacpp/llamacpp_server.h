@@ -47,6 +47,7 @@ public:
 
     // ITokenizerServer implementation
     json tokenize(const json& request) override;
+    json count_anthropic_tokens(const json& request) override;
 
 private:
     // llama-server echoes the local .gguf path it was launched with (`-m <path>`)

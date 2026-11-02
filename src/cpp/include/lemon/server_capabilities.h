@@ -90,6 +90,10 @@ public:
     virtual json image_generations(const json& request) = 0;
     virtual json image_edits(const json& request) = 0;
     virtual json image_variations(const json& request) = 0;
+    virtual json image_sdapi(const json&) {
+        return {{"error", {{"message", "This image backend does not support the SD API"},
+                            {"type", "unsupported_operation_error"}}}};
+    }
 };
 
 class IUpscaleServer : public virtual ICapability {
@@ -127,6 +131,10 @@ class ITokenizerServer : public virtual ICapability {
 public:
     virtual ~ITokenizerServer() = default;
     virtual json tokenize(const json& request_body) = 0;
+    virtual json count_anthropic_tokens(const json&) {
+        return {{"error", {{"message", "This backend does not support Messages token counting"},
+                            {"type", "unsupported_operation_error"}}}};
+    }
 };
 
 template<typename T>

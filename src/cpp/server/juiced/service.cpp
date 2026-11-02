@@ -117,6 +117,7 @@ void JuicedService::stop() {
   wake_.notify_all();
   if (worker_.joinable())
     worker_.join();
+  voice_process_.reset();
 }
 void JuicedService::persist_locked() {
   state_["revision"] = state_.value("revision", 0) + 1;
@@ -169,6 +170,13 @@ bool JuicedService::inference_guard(const httplib::Request &req,
               {{"message", "Model is disabled by its loading policy"},
                {"type", "invalid_request_error"}}}},
             409);
+      return true;
+    }
+    if ((req.path == "/api/chat" || req.path == "/api/generate") &&
+        body.contains("keep_alive") && body["keep_alive"] == 0 &&
+        body.value("messages", json::array()).empty() &&
+        body.value("prompt", "").empty() && hot(model)) {
+      reply(res, {{"error", "Hot models cannot be unloaded by client keep_alive hints"}}, 409);
       return true;
     }
   } catch (const std::exception &) {
@@ -372,6 +380,7 @@ void JuicedService::run() {
           persist_locked();
       }
       reconcile();
+      reconcile_voice();
     } catch (const std::exception &e) {
       std::lock_guard<std::mutex> lock(mutex_);
       state_["last_error"] = e.what();
@@ -382,6 +391,7 @@ void JuicedService::run() {
   }
 }
 void JuicedService::routes(httplib::Server &http) {
+  compatibility_routes(http);
   const std::string ui = utils::get_resource_path("resources/juiced");
   if (std::filesystem::is_regular_file(std::filesystem::path(ui) /
                                        "index.html")) {
@@ -422,6 +432,7 @@ void JuicedService::routes(httplib::Server &http) {
     reply(r, {{"name", "Juiced"},
               {"version", "0.1.0"},
               {"catalog", "/v1/juiced/catalog"},
+              {"protocols", "/v1/juiced/protocols"},
               {"inference", "/v1"},
               {"ui", "/"}});
   });

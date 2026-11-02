@@ -2326,6 +2326,28 @@ AudioFormatMetadata Router::audio_speech_format_metadata(
                       : AudioFormatMetadata{};
 }
 
+json Router::count_anthropic_tokens(const json& request) {
+    return execute_inference(request, [&](WrappedServer* server) {
+        auto tokenizer = dynamic_cast<ITokenizerServer*>(server);
+        if (!tokenizer) {
+            return ErrorResponse::from_exception(
+                UnsupportedOperationException("Messages token counting", server->get_model_name()));
+        }
+        return tokenizer->count_anthropic_tokens(request);
+    });
+}
+
+json Router::image_sdapi(const json& request) {
+    return execute_inference(request, [&](WrappedServer* server) {
+        auto image = dynamic_cast<IImageServer*>(server);
+        if (!image) {
+            return ErrorResponse::from_exception(
+                UnsupportedOperationException("SD API", server->get_model_name()));
+        }
+        return image->image_sdapi(request);
+    });
+}
+
 json Router::image_generations(const json& request) {
     return execute_inference(request, [&](WrappedServer* server) {
         auto image_server = dynamic_cast<IImageServer*>(server);

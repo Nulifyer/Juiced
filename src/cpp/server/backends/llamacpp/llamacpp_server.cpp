@@ -630,6 +630,10 @@ json LlamaCppServer::tokenize(const json& request_body) {
     return forward_request("/tokenize", request_body);
 }
 
+json LlamaCppServer::count_anthropic_tokens(const json& request) {
+    return forward_request("/v1/messages/count_tokens", request);
+}
+
 json LlamaCppServer::responses(const json& request) {
     return normalize_response_model(
         forward_request("/v1/responses",

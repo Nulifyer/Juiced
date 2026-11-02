@@ -1,6 +1,7 @@
-import { Copy, Server } from "lucide-react";
+import { ChevronRight, Copy, Server } from "lucide-react";
+import { useEffect, useState } from "react";
 import { Button } from "./t3/button";
-import type { Model } from "../api";
+import { api, type Model } from "../api";
 import "./ServiceEndpoints.css";
 export function ServiceEndpoints({
   models,
@@ -9,6 +10,23 @@ export function ServiceEndpoints({
   models: Model[];
   notify: (message: string) => void;
 }) {
+  const [protocols, setProtocols] = useState<{
+    id: string;
+    base_path?: string;
+    features: string[];
+    limits: string[];
+    listener?: { enabled: boolean; process_running: boolean; uri: string };
+  }[]>([]);
+  const [protocolError, setProtocolError] = useState("");
+  useEffect(() => {
+    const controller = new AbortController();
+    const refresh = () => void api("juiced/protocols", undefined, controller.signal)
+      .then((data) => { setProtocols(data.protocols); setProtocolError(""); })
+      .catch((error) => { if (!controller.signal.aborted) setProtocolError(error.message); });
+    refresh();
+    const timer = window.setInterval(refresh, 10000);
+    return () => { controller.abort(); window.clearInterval(timer); };
+  }, []);
   const origin = window.location.origin;
   const enabled = models.filter(
     (m) => m.policy !== "disabled" && m.available !== false,
@@ -48,6 +66,29 @@ export function ServiceEndpoints({
           </div>
         </div>
       </section>
+      <h2>Client protocols</h2>
+      <p className="endpoint-intro">Choose the provider your client already supports. All interfaces use the same model workers and loading policies.</p>
+      {protocolError && <p role="alert">Could not read protocol support: {protocolError}</p>}
+      {!protocols.length && !protocolError && <p className="endpoint-intro">Reading protocol support…</p>}
+      <div className="protocol-list">
+        {protocols.map((protocol) => {
+          const names: Record<string, string> = { openai: "OpenAI-compatible", ollama: "Ollama", anthropic: "Anthropic Messages", automatic1111: "AUTOMATIC1111 images", wyoming: "Wyoming speech" };
+          const address = protocol.id === "wyoming" ? "Juiced container · private TCP 10300" : origin + (protocol.base_path || "");
+          return <details className="protocol-entry" key={protocol.id}>
+            <summary>
+              <span className="protocol-label"><ChevronRight size={13} />{names[protocol.id] || protocol.id}</span>
+              <code>{address}</code>
+              <span className="protocol-status">{protocol.listener ? (protocol.listener.enabled ? (protocol.listener.process_running ? "Process running" : "Starting / waiting") : "Disabled") : "Supported subset"}</span>
+            </summary>
+            <div className="protocol-body">
+              <div className="protocol-features">{protocol.features.map((feature) => <code key={feature}>{feature}</code>)}</div>
+              <ul>{protocol.limits.map((limit) => <li key={limit}>{limit}</li>)}</ul>
+              {protocol.id !== "wyoming" && <Button variant="outline" size="compact" onClick={() => copy(address)}><Copy size={14} />Copy base URL</Button>}
+              {protocol.id === "wyoming" && <p>Home Assistant uses the Wyoming integration with the container's private network name and port 10300. No HTTP URL is needed. Process status does not prove a completed voice request.</p>}
+            </div>
+          </details>;
+        })}
+      </div>
       <h2>Model services</h2>
       <div className="endpoint-table">
         {[
@@ -119,15 +160,6 @@ export function ServiceEndpoints({
             reuse, send the full current history with a stable{" "}
             <code>X-Juiced-Session-Id</code> header. Juiced keeps computation,
             not chat messages. Temporary tests in this UI use memory reuse only.
-          </p>
-        </section>
-        <section>
-          <h2>Other client protocols</h2>
-          <p>
-            Ollama-compatible clients use <code>{origin}</code> with{" "}
-            <code>/api/tags</code> and <code>/api/chat</code>.
-            Anthropic-compatible clients use <code>{origin}/v1/messages</code>.
-            Model and backend support still applies.
           </p>
         </section>
       </div>

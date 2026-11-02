@@ -239,6 +239,8 @@ public:
         const std::string& model_name, const std::string& response_format);
 
     json image_generations(const json& request);
+    json image_sdapi(const json& request);
+    json count_anthropic_tokens(const json& request);
     json image_edits(const json& request);
     json image_variations(const json& request);
 
