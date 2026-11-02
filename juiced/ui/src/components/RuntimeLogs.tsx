@@ -34,7 +34,12 @@ export function RuntimeLogs({ logs }: { logs: LogState }) {
     () => filterEntries(parsed, search, level, component),
     [parsed, search, level, component],
   );
-  const components = [...new Set(parsed.map((e) => e.tag))].sort();
+  const components = [
+    ...new Set([
+      ...parsed.map((e) => e.tag),
+      ...(component === "all" ? [] : [component]),
+    ]),
+  ].sort();
   useEffect(() => {
     if (follow && !frozen && viewport.current)
       viewport.current.scrollTop = viewport.current.scrollHeight;
