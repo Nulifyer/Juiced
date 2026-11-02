@@ -1,0 +1,227 @@
+.logs-workspace {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.logs-workspace .page-heading {
+  margin-bottom: 0;
+  flex-shrink: 0;
+}
+.log-connection {
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+.log-connection.live {
+  color: #98c4aa;
+}
+.log-error {
+  color: #edb47f;
+  font-size: 12px;
+}
+.log-controls {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.log-view-switch {
+  display: flex;
+  gap: 2px;
+}
+.log-controls .search-input {
+  flex: 1;
+  min-width: 170px;
+}
+.log-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+.log-actions > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+.log-viewport {
+  flex: 1;
+  min-height: 180px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--background);
+  overscroll-behavior: contain;
+}
+.raw-log-output {
+  padding: 12px;
+  font:
+    11px/1.7 ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    monospace;
+  margin: 0;
+  white-space: pre;
+  width: max-content;
+  min-width: 100%;
+}
+.parsed-log-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+  text-align: left;
+}
+.parsed-log-table th {
+  position: sticky;
+  top: 0;
+  background: var(--card);
+  z-index: 1;
+  font-weight: 500;
+  color: var(--muted-foreground);
+}
+.parsed-log-table td,
+.parsed-log-table th {
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+.parsed-log-table td:nth-child(-n + 3) {
+  white-space: nowrap;
+}
+.parsed-log-table td:last-child {
+  width: 100%;
+  min-width: 220px;
+  overflow-wrap: anywhere;
+}
+.parsed-log-table summary {
+  cursor: pointer;
+  white-space: pre-wrap;
+}
+.parsed-log-table pre {
+  max-width: 65vw;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 8px 0;
+  color: var(--muted-foreground);
+}
+.log-level {
+  color: var(--muted-foreground);
+  font-size: 10px;
+}
+.log-level.warning {
+  color: #edb47f;
+}
+.log-level.error,
+.log-level.fatal {
+  color: #f0a0a5;
+}
+.log-level.info {
+  color: #98c4aa;
+}
+.logs-empty {
+  min-height: 180px;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 12px;
+  color: var(--muted-foreground);
+}
+.log-retention {
+  color: var(--muted-foreground);
+  font-size: 10px;
+}
+.runtime-activity {
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  margin-bottom: 20px;
+  overflow: hidden;
+}
+.runtime-activity > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.runtime-activity h2 {
+  font-size: 13px;
+}
+.runtime-activity ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.runtime-activity li {
+  display: grid;
+  grid-template-columns: 60px 60px minmax(0, 1fr);
+  align-items: baseline;
+  gap: 10px;
+  padding: 7px 14px;
+  font-size: 11px;
+}
+.runtime-activity li > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.runtime-activity time {
+  color: var(--muted-foreground);
+  font-variant-numeric: tabular-nums;
+}
+.runtime-activity > p {
+  padding: 12px 14px;
+}
+@media (max-width: 650px) {
+  .log-controls {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .log-controls .search-input {
+    min-width: 0;
+  }
+  .log-controls select {
+    width: 100%;
+  }
+  .parsed-log-table, .parsed-log-table tbody {
+    display: block;
+  }
+  .parsed-log-table thead {
+    display: none;
+  }
+  .parsed-log-table tr {
+    display: grid;
+    grid-template-columns: 90px 60px minmax(0, 1fr);
+    border-bottom: 1px solid var(--border);
+  }
+  .parsed-log-table td {
+    border-bottom: 0;
+    padding: 5px 8px;
+    overflow-wrap: anywhere;
+    white-space: normal;
+  }
+  .parsed-log-table td:last-child {
+    grid-column: 1 / -1;
+    min-width: 0;
+    width: auto;
+    padding-top: 0;
+  }
+  .parsed-log-table pre {
+    max-width: 100%;
+  }
+  .log-actions > div {
+    gap: 0;
+  }
+  .runtime-activity li {
+    grid-template-columns: 50px minmax(0, 1fr);
+    gap: 6px;
+  }
+  .runtime-activity li > .log-level {
+    display: none;
+  }
+  .runtime-activity small {
+    font-size: 10px;
+  }
+}

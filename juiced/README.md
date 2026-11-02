@@ -34,6 +34,7 @@ explicitly provisioned runtime variant and are outside this default native image
 | Loading policy | Set residency in three drag-and-drop lanes: Hot, On demand and Disabled. Menus and bulk actions offer the same commands. |
 | Library | Search Hugging Face and review files; inspect downloaded weights in a table; follow transfers; upload or register a GGUF in a dedicated import form. |
 | Service APIs | Copy client endpoints and inspect enabled-service counts and session-cache requirements. |
+| Logs | Live raw output and client-parsed fields, search, severity/component filters, pause/follow, filtered export and tab-local clear. |
 | Cache | Inspect consumer-session computation snapshots separately from retention, mode and disk-budget settings. Unsaved settings survive background refreshes. |
 | Test services | Chat has a conversation and anchored composer. Transcribe pairs an audio source with an editable/exportable transcript. Speak pairs a script with playback. Images pairs a prompt with a preview. Compare places responses beside each other after sequential requests. |
 
@@ -71,6 +72,26 @@ session ID do not create persistent snapshots. Temporary UI requests do not send
 qualified for persistent session snapshots in this first release.
 
 Legacy prototype conversation routes return HTTP410. Existing files are preserved, never extended or used as a cache index. Cache retention and forgetting use snapshot IDs or opaque consumer-session IDs.
+
+## Runtime diagnostics
+
+The UI subscribes to native `/logs/stream` WebSocket messages. Raw preserves each
+stream line; Parsed separates timestamp, severity, component and message, with the
+original line available by expanding it. Explicit child-process error/warning
+prefixes are identified without changing the stream severity or raw output.
+
+A shared tab-local buffer serves Logs and the dashboard's recent activity. It is
+limited to 2,000 entries and 2 Mi characters of line text; no logs are persisted by
+the UI. The manager retains up to 5,000 entries since restart. Reconnect reloads
+that history, deduplicates sequence numbers and detects restarted sequences.
+Pause freezes only the log view. Clear resets this tab's buffer, including recent
+activity, without removing server logs. Export downloads raw lines matching the
+current filters. Server timestamps retain the server's clock format.
+
+Dashboard activity extracts explicit native inference summaries and recent
+warnings/errors. It does not calculate resource or throughput counters by
+scraping text. The bottom status bar uses native `/v1/system-stats` and `/v1/stats`,
+with live token estimates distinguished from the last completed decode rate.
 
 ## Provenance
 

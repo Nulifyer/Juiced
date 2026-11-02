@@ -361,6 +361,7 @@ function ModelRow({
 }
 export function ModelLibrary({
   models,
+  activity,
   policy,
   service,
   notify,
@@ -371,6 +372,7 @@ export function ModelLibrary({
   onPolicy,
 }: {
   models: Model[];
+  activity: ReactNode;
   policy: boolean;
   service: string;
   notify: (s: string) => void;
@@ -555,6 +557,7 @@ export function ModelLibrary({
           </div>
         </div>
       )}
+      {!policy && activity}
       <div className="workspace-toolbar">
         <label className="search-input">
           <Search size={15} />

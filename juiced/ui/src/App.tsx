@@ -2,6 +2,8 @@ import {
   RuntimeMetrics,
   useRuntimeTelemetry,
 } from "./components/RuntimeMetrics";
+import { RuntimeLogs, RuntimeActivity } from "./components/RuntimeLogs";
+import { useLogStream } from "./logs/useLogStream";
 import { ModelRemoval } from "./components/ModelRemoval";
 import { useCallback, useEffect, useState } from "react";
 import {
@@ -22,6 +24,7 @@ import {
   Download,
   Upload,
   HardDrive,
+  Terminal,
 } from "lucide-react";
 import { Dialog } from "@base-ui/react/dialog";
 import { Button } from "./components/t3/button";
@@ -43,6 +46,7 @@ const destinations = [
   ["library", "Library", Library],
   ["cache", "Cache", Database],
   ["services", "Service APIs", Server],
+  ["logs", "Logs", Terminal],
   ["playground", "Test services", MessageSquare],
 ] as const;
 const tasks = [
@@ -54,6 +58,7 @@ const tasks = [
 ] as const;
 export default function App() {
   const telemetry = useRuntimeTelemetry();
+  const logs = useLogStream();
   const [screen, setScreen] = useState(
       () => localStorage.getItem("juiced.screen") || "models",
     ),
@@ -378,6 +383,9 @@ export default function App() {
       >
         {(screen === "models" || screen === "policy") && (
           <ModelLibrary
+            activity={
+              <RuntimeActivity logs={logs} openLogs={() => setScreen("logs")} />
+            }
             models={models}
             policy={screen === "policy"}
             service={service}
@@ -423,6 +431,7 @@ export default function App() {
             openModels={() => setScreen("models")}
           />
         )}
+        {screen === "logs" && <RuntimeLogs logs={logs} />}
         {screen === "services" && (
           <ServiceEndpoints models={models} notify={notify} />
         )}

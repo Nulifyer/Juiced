@@ -9,6 +9,11 @@ export default defineConfig({
   build: { outDir: "../../web", emptyOutDir: true },
   server: {
     proxy: {
+      "/logs/stream": {
+        target: process.env.JUICED_DEV_API || "http://127.0.0.1:13305",
+        ws: true,
+        changeOrigin: true,
+      },
       "/v1": process.env.JUICED_DEV_API || "http://127.0.0.1:13305",
       "/.well-known": process.env.JUICED_DEV_API || "http://127.0.0.1:13305",
     },
