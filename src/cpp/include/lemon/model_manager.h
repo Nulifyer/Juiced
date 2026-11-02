@@ -253,6 +253,9 @@ public:
                             const json& model_data,
                             const std::string& source = "");
 
+    // Remove a user registration without deleting its source files.
+    void unregister_user_model(const std::string& model_name);
+
     // Register or validate a model definition without downloading its files.
     // Uses the same registration path as download_model.
     void register_model(const std::string& model_name,
@@ -482,11 +485,6 @@ private:
     json load_architecture_defaults();
     json load_optional_json(const std::string& path);
     void save_user_models(const json& user_models);
-
-    // Remove a user model entry from user_models.json (no file deletion).
-    // Used to roll back a collection registered earlier in the same call when
-    // its component resolution fails.
-    void unregister_user_model(const std::string& model_name);
 
     std::string get_user_models_file();
     std::string get_recipe_options_file();

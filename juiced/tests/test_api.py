@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Model-free contract tests against the actual compiled manager."""
-import json,os,pathlib,socket,subprocess,sys,tempfile,time,unittest,urllib.request,urllib.error
+import struct,json,os,pathlib,socket,subprocess,sys,tempfile,time,unittest,urllib.request,urllib.error
 BINARY=str(pathlib.Path(sys.argv.pop(1)).resolve())
 class ApiContract(unittest.TestCase):
  @classmethod
@@ -9,8 +9,10 @@ class ApiContract(unittest.TestCase):
   with socket.socket() as s:s.bind(('127.0.0.1',0));cls.port=s.getsockname()[1]
   (cls.root/'config/config.json').write_text(json.dumps({'port':cls.port,'broadcast':False,'disable_model_filtering':True,'auto_check_model_updates':False}))
   cls.external=cls.root/'external.bin';cls.external.write_bytes(b'preserve this external artifact')
-  (cls.root/'config/user_models.json').write_text(json.dumps({'ZZExternalFile':{'recipe':'whispercpp','source':'local_path','checkpoints':{'main':str(cls.external)},'labels':['transcription']}}))
-  cls.log=open(cls.root/'server.log','w');cls.process=subprocess.Popen([BINARY,str(cls.root/'cache'),str(cls.root/'config'),'--host','127.0.0.1','--port',str(cls.port)],stdout=cls.log,stderr=cls.log,env={**os.environ,'HOME':str(cls.root),'XDG_RUNTIME_DIR':str(cls.root/'run')})
+  cls.shared_upload=cls.root/'config/juiced/artifacts/shared/shared.gguf';cls.shared_upload.parent.mkdir(parents=True);cls.shared_upload.write_bytes(b'shared fixture')
+  cls.repo=cls.root/'hf/models--Fixture--Removal';(cls.repo/'snapshots/rev').mkdir(parents=True);(cls.repo/'refs').mkdir();(cls.repo/'refs/main').write_text('rev');(cls.repo/'snapshots/rev/one.gguf').write_bytes(b'fixture one');(cls.repo/'snapshots/rev/two.gguf').write_bytes(b'fixture two')
+  (cls.root/'config/user_models.json').write_text(json.dumps({'ZZSharedUpload1':{'recipe':'whispercpp','source':'local_path','checkpoints':{'main':str(cls.shared_upload)}},'ZZSharedUpload2':{'recipe':'whispercpp','source':'local_path','checkpoints':{'main':str(cls.shared_upload)}},'ZZUnsupported':{'recipe':'hybrid','juiced_existing_artifact':True,'checkpoints':{'main':str(cls.external)},'labels':['chat']},'ZZRemovalHFOne':{'recipe':'whispercpp','source':'huggingface','checkpoints':{'main':'Fixture/Removal:one.gguf'},'labels':['transcription']},'ZZRemovalHFTwo':{'recipe':'whispercpp','source':'huggingface','checkpoints':{'main':'Fixture/Removal:two.gguf'},'labels':['transcription']},'ZZRemovalExternal':{'recipe':'whispercpp','source':'local_path','checkpoints':{'main':str(cls.external)},'labels':['transcription']},'ZZExternalFile':{'recipe':'whispercpp','source':'local_path','checkpoints':{'main':str(cls.external)},'labels':['transcription']}}))
+  cls.log=open(cls.root/'server.log','w');cls.process=subprocess.Popen([BINARY,str(cls.root/'cache'),str(cls.root/'config'),'--host','127.0.0.1','--port',str(cls.port)],stdout=cls.log,stderr=cls.log,env={**os.environ,'HOME':str(cls.root),'XDG_RUNTIME_DIR':str(cls.root/'run'),'HF_HUB_CACHE':str(cls.root/'hf')})
   for _ in range(150):
    try:
     status,x=cls.request('juiced/catalog')
@@ -88,6 +90,45 @@ class ApiContract(unittest.TestCase):
   before=self.external.read_bytes();s,_=self.request('delete',{'model_name':'user.ZZExternalFile'});self.assertEqual(s,200)
   self.assertEqual(self.external.read_bytes(),before)
   self.assertNotIn('ZZExternalFile',json.loads((self.root/'config/user_models.json').read_text()))
+ def test_removal_external_registration(self):
+  model='ZZRemovalExternal';before=self.external.read_bytes()
+  for prefix in ['/api/v0/','/api/v1/','/v0/','/v1/']:
+   status,plan=self.request(prefix+'juiced/removal?model='+model);self.assertEqual(status,200);self.assertTrue(plan['allowed']);self.assertEqual(plan['action'],'unregister')
+  status,_=self.request('juiced/removal',{'model':model,'expected':plan,'confirmation':'wrong-name'});self.assertEqual(status,400)
+  status,_=self.request('juiced/removal',{'model':model,'expected':{**plan,'action':'upload'},'confirmation':model});self.assertEqual(status,409)
+  status,_=self.request('juiced/removal',{'model':model,'expected':plan,'confirmation':model});self.assertEqual(status,200)
+  self.assertEqual(self.external.read_bytes(),before)
+  self.assertNotIn(model,json.loads((self.root/'config/user_models.json').read_text()))
+ def test_removal_managed_variant_preserves_sibling(self):
+  model='ZZRemovalHFOne';status,plan=self.request('juiced/removal?model='+model);self.assertEqual(status,200);self.assertEqual(plan['action'],'cache');self.assertTrue(plan['allowed'])
+  status,_=self.request('juiced/removal',{'model':model,'expected':plan,'confirmation':model});self.assertEqual(status,200)
+  self.assertFalse((self.repo/'snapshots/rev/one.gguf').exists());self.assertEqual((self.repo/'snapshots/rev/two.gguf').read_bytes(),b'fixture two')
+ def test_removal_hot_protection(self):
+  self.request('juiced/policy',{'model':self.model,'policy':'hot'})
+  status,plan=self.request('juiced/removal?model='+self.model);self.assertEqual(status,200);self.assertFalse(plan['allowed'])
+  status,_=self.request('juiced/removal',{'model':self.model,'expected':plan,'confirmation':self.model});self.assertEqual(status,409)
+  status,_=self.request('delete',{'model_name':self.model});self.assertEqual(status,409)
+  self.request('juiced/policy',{'model':self.model,'policy':'disabled'})
+ def test_removal_uploaded_weights(self):
+  def string(s):
+   b=s.encode();return struct.pack('<Q',len(b))+b
+  payload=b'GGUF'+struct.pack('<IQQ',3,0,1)+string('general.architecture')+struct.pack('<I',8)+string('llama')
+  status,job=self.request('juiced/import/start',{'filename':'RemovalFixture.gguf','size':len(payload)});self.assertEqual(status,201)
+  status,_=self.request('juiced/import/chunk?id='+job['id']+'&offset=0',payload,True);self.assertEqual(status,200)
+  status,model=self.request('juiced/import/finish',{'id':job['id'],'name':'RemovalFixture','recipe':'llamacpp'});self.assertEqual(status,201,model)
+  file=pathlib.Path(model['path']);self.assertTrue(file.exists())
+  status,plan=self.request('juiced/removal?model=RemovalFixture');self.assertEqual(status,200);self.assertEqual(plan['action'],'upload');self.assertTrue(plan['allowed'])
+  status,_=self.request('juiced/removal',{'model':'RemovalFixture','expected':plan,'confirmation':'RemovalFixture'});self.assertEqual(status,200)
+  self.assertFalse(file.exists());self.assertTrue(self.external.exists())
+ def test_removal_shared_upload_preserves_file(self):
+  model='ZZSharedUpload1';status,plan=self.request('juiced/removal?model='+model);self.assertEqual(status,200,plan);self.assertEqual(plan['action'],'unregister')
+  status,_=self.request('juiced/removal',{'model':model,'expected':plan,'confirmation':model});self.assertEqual(status,200);self.assertEqual(self.shared_upload.read_bytes(),b'shared fixture')
+  self.assertIn('ZZSharedUpload2',json.loads((self.root/'config/user_models.json').read_text()))
+ def test_removal_unsupported_registration(self):
+  model='ZZUnsupported';before=self.external.read_bytes()
+  status,plan=self.request('juiced/removal?model='+model);self.assertEqual(status,200,plan);self.assertEqual(plan['action'],'unregister')
+  status,_=self.request('juiced/removal',{'model':model,'expected':plan,'confirmation':model});self.assertEqual(status,200);self.assertEqual(self.external.read_bytes(),before)
+  self.assertNotIn(model,json.loads((self.root/'config/user_models.json').read_text()))
  def test_upload_path_rejected(self):
   s,_=self.request('juiced/import/start',{'filename':'../escape.gguf','size':32});self.assertEqual(s,400)
 if __name__=='__main__':unittest.main(verbosity=2)

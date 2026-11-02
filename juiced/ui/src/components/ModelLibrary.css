@@ -20,27 +20,6 @@
 .workspace-toolbar select {
   font-size: 12px;
 }
-.runtime-summary {
-  display: flex;
-  align-items: center;
-  gap: 28px;
-  padding: 16px 0;
-  border-block: 1px solid var(--border);
-  font-size: 12px;
-  color: var(--muted-foreground);
-}
-.runtime-summary > span {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-}
-.runtime-summary strong {
-  font-weight: 550;
-  color: var(--foreground);
-}
-.runtime-summary .runtime-summary-note {
-  margin-left: auto;
-}
 .section-heading {
   display: flex;
   align-items: center;
@@ -381,13 +360,6 @@
   .policy-empty {
     padding: 25px 15px;
   }
-  .runtime-summary {
-    gap: 14px;
-    flex-wrap: wrap;
-  }
-  .runtime-summary-note {
-    display: none !important;
-  }
   .deployment-row {
     flex-wrap: wrap;
     gap: 7px;
@@ -436,4 +408,99 @@
 }
 .deployment-row.is-dragging {
   cursor: grabbing;
+}
+
+.dashboard-overview {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 20px;
+}
+.dashboard-overview > div {
+  display: grid;
+  gap: 5px;
+  padding: 15px 18px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--card);
+}
+.dashboard-overview span {
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+.dashboard-overview strong {
+  font-size: 26px;
+  font-weight: 550;
+  font-variant-numeric: tabular-nums;
+}
+.dashboard-overview em {
+  font-size: 15px;
+  font-style: normal;
+  color: var(--muted-foreground);
+}
+.dashboard-services {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  align-items: start;
+}
+.dashboard-services .live-service {
+  margin: 0;
+  overflow: hidden;
+}
+.dashboard-services .deployment-row {
+  flex-wrap: wrap;
+  gap: 7px;
+  padding: 12px;
+  min-height: 80px;
+}
+.dashboard-services .service-mark {
+  display: none;
+}
+.dashboard-services .deployment-identity {
+  flex-basis: calc(100% - 28px);
+}
+.dashboard-services .deployment-actions {
+  margin-left: auto;
+}
+.dashboard-services .model-name {
+  font-size: 12px;
+}
+.dashboard-services .runtime-status {
+  margin-left: 20px;
+  font-size: 10px;
+}
+.service-idle {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 18px;
+  color: var(--muted-foreground);
+  min-height: 110px;
+}
+.service-idle p {
+  font-size: 12px;
+}
+.service-idle small {
+  flex-basis: 100%;
+}
+.service-idle button {
+  margin-left: -8px;
+}
+@media (max-width: 1100px) {
+  .dashboard-overview {
+    gap: 8px;
+  }
+  .dashboard-overview > div {
+    padding: 12px;
+  }
+}
+@media (max-width: 850px) {
+  .dashboard-overview {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .dashboard-services {
+    grid-template-columns: 1fr;
+  }
 }

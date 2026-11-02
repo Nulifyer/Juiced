@@ -135,6 +135,7 @@ function ModelRow({
   onSelect,
   onAction,
   onInspect,
+  onRemove,
   onPlay,
 }: {
   model: Model;
@@ -143,6 +144,7 @@ function ModelRow({
   onSelect: () => void;
   onAction: (m: Model, a: string) => void;
   onInspect: (m: Model) => void;
+  onRemove: (m: Model) => void;
   onPlay: (m: Model) => void;
 }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
@@ -176,6 +178,9 @@ function ModelRow({
       </Item>
       <Item className="menu-item" onClick={() => onInspect(m)}>
         Model details…
+      </Item>
+      <Item className="menu-item" onClick={() => onRemove(m)}>
+        Remove model…
       </Item>
     </>
   );
@@ -361,6 +366,7 @@ export function ModelLibrary({
   notify,
   refresh,
   onInspect,
+  onRemove,
   onPlay,
   onPolicy,
 }: {
@@ -370,6 +376,7 @@ export function ModelLibrary({
   notify: (s: string) => void;
   refresh: () => Promise<void>;
   onInspect: (m: Model) => void;
+  onRemove: (m: Model) => void;
   onPlay: (m: Model) => void;
   onPolicy: () => void;
 }) {
@@ -377,7 +384,8 @@ export function ModelLibrary({
     [sort, setSort] = useState("name"),
     [selected, setSelected] = useState<Set<string>>(new Set()),
     [limit, setLimit] = useState(60),
-    [dragged, setDragged] = useState<Model>();
+    [dragged, setDragged] = useState<Model>(),
+    [expanded, setExpanded] = useState(false);
   useEffect(() => {
     setSelected(new Set());
     setLimit(60);
@@ -485,6 +493,7 @@ export function ModelLibrary({
       }
       onAction={action}
       onInspect={onInspect}
+      onRemove={onRemove}
       onPlay={onPlay}
     />
   );
@@ -492,11 +501,11 @@ export function ModelLibrary({
     <div className={policy ? "policy-workspace" : "runtime-workspace"}>
       <header className="page-heading">
         <div>
-          <h1>{policy ? "Loading policy" : "Model services"}</h1>
+          <h1>{policy ? "Loading policy" : "Runtime dashboard"}</h1>
           <p>
             {policy
               ? "Decide which models stay ready, load when needed, or stay out of the way."
-              : "See what is ready to serve. Load another model when you need it."}
+              : "Monitor serving readiness and manage loaded models."}
           </p>
         </div>
         {!policy && (
@@ -507,26 +516,43 @@ export function ModelLibrary({
         )}
       </header>
       {!policy && (
-        <div className="runtime-summary">
-          <span>
-            <i className="state-dot loaded" />
-            <strong>{eligible.filter((m) => m.loaded).length}</strong> loaded
-          </span>
-          <span>
+        <div className="dashboard-overview">
+          <div>
+            <span>Ready models</span>
             <strong>
-              {eligible.filter((m) => m.operation?.pending).length}
-            </strong>{" "}
-            changing
-          </span>
-          <span>
-            <strong>{eligible.filter((m) => m.policy === "hot").length}</strong>{" "}
-            kept Hot
-          </span>
-          <span className="runtime-summary-note">
-            {service === "All services"
-              ? "All services"
-              : serviceNames[service] || service}
-          </span>
+              {eligible.filter((m) => m.loaded && !m.runtime?.is_busy).length}
+            </strong>
+            <small>Serving now</small>
+          </div>
+          <div>
+            <span>Busy models</span>
+            <strong>
+              {eligible.filter((m) => m.loaded && m.runtime?.is_busy).length}
+            </strong>
+            <small>
+              {eligible.filter((m) => m.operation?.pending).length} operations
+              pending
+            </small>
+          </div>
+          <div>
+            <span>Hot readiness</span>
+            <strong>
+              {eligible.filter((m) => m.policy === "hot" && m.loaded).length}
+              <em> / {eligible.filter((m) => m.policy === "hot").length}</em>
+            </strong>
+            <small>Startup and recovery</small>
+          </div>
+          <div>
+            <span>Downloaded</span>
+            <strong>{models.filter((m) => m.downloaded).length}</strong>
+            <small>
+              {
+                models.filter((m) => m.downloaded && m.policy === "disabled")
+                  .length
+              }{" "}
+              Disabled
+            </small>
+          </div>
         </div>
       )}
       <div className="workspace-toolbar">
@@ -661,48 +687,101 @@ export function ModelLibrary({
                   <p>Load one from the downloaded models below.</p>
                 </div>
               )}
-              {Array.from(new Set(running.map((m) => m.service)))
-                .sort(
-                  (a, b) =>
-                    ["Chat", "Transcribe", "Speak", "Images"].indexOf(a) -
-                    ["Chat", "Transcribe", "Speak", "Images"].indexOf(b),
+              <div className="dashboard-services">
+                {Array.from(
+                  new Set((q ? visible : eligible).map((m) => m.service)),
                 )
-                .map((s) => (
-                  <section className="live-service" key={s}>
-                    <header>
-                      <ServiceIcon service={s} size={15} />
-                      <h3>{serviceNames[s] || s}</h3>
-                      <span>
-                        {running.filter((m) => m.service === s).length}
-                      </span>
-                    </header>
-                    {running.filter((m) => m.service === s).map(row)}
-                  </section>
-                ))}
+                  .sort(
+                    (a, b) =>
+                      ["Chat", "Transcribe", "Speak", "Images"].indexOf(a) -
+                      ["Chat", "Transcribe", "Speak", "Images"].indexOf(b),
+                  )
+                  .map((s) => (
+                    <section className="live-service" key={s}>
+                      <header>
+                        <ServiceIcon service={s} size={15} />
+                        <h3>{serviceNames[s] || s}</h3>
+                        <span>
+                          {running.filter((m) => m.service === s).length}
+                        </span>
+                      </header>
+                      {running.filter((m) => m.service === s).map(row)}
+                      {!running.some((m) => m.service === s) && (
+                        <div className="service-idle">
+                          <Power size={17} />
+                          <p>
+                            {q ? "No matching model loaded" : "No model loaded"}
+                          </p>
+                          <small>
+                            {eligible.filter((m) => m.service === s).length}{" "}
+                            downloaded ·{" "}
+                            {
+                              eligible.filter(
+                                (m) =>
+                                  m.service === s && m.policy !== "disabled",
+                              ).length
+                            }{" "}
+                            enabled
+                          </small>
+                          <Button
+                            size="compact"
+                            variant="ghost"
+                            onClick={onPolicy}
+                          >
+                            Set loading policy
+                          </Button>
+                        </div>
+                      )}
+                    </section>
+                  ))}
+              </div>
             </DropArea>
             <DropArea id="runtime:Unloaded" className="runtime-shelf">
               <div className="section-heading">
                 <div>
-                  <h2>Unloaded</h2>
-                  <p>Downloaded and available when you need them.</p>
+                  <h2>Unloaded models</h2>
+                  <p>Enable a Disabled model before loading it.</p>
                 </div>
-                <span>{unloaded.length} models</span>
-              </div>
-              <div className="inventory-column-head">
-                <span>Model / backend</span>
-                <span>Loading policy</span>
-                <span>Action</span>
-              </div>
-              {unloaded.slice(0, limit).map(row)}
-              {!unloaded.length && (
-                <p className="empty-state">
-                  No unloaded models match this view.
-                </p>
-              )}
-              {unloaded.length > limit && (
-                <Button variant="ghost" onClick={() => setLimit(limit + 60)}>
-                  Show more
+                <Button
+                  size="compact"
+                  variant="outline"
+                  aria-expanded={expanded || Boolean(q)}
+                  onClick={() => {
+                    if (q) {
+                      setQ("");
+                      setExpanded(false);
+                    } else setExpanded(!expanded);
+                  }}
+                >
+                  {q
+                    ? "Clear search"
+                    : expanded
+                      ? "Hide inventory"
+                      : "Show " + unloaded.length + " models"}
                 </Button>
+              </div>
+              {(expanded || Boolean(q)) && (
+                <>
+                  <div className="inventory-column-head">
+                    <span>Model / backend</span>
+                    <span>Loading policy</span>
+                    <span>Action</span>
+                  </div>
+                  {unloaded.slice(0, limit).map(row)}
+                  {!unloaded.length && (
+                    <p className="empty-state">
+                      No unloaded models match this view.
+                    </p>
+                  )}
+                  {unloaded.length > limit && (
+                    <Button
+                      variant="ghost"
+                      onClick={() => setLimit(limit + 60)}
+                    >
+                      Show more
+                    </Button>
+                  )}
+                </>
               )}
             </DropArea>
           </>

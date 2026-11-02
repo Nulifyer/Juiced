@@ -30,7 +30,7 @@ explicitly provisioned runtime variant and are outside this default native image
 
 | Screen | Purpose and layout |
 | --- | --- |
-| Models | Operate live services: ready/busy models grouped by service, followed by a compact unloaded inventory. Try opens the selected model and service. |
+| Models | Runtime dashboard with readiness counters, service cards and an expandable unloaded inventory. Try opens a temporary service test. |
 | Loading policy | Set residency in three drag-and-drop lanes: Hot, On demand and Disabled. Menus and bulk actions offer the same commands. |
 | Library | Search Hugging Face and review files; inspect downloaded weights in a table; follow transfers; upload or register a GGUF in a dedicated import form. |
 | Service APIs | Copy client endpoints and inspect enabled-service counts and session-cache requirements. |
@@ -98,3 +98,11 @@ HA and other clients are deliberately not migrated during initial user testing.
 Discovery groups GGUF quantization repositories under the exact model and publisher. File review shows selectable weight sizes. Model rows support dragging from their name or body, with independent checkbox/menu actions. `GET /v1/audio/voices?model=kokoro-v1` reads available voices from the loaded Kokoro backend. The speech selector uses that list; unsupported backends explain the limitation and accept an explicit voice ID.
 
 Hugging Face logo: official brand asset from https://huggingface.co/brand, stored locally under `juiced/ui/public/huggingface.svg`. The mark belongs to Hugging Face.
+
+## Runtime dashboard and removal
+
+The bottom metrics strip reads native `/system-stats` and `/stats` every two seconds. It shows host CPU/RAM, GPU utilization/allocation, NPU when reported, active requests, live estimated output and the last completed decode rate. Details exposes input/output/cache counts and first-token latency. Shared GPU memory overlaps RAM. Missing or stale readings display a dash, rather than a made-up zero.
+
+Model details and row menus offer removal. `GET /v1/juiced/removal?model=...` previews the current file-ownership plan. `POST /v1/juiced/removal` requires that exact preview and confirmation of the model name. Disable/unload the model and finish active downloads first. Managed downloads use the existing model manager's shared-variant cleanup. An unshared uploaded GGUF is deleted from Juiced storage. External/shared local files and retained unsupported artifacts are unregistered without deleting source files. Caches remain separately managed. Built-in catalog definitions can be downloaded again.
+
+Removal routes use all four native version prefixes. The older delete route also requires a Disabled, unloaded model. Release gates cover disposable uploaded/external/shared-cache fixtures, wrong/stale confirmations, Hot protection, and the upstream shared-repository deletion contract.

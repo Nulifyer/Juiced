@@ -397,15 +397,16 @@ void JuicedService::routes(httplib::Server &http) {
   for (const std::string prefix : {"/api/v0/", "/api/v1/", "/v0/", "/v1/"}) {
     http.Get(prefix + "audio/voices",
              [this](const auto &q, auto &r) { handle(q, r, "voices"); });
-    for (const std::string operation : {"catalog", "state", "threads", "thread",
-                                        "cache", "imports", "transfers"})
+    for (const std::string operation :
+         {"catalog", "state", "threads", "thread", "cache", "imports",
+          "transfers", "removal"})
       http.Get(prefix + "juiced/" + operation,
                [this, operation](const auto &q, auto &r) {
                  handle(q, r, operation);
                });
     for (const std::string operation :
          {"operation", "policy", "thread", "cache", "cache/forget",
-          "cache/profile", "cache/qualify", "cache/retain"})
+          "cache/profile", "cache/qualify", "cache/retain", "removal"})
       http.Post(prefix + "juiced/" + operation,
                 [this, operation](const auto &q, auto &r) {
                   handle(q, r, operation);
@@ -429,6 +430,10 @@ void JuicedService::handle(const httplib::Request &req, httplib::Response &res,
                            const std::string &op) {
   try {
     json body = req.body.empty() ? json::object() : json::parse(req.body);
+    if (op == "removal") {
+      remove_model(req, res);
+      return;
+    }
     if (op == "voices") {
       const auto requested = req.get_param_value("model");
       if (requested.empty())
@@ -515,6 +520,11 @@ void JuicedService::handle(const httplib::Request &req, httplib::Response &res,
             reply(res,
                   {{"error", "Policy changed elsewhere; refresh and retry"}},
                   409);
+            return;
+          }
+          if (operations_.contains(model) &&
+              operations_[model].value("state", "") == "removing") {
+            reply(res, {{"error", "Wait for model removal to finish"}}, 409);
             return;
           }
           state_["policies"][model] = policy;

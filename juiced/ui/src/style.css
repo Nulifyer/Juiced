@@ -10,6 +10,8 @@
   --color-muted-foreground: var(--muted-foreground);
   --color-border: var(--border);
   --color-ring: var(--ring);
+  --color-destructive: #b94750;
+  --color-destructive-foreground: #f0a0a5;
   --color-accent: var(--secondary);
   --color-sidebar-row-hover: var(--secondary);
   --color-sidebar-foreground: var(--foreground);
@@ -121,7 +123,7 @@ summary:focus-visible {
 .app-shell {
   display: grid;
   grid-template-columns: 240px minmax(0, 1fr);
-  grid-template-rows: 50px minmax(0, 1fr);
+  grid-template-rows: 50px minmax(0, 1fr) auto;
   height: 100dvh;
 }
 .app-topbar {
@@ -1010,7 +1012,7 @@ audio {
 @media (max-width: 650px) {
   .app-shell {
     grid-template-columns: 1fr;
-    grid-template-rows: 49px minmax(0, 1fr);
+    grid-template-rows: 49px minmax(0, 1fr) auto;
   }
   .mobile-trigger {
     display: inline-flex;

@@ -6557,6 +6557,12 @@ void Server::handle_delete(const httplib::Request& req, httplib::Response& res) 
             request_json["model"].get<std::string>() :
             request_json["model_name"].get<std::string>();
 
+        if (juiced_ && (juiced_->allows(model_name) || router_->is_model_loaded(model_name))) {
+            res.status = 409;
+            res.set_content(nlohmann::json{{"error", "Disable and unload the model before removing it"}}.dump(), "application/json");
+            return;
+        }
+
         LOG(INFO, "Server") << "Deleting model: " << model_name << std::endl;
 
         // If the model is currently loaded, unload it first to release file locks

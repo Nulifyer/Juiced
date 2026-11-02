@@ -1,3 +1,8 @@
+import {
+  RuntimeMetrics,
+  useRuntimeTelemetry,
+} from "./components/RuntimeMetrics";
+import { ModelRemoval } from "./components/ModelRemoval";
 import { useCallback, useEffect, useState } from "react";
 import {
   MessageSquare,
@@ -48,6 +53,7 @@ const tasks = [
   ["Compare", Columns2],
 ] as const;
 export default function App() {
+  const telemetry = useRuntimeTelemetry();
   const [screen, setScreen] = useState(
       () => localStorage.getItem("juiced.screen") || "models",
     ),
@@ -64,6 +70,7 @@ export default function App() {
     [options, setOptions] = useState(""),
     [cache, setCache] = useState<any>(),
     [saving, setSaving] = useState(false),
+    [removalRequested, setRemovalRequested] = useState(false),
     [preferredModel, setPreferredModel] = useState("");
   useEffect(() => {
     if (!notice) return;
@@ -185,7 +192,7 @@ export default function App() {
             }}
           >
             <DownloadActivity />
-            {activeJobs.length ? activeJobs.length + " active" : "Transfers"}
+            Downloads{activeJobs.length ? " · " + activeJobs.length : ""}
           </Button>
         </div>
       </header>
@@ -376,7 +383,14 @@ export default function App() {
             service={service}
             notify={notify}
             refresh={refresh}
-            onInspect={setInspected}
+            onInspect={(m) => {
+              setRemovalRequested(false);
+              setInspected(m);
+            }}
+            onRemove={(m) => {
+              setRemovalRequested(true);
+              setInspected(m);
+            }}
             onPolicy={() => setScreen("policy")}
             onPlay={(m) => {
               setPreferredModel(m.id);
@@ -394,7 +408,10 @@ export default function App() {
             refresh={refresh}
             tab={libraryTab}
             setTab={setLibraryTab}
-            onInspect={setInspected}
+            onInspect={(m) => {
+              setRemovalRequested(false);
+              setInspected(m);
+            }}
           />
         )}
         {screen === "playground" && (
@@ -420,6 +437,7 @@ export default function App() {
           </p>
         )}
       </main>
+      <RuntimeMetrics data={telemetry} />
       {notice && (
         <div className="notice" role="status">
           <AlertCircle size={15} />
@@ -437,7 +455,10 @@ export default function App() {
       <Dialog.Root
         open={!!inspected}
         onOpenChange={(open) => {
-          if (!open) setInspected(null);
+          if (!open) {
+            setInspected(null);
+            setRemovalRequested(false);
+          }
         }}
       >
         <Dialog.Portal>
@@ -492,6 +513,15 @@ export default function App() {
                 <Button disabled={saving} onClick={() => void saveOptions()}>
                   Save deployment options
                 </Button>
+                <ModelRemoval
+                  model={inspected}
+                  focusRequested={removalRequested}
+                  notify={notify}
+                  onRemoved={async () => {
+                    setInspected(null);
+                    await refresh();
+                  }}
+                />
                 <details className="raw-details">
                   <summary>Complete catalog record</summary>
                   <pre>{JSON.stringify(inspected, null, 2)}</pre>

@@ -266,33 +266,26 @@ export function Acquisition({
             }
           >
             <div className="discovery-primary">
-              <div className="discovery-search-heading">
-                <span className="source-mark">
-                  <img
-                    src="/huggingface.svg"
-                    alt="Hugging Face"
-                    width="32"
-                    height="32"
-                  />
-                </span>
-                <div>
-                  <h2>Search Hugging Face</h2>
-                  <p>
-                    Publisher repositories, quantizations and companion files.
-                  </p>
-                </div>
-              </div>
               <form
-                className="search-row"
+                className="discovery-search"
+                aria-label="Search Hugging Face"
                 onSubmit={(e) => {
                   e.preventDefault();
                   void search();
                 }}
               >
+                <img
+                  className="source-mark"
+                  src="/huggingface.svg"
+                  alt="Hugging Face"
+                  width="30"
+                  height="30"
+                />
                 <label className="search-input">
                   <Search size={16} />
                   <input
-                    placeholder="Search Hugging Face…"
+                    aria-label="Search Hugging Face models"
+                    placeholder="Search Hugging Face models…"
                     value={query}
                     onChange={(e) => setQuery(e.target.value)}
                   />
@@ -305,10 +298,6 @@ export function Acquisition({
                   )}
                 </Button>
               </form>
-              <p className="page-note">
-                Search checks repository metadata. Inspect files before choosing
-                a compatible backend.
-              </p>
               {results.length === 0 && !busy && (
                 <div className="discovery-start">
                   <Search size={25} />
@@ -358,9 +347,6 @@ export function Acquisition({
                           .reduce((sum, r) => sum + (r.downloads || 0), 0)
                           .toLocaleString()}{" "}
                         downloads
-                        {group.repositories.length > 1
-                          ? ` across ${group.repositories.length} repositories`
-                          : ""}
                       </span>
                     </header>
                     <div
@@ -383,7 +369,7 @@ export function Acquisition({
                       ))}
                     </div>
                     <details className="discovery-sources">
-                      <summary>Repository sources</summary>
+                      <summary>Sources</summary>
                       {group.repositories.map((r) => (
                         <a
                           key={r.repository_id}

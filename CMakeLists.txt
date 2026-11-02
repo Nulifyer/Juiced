@@ -1027,6 +1027,7 @@ set(SOURCES_CORE
     src/cpp/server/server.cpp
     src/cpp/server/juiced/service.cpp
     src/cpp/server/juiced/cache.cpp
+    src/cpp/server/juiced/removal.cpp
     src/cpp/server/collection_orchestrator.cpp
     src/cpp/server/jobs/job_ops.cpp
     src/cpp/server/jobs/job_manager.cpp

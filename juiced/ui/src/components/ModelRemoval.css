@@ -1,0 +1,31 @@
+.model-removal {
+  border-top: 1px solid var(--border);
+  margin-top: 24px;
+  padding-top: 20px;
+}
+.model-removal p {
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1.7;
+  margin: 10px 0;
+}
+.model-removal .removal-reason {
+  color: #dec294;
+}
+.removal-confirmation {
+  border: 1px solid #8b4b4b;
+  border-radius: 6px;
+  padding: 14px;
+  margin-top: 12px;
+}
+.removal-confirmation label {
+  display: grid;
+  gap: 8px;
+  font-size: 12px;
+  margin: 14px 0;
+}
+.removal-confirmation > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}

@@ -49,6 +49,8 @@ private:
   void run();
   void handle(const httplib::Request &, httplib::Response &,
               const std::string &operation);
+  json removal_plan(const std::string &model);
+  void remove_model(const httplib::Request &, httplib::Response &);
   void import_file(const httplib::Request &, httplib::Response &,
                    const std::string &operation);
   void chat(const httplib::Request &, httplib::Response &);

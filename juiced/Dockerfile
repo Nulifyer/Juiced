@@ -5,7 +5,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends build-essential
 FROM toolchain AS manager
 WORKDIR /src
 COPY . .
-RUN printf '2026.44.1-juiced\n' > .version && cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_WEB_APP=OFF -DBUILD_TAURI_APP=OFF -DBUILD_TESTING=ON && cmake --build build -j4 --target lemond lemonade test_backend_mode_contract && ctest --test-dir build --output-on-failure -R '^BackendModeContractTest$'
+RUN printf '2026.44.1-juiced\n' > .version && cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_WEB_APP=OFF -DBUILD_TAURI_APP=OFF -DBUILD_TESTING=ON && cmake --build build -j4 --target lemond lemonade test_backend_mode_contract test_model_delete_shared_repo && ctest --test-dir build --output-on-failure -R '^(BackendModeContractTest|ModelDeleteSharedRepoTest)$'
 RUN python3 juiced/tests/test_api.py build/lemond
 RUN mkdir -p /out/licenses && cd /src/build/_deps && find . -maxdepth 2 -type f \( -iname 'license*' -o -iname 'copying*' -o -iname 'notice*' \) -exec cp --parents '{}' /out/licenses/ ';'
 
