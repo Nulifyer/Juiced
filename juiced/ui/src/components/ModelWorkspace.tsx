@@ -158,6 +158,11 @@ export function ModelWorkspace({
           <input
             type="number"
             aria-label={field.label}
+            disabled={
+              field.key === "gpu" &&
+              (draft.llamacpp_backend ??
+                response?.effective.llamacpp_backend) === "cpu"
+            }
             min={field.min}
             step={field.step || 1}
             value={value}

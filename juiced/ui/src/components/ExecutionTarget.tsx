@@ -108,17 +108,22 @@ export function ExecutionTarget({
   );
   function choose(value: string) {
     if (!backendKey) return;
-    update(backendKey, value);
-    if (model.recipe === "llamacpp") {
-      update("llamacpp_device", null);
-      update(
-        "llamacpp_args",
-        setArg(
-          String(draft.llamacpp_args ?? effective.llamacpp_args ?? ""),
-          runtimeFields.find((f) => f.key === "gpu")!,
-          value === "cpu" ? "0" : "999",
-        ),
-      );
+    try {
+      const nextArgs =
+        model.recipe === "llamacpp"
+          ? setArg(
+              String(draft.llamacpp_args ?? effective.llamacpp_args ?? ""),
+              runtimeFields.find((f) => f.key === "gpu")!,
+              value === "cpu" ? "0" : "999",
+            )
+          : undefined;
+      update(backendKey, value);
+      if (nextArgs !== undefined) {
+        update("llamacpp_device", null);
+        update("llamacpp_args", nextArgs);
+      }
+    } catch (e) {
+      setDeviceError((e as Error).message);
     }
   }
   return (
