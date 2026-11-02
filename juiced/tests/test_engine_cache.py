@@ -52,6 +52,31 @@ proof['reuse']=engine(address,'/v1/chat/completions',{**body,'id_slot':0});asser
 assert proof['reuse']['choices'][0]['message']['content']==proof['cold']['choices'][0]['message']['content'],proof
 call('juiced/cache/qualify',{'model':model,'fingerprint':profile2['fingerprint'],'evidence':'Real CPU engine save/reload/restore, >30 reused tokens and identical greedy output; test_engine_cache.py'})
 call('juiced/cache',{'mode':'persistent','disk_budget_gib':1})
+ollama_url=a.url.rstrip('/')+'/api/chat'
+ollama_body={'model':model+':latest','messages':messages,'stream':True,'think':False,'options':{'num_ctx':128,'num_predict':8},'keep_alive':-1}
+q=urllib.request.Request(ollama_url,data=json.dumps(ollama_body).encode(),headers={'Content-Type':'application/json'})
+try:
+ urllib.request.urlopen(q,timeout=30)
+ raise AssertionError('Persistent model accepted an unleased protocol')
+except urllib.error.HTTPError as e:
+ assert e.code==409
+call('juiced/cache',{'model_modes':{model:'memory'}})
+with urllib.request.urlopen(q,timeout=180) as r:
+ chunks=[json.loads(line) for line in r if line.strip()]
+ assert chunks and chunks[-1]['done'] and any(x.get('message',{}).get('content') for x in chunks),chunks
+assert call('juiced/cache')['settings']['mode']=='persistent'
+if a.container:
+ subprocess.run(['docker','restart',a.container],check=True,stdout=subprocess.DEVNULL)
+ for _ in range(120):
+  try:
+   settings=call('juiced/cache')['settings']
+   assert settings['model_modes'][model]=='memory'
+   break
+  except (OSError,RuntimeError):time.sleep(.5)
+ else:raise AssertionError('Container did not recover')
+proof['ollama_memory_override']={'done':chunks[-1]['done'],'chunks':len(chunks),'global_mode_preserved':'persistent','restart_checked':bool(a.container)}
+call('juiced/cache',{'model_modes':{}})
+call('juiced/operation',{'model':model,'action':'load'});wait_loaded(True)
 def ask(session,stream,cache_prompt=True,legacy=False):
  q=urllib.request.Request(base+'chat/completions',data=json.dumps({**body,'cache_prompt':cache_prompt,'stream':stream,'stream_options':{'include_usage':True}}).encode(),headers={'Content-Type':'application/json',('X-Juiced-Thread-Id' if legacy else 'X-Juiced-Session-Id'):session})
  with urllib.request.urlopen(q,timeout=180) as r:

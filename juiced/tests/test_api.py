@@ -80,6 +80,13 @@ class ApiContract(unittest.TestCase):
   s,_=self.request('juiced/cache',{'mode':'persistent'});self.assertEqual(s,422)
   s,_=self.request('juiced/cache',{'retention_days':-1});self.assertEqual(s,400)
   s,x=self.request('juiced/cache',{'mode':'off'});self.assertEqual(s,200);self.assertEqual(x['settings']['mode'],'off')
+ def test_model_cache_modes(self):
+  for invalid in [[],{'missing-model':'memory'},{self.model:'invalid'},{self.model:False}]:
+   s,_=self.request('juiced/cache',{'model_modes':invalid});self.assertEqual(s,400)
+  for prefix in ['/api/v0/','/api/v1/','/v0/','/v1/']:
+   s,x=self.request(prefix+'juiced/cache',{'model_modes':{self.model:'memory'}});self.assertEqual(s,200);self.assertEqual(x['settings']['model_modes'],{self.model:'memory'})
+  persisted=json.loads((self.root/'config/juiced/state.json').read_text());self.assertEqual(persisted['cache']['model_modes'],{self.model:'memory'})
+  s,x=self.request('juiced/cache',{'model_modes':{}});self.assertEqual(s,200);self.assertEqual(x['settings']['model_modes'],{})
  def test_chunk_offset_and_invalid_gguf(self):
   s,j=self.request('juiced/import/start',{'filename':'bad.gguf','size':32});self.assertEqual(s,201)
   s,_=self.request('juiced/import/chunk?id='+j['id']+'&offset=1',b'x'*32,True);self.assertEqual(s,409)

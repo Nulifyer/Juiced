@@ -71,6 +71,13 @@ saved computation independently of client-owned messages or weights. Requests wi
 session ID do not create persistent snapshots. Temporary UI requests do not send session IDs. The older `X-Juiced-Thread-Id` header remains an alias. Snapshot misses, invalid files and incompatible prefixes rebuild inside their leased slot. An unavailable admission path returns a retryable503 instead of racing another request. Other inference protocols are not
 qualified for persistent session snapshots in this first release.
 
+Cache settings include per-model overrides. Set a utility model to Memory only
+to use HA's native Ollama integration while other models keep persistent Chat
+Completions snapshots. The default mode remains the fallback for models without
+an override. Changing an override preserves existing snapshots and qualification
+evidence. `POST /v1/juiced/cache` accepts `model_modes`, an object mapping canonical
+model IDs to `memory` or `persistent`; an empty object clears the overrides.
+
 Legacy prototype conversation routes return HTTP410. Existing files are preserved, never extended or used as a cache index. Cache retention and forgetting use snapshot IDs or opaque consumer-session IDs.
 
 ## Runtime diagnostics

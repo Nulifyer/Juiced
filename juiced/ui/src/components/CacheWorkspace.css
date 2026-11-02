@@ -183,6 +183,21 @@
   margin-top: 8px;
   color: #d6b987;
 }
+.cache-model-overrides {
+  grid-column: 1/-1;
+  margin-top: 20px;
+  min-width: 0;
+}
+.cache-model-overrides summary {
+  cursor: pointer;
+  color: var(--foreground);
+}
+.cache-model-overrides label {
+  overflow-wrap: anywhere;
+}
+.cache-model-overrides select {
+  min-width: 0;
+}
 .cache-explainer {
   border-top: 1px solid var(--border);
   margin-top: 28px;

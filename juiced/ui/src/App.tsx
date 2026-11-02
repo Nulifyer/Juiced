@@ -436,7 +436,12 @@ export default function App() {
           <ServiceEndpoints models={models} notify={notify} />
         )}
         {screen === "cache" && (
-          <CacheWorkspace cache={cache} setCache={setCache} notify={notify} />
+          <CacheWorkspace
+            cache={cache}
+            models={models}
+            setCache={setCache}
+            notify={notify}
+          />
         )}
         {!ready && screen !== "playground" && (
           <p className="page-note">

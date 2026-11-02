@@ -9,7 +9,7 @@ import {
   ChevronRight,
 } from "lucide-react";
 import { Dialog } from "@base-ui/react/dialog";
-import { api, bytes } from "../api";
+import { api, bytes, type Model } from "../api";
 import { Button } from "./t3/button";
 import "./CacheWorkspace.css";
 function age(value?: number) {
@@ -19,10 +19,12 @@ function age(value?: number) {
 }
 export function CacheWorkspace({
   cache,
+  models,
   setCache,
   notify,
 }: {
   cache: any;
+  models: Model[];
   setCache: (value: any) => void;
   notify: (s: string) => void;
 }) {
@@ -305,6 +307,48 @@ export function CacheWorkspace({
                     ? "Reuse compatible state while the engine stays loaded."
                     : "Chat Completions requests bypass prompt reuse."}
               </p>
+              <details className="cache-model-overrides">
+                <summary>
+                  Model overrides ·{" "}
+                  {Object.keys(draft.model_modes || {}).length}
+                </summary>
+                <p>
+                  Memory only permits Ollama and other protocols without
+                  changing persistent caching for other models. Existing
+                  snapshots are kept.
+                </p>
+                {models
+                  .filter(
+                    (m) =>
+                      m.downloaded &&
+                      m.recipe === "llamacpp" &&
+                      m.service === "Chat",
+                  )
+                  .sort((a, b) => a.id.localeCompare(b.id))
+                  .map((model) => (
+                    <label key={model.id}>
+                      {model.id}
+                      <select
+                        value={draft.model_modes?.[model.id] || ""}
+                        onChange={(e) => {
+                          const modes = { ...draft.model_modes };
+                          if (e.target.value) modes[model.id] = e.target.value;
+                          else delete modes[model.id];
+                          edit("model_modes", modes);
+                        }}
+                      >
+                        <option value="">Use default</option>
+                        <option value="memory">Memory only</option>
+                        <option
+                          value="persistent"
+                          disabled={!cache?.persistent_supported}
+                        >
+                          Persistent disk snapshots
+                        </option>
+                      </select>
+                    </label>
+                  ))}
+              </details>
               <label>
                 Expire after
                 <input

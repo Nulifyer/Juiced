@@ -37,6 +37,7 @@ private:
   std::map<std::string, std::set<int>> active_slots_;
   std::set<std::string> active_snapshots_;
   std::filesystem::path snapshot_directory_;
+  std::string cache_mode_locked(const std::string &model) const;
   json cache_profile(const std::string &model);
   void cache_api(const httplib::Request &, httplib::Response &,
                  const std::string &);

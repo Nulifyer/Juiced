@@ -80,6 +80,13 @@ std::string prefix_hash(const json &messages, size_t n) {
   return digest(prefix.dump());
 }
 } // namespace
+std::string JuicedService::cache_mode_locked(const std::string &model) const {
+  const auto &settings = state_.at("cache");
+  if (settings.contains("model_modes") &&
+      settings["model_modes"].contains(model))
+    return settings["model_modes"][model].get<std::string>();
+  return settings.value("mode", "memory");
+}
 bool JuicedService::unleased_protocol(const httplib::Request &req,
                                       httplib::Response &res) {
   try {
@@ -96,7 +103,7 @@ bool JuicedService::unleased_protocol(const httplib::Request &req,
          state_["qualified_profiles"].items())
       if (profile.value("model", "") == name)
         qualified = true;
-    if (state_["cache"].value("mode", "memory") == "persistent" && qualified) {
+    if (cache_mode_locked(name) == "persistent" && qualified) {
       output(
           res,
           {{"error",
@@ -210,6 +217,18 @@ void JuicedService::prune_cache_locked() {
 void JuicedService::cache_api(const httplib::Request &req,
                               httplib::Response &res, const std::string &op) {
   auto body = req.body.empty() ? json::object() : json::parse(req.body);
+  if (body.contains("model_modes")) {
+    if (!body["model_modes"].is_object())
+      throw std::invalid_argument("Model cache modes must be an object");
+    for (const auto &[model, mode] : body["model_modes"].items()) {
+      if (!mode.is_string() || (mode != "memory" && mode != "persistent"))
+        throw std::invalid_argument("Model cache mode must be memory or persistent");
+      const auto canonical = server_.model_manager_->get_public_model_name(
+          server_.model_manager_->resolve_model_name(model));
+      if (!server_.model_manager_->model_exists(model) || canonical != model)
+        throw std::invalid_argument("Use an existing canonical model name");
+    }
+  }
   if (op == "cache/profile" || op == "cache/qualify") {
     auto profile = cache_profile(body.at("model").get<std::string>());
     if (op == "cache/qualify") {
@@ -278,6 +297,9 @@ void JuicedService::cache_api(const httplib::Request &req,
                   "prefixes may remain until replaced or unloaded."}});
     return;
   }
+  const auto loaded = req.method != "GET"
+                          ? server_.router_->get_all_loaded_models()
+                          : json::array();
   std::lock_guard<std::mutex> lock(mutex_);
   if (req.method != "GET") {
     auto mode = body.value("mode", state_["cache"].value("mode", "memory"));
@@ -293,6 +315,27 @@ void JuicedService::cache_api(const httplib::Request &req,
               409);
           return;
         }
+    }
+    if (body.contains("model_modes")) {
+      for (const auto &[model, slots] : active_slots_) {
+        const auto next = body["model_modes"].value(model, mode);
+        if (!slots.empty() && next != cache_mode_locked(model)) {
+          output(res,
+                 {{"error", "Finish or stop active requests before changing model cache mode"}},
+                 409);
+          return;
+        }
+      }
+    }
+    const auto overrides = body.value(
+        "model_modes", state_["cache"].value("model_modes", json::object()));
+    for (const auto &model : loaded) {
+      const auto name = model.value("model_name", "");
+      if (model.value("is_busy", false) &&
+          overrides.value(name, mode) != cache_mode_locked(name)) {
+        output(res, {{"error", "Finish or stop active requests before changing model cache mode"}}, 409);
+        return;
+      }
     }
     if (mode == "persistent" && state_["qualified_profiles"].empty()) {
       output(
@@ -310,7 +353,8 @@ void JuicedService::cache_api(const httplib::Request &req,
         (!body["disk_budget_gib"].is_number() || body["disk_budget_gib"] < 1 ||
          body["disk_budget_gib"] > 256))
       throw std::invalid_argument("Disk budget must be between 1 and 256 GiB");
-    for (const std::string k : {"mode", "retention_days", "disk_budget_gib"})
+    for (const std::string k : {"mode", "retention_days", "disk_budget_gib",
+                                "model_modes"})
       if (body.contains(k))
         state_["cache"][k] = body[k];
     prune_cache_locked();
@@ -336,10 +380,19 @@ void JuicedService::cache_api(const httplib::Request &req,
 }
 void JuicedService::chat(const httplib::Request &original,
                          httplib::Response &res) {
+  std::string model_name;
+  try {
+    auto request = json::parse(original.body);
+    model_name = server_.model_manager_->get_public_model_name(
+        server_.model_manager_->resolve_model_name(request.value("model", "")));
+  } catch (const std::exception &) {
+    server_.handle_chat_completions(original, res);
+    return;
+  }
   bool persistent = false;
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    persistent = state_["cache"].value("mode", "memory") == "persistent";
+    persistent = cache_mode_locked(model_name) == "persistent";
   }
   if (!persistent) {
     server_.handle_chat_completions(original, res);
@@ -483,7 +536,7 @@ void JuicedService::chat(const httplib::Request &original,
         uint64_t budget;
         {
           std::lock_guard<std::mutex> lock(mutex_);
-          if (state_["cache"].value("mode", "") != "persistent")
+          if (cache_mode_locked(model) != "persistent")
             return;
           budget = uint64_t(state_["cache"].value("disk_budget_gib", 8.0) *
                             1024 * 1024 * 1024);
