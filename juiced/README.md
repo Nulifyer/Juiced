@@ -9,6 +9,8 @@ processes and serving policy. Agent tools/workspaces remain in a separate stack.
 - Manager: `cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_WEB_APP=OFF -DBUILD_TAURI_APP=OFF`, then `cmake --build build -j4 --target lemond`.
 - UI: `cd juiced/ui && bun install --frozen-lockfile && bun run build`.
 - Native API tests: `python3 juiced/tests/test_api.py build/lemond`.
+- Native device discovery uses the same Linux CUDA/ROCm library environment as model launch. Hardware nodes must still be passed to the container. Package installation alone does not prove device access.
+- Process environment isolation: `ctest --test-dir build --output-on-failure -R '^ProcessManagerTest$'`.
 - Actual engine cache gate: `python3 juiced/tests/test_engine_cache.py --help`; uses a checksum-verified tiny CPU fixture in release CI, then real-model acceptance on Mage.
 - Container: `docker build -f juiced/Dockerfile -t juiced:development .`.
 

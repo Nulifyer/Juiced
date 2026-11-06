@@ -7,7 +7,9 @@ class ApiContract(unittest.TestCase):
  def setUpClass(cls):
   cls.temp=tempfile.TemporaryDirectory(prefix='juiced-test-');cls.root=pathlib.Path(cls.temp.name);(cls.root/'config').mkdir();(cls.root/'cache').mkdir();(cls.root/'run').mkdir()
   with socket.socket() as s:s.bind(('127.0.0.1',0));cls.port=s.getsockname()[1]
-  (cls.root/'config/config.json').write_text(json.dumps({'port':cls.port,'broadcast':False,'disable_model_filtering':True,'auto_check_model_updates':False}))
+  cls.probe_dir=cls.root/'fake-cuda';cls.probe_dir.mkdir()
+  probe=cls.probe_dir/'llama-server';probe.write_text('#!/bin/sh\ncase "$LD_LIBRARY_PATH" in "'+str(cls.probe_dir)+'"*) printf "CUDA0: Fixture GPU\\n";; *) exit 23;; esac\n');probe.chmod(0o755)
+  (cls.root/'config/config.json').write_text(json.dumps({'port':cls.port,'llamacpp':{'cuda_bin':str(cls.probe_dir)},'broadcast':False,'disable_model_filtering':True,'auto_check_model_updates':False}))
   cls.external=cls.root/'external.bin';cls.external.write_bytes(b'preserve this external artifact')
   cls.shared_upload=cls.root/'config/juiced/artifacts/shared/shared.gguf';cls.shared_upload.parent.mkdir(parents=True);cls.shared_upload.write_bytes(b'shared fixture')
   cls.repo=cls.root/'hf/models--Fixture--Removal';(cls.repo/'snapshots/rev').mkdir(parents=True);(cls.repo/'refs').mkdir();(cls.repo/'refs/main').write_text('rev');(cls.repo/'snapshots/rev/one.gguf').write_bytes(b'fixture one');(cls.repo/'snapshots/rev/two.gguf').write_bytes(b'fixture two')
@@ -35,6 +37,10 @@ class ApiContract(unittest.TestCase):
    with urllib.request.urlopen(q,timeout=15) as r:return r.status,json.load(r)
   except urllib.error.HTTPError as r:
    with r:return r.code,json.load(r)
+ def test_device_probe_uses_launch_library_environment(self):
+  for prefix in ['/v1/','/v0/','/api/v1/','/api/v0/']:
+   status,data=self.request(prefix+'juiced/devices?recipe=llamacpp&backend=cuda')
+   self.assertEqual(status,200);self.assertEqual(data['devices'],[{'id':'CUDA0','name':'Fixture GPU'}])
  def test_request_metadata_is_bounded_and_private(self):
   marker='REQUEST-CONTENT-MUST-NOT-BE-RETAINED'
   for index in range(205):

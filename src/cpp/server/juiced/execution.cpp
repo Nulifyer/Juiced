@@ -38,7 +38,8 @@ void JuicedService::execution_devices(const httplib::Request &req,
                   {{"id", match[1].str()}, {"name", match[2].str()}});
             return true;
           },
-          "", 8);
+          "", 8, true,
+          backends::BackendUtils::llamacpp_library_environment(binary, backend));
       if (status != 0)
         throw std::runtime_error(
             "The installed runtime could not enumerate devices. Check the "

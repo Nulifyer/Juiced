@@ -2269,6 +2269,34 @@ namespace lemon::backends {
         return false;
     }
 
+    std::vector<std::pair<std::string, std::string>> BackendUtils::llamacpp_library_environment(
+        const std::string& executable, const std::string& backend) {
+#ifndef _WIN32
+        std::string resolved = backend;
+        if (resolved == "rocm") {
+            auto* cfg = RuntimeConfig::global();
+            resolved = "rocm-" + (cfg ? cfg->rocm_channel_for_recipe("llamacpp") : "stable");
+        }
+        if (resolved != "cuda" && resolved != "rocm-stable" && resolved != "rocm-nightly")
+            return {};
+        std::string path = fs::path(executable).parent_path().string();
+        if (resolved == "rocm-stable") {
+            const auto arch = SystemInfo::get_rocm_arch();
+            if (!arch.empty()) {
+                const auto runtime = join_runtime_dirs(get_therock_lib_paths(arch));
+                if (!runtime.empty()) path = runtime + ":" + path;
+            }
+        }
+        const char* inherited = std::getenv("LD_LIBRARY_PATH");
+        if (inherited && *inherited) path += ":" + std::string(inherited);
+        return {{"LD_LIBRARY_PATH", path}};
+#else
+        (void)executable;
+        (void)backend;
+        return {};
+#endif
+    }
+
     std::string BackendUtils::join_runtime_dirs(const std::vector<std::string>& dirs) {
 #if !defined(__linux__) && !defined(_WIN32)
         (void)dirs;

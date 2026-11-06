@@ -224,6 +224,10 @@ namespace lemon::backends {
          *  get_therock_lib_paths). Returns "" for empty input. */
         static std::string join_runtime_dirs(const std::vector<std::string>& dirs);
 
+        /** Child loader environment shared by llama.cpp launch and device probes. */
+        static std::vector<std::pair<std::string, std::string>> llamacpp_library_environment(
+            const std::string& executable, const std::string& backend);
+
         /** Stage TheRock's HIP runtime set (the amdhip64 and amd_comgr DLLs)
          *  next to a ROCm backend exe, so the loader cannot mix it with the
          *  display driver's copies in System32. No-op off Windows. */

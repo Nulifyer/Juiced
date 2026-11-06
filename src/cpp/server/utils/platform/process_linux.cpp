@@ -117,7 +117,8 @@ public:
         OutputLineCallback on_line,
         const std::string& working_dir,
         int timeout_seconds,
-        bool capture_stderr = true) override;
+        bool capture_stderr = true,
+        const std::vector<std::pair<std::string, std::string>>& env_vars = {}) override;
 
     int find_free_port(int start_port) override;
     int run_command(const std::string& command, std::string& output, int timeout_seconds) override;
@@ -498,7 +499,8 @@ int LinuxProcessPlatform::run_with_output(
     OutputLineCallback on_line,
     const std::string& working_dir,
     int timeout_seconds,
-    bool capture_stderr) {
+    bool capture_stderr,
+    const std::vector<std::pair<std::string, std::string>>& env_vars) {
 
     int stdout_pipe[2];
 
@@ -532,6 +534,11 @@ int LinuxProcessPlatform::run_with_output(
 #ifdef HAVE_LIBCAP
         preserve_capabilities_for_exec();
 #endif
+
+        for (const auto& env : env_vars) {
+            if (setenv(env.first.c_str(), env.second.c_str(), 1) != 0)
+                _exit(127);
+        }
 
         std::vector<char*> argv_ptrs;
         argv_ptrs.push_back(const_cast<char*>(executable.c_str()));

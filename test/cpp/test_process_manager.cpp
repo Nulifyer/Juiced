@@ -1,6 +1,7 @@
 #include <lemon/utils/process_manager.h>
 
 #include <cerrno>
+#include <cstdlib>
 #include <chrono>
 #include <csignal>
 #include <cstdio>
@@ -87,6 +88,17 @@ void kill_and_reap(pid_t pid) {
 } // namespace
 
 int main() {
+    {
+        const std::string key = "JUICED_TEST_CHILD_ENV";
+        unsetenv(key.c_str());
+        std::string output;
+        const int status = ProcessManager::run_process_with_output(
+            "/bin/sh", {"-c", "printf '%s' \"$JUICED_TEST_CHILD_ENV\""},
+            [&](const std::string& line) { output += line; return true; },
+            "", 5, true, {{key, "child-only"}});
+        check("captured child receives its runtime environment", status == 0 && output == "child-only");
+        check("child environment does not mutate the parent", std::getenv(key.c_str()) == nullptr);
+    }
     {
         const pid_t child = spawn_exiting_child(42);
         check("fork exited child", child > 0);
