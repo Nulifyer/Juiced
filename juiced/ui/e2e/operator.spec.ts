@@ -185,3 +185,28 @@ test('larger text, visible focus and text contrast remain usable', async ({ page
   expect(result.contrast).toBeGreaterThanOrEqual(4.5);
   expect(result.focused).not.toBe('none');
 });
+
+test('search groups quants, and an existing checkpoint opens its installed registration', async ({ page, runtime }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Library', exact: true }).click();
+  await page.getByLabel('Search Hugging Face models', { exact: true }).fill('Ornith');
+  await page.getByRole('button', { name: 'Search', exact: true }).click();
+  await page.getByRole('button', { name: 'Browse quants', exact: true }).click();
+  await expect(page.getByRole('dialog')).toBeVisible();
+  await expect(page.getByText('Ornith-Q4_K_M.gguf', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Open installed variant', exact: true }).click();
+  await expect(page.getByRole('heading', { name: modelId, exact: true })).toBeVisible();
+  expect(runtime.writes).toEqual([]);
+});
+
+test('library import, cache and consumer endpoints remain reachable after navigation', async ({ page, runtime }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Library', exact: true }).click();
+  await page.getByRole('button', { name: 'Import GGUF', exact: true }).first().click();
+  await expect(page.getByRole('heading', { name: /Import/ }).first()).toBeVisible();
+  await page.getByRole('button', { name: 'Cache', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Runtime cache', exact: true }).first()).toBeVisible();
+  await page.getByRole('button', { name: 'Service APIs', exact: true }).click();
+  await expect(page.getByRole('heading', { name: /Service APIs/ }).first()).toBeVisible();
+  expect(runtime.writes).toEqual([]);
+});

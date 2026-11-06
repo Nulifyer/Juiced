@@ -3,6 +3,8 @@ export const modelId = 'Ornith-1.5-35B-A3B-GGUF-Q6_K';
 export const otherId = 'Ornith-1.5-35B-A3B-GGUF-Q4_K_M';
 export const test = base.extend<{ runtime: any }>({
   runtime: async ({ page }, use) => {
+    const errors: string[] = [];
+    page.on("pageerror", error => errors.push(error.message));
     const state = {
       saved: { ctx_size: 8192, llamacpp_args: '--parallel 2', llamacpp_backend: 'cpu' } as Record<string, any>,
       running: { ctx_size: 4096, llamacpp_args: '--parallel 2', llamacpp_backend: 'cpu' },
@@ -29,10 +31,13 @@ export const test = base.extend<{ runtime: any }>({
       }
       if (path === 'juiced/catalog') return reply({ data: state.empty ? [] : state.models });
       if (path === 'juiced/transfers' || path === 'downloads') return reply({ data: state.jobs });
+      if (path === 'juiced/protocols') return reply({ protocols: [] });
       if (path === 'juiced/cache') return reply({ settings: { mode: 'memory' }, entries: [] });
       if (path === 'health') return reply({ all_models_loaded: [{ model_name: modelId, recipe_options: state.running, launch_command: ['/runtime/llama-server', '--model', '/library/Ornith-Q6_K.gguf', '--ctx-size', '4096', '--parallel', '2'] }] });
       if (path === 'juiced/operation') return reply({ status: 'queued' });
       if (path === 'juiced/policy') { const model = state.models.find(m => m.id === body.model); if (model) model.policy = body.policy; return reply({}); }
+      if (path === 'registry/search') return reply({ results: [{ repository_id: 'Example/Ornith-GGUF', downloads: 5000 }] });
+      if (path === 'pull/variants') return reply({ checkpoint: 'Example/Ornith-GGUF', recipe: 'llamacpp', suggested_name: 'Ornith-GGUF', variants: [{ name: 'Ornith-Q6_K.gguf', size_bytes: 24000000000 }, { name: 'Ornith-Q4_K_M.gguf', size_bytes: 18000000000 }], mmproj_files: [] });
       if (path === 'system-info') return reply({ devices: { cpu: { name: 'Test CPU', cores: 8, threads: 16, available: true }, gpu: [{ name: 'Test GPU', available: true }] }, recipes: { llamacpp: { display_name: 'llama.cpp', modality: 'llm', backends: { cpu: { state: 'update_available', version: 'b123', message: 'Update is available' }, vulkan: { state: 'installable' }, rocm: { state: 'unsupported' } } }, whispercpp: { display_name: 'Whisper.cpp', modality: 'stt', backends: { cpu: { state: 'installed', version: 'v1.8.0' } } } } });
       if (path === 'system-stats') return reply({ cpu_percent: 25, memory_gb: 34, npu_percent: 0, primary_gpu_id: 'gpu0', gpus: [{ id: 'gpu0', name: 'Test GPU', gpu_percent: 40, memory_used_gb: 24, memory_type: 'shared' }] });
       if (path === 'stats') return reply({ tokens_per_second: 35, time_to_first_token: .25, input_tokens: 12, output_tokens: 32, cache_tokens: 2, request_count_total: 2, live: { active_requests: 0 } });
@@ -41,6 +46,7 @@ export const test = base.extend<{ runtime: any }>({
       return reply({});
     });
     await use(state);
+    expect(errors, "No unhandled browser exceptions").toEqual([]);
   },
 });
 export { expect };
