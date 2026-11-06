@@ -38,6 +38,10 @@ function repository(model: Model) {
     ? checkpoint.slice(0, checkpoint.lastIndexOf(":"))
     : "";
 }
+function retainedExtra(value: unknown) {
+  const args = String(value || "");
+  try { return stripArgs(args); } catch { return args; }
+}
 const optionLabels: Record<string, string> = {
   llamacpp_backend: "Runtime backend",
   llamacpp_device: "Runtime device",
@@ -631,6 +635,7 @@ export function ModelWorkspace({
                       <label>
                         Additional llama.cpp arguments
                         <textarea
+                          aria-label="Additional llama.cpp arguments"
                           value={extra}
                           rows={5}
                           spellCheck={false}
@@ -769,7 +774,7 @@ export function ModelWorkspace({
                   onClick={() => {
                     setDraft(editableOptions(response.saved));
                     setExtra(
-                      stripArgs(String(response.effective.llamacpp_args || "")),
+                      retainedExtra(response.effective.llamacpp_args),
                     );
                     setExtraEdited(false);
                     setError("");
@@ -820,7 +825,7 @@ export function ModelWorkspace({
             <Dialog.Description>Your running model and saved settings have not changed. Keep editing, or discard this draft and continue.</Dialog.Description>
             <div>
               <Button variant="outline" onClick={() => setLeaveAction(null)}>Keep editing</Button>
-              <Button onClick={() => { const action = leaveAction; setLeaveAction(null); if (response) { setDraft(editableOptions(response.saved)); setExtra(stripArgs(String(response.effective.llamacpp_args || ""))); setExtraEdited(false); } action?.(); }}>Discard changes</Button>
+              <Button onClick={() => { const action = leaveAction; setLeaveAction(null); if (response) { setDraft(editableOptions(response.saved)); setExtra(retainedExtra(response.effective.llamacpp_args)); setExtraEdited(false); } action?.(); }}>Discard changes</Button>
             </div>
           </Dialog.Popup>
         </Dialog.Portal>

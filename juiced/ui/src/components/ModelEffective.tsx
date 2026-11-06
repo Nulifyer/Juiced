@@ -23,11 +23,18 @@ export function ModelEffective({ model, options, draft, extra }: { model: Model;
     return () => controller.abort();
   }, [model.id, model.runtime?.pid, revision]);
   const capacity = model.recipe === "llamacpp" ? slotCapacity(worker?.recipe_options) : null;
-  const rows = effectiveRows(options, draft, worker?.recipe_options, extra);
+  let draftError = "";
+  let rows;
+  try { rows = effectiveRows(options, draft, worker?.recipe_options, extra); }
+  catch (error) {
+    draftError = `Correct the additional backend arguments before comparing them: ${(error as Error).message}`;
+    rows = effectiveRows(options, draft, worker?.recipe_options);
+  }
   return <section className="effective-settings" aria-label="Effective model settings">
     <header><div><h3>Saved, running and draft</h3><p>Compare persistent intent with the worker serving every connected client.</p></div>
       <Button variant="ghost" size="sm" onClick={() => setRevision(revision + 1)} disabled={loading}><RefreshCw size={14} /> Refresh</Button></header>
     {error && <p className="inline-error" role="alert">Running settings unavailable: {error}</p>}
+    {draftError && <p className="inline-error" role="alert">{draftError}</p>}
     {loading ? <p role="status">Reading the running worker…</p> : !worker ? <p className="settings-message">This model is unloaded. Running values become available after it loads.</p> : null}
     {capacity && <div className="capacity-summary"><strong>{capacity.perSlot.toLocaleString()} tokens per chat</strong><span>{capacity.total.toLocaleString()} total context across {capacity.slots} slot{capacity.slots === 1 ? "" : "s"}. Includes input, reasoning and output.</span></div>}
     <div className="effective-table-scroll" tabIndex={0} aria-label="Settings comparison table">

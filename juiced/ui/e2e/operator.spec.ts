@@ -210,3 +210,26 @@ test('library import, cache and consumer endpoints remain reachable after naviga
   await expect(page.getByRole('heading', { name: /Service APIs/ }).first()).toBeVisible();
   expect(runtime.writes).toEqual([]);
 });
+
+test('malformed advanced draft cannot unrender effective settings and can be corrected', async ({ page, runtime }) => {
+  await openModel(page);
+  await page.getByText('Advanced backend arguments', { exact: true }).click();
+  await page.getByLabel('Additional llama.cpp arguments', { exact: true }).fill("--chat-template 'unfinished");
+  await page.getByRole('button', { name: 'Effective', exact: true }).click();
+  await expect(page.getByRole('alert')).toContainText('Correct the additional backend arguments');
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  if (!await page.getByLabel('Additional llama.cpp arguments', { exact: true }).isVisible()) await page.getByText('Advanced backend arguments', { exact: true }).click();
+  await page.getByLabel('Additional llama.cpp arguments', { exact: true }).fill('--chat-template chatml');
+  await page.getByRole('button', { name: 'Effective', exact: true }).click();
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  expect(runtime.writes).toEqual([]);
+});
+
+test('loading policy remains readable beside the persistent inspector', async ({ page, runtime }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openModel(page);
+  await page.getByRole('button', { name: 'Loading policy', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Loading policy', exact: true })).toBeVisible();
+  expect(await page.locator('.policy-board').evaluate(node => getComputedStyle(node).gridTemplateColumns.split(' ').length)).toBe(1);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
+});

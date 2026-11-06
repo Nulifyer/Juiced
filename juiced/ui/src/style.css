@@ -1163,6 +1163,9 @@ audio {
 .workspace-primary { min-width: 0; min-height: 0; }
 .app-main.has-inspector { display: grid; grid-template-columns: minmax(310px, 0.85fr) minmax(470px, 1.15fr); padding: 0; overflow: hidden; }
 .app-main.has-inspector > .workspace-primary { overflow: auto; padding: 24px; }
+.app-main.has-inspector .policy-board { grid-template-columns: 1fr; }
+.app-main.has-inspector .policy-lane { min-height: 180px; }
+.app-main.has-inspector .policy-lane-heading { min-height: auto; }
 .app-main.has-inspector .dashboard-services { grid-template-columns: 1fr; }
 .app-main.has-inspector .dashboard-overview { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .app-main.has-inspector .page-heading { flex-wrap: wrap; gap: 12px; }
