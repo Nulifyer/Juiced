@@ -2,10 +2,11 @@ import {
   RuntimeMetrics,
   useRuntimeTelemetry,
 } from "./components/RuntimeMetrics";
-import { RuntimeLogs, RuntimeActivity } from "./components/RuntimeLogs";
+import { Diagnostics } from "./components/Diagnostics";
+import { RuntimeActivity } from "./components/RuntimeLogs";
 import { useLogStream } from "./logs/useLogStream";
 import { ModelWorkspace } from "./components/ModelWorkspace";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   MessageSquare,
   Server,
@@ -47,7 +48,7 @@ const destinations = [
   ["backends", "Backends & hardware", Server],
   ["cache", "Cache", Database],
   ["services", "Service APIs", Server],
-  ["logs", "Logs", Terminal],
+  ["diagnostics", "Diagnostics", Terminal],
   ["playground", "Test services", MessageSquare],
 ] as const;
 const tasks = [
@@ -77,6 +78,12 @@ export default function App() {
     [cache, setCache] = useState<any>(),
     [removalRequested, setRemovalRequested] = useState(false),
     [preferredModel, setPreferredModel] = useState("");
+  const [diagnosticTab, setDiagnosticTab] = useState("performance");
+  const navigationGuard = useRef<((action: () => void) => void) | undefined>(undefined);
+  const registerNavigationGuard = useCallback((guard?: (action: () => void) => void) => { navigationGuard.current = guard; }, []);
+  function navigate(action: () => void) { if (navigationGuard.current) navigationGuard.current(action); else action(); }
+  function chooseScreen(next: string) { navigate(() => setScreen(next)); }
+  const inspectable = ["models", "policy", "library"].includes(screen);
   useEffect(() => {
     if (!notice) return;
     const timer = setTimeout(() => setNotice(""), 8000);
@@ -130,7 +137,7 @@ export default function App() {
     }
   }, [mobile]);
   const activeJobs = jobs.filter(
-    (j) => j.running || j.status === "interrupted",
+    (j) => j.running || ["queued", "interrupted", "paused", "error"].includes(j.status),
   );
   return (
     <div className="app-shell">
@@ -168,8 +175,7 @@ export default function App() {
             variant="ghost"
             size="sm"
             onClick={() => {
-              setLibraryTab("transfers");
-              setScreen("library");
+              navigate(() => { setLibraryTab("transfers"); setScreen("library"); });
             }}
           >
             <DownloadActivity />
@@ -192,7 +198,7 @@ export default function App() {
                 <button
                   className={"sidebar-link " + (screen === id ? "active" : "")}
                   aria-current={screen === id ? "page" : undefined}
-                  onClick={() => setScreen(id)}
+                  onClick={() => chooseScreen(id)}
                 >
                   <Icon size={16} />
                   <span>{label}</span>
@@ -354,13 +360,14 @@ export default function App() {
       </aside>
       <main
         className={
-          "app-main " + (screen === "playground" ? "playground-main" : "")
+          "app-main " + (screen === "playground" ? "playground-main" : "") + (inspected && inspectable ? " has-inspector" : "")
         }
       >
+        <div className="workspace-primary">
         {(screen === "models" || screen === "policy") && (
           <ModelLibrary
             activity={
-              <RuntimeActivity logs={logs} openLogs={() => setScreen("logs")} />
+              <RuntimeActivity logs={logs} openLogs={() => navigate(() => { setDiagnosticTab("logs"); setScreen("diagnostics"); })} />
             }
             models={models}
             policy={screen === "policy"}
@@ -368,24 +375,23 @@ export default function App() {
             notify={notify}
             refresh={refresh}
             onInspect={(m) => {
-              setRemovalRequested(false);
-              setInspected(m);
+              navigate(() => { setRemovalRequested(false); setInspected(m); });
             }}
             onRemove={(m) => {
-              setRemovalRequested(true);
-              setInspected(m);
+              navigate(() => { setRemovalRequested(true); setInspected(m); });
             }}
-            onPolicy={() => setScreen("policy")}
-            onPlay={(m) => {
+            onPolicy={() => chooseScreen("policy")}
+            onPlay={(m) => navigate(() => {
               setPreferredModel(m.id);
               setTask(m.service);
               setScreen("playground");
-            }}
+            })}
           />
         )}
         {screen === "library" && (
           <Acquisition
             models={models}
+            onBackends={() => chooseScreen("backends")}
             initialRepository={acquireRepo}
             onRepositoryOpened={() => setAcquireRepo(undefined)}
             service={service}
@@ -395,8 +401,7 @@ export default function App() {
             tab={libraryTab}
             setTab={setLibraryTab}
             onInspect={(m) => {
-              setRemovalRequested(false);
-              setInspected(m);
+              navigate(() => { setRemovalRequested(false); setInspected(m); });
             }}
           />
         )}
@@ -409,8 +414,8 @@ export default function App() {
             openModels={() => setScreen("models")}
           />
         )}
-        {screen === "logs" && <RuntimeLogs logs={logs} />}
-        {screen === "backends" && <BackendInventory />}
+        {["logs", "diagnostics"].includes(screen) && <Diagnostics initialTab={screen === "logs" ? "logs" : diagnosticTab} data={telemetry} logs={logs} models={models} inspect={(model) => { setInspected(model); setScreen("models"); }} />}
+        {screen === "backends" && <BackendInventory models={models} jobs={jobs} openDownloads={() => { setLibraryTab("transfers"); setScreen("library"); }} />}
         {screen === "services" && (
           <ServiceEndpoints models={models} notify={notify} />
         )}
@@ -429,6 +434,37 @@ export default function App() {
               : "The model service is reconnecting. Existing work remains saved."}
           </p>
         )}
+        </div>
+      {inspected && inspectable && (
+        <ModelWorkspace
+          key={inspected.id}
+          model={models.find((m) => m.id === inspected.id) || inspected}
+          models={models}
+          removalRequested={removalRequested}
+          registerNavigationGuard={registerNavigationGuard}
+          onClose={() => {
+            setInspected(null);
+            setRemovalRequested(false);
+          }}
+          onInspect={(m) => {
+            setRemovalRequested(false);
+            setInspected(m);
+          }}
+          onBrowse={(repo) => {
+            setInspected(null);
+            setAcquireRepo({ repo });
+            setLibraryTab("discover");
+            setScreen("library");
+          }}
+          onTest={(m) => {
+            setPreferredModel(m.id);
+            setTask(m.service);
+            setScreen("playground");
+          }}
+          refresh={refresh}
+          notify={notify}
+        />
+      )}
       </main>
       <RuntimeMetrics data={telemetry} />
       {notice && (
@@ -445,36 +481,7 @@ export default function App() {
           </Button>
         </div>
       )}
-      {inspected && (
-        <ModelWorkspace
-          key={inspected.id}
-          model={models.find((m) => m.id === inspected.id) || inspected}
-          models={models}
-          removalRequested={removalRequested}
-          onClose={() => {
-            setInspected(null);
-            setRemovalRequested(false);
-          }}
-          onInspect={(m) => {
-            setRemovalRequested(false);
-            setInspected(m);
-          }}
-          onBrowse={(repo) => {
-            setInspected(null);
-            setAcquireRepo({ repo });
-            setLibraryTab("discover");
-            setScreen("library");
-          }}
-          onTest={(m) => {
-            setInspected(null);
-            setPreferredModel(m.id);
-            setTask(m.service);
-            setScreen("playground");
-          }}
-          refresh={refresh}
-          notify={notify}
-        />
-      )}
+
     </div>
   );
 }

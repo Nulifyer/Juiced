@@ -6,6 +6,7 @@ export type RuntimeTelemetry = {
   system?: any;
   inference?: any;
   stale: boolean;
+  history?: { at: number; system: any; inference: any }[];
 };
 export function useRuntimeTelemetry() {
   const [data, setData] = useState<RuntimeTelemetry>({ stale: true });
@@ -23,7 +24,8 @@ export function useRuntimeTelemetry() {
           api("stats", undefined, signal),
         ]);
         if (!controller.signal.aborted)
-          setData({ system, inference, stale: false });
+          setData((previous) => ({ system, inference, stale: false,
+            history: [...(previous.history || []).slice(-59), { at: Date.now(), system, inference }] }));
       } catch {
         if (!controller.signal.aborted)
           setData((previous) => ({ ...previous, stale: true }));

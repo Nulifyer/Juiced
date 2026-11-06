@@ -27,6 +27,8 @@ import {
   type Options,
 } from "./modelSettings";
 import "./ModelWorkspace.css";
+import { ModelEffective } from "./ModelEffective";
+import { ModelReadme } from "./ModelReadme";
 import { ExecutionTarget } from "./ExecutionTarget";
 import "./BackendInventory.css";
 
@@ -50,6 +52,7 @@ export function ModelWorkspace({
   model,
   models,
   removalRequested,
+  registerNavigationGuard,
   onClose,
   onInspect,
   onBrowse,
@@ -60,6 +63,7 @@ export function ModelWorkspace({
   model: Model;
   models: Model[];
   removalRequested: boolean;
+  registerNavigationGuard: (guard?: (action: () => void) => void) => void;
   onClose: () => void;
   onInspect: (model: Model) => void;
   onBrowse: (repo: string) => void;
@@ -72,6 +76,9 @@ export function ModelWorkspace({
   const [draft, setDraft] = useState<Options>({});
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [leaveAction, setLeaveAction] = useState<(() => void) | null>(null);
+  const [revision, setRevision] = useState(0);
+  const [conflict, setConflict] = useState(false);
   const [message, setMessage] = useState("");
   const [extra, setExtra] = useState("");
   const [extraEdited, setExtraEdited] = useState(false);
@@ -92,6 +99,7 @@ export function ModelWorkspace({
   const busy = model.runtime?.is_busy;
   useEffect(() => {
     const controller = new AbortController();
+    setError("");
     void api<OptionResponse>(
       `models/${encodeURIComponent(model.id)}/options`,
       undefined,
@@ -111,13 +119,38 @@ export function ModelWorkspace({
         if (!controller.signal.aborted) setError(e.message);
       });
     return () => controller.abort();
-  }, [model.id]);
+  }, [model.id, revision]);
   function leave(action: () => void) {
-    if (
-      !saving &&
-      (!dirty || window.confirm("Discard unsaved model settings?"))
-    )
-      action();
+    if (saving) return;
+    if (dirty) setLeaveAction(() => action);
+    else action();
+  }
+  useEffect(() => {
+    registerNavigationGuard(leave);
+    return () => registerNavigationGuard(undefined);
+  }, [dirty, saving, registerNavigationGuard]);
+  useEffect(() => {
+    if (!dirty) return;
+    const warn = (event: BeforeUnloadEvent) => event.preventDefault();
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [dirty]);
+  async function reviewLatest() {
+    if (!response) return;
+    setSaving(true);
+    try {
+      const patch = optionPatch(editableOptions(response.saved), draft);
+      const latest = await api<OptionResponse>(`models/${encodeURIComponent(model.id)}/options`);
+      setResponse(latest);
+      const merged = { ...editableOptions(latest.saved), ...patch };
+      setDraft(merged);
+      if (!extraEdited) setExtra(stripArgs(String(merged.llamacpp_args ?? latest.effective.llamacpp_args ?? "")));
+      setConflict(false);
+      setError("");
+      setMessage("Latest saved settings loaded. Your edits are retained for review before saving.");
+      setTab("effective");
+    } catch (error) { setError((error as Error).message); }
+    finally { setSaving(false); }
   }
   function update(key: string, value: any) {
     setDraft((current) => ({ ...current, [key]: value }));
@@ -178,6 +211,7 @@ export function ModelWorkspace({
     if (!response) return;
     setSaving(true);
     setError("");
+    setConflict(false);
     setMessage("");
     let saved = false;
     try {
@@ -196,9 +230,12 @@ export function ModelWorkspace({
               JSON.stringify(response.saved[key]),
           )
         )
+          {
+          setConflict(true);
           throw Error(
-            "These settings changed in another client. Reopen the model to review the latest values before saving.",
+            "These settings changed in another client. Review the latest values before saving.",
           );
+          }
         const result = await api<OptionResponse>(
           `models/${encodeURIComponent(model.id)}/options`,
           patch,
@@ -273,27 +310,20 @@ export function ModelWorkspace({
   }
   const context = Number(draft.ctx_size ?? response?.effective.ctx_size ?? -1);
   return (
-    <Dialog.Root
-      open
-      onOpenChange={(open) => {
-        if (!open) leave(onClose);
-      }}
-    >
-      <Dialog.Portal>
-        <Dialog.Backdrop className="dialog-backdrop" />
-        <Dialog.Popup className="model-workspace">
+    <>
+      <section className="model-workspace" aria-label="Model details">
           <header className="model-workspace-header">
             <div className="dialog-heading">
               <div>
-                <Dialog.Title>{model.id}</Dialog.Title>
-                <Dialog.Description>
+                <h2>{model.id}</h2>
+                <p>
                   Configure and test this model variant.
-                </Dialog.Description>
+                </p>
               </div>
               <Button
                 variant="ghost"
                 size="icon-sm"
-                aria-label="Close model details"
+                aria-label="Back to model list"
                 disabled={saving}
                 onClick={() => leave(onClose)}
               >
@@ -322,6 +352,7 @@ export function ModelWorkspace({
               <label>
                 Loading policy
                 <select
+                  aria-label="Loading policy"
                   value={model.policy}
                   disabled={pending}
                   onChange={(e) => void policy(e.target.value)}
@@ -352,6 +383,8 @@ export function ModelWorkspace({
             <nav className="workspace-tabs" aria-label="Model details">
               {[
                 ["settings", "Settings"],
+                ["effective", "Effective"],
+                ["readme", "README"],
                 ["weights", "Weights & variants"],
                 ["manage", "Manage"],
               ].map(([key, label]) => (
@@ -370,6 +403,7 @@ export function ModelWorkspace({
             {error && (
               <p className="inline-error" role="alert">
                 {error}
+                {conflict && <Button size="sm" variant="outline" onClick={() => void reviewLatest()}>Review latest settings</Button>}
               </p>
             )}
             {model.operation?.error && (
@@ -386,8 +420,9 @@ export function ModelWorkspace({
               (!response ? (
                 <p>
                   {error
-                    ? "Settings could not be read. Reopen this model to retry."
+                    ? "Settings could not be read. Retry to load them."
                     : "Reading model settings…"}
+                  {error && <Button size="sm" variant="outline" onClick={() => setRevision(revision + 1)}>Retry settings</Button>}
                 </p>
               ) : (
                 <>
@@ -624,6 +659,8 @@ export function ModelWorkspace({
                   </details>
                 </>
               ))}
+            {tab === "effective" && response && <ModelEffective model={model} options={response} draft={draft} extra={extraEdited ? extra : undefined} />}
+            {tab === "readme" && <ModelReadme repository={repo} />}
             {tab === "weights" && (
               <>
                 <section className="settings-section">
@@ -707,7 +744,7 @@ export function ModelWorkspace({
               </>
             )}
           </div>
-          {tab === "settings" && response && (
+          {["settings", "effective"].includes(tab) && response && (
             <footer className="model-workspace-footer">
               <div>
                 <strong>
@@ -774,8 +811,20 @@ export function ModelWorkspace({
               </Button>
             </footer>
           )}
-        </Dialog.Popup>
-      </Dialog.Portal>
-    </Dialog.Root>
+      </section>
+      <Dialog.Root open={!!leaveAction} onOpenChange={(open) => { if (!open) setLeaveAction(null); }}>
+        <Dialog.Portal>
+          <Dialog.Backdrop className="dialog-backdrop" />
+          <Dialog.Popup className="discard-model-dialog">
+            <Dialog.Title>Discard unsaved model settings?</Dialog.Title>
+            <Dialog.Description>Your running model and saved settings have not changed. Keep editing, or discard this draft and continue.</Dialog.Description>
+            <div>
+              <Button variant="outline" onClick={() => setLeaveAction(null)}>Keep editing</Button>
+              <Button onClick={() => { const action = leaveAction; setLeaveAction(null); if (response) { setDraft(editableOptions(response.saved)); setExtra(stripArgs(String(response.effective.llamacpp_args || ""))); setExtraEdited(false); } action?.(); }}>Discard changes</Button>
+            </div>
+          </Dialog.Popup>
+        </Dialog.Portal>
+      </Dialog.Root>
+    </>
   );
 }

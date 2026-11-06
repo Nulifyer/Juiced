@@ -35,6 +35,21 @@ class ApiContract(unittest.TestCase):
    with urllib.request.urlopen(q,timeout=15) as r:return r.status,json.load(r)
   except urllib.error.HTTPError as r:
    with r:return r.code,json.load(r)
+ def test_request_metadata_is_bounded_and_private(self):
+  marker='REQUEST-CONTENT-MUST-NOT-BE-RETAINED'
+  for index in range(205):
+   self.request('chat/completions?private='+marker,{'model':'Unregistered-'+marker,'messages':[{'role':'user','content':marker}], 'stream':False},headers={'X-Client-Session-Id':marker})
+  for _ in range(30):
+   status,history=self.request('juiced/requests')
+   if len(history['data'])==200:break
+   time.sleep(.05)
+  self.assertEqual(status,200);self.assertEqual(len(history['data']),200)
+  self.assertFalse(history['content_captured']);self.assertNotIn(marker,json.dumps(history))
+  self.assertTrue(all(r['model'] is None and r['status']>=400 and r['duration_ms']>=0 for r in history['data']))
+  self.assertTrue(all(set(r)=={'id','timestamp_ms','endpoint','protocol','model','stream','status','duration_ms','input_tokens','output_tokens'} for r in history['data']))
+  ids=[r['id'] for r in history['data']];self.assertEqual(ids,sorted(ids,reverse=True))
+  for prefix in ['/api/v0/','/api/v1/','/v0/','/v1/']:
+   status,result=self.request(prefix+'juiced/requests');self.assertEqual(status,200);self.assertEqual(result['capacity'],200)
  def test_catalog(self):
   s,x=self.request('juiced/catalog');self.assertEqual(s,200);self.assertTrue(x['data']);self.assertTrue(all(m['policy']=='disabled' for m in x['data']));self.assertTrue(all('state'in m and'service'in m for m in x['data']))
  def test_policy_validation_and_revision(self):

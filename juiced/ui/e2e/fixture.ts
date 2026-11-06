@@ -1,0 +1,52 @@
+import { test as base, expect } from '@playwright/test';
+export const modelId = 'Ornith-1.5-35B-A3B-GGUF-Q6_K';
+export const otherId = 'Ornith-1.5-35B-A3B-GGUF-Q4_K_M';
+export const test = base.extend<{ runtime: any }>({
+  runtime: async ({ page }, use) => {
+    const state = {
+      saved: { ctx_size: 8192, llamacpp_args: '--parallel 2', llamacpp_backend: 'cpu' } as Record<string, any>,
+      running: { ctx_size: 4096, llamacpp_args: '--parallel 2', llamacpp_backend: 'cpu' },
+      defaults: { ctx_size: 4096, llamacpp_args: '', llamacpp_backend: 'cpu' },
+      writes: [] as { path: string; body: any }[], failOptions: false, failRequests: false, empty: false,
+      models: [
+        { id: modelId, recipe: 'llamacpp', service: 'Chat', labels: ['tool-calling'], downloaded: true, available: true, loaded: true, state: 'loaded', policy: 'hot', size: 24, checkpoint: 'Example/Ornith-GGUF:Ornith-Q6_K.gguf', runtime: { pid: 4321, is_busy: false, settings_pending: true } },
+        { id: otherId, recipe: 'llamacpp', service: 'Chat', labels: [], downloaded: true, available: true, loaded: false, state: 'unloaded', policy: 'disabled', size: 18, checkpoint: 'Example/Ornith-GGUF:Ornith-Q4_K_M.gguf' },
+      ],
+      jobs: [ { id: otherId, model_name: otherId, type: 'model', complete: true, status: 'complete', percent: 100 }, { id: 'backend:whispercpp:cpu', model_name: 'whispercpp:cpu', type: 'backend', complete: true, status: 'complete' } ],
+      requests: [ { id: 2, timestamp_ms: Date.now(), model: modelId, endpoint: '/v1/chat/completions', protocol: 'openai', stream: false, status: 200, duration_ms: 1532, input_tokens: 12, output_tokens: 32 }, { id: 1, timestamp_ms: Date.now(), model: null, endpoint: '/api/chat', protocol: 'ollama', stream: true, status: 400, duration_ms: 5, input_tokens: null, output_tokens: null } ],
+    };
+    await page.routeWebSocket('**/logs/stream', socket => { socket.close({ code: 1000, reason: 'Fixture has no log stream' }); });
+    await page.route('https://huggingface.co/**', route => route.fulfill({ body: '# Ornith model card\n\nA public model card.\n\n<script>window.compromised=true</script>', contentType: 'text/markdown' }));
+    await page.route('**/v1/**', async route => {
+      const request = route.request(), path = new URL(request.url()).pathname.slice(4);
+      const body = request.method() === 'POST' ? request.postDataJSON() : undefined;
+      const reply = (json: any, status = 200) => route.fulfill({ json, status });
+      if (body) state.writes.push({ path, body });
+      if (/^models\/.+\/options$/.test(path)) {
+        if (state.failOptions) return reply({ error: 'Fixture settings unavailable' }, 503);
+        if (body) Object.assign(state.saved, body);
+        return reply({ recipe: 'llamacpp', saved: state.saved, defaults: state.defaults, effective: { ...state.defaults, ...state.saved } });
+      }
+      if (path === 'juiced/catalog') return reply({ data: state.empty ? [] : state.models });
+      if (path === 'juiced/transfers' || path === 'downloads') return reply({ data: state.jobs });
+      if (path === 'juiced/cache') return reply({ settings: { mode: 'memory' }, entries: [] });
+      if (path === 'health') return reply({ all_models_loaded: [{ model_name: modelId, recipe_options: state.running, launch_command: ['/runtime/llama-server', '--model', '/library/Ornith-Q6_K.gguf', '--ctx-size', '4096', '--parallel', '2'] }] });
+      if (path === 'juiced/operation') return reply({ status: 'queued' });
+      if (path === 'juiced/policy') { const model = state.models.find(m => m.id === body.model); if (model) model.policy = body.policy; return reply({}); }
+      if (path === 'system-info') return reply({ devices: { cpu: { name: 'Test CPU', cores: 8, threads: 16, available: true }, gpu: [{ name: 'Test GPU', available: true }] }, recipes: { llamacpp: { display_name: 'llama.cpp', modality: 'llm', backends: { cpu: { state: 'update_available', version: 'b123', message: 'Update is available' }, vulkan: { state: 'installable' }, rocm: { state: 'unsupported' } } }, whispercpp: { display_name: 'Whisper.cpp', modality: 'stt', backends: { cpu: { state: 'installed', version: 'v1.8.0' } } } } });
+      if (path === 'system-stats') return reply({ cpu_percent: 25, memory_gb: 34, npu_percent: 0, primary_gpu_id: 'gpu0', gpus: [{ id: 'gpu0', name: 'Test GPU', gpu_percent: 40, memory_used_gb: 24, memory_type: 'shared' }] });
+      if (path === 'stats') return reply({ tokens_per_second: 35, time_to_first_token: .25, input_tokens: 12, output_tokens: 32, cache_tokens: 2, request_count_total: 2, live: { active_requests: 0 } });
+      if (path === 'juiced/requests') return state.failRequests ? reply({ error: 'Fixture diagnostics unavailable' }, 503) : reply({ data: state.requests });
+      if (path === 'juiced/removal' || path === 'juiced/removal' && !body) return reply({ allowed: false, description: 'External weights are preserved', reason: 'Disable and unload this model before removal', label: 'Remove model' });
+      return reply({});
+    });
+    await use(state);
+  },
+});
+export { expect };
+export async function openModel(page: any, id = modelId) {
+  await page.goto('/');
+  if (id !== modelId) await page.getByRole('button', { name: /Show 1 models/ }).click();
+  await page.getByRole('button', { name: id, exact: true }).first().click();
+  await expect(page.getByRole('region', { name: 'Model details', exact: true })).toBeVisible();
+}

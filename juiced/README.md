@@ -33,10 +33,10 @@ explicitly provisioned runtime variant and are outside this default native image
 | Models | Runtime dashboard with readiness counters, service cards and an expandable unloaded inventory. Try opens a temporary service test. |
 | Loading policy | Set residency in three drag-and-drop lanes: Hot, On demand and Disabled. Menus and bulk actions offer the same commands. |
 | Library | Search Hugging Face and review files; inspect downloaded weights in a table; follow transfers; upload or register a GGUF in a dedicated import form. |
-| Model settings | Model-specific workspace with Settings, Weights & variants and Manage tabs. Common load/sampling controls, execution backend/device choices, staged setting copy between quants and explicit save/reload actions. |
+| Model settings | Persistent desktop inspector; focused detail view on narrow screens. Settings, Effective, README, Weights & variants and Manage tabs. Common load/sampling controls, execution backend/device choices, staged setting copy between quants and explicit save/reload actions. |
 | Backends & hardware | Detected CPU/GPU/NPU and native runtime installation/support inventory. Availability is separate from compatibility with a particular model registration. |
 | Service APIs | Copy client endpoints and inspect enabled-service counts and session-cache requirements. |
-| Logs | Live raw output and client-parsed fields, search, severity/component filters, pause/follow, filtered export and tab-local clear. |
+| Diagnostics | Native resource/throughput history, bounded completed-request metadata, and live raw output and client-parsed fields, search, severity/component filters, pause/follow, filtered export and tab-local clear. |
 | Cache | Inspect consumer-session computation snapshots separately from retention, mode and disk-budget settings. Unsaved settings survive background refreshes. |
 | Test services | Chat has a conversation and anchored composer. Transcribe pairs an audio source with an editable/exportable transcript. Speak pairs a script with playback. Images pairs a prompt with a preview. Compare places responses beside each other after sequential requests. |
 
@@ -233,3 +233,45 @@ a real enabled model. It checks discovery, JSON/streaming chat, token counting
 and Responses. `--tools` adds real tool-result round trips and needs a capable
 model. CI uses Stories15M only for protocol/engine behavior, not quality or tool
 ability. Production-model and unchanged consumer acceptance are separate checks.
+
+
+## Operator console acceptance
+
+`juiced/UI-DESIGN.md` owns screen purposes and interaction requirements. The
+model inspector retains list context on desktop and offers a back action on
+narrow screens. Drafts survive polling; leaving or changing a model asks before
+discarding edits. Conflicts offer review of the latest saved state while keeping
+local changes. Effective compares resolved saved intent, the current worker and
+the draft, and shows the actual native launch command. Missing running values
+remain unavailable. The publisher README is fetched from Hugging Face without
+credentials; HTML is not executed.
+
+Diagnostics samples native telemetry every two seconds, retaining at most sixty
+samples in this browser tab. History uses timestamps and breaks across missing
+samples. Pause freezes the view while inference and collection continue. The
+request journal is `GET /v1/juiced/requests` (also all native version prefixes),
+admin-authenticated, newest first, capacity200 in server memory. It covers
+completed supported HTTP inference requests across OpenAI, Anthropic, Ollama and
+SD interfaces. It stores model identifiers, protocol/endpoint, status, duration
+and usage only when reported in that response. It never stores bodies, headers,
+query strings or consumer session IDs. Streaming usage can be unavailable.
+Manager restart clears this journal. Raw logs have their existing independent
+retention and may contain backend output; the journal's privacy properties do
+not apply to arbitrary runtime log lines.
+
+Backend inventory reports native installed versions and update states. Optional
+updates remain usable; required updates do not. Updating a runtime is blocked
+while models using that recipe are loaded. Installations use server-owned
+transfer jobs. Completed model downloads offer Review model, so operators
+explicitly enable residency before loading a new Disabled variant.
+
+Run browser acceptance with `cd juiced/ui && bun install --frozen-lockfile`,
+`node node_modules/@playwright/test/cli.js install chromium`, then
+`bun run test:e2e`. These stateful fixtures test failure/recovery, drafts,
+conflicts, policies, installation, requests, keyboard, zoom, temporary tests and
+320/390/900/1440px layouts. They do not prove inference. Release CI separately
+runs `JUICED_LIVE_URL=http://127.0.0.1:18080 bun run test:e2e` against the actual
+built container and checksum-pinned CPU model: save without restart, explicit
+reload, inference, command inspection and request usage. Both browser gates must
+pass before package publication. Playwright and browser binaries remain test
+and build dependencies; they are excluded from the runtime image.

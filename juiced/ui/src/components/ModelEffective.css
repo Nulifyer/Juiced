@@ -1,0 +1,21 @@
+.effective-settings > header { display: flex; justify-content: space-between; align-items: start; gap: 12px; }
+.effective-settings h3 { font-size: 14px; margin: 0 0 8px; }
+.effective-settings p { color: var(--muted-foreground); font-size: 12px; line-height: 1.6; }
+.capacity-summary { display: grid; gap: 6px; border: 1px solid var(--border); padding: 14px; margin: 18px 0; border-radius: 6px; font-size: 13px; }
+.capacity-summary span { color: var(--muted-foreground); font-size: 12px; }
+.effective-table-scroll { overflow: auto; margin: 20px 0 28px; outline-offset: 3px; }
+.effective-settings table { border-collapse: collapse; width: 100%; min-width: 420px; table-layout: fixed; font-size: 12px; }
+.effective-settings th, .effective-settings td { padding: 12px 9px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; font-weight: 400; }
+.effective-settings thead th { color: var(--muted-foreground); font-weight: 600; }
+.effective-settings th:first-child { width: 29%; }
+.effective-settings small { display: block; margin-top: 5px; color: var(--muted-foreground); font-size: 11px; }
+.effective-settings .changed-setting td:last-child { background: var(--muted); }
+.running-command pre { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--muted); border: 1px solid var(--border); border-radius: 6px; padding: 14px; font: 12px/1.7 ui-monospace, monospace; }
+.model-readme { font-size: 14px; line-height: 1.65; overflow-wrap: anywhere; }
+.model-readme img { max-width: 100%; height: auto; }
+.model-readme pre { overflow: auto; padding: 14px; background: var(--muted); border-radius: 6px; }
+.model-readme h1 { font-size: 22px; }
+.model-readme h2 { font-size: 18px; }
+.model-readme h3 { font-size: 15px; }
+.model-readme table { display: block; overflow: auto; }
+.model-readme a { text-decoration: underline; color: var(--foreground); }

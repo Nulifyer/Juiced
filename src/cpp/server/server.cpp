@@ -1128,6 +1128,7 @@ void Server::setup_routes(httplib::Server &web_server) {
     if (juiced_) juiced_->routes(web_server);
     // Add pre-routing handler to log ALL incoming requests (except health checks)
     web_server.set_pre_routing_handler([this](const httplib::Request& req, httplib::Response& res) {
+        if (juiced_) juiced_->request_started();
         this->log_request(req);
 
         // Unconditionally set Vary: Origin to prevent caching issues, preserving existing values
@@ -2040,6 +2041,7 @@ std::string Server::resolve_host_to_ip(int ai_family, const std::string& host) {
 void Server::setup_http_logger(httplib::Server &web_server) {
     // Add request logging for ALL requests (except health checks and stats endpoints)
     web_server.set_logger([this](const httplib::Request& req, const httplib::Response& res) {
+        if (juiced_) juiced_->request_finished(req, res);
         if (req.path == "/metrics") {
             if (res.status == 200) {
                 bool expected = false;

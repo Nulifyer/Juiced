@@ -1,0 +1,47 @@
+.diagnostics-workspace { max-width: 1400px; margin: 0 auto; }
+.diagnostics-workspace > .workspace-tabs { margin-bottom: 24px; border-bottom: 1px solid var(--border); }
+.diagnostics-toolbar { display: flex; justify-content: space-between; gap: 14px; align-items: center; margin-bottom: 20px; }
+.diagnostics-toolbar p, .diagnostic-details p { color: var(--muted-foreground); font-size: 12px; line-height: 1.6; }
+.performance-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 18px; padding: 18px 0 24px; border-bottom: 1px solid var(--border); }
+.performance-summary > div { display: grid; gap: 10px; min-width: 0; }
+.performance-summary span { color: var(--muted-foreground); font-size: 12px; }
+.performance-summary strong { font-size: 21px; font-variant-numeric: tabular-nums; font-weight: 600; }
+.performance-charts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; margin: 28px 0; }
+.history-chart { min-width: 0; }
+.history-chart header, .history-chart footer { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; font-size: 13px; }
+.history-chart svg { display: block; width: 100%; height: 110px; margin: 12px 0; }
+.history-chart footer { font-size: 11px; color: var(--muted-foreground); }
+.chart-baseline { stroke: var(--border); fill: none; }
+.chart-line { stroke: var(--foreground); stroke-width: 1.8; fill: none; vector-effect: non-scaling-stroke; }
+.diagnostic-details { border-top: 1px solid var(--border); padding-top: 20px; }
+.diagnostic-details h2 { font-size: 15px; }
+.diagnostic-details dl { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; }
+.diagnostic-details dl > div { display: grid; gap: 8px; font-size: 13px; }
+.diagnostic-details dt { color: var(--muted-foreground); }
+.diagnostic-details dd { margin: 0; font-variant-numeric: tabular-nums; }
+.gpu-chart-select { display: flex; gap: 12px; align-items: center; margin-top: 22px; font-size: 12px; }
+.request-controls { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.request-controls .search-input { flex: 1; min-width: 220px; }
+.request-controls select { min-height: 32px; }
+.request-table-scroll { overflow: auto; border-top: 1px solid var(--border); outline-offset: 3px; }
+.request-table-scroll table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.request-table-scroll th, .request-table-scroll td { padding: 14px 12px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--border); }
+.request-table-scroll th { color: var(--muted-foreground); font-weight: 500; white-space: nowrap; }
+.request-table-scroll td:nth-child(2) { min-width: 200px; max-width: 480px; overflow-wrap: anywhere; }
+.request-table-scroll td:nth-child(n+3) { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.request-table-scroll summary { cursor: pointer; line-height: 1.6; }
+.request-table-scroll small { display: block; color: var(--muted-foreground); margin-top: 5px; }
+.request-error { color: #fca5a5; }
+.requests-empty { padding: 48px 20px; text-align: center; color: var(--muted-foreground); }
+.requests-empty h2 { font-size: 15px; color: var(--foreground); }
+.requests-empty p { font-size: 12px; }
+.diagnostics-logs .logs-workspace { height: 660px; min-height: 440px; }
+.diagnostics-logs .page-heading { margin-bottom: 16px; }
+.diagnostics-logs .page-heading h1 { font-size: 17px; }
+@media (max-width: 720px) {
+  .performance-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .performance-charts { grid-template-columns: 1fr; }
+  .diagnostic-details dl { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .diagnostics-toolbar { align-items: start; flex-direction: column; }
+  .request-controls .search-input { flex-basis: 100%; }
+}

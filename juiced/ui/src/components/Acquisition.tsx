@@ -32,6 +32,7 @@ export function Acquisition({
   onInspect,
   initialRepository,
   onRepositoryOpened,
+  onBackends,
 }: {
   models: Model[];
   service: string;
@@ -43,6 +44,7 @@ export function Acquisition({
   onInspect: (m: Model) => void;
   initialRepository?: { repo: string };
   onRepositoryOpened?: () => void;
+  onBackends: () => void;
 }) {
   const [query, setQuery] = useState(""),
     [inventoryQuery, setInventoryQuery] = useState(""),
@@ -796,7 +798,7 @@ export function Acquisition({
                 <article className="transfer-row" key={j.id}>
                   <div className="row-spread">
                     <strong>{j.model_name}</strong>
-                    <span className="badge">{j.status}</span>
+                    <span className="badge">{j.running && j.percent >= 100 ? "Finishing…" : j.status}</span>
                   </div>
                   {!j.complete && (
                     <progress
@@ -816,27 +818,11 @@ export function Acquisition({
                         : ""}
                     </small>
                     <div className="row-actions">
-                      {j.complete && (
-                        <Button
-                          size="compact"
-                          variant="outline"
-                          onClick={async () => {
-                            try {
-                              await api("juiced/operation", {
-                                model: j.model_name,
-                                action: "load",
-                              });
-                              notify("Model queued for loading.");
-                              await refresh();
-                            } catch (e) {
-                              notify((e as Error).message);
-                            }
-                          }}
-                        >
-                          <Play size={13} />
-                          Load
-                        </Button>
-                      )}
+                      {j.complete && (j.type === "backend" || j.id?.startsWith("backend:")) ? (
+                        <Button size="compact" variant="outline" onClick={onBackends}>View backend</Button>
+                      ) : j.complete && models.some((model) => model.id === j.model_name) ? (
+                        <Button size="compact" variant="outline" onClick={() => onInspect(models.find((model) => model.id === j.model_name)!)}>Review model</Button>
+                      ) : null}
                       {j.running ? (
                         <>
                           <Button

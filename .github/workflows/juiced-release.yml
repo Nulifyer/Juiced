@@ -10,7 +10,31 @@ concurrency:
   group: juiced-container-publication
   cancel-in-progress: false
 jobs:
+  ui-acceptance:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.3
+      - name: Install UI and browser
+        working-directory: juiced/ui
+        run: |
+          bun install --frozen-lockfile
+          node node_modules/@playwright/test/cli.js install --with-deps chromium
+      - name: Browser workflow acceptance
+        working-directory: juiced/ui
+        run: bun run test:e2e
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: operator-ui-acceptance
+          path: |
+            juiced/ui/playwright-report/
+            juiced/ui/test-results/
   image:
+    needs: ui-acceptance
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
@@ -54,7 +78,24 @@ jobs:
           python3 -m venv /tmp/juiced-clients
           /tmp/juiced-clients/bin/pip install -r juiced/tests/client-requirements.txt
           /tmp/juiced-clients/bin/python juiced/tests/test_clients.py --url http://127.0.0.1:18080 --model Stories15M-Q4_0 --out client-proof.json
-          docker stop juiced-smoke
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.3
+      - name: Browser acceptance against the actual container and CPU engine
+        working-directory: juiced/ui
+        run: |
+          bun install --frozen-lockfile
+          node node_modules/@playwright/test/cli.js install --with-deps chromium
+          JUICED_LIVE_URL=http://127.0.0.1:18080 bun run test:e2e
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-browser-acceptance
+          path: |
+            juiced/ui/playwright-report/
+            juiced/ui/test-results/
+      - name: Stop accepted fixture
+        run: docker stop juiced-smoke
       - name: Publish accepted container
         run: |
           image=ghcr.io/nulifyer/juiced:${{ github.ref_type == 'tag' && github.ref_name || 'development' }}

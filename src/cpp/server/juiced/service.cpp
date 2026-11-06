@@ -17,6 +17,7 @@
 namespace lemon {
 namespace {
 using json = nlohmann::json;
+thread_local std::chrono::steady_clock::time_point request_start;
 long long now() {
   return std::chrono::duration_cast<std::chrono::seconds>(
              std::chrono::system_clock::now().time_since_epoch())
@@ -431,6 +432,76 @@ void JuicedService::run() {
                    [this] { return stopping_ || !pending_.empty(); });
   }
 }
+void JuicedService::request_started() {
+  request_start = std::chrono::steady_clock::now();
+}
+void JuicedService::request_finished(const httplib::Request &req,
+                                     const httplib::Response &res) {
+  if (req.method != "POST") return;
+  std::string route = req.path;
+  std::string protocol = "openai";
+  if (route == "/api/chat" || route == "/api/generate" ||
+      route == "/api/embed" || route == "/api/embeddings") {
+    protocol = "ollama";
+  } else if (route == "/sdapi/v1/txt2img") {
+    protocol = "sdapi";
+  } else {
+    bool versioned = false;
+    for (const std::string prefix : {"/api/v0/", "/api/v1/", "/v0/", "/v1/"}) {
+      if (route.rfind(prefix, 0) == 0) {
+        route = route.substr(prefix.size());
+        versioned = true;
+        break;
+      }
+    }
+    const std::set<std::string> inference = {"chat/completions", "completions",
+      "responses", "messages", "audio/transcriptions", "audio/speech",
+      "images/generations", "images/edits", "embeddings", "rerank", "classify"};
+    if (!versioned || !inference.count(route)) return;
+    if (route == "messages") protocol = "anthropic";
+  }
+  try {
+    std::string model;
+    bool stream = false;
+    if (!req.body.empty() && req.body.size() <= 262144 &&
+        req.get_header_value("Content-Type").find("json") != std::string::npos) {
+      const auto body = json::parse(req.body, nullptr, false);
+      if (body.is_object()) {
+        if (body.contains("model") && body["model"].is_string()) model = body["model"].get<std::string>();
+        stream = body.value("stream", json(false)) == json(true);
+      }
+    } else if (req.form.has_field("model")) {
+      model = req.form.get_field("model");
+    }
+    // Only a registered identifier is retained; never retain arbitrary body text
+    // presented as a model, headers, query strings, prompts or response content.
+    if (model.size() > 256 || !server_.model_manager_->model_exists_unfiltered(model)) model.clear();
+    json record = {{"endpoint", route}, {"protocol", protocol},
+      {"model", model.empty() ? json(nullptr) : json(model)}, {"stream", stream},
+      {"status", res.status}, {"input_tokens", nullptr}, {"output_tokens", nullptr},
+      {"duration_ms", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - request_start).count()},
+      {"timestamp_ms", std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count()}};
+    if (!res.body.empty() && res.body.size() <= 1048576 &&
+        res.get_header_value("Content-Type").find("json") != std::string::npos) {
+      const auto body = json::parse(res.body, nullptr, false);
+      if (body.is_object() && body.contains("usage") && body["usage"].is_object()) {
+        const auto &usage = body["usage"];
+        for (const auto &field : {std::make_pair("input_tokens", "prompt_tokens"),
+                                  std::make_pair("output_tokens", "completion_tokens")}) {
+          const auto value = usage.value(field.first, usage.value(field.second, json(nullptr)));
+          if (value.is_number_integer() && value.get<long long>() >= 0) record[field.first] = value;
+        }
+      }
+    }
+    std::lock_guard<std::mutex> lock(requests_mutex_);
+    record["id"] = ++request_sequence_;
+    requests_.push_back(std::move(record));
+    while (requests_.size() > 200) requests_.pop_front();
+  } catch (...) {
+    // Diagnostics must never alter serving or throw from the HTTP logger.
+  }
+}
+
 void JuicedService::routes(httplib::Server &http) {
   compatibility_routes(http);
   const std::string ui = utils::get_resource_path("resources/juiced");
@@ -452,7 +523,7 @@ void JuicedService::routes(httplib::Server &http) {
              [this](const auto &q, auto &r) { handle(q, r, "voices"); });
     for (const std::string operation :
          {"catalog", "state", "threads", "thread", "cache", "imports",
-          "transfers", "removal"})
+          "transfers", "removal", "requests"})
       http.Get(prefix + "juiced/" + operation,
                [this, operation](const auto &q, auto &r) {
                  handle(q, r, operation);
@@ -483,6 +554,15 @@ void JuicedService::routes(httplib::Server &http) {
 void JuicedService::handle(const httplib::Request &req, httplib::Response &res,
                            const std::string &op) {
   try {
+    if (op == "requests") {
+      std::lock_guard<std::mutex> lock(requests_mutex_);
+      json records = json::array();
+      for (auto it = requests_.rbegin(); it != requests_.rend(); ++it)
+        records.push_back(*it);
+      reply(res, {{"data", records}, {"capacity", 200},
+                  {"content_captured", false}, {"retention", "memory since manager restart"}});
+      return;
+    }
     json body = req.body.empty() ? json::object() : json::parse(req.body);
     if (op == "removal") {
       remove_model(req, res);

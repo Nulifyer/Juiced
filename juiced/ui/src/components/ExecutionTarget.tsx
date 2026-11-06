@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { backendReady } from "./backendState";
 import { api, type Model } from "../api";
 import { runtimeFields, setArg, type Options } from "./modelSettings";
 
@@ -9,7 +10,7 @@ export type RuntimeInfo = {
   options?: { name: string; type_name: string; help: string }[];
   backends: Record<
     string,
-    { state: string; message?: string; devices?: string[]; version?: string }
+    { state: string; message?: string; devices?: string[]; version?: string; action?: string; update_available?: boolean }
   >;
 };
 export type SystemInfo = {
@@ -35,16 +36,19 @@ export const acceleratorName = (name: string) =>
 export function useSystemInfo() {
   const [info, setInfo] = useState<SystemInfo>();
   const [error, setError] = useState("");
+  const [revision, setRevision] = useState(0);
+  const refresh = useCallback(() => setRevision((value) => value + 1), []);
   useEffect(() => {
     const controller = new AbortController();
+    setError("");
     void api<SystemInfo>("system-info", undefined, controller.signal)
       .then(setInfo)
       .catch((e) => {
         if (!controller.signal.aborted) setError(e.message);
       });
     return () => controller.abort();
-  }, []);
-  return { info, error };
+  }, [revision]);
+  return { info, error, refresh };
 }
 export function ExecutionTarget({
   model,
@@ -82,7 +86,7 @@ export function ExecutionTarget({
     if (
       model.recipe !== "llamacpp" ||
       backend === "cpu" ||
-      supported?.state !== "installed"
+      !backendReady(supported?.state || "")
     )
       return;
     const controller = new AbortController();
@@ -175,9 +179,9 @@ export function ExecutionTarget({
               </option>
             ) : (
               Object.entries(recipe.backends).map(([id, b]) => (
-                <option value={id} key={id} disabled={b.state !== "installed"}>
+                <option value={id} key={id} disabled={!backendReady(b.state)}>
                   {acceleratorName(id)}
-                  {b.state === "installed"
+                  {backendReady(b.state)
                     ? ""
                     : ` · ${b.state === "installable" ? "not installed" : "unavailable"}`}
                 </option>
@@ -239,7 +243,7 @@ export function ExecutionTarget({
         <summary>Why are other execution paths unavailable?</summary>
         <ul className="execution-reasons">
           {Object.entries(recipe?.backends || {})
-            .filter(([, b]) => b.state !== "installed")
+            .filter(([, b]) => !backendReady(b.state))
             .map(([id, b]) => (
               <li key={id}>
                 <strong>{acceleratorName(id)}</strong>
@@ -255,7 +259,7 @@ export function ExecutionTarget({
             <li key={id}>
               <strong>{runtimeName(id, r)}</strong>
               <span>
-                {Object.values(r.backends).some((b) => b.state === "installed")
+                {Object.values(r.backends).some((b) => backendReady(b.state))
                   ? "Installed for other registrations."
                   : Object.values(r.backends).some(
                         (b) => b.state === "installable",

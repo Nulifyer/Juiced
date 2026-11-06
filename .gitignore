@@ -198,3 +198,8 @@ CLAUDE.local.md
 # The UI source utility module is not a generated native library.
 !/juiced/ui/src/lib/
 !/juiced/ui/src/lib/**
+
+# Operator UI browser acceptance artifacts
+/juiced/ui/test-results/
+/juiced/ui/playwright-report/
+/test-results/

@@ -39,3 +39,9 @@ build/
 **/node_modules/
 **/target/
 **/dist/
+
+# Browser acceptance output is never a build input
+**/test-results/
+**/playwright-report/
+/juiced/ui/e2e/
+/juiced/ui/playwright.config.ts

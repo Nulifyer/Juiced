@@ -24,6 +24,8 @@ public:
   void set_hot(const std::string &model, bool pinned);
   bool inference_guard(const httplib::Request &, httplib::Response &);
   bool unleased_protocol(const httplib::Request &, httplib::Response &);
+  void request_started();
+  void request_finished(const httplib::Request &, const httplib::Response &);
 
 private:
   friend class Server;
@@ -34,6 +36,9 @@ private:
   std::condition_variable wake_;
   json state_, catalog_ = json::array(), operations_ = json::object();
   std::deque<json> pending_;
+  std::mutex requests_mutex_;
+  std::deque<json> requests_;
+  unsigned long long request_sequence_ = 0;
   std::atomic<bool> stopping_{false};
   std::thread worker_;
   std::unique_ptr<NativeProcess> voice_process_;
