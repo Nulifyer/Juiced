@@ -89,3 +89,14 @@ test('cache policy drafts survive tab changes and save only on request', async (
   await expect.poll(() => runtime.cache.settings.retention_days).toBe(14);
   await expect(page.getByRole('button', { name: 'Save changes', exact: true })).toBeDisabled();
 });
+
+
+test('selecting the current destination closes mobile navigation', async ({ page, runtime }) => {
+  await page.setViewportSize({ width: 390, height: 960 });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Toggle navigation' }).click();
+  await page.getByRole('button', { name: 'Models', exact: true }).click();
+  await expect(page.locator('.app-sidebar.mobile-open')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Toggle navigation' })).toHaveAttribute('aria-expanded', 'false');
+  expect(runtime.writes).toEqual([]);
+});

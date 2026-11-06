@@ -83,7 +83,7 @@ export default function App() {
   const navigationGuard = useRef<((action: () => void) => void) | undefined>(undefined);
   const registerNavigationGuard = useCallback((guard?: (action: () => void) => void) => { navigationGuard.current = guard; }, []);
   function navigate(action: () => void) { if (navigationGuard.current) navigationGuard.current(action); else action(); }
-  function chooseScreen(next: string) { navigate(() => setScreen(next)); }
+  function chooseScreen(next: string) { navigate(() => { setScreen(next); setMobile(false); }); }
   const inspectable = ["models", "policy", "library"].includes(screen);
   useEffect(() => {
     if (!notice) return;
