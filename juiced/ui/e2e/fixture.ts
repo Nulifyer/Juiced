@@ -14,7 +14,7 @@ export const test = base.extend<{ runtime: any }>({
         { id: modelId, recipe: 'llamacpp', service: 'Chat', labels: ['tool-calling'], downloaded: true, available: true, loaded: true, state: 'loaded', policy: 'hot', size: 24, checkpoint: 'Example/Ornith-GGUF:Ornith-Q6_K.gguf', runtime: { pid: 4321, is_busy: false, settings_pending: true } },
         { id: otherId, recipe: 'llamacpp', service: 'Chat', labels: [], downloaded: true, available: true, loaded: false, state: 'unloaded', policy: 'disabled', size: 18, checkpoint: 'Example/Ornith-GGUF:Ornith-Q4_K_M.gguf' },
       ],
-      jobs: [ { id: otherId, model_name: otherId, type: 'model', complete: true, status: 'complete', percent: 100 }, { id: 'backend:whispercpp:cpu', model_name: 'whispercpp:cpu', type: 'backend', complete: true, status: 'complete' } ],
+      jobs: [ { id: otherId, model_name: 'user.' + otherId, type: 'model', complete: true, status: 'complete', percent: 100 }, { id: 'backend:whispercpp:cpu', model_name: 'whispercpp:cpu', type: 'backend', complete: true, status: 'complete' } ],
       requests: [ { id: 2, timestamp_ms: Date.now(), model: modelId, endpoint: '/v1/chat/completions', protocol: 'openai', stream: false, status: 200, duration_ms: 1532, input_tokens: 12, output_tokens: 32 }, { id: 1, timestamp_ms: Date.now(), model: null, endpoint: '/api/chat', protocol: 'ollama', stream: true, status: 400, duration_ms: 5, input_tokens: null, output_tokens: null } ],
     };
     await page.routeWebSocket('**/logs/stream', socket => { socket.close({ code: 1000, reason: 'Fixture has no log stream' }); });

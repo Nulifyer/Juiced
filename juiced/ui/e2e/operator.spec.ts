@@ -233,3 +233,12 @@ test('loading policy remains readable beside the persistent inspector', async ({
   expect(await page.locator('.policy-board').evaluate(node => getComputedStyle(node).gridTemplateColumns.split(' ').length)).toBe(1);
   expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
 });
+
+test('global Downloads opens its view from a focused mobile inspector', async ({ page, runtime }) => {
+  await page.setViewportSize({ width: 390, height: 800 });
+  await openModel(page);
+  await page.getByRole('button', { name: /^Downloads/ }).click();
+  await expect(page.getByRole('button', { name: 'Review model', exact: true })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Model details', exact: true })).toHaveCount(0);
+  expect(runtime.writes).toEqual([]);
+});

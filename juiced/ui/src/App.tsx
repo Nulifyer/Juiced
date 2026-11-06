@@ -175,7 +175,7 @@ export default function App() {
             variant="ghost"
             size="sm"
             onClick={() => {
-              navigate(() => { setLibraryTab("transfers"); setScreen("library"); });
+              navigate(() => { setInspected(null); setLibraryTab("transfers"); setScreen("library"); });
             }}
           >
             <DownloadActivity />
@@ -415,7 +415,7 @@ export default function App() {
           />
         )}
         {["logs", "diagnostics"].includes(screen) && <Diagnostics initialTab={screen === "logs" ? "logs" : diagnosticTab} data={telemetry} logs={logs} models={models} inspect={(model) => { setInspected(model); setScreen("models"); }} />}
-        {screen === "backends" && <BackendInventory models={models} jobs={jobs} openDownloads={() => { setLibraryTab("transfers"); setScreen("library"); }} />}
+        {screen === "backends" && <BackendInventory models={models} jobs={jobs} openDownloads={() => { setInspected(null); setLibraryTab("transfers"); setScreen("library"); }} />}
         {screen === "services" && (
           <ServiceEndpoints models={models} notify={notify} />
         )}

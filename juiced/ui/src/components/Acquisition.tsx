@@ -21,6 +21,10 @@ import { Button } from "./t3/button";
 import { CapabilityIcons, ServiceIcon, serviceNames } from "./ModelLibrary";
 import "./Acquisition.css";
 import { api, bytes, type Model } from "../api";
+function transferModel(models: Model[], name: string) {
+  return models.find((model) => model.id === name) ||
+    (name?.startsWith("user.") ? models.find((model) => model.id === name.slice(5)) : undefined);
+}
 export function Acquisition({
   models,
   service,
@@ -797,7 +801,7 @@ export function Acquisition({
               .map((j) => (
                 <article className="transfer-row" key={j.id}>
                   <div className="row-spread">
-                    <strong>{j.model_name}</strong>
+                    <strong>{transferModel(models, j.model_name)?.id || j.model_name}</strong>
                     <span className="badge">{j.running && j.percent >= 100 ? "Finishing…" : j.status}</span>
                   </div>
                   {!j.complete && (
@@ -820,8 +824,8 @@ export function Acquisition({
                     <div className="row-actions">
                       {j.complete && (j.type === "backend" || j.id?.startsWith("backend:")) ? (
                         <Button size="compact" variant="outline" onClick={onBackends}>View backend</Button>
-                      ) : j.complete && models.some((model) => model.id === j.model_name) ? (
-                        <Button size="compact" variant="outline" onClick={() => onInspect(models.find((model) => model.id === j.model_name)!)}>Review model</Button>
+                      ) : j.complete && transferModel(models, j.model_name) ? (
+                        <Button size="compact" variant="outline" onClick={() => onInspect(transferModel(models, j.model_name)!)}>Review model</Button>
                       ) : null}
                       {j.running ? (
                         <>
