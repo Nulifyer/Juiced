@@ -4,6 +4,7 @@ import { api, type Model } from "../api";
 import type { RuntimeTelemetry } from "./RuntimeMetrics";
 import type { RuntimeLogs as LogState } from "../logs/useLogStream";
 import { RuntimeLogs } from "./RuntimeLogs";
+import { HelpTip } from "./HelpTip";
 import { Button } from "./t3/button";
 import "./Diagnostics.css";
 
@@ -43,7 +44,7 @@ function Performance({ data, models }: { data: RuntimeTelemetry; models: Model[]
   const rate = finite(active) ? active > 0 ? stats?.live?.estimated_tokens_per_second : 0 : undefined;
   const last = (stats?.request_count_total ?? stats?.output_tokens ?? 0) > 0 ? stats : undefined;
   return <section className="performance-view" aria-label="Runtime performance">
-    <div className="diagnostics-toolbar"><p>{current.stale ? "Telemetry is unavailable. Retained charts may be stale." : frozen ? "View paused. Inference and data collection continue." : "Native runtime measurements. Updates every 2 seconds."}</p>
+    <div className="diagnostics-toolbar"><p>{current.stale ? "Telemetry is unavailable. Retained charts may be stale." : frozen ? "View paused. Inference and data collection continue." : "Live · 2s updates"}</p>
       <Button variant="outline" size="sm" onClick={() => setFrozen(frozen ? null : data)}>{frozen ? <Play size={14} /> : <Pause size={14} />}{frozen ? "Resume performance" : "Pause performance"}</Button></div>
     <div className="performance-summary">
       <div><span>Active requests</span><strong>{format(stats?.live?.active_requests, "", 0)}</strong></div>
@@ -58,12 +59,12 @@ function Performance({ data, models }: { data: RuntimeTelemetry; models: Model[]
       <HistoryChart times={samples.map((sample) => sample.at)} title="GPU utilization" values={samples.map((sample) => sample.system.gpus?.find((g: any) => g.id === (gpuId || sample.system.primary_gpu_id))?.gpu_percent)} unit="%" ceiling={100} />
       <HistoryChart times={samples.map((sample) => sample.at)} title="Live output estimate" values={samples.map((sample) => finite(sample.inference?.live?.active_requests) ? sample.inference.live.active_requests > 0 ? sample.inference.live.estimated_tokens_per_second : 0 : undefined)} unit=" tok/s" />
     </div>
-    <section className="diagnostic-details"><h2>Last completed inference</h2><dl>
+    <section className="diagnostic-details"><div className="heading-with-help"><h2>Last completed inference</h2><HelpTip label="Inference measurements">GPU shared allocation overlaps host RAM. Missing prefill speed, load time and per-worker cache occupancy are not inferred from aggregate counters.</HelpTip></div><dl>
       <div><dt>Decode rate</dt><dd>{format(last?.tokens_per_second, " tok/s")}</dd></div><div><dt>Input tokens</dt><dd>{format(last?.input_tokens, "", 0)}</dd></div>
       <div><dt>Output tokens</dt><dd>{format(last?.output_tokens, "", 0)}</dd></div><div><dt>Cached tokens</dt><dd>{format(last?.cache_tokens, "", 0)}</dd></div>
       <div><dt>GPU allocation</dt><dd>{format(gpu?.memory_used_gb, " GiB")}{gpu?.memory_type === "shared" ? " shared with host RAM" : ""}</dd></div>
       <div><dt>NPU utilization</dt><dd>{format(system?.npu_percent, "%")}</dd></div>
-    </dl><p>Shared GPU allocation overlaps host RAM. Do not add the two. Prefill speed, load time and per-worker KV occupancy are not inferred from aggregate counters when the backend does not report them.</p></section>
+    </dl></section>
   </section>;
 }
 
@@ -97,11 +98,11 @@ function Requests({ active, models, inspect }: { active: boolean; models: Model[
       <select aria-label="Request status" value={status} onChange={(event) => setStatus(event.target.value)}><option value="all">All requests</option><option value="success">Successful</option><option value="errors">Errors</option></select>
       <Button variant="outline" size="sm" onClick={() => setPaused(!paused)}>{paused ? <Play size={14} /> : <Pause size={14} />}{paused ? "Resume requests" : "Pause requests"}</Button>
       <Button variant="ghost" size="sm" aria-label="Refresh request history" disabled={paused} onClick={() => setRevision(revision + 1)}><RefreshCw size={14} /></Button></div>
-    <p className="page-note">{visible.length} retained requests shown. {paused ? "View paused. " : ""}Latest 200 completed inference requests since manager restart. Metadata only; prompts, output and client session IDs are never captured here.</p>
+    <div className="request-retention">{visible.length} requests{paused ? " · Paused" : ""}<HelpTip label="Request history">Latest 200 completed inference requests since manager restart. Metadata only; prompts, output and client session IDs are never captured here. Duration includes loading, queueing and inference.</HelpTip></div>
     {error && <p role="alert" className="inline-error">Request history unavailable: {error}. <Button size="sm" variant="outline" onClick={() => { setPaused(false); setRevision(revision + 1); }}>Retry requests</Button></p>}
     <div className="request-table-scroll" tabIndex={0} aria-label="Completed requests">
       <table><thead><tr><th>Completed</th><th>Model / endpoint</th><th>Status</th><th>Duration</th><th>Input / output</th></tr></thead><tbody>
-        {visible.map((record) => <tr key={record.id}><td><time dateTime={new Date(record.timestamp_ms).toISOString()}>{new Date(record.timestamp_ms).toLocaleTimeString()}</time></td><td><details><summary>{record.model || "Model not reported"}<small>{record.protocol} · {record.endpoint}</small></summary><p>Request {record.id}. {record.stream ? "Streaming" : "Non-streaming"}. Duration includes loading, queueing and inference.</p>{models.some((model) => model.id === record.model) && <Button variant="outline" size="sm" onClick={() => inspect(models.find((model) => model.id === record.model)!)}>Inspect model</Button>}</details></td>
+        {visible.map((record) => <tr key={record.id}><td><time dateTime={new Date(record.timestamp_ms).toISOString()}>{new Date(record.timestamp_ms).toLocaleTimeString()}</time></td><td><div className="request-model-cell">{models.some((model) => model.id === record.model) ? <button className="request-model" onClick={() => inspect(models.find((model) => model.id === record.model)!)}>{record.model}</button> : <span>{record.model || "Model not reported"}</span>}<HelpTip label={`Request ${record.id}`}>{record.stream ? "Streaming" : "Non-streaming"} request. Duration includes loading, queueing and inference.</HelpTip></div><small>{record.protocol} · {record.endpoint}</small></td>
           <td><span className={record.status >= 400 ? "request-error" : "is-ready"}>{record.status}</span></td><td>{format(record.duration_ms / 1000, " s", 3)}</td><td>{record.input_tokens ?? "—"} / {record.output_tokens ?? "—"}</td></tr>)}
       </tbody></table>
       {!visible.length && <div className="requests-empty"><Activity size={26} /><h2>{loading ? "Reading request history…" : error ? "Request history is unavailable" : records.length ? "No requests match these filters" : "No completed inference requests yet"}</h2><p>Requests appear after they finish. Streaming tokens are not guessed from another request's counters.</p></div>}
@@ -112,7 +113,7 @@ function Requests({ active, models, inspect }: { active: boolean; models: Model[
 export function Diagnostics({ data, logs, models, inspect, initialTab = "performance" }: { initialTab?: string; data: RuntimeTelemetry; logs: LogState; models: Model[]; inspect: (model: Model) => void }) {
   const [tab, setTab] = useState(initialTab);
   useEffect(() => setTab(initialTab), [initialTab]);
-  return <div className="diagnostics-workspace"><header className="page-heading"><div><h1>Diagnostics</h1><p>Understand resource use, completed requests and runtime output.</p></div></header>
+  return <div className="diagnostics-workspace"><header className="page-heading"><div><h1>Diagnostics</h1></div></header>
     <nav className="workspace-tabs" aria-label="Diagnostic views">{["performance", "requests", "logs"].map((name) => <button key={name} aria-current={tab === name ? "page" : undefined} className={tab === name ? "active" : ""} onClick={() => setTab(name)}>{name[0].toUpperCase() + name.slice(1)}</button>)}</nav>
     {tab === "performance" && <Performance data={data} models={models} />}
     <div hidden={tab !== "requests"}><Requests active={tab === "requests"} models={models} inspect={inspect} /></div>

@@ -45,3 +45,8 @@
   .diagnostics-toolbar { align-items: start; flex-direction: column; }
   .request-controls .search-input { flex-basis: 100%; }
 }
+
+.request-retention { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted-foreground); margin: 8px 0; }
+.request-model-cell { display: flex; align-items: baseline; gap: 4px; }
+.request-model { text-align: left; overflow-wrap: anywhere; }
+.request-model:hover { text-decoration: underline; text-underline-offset: 3px; }

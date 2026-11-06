@@ -14,6 +14,7 @@ export const test = base.extend<{ runtime: any }>({
         { id: modelId, recipe: 'llamacpp', service: 'Chat', labels: ['tool-calling'], downloaded: true, available: true, loaded: true, state: 'loaded', policy: 'hot', size: 24, checkpoint: 'Example/Ornith-GGUF:Ornith-Q6_K.gguf', runtime: { pid: 4321, is_busy: false, settings_pending: true } },
         { id: otherId, recipe: 'llamacpp', service: 'Chat', labels: [], downloaded: true, available: true, loaded: false, state: 'unloaded', policy: 'disabled', size: 18, checkpoint: 'Example/Ornith-GGUF:Ornith-Q4_K_M.gguf' },
       ],
+      cache: { settings: { mode: 'memory', retention_days: 7, disk_budget_gib: 8, model_modes: {} }, snapshots: [], persistent_supported: true },
       jobs: [ { id: otherId, model_name: 'user.' + otherId, type: 'model', complete: true, status: 'complete', percent: 100 }, { id: 'backend:whispercpp:cpu', model_name: 'whispercpp:cpu', type: 'backend', complete: true, status: 'complete' } ],
       requests: [ { id: 2, timestamp_ms: Date.now(), model: modelId, endpoint: '/v1/chat/completions', protocol: 'openai', stream: false, status: 200, duration_ms: 1532, input_tokens: 12, output_tokens: 32 }, { id: 1, timestamp_ms: Date.now(), model: null, endpoint: '/api/chat', protocol: 'ollama', stream: true, status: 400, duration_ms: 5, input_tokens: null, output_tokens: null } ],
     };
@@ -31,8 +32,12 @@ export const test = base.extend<{ runtime: any }>({
       }
       if (path === 'juiced/catalog') return reply({ data: state.empty ? [] : state.models });
       if (path === 'juiced/transfers' || path === 'downloads') return reply({ data: state.jobs });
-      if (path === 'juiced/protocols') return reply({ protocols: [] });
-      if (path === 'juiced/cache') return reply({ settings: { mode: 'memory' }, entries: [] });
+      if (path === 'juiced/cache') { if (body) state.cache.settings = { ...state.cache.settings, ...body }; return reply(state.cache); }
+      if (path === 'juiced/protocols') return reply({ protocols: [
+        { id: 'openai', base_path: '/v1', features: ['Chat', 'Speech', 'Images'], limits: ['Model and backend capabilities apply.'] },
+        { id: 'ollama', base_path: '', features: ['Chat', 'Generate', 'Tags'], limits: ['Model installation uses the Juiced catalog.'] },
+        { id: 'wyoming', features: ['STT', 'TTS'], limits: ['Private TCP listener.'], listener: { enabled: true, process_running: true, uri: 'tcp://0.0.0.0:10300' } },
+      ] });
       if (path === 'health') return reply({ all_models_loaded: [{ model_name: modelId, recipe_options: state.running, launch_command: ['/runtime/llama-server', '--model', '/library/Ornith-Q6_K.gguf', '--ctx-size', '4096', '--parallel', '2'] }] });
       if (path === 'juiced/operation') return reply({ status: 'queued' });
       if (path === 'juiced/policy') { const model = state.models.find(m => m.id === body.model); if (model) model.policy = body.policy; return reply({}); }

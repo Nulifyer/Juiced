@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { backendReady } from "./backendState";
+import { HelpTip } from "./HelpTip";
 import { api, type Model } from "../api";
 import { SelectField, type SelectOption } from "./t3/select";
 import { runtimeFields, setArg, type Options } from "./modelSettings";
@@ -165,11 +166,7 @@ export function ExecutionTarget({
   });
   return (
     <fieldset className="settings-section execution-target" disabled={disabled}>
-      <legend>Runtime & hardware</legend>
-      <p>
-        Runtime compatibility belongs to the model registration. Choose an
-        installed execution backend for that runtime, then reload to apply it.
-      </p>
+      <legend>Runtime & hardware <HelpTip label="Runtime compatibility">Execution choices belong to this model registration. Installed packages alone do not prove compatibility with its architecture or quantization. Reload to apply a changed execution target.</HelpTip></legend>
       {error && (
         <p className="inline-error" role="alert">
           Hardware inventory unavailable: {error}. No new hardware choices are
@@ -178,17 +175,14 @@ export function ExecutionTarget({
       )}
       <div className="settings-grid">
         <div className="registered-runtime-field">
-          <span>Model runtime</span>
+          <span className="field-label">Model runtime</span>
           <div className="registered-runtime">
             {runtimeName(model.recipe, recipe)}
           </div>
-          <small>
-            Fixed by this registration. Weights are not automatically converted
-            for another runtime.
-          </small>
+
         </div>
         <label>
-          Run on
+          <span className="field-label">Run on</span>
           <SelectField
             label="Run on"
             value={backend}
@@ -207,7 +201,7 @@ export function ExecutionTarget({
       </div>
       {model.recipe === "llamacpp" && backend !== "cpu" && (
         <label className="execution-device">
-          Accelerator device
+          <span className="field-label">Accelerator device <HelpTip label="Accelerator device">Device IDs come from the selected runtime. Automatic selection lets the runtime choose a GPU.</HelpTip></span>
           <SelectField
             label="Accelerator device"
             value={device}
@@ -230,22 +224,10 @@ export function ExecutionTarget({
                 : []),
             ]}
           />
-          <small>
-            {deviceError ||
-              "Device IDs are reported by the selected runtime. Existing selections are preserved until changed."}
-          </small>
+          {deviceError && <small role="alert">{deviceError}</small>}
         </label>
       )}
-      {info?.devices.amd_npu?.available &&
-        !supported?.devices?.includes("amd_npu") && (
-          <p className="page-note">
-            The server detects an NPU. This model registration has no installed
-            NPU execution path. Hybrid execution needs a runtime that explicitly
-            supports both devices.
-          </p>
-        )}
-      <details>
-        <summary>Why are other execution paths unavailable?</summary>
+      <div className="execution-alternatives"><HelpTip label="Other execution paths">
         <ul className="execution-reasons">
           {Object.entries(recipe?.backends || {})
             .filter(([, b]) => !backendReady(b.state))
@@ -271,7 +253,7 @@ export function ExecutionTarget({
                       )
                     ? "Runtime package is not installed."
                     : "Unavailable in the current runtime environment."}{" "}
-                This model has no compatible registration for this runtime.
+                This model is registered with a different runtime. Exact artifact compatibility has not been established here.
               </span>
             </li>
           ))}
@@ -283,7 +265,7 @@ export function ExecutionTarget({
             </span>
           </li>
         </ul>
-      </details>
+      </HelpTip><span>Other execution paths</span></div>
     </fieldset>
   );
 }

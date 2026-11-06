@@ -27,6 +27,7 @@ import {
   type Options,
 } from "./modelSettings";
 import "./ModelWorkspace.css";
+import { HelpTip } from "./HelpTip";
 import { ModelEffective } from "./ModelEffective";
 import { ModelReadme } from "./ModelReadme";
 import { ExecutionTarget } from "./ExecutionTarget";
@@ -177,7 +178,7 @@ export function ModelWorkspace({
     };
     return (
       <label key={field.key}>
-        {field.label}
+        <span className="field-label">{field.label}<HelpTip label={field.label}>{field.help}</HelpTip></span>
         {field.choices ? (
           <select
             aria-label={field.label}
@@ -207,7 +208,7 @@ export function ModelWorkspace({
             onChange={(e) => change(e.target.value)}
           />
         )}
-        <small>{field.help}</small>
+
       </label>
     );
   }
@@ -320,9 +321,7 @@ export function ModelWorkspace({
             <div className="dialog-heading">
               <div>
                 <h2>{model.id}</h2>
-                <p>
-                  Configure and test this model variant.
-                </p>
+
               </div>
               <Button
                 variant="ghost"
@@ -387,6 +386,7 @@ export function ModelWorkspace({
             <nav className="workspace-tabs" aria-label="Model details">
               {[
                 ["settings", "Settings"],
+                ["advanced", "Advanced"],
                 ["effective", "Effective"],
                 ["readme", "README"],
                 ["weights", "Weights & variants"],
@@ -420,7 +420,7 @@ export function ModelWorkspace({
                 {message}
               </p>
             )}
-            {tab === "settings" &&
+            {["settings", "advanced"].includes(tab) &&
               (!response ? (
                 <p>
                   {error
@@ -430,7 +430,7 @@ export function ModelWorkspace({
                 </p>
               ) : (
                 <>
-                  <div className="settings-status">
+                  {busy && <div className="settings-status">
                     <strong>
                       {dirty
                         ? "Unsaved changes"
@@ -445,8 +445,8 @@ export function ModelWorkspace({
                         ? "Active requests are running. Save for the next load, or wait before reloading."
                         : "Load-time changes apply to this variant only. Reload keeps its loading policy."}
                     </p>
-                  </div>
-                  {related.some(
+                  </div>}
+                  {tab === "advanced" && related.some(
                     (m) => m.id !== model.id && m.recipe === model.recipe,
                   ) && (
                     <div className="settings-copy">
@@ -479,6 +479,7 @@ export function ModelWorkspace({
                       </Button>
                     </div>
                   )}
+                  {tab === "settings" && <>
                   <ExecutionTarget
                     model={model}
                     effective={response.effective}
@@ -491,7 +492,7 @@ export function ModelWorkspace({
                     <div className="settings-grid">
                       {"ctx_size" in response.effective && (
                         <label>
-                          Total context tokens
+                          <span className="field-label">Total context tokens<HelpTip label="Total context tokens">Includes prompt, reasoning and output. -1 selects automatically. More context and concurrent chats require more memory.</HelpTip></span>
                           <input
                             type="number"
                             aria-label="Total context tokens"
@@ -511,10 +512,7 @@ export function ModelWorkspace({
                               )
                             }
                           />
-                          <small>
-                            -1 selects automatically. Includes prompt, reasoning
-                            and output.
-                          </small>
+
                         </label>
                       )}
                       {model.recipe === "llamacpp" &&
@@ -525,7 +523,7 @@ export function ModelWorkspace({
                         {context > 0
                           ? `${Math.floor(context / parallel).toLocaleString()} tokens per chat across ${parallel} slot${parallel === 1 ? "" : "s"}.`
                           : "Per-chat context is determined when the backend loads."}{" "}
-                        More context and slots require more memory.
+
                       </p>
                     )}
                   </fieldset>
@@ -538,18 +536,15 @@ export function ModelWorkspace({
                         </div>
                       </fieldset>
                       <fieldset className="settings-section" disabled={saving}>
-                        <legend>Generation defaults</legend>
-                        <p>
-                          Defaults for callers that do not supply their own
-                          sampling settings. A harness can override these per
-                          request.
-                        </p>
+                        <legend>Generation defaults <HelpTip label="Generation defaults">Used when callers do not supply sampling settings. Clients can override these per request.</HelpTip></legend>
                         <div className="settings-grid">
                           {samplingFields.map(argControl)}
                         </div>
                       </fieldset>
                     </>
                   )}
+                  </>}
+                  {tab === "advanced" && <>
                   <fieldset className="settings-section" disabled={saving}>
                     <legend>Backend options</legend>
                     <div className="settings-grid">
@@ -625,12 +620,8 @@ export function ModelWorkspace({
                         })}
                     </div>
                   </fieldset>
-                  <details className="settings-section">
-                    <summary>Advanced backend arguments</summary>
-                    <p>
-                      Arguments not covered by the controls above. Existing
-                      cache, template and backend flags are preserved.
-                    </p>
+                  <section className="settings-section">
+                    <h2>Backend arguments <HelpTip label="Backend arguments">Additional flags not covered by the Settings controls. Existing cache, template and backend flags are preserved.</HelpTip></h2>
                     {model.recipe === "llamacpp" ? (
                       <label>
                         Additional llama.cpp arguments
@@ -661,7 +652,8 @@ export function ModelWorkspace({
                           </label>
                         ))
                     )}
-                  </details>
+                  </section>
+                  </>}
                 </>
               ))}
             {tab === "effective" && response && <ModelEffective model={model} options={response} draft={draft} extra={extraEdited ? extra : undefined} />}
@@ -749,7 +741,7 @@ export function ModelWorkspace({
               </>
             )}
           </div>
-          {["settings", "effective"].includes(tab) && response && (
+          {["settings", "advanced", "effective"].includes(tab) && response && (
             <footer className="model-workspace-footer">
               <div>
                 <strong>

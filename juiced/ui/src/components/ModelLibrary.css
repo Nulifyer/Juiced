@@ -12,10 +12,10 @@
   display: flex;
   gap: 10px;
   align-items: center;
-  margin: 22px 0;
+  margin: 16px 0;
 }
 .workspace-toolbar .search-input {
-  max-width: 620px;
+  max-width: none;
 }
 .workspace-toolbar select {
   font-size: 12px;
@@ -25,7 +25,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  margin-bottom: 16px;
+  margin-bottom: 10px;
 }
 .section-heading h2 {
   font-size: 15px;
@@ -40,7 +40,7 @@
 }
 .live-service {
   border: 1px solid var(--border);
-  border-radius: 9px;
+  border-radius: 6px;
   background: var(--card);
   margin: 0 0 12px;
 }
@@ -64,10 +64,10 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  min-height: 72px;
+  min-height: 58px;
   cursor: grab;
   touch-action: pan-y;
-  padding: 14px 12px;
+  padding: 10px 12px;
   border-bottom: 1px solid #ffffff08;
   min-width: 0;
 }
@@ -144,7 +144,7 @@
   background: #8ab89b;
 }
 .runtime-shelf {
-  margin-top: 34px;
+  margin-top: 24px;
 }
 .inventory-column-head {
   display: flex;
@@ -165,7 +165,7 @@
   width: 90px;
 }
 .runtime-shelf .deployment-row {
-  min-height: 68px;
+  min-height: 58px;
 }
 .runtime-shelf .deployment-actions {
   min-width: 90px;
@@ -199,12 +199,11 @@
   border-radius: 8px;
   min-width: 0;
   background: var(--card);
-  min-height: 330px;
+  min-height: 220px;
 }
 .policy-lane-heading {
-  padding: 18px 16px;
+  padding: 12px;
   border-bottom: 1px solid var(--border);
-  min-height: 120px;
 }
 .policy-lane-heading > div {
   display: flex;
@@ -236,14 +235,14 @@
   color: #999fae;
 }
 .policy-lane-models {
-  max-height: calc(100dvh - 410px);
+  max-height: calc(100dvh - 290px);
   min-height: 210px;
   overflow-y: auto;
   scrollbar-width: thin;
 }
 .policy-model {
   gap: 6px;
-  padding: 14px 10px;
+  padding: 10px;
   align-items: start;
 }
 .policy-model .model-name {
@@ -413,23 +412,22 @@
 .dashboard-overview {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 12px;
-  margin-bottom: 20px;
+  border-block: 1px solid var(--border);
+  margin-bottom: 16px;
 }
 .dashboard-overview > div {
-  display: grid;
-  gap: 5px;
-  padding: 15px 18px;
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  background: var(--card);
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 12px 16px;
+  border-right: 1px solid var(--border);
 }
 .dashboard-overview span {
   font-size: 11px;
   color: var(--muted-foreground);
 }
 .dashboard-overview strong {
-  font-size: 26px;
+  font-size: 22px;
   font-weight: 550;
   font-variant-numeric: tabular-nums;
 }
@@ -440,8 +438,8 @@
 }
 .dashboard-services {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
   align-items: start;
 }
 .dashboard-services .live-service {
@@ -449,17 +447,14 @@
   overflow: hidden;
 }
 .dashboard-services .deployment-row {
-  flex-wrap: wrap;
-  gap: 7px;
-  padding: 12px;
-  min-height: 80px;
+  gap: 10px;
+  padding: 10px 12px;
+  min-height: 58px;
 }
 .dashboard-services .service-mark {
   display: none;
 }
-.dashboard-services .deployment-identity {
-  flex-basis: calc(100% - 28px);
-}
+.dashboard-services .deployment-identity { flex: 1; }
 .dashboard-services .deployment-actions {
   margin-left: auto;
 }
@@ -467,8 +462,7 @@
   font-size: 12px;
 }
 .dashboard-services .runtime-status {
-  margin-left: 20px;
-  font-size: 10px;
+  font-size: 11px;
 }
 .service-idle {
   display: flex;
@@ -503,4 +497,19 @@
   .dashboard-services {
     grid-template-columns: 1fr;
   }
+}
+
+.dashboard-overview > div:last-child { border-right: 0; }
+.dashboard-overview strong { order: -1; }
+@media (max-width: 750px) {
+  .dashboard-overview > div { padding: 8px; gap: 6px; }
+  .dashboard-overview span { font-size: 11px; }
+  .dashboard-overview > div:nth-child(2) { border-right: 0; }
+  .dashboard-services .deployment-identity { flex-basis: calc(100% - 28px); }
+}
+
+@container primary (max-width: 520px) {
+ .dashboard-services .deployment-row { flex-wrap: wrap; }
+ .dashboard-services .deployment-identity { flex-basis: calc(100% - 28px); }
+ .dashboard-services .runtime-status { margin-left: 20px; }
 }

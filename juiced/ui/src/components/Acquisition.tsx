@@ -5,6 +5,7 @@ import {
   quantization,
   variantName,
 } from "./modelDiscovery";
+import { HelpTip } from "./HelpTip";
 import { useEffect, useRef, useState } from "react";
 import {
   Search,
@@ -272,7 +273,7 @@ export function Acquisition({
   return (
     <>
       <header className="page-heading">
-        <div>
+        <div className="heading-with-help">
           <h1>
             {
               {
@@ -283,20 +284,7 @@ export function Acquisition({
               }[tab]
             }
           </h1>
-          <p>
-            {
-              {
-                discover:
-                  "Find a model, review its files and choose a variant.",
-                downloaded:
-                  "Your local collection. Inspect files and capabilities without changing what is running.",
-                transfers:
-                  "Follow active transfers and pick up interrupted downloads.",
-                import:
-                  "Add a GGUF from your computer or register one already on the server.",
-              }[tab]
-            }
-          </p>
+          <HelpTip label="Model library">Search Hugging Face repositories, choose a quant and review companion files before downloading. New models stay Disabled until you enable them. Upload local files through Import GGUF.</HelpTip>
         </div>
         {tab !== "import" && (
           <Button
@@ -326,6 +314,7 @@ export function Acquisition({
                 }}
               >
                 <img
+                  title="Search Hugging Face repositories"
                   className="source-mark"
                   src="/huggingface.svg"
                   alt="Hugging Face"
@@ -510,55 +499,7 @@ export function Acquisition({
                 </div>
               </details>
             </div>
-            <aside className="discovery-guide">
-              <section>
-                <Download size={20} />
-                <h3>Choose the right files</h3>
-                <p>
-                  Review quantization and size. Vision models may also need a
-                  projector.
-                </p>
-                <p>
-                  Downloads add weights to your library. They do not load a
-                  model into memory.
-                </p>
-              </section>
-              <section>
-                <Upload size={20} />
-                <h3>Already have a GGUF?</h3>
-                <p>
-                  Upload a file from your computer or register an existing
-                  server file.
-                </p>
-                <Button
-                  variant="outline"
-                  size="compact"
-                  onClick={() => setTab("import")}
-                >
-                  Import a model
-                </Button>
-              </section>
-              {jobs.some((j) => j.running || j.status === "interrupted") && (
-                <section>
-                  <h3>Transfers in progress</h3>
-                  <p>
-                    {
-                      jobs.filter(
-                        (j) => j.running || j.status === "interrupted",
-                      ).length
-                    }{" "}
-                    downloads need attention.
-                  </p>
-                  <Button
-                    variant="ghost"
-                    size="compact"
-                    onClick={() => setTab("transfers")}
-                  >
-                    View downloads
-                  </Button>
-                </section>
-              )}
-            </aside>
+
           </div>
           {variants && (
             <Dialog.Root

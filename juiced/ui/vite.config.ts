@@ -5,7 +5,8 @@ import tailwindcss from "@tailwindcss/vite";
 import { fileURLToPath, URL } from "node:url";
 export default defineConfig({
   plugins: [react(), tailwindcss(), dependencyNotices()],
-  resolve: { alias: { "~": fileURLToPath(new URL("./src", import.meta.url)) } },
+  optimizeDeps: { include: ["@base-ui/react/context-menu", "@base-ui/react/dialog", "@base-ui/react/menu", "@base-ui/react/popover", "@base-ui/react/select"] },
+  resolve: { dedupe: ["react", "react-dom"], alias: { "~": fileURLToPath(new URL("./src", import.meta.url)) } },
   build: { outDir: "../../web", emptyOutDir: true },
   server: {
     proxy: {

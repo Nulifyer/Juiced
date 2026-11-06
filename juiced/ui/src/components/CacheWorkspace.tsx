@@ -3,13 +3,12 @@ import {
   Database,
   Search,
   Pin,
-  Settings2,
-  Clock3,
   Trash2,
   ChevronRight,
 } from "lucide-react";
 import { Dialog } from "@base-ui/react/dialog";
 import { api, bytes, type Model } from "../api";
+import { HelpTip } from "./HelpTip";
 import { Button } from "./t3/button";
 import "./CacheWorkspace.css";
 function age(value?: number) {
@@ -28,6 +27,7 @@ export function CacheWorkspace({
   setCache: (value: any) => void;
   notify: (s: string) => void;
 }) {
+  const [tab, setTab] = useState("snapshots");
   const [q, setQ] = useState(""),
     [filter, setFilter] = useState("all"),
     [selected, setSelected] = useState<string>(),
@@ -94,15 +94,17 @@ export function CacheWorkspace({
     <div className="cache-workspace">
       <header className="page-heading">
         <div>
-          <h1>Runtime cache</h1>
-          <p>Manage reusable computation for downstream consumer sessions.</p>
+          <div className="heading-with-help"><h1>Runtime cache</h1><HelpTip label="Runtime cache">Cache stores reusable computation for client sessions. Clients own conversation history. Reuse requires the same model, engine and compatible load profile; changing them can require a fresh prefill. {cache?.reason}</HelpTip></div>
         </div>
         <Button size="compact" variant="outline" onClick={() => void refresh()}>
           Refresh
         </Button>
       </header>
+      <nav className="workspace-tabs" aria-label="Cache views">
+        {[["snapshots", "Snapshots"], ["settings", "Storage policy"], ["overrides", "Model overrides"]].map(([id, label]) => <button key={id} className={tab === id ? "active" : ""} aria-current={tab === id ? "page" : undefined} onClick={() => setTab(id)}>{label}{dirty && id !== "snapshots" ? " *" : ""}</button>)}
+      </nav>
       <div className="cache-layout">
-        <section className="cache-inventory">
+        <section className="cache-inventory" hidden={tab !== "snapshots"}>
           <div className="storage-overview">
             <div className="storage-title">
               <span className="storage-icon">
@@ -124,10 +126,7 @@ export function CacheWorkspace({
               value={Math.min(total, budget)}
             />
             <div className="storage-caption">
-              <span>
-                Model weights use separate storage. Clients own conversation
-                history.
-              </span>
+              <span>Snapshot storage</span>
               <span>
                 {budget ? Math.round((100 * total) / budget) : 0}% used
               </span>
@@ -270,13 +269,7 @@ export function CacheWorkspace({
             </Dialog.Root>
           )}
         </section>
-        <aside className="cache-settings">
-          <div className="section-heading">
-            <h2>
-              <Settings2 size={16} />
-              Storage policy
-            </h2>
-          </div>
+        <section className="cache-settings" hidden={tab === "snapshots"}>
           {draft ? (
             <form
               onSubmit={(e) => {
@@ -284,9 +277,11 @@ export function CacheWorkspace({
                 void save();
               }}
             >
+              <div className="cache-policy-fields" hidden={tab !== "settings"}>
               <label>
-                Reuse mode
+                <span className="field-label">Reuse mode <HelpTip label="Reuse mode">Memory reuse lasts while the engine stays loaded. Persistent snapshots can survive model or server restarts on qualified profiles. Off bypasses prompt reuse.</HelpTip></span>
                 <select
+                  aria-label="Reuse mode"
                   value={draft.mode}
                   onChange={(e) => edit("mode", e.target.value)}
                 >
@@ -300,23 +295,9 @@ export function CacheWorkspace({
                   </option>
                 </select>
               </label>
-              <p>
-                {draft.mode === "persistent"
-                  ? "Reuse qualified consumer session state after a model or server restart."
-                  : draft.mode === "memory"
-                    ? "Reuse compatible state while the engine stays loaded."
-                    : "Chat Completions requests bypass prompt reuse."}
-              </p>
-              <details className="cache-model-overrides">
-                <summary>
-                  Model overrides ·{" "}
-                  {Object.keys(draft.model_modes || {}).length}
-                </summary>
-                <p>
-                  Memory only permits Ollama and other protocols without
-                  changing persistent caching for other models. Existing
-                  snapshots are kept.
-                </p>
+              </div>
+              <div className="cache-model-overrides" hidden={tab !== "overrides"}>
+                <div className="field-label">Model overrides <HelpTip label="Model overrides">Override the default reuse mode per model. Memory only permits Ollama and other protocols without changing persistent caching for other models. Existing snapshots are kept.</HelpTip></div>
                 {models
                   .filter(
                     (m) =>
@@ -348,39 +329,39 @@ export function CacheWorkspace({
                       </select>
                     </label>
                   ))}
-              </details>
+              </div>
+              <div className="cache-policy-fields" hidden={tab !== "settings"}>
               <label>
-                Expire after
+                <span className="field-label">Expiry (days) <HelpTip label="Cache expiry">Days since last use. Retained snapshots are protected.</HelpTip></span>
                 <input
                   type="number"
                   min={1}
                   max={365}
                   required
+                  aria-label="Expiry (days)"
                   value={draft.retention_days}
                   onChange={(e) =>
                     edit("retention_days", Number(e.target.value))
                   }
                 />
-                <small>
-                  Days since last use. Retained snapshots are protected.
-                </small>
+
               </label>
               <label>
-                Disk budget
+                <span className="field-label">Disk budget (GiB) <HelpTip label="Disk budget">Budget for snapshots. Temporary saves need additional free space.</HelpTip></span>
                 <input
                   type="number"
                   min={1}
                   max={256}
                   required
+                  aria-label="Disk budget (GiB)"
                   value={draft.disk_budget_gib}
                   onChange={(e) =>
                     edit("disk_budget_gib", Number(e.target.value))
                   }
                 />
-                <small>
-                  GiB for snapshots. Temporary saves need additional free space.
-                </small>
               </label>
+              </div>
+              <div className="cache-save-actions">
               {dirty && (
                 <Button
                   type="button"
@@ -397,33 +378,17 @@ export function CacheWorkspace({
                 {busy ? "Saving…" : "Save changes"}
               </Button>
               {dirty && <small className="unsaved-note">Unsaved changes</small>}
+              </div>
             </form>
           ) : (
             <p>Loading cache settings…</p>
           )}
-          <div className="cache-explainer">
-            <Clock3 size={17} />
-            <h3>What gets reused?</h3>
-            <p>
-              Snapshots belong to a consumer session and an exact model, engine
-              and load profile. A changed profile or edited prefix can require a
-              fresh prefill.
-            </p>
-            <p>
-              Clients own their history. Retaining a snapshot protects its
-              computation from ordinary expiry.
-            </p>
-            <details>
-              <summary>Compatibility details</summary>
-              <p>{cache?.reason}</p>
-            </details>
-          </div>
           {cache?.settings?.last_error && (
             <p className="inline-error">
               Last save: {cache.settings.last_error}
             </p>
           )}
-        </aside>
+        </section>
       </div>
     </div>
   );

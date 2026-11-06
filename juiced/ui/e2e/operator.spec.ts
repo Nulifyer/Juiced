@@ -213,12 +213,12 @@ test('library import, cache and consumer endpoints remain reachable after naviga
 
 test('malformed advanced draft cannot unrender effective settings and can be corrected', async ({ page, runtime }) => {
   await openModel(page);
-  await page.getByText('Advanced backend arguments', { exact: true }).click();
+  await page.getByRole('button', { name: 'Advanced', exact: true }).click();
   await page.getByLabel('Additional llama.cpp arguments', { exact: true }).fill("--chat-template 'unfinished");
   await page.getByRole('button', { name: 'Effective', exact: true }).click();
   await expect(page.getByRole('alert')).toContainText('Correct the additional backend arguments');
-  await page.getByRole('button', { name: 'Settings', exact: true }).click();
-  if (!await page.getByLabel('Additional llama.cpp arguments', { exact: true }).isVisible()) await page.getByText('Advanced backend arguments', { exact: true }).click();
+  await page.getByRole('button', { name: 'Advanced', exact: true }).click();
+  if (!await page.getByLabel('Additional llama.cpp arguments', { exact: true }).isVisible()) await page.getByRole('button', { name: 'Advanced', exact: true }).click();
   await page.getByLabel('Additional llama.cpp arguments', { exact: true }).fill('--chat-template chatml');
   await page.getByRole('button', { name: 'Effective', exact: true }).click();
   await expect(page.getByRole('alert')).toHaveCount(0);
@@ -284,7 +284,7 @@ test('variant filters retain provider identity and native lifecycle actions', as
   await expect(page.getByText('No backends match this filter.', { exact: false })).toBeVisible();
 });
 
-for (const width of [1440, 900, 390, 320]) test(`provider groups and hardware disclosure fit ${width}px`, async ({ page, runtime }) => {
+for (const width of [1440, 900, 390, 320]) test(`provider groups and visible hardware fit ${width}px`, async ({ page, runtime }) => {
   await page.setViewportSize({ width, height: 900 });
   await page.goto('/');
   if (width < 768) await page.getByLabel('Toggle navigation').click();
@@ -294,7 +294,6 @@ for (const width of [1440, 900, 390, 320]) test(`provider groups and hardware di
   expect(header!.y).toBeLessThan(600);
   expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
   await page.screenshot({ path: `test-results/backend-groups-${width}.png` });
-  await page.getByText('Detected hardware', { exact: true }).click();
   await expect(page.locator('.hardware-kind')).toContainText(['CPU', 'GPU']);
   expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
 });

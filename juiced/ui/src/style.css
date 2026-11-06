@@ -224,24 +224,31 @@ summary:focus-visible {
 }
 .sidebar-footer {
   margin-top: auto;
-  display: grid;
-  gap: 10px;
-  font-size: 10px;
-  color: var(--muted-foreground);
-  padding: 20px 15px 8px;
-}
-.sidebar-footer button {
   display: flex;
-  gap: 6px;
   align-items: center;
-  width: max-content;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--muted-foreground);
+  padding: 12px 4px 2px;
+  border-top: 1px solid var(--border);
 }
+.sidebar-footer > span { flex: 1; min-width: 0; white-space: nowrap; }
+.sidebar-footer button, .sidebar-footer a {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 28px;
+  flex: none;
+  border-radius: 4px;
+}
+.sidebar-footer button:hover, .sidebar-footer a:hover { background: var(--secondary); color: var(--foreground); }
 .sidebar-footer a {
   color: var(--muted-foreground);
 }
 .app-main {
   overflow-y: auto;
-  padding: 32px clamp(20px, 4vw, 64px);
+  padding: 24px 28px;
   min-width: 0;
   scrollbar-gutter: stable;
 }
@@ -250,7 +257,7 @@ summary:focus-visible {
   justify-content: space-between;
   align-items: start;
   gap: 15px;
-  margin-bottom: 22px;
+  margin-bottom: 18px;
 }
 .page-heading p,
 .chat-header p {
@@ -514,8 +521,6 @@ summary:focus-visible {
 }
 .variant-panel label,
 .import-grid label,
-.settings-section label,
-.settings-grid label,
 .inline-settings label {
   display: grid;
   gap: 6px;
@@ -562,21 +567,6 @@ progress::-webkit-progress-value {
   max-width: 100%;
   font-size: 11px;
   margin-top: 10px;
-}
-.settings-section {
-  padding-top: 24px;
-  margin-top: 24px;
-  border-top: 1px solid var(--border);
-}
-.settings-section label {
-  max-width: 680px;
-}
-.settings-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0 20px;
-  max-width: 700px;
-  margin-bottom: 18px;
 }
 .callout {
   display: flex;
@@ -1163,7 +1153,7 @@ audio {
   width: min(420px, calc(100vw - 32px));
 }
 
-.workspace-primary { min-width: 0; min-height: 0; }
+.workspace-primary { min-width: 0; min-height: 0; container: primary / inline-size; }
 .app-main.has-inspector { display: grid; grid-template-columns: minmax(310px, 0.85fr) minmax(470px, 1.15fr); padding: 0; overflow: hidden; }
 .app-main.has-inspector > .workspace-primary { overflow: auto; padding: 24px; }
 .app-main.has-inspector .policy-board { grid-template-columns: 1fr; }

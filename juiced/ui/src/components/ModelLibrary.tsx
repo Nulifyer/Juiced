@@ -1,3 +1,4 @@
+import { HelpTip } from "./HelpTip";
 import { useEffect, useState, type ReactNode } from "react";
 import {
   DndContext,
@@ -523,12 +524,12 @@ export function ModelLibrary({
     <div className={policy ? "policy-workspace" : "runtime-workspace"}>
       <header className="page-heading">
         <div>
-          <h1>{policy ? "Loading policy" : "Runtime dashboard"}</h1>
-          <p>
-            {policy
-              ? "Decide which models stay ready, load when needed, or stay out of the way."
-              : "Monitor serving readiness and manage loaded models."}
-          </p>
+          <div className="heading-with-help">
+            <h1>{policy ? "Loading policy" : "Runtime dashboard"}</h1>
+            <HelpTip label={policy ? "Loading policy" : "Runtime dashboard"}>
+              {policy ? "Drag a model between lanes or use its menu. Changing policy keeps its files. On demand models stay loaded until unloaded or evicted." : "Manage loaded workers here. Hardware and token rates appear in the status bar; request history and logs are in Diagnostics."}
+            </HelpTip>
+          </div>
         </div>
         {!policy && (
           <Button variant="outline" size="compact" onClick={onPolicy}>
@@ -544,17 +545,14 @@ export function ModelLibrary({
             <strong>
               {eligible.filter((m) => m.loaded && !m.runtime?.is_busy).length}
             </strong>
-            <small>Serving now</small>
+
           </div>
           <div>
             <span>Busy models</span>
             <strong>
               {eligible.filter((m) => m.loaded && m.runtime?.is_busy).length}
             </strong>
-            <small>
-              {eligible.filter((m) => m.operation?.pending).length} operations
-              pending
-            </small>
+            {eligible.some((m) => m.operation?.pending) && <span>{eligible.filter((m) => m.operation?.pending).length} changing</span>}
           </div>
           <div>
             <span>Hot readiness</span>
@@ -562,18 +560,12 @@ export function ModelLibrary({
               {eligible.filter((m) => m.policy === "hot" && m.loaded).length}
               <em> / {eligible.filter((m) => m.policy === "hot").length}</em>
             </strong>
-            <small>Startup and recovery</small>
+
           </div>
           <div>
             <span>Downloaded</span>
             <strong>{models.filter((m) => m.downloaded).length}</strong>
-            <small>
-              {
-                models.filter((m) => m.downloaded && m.policy === "disabled")
-                  .length
-              }{" "}
-              Disabled
-            </small>
+
           </div>
         </div>
       )}
@@ -660,9 +652,10 @@ export function ModelLibrary({
                       <div>
                         <Icon size={17} />
                         <h2>{title}</h2>
+                        <HelpTip label={title}>{description}</HelpTip>
                         <span>{items.length}</span>
                       </div>
-                      <p>{description}</p>
+
                     </header>
                     <div className="policy-lane-models">
                       {items.slice(0, limit).map(row)}
@@ -672,7 +665,7 @@ export function ModelLibrary({
                           <p>
                             {q ? "No matching models" : "Drop a model here"}
                           </p>
-                          <small>Or change its policy from the ⋯ menu.</small>
+
                         </div>
                       )}
                       {items.length > limit && (
@@ -688,11 +681,7 @@ export function ModelLibrary({
                 );
               })}
             </div>
-            <p className="page-note">
-              Drag a model between groups or use its menu. Changing policy keeps
-              downloaded files. On demand models can remain loaded until you
-              unload them.
-            </p>
+
           </>
         ) : (
           <>

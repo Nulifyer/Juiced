@@ -1,0 +1,40 @@
+.help-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted-foreground);
+  flex: none;
+  vertical-align: middle;
+}
+.help-trigger:hover, .help-trigger[data-popup-open] {
+  color: var(--foreground);
+  background: var(--secondary);
+}
+.help-popup {
+  z-index: 150;
+  width: max-content;
+  max-width: min(360px, calc(100vw - 24px));
+  max-height: min(480px, 65dvh);
+  overflow: auto;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--foreground);
+  background: var(--card);
+  box-shadow: 0 8px 28px #0006;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.help-title { font-size: 12px; font-weight: 600; margin: 0 0 6px; }
+.help-content { color: var(--muted-foreground); }
+.help-content p + p { margin-top: 8px; }
+.help-content ul { margin: 4px 0; padding-left: 18px; }
+.help-content code { overflow-wrap: anywhere; }
+.heading-with-help, .field-label { display: flex; align-items: center; gap: 4px; }
+.field-label { min-height: 24px; }

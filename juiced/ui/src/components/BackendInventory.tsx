@@ -14,6 +14,7 @@ import {
 } from "./backendState";
 import { api, type Model } from "../api";
 import { useSystemInfo, runtimeName, acceleratorName } from "./ExecutionTarget";
+import { HelpTip } from "./HelpTip";
 import { Button } from "./t3/button";
 import "./BackendInventory.css";
 
@@ -188,10 +189,7 @@ export function BackendInventory({
     <div className="backend-inventory">
       <header className="page-heading">
         <div>
-          <h1>Backends & hardware</h1>
-          <p>
-            Check native runtime readiness before selecting an execution target.
-          </p>
+          <div className="heading-with-help"><h1>Backends & hardware</h1><HelpTip label="Backends & hardware">Install and update execution engines here. Select a runtime and device in each model's settings. Hardware detection and an installed package do not establish exact model compatibility.</HelpTip></div>
         </div>
         <Button variant="outline" size="sm" onClick={refresh}>
           <RefreshCw size={14} /> Refresh inventory
@@ -221,17 +219,8 @@ export function BackendInventory({
       {!info && !error && <p role="status">Reading runtime inventory…</p>}
       {info && (
         <>
-          <details className="hardware-disclosure">
-            <summary>
-              <ChevronRight size={15} aria-hidden="true" />
-              <strong>Detected hardware</strong>
-              <span>
-                {devices
-                  .map((device) => deviceKind(device.kind))
-                  .filter((kind, index, kinds) => kinds.indexOf(kind) === index)
-                  .join(" · ") || "None reported"}
-              </span>
-            </summary>
+          <div className="hardware-context">
+            <h2>Detected hardware</h2>
             <section
               className="hardware-overview"
               aria-label="Detected hardware"
@@ -246,21 +235,12 @@ export function BackendInventory({
                     {device.kind === "cpu"
                       ? `${device.cores} cores · ${device.threads} threads`
                       : device.family ||
-                        "Detected; runtime compatibility is checked separately"}
+                        "Detected"}
                   </small>
                 </article>
               ))}
             </section>
-            <p className="page-note">
-              Detected hardware is not proof of a compatible model or engine.
-              Select the actual device in each model's settings.
-            </p>
-          </details>
-          <p className="page-note">
-            Runtime providers own their execution variants. Installations do not
-            reload current workers; versions appear when reported by the
-            runtime.
-          </p>
+          </div>
           <div
             className="backend-filters"
             role="group"
@@ -303,7 +283,7 @@ export function BackendInventory({
           <p className="backend-result-count" role="status">
             {groups.length} provider{groups.length === 1 ? "" : "s"} ·{" "}
             {visible.length} execution variant{visible.length === 1 ? "" : "s"}
-            {filtering ? " match" : ""}. Filter counts refer to variants.
+            {filtering ? " match" : ""}
           </p>
           <div className="backend-table">
             {groups.map((group) => {
@@ -402,7 +382,7 @@ export function BackendInventory({
                           <div className="backend-entry-identity">
                             <strong>{acceleratorName(backend)}</strong>
                             <small>
-                              {variant.version || "Version not reported"}
+                              {variant.version || "—"}
                             </small>
                           </div>
                           <div className="backend-entry-state">
@@ -413,12 +393,7 @@ export function BackendInventory({
                             >
                               {backendLabel(variant.state)}
                             </strong>
-                            <p>
-                              {variant.message ||
-                                (backendReady(variant.state)
-                                  ? "Ready for compatible models."
-                                  : "No ready execution path.")}
-                            </p>
+                            {variant.message && <HelpTip label={`${runtimeName(recipe)} ${acceleratorName(backend)}`}>{variant.message}</HelpTip>}
                             {updating && used && (
                               <small>
                                 Unload workers using this runtime before

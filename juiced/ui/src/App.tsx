@@ -26,6 +26,7 @@ import {
   Upload,
   HardDrive,
   Terminal,
+  Github,
 } from "lucide-react";
 import { Button } from "./components/t3/button";
 import {
@@ -305,56 +306,26 @@ export default function App() {
             ))}
           </SidebarGroup>
         )}
-        {screen === "cache" && (
-          <SidebarGroup>
-            <div className="sidebar-label">Saved computation</div>
-            <div className="sidebar-context-note">
-              <Database size={20} />
-              <strong>
-                {cache?.settings?.mode === "persistent"
-                  ? "Disk snapshots enabled"
-                  : cache?.settings?.mode === "memory"
-                    ? "Memory caching"
-                    : cache?.settings?.mode === "off"
-                      ? "Caching off"
-                      : "Loading settings…"}
-              </strong>
-              <p>
-                Consumer session state can be reused independently of model
-                residency.
-              </p>
-              <span>
-                {cache?.settings?.retention_days || 7} day expiry ·{" "}
-                {cache?.settings?.disk_budget_gib || 8} GiB budget
-              </span>
-            </div>
-          </SidebarGroup>
-        )}
-        {screen === "playground" && (
-          <SidebarGroup>
-            <p className="sidebar-context-note">
-              Temporary service tests. Results are cleared when you leave or
-              reload this page.
-            </p>
-          </SidebarGroup>
-        )}
         <footer className="sidebar-footer">
-          <span>
+          <span title="Currently loaded models / downloaded models">
             {models.filter((m) => m.loaded).length} loaded ·{" "}
             {models.filter((m) => m.downloaded).length} downloaded
           </span>
           <button
+            aria-label="Refresh catalog"
+            title="Refresh catalog"
             onClick={() => void refresh().catch((e) => notify(e.message))}
           >
-            <RefreshCw size={12} />
-            Refresh
+            <RefreshCw size={14} />
           </button>
           <a
             href="https://github.com/Nulifyer/Juiced"
             target="_blank"
             rel="noreferrer"
+            aria-label="Source and releases"
+            title="Source and releases"
           >
-            Source & release notes
+            <Github size={14} />
           </a>
         </footer>
       </aside>

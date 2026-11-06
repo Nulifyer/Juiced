@@ -4,6 +4,8 @@
   min-height: 0;
   height: 100%;
   width: 100%;
+  container-name: model-inspector;
+  container-type: inline-size;
   display: flex;
   flex-direction: column;
   background: var(--background);
@@ -12,12 +14,12 @@
 }
 .model-workspace-header {
   flex: none;
-  padding: 22px 26px 0;
+  padding: 16px 20px 0;
   border-bottom: 1px solid var(--border);
 }
 .model-workspace-header h2 {
   margin: 0;
-  font-size: 19px;
+  font-size: 17px;
 }
 .model-workspace-header p {
   margin: 7px 0 0;
@@ -31,7 +33,7 @@
   gap: 12px;
   color: var(--muted-foreground);
   font-size: 12px;
-  margin: 17px 0;
+  margin: 10px 0;
 }
 .quant-badge {
   display: inline-block;
@@ -47,7 +49,7 @@
   align-items: end;
   flex-wrap: wrap;
   gap: 10px;
-  margin-bottom: 20px;
+  margin-bottom: 10px;
 }
 .model-workspace-actions label {
   display: grid;
@@ -65,7 +67,7 @@
 }
 .workspace-tabs {
   display: flex;
-  gap: 18px;
+  gap: 16px;
   overflow-x: auto;
 }
 .workspace-tabs button {
@@ -92,7 +94,7 @@
   display: flex;
   align-items: end;
   gap: 12px;
-  margin: 20px 0 26px;
+  margin: 0 0 20px;
 }
 .settings-copy label {
   display: grid;
@@ -118,7 +120,7 @@
   flex: 1;
   min-height: 0;
   overflow: auto;
-  padding: 24px 26px;
+  padding: 16px 20px;
 }
 .settings-status {
   margin-bottom: 24px;
@@ -137,8 +139,8 @@
 .settings-section {
   border: 0;
   border-bottom: 1px solid var(--border);
-  padding: 0 0 24px;
-  margin: 0 0 24px;
+  padding: 0 0 16px;
+  margin: 0 0 16px;
   min-width: 0;
 }
 .settings-section legend,
@@ -147,7 +149,7 @@
   font-size: 14px;
   font-weight: 600;
   padding: 0;
-  margin-bottom: 16px;
+  margin-bottom: 10px;
 }
 .settings-section summary {
   cursor: pointer;
@@ -158,13 +160,13 @@
 .settings-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 18px 26px;
+  gap: 12px 16px;
 }
 .settings-grid label,
 .settings-section > label {
   display: flex;
   flex-direction: column;
-  gap: 7px;
+  gap: 4px;
   font-size: 12px;
   min-width: 0;
 }
@@ -207,7 +209,7 @@
   justify-content: end;
   flex-wrap: wrap;
   gap: 10px;
-  padding: 16px 26px;
+  padding: 12px 20px;
   background: var(--background);
 }
 .model-workspace-footer > div {
@@ -293,10 +295,12 @@
 .discard-model-dialog h2 { font-size: 18px; margin: 0 0 12px; }
 .discard-model-dialog p { font-size: 14px; color: var(--muted-foreground); line-height: 1.6; }
 .discard-model-dialog > div { display: flex; justify-content: flex-end; gap: 10px; margin-top: 24px; }
-@media (max-width: 1250px) { .model-workspace .settings-grid { grid-template-columns: 1fr; } }
+@container model-inspector (max-width: 430px) { .model-workspace .settings-grid { grid-template-columns: 1fr; } }
 
 @media (max-width: 620px) {
  .model-workspace-header { padding-top: 12px; }
  .model-workspace-actions { margin-bottom: 8px; gap: 8px; }
  .variant-summary { margin: 10px 0; }
 }
+
+.execution-alternatives { display: flex; align-items: center; gap: 4px; margin-top: 8px; color: var(--muted-foreground); font-size: 11px; }

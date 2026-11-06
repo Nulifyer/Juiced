@@ -10,6 +10,26 @@ typography. Use the existing color roles and compact controls. Prefer aligned
 lists, meaningful state labels and task-specific panes over repeated cards.
 Model names and quantization remain readable at normal desktop and phone sizes.
 
+## Compact console direction
+
+Use short page headers, aligned list rows and a compact summary band. Keep the
+sidebar navigation; its footer is one status line with labelled refresh/source
+icons. Explanations belong beside the relevant decision, behind a shared Info
+popover that works with keyboard and touch. Native titles suit short metadata.
+Keep failures, unsaved changes, unavailable capabilities and apply/reload
+consequences visible. Do not hide them as help text.
+
+Use one level of task tabs instead of repeated accordions: Settings/Advanced in
+the model inspector, Snapshots/Storage policy/Model overrides in Cache, and a
+protocol selector in Service APIs. Provider grouping remains collapsible because
+it organizes a potentially large engine inventory. Show hardware context directly.
+
+The inspected [LM Studio model table](https://lmstudio.ai/docs/app/advanced/per-model)
+informs row density, explicit quant/size columns and contextual actions. The
+[Docker Desktop workflow](https://docs.docker.com/desktop/use-desktop/container/)
+informs the list/detail separation and nearby lifecycle actions. Borrow these
+specific qualities within Juiced's existing T3-based visual foundations.
+
 ## Workflows and screen purpose
 
 | Screen | Operator decision | Layout |

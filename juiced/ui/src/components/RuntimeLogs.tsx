@@ -281,13 +281,11 @@ export function RuntimeActivity({
     .slice(-4)
     .reverse();
   return (
-    <section className="runtime-activity">
+    <section className={"runtime-activity" + (!events.length ? " activity-idle" : "")}>
       <header>
-        <div>
+        <div className="activity-heading">
           <h2>Recent activity</h2>
-          <small>
-            {logs.status} · {issues.length} warnings/errors in retained logs
-          </small>
+          <small>{issues.length ? `${issues.length} warnings/errors` : logs.status}</small>
         </div>
         <Button size="compact" variant="ghost" onClick={openLogs}>
           View logs
@@ -312,10 +310,7 @@ export function RuntimeActivity({
           ))}
         </ul>
       ) : (
-        <p className="page-note">
-          {logs.error ||
-            "Waiting for model activity. Hardware and token metrics appear in the status bar."}
-        </p>
+        logs.error ? <p className="page-note">{logs.error}</p> : null
       )}
     </section>
   );
