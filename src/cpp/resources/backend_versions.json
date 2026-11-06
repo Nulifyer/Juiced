@@ -50,6 +50,12 @@
         "hrx-b99": {
           "llama-hrx-b99-bin-manylinux-hrx-x64.tar.gz": "sha256:02c88d96d39c607aefbb982e8b4f630785ec43c4416583834912ceaa63fd7624"
         }
+      },
+      "ROCm/FastFlowLM": {
+        "v1.0.12": {
+          "fastflowlm_1.0.12_linux.tar.gz": "sha256:626fbee5e5206a215a8c2c4d3d961055cbf7289d257d36599e9fef38f2f555a8",
+          "fastflowlm_1.0.12_windows_amd64.zip": "sha256:568706c537398d597f3f24b5094fc58e65126c56f118971f2910c26a86ae027c"
+        }
       }
     }
   },
@@ -144,7 +150,7 @@
     "npu": "v1.7.0"
   },
   "flm": {
-    "npu": "v1.0.7"
+    "npu": "v1.0.12"
   },
   "kokoro": {
     "cpu": "b21",
