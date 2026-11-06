@@ -4,7 +4,20 @@ export type Repository = {
   downloads?: number;
   description?: string;
   tags?: string[];
+  task?: string;
 };
+
+export function matchesModelSearch(query: string, values: string[]) {
+  const normalize = (value: string) => value.normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+  const text = normalize(values.join(" "));
+  const compact = text.replaceAll(" ", "");
+  return normalize(query).split(/\s+/).filter(Boolean).every((word) => text.includes(word) || compact.includes(word));
+}
+
+export function catalogEntries<T extends { id: string; recipe: string; checkpoint?: string; checkpoints?: Record<string, string>; available?: boolean }>(models: T[]) {
+  const identities = new Set(models.filter((m) => !m.id.startsWith("builtin.")).map((m) => JSON.stringify([m.id, m.recipe, m.checkpoints?.main || m.checkpoint])));
+  return models.filter((m) => m.available !== false && (!m.id.startsWith("builtin.") || !identities.has(JSON.stringify([m.id.slice(8), m.recipe, m.checkpoints?.main || m.checkpoint]))));
+}
 // Strip only known terminal weight formats. Model versions and fine-tune names
 // remain distinct, and different publishers are never merged.
 export function quantization(name: string) {
@@ -25,6 +38,7 @@ export function modelQuant(model: {
   return quantization(selector) || quantization(model.id) || "";
 }
 export function variantName(base: string, quant: string) {
+  quant = quantization(quant) || quant;
   const current = quantization(base);
   return current === quant.toUpperCase()
     ? base

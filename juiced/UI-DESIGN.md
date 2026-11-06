@@ -32,6 +32,21 @@ specific qualities within Juiced's existing T3-based visual foundations.
 
 ## Workflows and screen purpose
 
+Discover opens a populated native catalog with the bundled Lemonade `hot` picks
+ranked first. That metadata is separate from the Hot loading policy. Search
+matches name, publisher/checkpoint, runtime and labels. Service, capability,
+runtime, weight download size and download status filters compose; reset restores
+the default view. Size is a download estimate, not a runtime memory promise.
+Model names open the inspector before acquisition; downloading never enables or
+loads a model. Hide only exact duplicate `builtin.` aliases in this discovery view.
+
+Hugging Face is a separate chat-GGUF search scope using the existing registry API.
+Keep grouped quant choices, show publisher/sort controls for returned results,
+retain queries/results after failures and cancel superseded searches. A full model
+URL can open file review directly. Preserve the exact quant/projector and proper
+registration name. The catalog is the discovery path for other services until
+their remote artifact contracts are supported.
+
 | Screen | Operator decision | Layout |
 | --- | --- | --- |
 | Models | What is ready, and which worker needs attention? | Runtime summary, compact model list, persistent selected-model inspector |

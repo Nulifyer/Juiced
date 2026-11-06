@@ -1,10 +1,9 @@
 import {
   existingVariant,
-  groupRepositories,
   modelQuant,
-  quantization,
   variantName,
 } from "./modelDiscovery";
+import { DiscoverModels } from "./DiscoverModels";
 import { HelpTip } from "./HelpTip";
 import { useEffect, useRef, useState } from "react";
 import {
@@ -51,13 +50,8 @@ export function Acquisition({
   onRepositoryOpened?: () => void;
   onBackends: () => void;
 }) {
-  const [query, setQuery] = useState(""),
-    [inventoryQuery, setInventoryQuery] = useState(""),
+  const [inventoryQuery, setInventoryQuery] = useState(""),
     [inventoryService, setInventoryService] = useState("All services"),
-    [catalogQuery, setCatalogQuery] = useState(""),
-    [catalogPage, setCatalogPage] = useState(0),
-    [searched, setSearched] = useState(false),
-    [results, setResults] = useState<any[]>([]),
     [variants, setVariants] = useState<any>(),
     [variant, setVariant] = useState(""),
     [name, setName] = useState(""),
@@ -86,7 +80,6 @@ export function Acquisition({
   const nameConflict =
     !installedVariant &&
     models.some((m) => m.id === name || m.id === "user." + name);
-  useEffect(() => setCatalogPage(0), [service]);
   useEffect(() => {
     if (initialRepository)
       void inspect(initialRepository.repo).finally(() =>
@@ -96,26 +89,6 @@ export function Acquisition({
   useEffect(() => {
     if (tab === "import") void loadImports();
   }, [tab]);
-  async function search() {
-    if (query.trim().length < 3) {
-      notify("Enter at least three characters.");
-      return;
-    }
-    setBusy(true);
-    try {
-      const j = await api(
-        "registry/search?source=huggingface&query=" +
-          encodeURIComponent(query) +
-          "&format=gguf",
-      );
-      setResults(j.results || []);
-      setSearched(true);
-    } catch (e) {
-      notify((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  }
   async function inspect(repo: string) {
     setBusy(true);
     try {
@@ -139,6 +112,7 @@ export function Acquisition({
     }
   }
   async function pull(model: string, extra: Record<string, unknown> = {}) {
+    setBusy(true);
     try {
       await api("pull", {
         model_name: model,
@@ -152,7 +126,7 @@ export function Acquisition({
       await refresh();
     } catch (e) {
       notify((e as Error).message);
-    }
+    } finally { setBusy(false); }
   }
   async function download() {
     if (!variants || !variant) return;
@@ -299,208 +273,7 @@ export function Acquisition({
       </header>
       {tab === "discover" && (
         <>
-          <div
-            className={
-              "discovery-layout" + (results.length ? " has-results" : "")
-            }
-          >
-            <div className="discovery-primary">
-              <form
-                className="discovery-search"
-                aria-label="Search Hugging Face"
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  void search();
-                }}
-              >
-                <img
-                  title="Search Hugging Face repositories"
-                  className="source-mark"
-                  src="/huggingface.svg"
-                  alt="Hugging Face"
-                  width="30"
-                  height="30"
-                />
-                <label className="search-input">
-                  <Search size={16} />
-                  <input
-                    aria-label="Search Hugging Face models"
-                    placeholder="Search Hugging Face models…"
-                    value={query}
-                    onChange={(e) => setQuery(e.target.value)}
-                  />
-                </label>
-                <Button disabled={busy} type="submit">
-                  {busy ? (
-                    <LoaderCircle size={16} className="spin" />
-                  ) : (
-                    "Search"
-                  )}
-                </Button>
-              </form>
-              {results.length === 0 && !busy && (
-                <div className="discovery-start">
-                  <Search size={25} />
-                  <h3>
-                    {searched
-                      ? "No matching repositories"
-                      : "What would you like to run?"}
-                  </h3>
-                  <p>
-                    Use a model name or repository, then review available files
-                    before downloading.
-                  </p>
-                  <div className="search-suggestions">
-                    {["Qwen", "Ornith", "Whisper"].map((term) => (
-                      <button key={term} onClick={() => setQuery(term)}>
-                        {term}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-              {results.length > 0 && (
-                <div className="discovery-result-summary">
-                  <span>{groupRepositories(results).length} models</span>
-                  <span>
-                    {results.length} repositories · grouped by publisher and
-                    model
-                  </span>
-                </div>
-              )}
-              <div
-                className="discovery-results"
-                aria-label="Model search results"
-              >
-                {groupRepositories(results).map((group) => (
-                  <article className="discovery-model" key={group.key}>
-                    <header>
-                      <div>
-                        <h3>{group.name}</h3>
-                        <p>
-                          Published by <strong>{group.publisher}</strong>
-                        </p>
-                      </div>
-                      <span className="discovery-downloads">
-                        <Download size={13} />
-                        {group.repositories
-                          .reduce((sum, r) => sum + (r.downloads || 0), 0)
-                          .toLocaleString()}{" "}
-                        downloads
-                      </span>
-                    </header>
-                    <div
-                      className="discovery-quants"
-                      aria-label={"Quantizations for " + group.name}
-                    >
-                      {group.repositories.map((r) => (
-                        <Button
-                          key={r.repository_id}
-                          variant="outline"
-                          size="compact"
-                          disabled={busy}
-                          title={r.repository_id}
-                          onClick={() => void inspect(r.repository_id)}
-                        >
-                          {quantization(
-                            r.repository_id.split("/").pop() || "",
-                          ) || "Browse quants"}
-                        </Button>
-                      ))}
-                    </div>
-                    <details className="discovery-sources">
-                      <summary>Sources</summary>
-                      {group.repositories.map((r) => (
-                        <a
-                          key={r.repository_id}
-                          href={"https://huggingface.co/" + r.repository_id}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          {r.repository_id}
-                          <ExternalLink size={12} />
-                        </a>
-                      ))}
-                    </details>
-                  </article>
-                ))}
-              </div>
-              <details className="catalog-browser">
-                <summary>Browse the runtime catalog</summary>
-                <p className="page-note">
-                  Ready-to-download models across all supported services.
-                </p>
-                <input
-                  aria-label="Filter runtime catalog"
-                  placeholder="Filter catalog models…"
-                  value={catalogQuery}
-                  onChange={(e) => {
-                    setCatalogQuery(e.target.value);
-                    setCatalogPage(0);
-                  }}
-                />
-                {models
-                  .filter(
-                    (m) =>
-                      !m.downloaded &&
-                      m.available !== false &&
-                      (service === "All services" || m.service === service) &&
-                      m.id.toLowerCase().includes(catalogQuery.toLowerCase()),
-                  )
-                  .slice(catalogPage * 30, (catalogPage + 1) * 30)
-                  .map((m) => (
-                    <article className="simple-row" key={m.id}>
-                      <div>
-                        <strong>{m.id}</strong>
-                        <p>
-                          {m.service} · {m.recipe} ·{" "}
-                          {bytes((m.size || 0) * 1e9)}
-                        </p>
-                      </div>
-                      <Button
-                        size="compact"
-                        variant="outline"
-                        onClick={() => void pull(m.id)}
-                      >
-                        <Download size={14} /> Download
-                      </Button>
-                    </article>
-                  ))}
-                <div className="row-actions">
-                  <Button
-                    size="compact"
-                    variant="ghost"
-                    disabled={catalogPage === 0}
-                    onClick={() => setCatalogPage(catalogPage - 1)}
-                  >
-                    Previous
-                  </Button>
-                  <span>Page {catalogPage + 1}</span>
-                  <Button
-                    size="compact"
-                    variant="ghost"
-                    disabled={
-                      models.filter(
-                        (m) =>
-                          !m.downloaded &&
-                          m.available !== false &&
-                          (service === "All services" ||
-                            m.service === service) &&
-                          m.id
-                            .toLowerCase()
-                            .includes(catalogQuery.toLowerCase()),
-                      ).length <=
-                      (catalogPage + 1) * 30
-                    }
-                    onClick={() => setCatalogPage(catalogPage + 1)}
-                  >
-                    Next
-                  </Button>
-                </div>
-              </details>
-            </div>
-
-          </div>
+          <DiscoverModels models={models} jobs={jobs} busy={busy} onRepository={(repo) => void inspect(repo)} onDownload={(id) => void pull(id)} onInspect={onInspect} onDownloads={() => setTab("transfers")} />
           {variants && (
             <Dialog.Root
               open

@@ -28,6 +28,7 @@ test("different quants receive distinct proper names and match stored checkpoint
   const base = "Ornith-1.5-35B-A3B-GGUF",
     repo = "ornith-ai/" + base;
   expect(variantName(base, "Q6_K")).toBe(base + "-Q6_K");
+  expect(variantName(base, "Ornith-1.5-35B-Q6_K.gguf")).toBe(base + "-Q6_K");
   expect(variantName(base + "-Q6_K", "Q6_K")).toBe(base + "-Q6_K");
   expect(variantName(base + "-Q4_K_M", "Q6_K")).toBe(base + "-Q6_K");
   const q4 = {
@@ -72,4 +73,18 @@ test("explicit base metadata groups generic and quant-specific repositories with
   expect(groups).toHaveLength(2);
   expect(groups[0]?.repositories).toHaveLength(2);
   expect(groups[0]?.name).toBe("Model-v2");
+});
+
+test('catalog token search handles punctuation and preserves exact model versions', async () => {
+  const { matchesModelSearch, catalogEntries } = await import('../src/components/modelDiscovery');
+  expect(matchesModelSearch('Qwen35 tools', ['Qwen3.5-4B', 'tools'])).toBe(true);
+  expect(matchesModelSearch('Mellum 2.1 thinking', ['JetBrains/Mellum2.1-12B-Thinking-GGUF'])).toBe(true);
+  expect(matchesModelSearch('Qwen 9B', ['Qwen3.5-4B'])).toBe(false);
+  const models = [
+    { id: 'Whisper', recipe: 'whispercpp', checkpoint: 'org/Whisper:Q8' },
+    { id: 'builtin.Whisper', recipe: 'whispercpp', checkpoint: 'org/Whisper:Q8' },
+    { id: 'builtin.Whisper', recipe: 'whispercpp', checkpoint: 'org/Whisper:Q4' },
+    { id: 'Retained', recipe: 'old', available: false },
+  ];
+  expect(catalogEntries(models)).toEqual([models[0], models[2]]);
 });

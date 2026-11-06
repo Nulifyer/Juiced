@@ -189,6 +189,7 @@ test('larger text, visible focus and text contrast remain usable', async ({ page
 test('search groups quants, and an existing checkpoint opens its installed registration', async ({ page, runtime }) => {
   await page.goto('/');
   await page.getByRole('button', { name: 'Library', exact: true }).click();
+  await page.getByRole('button', { name: 'Hugging Face', exact: true }).click();
   await page.getByLabel('Search Hugging Face models', { exact: true }).fill('Ornith');
   await page.getByRole('button', { name: 'Search', exact: true }).click();
   await page.getByRole('button', { name: 'Browse quants', exact: true }).click();
