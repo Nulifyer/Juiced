@@ -19,7 +19,7 @@ Model names and quantization remain readable at normal desktop and phone sizes.
 | Library | Which weights/quant should I acquire or inspect? | Dense discovery/downloaded list, variants and file review; existing imports/download jobs |
 | Model inspector | Which exact variant is this, and what should change? | Sticky identity/actions, Settings/Effective/README/Weights/Manage, explicit save/apply footer |
 | Diagnostics | What is consuming resources and how are requests behaving? | Performance, Requests and Logs; existing hardware footer remains global |
-| Backends & hardware | Which installed engine/device can run these weights? | Hardware summary, filterable native backend inventory, explicit lifecycle feedback |
+| Backends & hardware | Which installed engine/device can run these weights? | Compact expandable hardware context, provider groups with execution variants, explicit lifecycle feedback |
 | Test services | Does this selected loaded model behave correctly? | Temporary task-specific inputs/results; selected model is explicit |
 
 On wide screens the selected model does not cover or disable the list. On narrow
@@ -52,3 +52,14 @@ temporary tests through the rendered UI. Include desktop, tablet and phone
 widths, large text, keyboard focus, long names, empty/loading/error states,
 unavailable data, no horizontal body overflow and independently bounded scroll
 regions. Native fixtures isolate mutations from production model settings.
+
+## Backend provider hierarchy
+
+Group native recipes once, with execution variants beneath each provider. Keep
+actual device selection separate in model settings. Headers retain ready/total
+counts, loaded-model counts and installation/update/error state. Prefer attention,
+then installed/in-use providers in the list. Expand in-use or attention groups by
+default and retain explicit collapse choices locally. Search and status filters
+reveal matching variants while preserving provider identity and ordinary collapse
+preferences. Filter counts always mean variants. Hardware detection is compact
+and expandable, with explicit CPU/GPU/NPU labels and no implied compatibility.

@@ -34,7 +34,7 @@ explicitly provisioned runtime variant and are outside this default native image
 | Loading policy | Set residency in three drag-and-drop lanes: Hot, On demand and Disabled. Menus and bulk actions offer the same commands. |
 | Library | Search Hugging Face and review files; inspect downloaded weights in a table; follow transfers; upload or register a GGUF in a dedicated import form. |
 | Model settings | Persistent desktop inspector; focused detail view on narrow screens. Settings, Effective, README, Weights & variants and Manage tabs. Common load/sampling controls, execution backend/device choices, staged setting copy between quants and explicit save/reload actions. |
-| Backends & hardware | Detected CPU/GPU/NPU and native runtime installation/support inventory. Availability is separate from compatibility with a particular model registration. |
+| Backends & hardware | Expandable CPU/GPU/NPU hardware summary and runtime provider groups with nested execution variants. Availability is separate from compatibility with a particular model registration. |
 | Service APIs | Copy client endpoints and inspect enabled-service counts and session-cache requirements. |
 | Diagnostics | Native resource/throughput history, bounded completed-request metadata, and live raw output and client-parsed fields, search, severity/component filters, pause/follow, filtered export and tab-local clear. |
 | Cache | Inspect consumer-session computation snapshots separately from retention, mode and disk-budget settings. Unsaved settings survive background refreshes. |

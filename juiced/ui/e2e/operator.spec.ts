@@ -242,3 +242,75 @@ test('global Downloads opens its view from a focused mobile inspector', async ({
   await expect(page.getByRole('region', { name: 'Model details', exact: true })).toHaveCount(0);
   expect(runtime.writes).toEqual([]);
 });
+
+test('backends group variants under one provider and retain collapse choices through search', async ({ page, runtime }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Backends & hardware', exact: true }).click();
+  const llama = page.getByRole('region', { name: 'llama.cpp provider', exact: true });
+  await expect(llama).toHaveCount(1);
+  await expect(llama.locator('.backend-entry')).toHaveCount(3);
+  await expect(llama.locator('.backend-entry-identity')).toContainText(['CPU', 'GPU · Vulkan', 'GPU · ROCm']);
+  const toggle = llama.getByRole('button', { name: /^llama.cpp/ });
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await page.getByLabel('Search backends').fill('Vulkan');
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  await expect(llama.locator('.backend-entry')).toHaveCount(1);
+  await expect(llama.locator('.backend-entry')).toContainText('Vulkan');
+  await page.getByLabel('Search backends').fill('llama.cpp');
+  await expect(llama.locator('.backend-entry')).toHaveCount(3);
+  await page.getByLabel('Search backends').fill('');
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await toggle.focus(); await page.keyboard.press('Enter');
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  await page.reload();
+  await expect(page.getByRole('region', { name: 'llama.cpp provider', exact: true }).getByRole('button', { name: /^llama.cpp/ })).toHaveAttribute('aria-expanded', 'true');
+  expect(runtime.writes).toEqual([]);
+});
+
+test('variant filters retain provider identity and native lifecycle actions', async ({ page, runtime }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Backends & hardware', exact: true }).click();
+  await page.getByRole('button', { name: /^Available / }).click();
+  await expect(page.locator('.backend-group')).toHaveCount(1);
+  await expect(page.locator('.backend-entry')).toHaveCount(1);
+  await expect(page.getByRole('region', { name: 'llama.cpp provider', exact: true })).toContainText('Vulkan');
+  await page.getByRole('button', { name: 'Install backend', exact: true }).click();
+  expect(runtime.writes.at(-1)?.body).toEqual({ recipe: 'llamacpp', backend: 'vulkan', force: false, stream: true, subscribe: false });
+  await page.getByRole('button', { name: /^Updates / }).click();
+  await expect(page.locator('.backend-entry')).toHaveCount(1);
+  await expect(page.getByRole('button', { name: 'Update backend', exact: true })).toBeDisabled();
+  await page.getByLabel('Search backends').fill('does not exist');
+  await expect(page.getByText('No backends match this filter.', { exact: false })).toBeVisible();
+});
+
+for (const width of [1440, 900, 390, 320]) test(`provider groups and hardware disclosure fit ${width}px`, async ({ page, runtime }) => {
+  await page.setViewportSize({ width, height: 900 });
+  await page.goto('/');
+  if (width < 768) await page.getByLabel('Toggle navigation').click();
+  await page.getByRole('button', { name: 'Backends & hardware', exact: true }).click();
+  await expect(page.getByRole('region', { name: 'llama.cpp provider', exact: true })).toBeVisible();
+  const header = await page.locator('.backend-group-toggle').first().boundingBox();
+  expect(header!.y).toBeLessThan(600);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
+  await page.screenshot({ path: `test-results/backend-groups-${width}.png` });
+  await page.getByText('Detected hardware', { exact: true }).click();
+  await expect(page.locator('.hardware-kind')).toContainText(['CPU', 'GPU']);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
+});
+
+test('collapsed providers retain installation failure feedback', async ({ page, runtime }) => {
+  runtime.jobs[1] = { ...runtime.jobs[1], complete: false, status: 'error', error: 'Fixture install failed' };
+  await page.setViewportSize({ width: 390, height: 900 });
+  await page.goto('/');
+  await page.getByLabel('Toggle navigation').click();
+  await page.getByRole('button', { name: 'Backends & hardware', exact: true }).click();
+  const provider = page.getByRole('region', { name: 'Whisper.cpp provider', exact: true });
+  const toggle = provider.getByRole('button', { name: /^Whisper.cpp/ });
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  await expect(provider).toContainText('Fixture install failed');
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await expect(toggle).toContainText('Installation needs attention');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
+});
