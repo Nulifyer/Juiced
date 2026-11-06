@@ -177,10 +177,11 @@ export function ModelWorkspace({
       }
     };
     return (
-      <label key={field.key}>
+      <label key={field.key} htmlFor={`model-setting-${field.key}`}>
         <span className="field-label">{field.label}<HelpTip label={field.label}>{field.help}</HelpTip></span>
         {field.choices ? (
           <select
+            id={`model-setting-${field.key}`}
             aria-label={field.label}
             value={value}
             onChange={(e) => change(e.target.value)}
@@ -195,6 +196,7 @@ export function ModelWorkspace({
         ) : (
           <input
             type="number"
+            id={`model-setting-${field.key}`}
             aria-label={field.label}
             disabled={
               field.key === "gpu" &&
@@ -491,10 +493,11 @@ export function ModelWorkspace({
                     <legend>Context & capacity</legend>
                     <div className="settings-grid">
                       {"ctx_size" in response.effective && (
-                        <label>
+                        <label htmlFor="model-context-tokens">
                           <span className="field-label">Total context tokens<HelpTip label="Total context tokens">Includes prompt, reasoning and output. -1 selects automatically. More context and concurrent chats require more memory.</HelpTip></span>
                           <input
                             type="number"
+                            id="model-context-tokens"
                             aria-label="Total context tokens"
                             min={-1}
                             step={1}

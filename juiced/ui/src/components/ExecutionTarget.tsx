@@ -181,9 +181,10 @@ export function ExecutionTarget({
           </div>
 
         </div>
-        <label>
+        <label htmlFor="execution-backend">
           <span className="field-label">Run on</span>
           <SelectField
+            id="execution-backend"
             label="Run on"
             value={backend}
             options={backendOptions}
@@ -200,9 +201,10 @@ export function ExecutionTarget({
         </label>
       </div>
       {model.recipe === "llamacpp" && backend !== "cpu" && (
-        <label className="execution-device">
+        <label className="execution-device" htmlFor="execution-device">
           <span className="field-label">Accelerator device <HelpTip label="Accelerator device">Device IDs come from the selected runtime. Automatic selection lets the runtime choose a GPU.</HelpTip></span>
           <SelectField
+            id="execution-device"
             label="Accelerator device"
             value={device}
             disabled={disabled}

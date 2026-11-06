@@ -278,9 +278,10 @@ export function CacheWorkspace({
               }}
             >
               <div className="cache-policy-fields" hidden={tab !== "settings"}>
-              <label>
+              <label htmlFor="cache-reuse-mode">
                 <span className="field-label">Reuse mode <HelpTip label="Reuse mode">Memory reuse lasts while the engine stays loaded. Persistent snapshots can survive model or server restarts on qualified profiles. Off bypasses prompt reuse.</HelpTip></span>
                 <select
+                  id="cache-reuse-mode"
                   aria-label="Reuse mode"
                   value={draft.mode}
                   onChange={(e) => edit("mode", e.target.value)}
@@ -331,13 +332,14 @@ export function CacheWorkspace({
                   ))}
               </div>
               <div className="cache-policy-fields" hidden={tab !== "settings"}>
-              <label>
+              <label htmlFor="cache-expiry-days">
                 <span className="field-label">Expiry (days) <HelpTip label="Cache expiry">Days since last use. Retained snapshots are protected.</HelpTip></span>
                 <input
                   type="number"
                   min={1}
                   max={365}
                   required
+                  id="cache-expiry-days"
                   aria-label="Expiry (days)"
                   value={draft.retention_days}
                   onChange={(e) =>
@@ -346,13 +348,14 @@ export function CacheWorkspace({
                 />
 
               </label>
-              <label>
+              <label htmlFor="cache-disk-budget">
                 <span className="field-label">Disk budget (GiB) <HelpTip label="Disk budget">Budget for snapshots. Temporary saves need additional free space.</HelpTip></span>
                 <input
                   type="number"
                   min={1}
                   max={256}
                   required
+                  id="cache-disk-budget"
                   aria-label="Disk budget (GiB)"
                   value={draft.disk_budget_gib}
                   onChange={(e) =>

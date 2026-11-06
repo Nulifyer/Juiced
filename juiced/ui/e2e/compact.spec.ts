@@ -32,6 +32,9 @@ for (const width of [1440, 390]) test(`field help opens by keyboard, closes with
   await page.setViewportSize({ width, height: 960 });
   await openModel(page);
   const input = page.getByLabel('Total context tokens', { exact: true });
+  await page.getByText('Total context tokens', { exact: true }).click();
+  await expect(input).toBeFocused();
+  expect(await page.locator('label[for="model-context-tokens"]').evaluate((label: HTMLLabelElement) => label.control?.id)).toBe('model-context-tokens');
   await input.fill('16384');
   const trigger = page.getByRole('button', { name: 'About Total context tokens', exact: true });
   await trigger.focus();
@@ -72,6 +75,7 @@ test('cache policy drafts survive tab changes and save only on request', async (
   await page.goto('/');
   await page.getByRole('button', { name: 'Cache', exact: true }).click();
   await page.getByRole('button', { name: 'Storage policy', exact: true }).click();
+  expect(await page.locator('label[for="cache-expiry-days"]').evaluate((label: HTMLLabelElement) => label.control?.id)).toBe('cache-expiry-days');
   await page.getByLabel('Expiry (days)').fill('14');
   await page.getByRole('button', { name: /^Model overrides/ }).click();
   await expect(page.getByRole('button', { name: 'Save changes', exact: true })).toBeEnabled();

@@ -10,12 +10,14 @@ export type SelectOption = {
 };
 
 export function SelectField({
+  id,
   label,
   value,
   options,
   disabled,
   onValueChange,
 }: {
+  id?: string;
   label: string;
   value: string;
   options: SelectOption[];
@@ -31,7 +33,7 @@ export function SelectField({
         if (next !== null) onValueChange(next);
       }}
     >
-      <Select.Trigger className="select-trigger" aria-label={label}>
+      <Select.Trigger id={id} className="select-trigger" aria-label={label}>
         <Select.Value />
         <Select.Icon>
           <ChevronDown size={15} aria-hidden="true" />
