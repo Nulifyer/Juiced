@@ -1,0 +1,99 @@
+.select-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  min-width: 0;
+  min-height: 36px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--control-radius);
+  background: var(--card);
+  color: var(--foreground);
+  text-align: left;
+  font-size: 12px;
+}
+.select-trigger > span:first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.select-trigger > span:last-child {
+  display: flex;
+  flex-shrink: 0;
+  color: var(--muted-foreground);
+}
+.select-trigger[data-disabled] {
+  color: var(--muted-foreground);
+  cursor: default;
+}
+.select-trigger[data-popup-open] {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.select-positioner {
+  z-index: 150;
+  outline: none;
+}
+.select-popup {
+  box-sizing: border-box;
+  width: var(--anchor-width);
+  min-width: min(250px, calc(100vw - 24px));
+  max-width: calc(100vw - 24px);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--card);
+  color: var(--foreground);
+  box-shadow: 0 8px 28px #0006;
+  outline: none;
+}
+.select-list {
+  max-height: min(360px, var(--available-height));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 5px;
+  outline: none;
+}
+.select-option {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 18px;
+  align-items: center;
+  gap: 12px;
+  min-height: 36px;
+  padding: 9px;
+  border-radius: 4px;
+  color: var(--foreground);
+  font-size: 13px;
+  cursor: pointer;
+  outline: none;
+}
+.select-option[data-highlighted] {
+  background: var(--secondary);
+  outline: 1px solid var(--ring);
+  outline-offset: -1px;
+}
+.select-option[data-disabled] {
+  color: var(--muted-foreground);
+  cursor: default;
+}
+.select-option-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.select-option-copy small {
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.select-option-check {
+  display: flex;
+  align-items: center;
+}
+@media (pointer: coarse) {
+  .select-trigger,
+  .select-option {
+    min-height: 44px;
+  }
+}

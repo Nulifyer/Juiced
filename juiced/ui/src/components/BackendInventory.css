@@ -279,3 +279,6 @@
   max-width: 150px;
   overflow-wrap: anywhere;
 }
+
+.registered-runtime-field { display: flex; flex-direction: column; gap: 7px; min-width: 0; font-size: 12px; }
+.registered-runtime { min-height: 36px; padding: 8px 0; color: var(--foreground); font-weight: 600; }

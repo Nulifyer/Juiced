@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { backendReady } from "./backendState";
 import { api, type Model } from "../api";
+import { SelectField, type SelectOption } from "./t3/select";
 import { runtimeFields, setArg, type Options } from "./modelSettings";
 
 export type RuntimeInfo = {
@@ -10,7 +11,14 @@ export type RuntimeInfo = {
   options?: { name: string; type_name: string; help: string }[];
   backends: Record<
     string,
-    { state: string; message?: string; devices?: string[]; version?: string; action?: string; update_available?: boolean }
+    {
+      state: string;
+      message?: string;
+      devices?: string[];
+      version?: string;
+      action?: string;
+      update_available?: boolean;
+    }
   >;
 };
 export type SystemInfo = {
@@ -130,6 +138,31 @@ export function ExecutionTarget({
       setDeviceError((e as Error).message);
     }
   }
+  const backendOptions: SelectOption[] = recipe
+    ? Object.entries(recipe.backends).map(([value, variant]) => ({
+        value,
+        label: acceleratorName(value),
+        disabled: !backendReady(variant.state),
+        description: backendReady(variant.state)
+          ? undefined
+          : variant.state === "installable"
+            ? "Not installed"
+            : "Unavailable",
+      }))
+    : [{ value: backend, label: backend || "Reading runtime inventory…" }];
+  if (recipe && !recipe.backends.npu)
+    backendOptions.push({
+      value: "unavailable-npu",
+      label: "NPU",
+      description: "No compatible runtime path",
+      disabled: true,
+    });
+  backendOptions.push({
+    value: "unavailable-hybrid",
+    label: "Hybrid NPU + GPU",
+    description: "Not implemented by this runtime",
+    disabled: true,
+  });
   return (
     <fieldset className="settings-section execution-target" disabled={disabled}>
       <legend>Runtime & hardware</legend>
@@ -144,58 +177,25 @@ export function ExecutionTarget({
         </p>
       )}
       <div className="settings-grid">
-        <label>
-          Model runtime
-          <select
-            aria-label="Model runtime"
-            value={model.recipe}
-            onChange={() => {}}
-          >
-            <option value={model.recipe}>
-              {runtimeName(model.recipe, recipe)}
-            </option>
-            {alternatives.map(([id, r]) => (
-              <option key={id} value={id} disabled>
-                {runtimeName(id, r)} · requires a compatible registration
-              </option>
-            ))}
-          </select>
+        <div className="registered-runtime-field">
+          <span>Model runtime</span>
+          <div className="registered-runtime">
+            {runtimeName(model.recipe, recipe)}
+          </div>
           <small>
-            Registered for {runtimeName(model.recipe, recipe)}. Weights are not
-            automatically converted for another runtime.
+            Fixed by this registration. Weights are not automatically converted
+            for another runtime.
           </small>
-        </label>
+        </div>
         <label>
           Run on
-          <select
-            aria-label="Run on"
+          <SelectField
+            label="Run on"
             value={backend}
-            disabled={!recipe || !backendKey}
-            onChange={(e) => choose(e.target.value)}
-          >
-            {!recipe ? (
-              <option value={backend}>
-                {backend || "Reading runtime inventory…"}
-              </option>
-            ) : (
-              Object.entries(recipe.backends).map(([id, b]) => (
-                <option value={id} key={id} disabled={!backendReady(b.state)}>
-                  {acceleratorName(id)}
-                  {backendReady(b.state)
-                    ? ""
-                    : ` · ${b.state === "installable" ? "not installed" : "unavailable"}`}
-                </option>
-              ))
-            )}
-            {recipe && !recipe.backends.npu && (
-              <option value="unavailable-npu" disabled>
-                NPU · no compatible runtime path
-              </option>
-            )}
-            <option value="unavailable-hybrid" disabled>
-              Hybrid NPU + GPU · not implemented by this runtime
-            </option>
-          </select>
+            options={backendOptions}
+            disabled={disabled || !recipe || !backendKey}
+            onValueChange={choose}
+          />
           <small>
             {deviceNames.join(", ") ||
               supported?.message ||
@@ -208,23 +208,28 @@ export function ExecutionTarget({
       {model.recipe === "llamacpp" && backend !== "cpu" && (
         <label className="execution-device">
           Accelerator device
-          <select
-            aria-label="Accelerator device"
+          <SelectField
+            label="Accelerator device"
             value={device}
-            onChange={(e) => update("llamacpp_device", e.target.value || null)}
-          >
-            <option value="">Automatic GPU selection</option>
-            {devices.map((d) => (
-              <option key={d.id} value={d.id}>
-                {d.id} · {d.name}
-              </option>
-            ))}
-            {device && !devices.some((d) => d.id === device) && (
-              <option value={device}>
-                {device} · current explicit selection
-              </option>
-            )}
-          </select>
+            disabled={disabled}
+            onValueChange={(next) => update("llamacpp_device", next || null)}
+            options={[
+              { value: "", label: "Automatic GPU selection" },
+              ...devices.map((item) => ({
+                value: item.id,
+                label: `${item.id} · ${item.name}`,
+              })),
+              ...(device && !devices.some((item) => item.id === device)
+                ? [
+                    {
+                      value: device,
+                      label: device,
+                      description: "Current explicit selection",
+                    },
+                  ]
+                : []),
+            ]}
+          />
           <small>
             {deviceError ||
               "Device IDs are reported by the selected runtime. Existing selections are preserved until changed."}

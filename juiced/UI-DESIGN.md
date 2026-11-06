@@ -63,3 +63,11 @@ default and retain explicit collapse choices locally. Search and status filters
 reveal matching variants while preserving provider identity and ordinary collapse
 preferences. Filter counts always mean variants. Hardware detection is compact
 and expandable, with explicit CPU/GPU/NPU labels and no implied compatibility.
+
+## Hardware selection menus
+
+Run on and accelerator-device choices use the shared Base UI SelectField rather
+than OS-rendered menus. Popup backgrounds, selected/highlighted states and
+disabled reasons use app tokens even with a light system theme. Menus are bounded
+to the viewport, keyboard-operable and return focus on Escape. Runtime recipe is
+a fixed registration value; only supported execution/device choices are editable.
