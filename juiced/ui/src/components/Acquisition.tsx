@@ -46,7 +46,7 @@ export function Acquisition({
   tab: string;
   setTab: (s: string) => void;
   onInspect: (m: Model) => void;
-  initialRepository?: { repo: string };
+  initialRepository?: { repo?: string; query?: string; runtime?: string };
   onRepositoryOpened?: () => void;
   onBackends: () => void;
 }) {
@@ -81,7 +81,7 @@ export function Acquisition({
     !installedVariant &&
     models.some((m) => m.id === name || m.id === "user." + name);
   useEffect(() => {
-    if (initialRepository)
+    if (initialRepository?.repo)
       void inspect(initialRepository.repo).finally(() =>
         onRepositoryOpened?.(),
       );
@@ -273,7 +273,7 @@ export function Acquisition({
       </header>
       {tab === "discover" && (
         <>
-          <DiscoverModels models={models} jobs={jobs} busy={busy} onRepository={(repo) => void inspect(repo)} onDownload={(id) => void pull(id)} onInspect={onInspect} onDownloads={() => setTab("transfers")} />
+          <DiscoverModels initialSearch={initialRepository?.query ? initialRepository : undefined} models={models} jobs={jobs} busy={busy} onRepository={(repo) => void inspect(repo)} onDownload={(id) => void pull(id)} onInspect={onInspect} onDownloads={() => setTab("transfers")} />
           {variants && (
             <Dialog.Root
               open

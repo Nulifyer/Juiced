@@ -110,7 +110,27 @@ JuicedService::JuicedService(Server &server)
     state_["snapshots"] = json::object();
   if (!state_.contains("qualified_profiles"))
     state_["qualified_profiles"] = json::object();
+  if (!state_.contains("preparations")) state_["preparations"] = json::object();
+  for (auto &[id, job] : state_["preparations"].items())
+    if (job.value("pending", false)) {
+      job["pending"] = false;
+      job["phase"] = "interrupted";
+    }
+  if (!state_.contains("execution_trials")) state_["execution_trials"] = json::object();
+  std::vector<std::string> recovered;
+  for (const auto &[name, trial] : state_["execution_trials"].items()) {
+    try {
+      server_.model_manager_->select_execution_profile(name, trial.at("previous"));
+      recovered.push_back(name);
+    } catch (const std::exception &error) {
+      operations_[name] = {{"pending", false}, {"state", "failed"},
+          {"error", "Interrupted trial recovery failed: " + std::string(error.what())}, {"updated", now()}};
+    }
+  }
+  for (const auto &name : recovered) state_["execution_trials"].erase(name);
+  if (!recovered.empty()) persist_locked();
   worker_ = std::thread([this] { run(); });
+  preparation_worker_ = std::thread([this] { preparation_run(); });
 }
 JuicedService::~JuicedService() { stop(); }
 void JuicedService::stop() {
@@ -118,6 +138,7 @@ void JuicedService::stop() {
   wake_.notify_all();
   if (worker_.joinable())
     worker_.join();
+  if (preparation_worker_.joinable()) preparation_worker_.join();
   voice_process_.reset();
 }
 void JuicedService::persist_locked() {
@@ -186,6 +207,10 @@ bool JuicedService::inference_guard(const httplib::Request &req,
               503);
         return true;
       }
+      if (state_.value("execution_trials", json::object()).contains(canonical)) {
+        reply(res, {{"error", {{"message", "Recover the interrupted runtime trial from the model Runtime screen"}, {"type", "invalid_request_error"}}}}, 409);
+        return true;
+      }
     }
     if ((req.path == "/api/chat" || req.path == "/api/generate") &&
         body.contains("keep_alive") && body["keep_alive"] == 0 &&
@@ -222,6 +247,7 @@ void JuicedService::refresh() {
   for (const auto &[id, info] : all) {
     auto m = server_.model_info_to_json(id, info);
     m["service"] = service(m);
+    m["execution_profile"] = server_.model_manager_->get_execution_profiles(id).value("selected", "registered");
     m["loaded"] = false;
     m["state"] = "unloaded";
     for (const auto &l : loaded)
@@ -297,6 +323,8 @@ void JuicedService::refresh() {
 void JuicedService::execute(const json &command) {
   const auto name = command.at("model").get<std::string>();
   const auto action = command.at("action").get<std::string>();
+  json previous_profile;
+  bool profile_changed = false, trial_started = false, was_loaded = false;
   try {
     {
       std::lock_guard<std::mutex> lock(mutex_);
@@ -307,6 +335,36 @@ void JuicedService::execute(const json &command) {
                            {"updated", now()}};
     }
     auto info = server_.model_manager_->get_model_info(name);
+    if (command.contains("profile")) {
+      const auto state = server_.model_manager_->get_execution_profiles(name);
+      const auto selected = state.value("selected", "registered");
+      if (command.value("expected_selected", selected) != selected)
+        throw std::runtime_error("Execution profile changed elsewhere; refresh and retry");
+      previous_profile = state.value("profiles", json::object()).value(selected,
+          json{{"id", selected}, {"recipe", info.recipe}, {"options", info.recipe_options.to_json()}});
+      previous_profile["id"] = selected;
+      previous_profile["recipe"] = info.recipe;
+      previous_profile["options"] = info.recipe_options.to_json();
+      was_loaded = server_.router_->is_model_loaded(name);
+      for (const auto &loaded : server_.router_->get_all_loaded_models())
+        if (loaded.value("model_name", "") == name && loaded.value("is_busy", false))
+          throw std::runtime_error("Model is busy; retry after active requests finish");
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (state_["execution_trials"].contains(name))
+          previous_profile = state_["execution_trials"][name].at("previous");
+        state_["execution_trials"][name] = {{"previous", previous_profile}, {"was_loaded", was_loaded}};
+        persist_locked();
+        trial_started = true;
+      }
+      if (was_loaded) {
+        server_.router_->unload_model(name);
+        if (server_.router_->is_model_loaded(name)) throw std::runtime_error("Model is still draining");
+      }
+      server_.model_manager_->select_execution_profile(name, command.at("profile"));
+      profile_changed = true;
+      info = server_.model_manager_->get_model_info(name);
+    }
     if (action == "load" || action == "reload") {
       if (!allows(name))
         throw std::invalid_argument("Model is disabled");
@@ -317,7 +375,7 @@ void JuicedService::execute(const json &command) {
         std::lock_guard<std::mutex> lock(mutex_);
         policy = state_["policies"].value(name, "disabled");
       }
-      if (action == "reload") {
+      if (action == "reload" && !profile_changed) {
         for (const auto &l : server_.router_->get_all_loaded_models())
           if (l.value("model_name", "") == name && l.value("is_busy", false))
             throw std::runtime_error(
@@ -330,7 +388,7 @@ void JuicedService::execute(const json &command) {
       server_.router_->load_model(
           name, info, RecipeOptions(info.recipe, json::object()), true, false,
           policy == "hot", LoadPurpose::UserInference, &stopping_);
-    } else {
+    } else if (action == "unload") {
       auto active = server_.router_->get_all_loaded_models();
       for (const auto &l : active)
         if (l.value("model_name", "") == name && l.value("is_busy", false))
@@ -341,21 +399,37 @@ void JuicedService::execute(const json &command) {
     {
       std::lock_guard<std::mutex> lock(mutex_);
       operations_.erase(name);
+      if (trial_started) { state_["execution_trials"].erase(name); persist_locked(); }
     }
   } catch (const std::exception &e) {
+    std::string error = e.what();
+    if (trial_started) {
+      try {
+        if (server_.router_->is_model_loaded(name)) server_.router_->unload_model(name);
+        server_.model_manager_->select_execution_profile(name, previous_profile);
+        if (was_loaded && !stopping_) {
+          auto restored = server_.model_manager_->get_model_info(name);
+          server_.router_->load_model(name, restored, RecipeOptions(restored.recipe, json::object()),
+              true, false, hot(name), LoadPurpose::UserInference, &stopping_);
+        }
+        { std::lock_guard<std::mutex> lock(mutex_); state_["execution_trials"].erase(name); persist_locked(); }
+        error += "; previous execution profile restored";
+      } catch (const std::exception &restore) { error += "; recovery failed: " + std::string(restore.what()); }
+    }
     std::lock_guard<std::mutex> lock(mutex_);
     operations_[name] = {{"pending", false},
                          {"state", "failed"},
-                         {"error", e.what()},
+                         {"error", error},
                          {"updated", now()}};
   }
 }
 void JuicedService::reconcile() {
-  json policies, catalog;
+  json policies, catalog, interrupted;
   {
     std::lock_guard<std::mutex> lock(mutex_);
     policies = state_["policies"];
     catalog = catalog_;
+    interrupted = state_["execution_trials"];
   }
   std::vector<std::pair<std::string, json>> ordered;
   for (const auto &item : policies.items())
@@ -375,6 +449,7 @@ void JuicedService::reconcile() {
                      return weight(a.first) < weight(b.first);
                    });
   for (const auto &[name, p] : ordered) {
+    if (p == "hot" && interrupted.contains(name)) continue;
     bool loaded = false, downloaded = false;
     for (const auto &m : catalog)
       if (m.value("id", "") == name) {
@@ -517,6 +592,10 @@ void JuicedService::routes(httplib::Server &http) {
     });
   }
   for (const std::string prefix : {"/api/v0/", "/api/v1/", "/v0/", "/v1/"}) {
+    http.Get(prefix + "juiced/preparation", [this](const auto &q, auto &r) { preparation_api(q, r); });
+    http.Post(prefix + "juiced/preparation", [this](const auto &q, auto &r) { preparation_api(q, r); });
+    http.Get(prefix + "juiced/execution", [this](const auto &q, auto &r) { execution_api(q, r); });
+    http.Post(prefix + "juiced/execution", [this](const auto &q, auto &r) { execution_api(q, r); });
     http.Get(prefix + "juiced/devices",
              [this](const auto &q, auto &r) { execution_devices(q, r); });
     http.Get(prefix + "audio/voices",

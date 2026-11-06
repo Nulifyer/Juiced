@@ -120,7 +120,7 @@ static const std::vector<std::string> USER_DEFINED_MODEL_PROPS = std::vector<std
     "checkpoints", "checkpoint", "recipe", "mmproj", "size",
     "image_defaults", "audio_defaults", "components", "recipe_options",
     "routing", "system_prompt", "version", "source", "registry_source",
-    "auto_update"
+    "auto_update", "juiced_preparation"
 };
 
 static std::string visible_extra_variant_name(const lemon::GgufVariant& variant) {
@@ -1402,6 +1402,9 @@ ModelManager::ModelManager(const std::string& extra_models_dir)
     server_models_ = load_server_models();
     user_models_ = load_optional_json(get_user_models_file());
     recipe_options_ = load_optional_json(get_recipe_options_file());
+    execution_profiles_ = load_optional_json(path_to_utf8(
+        path_from_utf8(get_recipe_options_file()).parent_path() / "execution_profiles.json"));
+    if (!execution_profiles_.is_object()) execution_profiles_ = json::object();
     architecture_defaults_ = load_architecture_defaults();
 
     // One-shot migration of recipe_options.json: older Lemonade keyed built-in
@@ -2423,6 +2426,75 @@ json ModelManager::write_saved_model_options(const std::string& model_name,
     return saved;
 }
 
+ModelInfo ModelManager::apply_execution_profile_locked(const std::string& cache_key, ModelInfo info) const {
+    const auto id = cache_key_to_canonical_id(cache_key);
+    if (!execution_profiles_.contains(id)) return info;
+    const auto& state = execution_profiles_.at(id);
+    const auto selected = state.value("selected", "registered");
+    if (selected == "registered" || !state.value("profiles", json::object()).contains(selected)) return info;
+    const auto& profile = state.at("profiles").at(selected);
+    info.extras["source_recipe"] = info.recipe;
+    info.extras["execution_profile"] = selected;
+    info.recipe = profile.at("recipe").get<std::string>();
+    if (profile.value("gguf_import", false)) {
+        info.extras["gguf_import"] = true;
+        info.extras["tokenizer"] = profile.value("tokenizer", "");
+    }
+    json options = profile.value("options", json::object());
+    if (recipe_options_.contains(id) && recipe_options_.at(id).is_object())
+        options.update(recipe_options_.at(id));
+    info.recipe_options = RecipeOptions(info.recipe, options);
+    if (const auto* descriptor = backends::descriptor_for(info.recipe)) info.device = descriptor->default_device;
+    return info;
+}
+
+json ModelManager::get_execution_profiles(const std::string& model_name) {
+    const auto key = resolve_model_name(model_name);
+    std::lock_guard<std::mutex> lock(models_cache_mutex_);
+    const auto id = cache_key_to_canonical_id(key);
+    return execution_profiles_.value(id, json{{"selected", "registered"}, {"profiles", json::object()}});
+}
+
+void ModelManager::select_execution_profile(const std::string& model_name, const json& profile) {
+    const auto key = resolve_model_name(model_name);
+    const auto id = cache_key_to_canonical_id(key);
+    const auto profile_id = profile.at("id").get<std::string>();
+    if (profile_id.empty() || profile_id.size() > 160) throw std::invalid_argument("Invalid execution profile identifier");
+    if (profile_id != "registered" &&
+        !backends::descriptor_for(profile.at("recipe").get<std::string>()))
+        throw std::invalid_argument("Unknown execution runtime");
+    std::lock_guard<std::mutex> write_lock(execution_profiles_write_mutex_);
+    const auto current = get_model_info(model_name);
+    const auto current_options = current.recipe_options.to_json();
+    const auto previous_saved = get_saved_model_options(model_name);
+    json previous_state, next_state, snapshot;
+    {
+        std::lock_guard<std::mutex> lock(models_cache_mutex_);
+        previous_state = execution_profiles_.value(id, json{{"selected", "registered"}, {"profiles", json::object()}});
+        next_state = previous_state;
+        const auto selected = next_state.value("selected", "registered");
+        next_state["profiles"][selected] = {{"id", selected}, {"recipe", current.recipe}, {"options", current_options}};
+        if (profile_id != "registered") next_state["profiles"][profile_id] = profile;
+        next_state["profiles"][profile_id]["options"]["pinned"] = current_options.value("pinned", false);
+        next_state["selected"] = profile_id;
+        execution_profiles_[id] = next_state;
+        snapshot = execution_profiles_;
+    }
+    const auto path = path_to_utf8(path_from_utf8(get_recipe_options_file()).parent_path() / "execution_profiles.json");
+    try {
+        save_user_json(path, snapshot);
+        write_saved_model_options(model_name, next_state.at("profiles").at(profile_id).value("options", json::object()), false);
+    } catch (...) {
+        {
+            std::lock_guard<std::mutex> lock(models_cache_mutex_);
+            execution_profiles_[id] = previous_state;
+            snapshot = execution_profiles_;
+        }
+        try { save_user_json(path, snapshot); write_saved_model_options(model_name, previous_saved, false); } catch (...) {}
+        throw;
+    }
+}
+
 std::map<std::string, ModelInfo> ModelManager::get_supported_models() {
     // Build cache if needed (lazy initialization)
     build_cache();
@@ -2433,7 +2505,7 @@ std::map<std::string, ModelInfo> ModelManager::get_supported_models() {
     for (const auto& [name, info] : models_cache_) {
         auto it = canonical_public_names_.find(name);
         const std::string& public_name = it != canonical_public_names_.end() ? it->second : name;
-        ModelInfo public_info = info;
+        ModelInfo public_info = apply_execution_profile_locked(name, info);
         public_info.model_name = public_name;
         public_models[public_name] = std::move(public_info);
     }
@@ -4766,7 +4838,7 @@ static bool user_entry_is_router_collection(const json& user_models,
 
 void ModelManager::register_user_model(const std::string& model_name,
                                       const json& model_data,
-                                      const std::string& source) {
+                                      const std::string& source, bool replace_existing) {
     const std::string recipe = model_data.value("recipe", std::string());
 
     // Remove "user." prefix if present
@@ -4829,6 +4901,8 @@ void ModelManager::register_user_model(const std::string& model_name,
         if (!updated_user_models.is_object()) {
             updated_user_models = json::object();
         }
+        if (!replace_existing && updated_user_models.contains(clean_name))
+            throw std::runtime_error("That model variant was registered while preparation was running; existing settings were preserved");
         overwrote_router_collection =
             user_entry_is_router_collection(updated_user_models, clean_name);
         updated_user_models[clean_name] = model_entry;
@@ -7058,7 +7132,7 @@ ModelInfo ModelManager::get_model_info(const std::string& model_name) {
         std::string canonical_name = alias_it != public_model_aliases_.end() ? alias_it->second : model_name;
         auto it = models_cache_.find(canonical_name);
         if (it != models_cache_.end()) {
-            return it->second;
+            return apply_execution_profile_locked(canonical_name, it->second);
         }
     }
 

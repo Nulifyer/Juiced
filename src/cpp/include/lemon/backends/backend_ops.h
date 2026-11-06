@@ -42,6 +42,14 @@ class BackendOps {
 public:
     virtual ~BackendOps() = default;
 
+    virtual json execution_compatibility(const ModelInfo& info, const std::string& recipe, const std::string& backend) const {
+        (void)backend;
+        return {{"compatible", info.recipe == recipe}, {"reuse", true},
+                {"reason", info.recipe == recipe ? "Registered runtime" : "No verified artifact importer for this runtime"},
+                {"changes", json::array()}};
+    }
+
+
     // Populate model-specific metadata (context window, capability labels, …)
     // for a downloaded model. Default: nothing.
     virtual void populate_metadata(ModelInfo& info, const BackendOpsContext& ctx) const {

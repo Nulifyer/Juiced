@@ -316,56 +316,24 @@ test('collapsed providers retain installation failure feedback', async ({ page, 
 });
 
 for (const width of [1440, 390]) test(`hardware popup stays readable with a light system theme at ${width}px`, async ({ page, runtime }) => {
-  await page.setViewportSize({ width, height: 900 });
-  await page.emulateMedia({ colorScheme: 'light' });
-  await openModel(page);
-  await page.getByRole('combobox', { name: 'Run on', exact: true }).click();
-  await expect(page.getByRole('listbox')).toBeVisible();
-  const disabled = page.getByRole('option', { name: /GPU · ROCm/ });
-  await expect(disabled).toBeDisabled();
-  await expect(page.getByRole('option', { name: /Hybrid NPU/ })).toBeDisabled();
-  await expect(page.getByRole('option', { name: 'CPU', exact: true })).toHaveAttribute('aria-selected', 'true');
-  const contrast = await disabled.evaluate(node => {
+  await page.setViewportSize({ width, height: 900 }); await page.emulateMedia({ colorScheme: 'light' });
+  await openModel(page); await page.getByRole('button', { name: 'Runtime', exact: true }).click();
+  const hardware = page.getByRole('combobox', { name: 'Run on', exact: true }); await hardware.click();
+  const option = page.getByRole('option', { name: /GPU · ROCm/ }); await expect(option).toContainText('Unavailable');
+  const contrast = await option.evaluate(node => {
     const popup = document.querySelector('.select-popup')!;
-    const color = getComputedStyle(node).color;
-    const background = getComputedStyle(popup).backgroundColor;
-    function luminance(rgb: string) { const values = rgb.match(/[\d.]+/g)!.slice(0,3).map(Number).map(v => v / 255).map(v => v <= .04045 ? v/12.92 : ((v+.055)/1.055)**2.4); return values[0]*.2126 + values[1]*.7152 + values[2]*.0722; }
-    const a = luminance(color), b = luminance(background);
-    return { ratio: (Math.max(a,b)+.05)/(Math.min(a,b)+.05), background };
-  });
-  expect(contrast.background).toBe('rgb(21, 22, 25)');
-  expect(contrast.ratio).toBeGreaterThanOrEqual(4.5);
-  const bounds = await page.locator('.select-popup').boundingBox();
-  expect(bounds!.x).toBeGreaterThanOrEqual(0);
-  expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width);
-  await page.screenshot({ path: `test-results/hardware-popup-${width}.png` });
-  await page.keyboard.press('Escape');
-  await expect(page.getByRole('listbox')).toHaveCount(0);
-  await expect(page.getByRole('combobox', { name: 'Run on', exact: true })).toBeFocused();
-  expect(runtime.writes).toEqual([]);
+    function luminance(rgb: string) { const v = rgb.match(/[\d.]+/g)!.slice(0,3).map(Number).map(n => n/255).map(n => n <= .04045 ? n/12.92 : ((n+.055)/1.055)**2.4); return v[0]*.2126+v[1]*.7152+v[2]*.0722; }
+    const a=luminance(getComputedStyle(node).color),b=luminance(getComputedStyle(popup).backgroundColor);return (Math.max(a,b)+.05)/(Math.min(a,b)+.05);
+  }); expect(contrast).toBeGreaterThanOrEqual(4.5);
+  const bounds = await page.locator('.select-popup').boundingBox(); expect(bounds!.x).toBeGreaterThanOrEqual(0); expect(bounds!.x+bounds!.width).toBeLessThanOrEqual(width);
+  await page.screenshot({ path: `test-results/hardware-popup-${width}.png` }); await option.click();
+  await expect(page.getByText('Requires an available ROCm GPU')).toBeVisible(); await expect(page.getByRole('button', { name: 'Apply & reload' })).toBeDisabled(); expect(runtime.writes).toEqual([]);
 });
 
-test('hardware menu keyboard selection stages backend/offload and device without saving', async ({ page, runtime }) => {
-  runtime.gpuInstalled = true;
-  await openModel(page);
-  const target = page.getByRole('combobox', { name: 'Run on', exact: true });
-  await target.focus(); await page.keyboard.press('ArrowDown');
-  await page.keyboard.press('End'); await page.keyboard.press('Enter');
-  await expect(target).toContainText('CPU');
-  await expect(page.getByRole('listbox')).toBeVisible();
-  await page.keyboard.press('Home'); await page.keyboard.press('ArrowDown'); await page.keyboard.press('Enter');
-  await expect(target).toContainText('GPU · Vulkan');
-  const device = page.getByRole('combobox', { name: 'Accelerator device', exact: true });
-  await expect(device).toContainText('Automatic GPU selection');
-  await device.click();
-  await page.getByRole('option', { name: /Vulkan0/ }).click();
-  await expect(device).toContainText('Vulkan0');
-  await target.click();
-  await page.getByRole('option', { name: 'CPU', exact: true }).click();
-  await expect(target).toContainText('CPU');
-  await expect(page.getByRole('combobox', { name: 'Accelerator device', exact: true })).toHaveCount(0);
-  await expect(page.getByRole('spinbutton', { name: 'GPU layers', exact: true })).toHaveValue('0');
-  await expect(page.getByRole('spinbutton', { name: 'GPU layers', exact: true })).toBeDisabled();
-  await expect(page.getByRole('combobox', { name: 'Model runtime', exact: true })).toHaveCount(0);
-  expect(runtime.writes).toEqual([]);
+test('hardware selection reviews an independent profile before reloading', async ({ page, runtime }) => {
+  runtime.gpuInstalled = true; await openModel(page); await page.getByRole('button', { name: 'Runtime', exact: true }).click();
+  const target=page.getByRole('combobox', { name: 'Run on', exact: true }); await target.click(); await page.getByRole('option', { name: 'GPU · Vulkan', exact: true }).click();
+  const device=page.getByRole('combobox', { name: 'Accelerator device', exact: true }); await device.click(); await page.getByRole('option', { name: /Vulkan0/ }).click();
+  expect(runtime.writes).toEqual([]); await page.getByRole('button', { name: 'Apply & reload' }).click();
+  expect(runtime.writes.find((w: any) => w.path==='juiced/execution').body).toMatchObject({ profile: 'llamacpp:vulkan', device: 'Vulkan0', reload: true });
 });

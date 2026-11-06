@@ -22,6 +22,7 @@
 #include <random>
 #include <regex>
 #include <sstream>
+#include <set>
 
 namespace fs = std::filesystem;
 using namespace lemon::utils;
@@ -375,6 +376,7 @@ void VLLMServer::load(const std::string& model_name,
     const RemoteRegistrySource registry_source =
         parse_remote_registry_source(model_info.registry_source);
     std::string model_target = model_id;
+    if (model_info.extra<bool>("gguf_import", false)) model_target = model_info.resolved_path();
     fs::path active_snapshot;
 
     // vLLM can resolve Hugging Face IDs itself, but it has no native knowledge
@@ -412,6 +414,11 @@ void VLLMServer::load(const std::string& model_name,
     std::vector<std::string> args;
     args.push_back("--model");
     args.push_back(model_target);
+    if (model_info.extra<bool>("gguf_import", false)) {
+        const auto tokenizer = model_info.extra<std::string>("tokenizer", "");
+        if (tokenizer.empty()) throw std::invalid_argument("GGUF import requires the original tokenizer/config repository");
+        args.insert(args.end(), {"--tokenizer", tokenizer, "--hf-config-path", tokenizer, "--quantization", "gguf"});
+    }
     args.push_back("--port");
     args.push_back(std::to_string(port_));
     args.push_back("--host");
@@ -794,7 +801,20 @@ std::unique_ptr<WrappedServer> create(const BackendContext& ctx) {
 
 
 const BackendSpec* spec() { return make_spec<VLLMServer>(descriptor, /*split=*/true); }
-const BackendOps* ops() { return default_backend_ops(); }
+class VllmOps : public BackendOps {
+public:
+    json execution_compatibility(const ModelInfo& info, const std::string&, const std::string&) const override {
+        if (info.recipe == "vllm") return {{"compatible", true}, {"reuse", true}, {"reason", "Registered vLLM model"}, {"changes", json::array()}};
+        const std::set<std::string> architectures = {"llama", "qwen2", "qwen3", "qwen3moe"};
+        const bool compatible = architectures.count(info.gguf.architecture) && !info.gguf.caps.vision && info.resolved_path("mmproj").empty() &&
+            std::find(info.labels.begin(), info.labels.end(), "vision") == info.labels.end();
+        return {{"compatible", compatible}, {"reuse", true}, {"experimental", true},
+                {"requires_tokenizer", compatible},
+                {"reason", compatible ? "Experimental GGUF import; select the original tokenizer/config repository" : "The pinned vLLM GGUF importer does not support this architecture or its vision companion"},
+                {"changes", json::array()}};
+    }
+};
+const BackendOps* ops() { return single_ops<VllmOps>(); }
 }  // namespace vllm
 }  // namespace backends
 }  // namespace lemon

@@ -159,3 +159,10 @@
  .cache-table-heading > span:last-child, .cache-entry-age { display: none; }
  .storage-title h2 > span { display: block; }
 }
+
+.cache-layout[hidden] { display: none; }
+.prepared-copies { display: grid; gap: 12px; padding: 20px 0; }
+.prepared-copy { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--border); }
+.prepared-copy > div:first-child { display: grid; gap: 6px; min-width: 0; }
+.prepared-copy strong { font-size: 13px; overflow-wrap: anywhere; }
+.prepared-copy small, .prepared-copy > span { font-size: 12px; color: var(--muted-foreground); }

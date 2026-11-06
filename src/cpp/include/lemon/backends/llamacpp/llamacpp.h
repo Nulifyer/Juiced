@@ -23,6 +23,8 @@ inline const BackendDescriptor descriptor = {
     /*uses_ctx_size*/   true,
     /*dynamic_models*/  false,
     /*options*/ {
+        {"llamacpp_hybrid_memory_mib", "", 2048, "SIZE", "Maximum additional NPU weight-copy memory in MiB", "Hybrid Options"},
+        {"llamacpp_hybrid_min_prompt", "", 1024, "SIZE", "Minimum prefill rows before NPU dispatch", "Hybrid Options"},
         {"llamacpp_backend", "--llamacpp", "", "BACKEND",
          "LlamaCpp backend to use", "Llama.cpp Backend Options"},
         {"llamacpp_device", "--llamacpp-device", "", "DEVICES",
@@ -44,6 +46,7 @@ inline const BackendDescriptor descriptor = {
           {"gfx908", {/*os*/ {"linux"}, /*channels*/ {}}},
           {"gfx90a", {/*os*/ {"linux"}, /*channels*/ {}}},
           {"gfx942", {/*os*/ {"linux"}, /*channels*/ {}}}}},
+        {"hybrid-rocm", BackendTier::Experimental, BackendFormat::Native, {"linux"}, {{"amd_gpu", {"gfx1150"}}, {"amd_npu", {"XDNA2"}}}, "XDNA2 prefill + Radeon gfx1150 ROCm GPU (experimental)", {}, true},
         {"cpu", BackendTier::Core, BackendFormat::Native, {"windows", "linux"}, {{"cpu", {"x86_64", "arm64"}}}, "x86_64 CPU; ARM64 CPU (Linux)"},
     },
     /*supported_modes*/ {"chat", "embeddings", "reranking"},
@@ -57,7 +60,7 @@ inline const BackendDescriptor descriptor = {
     /*self_manages_downloads*/ false,
     /*takes_args*/      true,
     /*arg_variants*/    {"rocm", "vulkan", "cpu"},
-    /*bin_variants*/    {"rocm", "vulkan", "cuda", "cpu"},
+    /*bin_variants*/    {"rocm", "vulkan", "cuda", "cpu", "hybrid-rocm"},
     /*config_extra*/    {{"prefer_system", true}},
 };
 

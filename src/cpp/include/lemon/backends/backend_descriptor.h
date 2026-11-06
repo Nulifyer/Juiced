@@ -118,6 +118,13 @@ struct BackendDescriptor {
     // filter_models_by_backend in model_manager.cpp).
     bool streams_model_from_storage = false;
 
+    std::string backend_option_name() const {
+        for (const auto& option : options) {
+            if (option.type_name == "BACKEND") return option.name;
+        }
+        return "";
+    }
+
     // The config.json section name for this backend, falling back to the recipe.
     std::string effective_config_section() const {
         return config_section.empty() ? recipe : config_section;

@@ -14,6 +14,16 @@ class ApiContract(unittest.TestCase):
   cls.shared_upload=cls.root/'config/juiced/artifacts/shared/shared.gguf';cls.shared_upload.parent.mkdir(parents=True);cls.shared_upload.write_bytes(b'shared fixture')
   cls.repo=cls.root/'hf/models--Fixture--Removal';(cls.repo/'snapshots/rev').mkdir(parents=True);(cls.repo/'refs').mkdir();(cls.repo/'refs/main').write_text('rev');(cls.repo/'snapshots/rev/one.gguf').write_bytes(b'fixture one');(cls.repo/'snapshots/rev/two.gguf').write_bytes(b'fixture two')
   (cls.root/'config/user_models.json').write_text(json.dumps({'ZZSharedUpload1':{'recipe':'whispercpp','source':'local_path','checkpoints':{'main':str(cls.shared_upload)}},'ZZSharedUpload2':{'recipe':'whispercpp','source':'local_path','checkpoints':{'main':str(cls.shared_upload)}},'ZZUnsupported':{'recipe':'hybrid','juiced_existing_artifact':True,'checkpoints':{'main':str(cls.external)},'labels':['chat']},'ZZRemovalHFOne':{'recipe':'whispercpp','source':'huggingface','checkpoints':{'main':'Fixture/Removal:one.gguf'},'labels':['transcription']},'ZZRemovalHFTwo':{'recipe':'whispercpp','source':'huggingface','checkpoints':{'main':'Fixture/Removal:two.gguf'},'labels':['transcription']},'ZZRemovalExternal':{'recipe':'whispercpp','source':'local_path','checkpoints':{'main':str(cls.external)},'labels':['transcription']},'ZZExternalFile':{'recipe':'whispercpp','source':'local_path','checkpoints':{'main':str(cls.external)},'labels':['transcription']}}))
+  def string(value):
+   data=value.encode();return struct.pack('<Q',len(data))+data
+  cls.execution_file=cls.root/'Llama-Execution-F16.gguf'
+  header=b'GGUF'+struct.pack('<IQQ',3,1,2)+string('general.architecture')+struct.pack('<I',8)+string('llama')+string('general.file_type')+struct.pack('<II',4,1)
+  header+=string('blk.0.attn_q.weight')+struct.pack('<IQQIQ',2,32,32,1,0)
+  cls.execution_file.write_bytes(header+b'\0'*((-len(header))%32)+b'\0'*2048)
+  definitions=json.loads((cls.root/'config/user_models.json').read_text());definitions['ZZExecution-F16']={'recipe':'llamacpp','source':'local_path','checkpoints':{'main':str(cls.execution_file)},'labels':['chat']};(cls.root/'config/user_models.json').write_text(json.dumps(definitions))
+  cls.hf_fixture=cls.root/'hf-text-fixture';cls.hf_fixture.mkdir();(cls.hf_fixture/'config.json').write_text(json.dumps({'model_type':'qwen3_5','text_config':{'model_type':'qwen3_5'},'vision_config':{}}));(cls.hf_fixture/'model.safetensors').write_bytes(b'planning fixture only')
+  definitions=json.loads((cls.root/'config/user_models.json').read_text());definitions['Qwen3.5-Fixture-BF16']={'recipe':'vllm','source':'local_path','checkpoints':{'main':str(cls.hf_fixture)},'labels':['chat','vision']};(cls.root/'config/user_models.json').write_text(json.dumps(definitions))
+  definitions=json.loads((cls.root/'config/user_models.json').read_text());definitions['ZZImage-Variant']={'recipe':'sd-cpp','source':'local_path','checkpoints':{'main':str(cls.execution_file)},'labels':['image'],'recipe_options':{'steps':7}};(cls.root/'config/user_models.json').write_text(json.dumps(definitions))
   cls.log=open(cls.root/'server.log','w');cls.process=subprocess.Popen([BINARY,str(cls.root/'cache'),str(cls.root/'config'),'--host','127.0.0.1','--port',str(cls.port)],stdout=cls.log,stderr=cls.log,env={**os.environ,'HOME':str(cls.root),'XDG_RUNTIME_DIR':str(cls.root/'run'),'HF_HUB_CACHE':str(cls.root/'hf')})
   for _ in range(150):
    try:
@@ -37,6 +47,77 @@ class ApiContract(unittest.TestCase):
    with urllib.request.urlopen(q,timeout=15) as r:return r.status,json.load(r)
   except urllib.error.HTTPError as r:
    with r:return r.code,json.load(r)
+ def test_execution_profiles_and_preparation_contract(self):
+  model='ZZExecution-F16'
+  for prefix in ['/v1/','/v0/','/api/v1/','/api/v0/']:
+   status,plan=self.request(prefix+'juiced/execution?model='+model);self.assertEqual(status,200)
+   targets={t['id']:t for t in plan['profiles']};self.assertTrue(targets['llamacpp:cpu']['compatible']);self.assertTrue(targets['llamacpp:cpu']['reuse'])
+   self.assertIn('llamacpp:hybrid-rocm',targets);self.assertTrue(targets['llamacpp:hybrid-rocm']['changes'])
+   self.assertTrue(any(t['recipe']=='vllm' for t in plan['profiles']))
+   status,prepare=self.request(prefix+'juiced/preparation?model='+model);self.assertEqual(status,200);self.assertTrue(prepare['compatible']);self.assertEqual(prepare['source_format'],'gguf')
+   self.assertEqual([t['name'] for t in prepare['targets']],['ZZExecution-Q4_K_M','ZZExecution-Q5_K_M','ZZExecution-Q6_K','ZZExecution-Q8_0'])
+  self.assertEqual(self.request('juiced/execution',{'model':model,'profile':'missing'})[0],400)
+  self.assertEqual(self.request('juiced/preparation',{'model':model,'quant':'Q4_K_M','acknowledge':False})[0],400)
+  self.assertEqual(self.request('juiced/preparation',{'action':'cancel','id':'../../outside'})[0],400)
+  status,_=self.request('juiced/execution',{'model':model,'profile':'llamacpp:cpu'});self.assertEqual(status,202)
+  for _ in range(100):
+   _,plan=self.request('juiced/execution?model='+model)
+   if plan['selected']=='llamacpp:cpu':break
+   time.sleep(.05)
+  self.assertEqual(plan['selected'],'llamacpp:cpu')
+  time.sleep(.1)
+  _,catalog=self.request('juiced/catalog');entry=next(m for m in catalog['data'] if m['id']==model);self.assertNotEqual(entry.get('operation',{}).get('state'),'failed')
+  _,options=self.request('models/'+model+'/options');self.assertEqual(options['effective']['llamacpp_backend'],'cpu')
+  self.assertEqual(self.request('juiced/execution',{'model':model,'profile':'registered','expected_selected':'stale'})[0],202)
+  time.sleep(.15)
+  _,catalog=self.request('juiced/catalog');entry=next(m for m in catalog['data'] if m['id']==model);self.assertEqual(entry['policy'],'disabled');self.assertFalse(entry['loaded'])
+  self.assertEqual(self.execution_file.read_bytes()[:4],b'GGUF')
+  status,_=self.request('juiced/execution',{'model':model,'profile':'registered','expected_selected':'llamacpp:cpu'});self.assertEqual(status,202)
+  for _ in range(100):
+   _,plan=self.request('juiced/execution?model='+model)
+   if plan['selected']=='registered':break
+   time.sleep(.05)
+  self.assertEqual(plan['selected'],'registered')
+ def test_multimodal_hf_plan_discloses_text_only_variants(self):
+  status,plan=self.request('juiced/preparation?model=Qwen3.5-Fixture-BF16');self.assertEqual(status,200)
+  self.assertTrue(plan['text_only']);self.assertEqual(plan['source_format'],'safetensors')
+  self.assertTrue(any('vision/audio tensors are omitted' in change for change in plan['changes']))
+  self.assertEqual(next(t['name'] for t in plan['targets'] if t['quant']=='Q6_K'),'Qwen3.5-Fixture-Text-Q6_K')
+ def test_provider_uses_its_declared_backend_option(self):
+  model='ZZImage-Variant';status,plan=self.request('juiced/execution?model='+model);self.assertEqual(status,200)
+  self.assertTrue(any(t['id']=='sd-cpp:cpu' for t in plan['profiles']))
+  status,result=self.request('juiced/execution',{'model':model,'profile':'sd-cpp:cpu'});self.assertEqual(status,202,result)
+  for _ in range(100):
+   _,catalog=self.request('juiced/catalog');entry=next(m for m in catalog['data'] if m['id']==model)
+   if entry.get('execution_profile')=='sd-cpp:cpu' and not entry.get('operation',{}).get('pending'):break
+   time.sleep(.05)
+  self.assertNotEqual(entry.get('operation',{}).get('state'),'failed')
+  _,options=self.request('models/'+model+'/options');self.assertEqual(options['effective']['sd-cpp_backend'],'cpu');self.assertNotIn('sdcpp_backend',options['saved']);self.assertEqual(options['effective']['steps'],7)
+ def test_interrupted_execution_trial_recovers_before_startup(self):
+  with tempfile.TemporaryDirectory(prefix='juiced-profile-recovery-') as temporary:
+   root=pathlib.Path(temporary);(root/'config/juiced').mkdir(parents=True);(root/'cache').mkdir();(root/'run').mkdir()
+   with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
+   model='Llama-Recovery-F16';previous={'id':'registered','recipe':'llamacpp','options':{'ctx_size':128,'llamacpp_backend':'cpu'}}
+   (root/'config/config.json').write_text(json.dumps({'disable_model_filtering':True,'broadcast':False,'no_fetch_executables':True,'auto_check_model_updates':False}))
+   (root/'config/user_models.json').write_text(json.dumps({model:{'recipe':'llamacpp','source':'local_path','checkpoints':{'main':str(self.execution_file)},'labels':['chat']}}))
+   (root/'config/execution_profiles.json').write_text(json.dumps({'user.'+model:{'selected':'llamacpp:cpu','profiles':{'registered':previous,'llamacpp:cpu':{'id':'llamacpp:cpu','recipe':'llamacpp','options':{'ctx_size':256,'llamacpp_backend':'cpu'}}}}}))
+   (root/'config/recipe_options.json').write_text(json.dumps({'user.'+model:{'ctx_size':256,'llamacpp_backend':'cpu'}}))
+   (root/'config/juiced/state.json').write_text(json.dumps({'version':1,'revision':0,'policies':{},'imports':{},'cache':{},'execution_trials':{model:{'previous':previous,'was_loaded':False}}}))
+   with (root/'server.log').open('w') as log:
+    process=subprocess.Popen([BINARY,str(root/'cache'),str(root/'config'),'--host','127.0.0.1','--port',str(port)],stdout=log,stderr=log,env={**os.environ,'HOME':str(root),'XDG_RUNTIME_DIR':str(root/'run')})
+    try:
+     for _ in range(150):
+      try:
+       with urllib.request.urlopen(f'http://127.0.0.1:{port}/v1/juiced/execution?model='+model,timeout=1) as response:plan=json.load(response)
+       break
+      except OSError:time.sleep(.1)
+     else:raise AssertionError((root/'server.log').read_text())
+     self.assertEqual(plan['selected'],'registered')
+     with urllib.request.urlopen(f'http://127.0.0.1:{port}/v1/models/'+model+'/options') as response:options=json.load(response)
+     self.assertEqual(options['saved']['ctx_size'],128)
+     self.assertEqual(json.loads((root/'config/juiced/state.json').read_text())['execution_trials'],{})
+    finally:
+     process.terminate();process.wait(timeout=20)
  def test_device_probe_uses_launch_library_environment(self):
   for prefix in ['/v1/','/v0/','/api/v1/','/api/v0/']:
    status,data=self.request(prefix+'juiced/devices?recipe=llamacpp&backend=cuda')

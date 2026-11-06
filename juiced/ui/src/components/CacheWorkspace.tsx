@@ -11,6 +11,7 @@ import { api, bytes, type Model } from "../api";
 import { HelpTip } from "./HelpTip";
 import { Button } from "./t3/button";
 import "./CacheWorkspace.css";
+import { PreparedCopies } from "./PreparedCopies";
 function age(value?: number) {
   if (!value) return "Not used yet";
   const days = Math.floor((Date.now() / 1000 - value) / 86400);
@@ -101,9 +102,10 @@ export function CacheWorkspace({
         </Button>
       </header>
       <nav className="workspace-tabs" aria-label="Cache views">
-        {[["snapshots", "Snapshots"], ["settings", "Storage policy"], ["overrides", "Model overrides"]].map(([id, label]) => <button key={id} className={tab === id ? "active" : ""} aria-current={tab === id ? "page" : undefined} onClick={() => setTab(id)}>{label}{dirty && id !== "snapshots" ? " *" : ""}</button>)}
+        {[["snapshots", "Snapshots"], ["settings", "Storage policy"], ["overrides", "Model overrides"], ["prepared", "Prepared copies"]].map(([id, label]) => <button key={id} className={tab === id ? "active" : ""} aria-current={tab === id ? "page" : undefined} onClick={() => setTab(id)}>{label}{dirty && id !== "snapshots" ? " *" : ""}</button>)}
       </nav>
-      <div className="cache-layout">
+      {tab === "prepared" && <PreparedCopies />}
+      <div className="cache-layout" hidden={tab === "prepared"}>
         <section className="cache-inventory" hidden={tab !== "snapshots"}>
           <div className="storage-overview">
             <div className="storage-title">

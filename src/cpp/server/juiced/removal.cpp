@@ -87,6 +87,9 @@ JuicedService::json JuicedService::removal_plan(const std::string &requested) {
   std::string reason;
   {
     std::lock_guard<std::mutex> lock(mutex_);
+    for (const auto &[id, job] : state_["preparations"].items())
+      if (job.value("model", "") == name && job.value("pending", false))
+        reason = "Cancel or finish preparation before removing its source model.";
     if (state_["policies"].value(name, "disabled") != "disabled")
       reason = "Move this model to Disabled before removing it.";
     else if (operations_.contains(name) &&

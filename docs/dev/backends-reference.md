@@ -14,7 +14,7 @@ the generator instead. Prose outside the markers is preserved. -->
 | `ds4` | DwarfStar4 | no | yes | rocm |
 | `flm` | FastFlowLM NPU | no | yes | npu |
 | `kokoro` | Kokoro | no | no | cpu, metal |
-| `llamacpp` | Llama.cpp GPU | yes | yes | cpu, cuda, metal, rocm, system, vulkan |
+| `llamacpp` | Llama.cpp GPU | yes | yes | cpu, cuda, hybrid-rocm, metal, rocm, system, vulkan |
 | `llamacpp-hrx` | HRX GPU | no | yes | hrx |
 | `moonshine` | Moonshine | no | no | cpu |
 | `onnxruntime` | ONNX Runtime | no | no | cpu |
@@ -49,6 +49,7 @@ Each backend has a tier and a format; see [Backend Tiers and Formats](../api/lem
 | `llamacpp` | cuda | core | native | linux, windows | nvidia_gpu (sm_100, sm_120, sm_121, sm_75, sm_80, sm_86, sm_89, sm_90) |
 | `llamacpp` | vulkan | core | native | linux, windows | amd_gpu; cpu (arm64, x86_64) |
 | `llamacpp` | rocm | core | native | linux, windows | amd_gpu (gfx103X, gfx110X, gfx1150, gfx1151, gfx1152, gfx120X, gfx908, gfx90a, gfx942, gfx950) |
+| `llamacpp` | hybrid-rocm | experimental | native | linux | amd_gpu (gfx1150); amd_npu (XDNA2) |
 | `llamacpp` | cpu | core | native | linux, windows | cpu (arm64, x86_64) |
 | `llamacpp-hrx` | hrx | experimental | native | linux | amd_gpu (gfx1100, gfx1151) |
 | `moonshine` | cpu | core | python | windows | cpu (x86_64) |
@@ -124,6 +125,8 @@ Each backend has a tier and a format; see [Backend Tiers and Formats](../api/lem
 | Option | CLI flag | Type | Default | Description |
 |--------|----------|------|---------|-------------|
 | `ctx_size` | `--ctx-size` | SIZE | -1 | Context size for the model |
+| `llamacpp_hybrid_memory_mib` | — | SIZE | 2048 | Maximum additional NPU weight-copy memory in MiB |
+| `llamacpp_hybrid_min_prompt` | — | SIZE | 1024 | Minimum prefill rows before NPU dispatch |
 | `llamacpp_backend` | `--llamacpp` | BACKEND | "" | LlamaCpp backend to use |
 | `llamacpp_device` | `--llamacpp-device` | DEVICES | "" | Comma-separated list of accelerator devices to use (e.g. Vulkan0) |
 | `llamacpp_args` | `--llamacpp-args` | ARGS | "" | Custom arguments to pass to llama-server |

@@ -56,6 +56,11 @@
           "fastflowlm_1.0.12_linux.tar.gz": "sha256:626fbee5e5206a215a8c2c4d3d961055cbf7289d257d36599e9fef38f2f555a8",
           "fastflowlm_1.0.12_windows_amd64.zip": "sha256:568706c537398d597f3f24b5094fc58e65126c56f118971f2910c26a86ae027c"
         }
+      },
+      "Nulifyer/llama-xdna-hybrid": {
+        "rocm-v0.3.1": {
+          "llama-xdna-hybrid-linux-rocm-gfx1150-x86_64.tar.gz": "sha256:862a65ab6c6345da0e2b2bf5793d5fe587052239b5cd9f8ef99b2bdc15bec31b"
+        }
       }
     }
   },
@@ -65,7 +70,8 @@
     "rocm-nightly": "b1338",
     "cuda": "b11395",
     "metal": "b11393",
-    "cpu": "b11393"
+    "cpu": "b11393",
+    "hybrid-rocm": "rocm-v0.3.1"
   },
   "llamacpp-hrx": {
     "hrx": "hrx-b99"

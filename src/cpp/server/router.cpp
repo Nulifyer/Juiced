@@ -633,7 +633,7 @@ WrappedServer* Router::find_npu_server_by_recipe(const std::string& recipe) cons
 WrappedServer* Router::find_coexisting_server_by_type(ModelType type) const {
     for (const auto& server : loaded_servers_) {
         if (server->is_backend_alive() &&
-            slot_policy_for_recipe(server->get_recipe_options().get_recipe()) ==
+            server->effective_slot_policy(server->get_recipe_options()) ==
                 SlotPolicy::CoexistByType &&
             server->get_model_type() == type) {
             return server.get();
@@ -950,7 +950,8 @@ void Router::load_model(const std::string& model_name,
 
         // Determine model type and device
         ModelType model_type = model_info.type;
-        DeviceType device_type = model_info.device;
+        std::unique_ptr<WrappedServer> new_server = create_backend_server(model_info);
+        DeviceType device_type = new_server->effective_device(effective_options);
 
         // NPU EXCLUSIVITY CHECK — driven by the backend's slot policy (descriptor).
         //   ExclusiveNpu (ryzenai-llm, whisper-on-npu): lock the entire NPU,
@@ -958,12 +959,16 @@ void Router::load_model(const std::string& model_name,
         //   CoexistByType (flm): coexist with other FLM types (max 1 per type),
         //                but evict exclusive-NPU peers.
         // Standard/Unmetered backends share no device exclusivity.
-        switch (slot_policy_for_recipe(model_info.recipe)) {
+        switch (new_server->effective_slot_policy(effective_options)) {
             case SlotPolicy::ExclusiveNpu: {
                 // Hardware exclusivity is stronger than count-based pools. Never
                 // alternate a router helper and its candidate across the same NPU:
                 // reject the cross-residency combination deterministically instead.
                 for (const auto& server : loaded_servers_) {
+                    if (!model_info.extra<std::string>("execution_profile", "").empty() &&
+                        server->is_backend_alive() && (server->get_device_type() & DEVICE_NPU) &&
+                        (server->is_pinned() || server->is_busy()))
+                        throw std::runtime_error("The NPU is occupied by " + server->get_model_name() + "; finish requests and unload that NPU model before trying this profile");
                     if (server->is_backend_alive() &&
                         (server->get_device_type() & DEVICE_NPU) &&
                         should_reject_residency_displacement(
@@ -989,7 +994,7 @@ void Router::load_model(const std::string& model_name,
                 std::vector<WrappedServer*> exclusive_peers;
                 for (const auto& server : loaded_servers_) {
                     if (server->is_backend_alive() && (server->get_device_type() & DEVICE_NPU) &&
-                        slot_policy_for_recipe(server->get_recipe_options().get_recipe()) !=
+                        server->effective_slot_policy(server->get_recipe_options()) !=
                             SlotPolicy::CoexistByType) {
                         if (should_reject_residency_displacement(
                                 requested_residency_class,
@@ -1042,7 +1047,9 @@ void Router::load_model(const std::string& model_name,
 
         // Auto-tune: resolve ctx_size = -1 → computed from memory + arch metadata
         // Done AFTER eviction so that freed VRAM/RAM is visible to the memory query.
-        int64_t auto_ctx = resolve_auto_ctx_size(effective_options, model_info);
+        auto execution_info = model_info;
+        execution_info.device = device_type;
+        int64_t auto_ctx = resolve_auto_ctx_size(effective_options, execution_info);
         const bool ctx_size_auto = auto_ctx != -2;
         if (auto_ctx > 0) {
             LOG(INFO, "Router") << "Auto-tune ctx_size resolved to " << auto_ctx << std::endl;
@@ -1059,9 +1066,9 @@ void Router::load_model(const std::string& model_name,
         // systems), so gate on known-low memory to avoid rejecting large models
         // on high-memory machines where the driver overhead would fit fine.
         if (auto_ctx == AUTO_CTX_FALLBACK
-            && (model_info.device & DEVICE_NPU)
+            && (device_type & DEVICE_NPU)
             && model_info.size > 10.0
-            && get_available_memory_gb(model_info.device) > 0) {
+            && get_available_memory_gb(device_type) > 0) {
             throw std::runtime_error(
                 "Not enough memory to load " + canonical_model_name
                 + " (" + std::to_string(static_cast<int>(model_info.size))
@@ -1070,9 +1077,6 @@ void Router::load_model(const std::string& model_name,
         }
 
         LOG(DEBUG, "Router") << "Effective settings: " << effective_options.to_log_string() << std::endl;
-
-        // Create new backend server
-        std::unique_ptr<WrappedServer> new_server = create_backend_server(model_info);
 
         // Set model metadata
         new_server->set_model_metadata(canonical_model_name, model_info.checkpoint(), model_type, device_type, effective_options);
@@ -1168,6 +1172,10 @@ void Router::load_model(const std::string& model_name,
             if (unrecoverable_config) {
                 LOG(ERROR, "Router") << "Configuration error, NOT evicting other models" << std::endl;
                 throw ConfigurationException(error_message);
+            }
+
+            if (!model_info.extra<std::string>("execution_profile", "").empty()) {
+                throw std::runtime_error(error_message);
             }
 
             if (is_file_not_found) {

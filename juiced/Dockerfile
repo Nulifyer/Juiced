@@ -38,6 +38,17 @@ FROM toolchain AS llama
 RUN mkdir -p /out/llama/bin /out/llama/licenses && curl --fail --location --retry 3 https://github.com/ggml-org/llama.cpp/releases/download/b12032/llama-b12032-bin-ubuntu-vulkan-x64.tar.gz -o /tmp/llama.tar.gz && echo 'f75e7107f9450034c5467492c41e9ed91816e2d815fc4b802c6bd58de7d5b126  /tmp/llama.tar.gz' | sha256sum -c - && tar -xzf /tmp/llama.tar.gz --strip-components=1 -C /out/llama/bin && cp /out/llama/bin/LICENSE /out/llama/licenses/llama.txt && rm /tmp/llama.tar.gz
 RUN printf '#!/bin/sh\nexport LD_LIBRARY_PATH=/opt/juiced/llama/bin\nexec /opt/juiced/llama/bin/llama-server "$@"\n' > /out/llama/llama-server && chmod 755 /out/llama/llama-server && printf 'b12032 dde879bc4f954b809892fd0d660515f42536394a\n' > /out/llama/source-revision
 
+FROM toolchain AS preparation
+RUN apt-get update && apt-get install -y --no-install-recommends python3-venv && rm -rf /var/lib/apt/lists/*
+RUN git clone https://github.com/ggml-org/llama.cpp.git /native && cd /native && git checkout 669204ee2b9004845b34f26466a91d003edc98aa && rm -rf .git
+RUN python3 -m venv /opt/juiced/preparation
+COPY juiced/runtime/preparation-requirements.txt /opt/juiced/preparation/requirements.lock
+RUN /opt/juiced/preparation/bin/pip install --no-cache-dir --require-hashes --only-binary=:all: -r /opt/juiced/preparation/requirements.lock && /opt/juiced/preparation/bin/pip install --no-cache-dir --no-deps /native/gguf-py && /opt/juiced/preparation/bin/pip uninstall -y pip setuptools
+RUN cmake -S /native -B /native/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=OFF -DGGML_BACKEND_DL=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_SERVER=OFF -DLLAMA_CURL=OFF && cmake --build /native/build --target llama-quantize -j4 && mkdir /opt/juiced/preparation/native && cp -a /native/build/bin/. /opt/juiced/preparation/native/
+RUN printf '#!/bin/sh\nexport LD_LIBRARY_PATH=/opt/juiced/preparation/native\nexec /opt/juiced/preparation/native/llama-quantize "$@"\n' > /opt/juiced/preparation/llama-quantize && chmod 755 /opt/juiced/preparation/llama-quantize
+RUN mkdir /opt/juiced/preparation/source && cp -a /native/conversion /native/convert_hf_to_gguf.py /native/gguf-py /opt/juiced/preparation/source/ && cp /native/LICENSE /opt/juiced/preparation/LICENSE.llama.cpp
+COPY juiced/runtime/prepare.py /opt/juiced/preparation/prepare.py
+
 FROM toolchain AS voice
 RUN apt-get update && apt-get install -y --no-install-recommends python3-venv && rm -rf /var/lib/apt/lists/*
 RUN python3 -m venv /opt/juiced/voice
@@ -64,6 +75,7 @@ COPY --chown=10001:10001 --from=ui /web/ /opt/lemonade/resources/juiced/
 COPY --chown=10001:10001 --from=futo /out/ /opt/juiced/
 COPY --chown=10001:10001 --from=parakeet /out/ /opt/juiced/
 COPY --chown=10001:10001 --from=llama /out/ /opt/juiced/
+COPY --chown=10001:10001 --from=preparation /opt/juiced/preparation/ /opt/juiced/preparation/
 COPY --chown=10001:10001 --from=voice /opt/juiced/voice/ /opt/juiced/voice/
 COPY --chown=10001:10001 juiced/runtime/voice.py /opt/juiced/voice/launcher.py
 COPY --chown=10001:10001 LICENSE /opt/juiced/licenses/lemonade-Apache-2.0.txt

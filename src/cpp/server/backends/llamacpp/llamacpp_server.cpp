@@ -173,6 +173,15 @@ InstallParams LlamaCppServer::get_install_params(const std::string& backend, con
 
     const std::string resolved_backend = resolve_llamacpp_backend(backend);
 
+    if (resolved_backend == "hybrid-rocm") {
+#ifdef __linux__
+        params.repo = "Nulifyer/llama-xdna-hybrid";
+        params.filename = "llama-xdna-hybrid-linux-rocm-gfx1150-x86_64.tar.gz";
+        return params;
+#else
+        throw std::runtime_error("This hybrid bundle is available on Linux gfx1150/XDNA2 only");
+#endif
+    }
     if (resolved_backend == "system") {
         return params; // Return empty params for system backend
     }
@@ -289,7 +298,7 @@ void LlamaCppServer::load(const std::string& model_name,
     bool use_gpu = (llamacpp_backend != "cpu");
 
     // Update device type based on the actual backend selected.
-    device_type_ = use_gpu ? DEVICE_GPU : DEVICE_CPU;
+    device_type_ = effective_device(options);
 
     // Install llama-server if needed (use per-model backend)
     backend_manager_->install_backend(llamacpp::spec()->recipe, llamacpp_backend);
@@ -339,7 +348,7 @@ void LlamaCppServer::load(const std::string& model_name,
     }
     push_arg(args, reserved_flags, "--ctx-size", std::to_string(ctx_size), std::vector<std::string>{"-c"});
 
-    if (!llamacpp_device.empty()) {
+    if (!llamacpp_device.empty() && llamacpp_backend != "hybrid-rocm") {
         BackendUtils::validate_device_backend_match(llamacpp_backend, llamacpp_device);
         push_arg(args, reserved_flags, "--device", llamacpp_device);
     }
@@ -414,6 +423,19 @@ void LlamaCppServer::load(const std::string& model_name,
     LOG(INFO, "LlamaCpp") << "Starting llama-server..." << std::endl;
 
     auto env_vars = BackendUtils::llamacpp_library_environment(executable, llamacpp_backend);
+    if (llamacpp_backend == "hybrid-rocm") {
+        if (!llamacpp_device.empty() && !std::regex_match(llamacpp_device, std::regex("ROCm[0-9]+")))
+            throw std::invalid_argument("Hybrid requires one ROCm GPU device");
+        executable = path_to_utf8(fs::path(executable).parent_path() / "hybrid-server");
+        env_vars.push_back({"HYBRID_GPU_DEVICE", llamacpp_device.empty() ? "ROCm0" : llamacpp_device});
+        env_vars.push_back({"HYBRID_REQUIRE_NPU", "1"});
+        const int memory_mib = options.get_option("llamacpp_hybrid_memory_mib");
+        const int min_prompt = options.get_option("llamacpp_hybrid_min_prompt");
+        if (memory_mib < 128 || memory_mib > 16384 || min_prompt < 1024 || min_prompt > 32768)
+            throw std::invalid_argument("Hybrid memory must be 128–16384 MiB and minimum prefill 1024–32768 tokens");
+        env_vars.push_back({"GGML_XDNA_MAX_COPY_GB", std::to_string(memory_mib / 1024.0)});
+        env_vars.push_back({"GGML_XDNA_MIN_BATCH", std::to_string(min_prompt)});
+    }
 #ifdef _WIN32
     // For ROCm on Windows with gfx1151, set OCL_SET_SVMSIZE
     // This is a patch to enable loading larger models
@@ -716,6 +738,23 @@ bool is_ggml_hip_plugin_available() {
 // llamacpp model-management behavior: GGUF metadata + capability labels.
 class LlamaCppOps : public BackendOps {
 public:
+    json execution_compatibility(const ModelInfo& info, const std::string&, const std::string& backend) const override {
+        const bool gguf = !info.gguf.architecture.empty() &&
+            (info.type == ModelType::LLM || info.type == ModelType::EMBEDDING || info.type == ModelType::RERANKING);
+        json result = {{"compatible", gguf}, {"reuse", true},
+                {"reason", gguf ? "Reuse the downloaded GGUF without changing its weights" : "Requires a compatible GGUF and architecture metadata"},
+                {"changes", json::array()}};
+        if (backend == "hybrid-rocm") {
+            const std::set<std::string> architectures = {"llama", "qwen2", "qwen3", "qwen3moe", "qwen35", "qwen35moe"};
+            if (!architectures.count(info.gguf.architecture)) {
+                result["compatible"] = false;
+                result["reason"] = "This matched hybrid engine has no reviewed importer for the architecture";
+            }
+            result["changes"] = json::array({"Eligible NPU prefill uses reduced-precision arithmetic; GPU weights and decode retain the source quantization", "Partial prefill only: routed experts, attention and decode stay on ROCm"});
+        }
+        return result;
+    }
+
     void resolve_runtime_options(const ModelInfo& info, RecipeOptions& options) const override {
         const json merge_args_value = options.get_option("merge_args");
         const bool merge_args =

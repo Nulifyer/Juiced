@@ -75,7 +75,7 @@ export default function App() {
     [mobile, setMobile] = useState(false),
     [libraryTab, setLibraryTab] = useState("discover"),
     [inspected, setInspected] = useState<Model | null>(null),
-    [acquireRepo, setAcquireRepo] = useState<{ repo: string }>(),
+    [acquireRepo, setAcquireRepo] = useState<{ repo?: string; query?: string; runtime?: string }>(),
     [cache, setCache] = useState<any>(),
     [removalRequested, setRemovalRequested] = useState(false),
     [preferredModel, setPreferredModel] = useState("");
@@ -420,6 +420,11 @@ export default function App() {
           onInspect={(m) => {
             setRemovalRequested(false);
             setInspected(m);
+          }}
+          onFindPrepared={(model, runtime) => {
+            setInspected(null);
+            setAcquireRepo({ query: model.id.replace(/[-_](?:IQ[0-9][A-Z0-9_]*|Q[0-9][A-Z0-9_]*|GGUF)$/ig, ""), runtime });
+            setLibraryTab("discover"); setScreen("library");
           }}
           onBrowse={(repo) => {
             setInspected(null);

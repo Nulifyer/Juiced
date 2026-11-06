@@ -74,6 +74,13 @@ jobs:
           echo '66967fbece6dbe97886593fdbb73589584927e29119ec31f08090732d1861739  stories15M-q4_0.gguf' | sha256sum -c -
           docker cp stories15M-q4_0.gguf juiced-smoke:/library/stories15M-q4_0.gguf
           python3 juiced/tests/test_engine_cache.py --url http://127.0.0.1:18080 --container juiced-smoke --model-file /library/stories15M-q4_0.gguf --snapshots /data/prompt-state --out engine-cache-proof.json
+          python3 juiced/tests/test_preparation.py --url http://127.0.0.1:18080 --out preparation-proof.json
+          docker cp juiced/tests/test_preparation_worker.py juiced-smoke:/tmp/test_preparation_worker.py
+          docker exec juiced-smoke python3 /tmp/test_preparation_worker.py --python /opt/juiced/preparation/bin/python3 --script /opt/juiced/preparation/prepare.py --source /library/stories15M-q4_0.gguf
+          docker cp juiced/tests/test_preparation_hf.py juiced-smoke:/tmp/test_preparation_hf.py
+          docker exec juiced-smoke /opt/juiced/preparation/bin/python3 /tmp/test_preparation_hf.py --script /opt/juiced/preparation/prepare.py --converter /opt/juiced/preparation/source/convert_hf_to_gguf.py --quantizer /opt/juiced/preparation/llama-quantize --out /tmp/hf-preparation-proof.json
+          docker cp juiced-smoke:/tmp/hf-preparation-proof.json hf-preparation-proof.json
+          python3 juiced/tests/test_execution_switch.py --url http://127.0.0.1:18080 --out execution-switch-proof.json
           python3 juiced/tests/test_model_tuning.py --url http://127.0.0.1:18080 --out model-tuning-proof.json
           python3 -m venv /tmp/juiced-clients
           /tmp/juiced-clients/bin/pip install -r juiced/tests/client-requirements.txt
@@ -110,5 +117,8 @@ jobs:
             state.json
             catalog.json
             engine-cache-proof.json
+            preparation-proof.json
+            hf-preparation-proof.json
+            execution-switch-proof.json
             model-tuning-proof.json
             client-proof.json

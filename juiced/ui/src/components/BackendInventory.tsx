@@ -13,7 +13,7 @@ import {
   backendUpdate,
 } from "./backendState";
 import { api, type Model } from "../api";
-import { useSystemInfo, runtimeName, acceleratorName } from "./ExecutionTarget";
+import { useSystemInfo, runtimeName, acceleratorName } from "./runtimeInfo";
 import { HelpTip } from "./HelpTip";
 import { Button } from "./t3/button";
 import "./BackendInventory.css";

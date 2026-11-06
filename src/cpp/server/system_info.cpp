@@ -448,7 +448,7 @@ static const std::vector<RecipeBackendDef>& recipe_defs() {
         for (const auto* desc : lemon::backends::all_descriptors()) {
             for (const auto& row : desc->support) {
                 v.push_back({desc->recipe, row.backend, row.tier, row.format, row.supported_os,
-                             row.devices, row.device_summary, row.arch_gates});
+                             row.devices, row.device_summary, row.arch_gates, row.requires_all_devices});
             }
         }
         return v;
@@ -1347,7 +1347,8 @@ json SystemInfo::build_recipes_info(const json& devices) {
             }
         }
 
-        bool supported = !unique_matching.empty();
+        bool supported = !unique_matching.empty() &&
+            (!def.requires_all_devices || (missing_devices.empty() && wrong_family.empty()));
         std::string install_error;
         bool available = is_recipe_installed(def.recipe, def.backend, install_error);
 
@@ -1575,7 +1576,7 @@ json SystemInfo::build_recipes_info(const json& devices) {
             continue;
         }
 
-        bool skip_as_default = (def.backend == "system" && !prefer_llamacpp_system);
+        bool skip_as_default = def.tier != BackendTier::Core || (def.backend == "system" && !prefer_llamacpp_system);
         if (supported && !skip_as_default) {
             const std::string effective_state =
                 recipes[def.recipe]["backends"][def.backend].value("state", "unsupported");

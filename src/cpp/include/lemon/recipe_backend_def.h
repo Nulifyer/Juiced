@@ -72,6 +72,7 @@ struct RecipeBackendDef {
     // May contain footnote markers (e.g. "*") whose text lives as prose in the doc.
     std::string device_summary = "";
     ArchInstallGates arch_gates;
+    bool requires_all_devices = false;
 };
 
 // A backend descriptor's support row, without the recipe (it's always the
@@ -85,6 +86,7 @@ struct BackendSupport {
     DeviceConstraints devices;
     std::string device_summary = "";
     ArchInstallGates arch_gates;
+    bool requires_all_devices = false;
 };
 
 } // namespace lemon

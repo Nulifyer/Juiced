@@ -6152,11 +6152,11 @@ void Server::handle_registry_search(const httplib::Request& req, httplib::Respon
         bool gguf_only = false;
         if (req.has_param("format")) {
             const std::string format = req.get_param_value("format");
-            if (format != "gguf") {
+            if (format != "gguf" && format != "all") {
                 throw std::invalid_argument(
-                    "Unsupported registry search format '" + format + "' (expected 'gguf')");
+                    "Unsupported registry search format '" + format + "' (expected 'gguf' or 'all')");
             }
-            gguf_only = true;
+            gguf_only = format == "gguf";
         }
 
         if (config_->offline()) {

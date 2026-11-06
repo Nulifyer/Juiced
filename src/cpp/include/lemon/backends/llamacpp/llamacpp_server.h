@@ -23,6 +23,16 @@ public:
              const RecipeOptions& options,
              bool do_not_upgrade = false) override;
 
+    DeviceType effective_device(const RecipeOptions& options) const override {
+        const std::string backend = options.get_option("llamacpp_backend");
+        return backend == "hybrid-rocm" ? DEVICE_GPU | DEVICE_NPU
+             : backend == "cpu" ? DEVICE_CPU : DEVICE_GPU;
+    }
+    SlotPolicy effective_slot_policy(const RecipeOptions& options) const override {
+        const std::string backend = options.get_option("llamacpp_backend");
+        return backend == "hybrid-rocm" ? SlotPolicy::ExclusiveNpu : SlotPolicy::Standard;
+    }
+
     // ICompletionServer implementation
     json chat_completion(const json& request) override;
     json completion(const json& request) override;

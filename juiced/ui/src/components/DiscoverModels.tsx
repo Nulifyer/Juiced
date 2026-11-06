@@ -4,19 +4,20 @@ import { api, bytes, type Model } from "../api";
 import { Button } from "./t3/button";
 import { HelpTip } from "./HelpTip";
 import { CapabilityIcons, serviceNames } from "./ModelLibrary";
-import { runtimeName, useSystemInfo } from "./ExecutionTarget";
+import { runtimeName, useSystemInfo } from "./runtimeInfo";
 import { catalogEntries, groupRepositories, matchesModelSearch, modelQuant, quantization, type Repository } from "./modelDiscovery";
 import "./DiscoverModels.css";
 
 const capabilities = [["vision", "Vision"], ["tool-calling", "Tools"], ["reasoning", "Reasoning"], ["coding", "Coding"], ["mtp", "MTP"], ["realtime-transcription", "Streaming audio"], ["edit", "Image editing"]];
-export function DiscoverModels({ models, jobs, busy, onRepository, onDownload, onInspect, onDownloads }: {
+export function DiscoverModels({ initialSearch, models, jobs, busy, onRepository, onDownload, onInspect, onDownloads }: {
+  initialSearch?: { query?: string; runtime?: string };
   models: Model[]; jobs: any[]; busy: boolean;
   onRepository: (repository: string) => void;
   onDownload: (model: string) => void;
   onInspect: (model: Model) => void;
   onDownloads: () => void;
 }) {
-  const [source, setSource] = useState("catalog");
+  const [source, setSource] = useState(initialSearch ? "huggingface" : "catalog");
   const [query, setQuery] = useState("");
   const [task, setTask] = useState("");
   const [capability, setCapability] = useState("");
@@ -26,7 +27,8 @@ export function DiscoverModels({ models, jobs, busy, onRepository, onDownload, o
   const [recommended, setRecommended] = useState(false);
   const [sort, setSort] = useState("recommended");
   const [limit, setLimit] = useState(30);
-  const [remoteQuery, setRemoteQuery] = useState("");
+  const [remoteQuery, setRemoteQuery] = useState(initialSearch?.query || "");
+  const [remoteRuntime, setRemoteRuntime] = useState(initialSearch?.runtime || "llamacpp");
   const [publisher, setPublisher] = useState("");
   const [remoteSort, setRemoteSort] = useState("relevance");
   const [results, setResults] = useState<Repository[]>([]);
@@ -68,7 +70,7 @@ export function DiscoverModels({ models, jobs, busy, onRepository, onDownload, o
     const request = new AbortController(); controller.current = request;
     setSearching(true); setError("");
     try {
-      const response = await api(`registry/search?source=huggingface&query=${encodeURIComponent(value)}&format=gguf&limit=50`, undefined, request.signal);
+      const response = await api(`registry/search?source=huggingface&query=${encodeURIComponent(value)}&format=${remoteRuntime === "llamacpp" ? "gguf" : "all"}&limit=50`, undefined, request.signal);
       if (request.signal.aborted) return;
       setResults(response.results || []); setSearched(value); setPublisher("");
     } catch (e) { if (!request.signal.aborted) setError((e as Error).message); }
@@ -112,11 +114,12 @@ export function DiscoverModels({ models, jobs, busy, onRepository, onDownload, o
       {!visible.length && <div className="discover-empty"><h2>{catalog.length ? "No models match these filters" : "Catalog not available yet"}</h2>{(!task || task === "Chat") && <Button variant="ghost" size="sm" onClick={() => { setRemoteQuery(query); setSource("huggingface"); }}>Search Hugging Face</Button>}</div>}
       {visible.length > limit && <Button className="discover-more" variant="outline" size="sm" onClick={() => setLimit(limit + 30)}>Show more models ({visible.length - limit} remaining)</Button>}
     </> : <>
+      <label className="remote-runtime-filter">Target runtime<select aria-label="Search target runtime" value={remoteRuntime} onChange={e => setRemoteRuntime(e.target.value)}><option value="llamacpp">llama.cpp · GGUF</option><option value="vllm">vLLM · review files</option><option value="flm">FastFlowLM · review files</option></select></label>
       <form className="discover-toolbar" aria-label="Search Hugging Face" onSubmit={(e) => { e.preventDefault(); void search(); }}>
         <label className="search-input"><Search size={16} /><input aria-label="Search Hugging Face models" placeholder="Model name or Hugging Face URL…" value={remoteQuery} onChange={(e) => setRemoteQuery(e.target.value)} /></label>
         <Button type="submit" disabled={busy} aria-busy={searching}>{searching && <LoaderCircle size={16} className="spin" />}Search</Button>
       </form>
-      <div className="discover-result-bar"><span>GGUF chat models</span><HelpTip label="Hugging Face search">Searches up to 50 matching repositories. Publisher filters and sorting apply to returned results. Review files and the runtime before downloading. Other services are available in Model catalog.</HelpTip>{!!results.length && <><select aria-label="Filter search by publisher" value={publisher} onChange={(e) => setPublisher(e.target.value)}><option value="">All publishers</option>{[...new Set(results.map((r) => r.repository_id.split("/")[0]))].sort().map((p) => <option key={p}>{p}</option>)}</select><select aria-label="Sort Hugging Face results" value={remoteSort} onChange={(e) => setRemoteSort(e.target.value)}><option value="relevance">Relevance</option><option value="downloads">Downloads</option></select></>}</div>
+      <div className="discover-result-bar"><span>{remoteRuntime === "llamacpp" ? "GGUF chat models" : "Runtime candidates · inspect files"}</span><HelpTip label="Hugging Face search">Searches up to 50 matching repositories. Publisher filters and sorting apply to returned results. Review files and the runtime before downloading. Other services are available in Model catalog.</HelpTip>{!!results.length && <><select aria-label="Filter search by publisher" value={publisher} onChange={(e) => setPublisher(e.target.value)}><option value="">All publishers</option>{[...new Set(results.map((r) => r.repository_id.split("/")[0]))].sort().map((p) => <option key={p}>{p}</option>)}</select><select aria-label="Sort Hugging Face results" value={remoteSort} onChange={(e) => setRemoteSort(e.target.value)}><option value="relevance">Relevance</option><option value="downloads">Downloads</option></select></>}</div>
       {error && <div className="inline-error" role="alert">{error}<Button variant="outline" size="sm" onClick={() => void search()}>Retry search</Button></div>}
       {searching && <p role="status" className="discover-search-state">Searching Hugging Face…</p>}
       {!!searched && <p className="discover-search-state">{groups.length} models for “{searched}”{searching ? " · previous results" : ""}</p>}

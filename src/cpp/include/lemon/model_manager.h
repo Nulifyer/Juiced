@@ -237,6 +237,8 @@ public:
 
     // Get all supported models from server_models.json
     std::map<std::string, ModelInfo> get_supported_models();
+    json get_execution_profiles(const std::string& model_name);
+    void select_execution_profile(const std::string& model_name, const json& profile);
 
     // Get downloaded models
     std::map<std::string, ModelInfo> get_downloaded_models();
@@ -251,7 +253,8 @@ public:
     // Register a user model
     void register_user_model(const std::string& model_name,
                             const json& model_data,
-                            const std::string& source = "");
+                            const std::string& source = "",
+                            bool replace_existing = true);
 
     // Remove a user registration without deleting its source files.
     void unregister_user_model(const std::string& model_name);
@@ -563,6 +566,9 @@ private:
     json server_models_;
     json user_models_;
     json recipe_options_;
+    json execution_profiles_ = json::object();
+    std::mutex execution_profiles_write_mutex_;
+    ModelInfo apply_execution_profile_locked(const std::string& cache_key, ModelInfo info) const;
     json architecture_defaults_;  // Per-architecture recipe option overlays (from resources)
     std::string extra_models_dir_;  // Secondary directory for GGUF model discovery
     CloudProviderRegistry* cloud_registry_ = nullptr;  // Not owned

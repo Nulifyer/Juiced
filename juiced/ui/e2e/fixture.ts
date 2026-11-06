@@ -6,6 +6,8 @@ export const test = base.extend<{ runtime: any }>({
     const errors: string[] = [];
     page.on("pageerror", error => errors.push(error.message));
     const state = {
+      preparedArtifacts: [{id: 'a'.repeat(64), bytes: 4096, quant: 'Q5_K_M', models: [modelId], removable: false}, {id: 'b'.repeat(64), bytes: 2048, quant: 'Q4_K_M', models: [], removable: true}],
+      existingPrepared: false, executionSelected: 'registered', preparationJobs: {} as Record<string, any>,
       saved: { ctx_size: 8192, llamacpp_args: '--parallel 2', llamacpp_backend: 'cpu' } as Record<string, any>,
       running: { ctx_size: 4096, llamacpp_args: '--parallel 2', llamacpp_backend: 'cpu' },
       defaults: { ctx_size: 4096, llamacpp_args: '', llamacpp_backend: 'cpu' },
@@ -43,6 +45,28 @@ export const test = base.extend<{ runtime: any }>({
       if (path === 'juiced/policy') { const model = state.models.find(m => m.id === body.model); if (model) model.policy = body.policy; return reply({}); }
       if (path === 'registry/search') return reply({ results: [{ repository_id: 'Example/Ornith-GGUF', downloads: 5000 }] });
       if (path === 'pull/variants') return reply({ checkpoint: 'Example/Ornith-GGUF', recipe: 'llamacpp', suggested_name: 'Ornith-GGUF', variants: [{ name: 'Ornith-Q6_K.gguf', size_bytes: 24000000000 }, { name: 'Ornith-Q4_K_M.gguf', size_bytes: 18000000000 }], mmproj_files: [] });
+      if (path === 'juiced/execution') {
+        if (body) { state.executionSelected = body.profile; return reply({ accepted: true }, 202); }
+        return reply({ model: modelId, selected: state.executionSelected, architecture: 'qwen35moe', profiles: [
+          { id: 'registered', recipe: 'llamacpp', compatible: true, available: true, changes: [] },
+          { id: 'llamacpp:cpu', recipe: 'llamacpp', backend: 'cpu', compatible: true, available: true, package_state: 'installed', reason: 'Reuse the downloaded GGUF without changing its weights', changes: [] },
+          { id: 'llamacpp:vulkan', recipe: 'llamacpp', backend: 'vulkan', compatible: true, available: true, package_state: state.gpuInstalled ? 'installed' : 'installable', reason: 'Reuse the downloaded GGUF without changing its weights', changes: [] },
+          { id: 'llamacpp:rocm', recipe: 'llamacpp', backend: 'rocm', compatible: true, available: false, hardware_reason: 'Requires an available ROCm GPU', changes: [] },
+          { id: 'llamacpp:hybrid-rocm', recipe: 'llamacpp', backend: 'hybrid-rocm', compatible: true, available: true, experimental: true, package_state: 'installable', changes: ['Eligible NPU prefill uses reduced-precision arithmetic; GPU weights and decode retain the source quantization', 'Partial prefill only: routed experts, attention and decode stay on ROCm'] },
+          { id: 'vllm:rocm', recipe: 'vllm', backend: 'rocm', compatible: false, available: true, reason: 'The pinned vLLM GGUF importer does not support this architecture', changes: [] },
+        ] });
+      }
+      if (path === 'juiced/preparation') {
+        if (body) {
+          if (body.action === 'delete_cache') { state.preparedArtifacts = state.preparedArtifacts.filter(a => a.id !== body.id); return reply({removed: true}); }
+          if (body.action === 'cancel') { state.preparationJobs[body.id].pending = false; state.preparationJobs[body.id].phase = 'cancelled'; return reply({ accepted: true }); }
+          const job = { id: 'prepare-1', model: modelId, name: 'Ornith-1.5-35B-A3B-GGUF-' + body.quant, phase: 'quantizing', pending: true };
+          state.preparationJobs[job.id] = job; return reply(job, 202);
+        }
+        if (new URL(request.url()).searchParams.has('cache')) return reply({artifacts: state.preparedArtifacts});
+        if (new URL(request.url()).searchParams.has('model')) return reply({ compatible: true, tools_ready: true, changes: ['Requantizing adds numerical error. Higher bit counts cannot restore lost precision.'], targets: ['Q4_K_M', 'Q5_K_M', 'Q6_K', 'Q8_0'].map(quant => ({ quant, name: 'Ornith-1.5-35B-A3B-GGUF-' + quant, exists: state.existingPrepared && quant === 'Q4_K_M' })) });
+        return reply({ jobs: state.preparationJobs });
+      }
       if (path === 'juiced/devices') return reply({ devices: [{ id: 'Vulkan0', name: 'AMD Radeon 890M Graphics' }] });
       if (path === 'system-info') return reply({ devices: { cpu: { name: 'Test CPU', cores: 8, threads: 16, available: true }, gpu: [{ name: 'Test GPU', available: true }] }, recipes: { llamacpp: { display_name: 'llama.cpp', modality: 'llm', backends: { cpu: { state: 'update_available', version: 'b123', message: 'Update is available' }, vulkan: { state: state.gpuInstalled ? 'installed' : 'installable' }, rocm: { state: 'unsupported' } } }, whispercpp: { display_name: 'Whisper.cpp', modality: 'stt', backends: { cpu: { state: 'installed', version: 'v1.8.0' } } } } });
       if (path === 'system-stats') return reply({ cpu_percent: 25, memory_gb: 34, npu_percent: 0, primary_gpu_id: 'gpu0', gpus: [{ id: 'gpu0', name: 'Test GPU', gpu_percent: 40, memory_used_gb: 24, memory_type: 'shared' }] });

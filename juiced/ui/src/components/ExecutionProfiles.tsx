@@ -1,0 +1,618 @@
+import { useEffect, useState } from "react";
+import { Dialog } from "@base-ui/react/dialog";
+import { api, type Model } from "../api";
+import { Button } from "./t3/button";
+import { SelectField } from "./t3/select";
+import { HelpTip } from "./HelpTip";
+import { acceleratorName, runtimeName } from "./runtimeInfo";
+import "./ExecutionProfiles.css";
+
+type Target = {
+  original_backend?: string;
+  settings?: Record<string, any>;
+  tokenizer?: string;
+  id: string;
+  recipe: string;
+  backend?: string;
+  compatible: boolean;
+  available: boolean;
+  reason?: string;
+  hardware_reason?: string;
+  package_state?: string;
+  experimental?: boolean;
+  requires_tokenizer?: boolean;
+  changes: string[];
+};
+type Plan = {
+  model: string;
+  selected: string;
+  architecture: string;
+  profiles: Target[];
+};
+type Preparation = {
+  compatible: boolean;
+  reason: string;
+  tools_ready: boolean;
+  changes: string[];
+  targets: { quant: string; name: string; exists?: boolean }[];
+};
+type Job = {
+  id: string;
+  model: string;
+  name: string;
+  phase: string;
+  pending: boolean;
+  error?: string;
+  cached?: boolean;
+};
+export function ExecutionProfiles({
+  model,
+  dirty,
+  refresh,
+  onChanged,
+  onFindPrepared,
+  onVariant,
+}: {
+  model: Model;
+  dirty: boolean;
+  refresh: () => Promise<void>;
+  onChanged: () => void;
+  onFindPrepared: (runtime: string) => void;
+  onVariant: (name: string) => void;
+}) {
+  const [plan, setPlan] = useState<Plan>(),
+    [preparation, setPreparation] = useState<Preparation>();
+  const [targetId, setTargetId] = useState(""),
+    [acknowledge, setAcknowledge] = useState(false);
+  const [hybridMemory, setHybridMemory] = useState(2048),
+    [hybridPrompt, setHybridPrompt] = useState(1024);
+  const [tokenizer, setTokenizer] = useState(""),
+    [device, setDevice] = useState("");
+  const [devices, setDevices] = useState<{ id: string; name: string }[]>([]),
+    [deviceError, setDeviceError] = useState("");
+  const [quant, setQuant] = useState("Q6_K"),
+    [prepareAcknowledged, setPrepareAcknowledged] = useState(false);
+  const [output, setOutput] = useState<string | null>(null);
+  const [jobs, setJobs] = useState<Job[]>([]),
+    [error, setError] = useState("");
+  const [busy, setBusy] = useState(false),
+    [message, setMessage] = useState(""),
+    [revision, setRevision] = useState(0);
+  const pending = busy || model.operation?.pending;
+  useEffect(() => {
+    const controller = new AbortController();
+    setPlan(undefined);
+    setPreparation(undefined);
+    setError("");
+    void Promise.all([
+      api<Plan>(
+        `juiced/execution?model=${encodeURIComponent(model.id)}`,
+        undefined,
+        controller.signal,
+      ),
+      api<Preparation>(
+        `juiced/preparation?model=${encodeURIComponent(model.id)}`,
+        undefined,
+        controller.signal,
+      ),
+    ])
+      .then(([execution, conversion]) => {
+        setPlan(execution);
+        setPreparation(conversion);
+        setTargetId(execution.selected);
+        setAcknowledge(false);
+        setError("");
+      })
+      .catch((e) => {
+        if (!controller.signal.aborted) setError(e.message);
+      });
+    return () => controller.abort();
+  }, [model.id, revision, model.operation?.pending]);
+  useEffect(() => {
+    const controller = new AbortController();
+    const poll = () =>
+      void api<{ jobs: Record<string, Job> }>(
+        "juiced/preparation",
+        undefined,
+        controller.signal,
+      )
+        .then((result) =>
+          setJobs(
+            Object.values(result.jobs)
+              .filter((job) => job.model === model.id)
+              .reverse(),
+          ),
+        )
+        .catch((e) => {
+          if (!controller.signal.aborted) setError(e.message);
+        });
+    poll();
+    const timer = window.setInterval(poll, 1500);
+    return () => {
+      controller.abort();
+      window.clearInterval(timer);
+    };
+  }, [model.id]);
+  const target = plan?.profiles.find((t) => t.id === targetId);
+  const runtimes = [...new Set(plan?.profiles.map((t) => t.recipe) || [])];
+  const variants =
+    plan?.profiles.filter((t) => t.recipe === target?.recipe) || [];
+  useEffect(() => {
+    const controller = new AbortController();
+    setDevices([]);
+    setDeviceError("");
+    setDevice(String(target?.settings?.llamacpp_device || ""));
+    setHybridMemory(
+      Number(target?.settings?.llamacpp_hybrid_memory_mib || 2048),
+    );
+    setHybridPrompt(
+      Number(target?.settings?.llamacpp_hybrid_min_prompt || 1024),
+    );
+    setTokenizer(target?.tokenizer || "");
+    if (
+      target?.recipe === "llamacpp" &&
+      target.backend &&
+      target.backend !== "cpu" &&
+      target.available &&
+      target.package_state !== "installable"
+    )
+      void api<{ devices: { id: string; name: string }[] }>(
+        `juiced/devices?recipe=llamacpp&backend=${encodeURIComponent(target.backend)}`,
+        undefined,
+        controller.signal,
+      )
+        .then((result) =>
+          setDevices(
+            result.devices.filter(
+              (d) =>
+                target.backend !== "hybrid-rocm" || d.id.startsWith("ROCm"),
+            ),
+          ),
+        )
+        .catch((e) => {
+          if (!controller.signal.aborted) setDeviceError(e.message);
+        });
+    return () => controller.abort();
+  }, [targetId, plan]);
+  function choose(id: string) {
+    setTargetId(id);
+    setAcknowledge(false);
+    setMessage("");
+  }
+  async function select() {
+    if (!plan || !target) return;
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      await api("juiced/execution", {
+        model: model.id,
+        profile: targetId,
+        expected_selected: plan.selected,
+        acknowledge,
+        tokenizer,
+        device,
+        hybrid_memory_mib: hybridMemory,
+        hybrid_min_prompt: hybridPrompt,
+        reload: model.loaded,
+      });
+      setMessage(
+        model.loaded
+          ? "Switching runtime. A failed load restores the previous profile."
+          : "Saving the execution profile for the next load.",
+      );
+      await refresh();
+      onChanged();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function prepare() {
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      const job = await api<Job>("juiced/preparation", {
+        model: model.id,
+        quant,
+        acknowledge: prepareAcknowledged,
+      });
+      setJobs((current) => [job, ...current]);
+      setPrepareAcknowledged(false);
+      setMessage("Preparation queued. The new variant will start Disabled.");
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function showOutput(id: string) {
+    try {
+      const result = await api<{ output?: string }>(
+        `juiced/preparation?id=${encodeURIComponent(id)}`,
+      );
+      setOutput(result.output || "No converter output yet.");
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+  const preparedTarget = preparation?.targets.find((t) => t.quant === quant);
+  const risks = !!target && (target.experimental || target.changes.length > 0);
+  return (
+    <div className="execution-profiles">
+      <section className="profile-section" aria-label="Execution profile">
+        <div className="profile-title">
+          <h3>Runtime & hardware</h3>
+          <HelpTip label="Execution profiles">
+            Reuse compatible weights. Each profile retains settings. A failed
+            switch restores the previous profile. Experimental profiles still
+            need your output and performance testing.
+          </HelpTip>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => setRevision((v) => v + 1)}
+          >
+            Refresh
+          </Button>
+        </div>
+        {!plan && !error && <p role="status">Reading compatible runtimes…</p>}
+        {plan && (
+          <>
+            <div className="settings-grid">
+              <label>
+                <span className="field-label">Runtime</span>
+                <SelectField
+                  label="Runtime"
+                  value={target?.recipe || ""}
+                  options={runtimes.map((recipe) => ({
+                    value: recipe,
+                    label: runtimeName(recipe),
+                  }))}
+                  onValueChange={(recipe) =>
+                    choose(
+                      plan.profiles.find(
+                        (t) => t.recipe === recipe && t.id !== "registered",
+                      )?.id || "registered",
+                    )
+                  }
+                  disabled={pending}
+                />
+              </label>
+              <label>
+                <span className="field-label">Run on</span>
+                <SelectField
+                  label="Run on"
+                  value={targetId}
+                  options={variants.map((t) => ({
+                    value: t.id,
+                    label:
+                      t.id === "registered"
+                        ? t.original_backend
+                          ? `${acceleratorName(t.original_backend)} · Original`
+                          : "Original setup"
+                        : acceleratorName(t.backend || ""),
+                    description: !t.compatible
+                      ? "Incompatible"
+                      : !t.available
+                        ? "Unavailable"
+                        : t.experimental
+                          ? "Experimental"
+                          : t.package_state === "installable"
+                            ? "Install on first load"
+                            : undefined,
+                  }))}
+                  onValueChange={choose}
+                  disabled={pending}
+                />
+              </label>
+            </div>
+            {target && (
+              <>
+                <p
+                  className={
+                    target.compatible && target.available
+                      ? "profile-reason"
+                      : "inline-error"
+                  }
+                >
+                  {!target.compatible
+                    ? target.reason
+                    : !target.available
+                      ? target.hardware_reason
+                      : target.reason}
+                </p>
+                {target.requires_tokenizer && (
+                  <label>
+                    <span className="field-label">
+                      Original tokenizer / config repository
+                      <HelpTip label="Tokenizer and config">
+                        Use the exact original repository or a local directory
+                        with its tokenizer and config.
+                      </HelpTip>
+                    </span>
+                    <input
+                      aria-label="Original tokenizer / config repository"
+                      value={tokenizer}
+                      onChange={(e) => setTokenizer(e.target.value)}
+                      placeholder="publisher/model"
+                    />
+                  </label>
+                )}
+                {target.recipe === "llamacpp" &&
+                  target.backend &&
+                  target.backend !== "cpu" && (
+                    <label>
+                      <span className="field-label">Accelerator device</span>
+                      <SelectField
+                        label="Accelerator device"
+                        value={device}
+                        options={[
+                          { value: "", label: "Automatic GPU selection" },
+                          ...devices.map((d) => ({
+                            value: d.id,
+                            label: `${d.id} · ${d.name}`,
+                          })),
+                        ]}
+                        onValueChange={setDevice}
+                        disabled={pending}
+                      />
+                      {deviceError && <small role="alert">{deviceError}</small>}
+                    </label>
+                  )}
+                {target.backend === "hybrid-rocm" && (
+                  <div className="settings-grid">
+                    <label>
+                      <span className="field-label">
+                        NPU copy budget (MiB)
+                        <HelpTip label="NPU copy budget">
+                          Bounds additional NPU weight copies. Keep room for the
+                          GPU model, context, other Hot models and XRT working
+                          buffers.
+                        </HelpTip>
+                      </span>
+                      <input
+                        type="number"
+                        aria-label="NPU copy budget (MiB)"
+                        min="128"
+                        max="16384"
+                        value={hybridMemory}
+                        onChange={(e) =>
+                          setHybridMemory(Number(e.target.value))
+                        }
+                      />
+                    </label>
+                    <label>
+                      <span className="field-label">
+                        Minimum prefill tokens
+                      </span>
+                      <input
+                        type="number"
+                        aria-label="Minimum prefill tokens"
+                        min="1024"
+                        max="32768"
+                        value={hybridPrompt}
+                        onChange={(e) =>
+                          setHybridPrompt(Number(e.target.value))
+                        }
+                      />
+                    </label>
+                  </div>
+                )}
+                {risks && (
+                  <div className="profile-warning">
+                    <strong>Experimental profile</strong>
+                    {target.changes.map((change) => (
+                      <p key={change}>{change}</p>
+                    ))}
+                    <label className="check">
+                      <input
+                        type="checkbox"
+                        checked={acknowledge}
+                        onChange={(e) => setAcknowledge(e.target.checked)}
+                      />
+                      I’ve reviewed these changes
+                    </label>
+                  </div>
+                )}
+                {dirty && (
+                  <p className="inline-error">
+                    Save or revert your settings before changing runtime.
+                  </p>
+                )}
+                <div className="profile-actions">
+                  <Button
+                    disabled={
+                      pending ||
+                      dirty ||
+                      !model.downloaded ||
+                      !target.compatible ||
+                      !target.available ||
+                      (risks && !acknowledge) ||
+                      (!!target.requires_tokenizer && !tokenizer)
+                    }
+                    onClick={() => void select()}
+                  >
+                    {model.loaded ? "Apply & reload" : "Use this profile"}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    onClick={() => onFindPrepared(target.recipe)}
+                  >
+                    Find a prepared version
+                  </Button>
+                </div>
+                <small className="profile-current">
+                  Saved profile:{" "}
+                  {plan.selected === "registered"
+                    ? "Original setup"
+                    : plan.selected}{" "}
+                  {plan.architecture && `· ${plan.architecture}`}
+                </small>
+              </>
+            )}
+          </>
+        )}
+      </section>
+      <section className="profile-section" aria-label="Prepare a variant">
+        <div className="profile-title">
+          <h3>Prepare a variant</h3>
+          <HelpTip label="Local preparation">
+            Source weights remain unchanged. Cached copies use source, companion
+            and tool hashes. Tensor structure is checked before registration;
+            inference still needs testing. Higher-bit output cannot restore
+            precision already lost.
+          </HelpTip>
+        </div>
+        {preparation &&
+          (preparation.compatible ? (
+            <>
+              <div className="preparation-target">
+                <label>
+                  <span className="field-label">Quantization</span>
+                  <SelectField
+                    label="Preparation quantization"
+                    value={quant}
+                    options={preparation.targets.map((t) => ({
+                      value: t.quant,
+                      label: t.quant,
+                      description: t.exists ? "Available" : undefined,
+                    }))}
+                    onValueChange={(value) => {
+                      setQuant(value);
+                      setPrepareAcknowledged(false);
+                    }}
+                  />
+                </label>
+                <span>
+                  {preparation.targets.find((t) => t.quant === quant)?.name}
+                </span>
+              </div>
+              {!preparedTarget?.exists && (
+                <>
+                  <div className="profile-warning">
+                    {preparation.changes.map((change) => (
+                      <p key={change}>{change}</p>
+                    ))}
+                    <label className="check">
+                      <input
+                        type="checkbox"
+                        checked={prepareAcknowledged}
+                        onChange={(e) =>
+                          setPrepareAcknowledged(e.target.checked)
+                        }
+                      />
+                      I accept the precision changes and separate disk use
+                    </label>
+                  </div>
+                </>
+              )}
+              {!preparation.tools_ready && (
+                <p className="inline-error">
+                  Preparation tools are not installed in this server image.
+                </p>
+              )}
+              {preparedTarget?.exists ? (
+                <Button
+                  variant="outline"
+                  onClick={() => onVariant(preparedTarget.name)}
+                >
+                  Open existing variant
+                </Button>
+              ) : (
+                <>
+                  <Button
+                    variant="outline"
+                    disabled={
+                      busy || !preparation.tools_ready || !prepareAcknowledged
+                    }
+                    onClick={() => void prepare()}
+                  >
+                    Prepare GGUF
+                  </Button>
+                </>
+              )}
+            </>
+          ) : (
+            <p className="profile-reason">{preparation.reason}</p>
+          ))}
+        {jobs.length > 0 && (
+          <div className="preparation-jobs" aria-label="Preparation jobs">
+            {jobs.slice(0, 12).map((job) => (
+              <article key={job.id}>
+                <div>
+                  <strong>{job.name}</strong>
+                  <small role="status">
+                    {job.phase}
+                    {job.cached ? " · reused cached output" : ""}
+                    {job.phase === "complete"
+                      ? " · Disabled · ready for your test"
+                      : ""}
+                  </small>
+                  {job.error && (
+                    <small className="inline-error">{job.error}</small>
+                  )}
+                </div>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => void showOutput(job.id)}
+                >
+                  Output
+                </Button>
+                {job.pending && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() =>
+                      void api("juiced/preparation", {
+                        action: "cancel",
+                        id: job.id,
+                      }).catch((e) => setError(e.message))
+                    }
+                  >
+                    Cancel
+                  </Button>
+                )}
+              </article>
+            ))}
+          </div>
+        )}
+      </section>
+      <Dialog.Root
+        open={output !== null}
+        onOpenChange={(open) => {
+          if (!open) setOutput(null);
+        }}
+      >
+        <Dialog.Portal>
+          <Dialog.Backdrop className="modal-backdrop" />
+          <Dialog.Popup className="modal preparation-output">
+            <Dialog.Title>Preparation output</Dialog.Title>
+            <pre>{output}</pre>
+            <Dialog.Close render={<Button variant="outline" />}>
+              Close
+            </Dialog.Close>
+          </Dialog.Popup>
+        </Dialog.Portal>
+      </Dialog.Root>
+      {error && (
+        <p className="inline-error" role="alert">
+          {error}
+        </p>
+      )}
+      {model.operation?.error && (
+        <p className="inline-error" role="alert">
+          {model.operation.error}
+        </p>
+      )}
+      {message && (
+        <p role="status" className="profile-reason">
+          {message}
+        </p>
+      )}
+    </div>
+  );
+}

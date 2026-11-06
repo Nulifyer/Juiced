@@ -40,7 +40,9 @@ private:
   std::deque<json> requests_;
   unsigned long long request_sequence_ = 0;
   std::atomic<bool> stopping_{false};
-  std::thread worker_;
+  std::thread worker_, preparation_worker_;
+  std::deque<json> preparation_pending_;
+  std::set<std::string> preparation_cancelled_;
   std::unique_ptr<NativeProcess> voice_process_;
   std::string voice_signature_;
   long long voice_retry_after_ = 0;
@@ -57,6 +59,12 @@ private:
   void reconcile();
   void reconcile_voice();
   void compatibility_routes(httplib::Server &http);
+  json prepared_artifacts();
+  json preparation_plan(const std::string& model);
+  void preparation_api(const httplib::Request &, httplib::Response &);
+  void preparation_run();
+  json execution_plan(const std::string& model);
+  void execution_api(const httplib::Request &, httplib::Response &);
   void execution_devices(const httplib::Request &, httplib::Response &);
   void image_compatibility(const httplib::Request &, httplib::Response &,
                            const std::string &operation);

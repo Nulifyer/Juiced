@@ -159,8 +159,8 @@ Lemonade supports multiple inference engines for LLM, speech, TTS, and image gen
   </thead>
   <tbody>
     <tr>
-      <td rowspan="11"><strong>Text generation</strong></td>
-      <td rowspan="6"><code>llamacpp</code></td>
+      <td rowspan="12"><strong>Text generation</strong></td>
+      <td rowspan="7"><code>llamacpp</code></td>
       <td><code>system</code></td>
       <td><code>x86_64</code>/ARM64 CPU, GPU</td>
       <td>Linux</td>
@@ -184,6 +184,11 @@ Lemonade supports multiple inference engines for LLM, speech, TTS, and image gen
       <td><code>rocm</code></td>
       <td>AMD GPUs supported by ROCm</td>
       <td>Windows, Linux</td>
+    </tr>
+    <tr>
+      <td><code>hybrid-rocm</code>†</td>
+      <td>XDNA2 prefill + Radeon gfx1150 ROCm GPU (experimental)</td>
+      <td>Linux</td>
     </tr>
     <tr>
       <td><code>cpu</code></td>
