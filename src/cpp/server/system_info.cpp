@@ -1576,7 +1576,8 @@ json SystemInfo::build_recipes_info(const json& devices) {
             continue;
         }
 
-        bool skip_as_default = def.tier != BackendTier::Core || (def.backend == "system" && !prefer_llamacpp_system);
+        bool skip_as_default = (def.recipe == "llamacpp" && def.backend == "hybrid-rocm") ||
+                               (def.backend == "system" && !prefer_llamacpp_system);
         if (supported && !skip_as_default) {
             const std::string effective_state =
                 recipes[def.recipe]["backends"][def.backend].value("state", "unsupported");
