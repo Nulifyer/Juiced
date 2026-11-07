@@ -1,0 +1,2564 @@
+{
+  "schema_version": 1,
+  "plan_revision": 2,
+  "baseline": "Juiced v0.8.6 / 9cd79d01",
+  "scope_rules": {
+    "core": "Required staged product behavior within selected supported families; no claim of every provider combination",
+    "conditional": "Only with a named target/workload and a separately approved selected-family contract; not a required dependency",
+    "retained": "Preserve delivered behavior and regression-check affected paths",
+    "excluded": "Do not expand core into this behavior; disable inherited conflicting execution paths without deleting records"
+  },
+  "entries": [
+    {
+      "id": "F001",
+      "feature": "Curated recommendations and service categories",
+      "baseline_status": "delivered",
+      "phase": "retain",
+      "disposition": "preserve and regression-check only where affected",
+      "baseline_evidence": [
+        "discover",
+        "models"
+      ],
+      "scope": "retained"
+    },
+    {
+      "id": "F002",
+      "feature": "Hugging Face search and repository inspection",
+      "baseline_status": "delivered",
+      "phase": "retain",
+      "disposition": "preserve and regression-check only where affected",
+      "baseline_evidence": [
+        "discover"
+      ],
+      "scope": "retained"
+    },
+    {
+      "id": "F003",
+      "feature": "Search filtered by target runtime or format",
+      "baseline_status": "partial",
+      "phase": "P3",
+      "disposition": "implement-or-complete",
+      "baseline_evidence": [
+        "discover",
+        "contract"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F004",
+      "feature": "Grouped quants instead of duplicate models",
+      "baseline_status": "delivered",
+      "phase": "retain",
+      "disposition": "preserve and regression-check only where affected",
+      "baseline_evidence": [
+        "discover"
+      ],
+      "scope": "retained"
+    },
+    {
+      "id": "F005",
+      "feature": "Download progress, pause and cancel",
+      "baseline_status": "delivered",
+      "phase": "retain",
+      "disposition": "preserve and regression-check only where affected",
+      "baseline_evidence": [
+        "models",
+        "UI"
+      ],
+      "scope": "retained"
+    },
+    {
+      "id": "F006",
+      "feature": "Revision-pinned full HF snapshot acquisition",
+      "baseline_status": "partial",
+      "phase": "P3",
+      "disposition": "implement-or-complete",
+      "baseline_evidence": [
+        "prepare",
+        "discover",
+        "contract"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F007",
+      "feature": "Gated/private model credentials and license acceptance",
+      "baseline_status": "partial",
+      "phase": "P3",
+      "disposition": "implement-or-complete",
+      "baseline_evidence": [
+        "discover",
+        "prepare"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F008",
+      "feature": "Manual GGUF upload and companion import",
+      "baseline_status": "delivered",
+      "phase": "retain",
+      "disposition": "preserve and regression-check only where affected",
+      "baseline_evidence": [
+        "discover"
+      ],
+      "scope": "retained"
+    },
+    {
+      "id": "F009",
+      "feature": "Split-shard completeness and projector identity",
+      "baseline_status": "partial",
+      "phase": "P3",
+      "disposition": "implement-or-complete",
+      "baseline_evidence": [
+        "prepare",
+        "contract"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F010",
+      "feature": "Same weights reused by multiple runtimes/devices",
+      "baseline_status": "delivered",
+      "phase": "retain",
+      "disposition": "preserve and regression-check only where affected",
+      "baseline_evidence": [
+        "profiles",
+        "contract"
+      ],
+      "scope": "retained"
+    },
+    {
+      "id": "F011",
+      "feature": "Content-addressed global weight deduplication",
+      "baseline_status": "missing",
+      "phase": "P7",
+      "disposition": "conditional integration after core contracts and named workload justify it; target availability is a qualification prerequisite",
+      "baseline_evidence": [
+        "prepare",
+        "remove"
+      ],
+      "scope": "conditional"
+    },
+    {
+      "id": "F012",
+      "feature": "OCI model registry pull/push and mirroring",
+      "baseline_status": "missing",
+      "phase": "P7",
+      "disposition": "conditional integration after core contracts and named workload justify it; target availability is a qualification prerequisite",
+      "baseline_evidence": [
+        "discover",
+        "prepare"
+      ],
+      "scope": "conditional"
+    },
+    {
+      "id": "F013",
+      "feature": "ModelScope acquisition",
+      "baseline_status": "unqualified",
+      "phase": "P7",
+      "disposition": "conditional registry integration; require named source/consumer and complete artifact contract",
+      "baseline_evidence": [
+        "discover",
+        "api"
+      ],
+      "scope": "conditional"
+    },
+    {
+      "id": "F014",
+      "feature": "Proper public model names and quant identity",
+      "baseline_status": "delivered",
+      "phase": "retain",
+      "disposition": "preserve and regression-check only where affected",
+      "baseline_evidence": [
+        "models",
+        "prepare",
+        "contract"
+      ],
+      "scope": "retained"
+    },
+    {
+      "id": "F015",
+      "feature": "Publisher provenance and immutable equivalence proof",
+      "baseline_status": "partial",
+      "phase": "P3",
+      "disposition": "implement-or-complete",
+      "baseline_evidence": [
+        "prepare",
+        "contract"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F016",
+      "feature": "Model card, license and redistribution inventory",
+      "baseline_status": "partial",
+      "phase": "P3",
+      "disposition": "implement-or-complete",
+      "baseline_evidence": [
+        "discover",
+        "backend"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F017",
+      "feature": "Safe delete, shared-reference checks and disk reclaim",
+      "baseline_status": "delivered",
+      "phase": "retain",
+      "disposition": "preserve and regression-check only where affected",
+      "baseline_evidence": [
+        "remove",
+        "prepare"
+      ],
+      "scope": "retained"
+    },
+    {
+      "id": "F018",
+      "feature": "Update checks with retained previous model revisions",
+      "baseline_status": "partial",
+      "phase": "P3",
+      "disposition": "implement-or-complete",
+      "baseline_evidence": [
+        "api",
+        "discover"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F019",
+      "feature": "Local supported HF-to-GGUF conversion",
+      "baseline_status": "delivered",
+      "phase": "retain",
+      "disposition": "preserve and regression-check only where affected",
+      "baseline_evidence": [
+        "prepare",
+        "prepare-worker",
+        "contract"
+      ],
+      "scope": "retained"
+    },
+    {
+      "id": "F020",
+      "feature": "Local GGUF requantization",
+      "baseline_status": "delivered",
+      "phase": "retain",
+      "disposition": "preserve and regression-check only where affected",
+      "baseline_evidence": [
+        "prepare",
+        "contract"
+      ],
+      "scope": "retained"
+    },
+    {
+      "id": "F021",
+      "feature": "Precision-loss and modality-loss disclosure",
+      "baseline_status": "delivered",
+      "phase": "retain",
+      "disposition": "preserve and regression-check only where affected",
+      "baseline_evidence": [
+        "prepare",
+        "contract"
+      ],
+      "scope": "retained"
+    },
+    {
+      "id": "F022",
+      "feature": "Lossless repack versus quantization distinction",
+      "baseline_status": "partial",
+      "phase": "P3",
+      "disposition": "implement-or-complete",
+      "baseline_evidence": [
+        "contract",
+        "prepare"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F023",
+      "feature": "Calibration dataset and importance-matrix workflows",
+      "baseline_status": "missing",
+      "phase": "P3",
+      "disposition": "implement-or-complete",
+      "baseline_evidence": [
+        "prepare-worker",
+        "contract"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F024",
+      "feature": "AWQ/GPTQ/compressed-tensors preparation",
+      "baseline_status": "missing",
+      "phase": "P7",
+      "disposition": "conditional target quantizer; only with matched consuming provider, original source and concrete quality/resource gates",
+      "baseline_evidence": [
+        "prepare-worker",
+        "contract"
+      ],
+      "scope": "conditional"
+    },
+    {
+      "id": "F025",
+      "feature": "EXL2/EXL3 preparation",
+      "baseline_status": "missing",
+      "phase": "P7",
+      "disposition": "conditional EXL preparation; only with a matched provider/model family and source/quality gates",
+      "baseline_evidence": [
+        "prepare-worker",
+        "contract"
+      ],
+      "scope": "conditional"
+    },
+    {
+      "id": "F026",
+      "feature": "OpenVINO IR/ONNX provider-specific export",
+      "baseline_status": "missing",
+      "phase": "P7",
+      "disposition": "conditional ONNX/OpenVINO export alongside a matched consuming provider and target hardware",
+      "baseline_evidence": [
+        "prepare-worker",
+        "contract"
+      ],
+      "scope": "conditional"
+    },
+    {
+      "id": "F027",
+      "feature": "MLX/UQFF/LiteRT target preparation",
+      "baseline_status": "missing",
+      "phase": "P7",
+      "disposition": "conditional integration; require real target and qualification; target availability is a qualification prerequisite",
+      "baseline_evidence": [
+        "prepare-worker",
+        "contract"
+      ],
+      "scope": "conditional"
+    },
+    {
+      "id": "F028",
+      "feature": "FLM Q4NX custom-model preparation and registration",
+      "baseline_status": "missing",
+      "phase": "P7",
+      "disposition": "conditional Q4NX route; converter geometry/head preservation and custom-loader contract must both qualify",
+      "baseline_evidence": [
+        "prepare-worker",
+        "contract"
+      ],
+      "scope": "conditional"
+    },
+    {
+      "id": "F029",
+      "feature": "Device-specific compiled engine cache",
+      "baseline_status": "partial",
+      "phase": "P7",
+      "disposition": "conditional compiled-engine target; P3 provides retained-bundle/cache identity foundation",
+      "baseline_evidence": [
+        "prepare",
+        "backend"
+      ],
+      "scope": "conditional"
+    },
+    {
+      "id": "F030",
+      "feature": "Structural validation and atomic publish",
+      "baseline_status": "delivered",
+      "phase": "retain",
+      "disposition": "preserve and regression-check only where affected",
+      "baseline_evidence": [
+        "prepare",
+        "prepare-worker"
+      ],
+      "scope": "retained"
+    },
+    {
+      "id": "F031",
+      "feature": "Preparation cancellation and restart recovery",
+      "baseline_status": "delivered",
+      "phase": "retain",
+      "disposition": "preserve and regression-check only where affected",
+      "baseline_evidence": [
+        "prepare",
+        "prepare-worker"
+      ],
+      "scope": "retained"
+    },
+    {
+      "id": "F032",
+      "feature": "Reference-aware prepared artifact cache",
+      "baseline_status": "delivered",
+      "phase": "retain",
+      "disposition": "preserve and regression-check only where affected",
+      "baseline_evidence": [
+        "prepare"
+      ],
+      "scope": "retained"
+    },
+    {
+      "id": "F033",
+      "feature": "Built-in post-conversion quality qualification",
+      "baseline_status": "missing",
+      "phase": "P2",
+      "disposition": "implement-or-complete",
+      "baseline_evidence": [
+        "prepare",
+        "playground"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F034",
+      "feature": "Preparation resource estimates and queue limits",
+      "baseline_status": "partial",
+      "phase": "P1",
+      "disposition": "bound preparation queue/RAM/disk concurrency in P1; detailed transform estimates and new recipes in P3",
+      "baseline_evidence": [
+        "prepare",
+        "contract"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F035",
+      "feature": "Universal reversible conversion between every format",
+      "baseline_status": "outside",
+      "phase": "excluded",
+      "disposition": "preserve runtime/client boundary; do not implement in core",
+      "baseline_evidence": [
+        "contract"
+      ],
+      "scope": "excluded"
+    },
+    {
+      "id": "F036",
+      "feature": "CPU acceleration matched to ISA",
+      "baseline_status": "partial",
+      "phase": "P6",
+      "disposition": "implement-or-complete; target availability is a qualification prerequisite; native packaging/build support and real-device qualification are separate gates",
+      "baseline_evidence": [
+        "backend",
+        "profiles"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F037",
+      "feature": "ROCm AMD ISA-specific builds",
+      "baseline_status": "delivered",
+      "phase": "retain",
+      "disposition": "preserve and regression-check only where affected",
+      "baseline_evidence": [
+        "backend",
+        "profiles",
+        "contract",
+        "live"
+      ],
+      "scope": "retained"
+    },
+    {
+      "id": "F038",
+      "feature": "Vulkan cross-vendor GPU acceleration",
+      "baseline_status": "delivered",
+      "phase": "retain",
+      "disposition": "preserve and regression-check only where affected",
+      "baseline_evidence": [
+        "profiles",
+        "backend",
+        "live"
+      ],
+      "scope": "retained"
+    },
+    {
+      "id": "F039",
+      "feature": "NVIDIA CUDA runtime packages",
+      "baseline_status": "unqualified",
+      "phase": "P6",
+      "disposition": "integrate existing source/provider and qualify before claiming support; target availability is a qualification prerequisite; native packaging/build support and real-device qualification are separate gates",
+      "baseline_evidence": [
+        "backend",
+        "live"
+      ],
+      "scope": "conditional"
+    },
+    {
+      "id": "F040",
+      "feature": "Native Apple Metal/MLX worker",
+      "baseline_status": "missing",
+      "phase": "P6",
+      "disposition": "conditional native Apple Metal packaging and optional MLX provider; remote/cluster worker extension is P7; native packaging/build support and real-device qualification are separate gates",
+      "baseline_evidence": [
+        "backend",
+        "profiles",
+        "contract"
+      ],
+      "scope": "conditional"
+    },
+    {
+      "id": "F041",
+      "feature": "Intel SYCL/OpenVINO GPU/NPU provider",
+      "baseline_status": "missing",
+      "phase": "P6",
+      "disposition": "conditional integration; require real target and qualification; target availability is a qualification prerequisite; native packaging/build support and real-device qualification are separate gates",
+      "baseline_evidence": [
+        "backend",
+        "live"
+      ],
+      "scope": "conditional"
+    },
+    {
+      "id": "F042",
+      "feature": "Qualcomm Hexagon/QAIRT provider",
+      "baseline_status": "missing",
+      "phase": "P6",
+      "disposition": "conditional integration; require real target and qualification; target availability is a qualification prerequisite; native packaging/build support and real-device qualification are separate gates",
+      "baseline_evidence": [
+        "backend",
+        "live"
+      ],
+      "scope": "conditional"
+    },
+    {
+      "id": "F043",
+      "feature": "Ascend CANN/NPU provider",
+      "baseline_status": "missing",
+      "phase": "P6",
+      "disposition": "conditional integration; require real target and qualification; target availability is a qualification prerequisite; native packaging/build support and real-device qualification are separate gates",
+      "baseline_evidence": [
+        "backend",
+        "live"
+      ],
+      "scope": "conditional"
+    },
+    {
+      "id": "F044",
+      "feature": "TPU/Gaudi/other datacenter accelerator plugins",
+      "baseline_status": "missing",
+      "phase": "P7",
+      "disposition": "conditional integration; require real target and qualification; target availability is a qualification prerequisite",
+      "baseline_evidence": [
+        "backend",
+        "live"
+      ],
+      "scope": "conditional"
+    },
+    {
+      "id": "F045",
+      "feature": "AMD XDNA2 NPU-only inference",
+      "baseline_status": "unqualified",
+      "phase": "P6",
+      "disposition": "integrate existing source/provider and qualify before claiming support; target availability is a qualification prerequisite; native packaging/build support and real-device qualification are separate gates",
+      "baseline_evidence": [
+        "backend",
+        "live",
+        "contract"
+      ],
+      "scope": "conditional"
+    },
+    {
+      "id": "F046",
+      "feature": "Same-model XDNA2 plus ROCm hybrid",
+      "baseline_status": "delivered",
+      "phase": "retain",
+      "disposition": "preserve and regression-check only where affected",
+      "baseline_evidence": [
+        "profiles",
+        "contract",
+        "live"
+      ],
+      "scope": "retained"
+    },
+    {
+      "id": "F047",
+      "feature": "Vendor ONNX NPU/GPU hybrid",
+      "baseline_status": "unqualified",
+      "phase": "P6",
+      "disposition": "integrate existing source/provider and qualify before claiming support; target availability is a qualification prerequisite; native packaging/build support and real-device qualification are separate gates",
+      "baseline_evidence": [
+        "backend",
+        "contract"
+      ],
+      "scope": "conditional"
+    },
+    {
+      "id": "F048",
+      "feature": "Independent NPU helper plus GPU chat",
+      "baseline_status": "partial",
+      "phase": "P6",
+      "disposition": "implement-or-complete; target availability is a qualification prerequisite; native packaging/build support and real-device qualification are separate gates",
+      "baseline_evidence": [
+        "router",
+        "backend",
+        "contract"
+      ],
+      "scope": "conditional"
+    },
+    {
+      "id": "F049",
+      "feature": "GPU/NPU conjunction and exclusivity checks",
+      "baseline_status": "delivered",
+      "phase": "retain",
+      "disposition": "preserve and regression-check only where affected",
+      "baseline_evidence": [
+        "backend",
+        "profiles",
+        "contract"
+      ],
+      "scope": "retained"
+    },
+    {
+      "id": "F050",
+      "feature": "Multi-GPU tensor or pipeline placement",
+      "baseline_status": "engine-only",
+      "phase": "P6",
+      "disposition": "implement-or-complete; target availability is a qualification prerequisite; native packaging/build support and real-device qualification are separate gates",
+      "baseline_evidence": [
+        "profiles",
+        "knobs"
+      ],
+      "scope": "conditional"
+    },
+    {
+      "id": "F051",
+      "feature": "Expert parallelism and CPU/GPU expert placement",
+      "baseline_status": "engine-only",
+      "phase": "P3",
+      "disposition": "implement-or-complete",
+      "baseline_evidence": [
+        "profiles",
+        "knobs"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F052",
+      "feature": "NUMA, CPU affinity and thread pools",
+      "baseline_status": "engine-only",
+      "phase": "P6",
+      "disposition": "implement-or-complete; target availability is a qualification prerequisite; native packaging/build support and real-device qualification are separate gates",
+      "baseline_evidence": [
+        "knobs",
+        "profiles"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F053",
+      "feature": "CPU/GPU shared-memory accounting",
+      "baseline_status": "partial",
+      "phase": "P1",
+      "disposition": "core prerequisite: account for overlapping physical CPU/GPU pools before resource protection qualification",
+      "baseline_evidence": [
+        "metrics",
+        "router",
+        "profiles"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F054",
+      "feature": "Host passthrough diagnostics",
+      "baseline_status": "delivered",
+      "phase": "retain",
+      "disposition": "preserve and regression-check only where affected",
+      "baseline_evidence": [
+        "backend",
+        "contract"
+      ],
+      "scope": "retained"
+    },
+    {
+      "id": "F055",
+      "feature": "NVIDIA/Intel/ARM/rootless deployment recipes",
+      "baseline_status": "partial",
+      "phase": "P6",
+      "disposition": "implement-or-complete; target availability is a qualification prerequisite; native packaging/build support and real-device qualification are separate gates",
+      "baseline_evidence": [
+        "backend",
+        "contract"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F056",
+      "feature": "Container user-space runtime install/update",
+      "baseline_status": "delivered",
+      "phase": "retain",
+      "disposition": "preserve and regression-check only where affected",
+      "baseline_evidence": [
+        "backends-ui",
+        "backend"
+      ],
+      "scope": "retained"
+    },
+    {
+      "id": "F057",
+      "feature": "Atomic retained backend versions and rollback",
+      "baseline_status": "missing",
+      "phase": "P3",
+      "disposition": "implement-or-complete",
+      "baseline_evidence": [
+        "backend",
+        "backends-ui"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F058",
+      "feature": "Runtime package signatures/provenance/SBOM verification",
+      "baseline_status": "partial",
+      "phase": "P3",
+      "disposition": "implement-or-complete",
+      "baseline_evidence": [
+        "backend",
+        "contract"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F059",
+      "feature": "Stable external backend ABI/protocol conformance kit",
+      "baseline_status": "partial",
+      "phase": "P3",
+      "disposition": "complete native descriptor/process conformance first; add external ABI only for a concrete provider integration",
+      "baseline_evidence": [
+        "backend",
+        "contract"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F060",
+      "feature": "Separate build/runtime stages",
+      "baseline_status": "delivered",
+      "phase": "retain",
+      "disposition": "preserve and regression-check only where affected",
+      "baseline_evidence": [
+        "contract",
+        "live"
+      ],
+      "scope": "retained"
+    },
+    {
+      "id": "F061",
+      "feature": "Host BIOS/firmware/kernel prerequisite diagnostics",
+      "baseline_status": "partial",
+      "phase": "P6",
+      "disposition": "implement-or-complete; target availability is a qualification prerequisite; native packaging/build support and real-device qualification are separate gates",
+      "baseline_evidence": [
+        "backend",
+        "contract"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F062",
+      "feature": "Automatic best-runtime recommendation per workload",
+      "baseline_status": "partial",
+      "phase": "P2",
+      "disposition": "implement-or-complete",
+      "baseline_evidence": [
+        "profiles",
+        "backend"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F063",
+      "feature": "Hardware support tiers and qualification receipts",
+      "baseline_status": "partial",
+      "phase": "P0",
+      "disposition": "implement-or-complete",
+      "baseline_evidence": [
+        "backend",
+        "profiles",
+        "contract"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F064",
+      "feature": "Disabled by default and excluded from discovery",
+      "baseline_status": "delivered",
+      "phase": "retain",
+      "disposition": "preserve and regression-check only where affected",
+      "baseline_evidence": [
+        "models",
+        "api"
+      ],
+      "scope": "retained"
+    },
+    {
+      "id": "F065",
+      "feature": "Hot/on-demand/disabled policies",
+      "baseline_status": "delivered",
+      "phase": "retain",
+      "disposition": "preserve and regression-check only where affected",
+      "baseline_evidence": [
+        "models",
+        "router"
+      ],
+      "scope": "retained"
+    },
+    {
+      "id": "F066",
+      "feature": "Startup preload and Hot recovery",
+      "baseline_status": "delivered",
+      "phase": "retain",
+      "disposition": "preserve and regression-check only where affected",
+      "baseline_evidence": [
+        "models",
+        "router"
+      ],
+      "scope": "retained"
+    },
+    {
+      "id": "F067",
+      "feature": "Multiple resident service models",
+      "baseline_status": "delivered",
+      "phase": "retain",
+      "disposition": "preserve and regression-check only where affected",
+      "baseline_evidence": [
+        "models",
+        "router",
+        "live"
+      ],
+      "scope": "retained"
+    },
+    {
+      "id": "F068",
+      "feature": "Busy-aware unload and request draining",
+      "baseline_status": "delivered",
+      "phase": "retain",
+      "disposition": "preserve and regression-check only where affected",
+      "baseline_evidence": [
+        "models",
+        "router"
+      ],
+      "scope": "retained"
+    },
+    {
+      "id": "F069",
+      "feature": "Apply settings and reload with recovery",
+      "baseline_status": "delivered",
+      "phase": "retain",
+      "disposition": "preserve and regression-check only where affected",
+      "baseline_evidence": [
+        "profiles",
+        "models",
+        "contract"
+      ],
+      "scope": "retained"
+    },
+    {
+      "id": "F070",
+      "feature": "Per-profile saved/effective/default settings",
+      "baseline_status": "delivered",
+      "phase": "retain",
+      "disposition": "preserve and regression-check only where affected",
+      "baseline_evidence": [
+        "profiles",
+        "knobs"
+      ],
+      "scope": "retained"
+    },
+    {
+      "id": "F071",
+      "feature": "Idle TTL and cost-aware/pressure eviction",
+      "baseline_status": "partial",
+      "phase": "P1",
+      "disposition": "implement-or-complete",
+      "baseline_evidence": [
+        "eviction",
+        "router"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F072",
+      "feature": "Sleep/downsize weights without full process teardown",
+      "baseline_status": "unqualified",
+      "phase": "P1",
+      "disposition": "integrate existing source/provider and qualify before claiming support",
+      "baseline_evidence": [
+        "eviction",
+        "router"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F073",
+      "feature": "Weight mmap, mlock and lazy loading controls",
+      "baseline_status": "engine-only",
+      "phase": "P1",
+      "disposition": "implement-or-complete",
+      "baseline_evidence": [
+        "profiles",
+        "knobs"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F074",
+      "feature": "Streaming/object-storage/parallel weight loaders",
+      "baseline_status": "missing",
+      "phase": "P7",
+      "disposition": "conditional integration; require real target and qualification; target availability is a qualification prerequisite",
+      "baseline_evidence": [
+        "backend",
+        "profiles"
+      ],
+      "scope": "conditional"
+    },
+    {
+      "id": "F075",
+      "feature": "Disk-streamed MoE expert loading",
+      "baseline_status": "missing",
+      "phase": "P7",
+      "disposition": "conditional integration after core contracts and named workload justify it; target availability is a qualification prerequisite",
+      "baseline_evidence": [
+        "backend",
+        "profiles"
+      ],
+      "scope": "conditional"
+    },
+    {
+      "id": "F076",
+      "feature": "Preflight memory fit including KV and workspaces",
+      "baseline_status": "partial",
+      "phase": "P1",
+      "disposition": "implement-or-complete",
+      "baseline_evidence": [
+        "profiles",
+        "router",
+        "metrics"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F077",
+      "feature": "Protected HA speech/small-model resource reservations",
+      "baseline_status": "partial",
+      "phase": "P1",
+      "disposition": "implement-or-complete",
+      "baseline_evidence": [
+        "models",
+        "router"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F078",
+      "feature": "Bounded per-client queues and fairness",
+      "baseline_status": "missing",
+      "phase": "P1",
+      "disposition": "implement-or-complete",
+      "baseline_evidence": [
+        "models",
+        "router"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F079",
+      "feature": "Request priority and deadlines",
+      "baseline_status": "missing",
+      "phase": "P1",
+      "disposition": "implement-or-complete",
+      "baseline_evidence": [
+        "router",
+        "compatibility"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F080",
+      "feature": "Preempt/resume requests across workers",
+      "baseline_status": "missing",
+      "phase": "P7",
+      "disposition": "conditional integration; require real target and qualification; target availability is a qualification prerequisite",
+      "baseline_evidence": [
+        "router",
+        "profiles"
+      ],
+      "scope": "conditional"
+    },
+    {
+      "id": "F081",
+      "feature": "Replica pools and health/load balancing",
+      "baseline_status": "unqualified",
+      "phase": "P7",
+      "disposition": "conditional replicas/load balancing after single-host contracts; do not require a cluster in P1",
+      "baseline_evidence": [
+        "routing",
+        "router"
+      ],
+      "scope": "conditional"
+    },
+    {
+      "id": "F082",
+      "feature": "Remote worker discovery and resource scheduling",
+      "baseline_status": "missing",
+      "phase": "P7",
+      "disposition": "conditional authenticated native remote workers; generic remote APIs are separate P5 integration",
+      "baseline_evidence": [
+        "backend",
+        "router"
+      ],
+      "scope": "conditional"
+    },
+    {
+      "id": "F083",
+      "feature": "Streaming text and client cancellation",
+      "baseline_status": "delivered",
+      "phase": "retain",
+      "disposition": "preserve and regression-check only where affected",
+      "baseline_evidence": [
+        "api",
+        "router"
+      ],
+      "scope": "retained"
+    },
+    {
+      "id": "F084",
+      "feature": "Multiple concurrent chat slots",
+      "baseline_status": "delivered",
+      "phase": "retain",
+      "disposition": "preserve and regression-check only where affected",
+      "baseline_evidence": [
+        "knobs",
+        "router"
+      ],
+      "scope": "retained"
+    },
+    {
+      "id": "F085",
+      "feature": "Continuous/dynamic batching",
+      "baseline_status": "engine-only",
+      "phase": "P1",
+      "disposition": "P0 declares engine capability; P1 integrates safe admission/interference; typed advanced tuning follows P3",
+      "baseline_evidence": [
+        "router",
+        "knobs"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F086",
+      "feature": "Chunked/interleaved prefill scheduling",
+      "baseline_status": "engine-only",
+      "phase": "P1",
+      "disposition": "P0 declares engine capability; P1 validates interleaving/interference or rejects unsafe background work",
+      "baseline_evidence": [
+        "knobs",
+        "profiles"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F087",
+      "feature": "Paged KV allocation",
+      "baseline_status": "engine-only",
+      "phase": "P7",
+      "disposition": "conditional paged allocator provider integration; do not equate current llama.cpp slots with paging",
+      "baseline_evidence": [
+        "backend",
+        "knobs"
+      ],
+      "scope": "conditional"
+    },
+    {
+      "id": "F088",
+      "feature": "FlashAttention and graph/kernel execution choices",
+      "baseline_status": "partial",
+      "phase": "P3",
+      "disposition": "implement-or-complete",
+      "baseline_evidence": [
+        "knobs",
+        "profiles"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F089",
+      "feature": "Dense/MoE/recurrent architecture awareness",
+      "baseline_status": "partial",
+      "phase": "P0",
+      "disposition": "core architecture/state metadata contract; P1 consumes it for model-aware resource estimates",
+      "baseline_evidence": [
+        "profiles",
+        "contract"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F090",
+      "feature": "Structured JSON/regex/grammar outputs",
+      "baseline_status": "engine-only",
+      "phase": "P4",
+      "disposition": "selected engine/protocol structured-output conformance; P0 advertises only evidenced operation claims",
+      "baseline_evidence": [
+        "api",
+        "playground"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F091",
+      "feature": "Tool calling and reasoning parsers",
+      "baseline_status": "partial",
+      "phase": "P4",
+      "disposition": "selected tool/reasoning parser conformance; never execute returned model tools; P0 excludes inherited Omni loop",
+      "baseline_evidence": [
+        "api",
+        "models"
+      ],
+      "scope": "core",
+      "prerequisite_boundary_gate": "P0"
+    },
+    {
+      "id": "F092",
+      "feature": "Tokenization and accurate context accounting",
+      "baseline_status": "partial",
+      "phase": "P0",
+      "disposition": "core tokenizer/context-limit contract; P1 uses resolved limits and P4 expands endpoint conformance",
+      "baseline_evidence": [
+        "api",
+        "knobs"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F093",
+      "feature": "FIM/completion prompts and template overrides",
+      "baseline_status": "engine-only",
+      "phase": "P3",
+      "disposition": "implement-or-complete",
+      "baseline_evidence": [
+        "api",
+        "knobs"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F094",
+      "feature": "Logprobs, seeds, stops and advanced sampling",
+      "baseline_status": "engine-only",
+      "phase": "P3",
+      "disposition": "implement-or-complete",
+      "baseline_evidence": [
+        "api",
+        "knobs"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F095",
+      "feature": "Speculative draft model selection and compatibility",
+      "baseline_status": "engine-only",
+      "phase": "P3",
+      "disposition": "implement-or-complete",
+      "baseline_evidence": [
+        "profiles",
+        "knobs"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F096",
+      "feature": "MTP/EAGLE/DFlash self/draft speculation",
+      "baseline_status": "engine-only",
+      "phase": "P3",
+      "disposition": "implement-or-complete",
+      "baseline_evidence": [
+        "backend",
+        "profiles"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F097",
+      "feature": "Speculative acceptance and rejected-token metrics",
+      "baseline_status": "partial",
+      "phase": "P2",
+      "disposition": "operational speculation metrics/benefit receipts; P3 adds complete draft pairing workflow",
+      "baseline_evidence": [
+        "metrics",
+        "live"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F098",
+      "feature": "LoRA adapter library and per-request selection",
+      "baseline_status": "engine-only",
+      "phase": "P3",
+      "disposition": "implement-or-complete",
+      "baseline_evidence": [
+        "api",
+        "profiles"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F099",
+      "feature": "Multi-LoRA batching and weighted composition",
+      "baseline_status": "missing",
+      "phase": "P7",
+      "disposition": "conditional multi-adapter batching/composition after P3 single-adapter identity and selected provider qualification",
+      "baseline_evidence": [
+        "backend",
+        "profiles"
+      ],
+      "scope": "conditional"
+    },
+    {
+      "id": "F100",
+      "feature": "Determinism and output-equivalence qualification",
+      "baseline_status": "missing",
+      "phase": "P2",
+      "disposition": "implement-or-complete",
+      "baseline_evidence": [
+        "playground",
+        "profiles"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F101",
+      "feature": "Approximate sparse attention/token pruning disclosure",
+      "baseline_status": "missing",
+      "phase": "P3",
+      "disposition": "implement-or-complete",
+      "baseline_evidence": [
+        "profiles",
+        "contract"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F102",
+      "feature": "Beam search and parallel sampling",
+      "baseline_status": "engine-only",
+      "phase": "P3",
+      "disposition": "implement-or-complete",
+      "baseline_evidence": [
+        "api",
+        "knobs"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F103",
+      "feature": "In-process prompt/prefix reuse",
+      "baseline_status": "partial",
+      "phase": "P4",
+      "disposition": "implement-or-complete",
+      "baseline_evidence": [
+        "cache",
+        "router"
+      ],
+      "scope": "core",
+      "prerequisite_identity_gate": "P0 native principal/session namespaces before P4 cache expansion"
+    },
+    {
+      "id": "F104",
+      "feature": "Opt-in persistent session KV snapshots",
+      "baseline_status": "delivered",
+      "phase": "retain",
+      "disposition": "preserve and regression-check only where affected",
+      "baseline_evidence": [
+        "cache",
+        "contract"
+      ],
+      "scope": "retained"
+    },
+    {
+      "id": "F105",
+      "feature": "Cache identity, checksums and invalidation",
+      "baseline_status": "delivered",
+      "phase": "retain",
+      "disposition": "preserve and regression-check only where affected",
+      "baseline_evidence": [
+        "cache",
+        "prepare"
+      ],
+      "scope": "retained"
+    },
+    {
+      "id": "F106",
+      "feature": "Per-model cache mode, TTL and disk budget",
+      "baseline_status": "delivered",
+      "phase": "retain",
+      "disposition": "preserve and regression-check only where affected",
+      "baseline_evidence": [
+        "cache",
+        "UI"
+      ],
+      "scope": "retained"
+    },
+    {
+      "id": "F107",
+      "feature": "Forget/reclaim snapshots and privacy controls",
+      "baseline_status": "delivered",
+      "phase": "retain",
+      "disposition": "preserve and regression-check only where affected",
+      "baseline_evidence": [
+        "cache"
+      ],
+      "scope": "retained"
+    },
+    {
+      "id": "F108",
+      "feature": "Hybrid/recurrent-state snapshot qualification",
+      "baseline_status": "partial",
+      "phase": "P4",
+      "disposition": "implement-or-complete",
+      "baseline_evidence": [
+        "cache",
+        "contract"
+      ],
+      "scope": "core",
+      "prerequisite_identity_gate": "P0 native principal/session namespaces before P4 cache expansion"
+    },
+    {
+      "id": "F109",
+      "feature": "Persistent cache across Responses/Anthropic/Ollama",
+      "baseline_status": "partial",
+      "phase": "P4",
+      "disposition": "implement-or-complete",
+      "baseline_evidence": [
+        "cache",
+        "compatibility"
+      ],
+      "scope": "core",
+      "prerequisite_identity_gate": "P0 native principal/session namespaces before P4 cache expansion"
+    },
+    {
+      "id": "F110",
+      "feature": "Paged GPU-to-RAM-to-disk KV tiering",
+      "baseline_status": "missing",
+      "phase": "P7",
+      "disposition": "conditional integration after core contracts and named workload justify it; target availability is a qualification prerequisite",
+      "baseline_evidence": [
+        "cache",
+        "router"
+      ],
+      "scope": "conditional"
+    },
+    {
+      "id": "F111",
+      "feature": "Distributed shared KV and cache-aware placement",
+      "baseline_status": "missing",
+      "phase": "P7",
+      "disposition": "conditional integration; require real target and qualification; target availability is a qualification prerequisite",
+      "baseline_evidence": [
+        "cache",
+        "routing"
+      ],
+      "scope": "conditional"
+    },
+    {
+      "id": "F112",
+      "feature": "Vision encoder feature cache",
+      "baseline_status": "unqualified",
+      "phase": "P4",
+      "disposition": "integrate existing source/provider and qualify before claiming support",
+      "baseline_evidence": [
+        "backend",
+        "cache"
+      ],
+      "scope": "core",
+      "prerequisite_identity_gate": "P0 native principal/session namespaces before P4 cache expansion"
+    },
+    {
+      "id": "F113",
+      "feature": "Response or semantic answer caching",
+      "baseline_status": "missing",
+      "phase": "P7",
+      "disposition": "deferred opt-in answer caching only with a named consumer and explicit freshness, eligibility, identity, invalidation and privacy contract",
+      "baseline_evidence": [
+        "cache",
+        "routing"
+      ],
+      "scope": "conditional"
+    },
+    {
+      "id": "F114",
+      "feature": "Cross-engine universal KV snapshot conversion",
+      "baseline_status": "outside",
+      "phase": "excluded",
+      "disposition": "preserve runtime/client boundary; do not implement in core",
+      "baseline_evidence": [
+        "contract",
+        "cache"
+      ],
+      "scope": "excluded"
+    },
+    {
+      "id": "F115",
+      "feature": "Cold/warm/load/cache latency breakdown",
+      "baseline_status": "partial",
+      "phase": "P2",
+      "disposition": "implement-or-complete",
+      "baseline_evidence": [
+        "metrics",
+        "UI"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F116",
+      "feature": "OpenAI chat/completion/responses subsets",
+      "baseline_status": "delivered",
+      "phase": "retain",
+      "disposition": "preserve and regression-check only where affected",
+      "baseline_evidence": [
+        "compatibility",
+        "api"
+      ],
+      "scope": "retained"
+    },
+    {
+      "id": "F117",
+      "feature": "Anthropic Messages and token-count subset",
+      "baseline_status": "delivered",
+      "phase": "retain",
+      "disposition": "preserve and regression-check only where affected",
+      "baseline_evidence": [
+        "compatibility",
+        "api"
+      ],
+      "scope": "retained"
+    },
+    {
+      "id": "F118",
+      "feature": "Ollama inference/discovery subset",
+      "baseline_status": "delivered",
+      "phase": "retain",
+      "disposition": "preserve and regression-check only where affected",
+      "baseline_evidence": [
+        "compatibility",
+        "api"
+      ],
+      "scope": "retained"
+    },
+    {
+      "id": "F119",
+      "feature": "A1111 text-to-image compatibility subset",
+      "baseline_status": "delivered",
+      "phase": "retain",
+      "disposition": "preserve and regression-check only where affected",
+      "baseline_evidence": [
+        "compatibility",
+        "protocol-ui"
+      ],
+      "scope": "retained"
+    },
+    {
+      "id": "F120",
+      "feature": "Wyoming describe/STT/TTS and HA services",
+      "baseline_status": "delivered",
+      "phase": "retain",
+      "disposition": "preserve and regression-check only where affected",
+      "baseline_evidence": [
+        "compatibility",
+        "live"
+      ],
+      "scope": "retained"
+    },
+    {
+      "id": "F121",
+      "feature": "Capability-rich machine-readable model schema",
+      "baseline_status": "partial",
+      "phase": "P0",
+      "disposition": "implement-or-complete",
+      "baseline_evidence": [
+        "models",
+        "profiles",
+        "api"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F122",
+      "feature": "Protocol/version/unsupported-parameter contracts",
+      "baseline_status": "partial",
+      "phase": "P0",
+      "disposition": "implement-or-complete",
+      "baseline_evidence": [
+        "compatibility",
+        "protocol-ui"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F123",
+      "feature": "Consumer discovery reflects enabled model changes",
+      "baseline_status": "delivered",
+      "phase": "retain",
+      "disposition": "preserve and regression-check only where affected",
+      "baseline_evidence": [
+        "api",
+        "models"
+      ],
+      "scope": "retained"
+    },
+    {
+      "id": "F124",
+      "feature": "Transparent aliases with proper target names",
+      "baseline_status": "unqualified",
+      "phase": "P5",
+      "disposition": "native alias/virtual-service integration with policy, identity, discovery and routing conformance",
+      "baseline_evidence": [
+        "api",
+        "live"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F125",
+      "feature": "Native MCP model-service endpoint",
+      "baseline_status": "unqualified",
+      "phase": "P4",
+      "disposition": "runtime-only MCP contract and actual cancel/resource-release qualification; P0 rejects inherited Omni/agent operations",
+      "baseline_evidence": [
+        "api"
+      ],
+      "scope": "core",
+      "prerequisite_boundary_gate": "P0"
+    },
+    {
+      "id": "F126",
+      "feature": "Realtime websocket audio compatibility",
+      "baseline_status": "unqualified",
+      "phase": "P4",
+      "disposition": "integrate existing source/provider and qualify before claiming support",
+      "baseline_evidence": [
+        "api",
+        "backend"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F127",
+      "feature": "ElevenLabs/Cartesia speech compatibility",
+      "baseline_status": "missing",
+      "phase": "P7",
+      "disposition": "conditional additional voice protocol only for a named client and exact streaming/auth/error contract",
+      "baseline_evidence": [
+        "compatibility",
+        "protocol-ui"
+      ],
+      "scope": "conditional"
+    },
+    {
+      "id": "F128",
+      "feature": "KServe V2/Triton gRPC inference protocols",
+      "baseline_status": "missing",
+      "phase": "P7",
+      "disposition": "conditional integration; require real target and qualification; target availability is a qualification prerequisite",
+      "baseline_evidence": [
+        "compatibility",
+        "api"
+      ],
+      "scope": "conditional"
+    },
+    {
+      "id": "F129",
+      "feature": "Asynchronous media jobs, progress and cancellation",
+      "baseline_status": "unqualified",
+      "phase": "P4",
+      "disposition": "fixed server-defined media job kinds only; P0 rejects arbitrary graphs and legacy graph resume while preserving records",
+      "baseline_evidence": [
+        "api",
+        "backend"
+      ],
+      "scope": "core",
+      "prerequisite_boundary_gate": "P0"
+    },
+    {
+      "id": "F130",
+      "feature": "OpenAI Batch API",
+      "baseline_status": "missing",
+      "phase": "P7",
+      "disposition": "deferred OpenAI Batch protocol; require a named client plus bounded fixed inference, file identity/retention, cancellation and privacy contract",
+      "baseline_evidence": [
+        "compatibility",
+        "api"
+      ],
+      "scope": "conditional"
+    },
+    {
+      "id": "F131",
+      "feature": "Model loading progress events for clients",
+      "baseline_status": "partial",
+      "phase": "P4",
+      "disposition": "implement-or-complete",
+      "baseline_evidence": [
+        "models",
+        "api"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F132",
+      "feature": "Standardized errors, retry hints and cancellation",
+      "baseline_status": "partial",
+      "phase": "P4",
+      "disposition": "implement-or-complete",
+      "baseline_evidence": [
+        "models",
+        "compatibility"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F133",
+      "feature": "HA native llama_cpp contract",
+      "baseline_status": "delivered",
+      "phase": "retain",
+      "disposition": "preserve and regression-check only where affected",
+      "baseline_evidence": [
+        "compatibility",
+        "live"
+      ],
+      "scope": "retained"
+    },
+    {
+      "id": "F134",
+      "feature": "Service API/client SDK conformance fixtures",
+      "baseline_status": "partial",
+      "phase": "P4",
+      "disposition": "expand selected direct-client conformance; existing consumer regression checks required from P0 onward",
+      "baseline_evidence": [
+        "compatibility",
+        "protocol-ui"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F135",
+      "feature": "Rule-based model selection",
+      "baseline_status": "unqualified",
+      "phase": "P5",
+      "disposition": "integrate existing source/provider and qualify before claiming support",
+      "baseline_evidence": [
+        "routing",
+        "api"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F136",
+      "feature": "Semantic/classifier/LLM auto routing",
+      "baseline_status": "unqualified",
+      "phase": "P5",
+      "disposition": "integrate existing source/provider and qualify before claiming support",
+      "baseline_evidence": [
+        "routing",
+        "api"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F137",
+      "feature": "Model capability constraints before routing",
+      "baseline_status": "partial",
+      "phase": "P5",
+      "disposition": "implement-or-complete",
+      "baseline_evidence": [
+        "profiles",
+        "routing"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F138",
+      "feature": "Transparent route decision traces",
+      "baseline_status": "unqualified",
+      "phase": "P5",
+      "disposition": "integrate existing source/provider and qualify before claiming support",
+      "baseline_evidence": [
+        "routing",
+        "metrics"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F139",
+      "feature": "Availability/failure fallback and health circuits",
+      "baseline_status": "unqualified",
+      "phase": "P5",
+      "disposition": "integrate existing source/provider and qualify before claiming support",
+      "baseline_evidence": [
+        "routing",
+        "cloud"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F140",
+      "feature": "Warmth/load/cache-aware route costs",
+      "baseline_status": "partial",
+      "phase": "P5",
+      "disposition": "implement-or-complete",
+      "baseline_evidence": [
+        "routing",
+        "router",
+        "metrics"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F141",
+      "feature": "Conversation affinity across model changes",
+      "baseline_status": "missing",
+      "phase": "P5",
+      "disposition": "implement-or-complete",
+      "baseline_evidence": [
+        "routing",
+        "cache"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F142",
+      "feature": "Remote OpenAI/Anthropic provider endpoints",
+      "baseline_status": "unqualified",
+      "phase": "P5",
+      "disposition": "integrate existing source/provider and qualify before claiming support",
+      "baseline_evidence": [
+        "cloud",
+        "api"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F143",
+      "feature": "Local-only policy and explicit cloud consent",
+      "baseline_status": "partial",
+      "phase": "P5",
+      "disposition": "implement-or-complete",
+      "baseline_evidence": [
+        "cloud",
+        "routing"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F144",
+      "feature": "Quality/cost/latency router evaluation and replay",
+      "baseline_status": "missing",
+      "phase": "P5",
+      "disposition": "implement-or-complete",
+      "baseline_evidence": [
+        "routing",
+        "playground"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F145",
+      "feature": "Prompt expansion or transformation presets",
+      "baseline_status": "partial",
+      "phase": "excluded",
+      "disposition": "no service-side prompt-rewrite pipelines; retain explicit model chat templates and temporary test presets only; downstream clients own expansion",
+      "baseline_evidence": [
+        "playground",
+        "api"
+      ],
+      "scope": "excluded"
+    },
+    {
+      "id": "F146",
+      "feature": "Batch English transcription",
+      "baseline_status": "delivered",
+      "phase": "retain",
+      "disposition": "preserve and regression-check only where affected",
+      "baseline_evidence": [
+        "compatibility",
+        "live"
+      ],
+      "scope": "retained"
+    },
+    {
+      "id": "F147",
+      "feature": "Voice catalogue with languages/speaker metadata",
+      "baseline_status": "partial",
+      "phase": "P4",
+      "disposition": "implement-or-complete",
+      "baseline_evidence": [
+        "voices",
+        "compatibility"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F148",
+      "feature": "Streaming synthesized audio",
+      "baseline_status": "partial",
+      "phase": "P4",
+      "disposition": "implement-or-complete",
+      "baseline_evidence": [
+        "api",
+        "compatibility"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F149",
+      "feature": "True incremental STT and partial transcripts",
+      "baseline_status": "unqualified",
+      "phase": "P4",
+      "disposition": "integrate existing source/provider and qualify before claiming support",
+      "baseline_evidence": [
+        "api",
+        "compatibility"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F150",
+      "feature": "Server-side VAD and endpointing",
+      "baseline_status": "unqualified",
+      "phase": "P4",
+      "disposition": "integrate existing source/provider and qualify before claiming support",
+      "baseline_evidence": [
+        "api",
+        "compatibility"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F151",
+      "feature": "Diarization, word timestamps and alignment",
+      "baseline_status": "missing",
+      "phase": "P7",
+      "disposition": "conditional diarization/alignment specialist with named consumer, output schema and measured backend",
+      "baseline_evidence": [
+        "compatibility",
+        "backend"
+      ],
+      "scope": "conditional"
+    },
+    {
+      "id": "F152",
+      "feature": "SSML, voice blending and per-word TTS captions",
+      "baseline_status": "missing",
+      "phase": "P7",
+      "disposition": "conditional SSML/blend/caption speech features with selected provider, voice identity and streaming semantics",
+      "baseline_evidence": [
+        "voices",
+        "compatibility"
+      ],
+      "scope": "conditional"
+    },
+    {
+      "id": "F153",
+      "feature": "Text normalization and phoneme control",
+      "baseline_status": "partial",
+      "phase": "P4",
+      "disposition": "implement-or-complete",
+      "baseline_evidence": [
+        "voices",
+        "backend"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F154",
+      "feature": "Barge-in and duplex voice sessions",
+      "baseline_status": "unqualified",
+      "phase": "P7",
+      "disposition": "conditional duplex/barge-in provider after P4 bounded streaming/cancellation contracts",
+      "baseline_evidence": [
+        "api",
+        "backend"
+      ],
+      "scope": "conditional"
+    },
+    {
+      "id": "F155",
+      "feature": "Wakeword and satellite protocols",
+      "baseline_status": "outside",
+      "phase": "excluded",
+      "disposition": "preserve runtime/client boundary; do not implement in core",
+      "baseline_evidence": [
+        "compatibility"
+      ],
+      "scope": "excluded"
+    },
+    {
+      "id": "F156",
+      "feature": "Text-to-image with temporary test UI",
+      "baseline_status": "delivered",
+      "phase": "retain",
+      "disposition": "preserve and regression-check only where affected",
+      "baseline_evidence": [
+        "playground",
+        "compatibility"
+      ],
+      "scope": "retained"
+    },
+    {
+      "id": "F157",
+      "feature": "Saved size/steps/seed and typed backend options",
+      "baseline_status": "delivered",
+      "phase": "retain",
+      "disposition": "preserve and regression-check only where affected",
+      "baseline_evidence": [
+        "knobs",
+        "playground"
+      ],
+      "scope": "retained"
+    },
+    {
+      "id": "F158",
+      "feature": "Component-aware VAE/text encoder/projector library",
+      "baseline_status": "partial",
+      "phase": "P3",
+      "disposition": "component identity/dependency library; P4 qualifies image request operations and reuse",
+      "baseline_evidence": [
+        "models",
+        "discover"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F159",
+      "feature": "Image-to-image and OpenAI edit endpoints",
+      "baseline_status": "unqualified",
+      "phase": "P4",
+      "disposition": "integrate existing source/provider and qualify before claiming support",
+      "baseline_evidence": [
+        "api",
+        "backend"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F160",
+      "feature": "Mask inpainting and outpainting API",
+      "baseline_status": "unqualified",
+      "phase": "P4",
+      "disposition": "integrate existing source/provider and qualify before claiming support",
+      "baseline_evidence": [
+        "api",
+        "backend"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F161",
+      "feature": "Image variations and upscale services",
+      "baseline_status": "unqualified",
+      "phase": "P4",
+      "disposition": "integrate existing source/provider and qualify before claiming support",
+      "baseline_evidence": [
+        "api",
+        "backend"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F162",
+      "feature": "Image LoRA library and weighted selection",
+      "baseline_status": "engine-only",
+      "phase": "P3",
+      "disposition": "implement-or-complete",
+      "baseline_evidence": [
+        "backend",
+        "knobs"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F163",
+      "feature": "ControlNet/IP-Adapter/reference conditioning",
+      "baseline_status": "engine-only",
+      "phase": "P4",
+      "disposition": "implement-or-complete",
+      "baseline_evidence": [
+        "backend",
+        "knobs"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F164",
+      "feature": "VAE tiling, low-memory streaming and offload",
+      "baseline_status": "engine-only",
+      "phase": "P4",
+      "disposition": "implement-or-complete",
+      "baseline_evidence": [
+        "backend",
+        "knobs"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F165",
+      "feature": "Sampler/seed/RNG reproducibility and PNG metadata",
+      "baseline_status": "partial",
+      "phase": "P4",
+      "disposition": "implement-or-complete",
+      "baseline_evidence": [
+        "playground",
+        "api"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F166",
+      "feature": "Video generation and frame interpolation",
+      "baseline_status": "missing",
+      "phase": "P7",
+      "disposition": "conditional video provider with bounded async output/progress/cancel contract and real target evidence",
+      "baseline_evidence": [
+        "backend",
+        "UI"
+      ],
+      "scope": "conditional"
+    },
+    {
+      "id": "F167",
+      "feature": "Music/sound generation",
+      "baseline_status": "unqualified",
+      "phase": "P7",
+      "disposition": "conditional music/sound provider; existing source remains unqualified until selected and tested",
+      "baseline_evidence": [
+        "backend",
+        "api",
+        "live"
+      ],
+      "scope": "conditional"
+    },
+    {
+      "id": "F168",
+      "feature": "3D generation",
+      "baseline_status": "unqualified",
+      "phase": "P7",
+      "disposition": "integrate existing source/provider and qualify before claiming support; target availability is a qualification prerequisite",
+      "baseline_evidence": [
+        "backend",
+        "api",
+        "live"
+      ],
+      "scope": "conditional"
+    },
+    {
+      "id": "F169",
+      "feature": "Image/audio embedding and retrieval model services",
+      "baseline_status": "partial",
+      "phase": "P4",
+      "disposition": "implement-or-complete",
+      "baseline_evidence": [
+        "api",
+        "models"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F170",
+      "feature": "Sparse/multivector embeddings",
+      "baseline_status": "missing",
+      "phase": "P7",
+      "disposition": "conditional sparse/multivector task provider and typed output schema for a named retrieval consumer",
+      "baseline_evidence": [
+        "compatibility",
+        "models"
+      ],
+      "scope": "conditional"
+    },
+    {
+      "id": "F171",
+      "feature": "Reranking and classification",
+      "baseline_status": "unqualified",
+      "phase": "P4",
+      "disposition": "integrate existing source/provider and qualify before claiming support",
+      "baseline_evidence": [
+        "api",
+        "backend",
+        "live"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F172",
+      "feature": "OCR/detection/segmentation/depth specialist outputs",
+      "baseline_status": "missing",
+      "phase": "P7",
+      "disposition": "conditional integration; require real target and qualification; target availability is a qualification prerequisite",
+      "baseline_evidence": [
+        "compatibility",
+        "backend"
+      ],
+      "scope": "conditional"
+    },
+    {
+      "id": "F173",
+      "feature": "Robotics/action model execution",
+      "baseline_status": "outside",
+      "phase": "excluded",
+      "disposition": "preserve runtime/client boundary; do not implement in core",
+      "baseline_evidence": [
+        "backend"
+      ],
+      "scope": "excluded"
+    },
+    {
+      "id": "F174",
+      "feature": "Creative canvas, workflow editor and persistent gallery",
+      "baseline_status": "outside",
+      "phase": "excluded",
+      "disposition": "preserve runtime/client boundary; do not implement in core",
+      "baseline_evidence": [
+        "UI",
+        "playground"
+      ],
+      "scope": "excluded"
+    },
+    {
+      "id": "F175",
+      "feature": "Live hardware, memory and token metrics",
+      "baseline_status": "delivered",
+      "phase": "retain",
+      "disposition": "preserve and regression-check only where affected",
+      "baseline_evidence": [
+        "metrics",
+        "live",
+        "UI"
+      ],
+      "scope": "retained"
+    },
+    {
+      "id": "F176",
+      "feature": "Raw and parsed runtime logs",
+      "baseline_status": "delivered",
+      "phase": "retain",
+      "disposition": "preserve and regression-check only where affected",
+      "baseline_evidence": [
+        "UI"
+      ],
+      "scope": "retained"
+    },
+    {
+      "id": "F177",
+      "feature": "Per-model Prometheus request/cache/speculation metrics",
+      "baseline_status": "delivered",
+      "phase": "retain",
+      "disposition": "preserve and regression-check only where affected",
+      "baseline_evidence": [
+        "metrics",
+        "live"
+      ],
+      "scope": "retained"
+    },
+    {
+      "id": "F178",
+      "feature": "OTLP tracing and incoming trace context",
+      "baseline_status": "unqualified",
+      "phase": "P2",
+      "disposition": "integrate existing source/provider and qualify before claiming support",
+      "baseline_evidence": [
+        "otlp",
+        "api"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F179",
+      "feature": "Request phase latency and correlated request IDs",
+      "baseline_status": "partial",
+      "phase": "P2",
+      "disposition": "implement-or-complete",
+      "baseline_evidence": [
+        "otlp",
+        "metrics",
+        "UI"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F180",
+      "feature": "Energy, thermal, clocks and NPU utilization reporting",
+      "baseline_status": "partial",
+      "phase": "P2",
+      "disposition": "implement-or-complete",
+      "baseline_evidence": [
+        "metrics",
+        "backend"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F181",
+      "feature": "Repeatable speed and quality benchmark UI",
+      "baseline_status": "partial",
+      "phase": "P2",
+      "disposition": "implement-or-complete",
+      "baseline_evidence": [
+        "playground",
+        "profiles"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F182",
+      "feature": "Concurrency/SLO autotuning",
+      "baseline_status": "missing",
+      "phase": "P2",
+      "disposition": "implement-or-complete",
+      "baseline_evidence": [
+        "profiles",
+        "playground"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F183",
+      "feature": "Diagnostic bundle with secrets/prompt redaction",
+      "baseline_status": "missing",
+      "phase": "P2",
+      "disposition": "implement-or-complete",
+      "baseline_evidence": [
+        "UI",
+        "otlp"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F184",
+      "feature": "Canary/shadow upgrades and regression gates",
+      "baseline_status": "missing",
+      "phase": "P3",
+      "disposition": "runtime/model candidate promotion and rollback gates; P2 supplies comparison receipts; no mandatory shadow serving",
+      "baseline_evidence": [
+        "profiles",
+        "backend"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F185",
+      "feature": "Health/readiness versus merely running",
+      "baseline_status": "partial",
+      "phase": "P2",
+      "disposition": "implement-or-complete",
+      "baseline_evidence": [
+        "models",
+        "api"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F186",
+      "feature": "Configuration backup/restore and schema migrations",
+      "baseline_status": "partial",
+      "phase": "P0",
+      "disposition": "restore rehearsal and consistent backup gate whenever any phase changes persisted state; fuller management UX may follow P3",
+      "baseline_evidence": [
+        "models",
+        "profiles"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F187",
+      "feature": "Build reproducibility and dependency isolation",
+      "baseline_status": "partial",
+      "phase": "P2",
+      "disposition": "implement-or-complete",
+      "baseline_evidence": [
+        "backend",
+        "contract"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F188",
+      "feature": "API versus admin credential separation",
+      "baseline_status": "partial",
+      "phase": "P0",
+      "disposition": "native principal/operation authorization contract and compatibility tests before cache/protocol expansion; optional multi-key UI follows P5",
+      "baseline_evidence": [
+        "api"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F189",
+      "feature": "Per-client keys/model allowlists and revocation",
+      "baseline_status": "missing",
+      "phase": "P5",
+      "disposition": "P5 optional multi-client key registry, allowlists and revocation; P0 native principal/session/operation authority is prerequisite",
+      "baseline_evidence": [
+        "api",
+        "compatibility"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F190",
+      "feature": "Per-client rate, token and resource quotas",
+      "baseline_status": "missing",
+      "phase": "P1",
+      "disposition": "global/anonymous and service queue/resource bounds first; P5 adds authenticated client-specific policy",
+      "baseline_evidence": [
+        "router",
+        "compatibility"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F191",
+      "feature": "Audit records with configurable prompt retention",
+      "baseline_status": "partial",
+      "phase": "P2",
+      "disposition": "bounded redacted audit/trace retention; P0 metadata avoids prompt/credential export",
+      "baseline_evidence": [
+        "otlp",
+        "UI"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F192",
+      "feature": "Single-user self-contained deployment",
+      "baseline_status": "delivered",
+      "phase": "retain",
+      "disposition": "preserve and regression-check only where affected",
+      "baseline_evidence": [
+        "contract",
+        "live"
+      ],
+      "scope": "retained"
+    },
+    {
+      "id": "F193",
+      "feature": "Saved conversations, projects and character histories",
+      "baseline_status": "outside",
+      "phase": "excluded",
+      "disposition": "preserve runtime/client boundary; do not implement in core",
+      "baseline_evidence": [
+        "UI",
+        "playground"
+      ],
+      "scope": "excluded"
+    },
+    {
+      "id": "F194",
+      "feature": "Web search, terminal tools and agent execution loops",
+      "baseline_status": "outside",
+      "phase": "excluded",
+      "disposition": "preserve runtime/client boundary; do not implement in core",
+      "baseline_evidence": [
+        "UI",
+        "api"
+      ],
+      "scope": "excluded"
+    },
+    {
+      "id": "F195",
+      "feature": "Document ingestion, vector database and RAG workspace",
+      "baseline_status": "outside",
+      "phase": "excluded",
+      "disposition": "preserve runtime/client boundary; do not implement in core",
+      "baseline_evidence": [
+        "UI",
+        "api"
+      ],
+      "scope": "excluded"
+    },
+    {
+      "id": "F196",
+      "feature": "Training, fine-tuning and checkpoint merging",
+      "baseline_status": "outside",
+      "phase": "excluded",
+      "disposition": "preserve runtime/client boundary; do not implement in core",
+      "baseline_evidence": [
+        "prepare",
+        "contract"
+      ],
+      "scope": "excluded"
+    },
+    {
+      "id": "F197",
+      "feature": "Kubernetes, cloud GPU provisioning and public swarms",
+      "baseline_status": "outside",
+      "phase": "excluded",
+      "disposition": "preserve runtime/client boundary; do not implement in core",
+      "baseline_evidence": [
+        "router",
+        "backend"
+      ],
+      "scope": "excluded"
+    },
+    {
+      "id": "F198",
+      "feature": "Typed KV cache precision selection",
+      "baseline_status": "delivered",
+      "phase": "retain",
+      "disposition": "preserve and regression-check only where affected",
+      "baseline_evidence": [
+        "knobs"
+      ],
+      "scope": "retained"
+    },
+    {
+      "id": "F199",
+      "feature": "Total versus per-request context budgets",
+      "baseline_status": "delivered",
+      "phase": "retain",
+      "disposition": "preserve and regression-check only where affected",
+      "baseline_evidence": [
+        "knobs",
+        "models"
+      ],
+      "scope": "retained"
+    },
+    {
+      "id": "F200",
+      "feature": "RoPE/YaRN and sliding-window controls",
+      "baseline_status": "engine-only",
+      "phase": "P3",
+      "disposition": "implement-or-complete",
+      "baseline_evidence": [
+        "profiles",
+        "knobs"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F201",
+      "feature": "DirectIO and prefetch/load-mode selection",
+      "baseline_status": "engine-only",
+      "phase": "P3",
+      "disposition": "implement-or-complete",
+      "baseline_evidence": [
+        "profiles",
+        "knobs"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F202",
+      "feature": "Pre-sharded tensor-parallel checkpoints",
+      "baseline_status": "missing",
+      "phase": "P7",
+      "disposition": "conditional integration; require real target and qualification; target availability is a qualification prerequisite",
+      "baseline_evidence": [
+        "prepare",
+        "profiles"
+      ],
+      "scope": "conditional"
+    },
+    {
+      "id": "F203",
+      "feature": "Seed-peer/network weight loading",
+      "baseline_status": "missing",
+      "phase": "P7",
+      "disposition": "conditional integration; require real target and qualification; target availability is a qualification prerequisite",
+      "baseline_evidence": [
+        "backend",
+        "profiles"
+      ],
+      "scope": "conditional"
+    },
+    {
+      "id": "F204",
+      "feature": "On-load layerwise quantization",
+      "baseline_status": "missing",
+      "phase": "P7",
+      "disposition": "conditional provider-specific on-load quantization with source, memory and quality contract",
+      "baseline_evidence": [
+        "prepare",
+        "profiles"
+      ],
+      "scope": "conditional"
+    },
+    {
+      "id": "F205",
+      "feature": "Kernel/graph compilation cache identity",
+      "baseline_status": "partial",
+      "phase": "P3",
+      "disposition": "implement-or-complete",
+      "baseline_evidence": [
+        "backend",
+        "contract"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F206",
+      "feature": "Explicit NPU extra-copy memory budget",
+      "baseline_status": "delivered",
+      "phase": "retain",
+      "disposition": "preserve and regression-check only where affected",
+      "baseline_evidence": [
+        "profiles",
+        "contract"
+      ],
+      "scope": "retained"
+    },
+    {
+      "id": "F207",
+      "feature": "Model coexistence groups and mutually exclusive sets",
+      "baseline_status": "partial",
+      "phase": "P1",
+      "disposition": "core coexistence/admission policy; optional richer operator group configuration only after measured need",
+      "baseline_evidence": [
+        "router",
+        "models"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F208",
+      "feature": "Maintenance pause and reject-new-work mode",
+      "baseline_status": "missing",
+      "phase": "P1",
+      "disposition": "core maintenance drain/pause/resume with saved policies preserved",
+      "baseline_evidence": [
+        "models",
+        "router"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F209",
+      "feature": "Request input limits and large-file backpressure",
+      "baseline_status": "partial",
+      "phase": "P1",
+      "disposition": "core request/input/queue bounds and large-file backpressure; declare limits before admission",
+      "baseline_evidence": [
+        "api",
+        "discover"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F210",
+      "feature": "Offline/private source policy",
+      "baseline_status": "partial",
+      "phase": "P3",
+      "disposition": "implement-or-complete",
+      "baseline_evidence": [
+        "backend",
+        "cloud",
+        "discover"
+      ],
+      "scope": "core"
+    },
+    {
+      "id": "F211",
+      "feature": "Current documentation and capability contract consistency",
+      "baseline_status": "partial",
+      "phase": "P0",
+      "disposition": "implement-or-complete",
+      "baseline_evidence": [
+        "contract",
+        "UI"
+      ],
+      "scope": "core"
+    }
+  ]
+}
