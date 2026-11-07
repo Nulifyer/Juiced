@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "batch": "P0 foundation",
+  "plan_revision": 2,
+  "plan_sha256": "987a9cd9dbf23edcdb4efc83d26a05ad9cfb0fa8e4a30c2a7546b102694d532b",
+  "baseline": "v0.8.6 / 9cd79d01b32dfcd8b3a1a351afc68dc99c0a5266",
+  "selected_families": {
+    "container": "Linux amd64 native manager and existing bundled engines",
+    "core_compile_checks": ["Linux GCC", "Windows MSVC", "macOS AppleClang"],
+    "deployment": "Mage HX 370; existing llama.cpp ROCm/Vulkan and CPU speech profiles",
+    "operations": ["capability discovery", "credential normalization", "Chat Completions snapshot identity", "runtime-only scope enforcement"],
+    "retained_services": ["OpenAI subset", "Ollama subset", "Anthropic subset", "A1111 subset", "private Wyoming speech"]
+  },
+  "required_acceptance": {
+    "native": "All identity and backend capability contracts pass on each selected core build platform; existing Linux process/shared-artifact contracts pass in image build",
+    "api": "All 39 isolated API cases pass, including four prefixes, unknowns, disabled policy, authentication, legacy records, graph rejection, Omni and alias rejection",
+    "ui": "All 73 fixture workflows and 19 logic tests pass; inspect capability Info at 1440px and 390px; no body overflow or unexpected writes",
+    "image": "Existing runtime packaging, actual CPU cache, preparation, runtime switch, tuning, SDK and two live browser workflows pass",
+    "recovery": "Independent whole-volume snapshot with sole writer stopped; candidate and restored v0.8.6 preserve model inventory, policies, selected profiles and native configuration hashes; four Hot services recover; neutral Qwen/Ornith arithmetic and generated-speech transcription pass",
+    "deployment": "Exact approved image/source recorded; all 50 downloads, 46 saved option sets, seven prior loaded models, four Hot models, volume/network/device/resource identities preserved; actual HA-container chat and Wyoming discovery plus Pi discovery pass",
+    "failure": "A required failure blocks production promotion. Keep the previous image and consistent backup. Restore the previous complete state on migration failure. No unsupported target becomes qualified by compilation."
+  },
+  "state_change": {
+    "schema_migration": false,
+    "cache_namespace": "principal-v1",
+    "behavior": "New prompt snapshots use normalized principal/credential epoch. Legacy snapshot files and manifests remain retained, without reassignment. First use can rebuild cold.",
+    "interrupted_migration": "No multi-file migration introduced; existing legacy interrupted-job recovery and retained-record fixtures are mandatory.",
+    "backup": "Entire juiced_data volume, plus retained external read-only weight volumes and previous image. Secret values stay outside receipts."
+  },
+  "not_delivered": [
+    "P1 resource reservations or latency protection",
+    "New inference engines or hardware acceleration paths",
+    "Model/runtime revision promotion or automatic upgrades",
+    "New protocol or cross-protocol persistent cache qualification",
+    "Per-client key administration",
+    "Portable native installer or unseen hardware qualification",
+    "Performance improvement or model quality ranking"
+  ]
+}

@@ -165,11 +165,13 @@ void JuicedService::persist_locked() {
   atomic_json(directory_ / "state.json", state_);
 }
 bool JuicedService::allows(const std::string &requested) const {
-  if (server_.model_manager_->model_exists(requested) &&
-      is_omni_collection_recipe(server_.model_manager_->get_model_info(requested).recipe))
+  const auto target = server_.alias_manager_
+      ? server_.alias_manager_->resolve_alias(requested).value_or(requested) : requested;
+  if (server_.model_manager_->model_exists(target) &&
+      is_omni_collection_recipe(server_.model_manager_->get_model_info(target).recipe))
     return false;
   auto model = server_.model_manager_->get_public_model_name(
-      server_.model_manager_->resolve_model_name(requested));
+      server_.model_manager_->resolve_model_name(target));
   std::lock_guard<std::mutex> lock(mutex_);
   return state_["policies"].value(model, "disabled") != "disabled";
 }

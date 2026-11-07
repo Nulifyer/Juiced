@@ -3011,6 +3011,7 @@ void Server::handle_models(const httplib::Request& req, httplib::Response& res) 
     response["object"] = "list";
 
     for (const auto& [model_id, model_info] : models) {
+        if (juiced_ && is_omni_collection_recipe(model_info.recipe)) continue;
         if (!show_all && juiced_ && !juiced_->allows(model_id)) continue;
         if (req.has_header("anthropic-version") && model_info.type != ModelType::LLM) continue;
         if (req.has_param("service")) {
@@ -3031,6 +3032,8 @@ void Server::handle_models(const httplib::Request& req, httplib::Response& res) 
                 ultimate_target = *resolved;
             }
             std::string canonical_target = model_manager_->resolve_model_name(ultimate_target);
+            if (juiced_ && model_manager_->model_exists(canonical_target) &&
+                is_omni_collection_recipe(model_manager_->get_model_info(canonical_target).recipe)) continue;
             if (!show_all && juiced_ && !juiced_->allows(canonical_target)) continue;
             if (models.count(canonical_target) > 0) {
                 response["data"].push_back(model_info_to_json(alias_id, models.at(canonical_target)));

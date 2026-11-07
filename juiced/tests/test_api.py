@@ -290,6 +290,11 @@ class ApiContract(unittest.TestCase):
    for stream in [False,True]:
     status,_=self.request(prefix+'chat/completions',{'model':model,'stream':stream,'messages':[{'role':'user','content':'fixture'}]});self.assertEqual(status,409)
   status,_=self.request('chat/completions',{'model':model,'messages':[{'role':'user','content':'x'*270000}]});self.assertEqual(status,409)
+  self.assertEqual(self.request('/internal/aliases',{'alias':'runtime-only-omni-alias','target':model})[0],200)
+  for name in [model,'runtime-only-omni-alias']:
+   self.assertEqual(self.request('chat/completions',{'model':name,'messages':[{'role':'user','content':'fixture'}]})[0],409)
+  _,models=self.request('models?show_all=true');self.assertNotIn(model,[m['id'] for m in models['data']]);self.assertNotIn('runtime-only-omni-alias',[m['id'] for m in models['data']])
+  self.request('/internal/aliases/runtime-only-omni-alias',method='DELETE')
  def test_protocol_manifest(self):
   for prefix in ['/api/v0/','/api/v1/','/v0/','/v1/']:
    status,data=self.request(prefix+'juiced/protocols');self.assertEqual(status,200)
