@@ -60,9 +60,9 @@ test('service protocols expose the selected connection and copy its URL', async 
   await page.goto('/');
   await page.getByRole('button', { name: 'Service APIs', exact: true }).click();
   await page.getByRole('button', { name: 'Ollama', exact: true }).click();
-  await expect(page.locator('.endpoint-address code')).toHaveText('http://127.0.0.1:5187');
+  await expect(page.locator('.endpoint-address code')).toHaveText(new URL(page.url()).origin);
   await page.getByRole('button', { name: 'Copy base URL', exact: true }).click();
-  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe('http://127.0.0.1:5187');
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(new URL(page.url()).origin);
   await page.getByRole('button', { name: 'Wyoming', exact: true }).click();
   await expect(page.getByRole('region', { name: 'Client connection' })).toContainText('10300');
   await expect(page.getByRole('button', { name: 'Copy base URL', exact: true })).toHaveCount(0);

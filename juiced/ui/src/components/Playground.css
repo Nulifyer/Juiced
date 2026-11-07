@@ -93,13 +93,7 @@
 .audio-source > button {
   width: 100%;
 }
-.studio-footnote {
-  font-size: 10px;
-  color: var(--muted-foreground);
-  line-height: 1.8;
-  margin-top: 16px;
-  max-width: 50ch;
-}
+
 .source-recording {
   margin-top: 22px;
   padding-top: 18px;
@@ -214,17 +208,6 @@
   font-size: 10px;
   margin-bottom: 7px;
   white-space: nowrap;
-}
-.output-size {
-  font-size: 11px;
-  color: var(--muted-foreground);
-}
-.output-size strong {
-  display: block;
-  font-size: 13px;
-  color: var(--foreground);
-  margin-top: 6px;
-  font-weight: 500;
 }
 .generation-output {
   border: 1px solid var(--border);
@@ -467,7 +450,7 @@
 }
 .playground-layout > .chat-header > div:first-child {
   flex: 1;
-  min-width: 180px;
+  min-width: 0;
 }
 .playground-layout > .chat-header .model-picker {
   flex: 0 1 360px;
@@ -577,10 +560,7 @@
     grid-column: 2;
     margin-top: 0;
   }
-  .audio-source .studio-footnote {
-    grid-column: 2;
-    margin-top: 0;
-  }
+
   .source-recording {
     grid-column: 2;
     margin-top: 0;
@@ -624,9 +604,7 @@
   .comparison-settings > label {
     flex: 1;
   }
-  .comparison-setup .studio-footnote {
-    flex-basis: 100%;
-  }
+
   .service-model-bar {
     align-items: start;
   }
@@ -666,9 +644,7 @@
   .audio-drop {
     min-height: 220px;
   }
-  .audio-source .studio-footnote {
-    margin-top: 12px;
-  }
+
   .source-recording {
     margin-top: 18px;
   }
@@ -703,3 +679,4 @@
   width: 100%;
   min-width: 180px;
 }
+.image-test-size { display: grid; gap: 6px; min-width: 180px; }

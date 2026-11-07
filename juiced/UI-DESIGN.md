@@ -9,6 +9,8 @@ Keep the existing dark T3-based palette, Base UI controls, Lucide icons and
 typography. Use the existing color roles and compact controls. Prefer aligned
 lists, meaningful state labels and task-specific panes over repeated cards.
 Model names and quantization remain readable at normal desktop and phone sizes.
+Bundle the unmodified Inter font and its license so host-installed fonts do not
+change the layout. Keep source/version/checksums beside the assets.
 
 ## Compact console direction
 
@@ -18,6 +20,8 @@ icons. Explanations belong beside the relevant decision, behind a shared Info
 popover that works with keyboard and touch. Native titles suit short metadata.
 Keep failures, unsaved changes, unavailable capabilities and apply/reload
 consequences visible. Do not hide them as help text.
+Use one latest-event strip on the dashboard; buffered log warnings are not an
+unresolved incident count. Full raw/parsed history belongs in Diagnostics.
 
 Use one level of task tabs instead of repeated accordions: Settings/Advanced in
 the model inspector, Snapshots/Storage policy/Model overrides in Cache, and a
@@ -61,6 +65,20 @@ On wide screens the selected model does not cover or disable the list. On narrow
 screens it becomes the focused main pane with a clear Back to models action.
 Changing selection or leaving with edits requires Keep editing or Discard changes.
 Do not use browser confirm as the primary navigation/recovery interface.
+Cache settings share this draft protection. Validate fields across tabs, reveal
+the failing tab and focus the invalid input. Snapshot details use a compact
+dialog rather than a full-height model inspector.
+
+Service APIs show routes and connection details for the selected protocol.
+Wyoming is a private TCP listener; do not imply HTTPS routes or persistent chat
+cache headers apply to it. Show a support-read failure instead of inventing a
+working connection. Voice discovery uses the selected eligible speech model.
+
+Image tests inherit saved model dimensions unless the operator chooses a
+temporary size override. Changing models or tasks clears generated outputs so
+results cannot appear to belong to the next model. Tests never enable a model or
+change its saved settings. Manage keeps policy, unload and removal eligibility
+in one flow, with explicit typed confirmation before removing weights.
 
 ## Model settings contract
 

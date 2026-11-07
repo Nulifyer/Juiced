@@ -139,12 +139,14 @@
   gap: 12px;
   align-items: start;
   border-top: 1px solid var(--border);
-  padding: 14px 16px;
+  padding: 10px 16px;
   font-size: 13px;
 }
 .backend-entry-identity {
-  display: grid;
-  gap: 5px;
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 10px;
   min-width: 0;
 }
 .backend-entry span,
@@ -161,6 +163,7 @@
 .backend-entry-action {
   min-width: 115px;
 }
+.backend-entry-action:empty { display: none; }
 .backend-entry-action a {
   color: var(--foreground);
   font-size: 12px;
@@ -180,12 +183,23 @@
   }
 }
 @media (max-width: 520px) {
-  .backend-entry {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 10px;
+  .hardware-overview { grid-template-columns: 1fr; }
+  .hardware-overview article {
+    grid-template-columns: 40px minmax(0, 1fr);
+    gap: 2px 8px;
+    padding: 9px 12px;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
   }
+  .hardware-overview article:last-child { border-bottom: 0; }
+  .hardware-overview article small { grid-column: 2; }
+  .backend-entry {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px 10px;
+  }
+  .backend-entry-identity small { white-space: nowrap; }
   .backend-entry-action {
-    grid-column: 1;
+    grid-column: 1 / -1;
   }
   .backend-group-toggle {
     padding: 12px;

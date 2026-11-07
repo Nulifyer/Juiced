@@ -8,11 +8,13 @@ export function ModelRemoval({
   model,
   focusRequested,
   onRemoved,
+  onRefresh,
   notify,
 }: {
   model: Model;
   focusRequested?: boolean;
   onRemoved: () => Promise<void>;
+  onRefresh: () => Promise<void>;
   notify: (message: string) => void;
 }) {
   const section = useRef<HTMLElement>(null);
@@ -43,7 +45,20 @@ export function ModelRemoval({
         if (!controller.signal.aborted) setError(e.message);
       });
     return () => controller.abort();
-  }, [model.id, focusRequested]);
+  }, [model.id, model.loaded, model.policy, model.operation?.pending, focusRequested]);
+  async function unload() {
+    setBusy(true);
+    setError("");
+    try {
+      await api("juiced/operation", { model: model.id, action: "unload" });
+      await onRefresh();
+      notify("Model unload requested.");
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
   async function remove() {
     setBusy(true);
     setError("");
@@ -79,6 +94,14 @@ export function ModelRemoval({
       <h2>Remove model</h2>
       <p>{plan?.description || "Checking model storage ownership…"}</p>
       {plan?.reason && <p className="removal-reason">{plan.reason}</p>}
+      {model.loaded && <div className="removal-unload">
+        <Button size="compact" variant="outline" onClick={() => void unload()}
+          disabled={busy || model.policy === "hot" || model.runtime?.is_busy || model.operation?.pending}
+          title={model.policy === "hot" ? "Change loading policy above before unloading a Hot model" : undefined}>
+          {model.operation?.pending ? "Unloading…" : "Unload model"}
+        </Button>
+        {model.policy === "hot" && <p>Set loading policy above to On demand or Disabled, then unload before removing.</p>}
+      </div>}
       {error && (
         <p role="alert" className="inline-error">
           {error}

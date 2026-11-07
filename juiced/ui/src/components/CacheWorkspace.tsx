@@ -12,6 +12,7 @@ import { HelpTip } from "./HelpTip";
 import { Button } from "./t3/button";
 import "./CacheWorkspace.css";
 import { PreparedCopies } from "./PreparedCopies";
+import { DraftLeaveDialog } from "./DraftLeaveDialog";
 function age(value?: number) {
   if (!value) return "Not used yet";
   const days = Math.floor((Date.now() / 1000 - value) / 86400);
@@ -22,11 +23,13 @@ export function CacheWorkspace({
   models,
   setCache,
   notify,
+  registerNavigationGuard,
 }: {
   cache: any;
   models: Model[];
   setCache: (value: any) => void;
   notify: (s: string) => void;
+  registerNavigationGuard: (guard?: (action: () => void) => void) => void;
 }) {
   const [tab, setTab] = useState("snapshots");
   const [q, setQ] = useState(""),
@@ -34,7 +37,23 @@ export function CacheWorkspace({
     [selected, setSelected] = useState<string>(),
     [draft, setDraft] = useState<any>(),
     [dirty, setDirty] = useState(false),
+    [validationError, setValidationError] = useState(""),
     [busy, setBusy] = useState(false);
+  const [leaveAction, setLeaveAction] = useState<(() => void) | null>(null);
+  useEffect(() => {
+    registerNavigationGuard(action => {
+      if (busy) return;
+      if (dirty) setLeaveAction(() => action);
+      else action();
+    });
+    return () => registerNavigationGuard(undefined);
+  }, [dirty, busy, registerNavigationGuard]);
+  useEffect(() => {
+    if (!dirty) return;
+    const warn = (event: BeforeUnloadEvent) => event.preventDefault();
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [dirty]);
   useEffect(() => {
     if (!dirty) setDraft(cache?.settings);
   }, [cache?.settings, dirty]);
@@ -74,6 +93,19 @@ export function CacheWorkspace({
     }
   }
   async function save() {
+    for (const [key, label, maximum, input] of [
+      ["retention_days", "Expiry", 365, "cache-expiry-days"],
+      ["disk_budget_gib", "Disk budget", 256, "cache-disk-budget"],
+    ] as const) {
+      const whole = key === "retention_days";
+      if (!Number.isFinite(draft[key]) || (whole && !Number.isInteger(draft[key])) || draft[key] < 1 || draft[key] > maximum) {
+        setValidationError(`${label} must be ${whole ? "a whole number" : "a number"} from 1 to ${maximum}.`);
+        setTab("settings");
+        requestAnimationFrame(() => document.getElementById(input)?.focus());
+        return;
+      }
+    }
+    setValidationError("");
     setBusy(true);
     try {
       const result = await api("juiced/cache", draft);
@@ -88,11 +120,16 @@ export function CacheWorkspace({
     }
   }
   function edit(key: string, value: unknown) {
+    setValidationError("");
     setDraft((d: any) => ({ ...d, [key]: value }));
     setDirty(true);
   }
   return (
     <div className="cache-workspace">
+      <DraftLeaveDialog open={!!leaveAction} title="Discard unsaved cache settings?"
+        description="The saved cache policy has not changed. Keep editing, or discard this draft and continue."
+        onKeepEditing={() => setLeaveAction(null)}
+        onDiscard={() => { const action = leaveAction; setLeaveAction(null); setDraft(cache.settings); setDirty(false); setValidationError(""); action?.(); }} />
       <header className="page-heading">
         <div>
           <div className="heading-with-help"><h1>Runtime cache</h1><HelpTip label="Runtime cache">Cache stores reusable computation for client sessions. Clients own conversation history. Reuse requires the same model, engine and compatible load profile; changing them can require a fresh prefill. {cache?.reason}</HelpTip></div>
@@ -117,7 +154,7 @@ export function CacheWorkspace({
                   {bytes(total)} <span>saved computation</span>
                 </h2>
                 <p>
-                  {snapshots.length} snapshots ·{" "}
+                  {snapshots.length} snapshot{snapshots.length === 1 ? "" : "s"} ·{" "}
                   {cache?.settings?.disk_budget_gib || 0} GiB budget
                 </p>
               </div>
@@ -209,7 +246,7 @@ export function CacheWorkspace({
             >
               <Dialog.Portal>
                 <Dialog.Backdrop className="dialog-backdrop" />
-                <Dialog.Popup className="model-drawer cache-entry-drawer">
+                <Dialog.Popup className="cache-snapshot-dialog">
                   <section className="cache-selection">
                     <div className="section-heading">
                       <Dialog.Title>Session cache</Dialog.Title>
@@ -274,6 +311,7 @@ export function CacheWorkspace({
         <section className="cache-settings" hidden={tab === "snapshots"}>
           {draft ? (
             <form
+              noValidate
               onSubmit={(e) => {
                 e.preventDefault();
                 void save();
@@ -358,6 +396,7 @@ export function CacheWorkspace({
                   max={256}
                   required
                   id="cache-disk-budget"
+                  step="any"
                   aria-label="Disk budget (GiB)"
                   value={draft.disk_budget_gib}
                   onChange={(e) =>
@@ -366,6 +405,7 @@ export function CacheWorkspace({
                 />
               </label>
               </div>
+              {validationError && <p role="alert" className="inline-error">{validationError}</p>}
               <div className="cache-save-actions">
               {dirty && (
                 <Button

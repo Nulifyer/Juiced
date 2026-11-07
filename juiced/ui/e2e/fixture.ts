@@ -82,7 +82,7 @@ export const test = base.extend<{ runtime: any }>({
 export { expect };
 export async function openModel(page: any, id = modelId) {
   await page.goto('/');
-  if (id !== modelId) await page.getByRole('button', { name: /Show 1 models/ }).click();
+  if (id !== modelId) await page.getByRole('button', { name: /Show 1 model/ }).click();
   await page.getByRole('button', { name: id, exact: true }).first().click();
   await expect(page.getByRole('region', { name: 'Model details', exact: true })).toBeVisible();
 }

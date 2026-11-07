@@ -688,7 +688,7 @@ export function ModelLibrary({
             <DropArea id="runtime:Loaded" className="runtime-live">
               <div className="section-heading">
                 <h2>Loaded</h2>
-                <span>{running.length} models</span>
+                <span>{running.length} model{running.length === 1 ? "" : "s"}</span>
               </div>
               {!running.length && (
                 <div className="workspace-empty">
@@ -769,7 +769,7 @@ export function ModelLibrary({
                     ? "Clear search"
                     : expanded
                       ? "Hide inventory"
-                      : "Show " + unloaded.length + " models"}
+                      : `Show ${unloaded.length} model${unloaded.length === 1 ? "" : "s"}`}
                 </Button>
               </div>
               {(expanded || Boolean(q)) && (

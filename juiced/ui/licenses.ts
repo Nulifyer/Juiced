@@ -54,6 +54,7 @@ export function dependencyNotices(): Plugin {
         source:
           "Juiced browser dependencies and generated helpers/CSS\n" +
           notices.sort().join("\n") +
+          "\nInter 4.1: fonts/LICENSE.Inter.txt (source and checksums: fonts/SOURCE.json)\n" +
           "\nT3 Code presentation: licenses/T3-Code-MIT.txt\n",
       });
     },

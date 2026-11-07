@@ -129,51 +129,22 @@
   gap: 12px;
   color: var(--muted-foreground);
 }
-.log-retention {
-  color: var(--muted-foreground);
-  font-size: 10px;
-}
 .runtime-activity {
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  margin-bottom: 16px;
-  overflow: hidden;
-}
-.runtime-activity > header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--border);
-}
-.runtime-activity h2 {
-  font-size: 13px;
-}
-.runtime-activity ul {
-  list-style: none;
-  padding: 0;
-  margin: 0;
-}
-.runtime-activity li {
   display: grid;
-  grid-template-columns: 60px 60px minmax(0, 1fr);
-  align-items: baseline;
-  gap: 10px;
-  padding: 7px 14px;
-  font-size: 11px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 12px;
+  margin-bottom: 16px;
 }
-.runtime-activity li > span:last-child {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.runtime-activity time {
-  color: var(--muted-foreground);
-  font-variant-numeric: tabular-nums;
-}
-.runtime-activity > p {
-  padding: 12px 14px;
-}
+.runtime-activity h2 { font-size: 12px; }
+.activity-heading { display: grid; gap: 2px; }
+.activity-heading small { color: var(--muted-foreground); font-size: 10px; }
+.activity-latest { display: flex; align-items: baseline; gap: 10px; min-width: 0; font-size: 12px; }
+.activity-latest time { color: var(--muted-foreground); font-size: 10px; font-variant-numeric: tabular-nums; }
+.activity-latest > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @media (max-width: 650px) {
   .log-controls {
     display: grid;
@@ -214,18 +185,8 @@
   .log-actions > div {
     gap: 0;
   }
-  .runtime-activity li {
-    grid-template-columns: 50px minmax(0, 1fr);
-    gap: 6px;
-  }
-  .runtime-activity li > .log-level {
-    display: none;
-  }
-  .runtime-activity small {
-    font-size: 10px;
-  }
+  .runtime-activity { grid-template-columns: minmax(0, 1fr) auto; gap: 6px 12px; }
+  .activity-heading { display: flex; gap: 8px; align-items: baseline; }
+  .activity-latest { grid-column: 1 / -1; grid-row: 2; }
+  .runtime-activity > button { grid-column: 2; grid-row: 1; }
 }
-
-.activity-heading { display: flex; align-items: baseline; flex-wrap: wrap; gap: 10px; }
-.activity-heading small { font-size: 11px; }
-.activity-idle > header { border-bottom: 0; }

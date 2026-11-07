@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import Markdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Button } from "./t3/button";
+import { HelpTip } from "./HelpTip";
 import "./ModelEffective.css";
 
 export function ModelReadme({ repository }: { repository: string }) {
@@ -28,7 +29,7 @@ export function ModelReadme({ repository }: { repository: string }) {
   }, [repository, valid, retry]);
   if (!valid) return <p className="page-note">No Hugging Face model card is associated with these local weights.</p>;
   return <section className="model-readme" aria-label="Publisher model card">
-    <p>Publisher documentation from <a href={`https://huggingface.co/${repository}`} target="_blank" rel="noreferrer">{repository}</a>. Claims are not a runtime compatibility check.</p>
+    <div className="heading-with-help"><a href={`https://huggingface.co/${repository}`} target="_blank" rel="noreferrer">{repository}</a><HelpTip label="Publisher documentation">This model card is supplied by the publisher. Its claims do not establish compatibility with the selected runtime or hardware.</HelpTip></div>
     {loading && <p role="status">Reading the model card…</p>}
     {error && <div role="alert"><p>{error}</p><Button variant="outline" onClick={() => setRetry(retry + 1)}>Retry README</Button></div>}
     <Markdown urlTransform={(url, key) => {

@@ -1,8 +1,9 @@
 .model-removal {
-  border-top: 1px solid var(--border);
-  margin-top: 24px;
-  padding-top: 20px;
+  padding-top: 4px;
+  border-top: 0;
 }
+.removal-unload { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 12px 0; }
+.removal-unload p { flex: 1; min-width: 180px; margin: 0; }
 .model-removal p {
   color: var(--muted-foreground);
   font-size: 12px;

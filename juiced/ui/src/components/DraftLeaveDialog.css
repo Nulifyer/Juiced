@@ -1,0 +1,4 @@
+.draft-leave-dialog { position: fixed; z-index: 120; top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(460px, calc(100% - 32px)); border: 1px solid var(--border); border-radius: 8px; padding: 20px; background: var(--background); }
+.draft-leave-dialog h2 { font-size: 17px; margin: 0 0 12px; }
+.draft-leave-dialog p { font-size: 14px; color: var(--muted-foreground); line-height: 1.6; }
+.draft-leave-dialog > div { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 10px; margin-top: 20px; }

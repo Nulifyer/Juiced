@@ -82,7 +82,7 @@ export default function App() {
   const [diagnosticTab, setDiagnosticTab] = useState("performance");
   const navigationGuard = useRef<((action: () => void) => void) | undefined>(undefined);
   const registerNavigationGuard = useCallback((guard?: (action: () => void) => void) => { navigationGuard.current = guard; }, []);
-  function navigate(action: () => void) { if (navigationGuard.current) navigationGuard.current(action); else action(); }
+  function navigate(action: () => void) { setMobile(false); if (navigationGuard.current) navigationGuard.current(action); else action(); }
   function chooseScreen(next: string) { navigate(() => { setScreen(next); setMobile(false); }); }
   const inspectable = ["models", "policy", "library"].includes(screen);
   useEffect(() => {
@@ -392,6 +392,7 @@ export default function App() {
         )}
         {screen === "cache" && (
           <CacheWorkspace
+            registerNavigationGuard={registerNavigationGuard}
             cache={cache}
             models={models}
             setCache={setCache}

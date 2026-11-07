@@ -9,6 +9,7 @@ import {
   Terminal,
 } from "lucide-react";
 import { Button } from "./t3/button";
+import { HelpTip } from "./HelpTip";
 import {
   filterEntries,
   MAX_LOG_ENTRIES,
@@ -59,11 +60,9 @@ export function RuntimeLogs({ logs }: { logs: LogState }) {
   return (
     <section className="logs-workspace">
       <header className="page-heading">
-        <div>
-          <h1>Runtime logs</h1>
-          <p>
-            Inspect manager and backend output. Parsing happens in this browser.
-          </p>
+        <div className="heading-with-help">
+          <h2>Runtime logs</h2>
+          <HelpTip label="Runtime logs">Raw output is preserved. Parsing and filters run in this browser. This tab holds up to {MAX_LOG_ENTRIES.toLocaleString()} entries or 2 Mi characters; the runtime retains up to 5,000 entries since restart. Reconnecting refreshes retained history. Clear resets this tab's buffer, and Export uses the current filters. These controls do not change model workers.</HelpTip>
         </div>
         <span
           className={"log-connection " + (logs.status === "Live" ? "live" : "")}
@@ -250,12 +249,6 @@ export function RuntimeLogs({ logs }: { logs: LogState }) {
           </table>
         )}
       </div>
-      <p className="log-retention">
-        Latest {MAX_LOG_ENTRIES.toLocaleString()} entries, up to 2 Mi characters
-        in this tab. The runtime retains up to 5,000 since restart. Reconnect
-        refreshes retained history. Clear resets this tab’s buffer only. Export
-        uses the current filters.
-      </p>
     </section>
   );
 }
@@ -270,48 +263,26 @@ export function RuntimeActivity({
   const issues = logs.parsed.filter((e) =>
     ["warning", "error", "fatal"].includes(e.level),
   );
-  const events = logs.parsed
-    .filter(
-      (e) =>
-        e.inference ||
-        ["warning", "error", "fatal"].includes(e.level) ||
-        (["Router", "Juiced"].includes(e.tag) &&
-          /load|unload|recover|fail/i.test(e.message)),
-    )
-    .slice(-4)
-    .reverse();
+  const latest = logs.parsed.filter((e) =>
+    e.inference || ["warning", "error", "fatal"].includes(e.level) ||
+    (["Router", "Juiced"].includes(e.tag) && /load|unload|recover|fail/i.test(e.message)),
+  ).at(-1);
+  const message = latest?.inference
+    ? `${latest.inference.model} · ${latest.inference.input} in / ${latest.inference.output} out · ${latest.inference.tps.toFixed(1)} tok/s`
+    : latest?.message || logs.error || "Waiting for runtime activity";
   return (
-    <section className={"runtime-activity" + (!events.length ? " activity-idle" : "")}>
-      <header>
-        <div className="activity-heading">
-          <h2>Recent activity</h2>
-          <small>{issues.length ? `${issues.length} warnings/errors` : logs.status}</small>
-        </div>
-        <Button size="compact" variant="ghost" onClick={openLogs}>
-          View logs
-        </Button>
-      </header>
-      {events.length ? (
-        <ul>
-          {events.map((e) => (
-            <li key={e.seq}>
-              <time title={e.timestamp}>
-                {e.timestamp.split(" ")[1]?.slice(0, 8) || ""}
-              </time>
-              <span className={"log-level " + e.level}>
-                {e.inference ? "inference" : e.level}
-              </span>
-              <span>
-                {e.inference
-                  ? `${e.inference.model} · ${e.inference.input} in / ${e.inference.output} out · ${e.inference.tps.toFixed(1)} tok/s · ${e.inference.ttft.toFixed(2)}s first token`
-                  : e.message}
-              </span>
-            </li>
-          ))}
-        </ul>
-      ) : (
-        logs.error ? <p className="page-note">{logs.error}</p> : null
-      )}
+    <section className="runtime-activity" aria-label="Recent runtime activity">
+      <div className="activity-heading">
+        <h2>Recent activity</h2>
+        <small title="Warnings and errors in the buffered logs, not an unresolved incident count">
+          {issues.length ? `${issues.length} log warning${issues.length === 1 ? "" : "s"}` : logs.status}
+        </small>
+      </div>
+      <div className="activity-latest">
+        {latest && <time title={latest.timestamp}>{latest.timestamp.split(" ")[1]?.slice(0, 8)}</time>}
+        <span className={latest && !latest.inference ? `log-level ${latest.level}` : ""} title={message}>{message}</span>
+      </div>
+      <Button size="compact" variant="ghost" onClick={openLogs}>View logs</Button>
     </section>
   );
 }

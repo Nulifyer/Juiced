@@ -18,6 +18,8 @@ import "./Playground.css";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Button } from "./t3/button";
+import { HelpTip } from "./HelpTip";
+import { SelectField } from "./t3/select";
 import { api, wav16k, type Model, type Message } from "../api";
 type Props = {
   models: Model[];
@@ -53,6 +55,7 @@ export function Playground({
     [voice, setVoice] = useState("af_heart"),
     [audio, setAudio] = useState(""),
     [image, setImage] = useState(""),
+    [imageSize, setImageSize] = useState(""),
     [receipt, setReceipt] = useState<any>(),
     [maxTokens, setMaxTokens] = useState(2048),
     [thinkingMode, setThinkingMode] = useState("profile"),
@@ -90,17 +93,26 @@ export function Playground({
   }, []);
   useEffect(() => {
     if (!eligible.some((m) => m.id === model)) setModel(eligible[0]?.id || "");
+    setCompareModels(current => {
+      const next = current.filter(id => eligible.some(m => m.id === id));
+      return next.length === current.length ? current : next;
+    });
   }, [models, task]);
   useEffect(() => {
     abort.current?.abort();
     abort.current = null;
     setWorking(false);
     setHistory([]);
-    setDraft(drafts.current[task] || "");
+    setDraft(task === "Transcribe" ? "" : drafts.current[task] || "");
     setAttachments([]);
     setReceipt(undefined);
     setContent("");
     setReasoning("");
+    setAudio("");
+    setImage("");
+    setImageSize("");
+    setComparison([]);
+    setCompareCurrent("");
     if (recorder.current?.state === "recording") {
       recorder.current.onstop = null;
       recorder.current.stop();
@@ -270,7 +282,7 @@ export function Playground({
             model,
             prompt: draft,
             n: 1,
-            size: "512x512",
+            ...(imageSize ? { size: imageSize } : {}),
             response_format: "b64_json",
           },
           controller.signal,
@@ -471,18 +483,18 @@ export function Playground({
     return (
       <div className={"service-workspace task-" + task.toLowerCase()}>
         <header className="page-heading">
-          <div>
+          <div className="heading-with-help">
             <h1>
               {
                 {
                   Transcribe: "Transcribe audio",
                   Speak: "Text to speech",
-                  Images: "Generate an image",
+                  Images: "Generate image",
                   Compare: "Compare models",
                 }[task]
               }
             </h1>
-            <p>
+            <HelpTip label="Service test">
               {
                 {
                   Transcribe: "Turn a recording into editable text.",
@@ -493,7 +505,9 @@ export function Playground({
                     "Run the same prompt through your loaded chat models.",
                 }[task]
               }
-            </p>
+              Results are temporary. Sampling and other settings use the saved
+              model profile. Comparison runs one model at a time.
+            </HelpTip>
           </div>
           <Button variant="outline" size="compact" onClick={openModels}>
             Manage models
@@ -528,7 +542,7 @@ export function Playground({
         {task === "Transcribe" && (
           <div className="transcription-studio">
             <section className="audio-source">
-              <h2>Source audio</h2>
+              <div className="heading-with-help"><h2>Source audio</h2><HelpTip label="Source audio">Audio is converted to 16 kHz mono PCM in your browser. The selected Juiced worker transcribes it as English.</HelpTip></div>
               <div
                 className="audio-drop"
                 onDragOver={(e) => e.preventDefault()}
@@ -567,9 +581,6 @@ export function Playground({
                   <audio controls src={sourceAudio} />
                 </div>
               )}
-              <p className="studio-footnote">
-                Your recording is converted locally before transcription.
-              </p>
             </section>
             <section className="transcript-output">
               <header>
@@ -642,15 +653,23 @@ export function Playground({
               <div className="generation-controls">
                 {task === "Speak" ? (
                   <VoicePicker
-                    model={model}
+                    model={selected?.id || ""}
                     value={voice}
                     onChange={setVoice}
                     disabled={working}
                   />
                 ) : (
-                  <span className="output-size">
-                    Output size <strong>512 × 512</strong>
-                  </span>
+                  <label className="image-test-size">
+                    <span className="field-label">Output size
+                      <HelpTip label="Image test size">Model default uses the saved width and height, or the backend default when unset. An override applies to this test only. Larger images need more memory and time.</HelpTip>
+                    </span>
+                    <SelectField label="Image test size" value={imageSize}
+                      onValueChange={setImageSize} disabled={working}
+                      options={[
+                        { value: "", label: "Model default" },
+                        ...["512x512", "768x768", "1024x1024", "768x1024", "1024x768"].map(value => ({ value, label: value.replace("x", " × ") })),
+                      ]} />
+                  </label>
                 )}
                 <small>{draft.length.toLocaleString()} characters</small>
               </div>
@@ -671,11 +690,6 @@ export function Playground({
                     ? "Generate speech"
                     : "Generate image"}
               </Button>
-              <p className="studio-footnote">
-                {task === "Speak"
-                  ? "Audio is generated by the selected speech model."
-                  : "The selected model’s saved generation profile supplies the remaining settings."}
-              </p>
             </section>
             <section
               className={
@@ -794,10 +808,6 @@ export function Playground({
                   </select>
                 </label>
               </div>
-              <p className="studio-footnote">
-                Models run one at a time to avoid competing for the same
-                hardware.
-              </p>
             </aside>
             <section className="comparison-main">
               <div className="comparison-prompt">
@@ -903,9 +913,9 @@ export function Playground({
   return (
     <div className="playground-layout">
       <header className="chat-header">
-        <div>
+        <div className="heading-with-help">
           <h1>Test chat</h1>
-          <p>Temporary chat test. Cleared when you leave or reload.</p>
+          <HelpTip label="Test chat">Temporary model test. Results stay in this page and clear when you leave, change models or reload. Connected harnesses own saved conversations.</HelpTip>
         </div>
         <div className="model-picker">
           <select
@@ -975,16 +985,12 @@ export function Playground({
               </select>
             </label>
           )}
-          <VoicePicker
+          {speakers.length > 0 && <VoicePicker
             model={speakers[0]?.id || ""}
             value={voice}
             onChange={setVoice}
             disabled={working}
-          />
-          <p className="page-note">
-            Sampling and context use the selected deployment’s saved profile.
-            Incompatible requests return an error.
-          </p>
+          />}
         </div>
       )}
       <div className="chat-messages" aria-live="polite">

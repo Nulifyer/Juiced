@@ -14,6 +14,7 @@ test('actual container: save, reload, infer, inspect request metadata and restor
   await page.goto('/');
   await page.evaluate(() => localStorage.setItem('juiced.screen', 'models'));
   await page.reload();
+  await expect.poll(() => page.evaluate(async () => { const faces = await document.fonts.load('14px Inter'); return faces.length; })).toBeGreaterThan(0);
   await page.getByRole('button', { name: model, exact: true }).first().click();
   const nextContext = original.effective.ctx_size === 512 ? 1024 : 512;
   try {

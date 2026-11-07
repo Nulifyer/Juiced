@@ -4,6 +4,7 @@ import {
   variantName,
 } from "./modelDiscovery";
 import { DiscoverModels } from "./DiscoverModels";
+import { runtimeName } from "./runtimeInfo";
 import { HelpTip } from "./HelpTip";
 import { useEffect, useRef, useState } from "react";
 import {
@@ -285,7 +286,7 @@ export function Acquisition({
                 <Dialog.Backdrop className="dialog-backdrop" />
                 <Dialog.Popup className="model-drawer variant-panel">
                   <div className="dialog-heading">
-                    <Dialog.Title>{variants.suggested_name}</Dialog.Title>
+                    <div className="heading-with-help"><Dialog.Title>{variants.suggested_name}</Dialog.Title><HelpTip label="File review">Review the source, weight size and optional vision projector. Publisher names and quants identify variants independently.</HelpTip></div>
                     <Button
                       size="icon-xs"
                       variant="ghost"
@@ -295,11 +296,6 @@ export function Acquisition({
                       <X size={16} />
                     </Button>
                   </div>
-                  <p className="page-note">
-                    Review the source, weight size and optional companion
-                    projector. Downloads remain Disabled until enabled. Names
-                    remain publisher names.
-                  </p>
                   <p className="variant-source">
                     <a
                       href={"https://huggingface.co/" + variants.checkpoint}
@@ -378,10 +374,7 @@ export function Acquisition({
                       </select>
                     </label>
                   )}
-                  <p className="page-note">
-                    Backend: {variants.recipe}. Requires architecture support;
-                    repository tags are not conformance tests.
-                  </p>
+                  <div className="heading-with-help page-note">Backend: {runtimeName(variants.recipe)}<HelpTip label="Download compatibility">The runtime must support this model's architecture. Repository tags do not establish compatibility with your runtime or hardware.</HelpTip></div>
                   <details>
                     <summary>Registration name</summary>
                     <label>

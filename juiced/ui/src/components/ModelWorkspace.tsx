@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Dialog } from "@base-ui/react/dialog";
+import { DraftLeaveDialog } from "./DraftLeaveDialog";
 import {
   Download,
   ExternalLink,
@@ -104,6 +104,9 @@ export function ModelWorkspace({
       extraEdited);
   const pending = saving || model.operation?.pending;
   const busy = model.runtime?.is_busy;
+  const advancedOptions = Object.entries(response?.effective || {}).filter(([key]) =>
+    !["model_name", "ctx_size", "pinned", "llamacpp_device"].includes(key) &&
+    !key.startsWith("llamacpp_hybrid_") && !key.endsWith("_args") && !key.endsWith("_backend"));
   useEffect(() => {
     const controller = new AbortController();
     setError("");
@@ -544,29 +547,20 @@ export function ModelWorkspace({
                   )}
                   </>}
                   {tab === "advanced" && <>
+                  {advancedOptions.length > 0 && (
                   <fieldset className="settings-section" disabled={saving}>
                     <legend>Backend options</legend>
                     <div className="settings-grid">
-                      {Object.entries(response.effective)
-                        .filter(
-                          ([key]) =>
-                            ![
-                              "model_name",
-                              "ctx_size",
-                              "pinned",
-                              "llamacpp_device",
-                            ].includes(key) &&
-                            !key.startsWith("llamacpp_hybrid_") &&
-                            !key.endsWith("_args") &&
-                            !key.endsWith("_backend"),
-                        )
-                        .map(([key, value]) => {
-                          const current = draft[key] ?? value;
+                      {advancedOptions.map(([key, value]) => {
+                          const current = Object.prototype.hasOwnProperty.call(draft, key) ? draft[key] : value;
+                          const optionType = typeof (response.defaults[key] ?? value);
+                          const label = optionLabels[key] || key.replace(/_/g, " ");
                           return (
                             <label key={key}>
-                              {optionLabels[key] || key.replace(/_/g, " ")}
-                              {typeof value === "boolean" || value === null ? (
+                              <span className="field-label">{label}<HelpTip label={label}>Default: {value === null ? "Follow server policy" : String(response.defaults[key] ?? "Automatic")}. Clear the override to inherit the default.</HelpTip></span>
+                              {optionType === "boolean" || (value === null && response.defaults[key] == null) ? (
                                 <select
+                                  aria-label={label}
                                   value={
                                     draft[key] === null
                                       ? "inherit"
@@ -589,37 +583,32 @@ export function ModelWorkspace({
                                 </select>
                               ) : (
                                 <input
+                                  aria-label={label}
                                   type={
-                                    typeof value === "number"
+                                    optionType === "number"
                                       ? "number"
                                       : "text"
                                   }
                                   value={current ?? ""}
+                                  placeholder={String(response.defaults[key] ?? "Backend default")}
                                   onChange={(e) =>
                                     update(
                                       key,
                                       e.target.value === ""
                                         ? null
-                                        : typeof value === "number"
+                                        : optionType === "number"
                                           ? Number(e.target.value)
                                           : e.target.value,
                                     )
                                   }
                                 />
                               )}
-                              <small>
-                                Default:{" "}
-                                {value === null
-                                  ? "Follow server policy"
-                                  : String(
-                                      response.defaults[key] ?? "Automatic",
-                                    )}
-                              </small>
                             </label>
                           );
                         })}
                     </div>
                   </fieldset>
+                  )}
                   <section className="settings-section">
                     <h2>Backend arguments <HelpTip label="Backend arguments">Additional flags not covered by the Settings controls. Existing cache, template and backend flags are preserved.</HelpTip></h2>
                     {model.recipe === "llamacpp" ? (
@@ -728,6 +717,7 @@ export function ModelWorkspace({
               <>
                 <ModelRemoval
                   model={model}
+                  onRefresh={refresh}
                   focusRequested={removalRequested}
                   notify={notify}
                   onRemoved={async () => {
@@ -810,19 +800,10 @@ export function ModelWorkspace({
             </footer>
           )}
       </section>
-      <Dialog.Root open={!!leaveAction} onOpenChange={(open) => { if (!open) setLeaveAction(null); }}>
-        <Dialog.Portal>
-          <Dialog.Backdrop className="dialog-backdrop" />
-          <Dialog.Popup className="discard-model-dialog">
-            <Dialog.Title>Discard unsaved model settings?</Dialog.Title>
-            <Dialog.Description>Your running model and saved settings have not changed. Keep editing, or discard this draft and continue.</Dialog.Description>
-            <div>
-              <Button variant="outline" onClick={() => setLeaveAction(null)}>Keep editing</Button>
-              <Button onClick={() => { const action = leaveAction; setLeaveAction(null); if (response) { setDraft(editableOptions(response.saved)); setExtra(retainedExtra(response.effective.llamacpp_args)); setExtraEdited(false); } action?.(); }}>Discard changes</Button>
-            </div>
-          </Dialog.Popup>
-        </Dialog.Portal>
-      </Dialog.Root>
+      <DraftLeaveDialog open={!!leaveAction} title="Discard unsaved model settings?"
+        description="Your running model and saved settings have not changed. Keep editing, or discard this draft and continue."
+        onKeepEditing={() => setLeaveAction(null)}
+        onDiscard={() => { const action = leaveAction; setLeaveAction(null); if (response) { setDraft(editableOptions(response.saved)); setExtra(retainedExtra(response.effective.llamacpp_args)); setExtraEdited(false); } action?.(); }} />
     </>
   );
 }

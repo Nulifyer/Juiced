@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
+import { HelpTip } from "./HelpTip";
 
 export function VoicePicker({
   model,
@@ -51,7 +52,12 @@ export function VoicePicker({
   );
   return (
     <label className="voice-picker">
-      Voice
+      <span className="field-label">Voice
+        <HelpTip label="Available voices">
+          Voices come from the selected speech model. {voices.length > 0 && `${english.length} English voices, ${voices.length} total options from ${model}.`}
+          The menu groups English voices, other languages and compatible aliases.
+        </HelpTip>
+      </span>
       {voices.length ? (
         <select
           aria-label="Speech voice"
@@ -85,13 +91,11 @@ export function VoicePicker({
           placeholder={loading ? "Loading voices…" : "Voice ID"}
         />
       )}
-      <span className="voice-picker-note" role="status">
+      {(loading || !voices.length) && <span className="voice-picker-note" role="status">
         {loading
           ? "Reading voices from the loaded model…"
-          : voices.length
-            ? `${english.length} English voices · ${voices.length} total options from ${model}`
-            : error || "Load a speech model to see its voices."}
-      </span>
+          : error || "Load a speech model to see its voices."}
+      </span>}
     </label>
   );
 }

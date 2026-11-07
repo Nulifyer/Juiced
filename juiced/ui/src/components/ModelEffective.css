@@ -19,3 +19,9 @@
 .model-readme h3 { font-size: 15px; }
 .model-readme table { display: block; overflow: auto; }
 .model-readme a { text-decoration: underline; color: var(--foreground); }
+.model-readme .heading-with-help > a { min-width: 0; overflow-wrap: anywhere; }
+.model-readme > :not(:first-child) { margin-top: 14px; }
+.model-readme :is(th, td) { padding: 6px 10px; border-bottom: 1px solid var(--border); text-align: left; }
+.model-readme :is(ul, ol) { padding-left: 22px; }
+.model-readme ul { list-style: disc; }
+.model-readme ol { list-style: decimal; }

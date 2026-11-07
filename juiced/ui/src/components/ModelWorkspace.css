@@ -291,10 +291,6 @@
 }
 
 .model-workspace-header h2 { overflow-wrap: anywhere; line-height: 1.4; }
-.discard-model-dialog { position: fixed; z-index: 120; top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(460px, calc(100% - 32px)); border: 1px solid var(--border); border-radius: 10px; padding: 24px; background: var(--background); }
-.discard-model-dialog h2 { font-size: 18px; margin: 0 0 12px; }
-.discard-model-dialog p { font-size: 14px; color: var(--muted-foreground); line-height: 1.6; }
-.discard-model-dialog > div { display: flex; justify-content: flex-end; gap: 10px; margin-top: 24px; }
 @container model-inspector (max-width: 430px) { .model-workspace .settings-grid { grid-template-columns: 1fr; } }
 
 @media (max-width: 620px) {
