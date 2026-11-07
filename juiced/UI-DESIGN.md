@@ -104,5 +104,11 @@ and expandable, with explicit CPU/GPU/NPU labels and no implied compatibility.
 Run on and accelerator-device choices use the shared Base UI SelectField rather
 than OS-rendered menus. Popup backgrounds, selected/highlighted states and
 disabled reasons use app tokens even with a light system theme. Menus are bounded
-to the viewport, keyboard-operable and return focus on Escape. Runtime recipe is
-a fixed registration value; only supported execution/device choices are editable.
+to the viewport, keyboard-operable and return focus on Escape. The native planner
+owns compatible provider/hardware choices; switching profiles preserves the
+source registration and weights.
+
+Model Runtime choices expose short native titles on each option and the selected
+control. Runtime, Run on and device labels also use Info popovers for keyboard
+and touch access. Put routine explanations there; keep incompatibility reasons,
+unavailable hardware and experimental precision/feature changes visible.

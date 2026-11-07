@@ -4,7 +4,12 @@ import { api, type Model } from "../api";
 import { Button } from "./t3/button";
 import { SelectField } from "./t3/select";
 import { HelpTip } from "./HelpTip";
-import { acceleratorName, runtimeName } from "./runtimeInfo";
+import {
+  acceleratorHelp,
+  acceleratorName,
+  runtimeHelp,
+  runtimeName,
+} from "./runtimeInfo";
 import "./ExecutionProfiles.css";
 
 type Target = {
@@ -144,6 +149,15 @@ export function ExecutionProfiles({
   const runtimes = [...new Set(plan?.profiles.map((t) => t.recipe) || [])];
   const variants =
     plan?.profiles.filter((t) => t.recipe === target?.recipe) || [];
+  const targetHelp = (t: Target) =>
+    [
+      t.id === "registered"
+        ? "The model's original registered setup and saved settings."
+        : undefined,
+      acceleratorHelp(t.backend || t.original_backend || ""),
+      t.reason,
+      !t.available ? t.hardware_reason : undefined,
+    ].filter(Boolean).join(" ");
   useEffect(() => {
     const controller = new AbortController();
     setDevices([]);
@@ -270,13 +284,19 @@ export function ExecutionProfiles({
           <>
             <div className="settings-grid">
               <label>
-                <span className="field-label">Runtime</span>
+                <span className="field-label">
+                  Runtime
+                  <HelpTip label="Runtime">
+                    {runtimeHelp(target?.recipe || "llamacpp")}
+                  </HelpTip>
+                </span>
                 <SelectField
                   label="Runtime"
                   value={target?.recipe || ""}
                   options={runtimes.map((recipe) => ({
                     value: recipe,
                     label: runtimeName(recipe),
+                    tooltip: runtimeHelp(recipe),
                   }))}
                   onValueChange={(recipe) =>
                     choose(
@@ -289,12 +309,18 @@ export function ExecutionProfiles({
                 />
               </label>
               <label>
-                <span className="field-label">Run on</span>
+                <span className="field-label">
+                  Run on
+                  <HelpTip label="Run on">
+                    {target ? targetHelp(target) : "Choose a runtime, then a compatible hardware profile."}
+                  </HelpTip>
+                </span>
                 <SelectField
                   label="Run on"
                   value={targetId}
                   options={variants.map((t) => ({
                     value: t.id,
+                    tooltip: targetHelp(t),
                     label:
                       t.id === "registered"
                         ? t.original_backend
@@ -318,19 +344,11 @@ export function ExecutionProfiles({
             </div>
             {target && (
               <>
-                <p
-                  className={
-                    target.compatible && target.available
-                      ? "profile-reason"
-                      : "inline-error"
-                  }
-                >
-                  {!target.compatible
-                    ? target.reason
-                    : !target.available
-                      ? target.hardware_reason
-                      : target.reason}
-                </p>
+                {(!target.compatible || !target.available) && (
+                  <p className="inline-error">
+                    {!target.compatible ? target.reason : target.hardware_reason}
+                  </p>
+                )}
                 {target.requires_tokenizer && (
                   <label>
                     <span className="field-label">
@@ -352,15 +370,27 @@ export function ExecutionProfiles({
                   target.backend &&
                   target.backend !== "cpu" && (
                     <label>
-                      <span className="field-label">Accelerator device</span>
+                      <span className="field-label">
+                        Accelerator device
+                        <HelpTip label="Accelerator device">
+                          Choose which GPU the runtime uses. Automatic uses the
+                          runtime's default GPU. In hybrid mode this selects the
+                          ROCm GPU; the NPU is paired separately.
+                        </HelpTip>
+                      </span>
                       <SelectField
                         label="Accelerator device"
                         value={device}
                         options={[
-                          { value: "", label: "Automatic GPU selection" },
+                          {
+                            value: "",
+                            label: "Automatic GPU selection",
+                            tooltip: "Let the selected runtime choose its default GPU.",
+                          },
                           ...devices.map((d) => ({
                             value: d.id,
                             label: `${d.id} · ${d.name}`,
+                            tooltip: `Use ${d.name} through ${d.id}. This chooses a device, not a different model or quant.`,
                           })),
                         ]}
                         onValueChange={setDevice}

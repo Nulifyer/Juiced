@@ -6,6 +6,7 @@ export type SelectOption = {
   value: string;
   label: string;
   description?: string;
+  tooltip?: string;
   disabled?: boolean;
 };
 
@@ -33,7 +34,12 @@ export function SelectField({
         if (next !== null) onValueChange(next);
       }}
     >
-      <Select.Trigger id={id} className="select-trigger" aria-label={label}>
+      <Select.Trigger
+        id={id}
+        className="select-trigger"
+        aria-label={label}
+        title={options.find((option) => option.value === value)?.tooltip}
+      >
         <Select.Value />
         <Select.Icon>
           <ChevronDown size={15} aria-hidden="true" />
@@ -58,6 +64,8 @@ export function SelectField({
                   value={option.value}
                   disabled={option.disabled}
                   className="select-option"
+                  title={option.tooltip}
+                  aria-description={option.tooltip}
                 >
                   <span className="select-option-copy">
                     <Select.ItemText>{option.label}</Select.ItemText>
