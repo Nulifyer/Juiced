@@ -1079,7 +1079,8 @@ httplib::Server::HandlerResponse Server::authenticate_request(const httplib::Req
         (native_path.rfind("juiced/", 0) == 0 && !public_metadata.count(native_path)) ||
         native_path == "jobs" || native_path.rfind("jobs/", 0) == 0 ||
         operator_operations.count(native_path) ||
-        (native_path.rfind("models/", 0) == 0 && native_path.size() > 8 &&
+        (req.method != "GET" && req.method != "HEAD" &&
+         native_path.rfind("models/", 0) == 0 && native_path.size() > 8 &&
          native_path.compare(native_path.size() - 8, 8, "/options") == 0);
     bool is_metrics_route = (req.path == "/metrics");
 

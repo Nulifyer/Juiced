@@ -235,6 +235,8 @@ class ApiContract(unittest.TestCase):
      self.assertEqual(request('/v1/jobs',{'Authorization':'Bearer fixture-regular'}),401)
      self.assertEqual(request('/v1/jobs',{'Authorization':'Bearer fixture-admin'}),200)
      self.assertEqual(request('/v1/install',{'Authorization':'Bearer fixture-regular'},{}),401)
+     self.assertEqual(request('/v1/models/Whisper-Tiny/options',{'Authorization':'Bearer fixture-regular'}),200)
+     self.assertEqual(request('/v1/models/Whisper-Tiny/options',{'Authorization':'Bearer fixture-regular'},{}),401)
      self.assertEqual(request('/v1/messages/count_tokens',{'x-api-key':'fixture-regular'},{}),400)
      self.assertEqual(request('/v1/messages/count_tokens',{'x-api-key':'wrong'},{}),401)
     finally:
