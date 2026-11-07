@@ -60,11 +60,11 @@ export function DiscoverModels({ initialSearch, models, jobs, busy, onRepository
   const filtered = !!(query || task || capability || runtime || size || downloaded || recommended || sort !== "recommended");
   function reset() { setQuery(""); setTask(""); setCapability(""); setRuntime(""); setSize(""); setDownloaded(""); setRecommended(false); setSort("recommended"); }
   async function search() {
-    const value = remoteQuery.trim();
+    let value = remoteQuery.trim();
     if (value.length < 3) { setError("Enter at least three characters or a Hugging Face model URL."); return; }
     if (/^https:\/\/huggingface\.co\//i.test(value)) {
       const parts = new URL(value).pathname.split("/").filter(Boolean);
-      if (parts.length >= 2) { onRepository(parts.slice(0, 2).join("/")); return; }
+      if (parts.length >= 2) { value = parts.slice(0, 2).join("/"); if (remoteRuntime === "llamacpp") { onRepository(value); return; } }
     }
     controller.current?.abort();
     const request = new AbortController(); controller.current = request;
@@ -126,7 +126,7 @@ export function DiscoverModels({ initialSearch, models, jobs, busy, onRepository
       {!searching && !groups.length && <div className="discover-empty"><h2>{searched ? "No matching repositories" : "Search beyond the catalog"}</h2><p>{searched ? "Try a shorter model name or another publisher." : "Find chat GGUFs or paste a Hugging Face model URL to browse its quants."}</p></div>}
       <div className="discovery-results" aria-label="Model search results">{groups.map((group) => <article className="discovery-model" key={group.key}>
         <header><div><h3>{group.name}</h3><p>{group.publisher}</p></div><span className="discovery-downloads"><Download size={13} />{group.repositories.reduce((n, r) => n + (r.downloads || 0), 0).toLocaleString()}</span></header>
-        <div className="discovery-quants" aria-label={`Quantizations for ${group.name}`}>{group.repositories.map((repo) => <Button key={repo.repository_id} variant="outline" size="compact" disabled={busy} title={repo.repository_id} onClick={() => onRepository(repo.repository_id)}>{quantization(repo.repository_id.split("/").pop() || "") || "Browse quants"}</Button>)}{group.repositories.map((repo) => <a className="repository-source" key={repo.repository_id} href={`https://huggingface.co/${repo.repository_id}`} target="_blank" rel="noreferrer" aria-label={`Open ${repo.repository_id} on Hugging Face`} title={repo.repository_id}><ExternalLink size={14} /></a>)}</div>
+        <div className="discovery-quants" aria-label={`Quantizations for ${group.name}`}>{group.repositories.map((repo) => remoteRuntime === "llamacpp" ? <Button key={repo.repository_id} variant="outline" size="compact" disabled={busy} title={repo.repository_id} onClick={() => onRepository(repo.repository_id)}>{quantization(repo.repository_id.split("/").pop() || "") || "Browse quants"}</Button> : <a className="repository-source" key={repo.repository_id} href={`https://huggingface.co/${repo.repository_id}/tree/main`} target="_blank" rel="noreferrer" title="Review the publisher package; the GGUF downloader does not import this runtime format">Review files <ExternalLink size={13} /></a>)}{group.repositories.map((repo) => <a className="repository-source" key={repo.repository_id} href={`https://huggingface.co/${repo.repository_id}`} target="_blank" rel="noreferrer" aria-label={`Open ${repo.repository_id} on Hugging Face`} title={repo.repository_id}><ExternalLink size={14} /></a>)}</div>
       </article>)}</div>
     </>}
   </section>;

@@ -47,7 +47,7 @@ export const test = base.extend<{ runtime: any }>({
       if (path === 'pull/variants') return reply({ checkpoint: 'Example/Ornith-GGUF', recipe: 'llamacpp', suggested_name: 'Ornith-GGUF', variants: [{ name: 'Ornith-Q6_K.gguf', size_bytes: 24000000000 }, { name: 'Ornith-Q4_K_M.gguf', size_bytes: 18000000000 }], mmproj_files: [] });
       if (path === 'juiced/execution') {
         if (body) { state.executionSelected = body.profile; return reply({ accepted: true }, 202); }
-        return reply({ model: modelId, selected: state.executionSelected, architecture: 'qwen35moe', profiles: [
+        return reply({ model: modelId, selected: state.executionSelected, architecture: 'qwen35moe', activity: state.executionSelected === 'llamacpp:hybrid-rocm' ? { npu_matmul_nodes: 48, prefill_plans: 2, npu_planned_weight_bytes: 104857600, npu_copy_budget_bytes: 2147483648 } : undefined, profiles: [
           { id: 'registered', recipe: 'llamacpp', compatible: true, available: true, changes: [] },
           { id: 'llamacpp:cpu', recipe: 'llamacpp', backend: 'cpu', compatible: true, available: true, package_state: 'installed', reason: 'Reuse the downloaded GGUF without changing its weights', changes: [] },
           { id: 'llamacpp:vulkan', recipe: 'llamacpp', backend: 'vulkan', compatible: true, available: true, package_state: state.gpuInstalled ? 'installed' : 'installable', reason: 'Reuse the downloaded GGUF without changing its weights', changes: [] },

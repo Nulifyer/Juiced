@@ -18,6 +18,24 @@ namespace lemon {
 namespace {
 using json = nlohmann::json;
 thread_local std::chrono::steady_clock::time_point request_start;
+thread_local json request_usage = json::object();
+json response_usage(const httplib::Response &res) {
+  json result = json::object();
+  if (!res.body.empty() && res.body.size() <= 1048576 &&
+      res.get_header_value("Content-Type").find("json") != std::string::npos) {
+    const auto body = json::parse(res.body, nullptr, false);
+    if (body.is_object() && body.contains("usage") && body["usage"].is_object()) {
+      const auto &usage = body["usage"];
+      for (const auto &field : {std::make_pair("input_tokens", "prompt_tokens"),
+                               std::make_pair("output_tokens", "completion_tokens")}) {
+        const auto value = usage.value(field.first, usage.value(field.second, json(nullptr)));
+        if (value.is_number_integer() && value.get<long long>() >= 0)
+          result[field.first] = value;
+      }
+    }
+  }
+  return result;
+}
 long long now() {
   return std::chrono::duration_cast<std::chrono::seconds>(
              std::chrono::system_clock::now().time_since_epoch())
@@ -364,6 +382,7 @@ void JuicedService::execute(const json &command) {
       server_.model_manager_->select_execution_profile(name, command.at("profile"));
       profile_changed = true;
       info = server_.model_manager_->get_model_info(name);
+      info.extras["execution_trial"] = true;
     }
     if (action == "load" || action == "reload") {
       if (!allows(name))
@@ -409,6 +428,7 @@ void JuicedService::execute(const json &command) {
         server_.model_manager_->select_execution_profile(name, previous_profile);
         if (was_loaded && !stopping_) {
           auto restored = server_.model_manager_->get_model_info(name);
+          restored.extras["execution_trial"] = true;
           server_.router_->load_model(name, restored, RecipeOptions(restored.recipe, json::object()),
               true, false, hot(name), LoadPurpose::UserInference, &stopping_);
         }
@@ -509,6 +529,10 @@ void JuicedService::run() {
 }
 void JuicedService::request_started() {
   request_start = std::chrono::steady_clock::now();
+  request_usage = json::object();
+}
+void JuicedService::capture_response_usage(const httplib::Response &res) {
+  try { request_usage = response_usage(res); } catch (...) {}
 }
 void JuicedService::request_finished(const httplib::Request &req,
                                      const httplib::Response &res) {
@@ -556,18 +580,8 @@ void JuicedService::request_finished(const httplib::Request &req,
       {"status", res.status}, {"input_tokens", nullptr}, {"output_tokens", nullptr},
       {"duration_ms", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - request_start).count()},
       {"timestamp_ms", std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count()}};
-    if (!res.body.empty() && res.body.size() <= 1048576 &&
-        res.get_header_value("Content-Type").find("json") != std::string::npos) {
-      const auto body = json::parse(res.body, nullptr, false);
-      if (body.is_object() && body.contains("usage") && body["usage"].is_object()) {
-        const auto &usage = body["usage"];
-        for (const auto &field : {std::make_pair("input_tokens", "prompt_tokens"),
-                                  std::make_pair("output_tokens", "completion_tokens")}) {
-          const auto value = usage.value(field.first, usage.value(field.second, json(nullptr)));
-          if (value.is_number_integer() && value.get<long long>() >= 0) record[field.first] = value;
-        }
-      }
-    }
+    record.update(request_usage);
+    record.update(response_usage(res));
     std::lock_guard<std::mutex> lock(requests_mutex_);
     record["id"] = ++request_sequence_;
     requests_.push_back(std::move(record));

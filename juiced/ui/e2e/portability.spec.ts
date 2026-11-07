@@ -6,6 +6,8 @@ test('hybrid changes require explicit review and unavailable vLLM explains why',
   const apply=page.getByRole('button', { name: 'Apply & reload' }); await expect(apply).toBeDisabled();
   await page.getByRole('checkbox', { name: 'I’ve reviewed these changes' }).check(); await apply.click();
   expect(runtime.writes.find((w: any) => w.path==='juiced/execution').body).toMatchObject({ profile: 'llamacpp:hybrid-rocm', acknowledge: true });
+  await page.locator('.execution-profiles').getByRole('button', { name: 'Refresh', exact: true }).click();
+  await expect(page.getByLabel('Current worker activity')).toContainText('48');
   await page.getByRole('combobox', { name: 'Runtime', exact: true }).click(); await page.getByRole('option', { name: 'vLLM', exact: true }).click();
   await expect(page.getByText('The pinned vLLM GGUF importer does not support this architecture')).toBeVisible(); await expect(apply).toBeDisabled();
 });
@@ -28,6 +30,7 @@ test('prepared model search keeps the requested runtime and source name', async 
 });
 
 for (const width of [1440,390]) test(`runtime controls remain compact at ${width}px`, async ({ page, runtime }) => {
+  runtime.executionSelected = 'llamacpp:hybrid-rocm';
   await page.setViewportSize({width,height:960}); await openModel(page); await page.getByRole('button',{name:'Runtime',exact:true}).click();
   await page.getByRole('combobox',{name:'Run on',exact:true}).click();await page.getByRole('option',{name:/Hybrid NPU/}).click();
   await expect(page.getByRole('checkbox',{name:'I’ve reviewed these changes'})).toBeVisible();

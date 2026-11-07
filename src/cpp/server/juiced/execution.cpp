@@ -6,6 +6,7 @@
 #include "lemon/router.h"
 #include "lemon/server.h"
 #include "lemon/system_info.h"
+#include "lemon/utils/http_client.h"
 #include "lemon/utils/process_manager.h"
 #include <algorithm>
 #include <regex>
@@ -83,6 +84,23 @@ JuicedService::execution_plan(const std::string &requested) {
            {"experimental", variant.tier != BackendTier::Core ||
                                 compatibility.value("experimental", false)}});
       result["profiles"].push_back(target);
+    }
+  }
+  if (info.recipe == "llamacpp" &&
+      info.recipe_options.to_json().value("llamacpp_backend", "") == "hybrid-rocm") {
+    for (const auto& loaded : server_.router_->get_all_loaded_models()) {
+      if (loaded.value("model_name", "") != name) continue;
+      try {
+        auto address = loaded.at("backend_url").get<std::string>();
+        if (address.size() >= 3 && address.substr(address.size() - 3) == "/v1") address.resize(address.size() - 3);
+        const auto response = utils::HttpClient::get(address + "/props", {}, 2, utils::HttpSecurityPolicy::TrustedLoopback);
+        if (response.status_code != 200) throw std::runtime_error("Worker metrics are unavailable");
+        const auto props = json::parse(response.body);
+        if (props.contains("hybrid") && props["hybrid"].is_object()) result["activity"] = props["hybrid"];
+      } catch (const std::exception& error) {
+        result["activity_error"] = error.what();
+      }
+      break;
     }
   }
   return result;

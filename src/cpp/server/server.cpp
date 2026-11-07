@@ -2040,6 +2040,9 @@ std::string Server::resolve_host_to_ip(int ai_family, const std::string& host) {
 
 void Server::setup_http_logger(httplib::Server &web_server) {
     // Add request logging for ALL requests (except health checks and stats endpoints)
+    web_server.set_pre_compression_logger([this](const httplib::Request&, const httplib::Response& res) {
+        if (juiced_) juiced_->capture_response_usage(res);
+    });
     web_server.set_logger([this](const httplib::Request& req, const httplib::Response& res) {
         if (juiced_) juiced_->request_finished(req, res);
         if (req.path == "/metrics") {

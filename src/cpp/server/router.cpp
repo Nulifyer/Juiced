@@ -1174,7 +1174,8 @@ void Router::load_model(const std::string& model_name,
                 throw ConfigurationException(error_message);
             }
 
-            if (!model_info.extra<std::string>("execution_profile", "").empty()) {
+            if (model_info.extra<bool>("execution_trial", false) ||
+                !model_info.extra<std::string>("execution_profile", "").empty()) {
                 throw std::runtime_error(error_message);
             }
 

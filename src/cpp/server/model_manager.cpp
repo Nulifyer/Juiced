@@ -2440,9 +2440,7 @@ ModelInfo ModelManager::apply_execution_profile_locked(const std::string& cache_
         info.extras["gguf_import"] = true;
         info.extras["tokenizer"] = profile.value("tokenizer", "");
     }
-    json options = profile.value("options", json::object());
-    if (recipe_options_.contains(id) && recipe_options_.at(id).is_object())
-        options.update(recipe_options_.at(id));
+    json options = recipe_options_.value(id, json::object());
     info.recipe_options = RecipeOptions(info.recipe, options);
     if (const auto* descriptor = backends::descriptor_for(info.recipe)) info.device = descriptor->default_device;
     return info;
@@ -2474,6 +2472,7 @@ void ModelManager::select_execution_profile(const std::string& model_name, const
         next_state = previous_state;
         const auto selected = next_state.value("selected", "registered");
         next_state["profiles"][selected] = {{"id", selected}, {"recipe", current.recipe}, {"options", current_options}};
+        if (selected == "registered") next_state["profiles"][selected]["saved_options"] = previous_saved;
         if (profile_id != "registered") next_state["profiles"][profile_id] = profile;
         next_state["profiles"][profile_id]["options"]["pinned"] = current_options.value("pinned", false);
         next_state["selected"] = profile_id;
@@ -2483,7 +2482,11 @@ void ModelManager::select_execution_profile(const std::string& model_name, const
     const auto path = path_to_utf8(path_from_utf8(get_recipe_options_file()).parent_path() / "execution_profiles.json");
     try {
         save_user_json(path, snapshot);
-        write_saved_model_options(model_name, next_state.at("profiles").at(profile_id).value("options", json::object()), false);
+        const auto& target = next_state.at("profiles").at(profile_id);
+        auto saved = profile_id == "registered" ? target.value("saved_options", target.value("options", json::object()))
+                                                : target.value("options", json::object());
+        saved["pinned"] = current_options.value("pinned", false);
+        write_saved_model_options(model_name, saved, false);
     } catch (...) {
         {
             std::lock_guard<std::mutex> lock(models_cache_mutex_);

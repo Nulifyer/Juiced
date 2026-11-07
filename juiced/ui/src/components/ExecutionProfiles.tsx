@@ -28,6 +28,13 @@ type Plan = {
   selected: string;
   architecture: string;
   profiles: Target[];
+  activity?: {
+    npu_matmul_nodes: number;
+    prefill_plans: number;
+    npu_planned_weight_bytes: number;
+    npu_copy_budget_bytes: number;
+  };
+  activity_error?: string;
 };
 type Preparation = {
   compatible: boolean;
@@ -386,11 +393,12 @@ export function ExecutionProfiles({
                     </label>
                     <label>
                       <span className="field-label">
-                        Minimum prefill tokens
+                        Minimum prefill rows
+                        <HelpTip label="Minimum prefill batch">Applies to each chunk, not the total prompt length. This bundle defaults to 2,048 rows per chunk. A higher threshold prevents NPU dispatch unless you also increase microbatch size in Advanced.</HelpTip>
                       </span>
                       <input
                         type="number"
-                        aria-label="Minimum prefill tokens"
+                        aria-label="Minimum prefill rows"
                         min="1024"
                         max="32768"
                         value={hybridPrompt}
@@ -444,6 +452,29 @@ export function ExecutionProfiles({
                     Find a prepared version
                   </Button>
                 </div>
+                {plan.activity && (
+                  <div className="profile-activity" aria-label="Current worker activity">
+                    <span className="field-label">
+                      Current worker
+                      <HelpTip label="Actual NPU activity">
+                        Cumulative work in this worker; reload resets it. Zero work
+                        can mean the prompt is below the prefill threshold.
+                        Selecting a hybrid profile alone does not prove NPU
+                        acceleration. Use Refresh after a test.
+                      </HelpTip>
+                    </span>
+                    <dl>
+                      <div><dt>NPU matmuls</dt><dd>{plan.activity.npu_matmul_nodes.toLocaleString()}</dd></div>
+                      <div><dt>Prefill plans</dt><dd>{plan.activity.prefill_plans.toLocaleString()}</dd></div>
+                      <div>
+                        <dt>Weight copies</dt>
+                        <dd>{Math.round(plan.activity.npu_planned_weight_bytes / 1048576)} / {Math.round(plan.activity.npu_copy_budget_bytes / 1048576)} MiB</dd>
+                      </div>
+                    </dl>
+                    {!plan.activity.npu_matmul_nodes && <small>No NPU prefill recorded.</small>}
+                  </div>
+                )}
+                {plan.activity_error && <small role="status">{plan.activity_error}</small>}
                 <small className="profile-current">
                   Saved profile:{" "}
                   {plan.selected === "registered"

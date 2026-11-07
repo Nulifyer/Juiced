@@ -20,7 +20,7 @@ class ApiContract(unittest.TestCase):
   header=b'GGUF'+struct.pack('<IQQ',3,1,2)+string('general.architecture')+struct.pack('<I',8)+string('llama')+string('general.file_type')+struct.pack('<II',4,1)
   header+=string('blk.0.attn_q.weight')+struct.pack('<IQQIQ',2,32,32,1,0)
   cls.execution_file.write_bytes(header+b'\0'*((-len(header))%32)+b'\0'*2048)
-  definitions=json.loads((cls.root/'config/user_models.json').read_text());definitions['ZZExecution-F16']={'recipe':'llamacpp','source':'local_path','checkpoints':{'main':str(cls.execution_file)},'labels':['chat']};(cls.root/'config/user_models.json').write_text(json.dumps(definitions))
+  definitions=json.loads((cls.root/'config/user_models.json').read_text());definitions['ZZExecution-F16']={'recipe':'llamacpp','source':'local_path','checkpoints':{'main':str(cls.execution_file)},'labels':['chat']};definitions['ZZProfile-Clear-F16']=dict(definitions['ZZExecution-F16']);(cls.root/'config/user_models.json').write_text(json.dumps(definitions))
   cls.hf_fixture=cls.root/'hf-text-fixture';cls.hf_fixture.mkdir();(cls.hf_fixture/'config.json').write_text(json.dumps({'model_type':'qwen3_5','text_config':{'model_type':'qwen3_5'},'vision_config':{}}));(cls.hf_fixture/'model.safetensors').write_bytes(b'planning fixture only')
   definitions=json.loads((cls.root/'config/user_models.json').read_text());definitions['Qwen3.5-Fixture-BF16']={'recipe':'vllm','source':'local_path','checkpoints':{'main':str(cls.hf_fixture)},'labels':['chat','vision']};(cls.root/'config/user_models.json').write_text(json.dumps(definitions))
   definitions=json.loads((cls.root/'config/user_models.json').read_text());definitions['ZZImage-Variant']={'recipe':'sd-cpp','source':'local_path','checkpoints':{'main':str(cls.execution_file)},'labels':['image'],'recipe_options':{'steps':7}};(cls.root/'config/user_models.json').write_text(json.dumps(definitions))
@@ -78,6 +78,21 @@ class ApiContract(unittest.TestCase):
    if plan['selected']=='registered':break
    time.sleep(.05)
   self.assertEqual(plan['selected'],'registered')
+ def test_execution_profile_override_can_be_cleared(self):
+  model='ZZProfile-Clear-F16'
+  def select(profile):
+   status,result=self.request('juiced/execution',{'model':model,'profile':profile});self.assertEqual(status,202,result)
+   for _ in range(100):
+    _,catalog=self.request('juiced/catalog');entry=next(m for m in catalog['data'] if m['id']==model)
+    if entry.get('execution_profile','registered')==profile and not entry.get('operation',{}).get('pending'):return
+    time.sleep(.05)
+   self.fail('Profile did not settle')
+  select('llamacpp:cpu')
+  self.assertEqual(self.request('models/'+model+'/options',{'ctx_size':321})[0],200)
+  select('registered');select('llamacpp:cpu')
+  _,options=self.request('models/'+model+'/options');self.assertEqual(options['effective']['ctx_size'],321)
+  status,options=self.request('models/'+model+'/options',{'ctx_size':None});self.assertEqual(status,200)
+  self.assertNotIn('ctx_size',options['saved']);self.assertNotEqual(options['effective']['ctx_size'],321)
  def test_multimodal_hf_plan_discloses_text_only_variants(self):
   status,plan=self.request('juiced/preparation?model=Qwen3.5-Fixture-BF16');self.assertEqual(status,200)
   self.assertTrue(plan['text_only']);self.assertEqual(plan['source_format'],'safetensors')

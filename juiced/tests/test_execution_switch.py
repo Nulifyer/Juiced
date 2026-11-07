@@ -98,7 +98,7 @@ output = call(
 )
 assert output["usage"]["completion_tokens"] > 0
 select("registered")
-call("models/" + args.model + "/options", before["saved"])
+call("models/" + args.model + "/options", {key: value for key, value in before["saved"].items() if key != "pinned"})
 call("juiced/policy", {"model": args.model, "policy": original["policy"]})
 Path(args.out).write_text(
     json.dumps(

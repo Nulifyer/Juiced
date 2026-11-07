@@ -9,7 +9,8 @@ do not prevent a structurally compatible trial.
 **Use this profile** saves an unloaded model's next execution target.
 **Apply & reload** switches a loaded model while preserving its loading policy.
 Busy models refuse the switch. If loading fails, Juiced restores the previous
-profile and attempts to reload it. An interrupted trial is recovered before
+profile and attempts to reload it. Clearing a saved override returns to the
+profile’s defaults; inactive profile snapshots do not override current edits. An interrupted trial is recovered before
 startup loading; a failed recovery blocks automatic retry until the operator
 selects a profile. A trial failure does not trigger the legacy
 fallback that unloads unrelated workers. Settings belong to each profile; the
@@ -78,7 +79,9 @@ best input for future target-specific preparation.
 
 **Find a prepared version** opens model search with the model name and intended
 runtime. GGUF search can filter on that format; other runtime candidates require
-file inspection. A repository name is not proof of backend compatibility or
+file inspection on the publisher site; the GGUF picker does not pretend to
+import arbitrary runtime packages. HF conversion needs an already complete,
+registered local snapshot. A repository name is not proof of backend compatibility or
 publisher equivalence. Juiced does not maintain an exhaustive equivalence map.
 
 ## XDNA2 + ROCm
@@ -98,6 +101,10 @@ The Runtime panel exposes additional NPU-copy budget (default2048 MiB) and minim
 prefill rows (default1024). These bound copied weights, not all XRT working
 memory. Keep headroom for the GPU model, context and other Hot models. A pinned
 or busy NPU worker blocks a hybrid trial until the operator releases it.
+**Current worker** shows actual NPU matmuls, prefill plans and weight-copy use.
+Refresh it after a request; selecting the profile alone is not evidence of NPU
+work. The vision projector stays on the selected GPU, and MTP prompt batches
+remain eligible for prefill while verification/decode stay on the GPU.
 
 The bundle's userspace libraries are private. Host kernel drivers and firmware
 remain host-owned. Device passthrough is `/dev/dri`, `/dev/kfd` and

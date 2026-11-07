@@ -25,6 +25,7 @@ public:
   bool inference_guard(const httplib::Request &, httplib::Response &);
   bool unleased_protocol(const httplib::Request &, httplib::Response &);
   void request_started();
+  void capture_response_usage(const httplib::Response &);
   void request_finished(const httplib::Request &, const httplib::Response &);
 
 private:
