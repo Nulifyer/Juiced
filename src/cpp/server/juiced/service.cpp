@@ -6,6 +6,7 @@
 #include "lemon/server.h"
 #include "lemon/utils/http_client.h"
 #include "lemon/utils/path_utils.h"
+#include "lemon/version.h"
 #include <algorithm>
 #include <chrono>
 #include <fstream>
@@ -164,6 +165,9 @@ void JuicedService::persist_locked() {
   atomic_json(directory_ / "state.json", state_);
 }
 bool JuicedService::allows(const std::string &requested) const {
+  if (server_.model_manager_->model_exists(requested) &&
+      is_omni_collection_recipe(server_.model_manager_->get_model_info(requested).recipe))
+    return false;
   auto model = server_.model_manager_->get_public_model_name(
       server_.model_manager_->resolve_model_name(requested));
   std::lock_guard<std::mutex> lock(mutex_);
@@ -265,6 +269,10 @@ void JuicedService::refresh() {
   for (const auto &[id, info] : all) {
     auto m = server_.model_info_to_json(id, info);
     m["service"] = service(m);
+    if (is_omni_collection_recipe(info.recipe)) {
+      m["available"] = false;
+      m["unavailable_reason"] = "Agent collections are outside Juiced model services";
+    }
     m["execution_profile"] = server_.model_manager_->get_execution_profiles(id).value("selected", "registered");
     m["loaded"] = false;
     m["state"] = "unloaded";
@@ -291,6 +299,7 @@ void JuicedService::refresh() {
         m["runtime"]["settings_pending"] = applied != desired;
         break;
       }
+    m["capability_contract"] = model_capabilities(info, m);
     result.push_back(std::move(m));
   }
   // Unsupported stored deployments remain visible in Library, without inventing
@@ -489,7 +498,7 @@ void JuicedService::reconcile() {
         retry = now() - operations_[name].value("updated", 0LL) > 30;
       }
     }
-    if (!pending && retry && p == "hot" && !loaded && downloaded)
+    if (!pending && retry && p == "hot" && !loaded && downloaded && allows(name))
       enqueue({{"model", name}, {"action", "load"}});
     if (!pending && retry && p == "disabled" && loaded)
       enqueue({{"model", name}, {"action", "unload"}});
@@ -606,6 +615,7 @@ void JuicedService::routes(httplib::Server &http) {
     });
   }
   for (const std::string prefix : {"/api/v0/", "/api/v1/", "/v0/", "/v1/"}) {
+    http.Get(prefix + "juiced/capabilities", [this](const auto &q, auto &r) { capabilities_api(q, r); });
     http.Get(prefix + "juiced/preparation", [this](const auto &q, auto &r) { preparation_api(q, r); });
     http.Post(prefix + "juiced/preparation", [this](const auto &q, auto &r) { preparation_api(q, r); });
     http.Get(prefix + "juiced/execution", [this](const auto &q, auto &r) { execution_api(q, r); });
@@ -635,10 +645,12 @@ void JuicedService::routes(httplib::Server &http) {
                   import_file(q, r, operation);
                 });
   }
-  http.Get("/.well-known/juiced.json", [](const auto &, auto &r) {
+  http.Get("/.well-known/juiced.json", [this](const auto &, auto &r) {
     reply(r, {{"name", "Juiced"},
-              {"version", "0.1.0"},
+              {"version", service_version()},
               {"catalog", "/v1/juiced/catalog"},
+              {"capabilities", "/v1/juiced/capabilities"},
+              {"capability_schema", 1},
               {"protocols", "/v1/juiced/protocols"},
               {"inference", "/v1"},
               {"ui", "/"}});
@@ -725,7 +737,7 @@ void JuicedService::handle(const httplib::Request &req, httplib::Response &res,
     }
     if (op == "state") {
       std::lock_guard<std::mutex> lock(mutex_);
-      reply(res, {{"version", "0.1.0"},
+      reply(res, {{"version", service_version()},
                   {"revision", state_["revision"]},
                   {"operations", operations_},
                   {"catalog_ready", !catalog_.empty()}});
@@ -740,6 +752,9 @@ void JuicedService::handle(const httplib::Request &req, httplib::Response &res,
         const auto policy = body.at("policy").get<std::string>();
         if (policy != "hot" && policy != "on-demand" && policy != "disabled")
           throw std::invalid_argument("Unknown loading policy");
+        if (policy != "disabled" && is_omni_collection_recipe(
+                server_.model_manager_->get_model_info(model).recipe))
+          throw std::invalid_argument("Agent collections are outside Juiced model services");
         {
           std::lock_guard<std::mutex> lock(mutex_);
           if (body.contains("revision") &&

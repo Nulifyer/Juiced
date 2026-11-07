@@ -139,3 +139,22 @@ for(const [id,service,recipe,options,field,next] of [
   if(recipe==='sd-cpp'){expect(patch.width).toBe(1024);expect(saved.sdcpp_args).toBe('--scheduler simple -t 8');}
   expect(runtime.writes.filter((w:any)=>w.path==='juiced/operation')).toEqual([]);
 });
+
+for (const width of [1440, 390]) test(`native capability evidence stays compact at ${width}px`, async ({ page, runtime }) => {
+  await page.setViewportSize({ width, height: 1000 });
+  runtime.models[0].capability_contract = {
+    schema_version: 1, runtime_service: true,
+    operations: [{ id: 'chat.completions', support: 'declared', source: 'native_backend_descriptor', streaming: null, conformance: 'not_recorded' }],
+    artifact: { architecture: 'qwen35moe', components_complete: true, missing_components: [] },
+    execution: { hardware_qualification: 'not_recorded', performance_qualification: 'not_recorded', compatibility: { compatible: true, reason: 'Reuse the downloaded GGUF' } },
+  };
+  await page.goto('/');
+  await page.getByRole('button', { name: modelId, exact: true }).first().click();
+  await page.getByRole('button', { name: 'Effective', exact: true }).click();
+  await expect(page.getByLabel('Declared model services')).toContainText('chat.completions');
+  await page.getByRole('button', { name: 'About Model capability evidence', exact: true }).click();
+  await expect(page.getByText('A declaration does not establish', { exact: false })).toBeVisible();
+  await page.screenshot({ path: test.info().outputPath('capability-evidence.png'), fullPage: true });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  expect(runtime.writes).toEqual([]);
+});

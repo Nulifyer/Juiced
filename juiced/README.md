@@ -1,280 +1,70 @@
 # Juiced
 
-A local model appliance derived from Lemonade, with a T3-derived model library
-and temporary multimodal service tests. The model runtime owns weights, backend
-processes and serving policy. Agent tools/workspaces remain in a separate stack.
+Juiced hosts model weights, supervises backend processes and serves model APIs.
+It is derived from Lemonade and uses compact T3-derived model-management controls.
+Agents, saved conversations, documents and creative workspaces belong to downstream
+clients. Interaction in this UI is temporary service testing.
 
-## Development
+## Current capabilities
 
-- Manager: `cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_WEB_APP=OFF -DBUILD_TAURI_APP=OFF`, then `cmake --build build -j4 --target lemond`.
+- Inspect downloaded models, proper names, quants, components and effective settings.
+- Search the curated catalogue or Hugging Face, review grouped quants, manage downloads
+  and import GGUF files. New models start Disabled until explicitly enabled.
+- Set Hot/on-demand/disabled policies, load/unload workers and apply settings with
+  profile reload/recovery. Busy workers and protected Hot models retain safeguards.
+- Select compatible runtime providers and hardware variants. CPU/Vulkan/ROCm and
+  other qualified llama.cpp variants can reuse a GGUF; other engines have exact
+  architecture/importer restrictions. Experimental XDNA2+ROCm is partial prefill,
+  uses a matched bundle and does not promise a speed gain.
+- Prepare supported local HF/GGUF variants without overwriting sources, with
+  precision/capability-loss disclosure, cancellation and reference-aware storage.
+- Serve documented OpenAI, Ollama, Anthropic and A1111 subsets plus optional private
+  Wyoming speech. Native discovery describes declared operations and unknowns.
+- Control qualified operational prompt snapshots, retention, per-model cache modes
+  and reclamation. Memory/persistent reuse depends on the exact engine/profile.
+- Inspect hardware/token metrics, raw/parsed logs and bounded request metadata.
+
+The model-service MCP gateway serves individual operations; Omni agent loops and
+caller-authored job graphs are excluded. Legacy records and weights are preserved.
+There is no stored-conversation API, agent tool execution or creative gallery.
+
+Read [runtime profiles and preparation](RUNTIME-PROFILES.md),
+[capability discovery and identity](CAPABILITIES.md), and
+[operator UI design](UI-DESIGN.md) for implemented behavior and limits.
+The approved [platform plan](PLATFORM-PLAN.md) and its
+[feature disposition](PLATFORM-FEATURES.json) describe future phases. Their approval
+is not evidence those features or every hardware combination already work.
+
+## Deployment
+
+The default image is one Linux runtime container. Weights/state are persistent data,
+not image layers. No Docker socket, external gateway/database or agent stack is
+required. Give the container only the actual devices, permissions and host prerequisites
+its selected engines require. Native Apple Metal is not available through a Linux
+Docker image. Native cross-platform core builds and device qualification are different
+support levels; broader packaged platform delivery remains planned.
+
+Build, UI, preparation and engine dependencies use separate stages. The final runtime
+excludes compilers, headers, Make/CMake, Node/Bun, Git and package installers. Optional
+engines use native package installation and private dependencies. Host kernel drivers,
+firmware and BIOS remain host-owned. An installed package is not inference proof.
+
+Current standard ports are HTTP8080 and optional private Wyoming TCP10300. Preserve
+existing volume identities and read-only original weight mounts during updates.
+Use the deployment's exact release image/digest and retain previous image/state for
+recovery. Do not run two writable managers against one state directory.
+
+## Development and checks
+
+- Native: `cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_WEB_APP=OFF -DBUILD_TAURI_APP=OFF -DBUILD_TESTING=ON`, then `cmake --build build -j4 --target lemond test_request_identity`.
+- Native API: `python3 juiced/tests/test_api.py build/lemond` uses isolated model-free fixtures.
+- Identity: `ctest --test-dir build --output-on-failure -R '^RequestIdentityTest$'`.
 - UI: `cd juiced/ui && bun install --frozen-lockfile && bun run build`.
-- Native API tests: `python3 juiced/tests/test_api.py build/lemond`.
-- FastFlowLM is pinned to upstream v1.0.12 with publisher asset hashes. Its portable Linux bundle includes XRT and its XDNA plugin; models still require separate qualification.
-- Native device discovery uses the same Linux CUDA/ROCm library environment as model launch. Hardware nodes must still be passed to the container. Package installation alone does not prove device access.
-- Process environment isolation: `ctest --test-dir build --output-on-failure -R '^ProcessManagerTest$'`.
-- Actual engine cache gate: `python3 juiced/tests/test_engine_cache.py --help`; uses a checksum-verified tiny CPU fixture in release CI, then real-model acceptance on Mage.
-- Container: `docker build -f juiced/Dockerfile -t juiced:development .`.
+- UI workflows: `bun run test:e2e` in `juiced/ui`; `JUICED_TEST_CHROMIUM` can select an installed test browser.
+- Actual CPU snapshot gate: `python3 juiced/tests/test_engine_cache.py --help`; a retained tiny fixture checks useful save/reload/restore, not general model quality.
+- Image: `docker build -f juiced/Dockerfile -t juiced:development .`.
 
-The dev server can proxy a remote runtime with `JUICED_DEV_API=https://your-runtime.example bun run dev`. Its default target is the local manager on port13305.
-
-The UI build produces root `web/`; the image copies it into native resources.
-The C++ server serves the UI and APIs on port8080. Models are downloaded to a
-persistent HF cache, not embedded into the image. No Docker socket is required.
-
-The Dockerfile keeps manager, UI and native engine builds in separate stages.
-Its final `runtime` target starts from Ubuntu24.04 and copies only compiled
-binaries, resources and license notices. It installs runtime libraries, Mesa's
-Vulkan driver, hardware discovery and archive/download tools. Compilers, headers,
-Make, CMake, Node, Bun and other build tools are excluded and checked before
-publication. Backends that require a JIT compiler, such as vLLM/Triton, need an
-explicitly provisioned runtime variant and are outside this default native image.
-
-## Workspaces
-
-| Screen | Purpose and layout |
-| --- | --- |
-| Models | Runtime dashboard with readiness counters, service cards and an expandable unloaded inventory. Try opens a temporary service test. |
-| Loading policy | Set residency in three drag-and-drop lanes: Hot, On demand and Disabled. Menus and bulk actions offer the same commands. |
-| Library | Search Hugging Face and review files; inspect downloaded weights in a table; follow transfers; upload or register a GGUF in a dedicated import form. |
-| Model settings | Persistent desktop inspector; focused detail view on narrow screens. Settings, Effective, README, Weights & variants and Manage tabs. Common load/sampling controls, execution backend/device choices, staged setting copy between quants and explicit save/reload actions. |
-| Backends & hardware | Expandable CPU/GPU/NPU hardware summary and runtime provider groups with nested execution variants. Availability is separate from compatibility with a particular model registration. |
-| Service APIs | Copy client endpoints and inspect enabled-service counts and session-cache requirements. |
-| Diagnostics | Native resource/throughput history, bounded completed-request metadata, and live raw output and client-parsed fields, search, severity/component filters, pause/follow, filtered export and tab-local clear. |
-| Cache | Inspect consumer-session computation snapshots separately from retention, mode and disk-budget settings. Unsaved settings survive background refreshes. |
-| Test services | Chat has a conversation and anchored composer. Transcribe pairs an audio source with an editable/exportable transcript. Speak pairs a script with playback. Images pairs a prompt with a preview. Compare places responses beside each other after sequential requests. |
-
-The sidebar follows the current task: service filters for operations, acquisition
-navigation for Library, cache information for storage, and task navigation
-for temporary tests. Wide workspaces collapse into a single column on narrow screens.
-
-## Serving behavior
-
-Hugging Face downloads identify each quant independently. The suggested name
-includes the actual quant; existing checkpoint/projector/backend combinations
-open their registration instead of colliding with another quant's base name.
-Existing public model IDs are preserved. New variants still default Disabled.
-
-Model settings reads the native per-model options API, shows common llama.cpp
-context, slot, batch, thread, offload/cache and sampling controls, and preserves
-advanced backend arguments. Copy settings stages a draft from another installed
-quant using the same source/runtime. Saving sends only changed option keys and
-does not write the policy-owned pin state. The UI detects stale edits before
-saving, retains drafts during background refresh, and confirms discarding edits.
-
-Save for next load leaves the current process running. Save and reload uses the
-native operation queue without changing Hot/On-demand policy. A busy reload is
-refused; new JSON inference requests receive retryable503 while an operation is pending.
-Pending settings and operation failures remain visible in the model workspace.
-Reload changes only that model; cache profiles continue to include exact model,
-runtime and settings identity. Quants do not share incompatible snapshots.
-
-Execution choices come from native system-info recipe/backend/hardware status.
-Installed variants are selectable; missing/unsupported variants show reasons.
-Accelerator device IDs come from the installed llama.cpp binary's bounded
-`--list-devices` query through `GET /v1/juiced/devices`. This is an administrative
-route when separate API/admin keys are configured.
-The endpoint is registered under all four standard prefixes. It does not load
-weights or install a runtime. CPU selection clears the GPU device override and
-sets zero GPU layers. GPU selection enables offload and uses automatic device
-selection unless the user picks an enumerated device.
-
-A model registration retains its runtime recipe. Other runtimes require compatible
-registrations; selecting a different engine never converts weights or asserts
-architecture support. The inventory screen is read-only. No vLLM installation,
-new NPU runtime, or hybrid execution engine is introduced by these controls.
-The current llama.cpp deployment has no NPU/hybrid path; these choices remain
-unavailable with an explanation instead of pretending that hardware detection
-alone makes them usable.
-
-Models shows actual Loaded/Unloaded state and operation status. Loading policy
-separates Hot/On demand/Disabled intent. Native C++ reconciliation recovers hot
-models with bounded retries. Existing native registries and downloads supply the
-catalog; the product does not duplicate model registrations.
-
-Library provides native Hugging Face search/variant review and transfers, plus
-chunked single-file GGUF uploads and approved-directory server import. Split
-weights and vision companions use managed HF downloads in this release. The
-transfer journal retains interrupted work across restart and retries through
-the native downloader. New, unconfigured, downloaded and imported models default to Disabled. Explicitly choose On demand or Hot to permit inference. Disabled models reject inference and are excluded from OpenAI and Ollama discovery.
-
-Test services uses eligible loaded deployments for chat, speech and images. Chat
-streams and supports images when declared by the model. Messages remain only in page memory and clear on navigation, reload, model change or Clear test. There is no conversation library or persistent chat API. Downstream clients own history. English audio is converted in-browser to16kHz WAV for the CPU recognizers.
-There are no shell, browser, MCP or autonomous agent tools in this application.
-
-Cache capability is reported explicitly. Memory reuse is engine-owned. Persistent
-Chat Completions reuse is opt-in and applies only to exact qualified engine/model
-profiles. The image uses the checksum-verified upstream llama.cpp b12032 Vulkan
-release, not a locally patched engine. The acceptance fixture must verify useful reuse after save/restart/
-restore before an operator records qualification. A saved file alone does not
-qualify it. External clients send full history and a stable `X-Juiced-Session-Id`; snapshots have matching
-prefix/profile keys, checksums, expiry and a retained-state disk budget. Temporary
-snapshot writes require additional free disk. Retain/release and forget affect
-saved computation independently of client-owned messages or weights. Requests without a stable
-session ID do not create persistent snapshots. Temporary UI requests do not send session IDs. The older `X-Juiced-Thread-Id` header remains an alias. Snapshot misses, invalid files and incompatible prefixes rebuild inside their leased slot. An unavailable admission path returns a retryable503 instead of racing another request. Other inference protocols are not
-qualified for persistent session snapshots in this first release.
-
-Cache settings include per-model overrides. Set a utility model to Memory only
-to use HA's native Ollama integration while other models keep persistent Chat
-Completions snapshots. The default mode remains the fallback for models without
-an override. Changing an override preserves existing snapshots and qualification
-evidence. `POST /v1/juiced/cache` accepts `model_modes`, an object mapping canonical
-model IDs to `memory` or `persistent`; an empty object clears the overrides.
-
-Legacy prototype conversation routes return HTTP410. Existing files are preserved, never extended or used as a cache index. Cache retention and forgetting use snapshot IDs or opaque consumer-session IDs.
-
-## Runtime diagnostics
-
-The UI subscribes to native `/logs/stream` WebSocket messages. Raw preserves each
-stream line; Parsed separates timestamp, severity, component and message, with the
-original line available by expanding it. Explicit child-process error/warning
-prefixes are identified without changing the stream severity or raw output.
-
-A shared tab-local buffer serves Logs and the dashboard's recent activity. It is
-limited to 2,000 entries and 2 Mi characters of line text; no logs are persisted by
-the UI. The manager retains up to 5,000 entries since restart. Reconnect reloads
-that history, deduplicates sequence numbers and detects restarted sequences.
-Pause freezes only the log view. Clear resets this tab's buffer, including recent
-activity, without removing server logs. Export downloads raw lines matching the
-current filters. Server timestamps retain the server's clock format.
-
-Dashboard activity extracts explicit native inference summaries and recent
-warnings/errors. It does not calculate resource or throughput counters by
-scraping text. The bottom status bar uses native `/v1/system-stats` and `/v1/stats`,
-with live token estimates distinguished from the last completed decode rate.
-
-## Provenance
-
-Upstream Lemonade base: v2026.44.1, commit69948a7d40afbf91f6ad990d8b863c83ce5cc71d.
-The root LICENSE and existing upstream history are retained. T3 UI extraction is
-pinned with its MIT notice in `juiced/ui/LICENSE.t3code` and `T3-SOURCES.json`.
-FUTO and Parakeet run as native subprocesses with their real backend identities;
-each runtime bundle includes its source-license notices. Browser dependency
-notices are generated from bundled modules at `/THIRD_PARTY_NOTICES.txt`.
-Native build-dependency notices are retained under `/opt/juiced/licenses`. Weights retain their
-publisher licenses and are not included in the image.
-
-## Release and deployment
-
-The release workflow builds and tests the image before publishing to
-`ghcr.io/nulifyer/juiced`. Versioned tags identify releases. Deploy with a retained
-/data volume, /dev/dri for Vulkan, and a private network. An optional read-only
-/library mount exposes existing GGUFs for explicit import. Keep administration
-on the trusted internal route; inference and management keys use native Lemonade
-key handling when configured. Do not mount another manager's writable config.
-
-Homelab deployment/evidence is owned by the separate Homelab repository. Existing
-HA and other clients are deliberately not migrated during initial user testing.
-
-Discovery groups GGUF quantization repositories under the exact model and publisher. File review shows selectable weight sizes. Model rows support dragging from their name or body, with independent checkbox/menu actions. `GET /v1/audio/voices?model=kokoro-v1` reads available voices from the loaded Kokoro backend. The speech selector uses that list; unsupported backends explain the limitation and accept an explicit voice ID.
-
-Hugging Face logo: official brand asset from https://huggingface.co/brand, stored locally under `juiced/ui/public/huggingface.svg`. The mark belongs to Hugging Face.
-
-## Runtime dashboard and removal
-
-The bottom metrics strip reads native `/system-stats` and `/stats` every two seconds. It shows host CPU/RAM, GPU utilization/allocation, NPU when reported, active requests, live estimated output and the last completed decode rate. Details exposes input/output/cache counts and first-token latency. Shared GPU memory overlaps RAM. Missing or stale readings display a dash, rather than a made-up zero.
-
-Model details and row menus offer removal. `GET /v1/juiced/removal?model=...` previews the current file-ownership plan. `POST /v1/juiced/removal` requires that exact preview and confirmation of the model name. Disable/unload the model and finish active downloads first. Managed downloads use the existing model manager's shared-variant cleanup. An unshared uploaded GGUF is deleted from Juiced storage. External/shared local files and retained unsupported artifacts are unregistered without deleting source files. Caches remain separately managed. Built-in catalog definitions can be downloaded again.
-
-Removal routes use all four native version prefixes. The older delete route also requires a Disabled, unloaded model. Release gates cover disposable uploaded/external/shared-cache fixtures, wrong/stale confirmations, Hot protection, and the upstream shared-repository deletion contract.
-
-## Direct client protocols
-
-All interfaces use the same model registry, loading policy and backend workers.
-`GET /v1/juiced/protocols` reports implemented subsets and listener process state;
-the Service APIs screen shows their addresses and exclusions. Registration of a
-route does not establish conformance for every model or client feature.
-
-| Client protocol | Address | Implemented subset |
-| --- | --- | --- |
-| OpenAI | HTTP base plus `/v1` | Models, Chat Completions, Responses, embeddings, image generation, transcription and speech. Actual model/backend support applies. |
-| Ollama | HTTP origin | Chat/generate, tags/show/ps, embeddings. Discovery contains enabled downloaded chat and embedding models. |
-| Anthropic | HTTP origin | Messages and streaming tool use; token counting delegates to the selected supported backend. Native llama.cpp b12032 counts without generation. SDK model discovery uses its expected list envelope. Unknown release timestamps are omitted. |
-| AUTOMATIC1111 / sd.cpp clients | HTTP origin | `/sdapi/v1/sd-models`, options, txt2img, sampler/scheduler discovery and progress. Native sd-cpp handles image controls and image bytes. |
-| Wyoming | Private TCP port10300 | Optional English transcription and Kokoro speech through the same HTTP/model workers. |
-
-Ollama clients cannot download/delete weights through these compatibility routes.
-Use Juiced management, which applies ownership and Hot-model protections.
-`keep_alive:0` cannot unload Hot models. Disabled models are excluded from
-discovery and reject serving. OpenAI discovery also supports
-`?service=chat|transcribe|speak|images|embeddings`; the native catalog remains complete.
-API-key authentication covers `/sdapi/*`; Anthropic clients can use `x-api-key`
-for Messages and model discovery. Administration continues to require the
-configured admin credential.
-
-For SD API generation, specify `model`, use `override_settings.sd_model_checkpoint`,
-or select the global default with `POST /sdapi/v1/options`. Multiple enabled
-image models require an explicit choice. Requests capture that model independently
-of later changes to the default. Juiced does not expose arbitrary scripts,
-file-based LoRAs, server-side image saving, hires processing or global interrupt.
-Unsupported fields return an error. It does not claim full WebUI or ComfyUI support.
-Sampler/scheduler discovery requires the selected model to be loaded; querying
-progress does not load it. Disabled choices never enable themselves.
-
-Enable the packaged speech listener with `JUICED_WYOMING_ENABLED=true` and optionally
-`JUICED_WYOMING_URI=tcp://0.0.0.0:10300`. The container must join the consumer's
-private network; publishing a host port is not required for HA on that network.
-Wyoming has no protocol authentication and must not be exposed publicly.
-The pinned upstream `wyoming_openai`0.8.0 implementation runs as a supervised
-child of lemond. A model-policy change refreshes its speech catalog by restarting
-the listener. Keep Kokoro Hot for voice discovery at startup. English Kokoro voices
-are read from the live backend; no separate model/voice configuration is required.
-Normal speech content is excluded from its default WARNING-level logging.
-
-The runtime contains a Python interpreter and a pinned speech environment, but
-no pip, setuptools, compiler or build toolchain. Installation happens in the voice
-builder stage. The default listener is disabled, so existing speech adapters can
-remain in service until an isolated client test and deliberate network cutover.
-
-Persistent session snapshots remain qualified only for Chat Completions. Other
-chat protocols require Memory mode for a qualified model; per-model overrides
-let a utility model coexist with persistent coding-model snapshots. Responses
-and media features still depend on backend support. Provider-hosted tools and
-conversation storage are outside this compatibility contract.
-
-`juiced/tests/test_clients.py` uses pinned OpenAI, Anthropic and Ollama SDKs against
-a real enabled model. It checks discovery, JSON/streaming chat, token counting
-and Responses. `--tools` adds real tool-result round trips and needs a capable
-model. CI uses Stories15M only for protocol/engine behavior, not quality or tool
-ability. Production-model and unchanged consumer acceptance are separate checks.
-
-
-## Operator console acceptance
-
-`juiced/UI-DESIGN.md` owns screen purposes and interaction requirements. The
-model inspector retains list context on desktop and offers a back action on
-narrow screens. Drafts survive polling; leaving or changing a model asks before
-discarding edits. Conflicts offer review of the latest saved state while keeping
-local changes. Effective compares resolved saved intent, the current worker and
-the draft, and shows the actual native launch command. Missing running values
-remain unavailable. The publisher README is fetched from Hugging Face without
-credentials; HTML is not executed.
-
-Diagnostics samples native telemetry every two seconds, retaining at most sixty
-samples in this browser tab. History uses timestamps and breaks across missing
-samples. Pause freezes the view while inference and collection continue. The
-request journal is `GET /v1/juiced/requests` (also all native version prefixes),
-admin-authenticated, newest first, capacity200 in server memory. It covers
-completed supported HTTP inference requests across OpenAI, Anthropic, Ollama and
-SD interfaces. It stores model identifiers, protocol/endpoint, status, duration
-and usage only when reported in that response. It never stores bodies, headers,
-query strings or consumer session IDs. Streaming usage can be unavailable.
-Manager restart clears this journal. Raw logs have their existing independent
-retention and may contain backend output; the journal's privacy properties do
-not apply to arbitrary runtime log lines.
-
-Backend inventory reports native installed versions and update states. Optional
-updates remain usable; required updates do not. Updating a runtime is blocked
-while models using that recipe are loaded. Installations use server-owned
-transfer jobs. Completed model downloads offer Review model, so operators
-explicitly enable residency before loading a new Disabled variant.
-
-Run browser acceptance with `cd juiced/ui && bun install --frozen-lockfile`,
-`node node_modules/@playwright/test/cli.js install chromium`, then
-`bun run test:e2e`. These stateful fixtures test failure/recovery, drafts,
-conflicts, policies, installation, requests, keyboard, zoom, temporary tests and
-320/390/900/1440px layouts. They do not prove inference. Release CI separately
-runs `JUICED_LIVE_URL=http://127.0.0.1:18080 bun run test:e2e` against the actual
-built container and checksum-pinned CPU model: save without restart, explicit
-reload, inference, command inspection and request usage. Both browser gates must
-pass before package publication. Playwright and browser binaries remain test
-and build dependencies; they are excluded from the runtime image.
+The UI builds root `web/`, copied into native resources by the image. Its development
+proxy defaults to a local manager on port13305; set `JUICED_DEV_API` to a test runtime
+for isolated UI work. Release CI checks UI, native contracts, runtime packaging and
+actual-container behavior. Compilation or fixtures do not qualify unseen hardware.

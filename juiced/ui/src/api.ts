@@ -11,6 +11,13 @@ export type Model = {
   policy: "hot" | "on-demand" | "disabled";
   size?: number;
   context_length?: number;
+  capability_contract?: {
+    schema_version: number;
+    runtime_service: boolean;
+    operations: { id: string; support: string; source: string; streaming: boolean | null; conformance: string }[];
+    artifact: { architecture: string | null; components_complete: boolean | null; missing_components: string[] };
+    execution: { hardware_qualification: string; performance_qualification: string; compatibility: { compatible: boolean | null; reason: string } };
+  };
   checkpoints?: Record<string, string>;
   checkpoint?: string;
   recipe_options?: Record<string, unknown>;

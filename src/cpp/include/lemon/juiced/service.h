@@ -13,6 +13,7 @@
 #include <thread>
 namespace lemon {
 class Server;
+struct ModelInfo;
 class JuicedService {
 public:
   explicit JuicedService(Server &server);
@@ -70,6 +71,9 @@ private:
   void image_compatibility(const httplib::Request &, httplib::Response &,
                            const std::string &operation);
   json protocols();
+  std::string service_version() const;
+  json model_capabilities(const ModelInfo &, const json &);
+  void capabilities_api(const httplib::Request &, httplib::Response &);
   std::string image_model(const std::string &requested);
   void refresh();
   void execute(const json &command);

@@ -25,3 +25,6 @@
 .model-readme :is(ul, ol) { padding-left: 22px; }
 .model-readme ul { list-style: disc; }
 .model-readme ol { list-style: decimal; }
+
+.model-capability-summary { display: flex; align-items: center; gap: 8px; margin: 12px 0; font-size: 13px; }
+.model-capability-summary > span { min-width: 0; flex: 1; overflow-wrap: anywhere; color: var(--muted-foreground); font-size: 12px; }

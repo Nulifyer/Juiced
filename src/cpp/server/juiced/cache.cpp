@@ -2,6 +2,7 @@
 #include "lemon/model_manager.h"
 #include "lemon/router.h"
 #include "lemon/server.h"
+#include "lemon/request_identity.h"
 #include "lemon/utils/http_client.h"
 #include <algorithm>
 #include <fstream>
@@ -456,7 +457,9 @@ void JuicedService::chat(const httplib::Request &original,
                                  "TUVWXYZ0123456789._-") == std::string::npos;
     const bool reuse_enabled = request.value("cache_prompt", true);
     const bool identified = has_thread && reuse_enabled;
-    const auto identity = digest(original.get_header_value("Authorization"));
+    const auto principal = resolve_request_identity(original, server_.api_key_, server_.admin_api_key_);
+    const auto identity = digest(json::array({"principal-v1", principal.principal,
+        principal.credential_epoch, "chat.completions"}).dump());
     json semantics = json::object();
     for (const std::string key : {"tools", "tool_choice", "response_format",
                                   "chat_template_kwargs", "reasoning"})

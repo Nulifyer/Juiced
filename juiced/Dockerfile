@@ -5,7 +5,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends build-essential
 FROM toolchain AS manager
 WORKDIR /src
 COPY . .
-RUN printf '2026.44.1-juiced\n' > .version && cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_WEB_APP=OFF -DBUILD_TAURI_APP=OFF -DBUILD_TESTING=ON && cmake --build build -j4 --target lemond lemonade test_backend_mode_contract test_model_delete_shared_repo test_process_manager && ctest --test-dir build --output-on-failure -R '^(BackendModeContractTest|ModelDeleteSharedRepoTest|ProcessManagerTest)$'
+RUN printf '2026.44.1-juiced\n' > .version && cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_WEB_APP=OFF -DBUILD_TAURI_APP=OFF -DBUILD_TESTING=ON && cmake --build build -j4 --target lemond lemonade test_backend_mode_contract test_model_delete_shared_repo test_process_manager test_request_identity && ctest --test-dir build --output-on-failure -R '^(BackendModeContractTest|ModelDeleteSharedRepoTest|ProcessManagerTest|RequestIdentityTest)$'
 RUN python3 juiced/tests/test_api.py build/lemond
 RUN mkdir -p /out/licenses && cd /src/build/_deps && find . -maxdepth 2 -type f \( -iname 'license*' -o -iname 'copying*' -o -iname 'notice*' \) -exec cp --parents '{}' /out/licenses/ ';'
 
@@ -67,6 +67,7 @@ RUN groupadd --gid 10001 juiced && useradd --uid 10001 --gid 10001 \
     --home-dir /opt/lemonade --no-create-home --shell /usr/sbin/nologin juiced
 ARG SOURCE_REVISION=development
 ARG SERVICE_VERSION=development
+ENV JUICED_SERVICE_VERSION=${SERVICE_VERSION} JUICED_SOURCE_REVISION=${SOURCE_REVISION}
 LABEL org.opencontainers.image.title="Juiced" org.opencontainers.image.source="https://github.com/Nulifyer/Juiced" org.opencontainers.image.revision="${SOURCE_REVISION}" org.opencontainers.image.version="${SERVICE_VERSION}" org.opencontainers.image.description="Local multi-backend model appliance derived from Lemonade; T3-derived model library and playground"
 COPY --chown=10001:10001 --from=manager /src/build/lemond /src/build/lemonade /opt/lemonade/
 COPY --chown=10001:10001 --from=manager /src/build/resources/ /opt/lemonade/resources/

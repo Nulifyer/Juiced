@@ -217,11 +217,16 @@ std::string unique_token() {
 
 }  // namespace
 
-McpServer::McpServer(Router* router, ModelManager* model_manager, EnsureLoadedFn ensure_loaded)
+McpServer::McpServer(Router* router, ModelManager* model_manager, EnsureLoadedFn ensure_loaded,
+                     ModelAllowedFn model_allowed, bool runtime_only)
     : router_(router),
       model_manager_(model_manager),
-      ensure_loaded_(std::move(ensure_loaded)) {
+      ensure_loaded_(std::move(ensure_loaded)),
+      model_allowed_(std::move(model_allowed)), runtime_only_(runtime_only) {
     tools_ = build_tools();
+    if (runtime_only_)
+        tools_.erase(std::remove_if(tools_.begin(), tools_.end(),
+            [](const McpTool& tool) { return tool.name() == "lemonade_omni"; }), tools_.end());
 }
 
 McpServer::~McpServer() = default;
@@ -462,18 +467,18 @@ std::variant<std::string, json> McpServer::resolve_model_for_tool(
     for (const auto& m : router_->get_all_loaded_models()) {
         if (m.value("type", std::string()) == type_str) {
             std::string name = m.value("model_name", std::string());
-            if (!name.empty()) return name;
+            if (!name.empty() && (!model_allowed_ || model_allowed_(name))) return name;
         }
     }
 
     // 3. Load a model of the right type that's already downloaded \u2014 no network.
     for (const auto& [name, info] : model_manager_->get_downloaded_models()) {
-        if (info.type == want_type) return name;
+        if (info.type == want_type && (!model_allowed_ || model_allowed_(name))) return name;
     }
 
     // 4. Nothing local. Only fetch the default if the caller opted in;
     //    otherwise ask the agent to confirm a download or name a model.
-    if (allow_download) return std::string(default_model);
+    if (allow_download && !runtime_only_) return std::string(default_model);
     return make_needs_model_result(
         type_str, default_model, "an explicit model name");
 }
@@ -1062,12 +1067,19 @@ json McpServer::tool_list_models(const json& arguments) {
     const bool include_suggested = arguments.value("include_suggested", true);
 
     json loaded = router_->get_all_loaded_models();
+    if (model_allowed_) {
+        json filtered = json::array();
+        for (const auto& model : loaded)
+            if (model_allowed_(model.value("model_name", ""))) filtered.push_back(model);
+        loaded = std::move(filtered);
+    }
     auto downloaded = model_manager_->get_downloaded_models();
 
     json available = json::array();
     if (include_available) {
         // Only downloaded models — the full registry would blow up client context.
         for (const auto& [model_id, info] : downloaded) {
+            if (model_allowed_ && !model_allowed_(model_id)) continue;
             json entry = {
                 {"model_name", model_id},
                 {"recipe", info.recipe},
@@ -1083,6 +1095,7 @@ json McpServer::tool_list_models(const json& arguments) {
     json suggested_to_pull = json::array();
     if (include_suggested) {
         for (const auto& [model_id, info] : model_manager_->get_supported_models()) {
+            if (runtime_only_) continue;
             if (!info.suggested) continue;
             if (downloaded.count(model_id)) continue;
             json entry = {

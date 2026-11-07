@@ -13,6 +13,7 @@
 #include "lemon/routing_policy_parser.h"
 #include "lemon/config_file.h"
 #include "lemon/juiced/service.h"
+#include "lemon/request_identity.h"
 #include "lemon/jobs/job_manager.h"
 #include "lemon/mcp_server.h"
 #include "lemon/ollama_api.h"
@@ -1062,11 +1063,24 @@ httplib::Server::HandlerResponse Server::authenticate_request(const httplib::Req
                         (req.path.rfind("/v1/", 0) == 0) ||
                         (req.path == "/mcp") ||
                         (req.path.rfind("/sdapi/", 0) == 0);
-    bool is_internal_route = (req.path.rfind("/internal/", 0) == 0) ||
-        (req.path.find("/juiced/") != std::string::npos &&
-         req.path.find("/juiced/catalog") == std::string::npos &&
-         req.path.find("/juiced/protocols") == std::string::npos &&
-         req.path.find("/juiced/state") == std::string::npos);
+    std::string native_path;
+    for (const std::string prefix : {"/api/v0/", "/api/v1/", "/v0/", "/v1/"}) {
+        if (req.path.rfind(prefix, 0) == 0) {
+            native_path = req.path.substr(prefix.size());
+            break;
+        }
+    }
+    const std::set<std::string> public_metadata = {
+        "juiced/catalog", "juiced/protocols", "juiced/state", "juiced/capabilities"};
+    const std::set<std::string> operator_operations = {
+        "pull", "delete", "install", "install/dry-run", "uninstall", "load",
+        "unload", "models/register", "downloads/control"};
+    const bool is_internal_route = req.path.rfind("/internal/", 0) == 0 ||
+        (native_path.rfind("juiced/", 0) == 0 && !public_metadata.count(native_path)) ||
+        native_path == "jobs" || native_path.rfind("jobs/", 0) == 0 ||
+        operator_operations.count(native_path) ||
+        (native_path.rfind("models/", 0) == 0 && native_path.size() > 8 &&
+         native_path.compare(native_path.size() - 8, 8, "/options") == 0);
     bool is_metrics_route = (req.path == "/metrics");
 
     // Authentication hierarchy. Two credentials gate two classes of endpoints:
@@ -1081,23 +1095,7 @@ httplib::Server::HandlerResponse Server::authenticate_request(const httplib::Req
     // - If api_key_ is empty, the regular endpoints require no authentication.
     // - If admin_api_key_ is empty (neither key set), /internal/* requires none.
 
-    // Safely extract bearer token, guarding against malformed Authorization headers
-    std::string auth_token;
-    try {
-        if (req.has_header("Authorization")) {
-            auto auth_value = req.get_header_value("Authorization");
-            // httplib::get_bearer_token_auth does substr(7) for "Bearer ", so check length
-            if (auth_value.size() >= 7) {
-                auth_token = httplib::get_bearer_token_auth(req);
-            }
-            // Silently ignore malformed/short Authorization headers
-        } else if (req.has_header("x-api-key") &&
-                   (req.path.rfind("/v1/messages", 0) == 0 || req.path.rfind("/v1/models", 0) == 0)) {
-            auth_token = req.get_header_value("x-api-key");
-        }
-    } catch (const std::exception& e) {
-        LOG(DEBUG, "Server") << "Failed to parse Authorization header: " << e.what() << std::endl;
-    }
+    const auto auth_token = request_credential(req);
 
     telemetry::g_current_auth_token = auth_token;
 
@@ -1572,7 +1570,9 @@ void Server::setup_routes(httplib::Server &web_server) {
     auto mcp_server = std::make_shared<McpServer>(
         router_.get(),
         model_manager_.get(),
-        [this](const std::string& m) { auto_load_model_if_needed(m); });
+        [this](const std::string& m) { auto_load_model_if_needed(m); },
+        [this](const std::string& m) { return !juiced_ || juiced_->allows(m); },
+        juiced_ != nullptr);
     mcp_server->register_routes(web_server);
 
     // Setup static file serving for web UI
@@ -3773,6 +3773,11 @@ void Server::handle_model_options_delete(const httplib::Request& req, httplib::R
 void Server::handle_collection_chat_completions(const nlohmann::json& request_json,
                                                 const ModelInfo& collection_info,
                                                 httplib::Response& res) {
+    if (juiced_) {
+        res.status = 501;
+        res.set_content(R"({"error":{"message":"Juiced does not execute agent collections","type":"unsupported_operation"}})", "application/json");
+        return;
+    }
     // Load the whole collection up front (shared, collection-aware loader) so the
     // model is fully ready — not just its chat component.
     try {
@@ -7266,6 +7271,10 @@ void job_error(httplib::Response& res, int status, const std::string& message) {
 }
 
 void Server::handle_jobs_create(const httplib::Request& req, httplib::Response& res) {
+    if (juiced_) {
+        job_error(res, 501, "Juiced does not execute caller-defined workflows or resume legacy graphs");
+        return;
+    }
     try {
         auto body = lemon::jobs::json::parse(req.body);
         const std::string name = body.value("name", "");
@@ -7322,6 +7331,10 @@ void Server::handle_jobs_interrupt(const httplib::Request& req, httplib::Respons
 }
 
 void Server::handle_jobs_resume(const httplib::Request& req, httplib::Response& res) {
+    if (juiced_) {
+        job_error(res, 501, "Juiced does not execute caller-defined workflows or resume legacy graphs");
+        return;
+    }
     if (!job_manager_->resume(job_id_from_path(req))) {
         job_error(res, 404, "job not found or not resumable");
         return;

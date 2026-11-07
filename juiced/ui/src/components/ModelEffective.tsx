@@ -4,6 +4,7 @@ import { api, type Model } from "../api";
 import type { OptionResponse, Options } from "./modelSettings";
 import { effectiveRows, settingValue, slotCapacity } from "./effectiveSettings";
 import { Button } from "./t3/button";
+import { HelpTip } from "./HelpTip";
 import "./ModelEffective.css";
 
 type Worker = { model_name: string; recipe_options?: Options; launch_command?: string[] };
@@ -36,6 +37,15 @@ export function ModelEffective({ model, options, draft, extra }: { model: Model;
     {error && <p className="inline-error" role="alert">Running settings unavailable: {error}</p>}
     {draftError && <p className="inline-error" role="alert">{draftError}</p>}
     {loading ? <p role="status">Reading the running worker…</p> : !worker ? <p className="settings-message">This model is unloaded. Running values become available after it loads.</p> : null}
+    {model.capability_contract && <div className="model-capability-summary" aria-label="Declared model services">
+      <strong>Model services</strong><span>{model.capability_contract.operations.map(operation => operation.id).join(", ") || "No declared runtime service"}</span>
+      <HelpTip label="Model capability evidence">
+        <p>These operations come from the native runtime descriptor and model metadata. A declaration does not establish tested hardware compatibility or output quality.</p>
+        <p>{model.capability_contract.execution.compatibility.reason}</p>
+        {model.capability_contract.artifact.missing_components.length > 0 && <p>Missing components: {model.capability_contract.artifact.missing_components.join(", ")}.</p>}
+        <p>Inspect Runtime for compatible profiles. Qualification remains unknown until a matching test is recorded.</p>
+      </HelpTip>
+    </div>}
     {capacity && <div className="capacity-summary"><strong>{capacity.perSlot.toLocaleString()} tokens per chat</strong><span>{capacity.total.toLocaleString()} total context across {capacity.slots} slot{capacity.slots === 1 ? "" : "s"}. Includes input, reasoning and output.</span></div>}
     <div className="effective-table-scroll" tabIndex={0} aria-label="Settings comparison table">
       <table><thead><tr><th>Setting / source</th><th>Saved</th><th>Running</th><th>Draft</th></tr></thead>

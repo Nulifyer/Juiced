@@ -77,8 +77,8 @@ if a.container:
 proof['ollama_memory_override']={'done':chunks[-1]['done'],'chunks':len(chunks),'global_mode_preserved':'persistent','restart_checked':bool(a.container)}
 call('juiced/cache',{'model_modes':{}})
 call('juiced/operation',{'model':model,'action':'load'});wait_loaded(True)
-def ask(session,stream,cache_prompt=True,legacy=False):
- q=urllib.request.Request(base+'chat/completions',data=json.dumps({**body,'cache_prompt':cache_prompt,'stream':stream,'stream_options':{'include_usage':True}}).encode(),headers={'Content-Type':'application/json',('X-Juiced-Thread-Id' if legacy else 'X-Juiced-Session-Id'):session})
+def ask(session,stream,cache_prompt=True,legacy=False,credential=None):
+ q=urllib.request.Request(base+'chat/completions',data=json.dumps({**body,'cache_prompt':cache_prompt,'stream':stream,'stream_options':{'include_usage':True}}).encode(),headers={'Content-Type':'application/json',('X-Juiced-Thread-Id' if legacy else 'X-Juiced-Session-Id'):session,**(credential or {})})
  with urllib.request.urlopen(q,timeout=180) as r:
   record={'headers':dict(r.headers)}
   if not stream:record['response']=json.load(r)
@@ -91,14 +91,14 @@ def ask(session,stream,cache_prompt=True,legacy=False):
  return record
 for streaming in [True,False]:
  session='engine-acceptance-'+('sse' if streaming else 'json')
- first=ask(session,streaming)
+ first=ask(session,streaming,credential={'Authorization':'Bearer anonymous-fixture-one'})
  for _ in range(50):
   saved=next((s for s in call('juiced/cache')['snapshots'] if s['session']==session),None)
   if saved:break
   time.sleep(.1)
  assert saved,call('juiced/cache')
  call('juiced/cache/retain', {'snapshot':saved['id'],'retained':True})
- reload();restored=ask(session,streaming,legacy=not streaming);assert restored['headers'].get('X-Juiced-Cache')=='restored',restored
+ reload();restored=ask(session,streaming,legacy=not streaming,credential={'x-api-key':'anonymous-fixture-two'});assert restored['headers'].get('X-Juiced-Cache')=='restored',restored
  data=restored['chunks'][-1] if streaming else restored['response'];assert data['timings']['cache_n']>30,restored
  before=next(x for x in call('juiced/cache')['snapshots'] if x['session']==session)
  assert before['retained'] is True

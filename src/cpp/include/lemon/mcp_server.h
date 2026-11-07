@@ -24,8 +24,10 @@ using json = nlohmann::json;
 class McpServer : public std::enable_shared_from_this<McpServer> {
 public:
     using EnsureLoadedFn = std::function<void(const std::string&)>;
+    using ModelAllowedFn = std::function<bool(const std::string&)>;
 
-    McpServer(Router* router, ModelManager* model_manager, EnsureLoadedFn ensure_loaded);
+    McpServer(Router* router, ModelManager* model_manager, EnsureLoadedFn ensure_loaded,
+              ModelAllowedFn model_allowed = {}, bool runtime_only = false);
     ~McpServer();
 
     // Must be called on a shared_ptr instance — handlers capture shared_from_this().
@@ -79,6 +81,8 @@ private:
     Router* router_;
     ModelManager* model_manager_;
     EnsureLoadedFn ensure_loaded_;
+    ModelAllowedFn model_allowed_;
+    bool runtime_only_ = false;
     std::vector<McpTool> tools_;
 };
 

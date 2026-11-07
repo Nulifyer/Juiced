@@ -1025,7 +1025,9 @@ include_directories(
 # ============================================================
 set(SOURCES_CORE
     src/cpp/server/server.cpp
+    src/cpp/server/request_identity.cpp
     src/cpp/server/juiced/service.cpp
+    src/cpp/server/juiced/capabilities.cpp
     src/cpp/server/juiced/compatibility.cpp
     src/cpp/server/juiced/execution.cpp
     src/cpp/server/juiced/preparation.cpp
@@ -3432,6 +3434,12 @@ if(BUILD_TESTING AND EXISTS "${_CLOUD_DISCOVERY_POLICY_TEST_SRC}")
     add_executable(test_cloud_discovery_policy test/cpp/test_cloud_discovery_policy.cpp)
     target_link_libraries(test_cloud_discovery_policy PRIVATE lemonade-server-core)
     add_cpp_ci_test(CloudDiscoveryPolicyTest CI ON COMMAND test_cloud_discovery_policy)
+endif()
+
+if(BUILD_TESTING)
+    add_executable(test_request_identity test/cpp/test_request_identity.cpp)
+    target_link_libraries(test_request_identity PRIVATE lemonade-server-core)
+    add_cpp_ci_test(RequestIdentityTest CI ON COMMAND test_request_identity)
 endif()
 
 set(_SESSION_UTILS_TEST_SRC "${CMAKE_CURRENT_SOURCE_DIR}/test/cpp/test_session_utils.cpp")

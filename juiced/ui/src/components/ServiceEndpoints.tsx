@@ -19,6 +19,7 @@ const protocolNames: Record<string, string> = {
 };
 const endpoints: Record<string, Endpoint[]> = {
   openai: [
+    ["Juiced capabilities", "GET", "/v1/juiced/capabilities", "Optional native discovery extension. Lists enabled downloaded models, declared operations, restrictions and qualification status; not an OpenAI standard endpoint."],
     ["Model discovery", "GET", "/v1/models", "Enabled models available to clients. Disabled models are excluded."],
     ["Chat", "POST", "/v1/chat/completions", "Text, vision and tools according to the selected model's capabilities."],
     ["Responses", "POST", "/v1/responses", "The supported Responses subset uses the same model workers."],

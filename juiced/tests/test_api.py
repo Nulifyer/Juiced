@@ -24,6 +24,7 @@ class ApiContract(unittest.TestCase):
   cls.hf_fixture=cls.root/'hf-text-fixture';cls.hf_fixture.mkdir();(cls.hf_fixture/'config.json').write_text(json.dumps({'model_type':'qwen3_5','text_config':{'model_type':'qwen3_5'},'vision_config':{}}));(cls.hf_fixture/'model.safetensors').write_bytes(b'planning fixture only')
   definitions=json.loads((cls.root/'config/user_models.json').read_text());definitions['Qwen3.5-Fixture-BF16']={'recipe':'vllm','source':'local_path','checkpoints':{'main':str(cls.hf_fixture)},'labels':['chat','vision']};(cls.root/'config/user_models.json').write_text(json.dumps(definitions))
   definitions=json.loads((cls.root/'config/user_models.json').read_text());definitions['ZZImage-Variant']={'recipe':'sd-cpp','source':'local_path','checkpoints':{'main':str(cls.execution_file)},'labels':['image'],'recipe_options':{'steps':7}};(cls.root/'config/user_models.json').write_text(json.dumps(definitions))
+  cls.legacy_jobs=cls.root/'config/jobs.json';cls.legacy_jobs.write_text(json.dumps({'jobs':[{'id':'legacy-fixture','name':'preserved graph','status':'queued','steps':[{'id':'first','op':'invalid-fixture-operation','when':'true','branch':[{'when':'true','goto':'first'}]}]}]}));cls.legacy_jobs_bytes=cls.legacy_jobs.read_bytes()
   cls.log=open(cls.root/'server.log','w');cls.process=subprocess.Popen([BINARY,str(cls.root/'cache'),str(cls.root/'config'),'--host','127.0.0.1','--port',str(cls.port)],stdout=cls.log,stderr=cls.log,env={**os.environ,'HOME':str(cls.root),'XDG_RUNTIME_DIR':str(cls.root/'run'),'HF_HUB_CACHE':str(cls.root/'hf')})
   for _ in range(150):
    try:
@@ -220,7 +221,7 @@ class ApiContract(unittest.TestCase):
       except OSError:pass
       time.sleep(.1)
      else:self.fail('Authenticated fixture did not start')
-     for path in ['/v1/juiced/protocols','/sdapi/v1/sd-models','/api/tags']:
+     for path in ['/v1/juiced/protocols','/v1/juiced/capabilities','/sdapi/v1/sd-models','/api/tags']:
       self.assertEqual(request(path),401,path)
       self.assertEqual(request(path,{'Authorization':'Bearer wrong'}),401,path)
       self.assertEqual(request(path,{'Authorization':'Bearer fixture-regular'}),200,path)
@@ -229,12 +230,66 @@ class ApiContract(unittest.TestCase):
      self.assertEqual(request(device_path,{'Authorization':'Bearer fixture-regular'}),401)
      self.assertEqual(request(device_path,{'Authorization':'Bearer fixture-admin'}),200)
      self.assertEqual(request('/v1/models',{'x-api-key':'fixture-regular','anthropic-version':'2023-06-01'}),200)
+     self.assertEqual(request('/v1/juiced/capabilities',{'x-api-key':'fixture-regular'}),200)
+     self.assertEqual(request('/v1/models',{'Authorization':'Basic fixture-regular'}),401)
+     self.assertEqual(request('/v1/jobs',{'Authorization':'Bearer fixture-regular'}),401)
+     self.assertEqual(request('/v1/jobs',{'Authorization':'Bearer fixture-admin'}),200)
+     self.assertEqual(request('/v1/install',{'Authorization':'Bearer fixture-regular'},{}),401)
      self.assertEqual(request('/v1/messages/count_tokens',{'x-api-key':'fixture-regular'},{}),400)
      self.assertEqual(request('/v1/messages/count_tokens',{'x-api-key':'wrong'},{}),401)
     finally:
      process.terminate()
      try:process.wait(timeout=20)
      except subprocess.TimeoutExpired:process.kill();process.wait()
+ def test_capability_contract(self):
+  model='ZZExecution-F16'
+  self.request('juiced/policy',{'model':model,'policy':'on-demand'})
+  try:
+   for prefix in ['/api/v0/','/api/v1/','/v0/','/v1/']:
+    status,data=self.request(prefix+'juiced/capabilities');self.assertEqual(status,200,data)
+    self.assertEqual(data['schema_version'],1);self.assertEqual(data['scope']['agent_execution'],False)
+    self.assertEqual(data['scope']['user_workflows'],False)
+    self.assertEqual(data['identity']['snapshot_namespace'],'principal-v1')
+    self.assertFalse(data['identity']['session_ids_are_access_control'])
+    entry=next(x for x in data['models'] if x['model']==model)
+    self.assertEqual(entry['artifact']['architecture'],'llama')
+    self.assertEqual(entry['execution']['performance_qualification'],'not_recorded')
+    self.assertIsNone(entry['limits']['concurrent_requests'])
+    self.assertEqual(entry['operations'][0]['id'],'chat.completions')
+    self.assertIsNone(entry['operations'][0]['streaming'])
+   self.request('juiced/policy',{'model':model,'policy':'disabled'})
+   _,data=self.request('juiced/capabilities');self.assertNotIn(model,[x['model'] for x in data['models']])
+   _,well_known=self.request('/.well-known/juiced.json');self.assertEqual(well_known['capabilities'],'/v1/juiced/capabilities')
+  finally:self.request('juiced/policy',{'model':model,'policy':'disabled'})
+ def test_runtime_only_jobs(self):
+  for prefix in ['/api/v0/','/api/v1/','/v0/','/v1/']:
+   for body in [{'steps':[{'op':'model.load','params':{'model':'invalid'}}]}, {'definition':{'steps':[{'op':'model.load'}]}}, {'name':'graph','inputs':{},'definition':{'steps':[]}}]:
+    status,_=self.request(prefix+'jobs',body);self.assertEqual(status,501)
+   status,_=self.request(prefix+'jobs/legacy-fixture/resume',{});self.assertEqual(status,501)
+ def test_legacy_jobs_preserved_and_not_resumed(self):
+  status,data=self.request('jobs/legacy-fixture');self.assertEqual(status,200,data)
+  self.assertEqual(data['status'],'interrupted')
+  self.assertEqual(data['steps'][0]['op'],'invalid-fixture-operation')
+  status,_=self.request('jobs/legacy-fixture/resume',{});self.assertEqual(status,501)
+  _,data=self.request('jobs/legacy-fixture');self.assertEqual(data['status'],'interrupted')
+  self.assertEqual(self.legacy_jobs.read_bytes(),self.legacy_jobs_bytes)
+ def test_runtime_only_mcp(self):
+  status,data=self.request('/mcp',{'jsonrpc':'2.0','id':1,'method':'tools/list'})
+  self.assertEqual(status,200,data);self.assertNotIn('lemonade_omni',[x['name'] for x in data['result']['tools']])
+  status,data=self.request('/mcp',{'jsonrpc':'2.0','id':2,'method':'tools/call','params':{'name':'lemonade_omni','arguments':{'messages':[{'role':'user','content':'fixture'}]}}})
+  self.assertEqual(status,200);self.assertTrue(data['result']['isError'])
+ def test_agent_collection_policy(self):
+  _,catalog=self.request('juiced/catalog')
+  omni=[x for x in catalog['data'] if x['recipe']=='collection.omni']
+  self.assertTrue(omni,'Expected native collection fixture catalogue')
+  model=omni[0]['id'];self.assertFalse(omni[0]['available'])
+  self.assertFalse(omni[0]['capability_contract']['runtime_service'])
+  self.assertEqual(omni[0]['capability_contract']['operations'],[])
+  status,_=self.request('juiced/policy',{'model':model,'policy':'hot'});self.assertEqual(status,400)
+  for prefix in ['/api/v0/','/api/v1/','/v0/','/v1/']:
+   for stream in [False,True]:
+    status,_=self.request(prefix+'chat/completions',{'model':model,'stream':stream,'messages':[{'role':'user','content':'fixture'}]});self.assertEqual(status,409)
+  status,_=self.request('chat/completions',{'model':model,'messages':[{'role':'user','content':'x'*270000}]});self.assertEqual(status,409)
  def test_protocol_manifest(self):
   for prefix in ['/api/v0/','/api/v1/','/v0/','/v1/']:
    status,data=self.request(prefix+'juiced/protocols');self.assertEqual(status,200)

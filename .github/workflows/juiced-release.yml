@@ -33,8 +33,25 @@ jobs:
           path: |
             juiced/ui/playwright-report/
             juiced/ui/test-results/
+  native-contracts:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure native core without desktop or web packaging
+        run: |
+          python -c "from pathlib import Path; Path('.version').write_text('2026.44.1-juiced\n')"
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_WEB_APP=OFF -DBUILD_TAURI_APP=OFF -DBUILD_TESTING=ON
+      - name: Compile core and portable contracts
+        run: cmake --build build --config Release --parallel 4 --target lemond test_request_identity test_backend_mode_contract
+      - name: Verify native contracts
+        run: ctest --test-dir build -C Release --output-on-failure -R "^(RequestIdentityTest|BackendModeContractTest)$"
   image:
-    needs: ui-acceptance
+    needs: [ui-acceptance, native-contracts]
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
@@ -69,7 +86,7 @@ jobs:
           done
           curl --fail --silent http://127.0.0.1:18080/ | grep -q '<title>Juiced</title>'
           curl --fail --silent http://127.0.0.1:18080/v1/juiced/catalog > catalog.json
-          python3 -c 'import json; assert json.load(open("state.json"))["version"] == "0.1.0"; assert "data" in json.load(open("catalog.json"))'
+          python3 -c 'import json; assert json.load(open("state.json"))["version"] == "${{ github.ref_type == 'tag' && github.ref_name || 'development' }}"; assert "data" in json.load(open("catalog.json"))'
           curl --fail --location --silent --show-error --retry 3 https://huggingface.co/ggml-org/models/resolve/main/tinyllamas/stories15M-q4_0.gguf -o stories15M-q4_0.gguf
           echo '66967fbece6dbe97886593fdbb73589584927e29119ec31f08090732d1861739  stories15M-q4_0.gguf' | sha256sum -c -
           docker cp stories15M-q4_0.gguf juiced-smoke:/library/stories15M-q4_0.gguf
