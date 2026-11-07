@@ -90,7 +90,9 @@ reuse rather than authorization. Session IDs are not access control.
 Snapshot identity `principal-v1` binds normalized principal, configured credential
 epoch, Chat Completions protocol, session, execution fingerprint and relevant request
 semantics. Rotating a configured key or changing auth mode causes a cold rebuild.
-Other protocols retain their existing persistent-state restrictions. Old snapshots
+Other protocols retain their persistent-state restrictions. MCP calls and model aliases
+use the same native lease requirement; an unleased MCP call cannot enter a qualified
+persistent deployment. Selecting Memory mode restores ordinary MCP inference. Old snapshots
 remain on disk under their original identities and are not silently reassigned.
 The first request after upgrading from the old raw-header namespace may be cold.
 No transcript/chat store or automatic cross-protocol session mapping is introduced.

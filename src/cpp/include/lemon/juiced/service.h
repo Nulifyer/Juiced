@@ -24,6 +24,7 @@ public:
   bool hot(const std::string &model) const;
   void set_hot(const std::string &model, bool pinned);
   bool inference_guard(const httplib::Request &, httplib::Response &);
+  bool requires_prompt_state_lease(const std::string &model) const;
   bool unleased_protocol(const httplib::Request &, httplib::Response &);
   void request_started();
   void capture_response_usage(const httplib::Response &);

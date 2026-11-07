@@ -88,31 +88,29 @@ std::string JuicedService::cache_mode_locked(const std::string &model) const {
     return settings["model_modes"][model].get<std::string>();
   return settings.value("mode", "memory");
 }
+bool JuicedService::requires_prompt_state_lease(const std::string &requested) const {
+  auto model = requested;
+  if (model.size() > 7 && model.substr(model.size() - 7) == ":latest")
+    model.resize(model.size() - 7);
+  if (server_.alias_manager_)
+    model = server_.alias_manager_->resolve_alias(model).value_or(model);
+  model = server_.model_manager_->get_public_model_name(
+      server_.model_manager_->resolve_model_name(model));
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (cache_mode_locked(model) != "persistent") return false;
+  for (const auto &[fingerprint, profile] : state_["qualified_profiles"].items())
+    if (profile.value("model", "") == model) return true;
+  return false;
+}
 bool JuicedService::unleased_protocol(const httplib::Request &req,
                                       httplib::Response &res) {
   try {
-    auto body = json::parse(req.body);
-    auto requested = body.value("model", "");
-    if (requested.size() > 7 &&
-        requested.substr(requested.size() - 7) == ":latest")
-      requested.resize(requested.size() - 7);
-    auto name = server_.model_manager_->get_public_model_name(
-        server_.model_manager_->resolve_model_name(requested));
-    std::lock_guard<std::mutex> lock(mutex_);
-    bool qualified = false;
-    for (const auto &[fingerprint, profile] :
-         state_["qualified_profiles"].items())
-      if (profile.value("model", "") == name)
-        qualified = true;
-    if (cache_mode_locked(name) == "persistent" && qualified) {
-      output(
-          res,
-          {{"error",
-            {{"message", "This deployment uses persistent session slots. Use "
-                         "Chat Completions, or select memory cache mode "
-                         "before using Responses/Completions."},
-             {"type", "invalid_request_error"}}}},
-          409);
+    const auto body = json::parse(req.body);
+    if (requires_prompt_state_lease(body.value("model", ""))) {
+      output(res,
+          {{"error", {{"message", "This deployment uses persistent session slots. Use "
+                         "Chat Completions, or select memory cache mode before using this protocol."},
+                       {"type", "invalid_request_error"}}}}, 409);
       return true;
     }
   } catch (const std::exception &) {

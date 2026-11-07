@@ -60,11 +60,31 @@ try:
  raise AssertionError('Persistent model accepted an unleased protocol')
 except urllib.error.HTTPError as e:
  assert e.code==409
+def mcp_chat():
+ q=urllib.request.Request(a.url.rstrip('/')+'/mcp',data=json.dumps({'jsonrpc':'2.0','id':1,'method':'tools/call','params':{'name':'lemonade_chat','arguments':{'model':model,'messages':messages,'max_tokens':4}}}).encode(),headers={'Content-Type':'application/json'})
+ with urllib.request.urlopen(q,timeout=180) as r:return json.load(r)['result']
+blocked=mcp_chat();assert blocked.get('isError') and 'persistent' in json.dumps(blocked),blocked
+proof['mcp_persistent_rejected']=True
+alias_url=a.url.rstrip('/')+'/internal/aliases'
+alias_request=urllib.request.Request(alias_url,data=json.dumps({'alias':'Stories-Persistent-Alias','target':model}).encode(),headers={'Content-Type':'application/json'})
+with urllib.request.urlopen(alias_request,timeout=30) as r:assert r.status==200
+try:
+ response_request=urllib.request.Request(base+'responses',data=json.dumps({'model':'Stories-Persistent-Alias','input':'A synthetic fixture.'}).encode(),headers={'Content-Type':'application/json'})
+ try:
+  urllib.request.urlopen(response_request,timeout=30)
+  raise AssertionError('Alias bypassed persistent slot protection')
+ except urllib.error.HTTPError as error:assert error.code==409
+ proof['alias_unleased_rejected']=True
+finally:
+ with urllib.request.urlopen(urllib.request.Request(alias_url+'/Stories-Persistent-Alias',method='DELETE'),timeout=30) as r:assert r.status==200
+
 call('juiced/cache',{'model_modes':{model:'memory'}})
 with urllib.request.urlopen(q,timeout=180) as r:
  chunks=[json.loads(line) for line in r if line.strip()]
  assert chunks and chunks[-1]['done'] and any(x.get('message',{}).get('content') for x in chunks),chunks
 assert call('juiced/cache')['settings']['mode']=='persistent'
+allowed=mcp_chat();assert not allowed.get('isError'),allowed
+proof['mcp_memory_allowed']=True
 if a.container:
  subprocess.run(['docker','restart',a.container],check=True,stdout=subprocess.DEVNULL)
  for _ in range(120):

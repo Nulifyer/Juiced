@@ -1573,7 +1573,11 @@ void Server::setup_routes(httplib::Server &web_server) {
     auto mcp_server = std::make_shared<McpServer>(
         router_.get(),
         model_manager_.get(),
-        [this](const std::string& m) { auto_load_model_if_needed(m); },
+        [this](const std::string& m) {
+            if (juiced_ && juiced_->requires_prompt_state_lease(m))
+                throw std::invalid_argument("MCP cannot use persistent session slots; use Chat Completions or select memory cache mode");
+            auto_load_model_if_needed(m);
+        },
         [this](const std::string& m) { return !juiced_ || juiced_->allows(m); },
         juiced_ != nullptr);
     mcp_server->register_routes(web_server);
