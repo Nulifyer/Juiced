@@ -58,8 +58,8 @@
         }
       },
       "Nulifyer/llama-xdna-hybrid": {
-        "rocm-v0.3.1": {
-          "llama-xdna-hybrid-linux-rocm-gfx1150-x86_64.tar.gz": "sha256:862a65ab6c6345da0e2b2bf5793d5fe587052239b5cd9f8ef99b2bdc15bec31b"
+        "rocm-v0.3.2": {
+          "llama-xdna-hybrid-linux-rocm-gfx1150-x86_64.tar.gz": "sha256:f9d2825c59a2c7a755c36a6482a20525ebf16521441e1b3b4860c709c1016a1b"
         }
       }
     }
@@ -71,7 +71,7 @@
     "cuda": "b11395",
     "metal": "b11393",
     "cpu": "b11393",
-    "hybrid-rocm": "rocm-v0.3.1"
+    "hybrid-rocm": "rocm-v0.3.2"
   },
   "llamacpp-hrx": {
     "hrx": "hrx-b99"
