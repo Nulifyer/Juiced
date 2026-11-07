@@ -209,8 +209,8 @@ class ApiContract(unittest.TestCase):
    (root/'config/config.json').write_text(json.dumps({'port':port,'broadcast':False,'auto_check_model_updates':False}))
    with open(root/'server.log','w') as log:
     process=subprocess.Popen([BINARY,str(root/'cache'),str(root/'config'),'--host','127.0.0.1','--port',str(port)],stdout=log,stderr=log,env={**os.environ,'HOME':str(root),'XDG_RUNTIME_DIR':str(root/'run'),'LEMONADE_API_KEY':'fixture-regular','LEMONADE_ADMIN_API_KEY':'fixture-admin'})
-    def request(path,headers=None,body=None):
-     q=urllib.request.Request(f'http://127.0.0.1:{port}'+path,headers=headers or {},data=None if body is None else json.dumps(body).encode())
+    def request(path,headers=None,body=None,method=None):
+     q=urllib.request.Request(f'http://127.0.0.1:{port}'+path,headers=headers or {},data=None if body is None else json.dumps(body).encode(),method=method)
      try:
       with urllib.request.urlopen(q,timeout=10) as response:return response.status
      except urllib.error.HTTPError as response:return response.code
@@ -237,6 +237,11 @@ class ApiContract(unittest.TestCase):
      self.assertEqual(request('/v1/install',{'Authorization':'Bearer fixture-regular'},{}),401)
      self.assertEqual(request('/v1/models/Whisper-Tiny/options',{'Authorization':'Bearer fixture-regular'}),200)
      self.assertEqual(request('/v1/models/Whisper-Tiny/options',{'Authorization':'Bearer fixture-regular'},{}),401)
+     for prefix in ['/api/v0/','/api/v1/','/v0/','/v1/']:
+      self.assertEqual(request(prefix+'slots',{'Authorization':'Bearer fixture-regular'}),401)
+      self.assertEqual(request(prefix+'slots/0?action=restore',{'Authorization':'Bearer fixture-regular'},{'filename':'fixture.bin'}),401)
+      self.assertEqual(request(prefix+'cloud/auth',{'Authorization':'Bearer fixture-regular'},{}),401)
+      self.assertEqual(request(prefix+'cloud/auth/fixture-provider',{'Authorization':'Bearer fixture-regular'},method='DELETE'),401)
      self.assertEqual(request('/v1/messages/count_tokens',{'x-api-key':'fixture-regular'},{}),400)
      self.assertEqual(request('/v1/messages/count_tokens',{'x-api-key':'wrong'},{}),401)
     finally:

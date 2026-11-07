@@ -77,7 +77,9 @@ not a valid API credential. Model/session/client headers cannot establish author
 With distinct configured keys, inference and operator credentials resolve to separate
 principals. The existing fallback where the admin key equals the regular key retains
 its full-access behavior. Native control operations, model-option mutations, installation and job
-inspection/mutation require the operator key when configured. Reading model options
+inspection/mutation require the operator key when configured. Raw native slot
+inspection/actions and cloud-credential configuration are operator controls too.
+Reading model options
 remains available to an inference credential for consumer context discovery. Existing key-free
 trusted-LAN installations remain key-free; this is a shared trust domain.
 

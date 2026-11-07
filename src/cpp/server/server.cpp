@@ -1074,10 +1074,12 @@ httplib::Server::HandlerResponse Server::authenticate_request(const httplib::Req
         "juiced/catalog", "juiced/protocols", "juiced/state", "juiced/capabilities"};
     const std::set<std::string> operator_operations = {
         "pull", "delete", "install", "install/dry-run", "uninstall", "load",
-        "unload", "models/register", "downloads/control"};
+        "unload", "models/register", "downloads/control", "cloud/auth", "models/check-updates"};
     const bool is_internal_route = req.path.rfind("/internal/", 0) == 0 ||
         (native_path.rfind("juiced/", 0) == 0 && !public_metadata.count(native_path)) ||
         native_path == "jobs" || native_path.rfind("jobs/", 0) == 0 ||
+        native_path == "slots" || native_path.rfind("slots/", 0) == 0 ||
+        native_path.rfind("cloud/auth/", 0) == 0 ||
         operator_operations.count(native_path) ||
         (req.method != "GET" && req.method != "HEAD" &&
          native_path.rfind("models/", 0) == 0 && native_path.size() > 8 &&

@@ -124,9 +124,10 @@ void JuicedService::capabilities_api(const httplib::Request &req,
     }
     json models = json::array();
     for (const auto &model : catalog) {
-        if (!model.value("downloaded", false) || !allows(model.value("id", ""))) continue;
+        if (!model.value("downloaded", false) || model.value("policy", "disabled") == "disabled") continue;
         if (!model.contains("capability_contract")) continue;
         auto contract = model.at("capability_contract");
+        if (!contract.value("runtime_service", false)) continue;
         contract["policy"] = model.at("policy");
         models.push_back(std::move(contract));
     }
