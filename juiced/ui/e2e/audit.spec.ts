@@ -100,3 +100,17 @@ test('clearing an advanced override shows inheritance and sends a reset',async({
   await page.getByRole('button',{name:'Save for next load',exact:true}).click();
   await expect.poll(()=>runtime.writes.find((w:any)=>w.path.endsWith('/options'))?.body.downsize_idle_timeout).toBeNull();
 });
+
+for(const width of [1440,390]) test(`file-review help stays above its modal and Escape preserves the review at ${width}px`,async({page,runtime})=>{
+  await page.setViewportSize({width,height:960});await page.goto('/');await navigate(page,'Library');
+  await page.getByRole('button',{name:'Hugging Face',exact:true}).click();
+  await page.getByRole('textbox',{name:'Search Hugging Face models',exact:true}).fill('Ornith');
+  await page.getByRole('button',{name:'Search',exact:true}).click();await page.getByRole('button',{name:'Browse quants',exact:true}).click();
+  const review=page.getByRole('dialog',{name:'Ornith-GGUF',exact:true});await expect(review).toBeVisible();
+  const trigger=page.getByRole('button',{name:'About File review',exact:true});await trigger.focus();await page.keyboard.press('Enter');
+  const help=page.getByRole('dialog',{name:'File review',exact:true});await expect(help).toBeVisible();
+  expect(await help.evaluate((element:HTMLElement)=>{const r=element.getBoundingClientRect();return element.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2));})).toBe(true);
+  const rect=await help.boundingBox();expect(rect!.x).toBeGreaterThanOrEqual(0);expect(rect!.x+rect!.width).toBeLessThanOrEqual(width);
+  await page.keyboard.press('Escape');await expect(help).toHaveCount(0);await expect(review).toBeVisible();await expect(trigger).toBeFocused();
+  await page.keyboard.press('Escape');await expect(review).toHaveCount(0);expect(runtime.writes).toEqual([]);
+});

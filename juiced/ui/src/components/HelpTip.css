@@ -16,8 +16,10 @@
   color: var(--foreground);
   background: var(--secondary);
 }
-.help-popup {
+.help-positioner {
   z-index: 150;
+}
+.help-popup {
   width: max-content;
   max-width: min(360px, calc(100vw - 24px));
   max-height: min(480px, 65dvh);
