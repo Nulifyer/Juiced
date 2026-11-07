@@ -52,7 +52,18 @@ const optionLabels: Record<string, string> = {
   downsize_idle_timeout: "Downsize after idle seconds",
   evict_idle_timeout: "Evict after idle seconds",
   evict_weight_factor: "Eviction weight",
+  width: "Image width",
+  height: "Image height",
+  steps: "Sampling steps",
+  cfg_scale: "Guidance scale",
+  flow_shift: "Flow shift",
+  sampling_method: "Sampler",
+  asr4all_threads: "CPU threads",
+  asr4all_commit: "Commit window",
+  asr4all_right: "Right context",
 };
+const runtimeBehaviorOptions = new Set(["auto_evict", "auto_update", "downsize_idle_timeout", "evict_idle_timeout", "evict_weight_factor", "merge_args"]);
+const modelOptionOrder = ["width", "height", "steps", "sampling_method", "cfg_scale", "flow_shift", "asr4all_threads", "asr4all_commit", "asr4all_right"];
 export function ModelWorkspace({
   model,
   models,
@@ -78,7 +89,7 @@ export function ModelWorkspace({
   refresh: () => Promise<void>;
   notify: (message: string) => void;
 }) {
-  const [tab, setTab] = useState(removalRequested ? "manage" : "settings");
+  const [tab, setTab] = useState(removalRequested ? "manage" : model.recipe === "llamacpp" ? "settings" : "advanced");
   const [response, setResponse] = useState<OptionResponse>();
   const [draft, setDraft] = useState<Options>({});
   const [error, setError] = useState("");
@@ -104,9 +115,18 @@ export function ModelWorkspace({
       extraEdited);
   const pending = saving || model.operation?.pending;
   const busy = model.runtime?.is_busy;
-  const advancedOptions = Object.entries(response?.effective || {}).filter(([key]) =>
-    !["model_name", "ctx_size", "pinned", "llamacpp_device"].includes(key) &&
-    !key.startsWith("llamacpp_hybrid_") && !key.endsWith("_args") && !key.endsWith("_backend"));
+  const backendArguments = Object.entries(response?.effective || {}).filter(([key, value]) => key.endsWith("_args") && typeof value === "string");
+  const advancedOptions = Object.entries(response?.effective || {}).filter(([key, value]) =>
+    !["model_name", ...(model.recipe === "llamacpp" ? ["ctx_size"] : []), "pinned", "llamacpp_device"].includes(key) &&
+    !key.startsWith("llamacpp_hybrid_") && !(key.endsWith("_args") && typeof value === "string") && !key.endsWith("_backend"))
+    .sort(([left], [right]) => {
+      const rank = (key: string) => modelOptionOrder.includes(key) ? modelOptionOrder.indexOf(key) : 100;
+      return rank(left) - rank(right);
+    });
+  const optionSections: [string, [string, any][]][] = model.recipe === "llamacpp"
+    ? [["Backend options", advancedOptions]]
+    : [["Model settings", advancedOptions.filter(([key]) => !runtimeBehaviorOptions.has(key))],
+       ["Runtime behavior", advancedOptions.filter(([key]) => runtimeBehaviorOptions.has(key))]];
   useEffect(() => {
     const controller = new AbortController();
     setError("");
@@ -392,9 +412,9 @@ export function ModelWorkspace({
             </div>
             <nav className="workspace-tabs" aria-label="Model details">
               {[
-                ["settings", "Settings"],
+                [model.recipe === "llamacpp" ? "settings" : "advanced", "Settings"],
                 ["runtime", "Runtime"],
-                ["advanced", "Advanced"],
+                ...(model.recipe === "llamacpp" ? [["advanced", "Advanced"]] : []),
                 ["effective", "Effective"],
                 ["readme", "README"],
                 ["weights", "Weights & variants"],
@@ -547,11 +567,11 @@ export function ModelWorkspace({
                   )}
                   </>}
                   {tab === "advanced" && <>
-                  {advancedOptions.length > 0 && (
-                  <fieldset className="settings-section" disabled={saving}>
-                    <legend>Backend options</legend>
+                  {optionSections.filter(([, options]) => options.length > 0).map(([title, options]) => (
+                  <fieldset key={title} className="settings-section" disabled={saving}>
+                    <legend>{title}</legend>
                     <div className="settings-grid">
-                      {advancedOptions.map(([key, value]) => {
+                      {options.map(([key, value]) => {
                           const current = Object.prototype.hasOwnProperty.call(draft, key) ? draft[key] : value;
                           const optionType = typeof (response.defaults[key] ?? value);
                           const label = optionLabels[key] || key.replace(/_/g, " ");
@@ -608,8 +628,8 @@ export function ModelWorkspace({
                         })}
                     </div>
                   </fieldset>
-                  )}
-                  <section className="settings-section">
+                  ))}
+                  {(model.recipe === "llamacpp" || backendArguments.length > 0) && <section className="settings-section">
                     <h2>Backend arguments <HelpTip label="Backend arguments">Additional flags not covered by the Settings controls. Existing cache, template and backend flags are preserved.</HelpTip></h2>
                     {model.recipe === "llamacpp" ? (
                       <label>
@@ -627,21 +647,21 @@ export function ModelWorkspace({
                         />
                       </label>
                     ) : (
-                      Object.entries(response.effective)
-                        .filter(([key]) => key.endsWith("_args"))
+                      backendArguments
                         .map(([key, value]) => (
                           <label key={key}>
                             {key.replace(/_/g, " ")}
                             <textarea
                               rows={4}
-                              value={draft[key] ?? value ?? ""}
+                              aria-label={key.replace(/_/g, " ")}
+                              value={Object.prototype.hasOwnProperty.call(draft, key) ? draft[key] ?? "" : value ?? ""}
                               onChange={(e) => update(key, e.target.value)}
                               spellCheck={false}
                             />
                           </label>
                         ))
                     )}
-                  </section>
+                  </section>}
                   </>}
                 </>
               ))}

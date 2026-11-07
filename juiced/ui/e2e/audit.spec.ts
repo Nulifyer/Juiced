@@ -114,3 +114,28 @@ for(const width of [1440,390]) test(`file-review help stays above its modal and 
   await page.keyboard.press('Escape');await expect(help).toHaveCount(0);await expect(review).toBeVisible();await expect(trigger).toBeFocused();
   await page.keyboard.press('Escape');await expect(review).toHaveCount(0);expect(runtime.writes).toEqual([]);
 });
+
+for(const [id,service,recipe,options,field,next] of [
+  ['kokoro-v1','Speak','kokoro',{},null,null],
+  ['asr4all-l-gptq-Q8_0','Transcribe','asr4all',{asr4all_threads:'4'},'CPU threads','6'],
+  ['Z-Image-Turbo','Images','sd-cpp',{width:768,height:768,steps:8,sdcpp_args:'--scheduler simple -t 8'},'Image width','1024'],
+] as const) test(`${service} inspector opens usable native settings and keeps boolean options typed`,async({page,runtime})=>{
+  const saved:any={merge_args:true,...options};const defaults={...saved};
+  runtime.models.push({id,service,recipe,labels:[],loaded:true,downloaded:true,available:true,state:'loaded',policy:'on-demand',runtime:{is_busy:false}});
+  await page.route(`**/v1/models/${id}/options`,route=>{
+    if(route.request().method()==='POST'){const body=route.request().postDataJSON();runtime.writes.push({path:`models/${id}/options`,body});Object.assign(saved,body);}
+    return route.fulfill({json:{recipe,saved,defaults,effective:{...defaults,...saved}}});
+  });
+  await page.goto('/');await page.getByRole('button',{name:id,exact:true}).first().click();
+  await expect(page.getByRole('button',{name:'Settings',exact:true})).toHaveAttribute('aria-current','page');
+  await expect(page.getByText('Context & capacity',{exact:true})).toHaveCount(0);
+  await expect(page.getByRole('textbox',{name:'merge args',exact:true})).toHaveCount(0);
+  await page.getByRole('combobox',{name:'Include backend defaults',exact:true}).selectOption('false');
+  if(field)await page.getByLabel(field,{exact:true}).fill(next);
+  await page.getByRole('button',{name:'Save for next load',exact:true}).click();
+  await expect.poll(()=>runtime.writes.find((w:any)=>w.path===`models/${id}/options`)?.body.merge_args).toBe(false);
+  const patch=runtime.writes.find((w:any)=>w.path===`models/${id}/options`).body;
+  if(recipe==='asr4all')expect(patch.asr4all_threads).toBe('6');
+  if(recipe==='sd-cpp'){expect(patch.width).toBe(1024);expect(saved.sdcpp_args).toBe('--scheduler simple -t 8');}
+  expect(runtime.writes.filter((w:any)=>w.path==='juiced/operation')).toEqual([]);
+});

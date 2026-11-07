@@ -88,6 +88,11 @@ change. Save for next load persists intent; Save and reload changes a shared
 worker while preserving policy. Busy/Disabled/missing-weight restrictions remain
 visible. A conflict retains the draft and provides a way to review current values.
 Required variants/projectors stay attached to the exact model registration.
+Speech, transcription and image models open their typed native options directly
+under Settings. Hide the chat-only context form for these runtimes; show image
+dimensions and recognizer settings before generic runtime behavior. Boolean
+options such as Include backend defaults remain booleans, even when their native
+key ends in `_args`. Only actual string arguments use the argument editor.
 
 ## Diagnostics contract
 
