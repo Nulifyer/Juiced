@@ -9,14 +9,14 @@
 #include <thread>
 #include <string>
 
-#ifdef _WIN32
-#include <windows.h>
-#endif
-
 #include <lemon/config_file.h>
 #include <lemon/server.h>
 #include <lemon/utils/json_utils.h>
 #include <lemon/utils/path_utils.h>
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 namespace fs = std::filesystem;
 using json = nlohmann::json;

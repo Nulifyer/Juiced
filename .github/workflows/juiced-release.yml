@@ -53,6 +53,8 @@ jobs:
         run: cmake --build build --config Release ${{ runner.os != 'Windows' && '--parallel 4' || '' }} --target lemond test_config_merging test_auto_tune test_request_cancellation test_provider_request_observation test_resource_admission test_router_admission test_provider_request_bounds test_request_identity test_backend_mode_contract test_memory_budget test_inference_lease test_realtime_worker_lease test_routing_helper_reconcile test_live_throughput
       - name: Verify native contracts
         run: ctest --test-dir build -C Release --output-on-failure -R "^(ConfigMergingTest|AutoTuneTest|RequestCancellationTest|ProviderRequestObservationTest|ResourceAdmissionTest|RouterAdmissionTest|ProviderRequestBoundsTest|RequestIdentityTest|BackendModeContractTest|MemoryBudgetTest|InferenceLeaseTest|RealtimeWorkerLeaseTest|RoutingHelperReconcileTest|LiveThroughputTest)$"
+      - name: Repeat admission queue and concurrency contract
+        run: ctest --test-dir build -C Release --output-on-failure --repeat until-fail:20 -R "^ResourceAdmissionTest$"
   image:
     needs: [ui-acceptance, native-contracts]
     runs-on: ubuntu-24.04
