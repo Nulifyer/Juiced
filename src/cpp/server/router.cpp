@@ -1592,6 +1592,7 @@ json Router::get_all_loaded_models() const {
         json model_info;
         model_info["model_name"] = model_manager_->get_public_model_name(server->get_model_name());
         model_info["checkpoint"] = server->get_checkpoint();
+        model_info["worker_generation"] = server->get_instance_id();
         if (!server->cloud_provider().empty()) model_info["cloud_provider"] = server->cloud_provider();
         model_info["type"] = model_type_to_string(server->get_model_type());
         model_info["residency_class"] = residency_class_to_string(server->get_residency_class());
@@ -3269,6 +3270,26 @@ json Router::get_pinned_helper_counts() const {
         {"tts", count_pinned_servers_in_pool(ModelType::TTS, ResidencyClass::RoutingHelper)},
         {"classification", count_pinned_servers_in_pool(ModelType::CLASSIFICATION, ResidencyClass::RoutingHelper)}
     };
+}
+
+uint64_t Router::get_model_generation(const std::string& model_name) const {
+    std::lock_guard<std::mutex> lock(load_mutex_);
+    const auto* worker = find_server_by_model_name(resolve_model_name(model_name));
+    return worker ? worker->get_instance_id() : 0;
+}
+
+bool Router::apply_model_policy(const std::string& model_name, uint64_t generation,
+                                bool pinned, bool unload) {
+    std::unique_lock<std::mutex> lock(load_mutex_);
+    wait_for_slot_clearance(lock);
+    auto* worker = find_server_by_model_name(resolve_model_name(model_name));
+    if (!worker || worker->get_instance_id() != generation) return false;
+    worker->set_pinned(pinned);
+    if (unload) {
+        if (worker->is_busy()) return false;
+        evict_server(worker);
+    }
+    return true;
 }
 
 void Router::set_model_pinned(const std::string& model_name, bool pinned) {

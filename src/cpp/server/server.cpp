@@ -3774,7 +3774,7 @@ void Server::handle_model_options_post(const httplib::Request& req, httplib::Res
                 return true;
             }
             if (!changes.empty()) {
-                model_manager_->update_saved_model_options(model_key, changes);
+                model_manager_->update_saved_model_options(model_key, changes, info.recipe);
             }
             info = model_manager_->get_model_info(model_key);
             return true;
@@ -3785,7 +3785,7 @@ void Server::handle_model_options_delete(const httplib::Request& req, httplib::R
     respond_with_model_options(req, res,
         [this](const std::string& model_key, ModelInfo& info, httplib::Response&) {
             if (!model_manager_->get_saved_model_options(model_key).empty()) {
-                model_manager_->set_saved_model_options(model_key, nlohmann::json::object());
+                model_manager_->set_saved_model_options(model_key, nlohmann::json::object(), info.recipe);
             }
             info = model_manager_->get_model_info(model_key);
             return true;
@@ -6395,7 +6395,7 @@ void Server::handle_load(const httplib::Request& req, httplib::Response& res) {
                     }
                 }
             }
-            model_manager_->set_saved_model_options(model_name, saved_for_write);
+            model_manager_->set_saved_model_options(model_name, saved_for_write, info.recipe);
             info = model_manager_->get_model_info(model_name);
         }
 

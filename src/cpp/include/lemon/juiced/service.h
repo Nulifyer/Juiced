@@ -38,6 +38,9 @@ private:
   Server &server_;
   std::filesystem::path directory_;
   mutable std::mutex mutex_;
+  // Commits and their effects are ordered without holding mutex_ through Router.
+  std::mutex policy_effect_mutex_;
+  std::function<void()> policy_effect_barrier_, reconciliation_barrier_;
   std::condition_variable wake_;
   json committed_state_;
   json state_, catalog_ = json::array(), operations_ = json::object();
@@ -63,10 +66,14 @@ private:
   json mutate_prompt_slot(const std::string& model, int slot,
                           const std::function<json()>& invoke);
   void prune_cache_locked();
+  void forget_snapshots_locked(const std::vector<std::string>& ids);
+  void cleanup_snapshots_locked();
   json save_state_locked(json candidate);
   void persist_locked();
   void set_policy_locked(const std::string& model, const std::string& policy);
-  void apply_policy_pin(const std::string& model, bool pinned);
+  uint64_t policy_revision_locked(const std::string& model) const;
+  void apply_policy_pin_locked(const std::string& model, uint64_t revision,
+                               uint64_t generation = 0);
   void reconcile();
   void reconcile_voice();
   void compatibility_routes(httplib::Server &http);

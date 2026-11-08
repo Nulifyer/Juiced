@@ -14,17 +14,23 @@
     "Cloud requests capture endpoint, credential, header, permission, wire format and revision together. Combined install/auth publication is coherent, and delayed discovery revalidates before publishing.",
     "Provider-scoped retirement rejects busy workers before commit, gates concurrent acquisition during publication and supports retryable cleanup after committed metadata removal.",
     "Returned native errors and thrown AdmissionError share status/code/retry classification before Ollama/Anthropic formatting.",
-    "CI retains native logs and cloud proof artifacts on failure; positive cancellation fixtures use explicit pending-state observation without changing production or negative-test deadlines."
+    "CI retains native logs and cloud proof artifacts on failure; positive cancellation fixtures use explicit pending-state observation without changing production or negative-test deadlines.",
+    "Final ModelManager readers recheck cache validity under the read lock. Options writers resolve the selected recipe inside the writer transaction, and native APIs reject changes since recipe validation.",
+    "Supported/downloaded/direct model discovery and the console catalog project the committed execution profile consistently.",
+    "Per-model committed policy revisions and exact worker generations order pin, reconciliation and queued unload effects. The Juiced state mutex is never held across those Router calls.",
+    "Cache forgetting and pruning commit tombstones before file deletion. Failed metadata publication preserves files; cleanup failure remains retryable across restart.",
+    "Portable ordering fixtures cover successful profile/policy races, obsolete queued commands, replacement generations, discovery parity and multi-snapshot failure/retry/restart. CPU fixtures explicitly select CPU before Hot loading."
   ],
   "verification": {
-    "status": "local Linux gates passed; current-source cross-platform/container/recovery evidence pending",
-    "native_contracts": 21,
+    "status": "local Linux native/API and isolated CPU/cloud integration gates passed; exact-source cross-platform/container/recovery evidence pending",
+    "native_contracts": 22,
     "persistence_checks": 90,
     "gateway_assertions": 34,
     "cloud_runtime_assertions": 12,
     "api_cases": 41,
     "ledger_repetitions": 20,
-    "scope": "Synthetic CPU/native/loopback and actual neutral Stories15M serving/cache. No accelerator, real speech, model quality or essential-service protection qualification."
+    "scope": "Synthetic CPU/native/loopback and actual neutral Stories15M serving/cache. No accelerator, real speech, model quality or essential-service protection qualification.",
+    "publication_ordering_checks": 34
   },
   "remaining": [
     "Full P1 fourteen-family path coverage, ingress/background/acquisition/preparation/install bounds, all-writer maintenance, exact execution identities, Realtime context/quiescence, termination reconciliation, early streaming status, shared observations and frozen service-protection gates.",

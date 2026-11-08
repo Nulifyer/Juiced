@@ -459,12 +459,12 @@ struct UpdateCheckResult {
 
     // Replace the model's recipe_options.json entry, returning the new entry.
     // An empty object erases the entry rather than persisting `{}`.
-    json set_saved_model_options(const std::string& model_name, const json& saved);
+    json set_saved_model_options(const std::string& model_name, const json& saved, const std::string& expected_recipe = "");
 
     // Merge changes into the model's recipe_options.json entry and return the
     // new entry. A null value erases that key. Atomic with respect to other
     // writers of the same entry.
-    json update_saved_model_options(const std::string& model_name, const json& changes);
+    json update_saved_model_options(const std::string& model_name, const json& changes, const std::string& expected_recipe = "");
 
     // The model-level options update_saved_model_options(changes) would leave
     // the model with, computed without persisting anything.
@@ -529,10 +529,11 @@ private:
     json registry_recipe_options(const std::string& cache_key);
     // Caller must hold models_cache_mutex_.
     json registry_recipe_options_locked(const std::string& cache_key);
-    json write_saved_model_options(const std::string& model_name, const json& options, bool merge);
+    json write_saved_model_options(const std::string& model_name, const json& options, bool merge, const std::string& expected_recipe);
 
     // Cache management
     void build_cache();
+    std::unique_lock<std::mutex> lock_current_models_cache();
     void add_model_to_cache(const std::string& model_name);
     // Caller must hold models_cache_mutex_.
     void update_model_options_in_cache_locked(const ModelInfo& info);
@@ -569,6 +570,7 @@ private:
     json recipe_options_;
     json execution_profiles_ = json::object();
     std::function<void()> profile_persistence_barrier_;
+    std::function<void()> cache_read_barrier_, options_write_barrier_;
     ModelInfo apply_execution_profile_locked(const std::string& cache_key, ModelInfo info) const;
     json architecture_defaults_;  // Per-architecture recipe option overlays (from resources)
     std::string extra_models_dir_;  // Secondary directory for GGUF model discovery

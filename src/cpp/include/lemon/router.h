@@ -214,6 +214,9 @@ public:
 
     // Pin or unpin a model
     void set_model_pinned(const std::string& model_name, bool pinned);
+    uint64_t get_model_generation(const std::string& model_name) const;
+    bool apply_model_policy(const std::string& model_name, uint64_t generation,
+                            bool pinned, bool unload = false);
 
     bool is_model_loaded() const;
 

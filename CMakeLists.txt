@@ -3463,6 +3463,8 @@ if(BUILD_TESTING)
     target_link_libraries(test_persistence_boundaries PRIVATE lemonade-server-core)
     add_cpp_ci_test(PersistenceBoundariesTest CI ON COMMAND test_persistence_boundaries)
     set_tests_properties(PersistenceBoundariesTest PROPERTIES TIMEOUT 90)
+    add_cpp_ci_test(PublicationOrderingTest CI ON COMMAND test_persistence_boundaries --ordering)
+    set_tests_properties(PublicationOrderingTest PROPERTIES TIMEOUT 120)
 
     add_executable(test_resource_admission test/cpp/test_resource_admission.cpp)
     target_link_libraries(test_resource_admission PRIVATE lemonade-server-core)

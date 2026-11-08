@@ -236,7 +236,40 @@ json JuicedService::cache_profile(const std::string &requested, WrappedServer::I
           {"address", address},     {"configured", configured},
           {"qualified", qualified}, {"identity", identity}};
 }
+void JuicedService::cleanup_snapshots_locked() {
+  bool changed = false;
+  const auto pending = state_["snapshot_cleanup"];
+  for (const auto& [id, entry] : pending.items()) {
+    if (active_snapshots_.count(id) || state_["snapshots"].contains(id)) continue;
+    std::error_code ec;
+    std::filesystem::remove(snapshot_directory_ / (id + ".bin"), ec);
+    if (ec) continue;
+    state_["snapshot_cleanup"].erase(id);
+    changed = true;
+  }
+  if (changed) {
+    try { persist_locked(); }
+    catch (const std::exception& error) {
+      LOG(WARNING, "Juiced") << "Snapshot cleanup will retry its durable tombstone: " << error.what() << std::endl;
+    }
+  }
+}
+void JuicedService::forget_snapshots_locked(const std::vector<std::string>& ids) {
+  bool changed = false;
+  for (const auto& id : ids) {
+    if (active_snapshots_.count(id)) throw std::runtime_error("Snapshot is in use");
+    if (state_["snapshots"].contains(id)) {
+      state_["snapshot_cleanup"][id] = state_["snapshots"][id];
+      state_["snapshots"].erase(id);
+      changed = true;
+    }
+  }
+  // A failed commit restores metadata before any saved computation is removed.
+  if (changed) persist_locked();
+  cleanup_snapshots_locked();
+}
 void JuicedService::prune_cache_locked() {
+  cleanup_snapshots_locked();
   auto budget = static_cast<uint64_t>(
       state_["cache"].value("disk_budget_gib", 8.0) * 1024 * 1024 * 1024);
   auto ttl = state_["cache"].value("retention_days", 7) * 86400LL;
@@ -255,7 +288,6 @@ void JuicedService::prune_cache_locked() {
     if (!std::filesystem::exists(file) ||
         (!j.value("retained", false) &&
          timestamp() - j.value("last_used", 0LL) > ttl)) {
-      std::filesystem::remove(file);
       remove.push_back(id);
     } else
       total += std::filesystem::file_size(file);
@@ -269,12 +301,10 @@ void JuicedService::prune_cache_locked() {
     auto file = snapshot_directory_ / (id + ".bin");
     if (std::filesystem::exists(file)) {
       total -= std::filesystem::file_size(file);
-      std::filesystem::remove(file);
     }
     remove.push_back(id);
   }
-  for (const auto &id : remove)
-    state_["snapshots"].erase(id);
+  if (!remove.empty()) forget_snapshots_locked(remove);
 }
 void JuicedService::cache_api(const httplib::Request &req,
                               httplib::Response &res, const std::string &op) {
@@ -342,20 +372,24 @@ void JuicedService::cache_api(const httplib::Request &req,
         ids.push_back(id);
       }
     }
+    if (op == "cache/forget") {
+      for (const auto& [id, entry] : state_["snapshot_cleanup"].items())
+        if ((!snapshot.empty() && id == snapshot) ||
+            (snapshot.empty() && entry.value("session", entry.value("thread", "")) == session))
+          ids.push_back(id);
+    }
     if (ids.empty()) {
       output(res, {{"error", "Snapshot not found"}}, 404);
       return;
     }
-    for (const auto &id : ids) {
-      if (op == "cache/retain")
-        state_["snapshots"][id]["retained"] = body.at("retained");
-      else {
-        std::filesystem::remove(snapshot_directory_ / (id + ".bin"));
-        state_["snapshots"].erase(id);
-      }
+    if (op == "cache/retain") {
+      for (const auto& id : ids) state_["snapshots"][id]["retained"] = body.at("retained");
+      persist_locked();
+    } else {
+      forget_snapshots_locked(ids);
     }
-    persist_locked();
     output(res, {{op == "cache/retain" ? "updated" : "forgotten", ids.size()},
+                 {"cleanup_pending", state_["snapshot_cleanup"].size()},
                  {"memory_note",
                   "Snapshot operations affect saved computation. Live engine "
                   "prefixes may remain until replaced or unloaded."}});
@@ -568,6 +602,8 @@ void JuicedService::chat(const httplib::Request &original,
         return;
       }
       prune_cache_locked();
+      if (state_["snapshot_cleanup"].contains(key))
+        throw std::runtime_error("Snapshot cleanup is pending; retry after filesystem access recovers");
       if (has_thread) {
         active_snapshots_.insert(key);
         guard->session_claimed = true;
@@ -652,13 +688,14 @@ void JuicedService::chat(const httplib::Request &original,
                       return a.second.value("last_used", 0LL) <
                              b.second.value("last_used", 0LL);
                     });
+          std::vector<std::string> evicted;
           for (const auto &[id, j] : order) {
             if (total <= budget)
               break;
-            std::filesystem::remove(snapshot_directory_ / (id + ".bin"));
             total -= j.value("bytes", uint64_t(0));
-            state_["snapshots"].erase(id);
+            evicted.push_back(id);
           }
+          if (!evicted.empty()) forget_snapshots_locked(evicted);
         }
         if (total > budget)
           throw std::runtime_error("Retained snapshots fill the budget; change "

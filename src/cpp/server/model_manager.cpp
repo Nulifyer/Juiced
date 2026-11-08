@@ -2277,20 +2277,25 @@ void ModelManager::save_model_options(const ModelInfo& info) {
     LOG(INFO, "ModelManager") << "Saving options for model: " << info.model_name << std::endl;
     // Persist under canonical ID (built-ins are keyed bare in cache but
     // recipe_options.json stores them as builtin.<name>).
-    const std::string id = cache_key_to_canonical_id(info.model_name);
     std::lock_guard<std::mutex> write_lock(recipe_options_write_mutex_);
-
+    auto current = get_model_info(info.model_name);
+    if (current.recipe != info.recipe)
+        throw std::invalid_argument("Execution profile changed before saving options; refresh and retry");
+    const std::string key = resolve_model_name(info.model_name);
+    const std::string id = cache_key_to_canonical_id(key);
+    current.model_name = key;
+    current.recipe_options = RecipeOptions(current.recipe, info.recipe_options.to_json());
     json snapshot;
     {
         std::lock_guard<std::mutex> lock(models_cache_mutex_);
         snapshot = recipe_options_;
-        snapshot[id] = info.recipe_options.to_json();
+        snapshot[id] = current.recipe_options.to_json();
     }
     save_user_json(get_recipe_options_file(), snapshot);
     {
         std::lock_guard<std::mutex> lock(models_cache_mutex_);
         recipe_options_.swap(snapshot);
-        update_model_options_in_cache_locked(info);
+        update_model_options_in_cache_locked(current);
     }
 }
 
@@ -2349,12 +2354,12 @@ json ModelManager::registry_recipe_options_locked(const std::string& cache_key) 
     return json(nullptr);
 }
 
-json ModelManager::set_saved_model_options(const std::string& model_name, const json& saved) {
-    return write_saved_model_options(model_name, saved, /*merge=*/false);
+json ModelManager::set_saved_model_options(const std::string& model_name, const json& saved, const std::string& expected_recipe) {
+    return write_saved_model_options(model_name, saved, /*merge=*/false, expected_recipe);
 }
 
-json ModelManager::update_saved_model_options(const std::string& model_name, const json& changes) {
-    return write_saved_model_options(model_name, changes, /*merge=*/true);
+json ModelManager::update_saved_model_options(const std::string& model_name, const json& changes, const std::string& expected_recipe) {
+    return write_saved_model_options(model_name, changes, /*merge=*/true, expected_recipe);
 }
 
 // Read-modify-write of one model's recipe_options.json entry.
@@ -2365,23 +2370,19 @@ json ModelManager::update_saved_model_options(const std::string& model_name, con
 // an older option set than the file. Only the first is held across disk I/O —
 // every request thread contends on the cache mutex.
 json ModelManager::write_saved_model_options(const std::string& model_name,
-                                             const json& options, bool merge) {
+                                             const json& options, bool merge, const std::string& expected_recipe) {
+    if (options_write_barrier_) options_write_barrier_();
+    std::lock_guard<std::mutex> write_lock(recipe_options_write_mutex_);
     const std::string cache_key = resolve_model_name(model_name);
     const std::string id = cache_key_to_canonical_id(cache_key);
     LOG(INFO, "ModelManager") << "Updating saved options for model: " << model_name << std::endl;
-
-    // get_model_info takes models_cache_mutex_ itself, so read it before
-    // locking. The registry layer is re-read under the lock instead, since the
-    // rebuild below has to reflect the registry as it stands at that moment.
     ModelInfo info;
     bool have_info = true;
-    try {
-        info = get_model_info(cache_key);
-    } catch (const std::exception&) {
-        have_info = false;
-    }
-
-    std::lock_guard<std::mutex> write_lock(recipe_options_write_mutex_);
+    try { info = get_model_info(cache_key); }
+    catch (const std::exception&) { have_info = false; }
+    if (!expected_recipe.empty() && (!have_info || info.recipe != expected_recipe))
+        throw std::invalid_argument("Execution profile changed before saving options; refresh and retry");
+    info.model_name = cache_key;
 
     json saved;
     json snapshot;
@@ -2412,14 +2413,11 @@ json ModelManager::write_saved_model_options(const std::string& model_name,
         recipe_options_.swap(snapshot);
 
         if (have_info) {
-            // Same layering as build_cache(), so the two can't drift.
             info.recipe_options = build_recipe_options(
                 info, registry_recipe_options_locked(cache_key), id, json{{id, saved}});
             update_model_options_in_cache_locked(info);
-        }
+        } else cache_valid_ = false;
     }
-
-    if (!have_info) invalidate_models_cache();
 
     return saved;
 }
@@ -2509,11 +2507,7 @@ void ModelManager::select_execution_profile(const std::string& model_name, const
 }
 
 std::map<std::string, ModelInfo> ModelManager::get_supported_models() {
-    // Build cache if needed (lazy initialization)
-    build_cache();
-
-    // Return copy of cache (all models, including their download status)
-    std::lock_guard<std::mutex> lock(models_cache_mutex_);
+    auto lock = lock_current_models_cache();
     std::map<std::string, ModelInfo> public_models;
     for (const auto& [name, info] : models_cache_) {
         auto it = canonical_public_names_.find(name);
@@ -3739,6 +3733,15 @@ static RoutingPolicyParseOptions make_routing_parse_options(RoutingResolutionTie
     return options;
 }
 
+std::unique_lock<std::mutex> ModelManager::lock_current_models_cache() {
+    for (;;) {
+        build_cache();
+        if (cache_read_barrier_) cache_read_barrier_();
+        std::unique_lock<std::mutex> lock(models_cache_mutex_);
+        if (cache_valid_) return lock;
+    }
+}
+
 void ModelManager::build_cache() {
     std::lock_guard<std::mutex> lock(models_cache_mutex_);
 
@@ -4332,21 +4335,13 @@ void ModelManager::remove_model_from_cache(const std::string& model_name) {
 
 
 std::map<std::string, ModelInfo> ModelManager::get_downloaded_models() {
-    // Build cache if needed
-    build_cache();
-
-    // Filter and return downloaded models. Collections (Omni) are included once
-    // all their components are downloaded: the server orchestrates /chat/completions
-    // for them (see CollectionOrchestrator), so they are genuine OpenAI-compatible
-    // chat models and should appear in /v1/models and Ollama /api/tags. A collection's
-    // `downloaded` flag already reflects component status (see build_cache).
-    std::lock_guard<std::mutex> lock(models_cache_mutex_);
+    auto lock = lock_current_models_cache();
     std::map<std::string, ModelInfo> downloaded;
     for (const auto& [name, info] : models_cache_) {
         if (info.downloaded) {
             auto it = canonical_public_names_.find(name);
             const std::string& public_name = it != canonical_public_names_.end() ? it->second : name;
-            ModelInfo public_info = info;
+            ModelInfo public_info = apply_execution_profile_locked(name, info);
             public_info.model_name = public_name;
             downloaded[public_name] = std::move(public_info);
         }
@@ -5699,16 +5694,8 @@ void ModelManager::download_model(const std::string& model_name,
     }
 
     if (model_data.contains("recipe_options")) {
-        // Merge import recipe_options on top of the already-merged options
-        // (which include image_defaults + JSON recipe_options + user-saved).
-        // This preserves the full 3-level merge from add_model_to_cache while
-        // layering in any import-specific overrides (e.g. sdcpp_args).
-        json merged = model_info.recipe_options.to_json();
-        for (auto& [key, value] : model_data["recipe_options"].items()) {
-            merged[key] = value;
-        }
-        model_info.recipe_options = RecipeOptions(model_info.recipe, merged);
-        save_model_options(model_info);
+        update_saved_model_options(model_name, model_data["recipe_options"]);
+        model_info = get_model_info(model_name);
     }
 
     if (register_only) {
@@ -7114,12 +7101,8 @@ json ModelManager::cleanup_orphaned_cache(bool dry_run) {
 }
 
 ModelInfo ModelManager::get_model_info(const std::string& model_name) {
-    // Build cache if needed
-    build_cache();
-
-    // O(1) lookup in cache
     {
-        std::lock_guard<std::mutex> lock(models_cache_mutex_);
+        auto lock = lock_current_models_cache();
         auto alias_it = public_model_aliases_.find(model_name);
         std::string canonical_name = alias_it != public_model_aliases_.end() ? alias_it->second : model_name;
         auto it = models_cache_.find(canonical_name);

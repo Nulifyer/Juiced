@@ -65,6 +65,7 @@ class Fixture:
                         "source": "local_path",
                         "checkpoints": {"main": str(args.model_file)},
                         "labels": ["chat"],
+                        "recipe_options": {"llamacpp_backend": "cpu", "ctx_size": 2048},
                     },
                     ROUTE: {
                         "recipe": "collection.router",

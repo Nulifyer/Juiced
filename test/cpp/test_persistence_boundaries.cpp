@@ -3,6 +3,7 @@
 #include "lemon/jobs/job_manager.h"
 #include "lemon/juiced/service.h"
 #include "lemon/model_manager.h"
+#include "lemon/mcp_server.h"
 #include "lemon/runtime_config.h"
 #include "lemon/server.h"
 #include "lemon/utils/json_utils.h"
@@ -23,6 +24,14 @@
 
 namespace lemon {
 struct ModelPublicationTestHook {
+    static void read_barrier(ModelManager& models, std::function<void()> callback) { models.cache_read_barrier_ = std::move(callback); }
+    static void write_barrier(ModelManager& models, std::function<void()> callback) { models.options_write_barrier_ = std::move(callback); }
+    static void downloaded(ModelManager& models, const std::string& name) {
+        const auto key = models.resolve_model_name(name);
+        models.get_model_info(name);
+        std::lock_guard<std::mutex> lock(models.models_cache_mutex_);
+        models.models_cache_.at(key).downloaded = true;
+    }
     static void barrier(ModelManager& models, std::function<void()> callback) {
         models.profile_persistence_barrier_ = std::move(callback);
     }
@@ -39,10 +48,53 @@ public:
     json chat_completion(const json&) override { return json::object(); }
 };
 struct StatePublicationTestHook {
-    static void add_worker(Server& server, const std::string& name) {
+    static void stop(Server& server) { server.juiced_->stop(); }
+    static ModelManager& models(Server& server) { return *server.model_manager_; }
+    static void effect_barrier(Server& server, std::function<void()> callback) { server.juiced_->policy_effect_barrier_ = std::move(callback); }
+    static void reconcile_barrier(Server& server, std::function<void()> callback) { server.juiced_->reconciliation_barrier_ = std::move(callback); }
+    static void refresh(Server& server) { server.juiced_->refresh(); }
+    static void reconcile(Server& server) { server.juiced_->reconcile(); }
+    static json take_command(Server& server) {
+        std::lock_guard<std::mutex> lock(server.juiced_->mutex_);
+        if (server.juiced_->pending_.empty()) return json::object();
+        auto cmd = server.juiced_->pending_.front(); server.juiced_->pending_.pop_front(); return cmd;
+    }
+    static void execute(Server& server, const json& command) { server.juiced_->execute(command); }
+    static uint64_t generation(Server& server, const std::string& name) { return server.router_->get_model_generation(name); }
+    static void stale_pin(Server& server, const std::string& name, uint64_t revision, uint64_t generation) {
+        std::lock_guard<std::mutex> effects(server.juiced_->policy_effect_mutex_);
+        server.juiced_->apply_policy_pin_locked(name, revision, generation);
+    }
+    static void add_worker(Server& server, const std::string& name, bool replace = false) {
         auto worker = std::make_shared<PolicyWorker>(name);
         std::lock_guard<std::mutex> lock(server.router_->load_mutex_);
+        if (replace) {
+            auto& workers = server.router_->loaded_servers_;
+            workers.erase(std::remove_if(workers.begin(), workers.end(), [&](const auto& old) { return old->get_model_name() == name; }), workers.end());
+        }
         server.router_->loaded_servers_.push_back(worker);
+    }
+    static httplib::Response list(Server& server, bool all) {
+        httplib::Request request; request.method = "GET"; request.path = "/v1/models";
+        if (all) request.params.emplace("show_all", "true");
+        httplib::Response response; response.status = 200; server.handle_models(request, response); return response;
+    }
+    static json mcp(Server& server) {
+        McpServer mcp(server.router_.get(), server.model_manager_.get(), [](const std::string&) {},
+                      [&](const std::string& name) { return server.juiced_->allows(name); }, true);
+        return json::parse(mcp.handle_request_body(json{{"jsonrpc", "2.0"}, {"id", 1}, {"method", "tools/call"},
+            {"params", {{"name", "lemonade_list_models"}, {"arguments", {{"include_suggested", false}}}}}}.dump()));
+    }
+    static void seed_snapshots(Server& server) {
+        std::lock_guard<std::mutex> lock(server.juiced_->mutex_);
+        for (const auto& id : {"first", "second"}) {
+            std::ofstream file(server.juiced_->snapshot_directory_ / (std::string(id) + ".bin")); file << "saved computation";
+            server.juiced_->state_["snapshots"][id] = {{"session", "fixture-session"}, {"retained", true}, {"bytes", 17}, {"last_used", 4102444800LL}};
+        }
+        server.juiced_->persist_locked();
+    }
+    static void cleanup(Server& server) {
+        std::lock_guard<std::mutex> lock(server.juiced_->mutex_); server.juiced_->cleanup_snapshots_locked();
     }
     static bool pinned(Server& server, const std::string& name) {
         const auto public_name = server.model_manager_->get_public_model_name(name);
@@ -60,9 +112,9 @@ struct StatePublicationTestHook {
         return server.juiced_->state_;
     }
     static bool allows(Server& server, const std::string& name) { return server.juiced_->allows(name); }
-    static httplib::Response cache(Server& server, const json& body) {
+    static httplib::Response cache(Server& server, const json& body, const std::string& operation = "cache") {
         httplib::Request req; req.method = "POST"; req.path = "/v1/juiced/cache"; req.body = body.dump();
-        httplib::Response response; server.juiced_->handle(req, response, "cache"); return response;
+        httplib::Response response; server.juiced_->handle(req, response, operation); return response;
     }
     static httplib::Response mutate(Server& server, const json& body, bool pin = false) {
         httplib::Request req; req.method = "POST"; req.path = pin ? "/internal/pin" : "/v1/juiced/policy"; req.body = body.dump();
@@ -278,6 +330,198 @@ static void profile_concurrency() {
     lemon::RuntimeConfig::set_global(nullptr);
 }
 
+static void successful_profile_overlap() {
+    auto defaults = lemon::ConfigFile::base_defaults(); defaults["offline"] = true;
+    lemon::RuntimeConfig runtime(defaults); lemon::RuntimeConfig::set_global(&runtime);
+    {
+        lemon::ModelManager models;
+        models.register_user_model("user.Persistence", {{"recipe", "llamacpp"}, {"checkpoint", "fixture/repo:Q4_K_M"}});
+        models.select_execution_profile("user.Persistence", {{"id", "registered"}});
+        models.update_saved_model_options("user.Persistence", {{"ctx_size", 8192}, {"llamacpp_backend", "vulkan"}});
+        for (bool list : {false, true}) {
+            models.select_execution_profile("user.Persistence", {{"id", "changed"}, {"recipe", "vllm"}, {"options", {{"ctx_size", 4096}}}});
+            std::promise<void> entered, release; auto released = release.get_future();
+            std::thread::id reader_id; std::atomic<bool> first{true};
+            lemon::ModelPublicationTestHook::read_barrier(models, [&] {
+                if (std::this_thread::get_id() == reader_id && first.exchange(false)) { entered.set_value(); released.wait(); }
+            });
+            auto reader = std::async(std::launch::async, [&] {
+                reader_id = std::this_thread::get_id();
+                return list ? models.get_supported_models().at(models.get_public_model_name("user.Persistence")) : models.get_model_info("user.Persistence");
+            });
+            entered.get_future().wait();
+            models.select_execution_profile("user.Persistence", {{"id", "registered"}});
+            release.set_value(); const auto observed = reader.get();
+            lemon::ModelPublicationTestHook::read_barrier(models, {});
+            check(observed.recipe == "llamacpp" && observed.recipe_options.get_option("ctx_size") == 8192 &&
+                  observed.recipe_options.get_option("llamacpp_backend") == "vulkan",
+                  "lookup and supported listing recheck successful profile commits across the cache/read gap");
+        }
+        models.select_execution_profile("user.Persistence", {{"id", "changed"}, {"recipe", "vllm"}, {"options", {{"ctx_size", 4096}}}});
+        auto stale = models.get_model_info("user.Persistence");
+        std::promise<void> entered, release; auto released = release.get_future();
+        lemon::ModelPublicationTestHook::write_barrier(models, [&] { entered.set_value(); released.wait(); });
+        auto writer = std::async(std::launch::async, [&] { return models.update_saved_model_options("user.Persistence", {{"ctx_size", 6144}}); });
+        entered.get_future().wait();
+        models.select_execution_profile("user.Persistence", {{"id", "registered"}});
+        const auto rebuilt = models.get_model_info("user.Persistence");
+        release.set_value(); writer.get(); lemon::ModelPublicationTestHook::write_barrier(models, {});
+        const auto committed = models.get_model_info("user.Persistence");
+        check(rebuilt.recipe == "llamacpp" && committed.recipe == "llamacpp" && committed.recipe_options.get_option("ctx_size") == 6144 &&
+              committed.recipe_options.get_option("llamacpp_backend") == "vulkan", "queued option writer interprets current committed recipe after successful selection and rebuild");
+        bool rejected = false; try { models.save_model_options(stale); } catch (const std::invalid_argument&) { rejected = true; }
+        check(rejected && models.get_model_info("user.Persistence").recipe_options.to_json() == committed.recipe_options.to_json(),
+              "stale full-option publication rejects instead of overwriting another recipe");
+        bool stale_validation = false;
+        try { models.update_saved_model_options("user.Persistence", {{"ctx_size", 2048}}, "vllm"); }
+        catch (const std::invalid_argument&) { stale_validation = true; }
+        check(stale_validation && models.get_model_info("user.Persistence").recipe_options.to_json() == committed.recipe_options.to_json(),
+              "options validated for another recipe reject before durable or cached publication");
+        lemon::ModelManager restarted;
+        check(restarted.get_model_info("user.Persistence").recipe_options.to_json() == committed.recipe_options.to_json() &&
+              restarted.get_execution_profiles("user.Persistence") == models.get_execution_profiles("user.Persistence"),
+              "successful profile/options overlap agrees after restart");
+    }
+    lemon::RuntimeConfig::set_global(nullptr);
+}
+
+static void profile_discovery() {
+    using Hook = lemon::StatePublicationTestHook;
+    const auto root = lemon::test::make_scratch_dir("profile-discovery");
+    auto defaults = lemon::ConfigFile::base_defaults(); defaults["offline"] = true; defaults["broadcast"] = false;
+    auto runtime = std::make_shared<lemon::RuntimeConfig>(defaults); lemon::RuntimeConfig::set_global(runtime.get());
+    for (bool restart : {false, true}) {
+        lemon::Server server(runtime, root.string(), root.string()); Hook::stop(server);
+        const std::string name = "user.DiscoveryProfile";
+        auto& models = Hook::models(server);
+        if (!restart) {
+            Hook::register_model(server, name);
+            models.select_execution_profile(name, {{"id", "alternate"}, {"recipe", "vllm"}, {"options", {{"ctx_size", 4096}}}});
+            Hook::mutate(server, {{"model", name}, {"policy", "on-demand"}});
+        }
+        const auto public_name = models.get_public_model_name(name);
+        lemon::ModelPublicationTestHook::downloaded(models, name);
+        check(models.get_model_info(name).recipe == "vllm" && models.get_supported_models().at(public_name).recipe == "vllm" &&
+              models.get_downloaded_models().at(public_name).recipe == "vllm", "direct, supported and downloaded projections agree on the selected recipe before/after restart");
+        for (bool all : {false, true}) {
+            const auto response = Hook::list(server, all); bool found = false;
+            const auto listing = json::parse(response.body);
+            for (const auto& row : listing.at("data")) if (row.at("id") == public_name) found = row.at("recipe") == "vllm";
+            check(response.status == 200 && found, "ordinary and show_all model APIs retain selected recipe and proper public name");
+        }
+        const auto reply = Hook::mcp(server);
+        const auto payload = json::parse(reply.at("result").at("content").at(1).at("text").get<std::string>());
+        bool found = false;
+        for (const auto& row : payload.at("available")) if (row.at("model_name") == public_name) found = row.at("recipe") == "vllm";
+        check(found, "MCP downloaded discovery uses the same committed selected recipe");
+    }
+    lemon::RuntimeConfig::set_global(nullptr);
+}
+
+static void policy_ordering() {
+    using Hook = lemon::StatePublicationTestHook;
+    const auto root = lemon::test::make_scratch_dir("policy-order");
+    const std::string name = "user.PolicyOrdering";
+    auto defaults = lemon::ConfigFile::base_defaults(); defaults["offline"] = true; defaults["broadcast"] = false;
+    auto runtime = std::make_shared<lemon::RuntimeConfig>(defaults); lemon::RuntimeConfig::set_global(runtime.get());
+    {
+        lemon::Server server(runtime, root.string(), root.string()); Hook::stop(server); Hook::register_model(server, name); Hook::add_worker(server, name);
+        const auto public_name = Hook::models(server).get_public_model_name(name);
+        Hook::mutate(server, {{"model", name}, {"policy", "hot"}});
+        std::promise<void> entered, release, newer_started; auto released = release.get_future();
+        std::thread::id old_id;
+        Hook::effect_barrier(server, [&] { if (std::this_thread::get_id() == old_id) { entered.set_value(); released.wait(); } });
+        auto older = std::async(std::launch::async, [&] { old_id = std::this_thread::get_id(); return Hook::mutate(server, {{"model", name}, {"policy", "on-demand"}}); });
+        entered.get_future().wait();
+        const auto stale_revision = Hook::state(server).at("policy_revisions").at(public_name).get<uint64_t>();
+        const auto old_generation = Hook::generation(server, name);
+        auto newer = std::async(std::launch::async, [&] { newer_started.set_value(); return Hook::mutate(server, {{"model", name}, {"pinned", true}}, true); });
+        newer_started.get_future().wait(); release.set_value();
+        check(older.get().status == 200 && newer.get().status == 200 && Hook::pinned(server, name),
+              "overlapping successful policy and legacy-pin updates apply effects in commit order");
+        Hook::effect_barrier(server, {});
+        Hook::stale_pin(server, name, stale_revision, old_generation);
+        check(Hook::pinned(server, name), "older revision cannot unpin the latest committed Hot worker");
+        Hook::mutate(server, {{"model", name}, {"policy", "disabled"}}); Hook::refresh(server);
+        std::promise<void> snapshot, continue_reconcile; auto continued = continue_reconcile.get_future();
+        Hook::reconcile_barrier(server, [&] { snapshot.set_value(); continued.wait(); });
+        auto reconciliation = std::async(std::launch::async, [&] { Hook::reconcile(server); });
+        snapshot.get_future().wait(); Hook::mutate(server, {{"model", name}, {"policy", "hot"}}); continue_reconcile.set_value(); reconciliation.get();
+        Hook::reconcile_barrier(server, {});
+        check(Hook::take_command(server).empty() && Hook::pinned(server, name), "stale Disabled reconciliation cannot enqueue unload after newer Hot intent");
+        Hook::mutate(server, {{"model", name}, {"policy", "disabled"}}); Hook::refresh(server); Hook::reconcile(server);
+        const auto command = Hook::take_command(server);
+        check(command.value("action", "") == "unload", "current Disabled reconciliation queues a revision-bound unload");
+        Hook::mutate(server, {{"model", name}, {"policy", "hot"}}); Hook::execute(server, command);
+        check(Hook::generation(server, name) == old_generation && Hook::pinned(server, name), "queued Disabled unload becomes obsolete after a newer Hot commit");
+        Hook::add_worker(server, name, true);
+        const auto replacement = Hook::generation(server, name);
+        Hook::mutate(server, {{"model", name}, {"policy", "hot"}});
+        const auto current_revision = Hook::state(server).at("policy_revisions").at(public_name).get<uint64_t>();
+        Hook::stale_pin(server, name, current_revision, old_generation);
+        check(replacement != old_generation && Hook::pinned(server, name), "generation-bound policy effect does not touch a replacement worker");
+        Hook::mutate(server, {{"model", name}, {"policy", "disabled"}}); Hook::execute(server, command);
+        check(Hook::generation(server, name) == replacement, "obsolete queued revision cannot unload a replacement generation");
+        Hook::refresh(server); Hook::reconcile(server);
+        const auto same_revision = Hook::take_command(server);
+        Hook::add_worker(server, name, true);
+        const auto newest = Hook::generation(server, name);
+        Hook::execute(server, same_revision);
+        check(same_revision.value("action", "") == "unload" && newest != replacement && Hook::generation(server, name) == newest,
+              "same-policy queued unload validates its exact generation before touching a replacement");
+    }
+    lemon::RuntimeConfig::set_global(nullptr);
+}
+
+static void cache_forget_failures() {
+    using Hook = lemon::StatePublicationTestHook;
+    for (bool staging : {false, true}) {
+        const auto root = lemon::test::make_scratch_dir("cache-forget");
+        auto defaults = lemon::ConfigFile::base_defaults(); defaults["offline"] = true; defaults["broadcast"] = false;
+        auto runtime = std::make_shared<lemon::RuntimeConfig>(defaults); lemon::RuntimeConfig::set_global(runtime.get());
+        {
+            lemon::Server server(runtime, root.string(), root.string()); Hook::stop(server); Hook::seed_snapshots(server);
+            const auto before = Hook::state(server); const auto target = root / "juiced/state.json";
+            httplib::Response rejected;
+            if (staging) {
+                fs::create_directory(root / "juiced/state.json.tmp");
+                rejected = Hook::cache(server, {{"session", "fixture-session"}}, "cache/forget");
+                fs::remove(root / "juiced/state.json.tmp");
+            } else {
+                write(root / "juiced/state.json.tmp", json::object()); BlockReplacement block(target);
+                rejected = Hook::cache(server, {{"session", "fixture-session"}}, "cache/forget");
+            }
+            check(rejected.status == 500 && Hook::state(server) == before && read(target) == before &&
+                  fs::exists(root / "juiced/snapshots/first.bin") && fs::exists(root / "juiced/snapshots/second.bin"),
+                  "failed multi-snapshot forget preserves metadata, revision and every saved computation file");
+            fs::remove(root / "juiced/state.json.tmp");
+            auto accepted = Hook::cache(server, {{"session", "fixture-session"}}, "cache/forget");
+            check(accepted.status == 200 && Hook::state(server).at("snapshots").empty() &&
+                  !fs::exists(root / "juiced/snapshots/first.bin") && !fs::exists(root / "juiced/snapshots/second.bin"),
+                  "forget retry commits removal before deleting all selected files");
+        }
+        {
+            lemon::Server server(runtime, root.string(), root.string()); Hook::stop(server);
+            check(Hook::state(server).at("snapshots").empty(), "forgotten computation does not reappear after restart");
+            Hook::seed_snapshots(server);
+            for (const auto& id : {"first", "second"}) {
+                const auto file = root / "juiced/snapshots" / (std::string(id) + ".bin"); fs::remove(file); fs::create_directory(file); write(file / "block", json::object());
+            }
+            const auto accepted = Hook::cache(server, {{"session", "fixture-session"}}, "cache/forget");
+            check(accepted.status == 200 && Hook::state(server).at("snapshots").empty() && Hook::state(server).at("snapshot_cleanup").size() == 2,
+                  "post-commit filesystem failure keeps durable retryable cleanup without advertising forgotten snapshots");
+        }
+        {
+            lemon::Server server(runtime, root.string(), root.string()); Hook::stop(server);
+            check(Hook::state(server).at("snapshot_cleanup").size() == 2, "cleanup tombstones survive restart");
+            fs::remove_all(root / "juiced/snapshots/first.bin"); fs::remove_all(root / "juiced/snapshots/second.bin");
+            const auto retry = Hook::cache(server, {{"session", "fixture-session"}}, "cache/forget");
+            check(retry.status == 200 && Hook::state(server).at("snapshot_cleanup").empty(), "committed forget remains retryable after filesystem recovery");
+        }
+        lemon::RuntimeConfig::set_global(nullptr);
+    }
+}
+
 static void policy_failures() {
     for (bool pin : {false, true}) for (bool staging : {false, true}) {
         const auto root = lemon::test::make_scratch_dir("policy");
@@ -333,8 +577,12 @@ static void policy_failures() {
     }
 }
 
-int main() {
-    cloud_failures(); retained_jobs(); model_files(); profile_concurrency(); policy_failures();
+int main(int argc, char** argv) {
+    if (argc > 1 && std::string(argv[1]) == "--ordering") {
+        successful_profile_overlap(); profile_discovery(); policy_ordering(); cache_forget_failures();
+    } else {
+        cloud_failures(); retained_jobs(); model_files(); profile_concurrency(); policy_failures();
+    }
     std::fprintf(stderr, "Persistence boundaries: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

@@ -102,10 +102,16 @@ complete-model promotion or multi-file rollback.
 Policy changes and legacy pin requests stage the Juiced state candidate and its
 revision before publication. That saved policy owns eligibility and Hot residency;
 saved engine options do not duplicate policy. Runtime pin effects follow the
-committed policy and reconciliation retries a changed generation. Profile selection
-and saved options share ModelManager's writer. Concurrent readers retain the old
-selection until both files commit, then receive the new selection and options
-together. This does not establish crash-consistent P3 multi-file promotion.
+committed policy. A separate effects lock orders successful policy commits and
+worker effects, without holding the state mutex during Router calls. Reconciliation
+and queued unloads carry the committed per-model policy revision and exact worker
+generation. Superseded effects cannot unpin or unload a newer Hot service.
+
+Profile selection and saved options share ModelManager's writer. Option writers
+resolve the committed recipe inside that transaction. Native option APIs reject a
+recipe change since validation. Final readers recheck cache validity under their
+read lock. Direct, supported and downloaded model views apply the same selected
+profile. This does not establish crash-consistent P3 multi-file promotion.
 
 Cloud forwarding and discovery use one per-provider snapshot of endpoint, credential,
 auth header, plaintext permission, wire format and revision. Existing requests retain
@@ -120,3 +126,9 @@ The Juiced state owner retains a private last-committed checkpoint. Failed write
 restore legacy state mutations under the same mutex, including cache controls.
 Revision advances only after commit. This checkpoint does not provide a consistent
 multi-writer volume backup or complete model/runtime revision recovery.
+
+Snapshot forgetting and pruning commit removal metadata and cleanup tombstones
+before deleting saved computation. A failed metadata commit preserves every file.
+Filesystem cleanup failures remain retryable across restart and do not advertise
+forgotten snapshots. A new request cannot reuse a snapshot key while its destructive
+cleanup remains pending. Source weights and consumer messages are unaffected.
