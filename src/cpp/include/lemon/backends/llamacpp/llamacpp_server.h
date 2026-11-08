@@ -34,6 +34,8 @@ public:
         return backend == "hybrid-rocm" ? SlotPolicy::ExclusiveNpu : SlotPolicy::Standard;
     }
 
+    RequestEnvelope resolve_request(InferenceOperation operation, const json& request, bool protected_mode) const override;
+
     // ICompletionServer implementation
     json chat_completion(const json& request) override;
     json completion(const json& request) override;

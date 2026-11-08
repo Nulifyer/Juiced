@@ -435,18 +435,7 @@ bool atomic_replace_file(const fs::path& src, const fs::path& dest, std::error_c
     fs::rename(src, dest, ec);
     if (!ec) return true;
 #endif
-    std::error_code copy_ec;
-    fs::copy_file(src, dest, fs::copy_options::overwrite_existing, copy_ec);
-    if (copy_ec) {
-        ec = copy_ec;
-        std::error_code rm_ec;
-        fs::remove(src, rm_ec);
-        return false;
-    }
-    ec.clear();
-    std::error_code rm_ec;
-    fs::remove(src, rm_ec);
-    return true;
+    return false;
 }
 
 

@@ -18,6 +18,7 @@ int main() {
     int failures = 0, checks = 0;
     auto check = [&](bool ok, const char* name) {
         ++checks;
+        std::fprintf(stderr, "CHECK %d: %s\n", checks, name);
         if (!ok) { ++failures; std::fprintf(stderr, "FAIL: %s\n", name); }
     };
     auto error = [&](auto action, const char* code) {

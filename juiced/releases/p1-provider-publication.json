@@ -1,0 +1,39 @@
+{
+  "schema": 1,
+  "phase": "P1",
+  "phase_complete": false,
+  "deployed": false,
+  "selected_families": [
+    "llama.cpp request schema",
+    "native configuration publication",
+    "persistent state inspection"
+  ],
+  "scope": [
+    "Provider/operation-owned request envelopes are resolved before reservation and the same body is dispatched.",
+    "llama.cpp token aliases, native completion counts and probability controls are canonicalized or rejected; unknown/nested overrides fail closed in protected mode.",
+    "Cloud metadata and operator config use one serialized publication owner; atomic replacement has no overwrite-copy fallback.",
+    "Persistent-cache /props inspection holds the worker and observes state deadlines/disconnects, retaining uncertainty until stop.",
+    "Automatic model loading preserves admission status/code and Retry-After through shared error conversion."
+  ],
+  "verification": {
+    "status": "passed local Linux gates; cross-platform CI diagnosis pending",
+    "native_contracts": 16,
+    "api_cases": 41,
+    "provider_http_checks": 76,
+    "configuration_checks": 125,
+    "resource_sanitized_checks": 46,
+    "automatic_load_cases": 48,
+    "cloud_admission_paired_updates": 10,
+    "cache_inspection_cases": [
+      "deadline",
+      "disconnect"
+    ],
+    "scope": "Synthetic CPU/protocol fixtures do not qualify physical hardware, real speech, quality or full P1 protection."
+  },
+  "remaining": [
+    "Unexplained prior macOS/Windows ResourceAdmissionTest failures require current-source CI diagnostics; no cross-platform completion claim.",
+    "Portable Router fixtures inject a known pool rather than assuming runner hardware telemetry is available.",
+    "Full P1 path coverage, background/ingress/maintenance envelopes, exact identities, shared runtime observations and frozen interference gates remain open.",
+    "P2-P7 remain under the approved plan. No production promotion or deployment."
+  ]
+}

@@ -251,20 +251,15 @@ void ConfigFile::save(const std::string& config_dir, const json& config) {
         file << config.dump(2) << std::endl;
         file.flush();
         if (!file) throw std::runtime_error("Failed to flush " + temp_path.string());
+        file.close();
+        if (!file) throw std::runtime_error("Failed to close " + temp_path.string());
     }
 
     std::error_code ec;
-    fs::rename(temp_path, config_path, ec);
-    if (ec) {
-        // On some systems (cross-device), rename fails. Fall back to copy + remove.
-        std::error_code copy_ec;
-        fs::copy_file(temp_path, config_path, fs::copy_options::overwrite_existing, copy_ec);
-        if (copy_ec) {
-            fs::remove(temp_path);
-            throw std::runtime_error("Failed to save " + config_path.string()
-                                     + ": " + copy_ec.message());
-        }
-        fs::remove(temp_path);
+    if (!utils::atomic_replace_file(temp_path, config_path, ec)) {
+        std::error_code cleanup;
+        fs::remove(temp_path, cleanup);
+        throw std::runtime_error("Failed to replace " + config_path.string() + ": " + ec.message());
     }
 }
 

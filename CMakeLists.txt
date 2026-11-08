@@ -3470,6 +3470,12 @@ if(BUILD_TESTING)
     add_cpp_ci_test(InferenceLeaseTest CI ON COMMAND test_inference_lease)
 endif()
 
+if(BUILD_TESTING)
+    add_executable(test_provider_request_bounds test/cpp/test_provider_request_bounds.cpp)
+    target_link_libraries(test_provider_request_bounds PRIVATE lemonade-server-core)
+    add_cpp_ci_test(ProviderRequestBoundsTest CI ON COMMAND test_provider_request_bounds)
+endif()
+
 set(_SESSION_UTILS_TEST_SRC "${CMAKE_CURRENT_SOURCE_DIR}/test/cpp/test_session_utils.cpp")
 if(BUILD_TESTING AND EXISTS "${_SESSION_UTILS_TEST_SRC}")
     add_executable(test_session_utils test/cpp/test_session_utils.cpp)

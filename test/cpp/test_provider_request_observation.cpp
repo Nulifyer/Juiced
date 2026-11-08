@@ -106,7 +106,9 @@ int main() {
                 {"pools", {{"host", {{"capacity_bytes", 1048576}, {"source", "single physical pool"}}}}},
                 {"models", {{worker->get_model_name(), profile}}}};
             config.set({{"admission", admission}});
-            Router router(&config, &models, nullptr); RoutingHelperTestHook::add(router, worker);
+            Router router(&config, &models, nullptr, [](const std::string& pool) -> std::optional<uint64_t> {
+            return pool == "host" ? std::optional<uint64_t>(16 * 1024 * 1024) : std::nullopt;
+        }); RoutingHelperTestHook::add(router, worker);
             json request = {{"model", worker->get_model_name()}, {"file_data", "neutral fixture bytes"}};
             auto response = router.audio_transcriptions(request);
             check(response.value("text", "") == "fixture speech" && router.admission_snapshot()["active"] == 0,

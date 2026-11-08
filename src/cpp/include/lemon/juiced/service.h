@@ -1,5 +1,6 @@
 #pragma once
 #include "lemon/server_process.h"
+#include "lemon/wrapped_server.h"
 #include <atomic>
 #include <condition_variable>
 #include <deque>
@@ -54,7 +55,7 @@ private:
   std::set<std::string> active_snapshots_;
   std::filesystem::path snapshot_directory_;
   std::string cache_mode_locked(const std::string &model) const;
-  json cache_profile(const std::string &model);
+  json cache_profile(const std::string &model, WrappedServer::InferenceLease& worker);
   void cache_api(const httplib::Request &, httplib::Response &,
                  const std::string &);
   json mutate_prompt_slot(const std::string& model, int slot,

@@ -20,6 +20,7 @@
 #include "backend_manager.h"
 #include "recipe_options.h"
 #include "resource_admission.h"
+#include "inference_request.h"
 #include "streaming_proxy.h"
 #include "backends/backend_descriptor.h"
 #include "server_process.h"
@@ -109,6 +110,15 @@ public:
         bool state_operation_ = false;
         ResourceAdmission::Lease resources_;
     };
+
+    virtual RequestEnvelope resolve_request(InferenceOperation operation, const json& request, bool protected_mode) const {
+        RequestEnvelope resolved{request, {}};
+        if (!protected_mode) return resolved;
+        if (operation != InferenceOperation::State)
+            throw AdmissionError("workload_unqualified", "This provider operation has no qualified request envelope");
+        resolved.workload = {{"input_bytes", request_storage_ceiling(request)}};
+        return resolved;
+    }
 
     InferenceLease try_acquire_inference() {
         return acquire_for_inference() ? InferenceLease(this) : InferenceLease();

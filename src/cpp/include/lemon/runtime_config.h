@@ -107,6 +107,10 @@ public:
                        std::function<void(const json&)> persist,
                        ConfigSideEffectCallback side_effect_cb = nullptr);
 
+    json update_persisted(std::function<json()> changes,
+                          std::function<void(const json&)> persist,
+                          ConfigSideEffectCallback side_effect_cb = nullptr);
+
     // --- Full snapshot ---
     json snapshot() const;
 

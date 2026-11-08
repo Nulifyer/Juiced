@@ -55,78 +55,6 @@ private:
     SuspendInhibitor* inhibitor_;
 };
 
-uint64_t request_storage_ceiling(const json& value, size_t depth = 0) {
-    if (depth > 64) throw AdmissionError("workload_limit_exceeded", "Request nesting exceeds the validated envelope", 413);
-    uint64_t size = 64;
-    if (value.is_string()) return size + 6 * value.get_ref<const std::string&>().size();
-    if (value.is_binary()) throw AdmissionError("workload_unqualified", "Binary JSON is outside the validated request envelope");
-    if (value.is_object()) {
-        for (const auto& item : value.items()) size += 6 * item.key().size() + request_storage_ceiling(item.value(), depth + 1);
-    } else if (value.is_array()) {
-        for (const auto& item : value) size += request_storage_ceiling(item, depth + 1);
-    }
-    return size;
-}
-
-void require_text_content(const json& value) {
-    if (value.is_null() || value.is_string()) return;
-    if (!value.is_array()) throw AdmissionError("workload_unqualified", "This content shape has no protected execution envelope");
-    for (const auto& part : value) {
-        if (!part.is_object() || !part.contains("type") || !part.at("type").is_string() ||
-            (part.at("type") != "text" && part.at("type") != "input_text") ||
-            !part.contains("text") || !part.at("text").is_string())
-            throw AdmissionError("workload_unqualified", "Multimodal content has no protected execution envelope");
-    }
-}
-
-std::map<std::string, uint64_t> text_workload(const json& request, ModelType type) {
-    if (type != ModelType::LLM && type != ModelType::EMBEDDING && type != ModelType::RERANKING)
-        throw AdmissionError("workload_unqualified", "This service has no validated protected request envelope");
-    for (const auto* field : {"image_data", "audio_data", "images", "audio", "input_audio", "modalities"})
-        if (request.contains(field)) throw AdmissionError("workload_unqualified", "Multimodal requests require a qualified resource envelope");
-    std::map<std::string, uint64_t> facts{{"input_bytes", request_storage_ceiling(request)}, {"batch", 1}};
-    auto positive = [&](const char* key) {
-        const auto& value = request.at(key);
-        if (!value.is_number_integer() || value.get<int64_t>() <= 0)
-            throw AdmissionError("workload_unqualified", "Protected request bounds must be positive integers");
-        return value.get<uint64_t>();
-    };
-    if (type == ModelType::LLM) {
-        uint64_t output = 0;
-        for (const auto* key : {"max_tokens", "max_completion_tokens", "max_output_tokens", "n_predict", "num_predict"})
-            if (request.contains(key)) output = std::max(output, positive(key));
-        if (!output) throw AdmissionError("workload_unqualified", "Protected generation requires an explicit output token ceiling");
-        facts["output_tokens"] = output;
-        for (const auto* key : {"n", "best_of"}) if (request.contains(key)) facts["batch"] = std::max(facts["batch"], positive(key));
-        for (const auto* key : {"logprobs", "prompt_logprobs", "top_logprobs"})
-            if (request.contains(key) && request.at(key) != false && request.at(key) != nullptr && request.at(key) != 0)
-                throw AdmissionError("workload_unqualified", "Probability output has no validated protected envelope");
-        if (request.contains("messages")) {
-            if (!request.at("messages").is_array()) throw AdmissionError("workload_unqualified", "Messages must have a validated text shape");
-            for (const auto& message : request.at("messages")) {
-                if (!message.is_object()) throw AdmissionError("workload_unqualified", "Messages must be objects");
-                if (message.contains("content")) require_text_content(message.at("content"));
-            }
-        }
-        if (request.contains("prompt") && !request.at("prompt").is_string())
-            throw AdmissionError("workload_unqualified", "Token-array prompts require a separate resource envelope");
-        if (request.contains("input")) {
-            const auto& input = request.at("input");
-            if (input.is_array()) {
-                for (const auto& part : input) {
-                    if (!part.is_object() || !part.contains("content"))
-                        throw AdmissionError("workload_unqualified", "This Responses input shape requires a separate envelope");
-                    require_text_content(part.at("content"));
-                }
-            } else if (!input.is_string()) throw AdmissionError("workload_unqualified", "Invalid protected input shape");
-        }
-    } else {
-        const auto key = type == ModelType::EMBEDDING ? "input" : "documents";
-        if (request.contains(key) && request.at(key).is_array()) facts["batch"] = request.at(key).size();
-    }
-    return facts;
-}
-
 json admission_failure(const AdmissionError& error) {
     json details = {{"code", error.code}, {"status_code", error.status}};
     if (error.status == 429 || error.status == 503) details["retry_after"] = 1;
@@ -177,9 +105,10 @@ void observe_stream_content(LiveThroughput::Request& live, const json& event) {
 
 } // namespace
 
-Router::Router(RuntimeConfig* config, ModelManager* model_manager, BackendManager* backend_manager)
+Router::Router(RuntimeConfig* config, ModelManager* model_manager, BackendManager* backend_manager,
+               ResourceAdmission::Headroom headroom)
     : config_(config), model_manager_(model_manager), backend_manager_(backend_manager),
-      admission_([](const std::string& pool) -> std::optional<uint64_t> {
+      admission_(headroom ? std::move(headroom) : [](const std::string& pool) -> std::optional<uint64_t> {
           if (pool != "host") return std::nullopt;
 #ifdef __linux__
           return read_linux_memory_budget().available_bytes();
@@ -262,8 +191,8 @@ std::shared_ptr<WrappedServer> Router::shared_worker(WrappedServer* server) cons
     return server ? server->shared_from_this() : nullptr;
 }
 
-ResourceAdmission::Lease Router::admit_worker(const WrappedServer& server, ResourceAdmission::Operation operation, const json* request) const {
-    const auto policy = admission_.policy();
+ResourceAdmission::Lease Router::admit_worker(const WrappedServer& server, ResourceAdmission::Operation operation, const RequestEnvelope* request, std::optional<ResourceAdmission::Policy> request_policy) const {
+    const auto policy = request_policy ? *request_policy : admission_.policy();
     const auto protected_mode = policy.protected_mode;
     if (protected_mode && operation == ResourceAdmission::Operation::Load &&
         (server.get_model_type() == ModelType::LLM || server.get_model_type() == ModelType::EMBEDDING || server.get_model_type() == ModelType::RERANKING)) {
@@ -300,12 +229,9 @@ ResourceAdmission::Lease Router::admit_worker(const WrappedServer& server, Resou
     }
     ResourceAdmission::Work work;
     work.config_revision = policy.revision;
-    if (protected_mode && operation == ResourceAdmission::Operation::Request) {
-        if (!request) throw AdmissionError("workload_unqualified", "Protected requests require a validated envelope");
-        work.workload = text_workload(*request, server.get_model_type());
-    } else if (protected_mode && operation == ResourceAdmission::Operation::State && request) {
-        work.workload = {{"input_bytes", request_storage_ceiling(*request)}};
-    }
+    if (protected_mode && request) work.workload = request->workload;
+    else if (protected_mode && operation == ResourceAdmission::Operation::Request)
+        throw AdmissionError("workload_unqualified", "Protected requests require a resolved provider envelope");
     work.model = model_manager_->get_public_model_name(server.get_model_name());
     work.service = model_type_to_string(server.get_model_type());
     work.generation = server.get_instance_id();
@@ -1851,7 +1777,7 @@ Router::StreamingTranscriptionLease Router::acquire_streaming_transcription(cons
 }
 
 template<typename Func>
-auto Router::execute_inference(const json& request, Func&& inference_func, ResourceAdmission::Operation operation) -> decltype(inference_func(nullptr)) {
+json Router::execute_inference(const json& request, InferenceOperation request_operation, Func&& inference_func, ResourceAdmission::Operation operation) {
     std::string requested_model;
     if (request.contains("model") && request["model"].is_string()) {
         requested_model = request["model"].get<std::string>();
@@ -1897,9 +1823,12 @@ auto Router::execute_inference(const json& request, Func&& inference_func, Resou
                 server->update_access_time();
             }
         }
+        RequestEnvelope prepared{request, {}};
         if (lifetime) {
             try {
-                auto resources = admit_worker(*lifetime, operation, &request);
+                const auto policy = admission_.policy();
+                prepared = lifetime->resolve_request(request_operation, request, policy.protected_mode);
+                auto resources = admit_worker(*lifetime, operation, &prepared, policy);
                 if (!model_access_allowed(requested_model))
                     throw AdmissionError("model_disabled", "Model was disabled while waiting for admission", 403);
                 const auto prior = WrappedServer::current_request_cancel_context();
@@ -1946,7 +1875,7 @@ auto Router::execute_inference(const json& request, Func&& inference_func, Resou
         WrappedServer::RequestCompletionScope completion(server->observes_inference_completion()
             ? std::function<void()>([&lease] { lease.resources_started(); }) : std::function<void()>());
         json response;
-        try { response = inference_func(server); }
+        try { response = inference_func(server, prepared.body); }
         catch (const AdmissionError& error) { return admission_failure(error); }
         if (completion.completed()) lease.resources_completed();
 
@@ -1986,7 +1915,7 @@ auto Router::execute_inference(const json& request, Func&& inference_func, Resou
 
 // Template method for streaming execution
 template<typename Func>
-void Router::execute_streaming(const std::string& request_body, httplib::DataSink& sink, Func&& streaming_func, std::shared_ptr<telemetry::InferenceSpan> span) {
+void Router::execute_streaming(const std::string& request_body, httplib::DataSink& sink, InferenceOperation request_operation, Func&& streaming_func, std::shared_ptr<telemetry::InferenceSpan> span) {
     std::string requested_model;
     json request;
 
@@ -2049,9 +1978,12 @@ void Router::execute_streaming(const std::string& request_body, httplib::DataSin
                 server->update_access_time();
             }
         }
+        RequestEnvelope prepared{request, {}};
         if (lifetime) {
             try {
-                auto resources = admit_worker(*lifetime, ResourceAdmission::Operation::Request, &request);
+                const auto policy = admission_.policy();
+                prepared = lifetime->resolve_request(request_operation, request, policy.protected_mode);
+                auto resources = admit_worker(*lifetime, ResourceAdmission::Operation::Request, &prepared, policy);
                 if (!model_access_allowed(requested_model))
                     throw AdmissionError("model_disabled", "Model was disabled while waiting for admission", 403);
                 const auto prior = WrappedServer::current_request_cancel_context();
@@ -2108,7 +2040,7 @@ void Router::execute_streaming(const std::string& request_body, httplib::DataSin
         WrappedServer::RequestCompletionScope completion(server->observes_inference_completion()
             ? std::function<void()>([&lease] { lease.resources_started(); }) : std::function<void()>());
         try {
-            streaming_func(server);
+            streaming_func(server, prepared.body);
             if (completion.completed()) lease.resources_completed();
         } catch (const BackendStreamRetryableReset& e) {
             restart_options = server->get_recipe_options();
@@ -2174,7 +2106,7 @@ json Router::chat_completion(const json& request, std::atomic<bool>* cancel) {
     try {
         std::string telemetry_url;
         std::function<std::map<std::string, nlohmann::json>(const std::string&)> telemetry_parser;
-        json response = execute_inference(request, [&](WrappedServer* server) {
+        json response = execute_inference(request, InferenceOperation::Chat, [&](WrappedServer* server, const json& request) {
             if (span) {
                 telemetry_url = server->get_additional_telemetry_url();
                 telemetry_parser = server->get_additional_telemetry_parser();
@@ -2291,7 +2223,7 @@ json Router::completion(const json& request) {
     try {
         std::string telemetry_url;
         std::function<std::map<std::string, nlohmann::json>(const std::string&)> telemetry_parser;
-        json response = execute_inference(request, [&](WrappedServer* server) {
+        json response = execute_inference(request, InferenceOperation::Completion, [&](WrappedServer* server, const json& request) {
             if (span) {
                 telemetry_url = server->get_additional_telemetry_url();
                 telemetry_parser = server->get_additional_telemetry_parser();
@@ -2355,7 +2287,7 @@ json Router::embeddings(const json& request) {
     std::shared_ptr<telemetry::InferenceSpan> span = telemetry::TelemetryTracker::start_span("EMBEDDING", "embeddings", requested_model, request);
 
     try {
-        json response = execute_inference(request, [&](WrappedServer* server) {
+        json response = execute_inference(request, InferenceOperation::Embedding, [&](WrappedServer* server, const json& request) {
             ModelTelemetryIdentity identity = get_telemetry_identity(server);
             if (span) {
                 span->set_attribute("embedding.backend", identity.recipe);
@@ -2411,7 +2343,7 @@ json Router::reranking(const json& request) {
     std::shared_ptr<telemetry::InferenceSpan> span = telemetry::TelemetryTracker::start_span("RERANKER", "reranking", requested_model, request);
 
     try {
-        json response = execute_inference(request, [&](WrappedServer* server) {
+        json response = execute_inference(request, InferenceOperation::Rerank, [&](WrappedServer* server, const json& request) {
             ModelTelemetryIdentity identity = get_telemetry_identity(server);
             if (span) {
                 span->set_attribute("reranker.backend", identity.recipe);
@@ -2461,7 +2393,7 @@ json Router::classify(const json& request) {
     std::shared_ptr<telemetry::InferenceSpan> span = telemetry::TelemetryTracker::start_span("CLASSIFIER", "classify", requested_model, request);
 
     try {
-        json response = execute_inference(request, [&](WrappedServer* server) {
+        json response = execute_inference(request, InferenceOperation::Other, [&](WrappedServer* server, const json& request) {
             ModelTelemetryIdentity identity = get_telemetry_identity(server);
             if (span) {
                 span->set_attribute("classifier.backend", identity.recipe);
@@ -2498,7 +2430,7 @@ json Router::classify(const json& request) {
 }
 
 json Router::get_slots() {
-    return execute_inference({{"model", get_loaded_model()}}, [](WrappedServer* server) {
+    return execute_inference({{"model", get_loaded_model()}}, InferenceOperation::State, [](WrappedServer* server, const json& request) {
         auto* slots = dynamic_cast<ISlotsServer*>(server);
         return slots ? slots->get_slots() : ErrorResponse::from_exception(
             UnsupportedOperationException("Slots", device_type_to_string(server->get_device_type())));
@@ -2509,10 +2441,10 @@ json Router::slots_action(int slot_id, const std::string& action, const json& re
                           const std::function<json(const std::string&, const std::function<json()>&)>& guard) {
     auto request = request_body;
     request["model"] = request_body.value("model", get_loaded_model());
-    return execute_inference(request, [&](WrappedServer* server) {
+    return execute_inference(request, InferenceOperation::State, [&](WrappedServer* server, const json& request) {
         auto* slots = dynamic_cast<ISlotsServer*>(server);
         return slots ? guard(model_manager_->get_public_model_name(server->get_model_name()),
-            [&] { return slots->slots_action(slot_id, action, request_body); }) : ErrorResponse::from_exception(
+            [&] { return slots->slots_action(slot_id, action, request); }) : ErrorResponse::from_exception(
             UnsupportedOperationException("Slots", device_type_to_string(server->get_device_type())));
     }, ResourceAdmission::Operation::State);
 }
@@ -2520,22 +2452,22 @@ json Router::slots_action(int slot_id, const std::string& action, const json& re
 json Router::tokenize(const json& request_body) {
     auto request = request_body;
     request["model"] = request_body.value("model", get_loaded_model());
-    return execute_inference(request, [&](WrappedServer* server) {
+    return execute_inference(request, InferenceOperation::State, [&](WrappedServer* server, const json& request) {
         auto* tokenizer = dynamic_cast<ITokenizerServer*>(server);
-        return tokenizer ? tokenizer->tokenize(request_body) : ErrorResponse::from_exception(
+        return tokenizer ? tokenizer->tokenize(request) : ErrorResponse::from_exception(
             UnsupportedOperationException("Tokenization", device_type_to_string(server->get_device_type())));
     }, ResourceAdmission::Operation::State);
 }
 
 json Router::responses(const json& request) {
-    return execute_inference(request, [&](WrappedServer* server) {
+    return execute_inference(request, InferenceOperation::Responses, [&](WrappedServer* server, const json& request) {
         return server->responses(request);
     });
 }
 
 json Router::audio_transcriptions(const json& request, bool from_realtime) {
     if (from_realtime) require_realtime_admission();
-    return execute_inference(request, [&](WrappedServer* server) {
+    return execute_inference(request, InferenceOperation::Other, [&](WrappedServer* server, const json& request) {
         auto transcription_server = dynamic_cast<ITranscriptionServer*>(server);
         if (!transcription_server) {
             return ErrorResponse::from_exception(
@@ -2547,7 +2479,7 @@ json Router::audio_transcriptions(const json& request, bool from_realtime) {
 }
 
 void Router::audio_speech(const json& request, httplib::DataSink& sink) {
-    execute_streaming(request.dump(), sink, [&](WrappedServer* server) {
+    execute_streaming(request.dump(), sink, InferenceOperation::Other, [&](WrappedServer* server, const json& request) {
         if (server->get_model_type() != ModelType::TTS) {
             throw InvalidRequestException(
                 "model '" + server->get_model_name() +
@@ -2588,7 +2520,7 @@ AudioFormatMetadata Router::audio_speech_format_metadata(
 }
 
 json Router::count_anthropic_tokens(const json& request) {
-    return execute_inference(request, [&](WrappedServer* server) {
+    return execute_inference(request, InferenceOperation::Other, [&](WrappedServer* server, const json& request) {
         auto tokenizer = dynamic_cast<ITokenizerServer*>(server);
         if (!tokenizer) {
             return ErrorResponse::from_exception(
@@ -2599,7 +2531,7 @@ json Router::count_anthropic_tokens(const json& request) {
 }
 
 json Router::image_sdapi(const json& request) {
-    return execute_inference(request, [&](WrappedServer* server) {
+    return execute_inference(request, InferenceOperation::Other, [&](WrappedServer* server, const json& request) {
         auto image = dynamic_cast<IImageServer*>(server);
         if (!image) {
             return ErrorResponse::from_exception(
@@ -2610,7 +2542,7 @@ json Router::image_sdapi(const json& request) {
 }
 
 json Router::image_generations(const json& request) {
-    return execute_inference(request, [&](WrappedServer* server) {
+    return execute_inference(request, InferenceOperation::Other, [&](WrappedServer* server, const json& request) {
         auto image_server = dynamic_cast<IImageServer*>(server);
         if (!image_server) {
             return ErrorResponse::from_exception(
@@ -2622,7 +2554,7 @@ json Router::image_generations(const json& request) {
 }
 
 json Router::image_edits(const json& request) {
-    return execute_inference(request, [&](WrappedServer* server) {
+    return execute_inference(request, InferenceOperation::Other, [&](WrappedServer* server, const json& request) {
         auto image_server = dynamic_cast<IImageServer*>(server);
         if (!image_server) {
             return ErrorResponse::from_exception(
@@ -2634,7 +2566,7 @@ json Router::image_edits(const json& request) {
 }
 
 json Router::image_variations(const json& request) {
-    return execute_inference(request, [&](WrappedServer* server) {
+    return execute_inference(request, InferenceOperation::Other, [&](WrappedServer* server, const json& request) {
         auto image_server = dynamic_cast<IImageServer*>(server);
         if (!image_server) {
             return ErrorResponse::from_exception(
@@ -2646,7 +2578,7 @@ json Router::image_variations(const json& request) {
 }
 
 void Router::audio_generations(const json& request, httplib::DataSink& sink) {
-    execute_streaming(request.dump(), sink, [&](WrappedServer* server) {
+    execute_streaming(request.dump(), sink, InferenceOperation::Other, [&](WrappedServer* server, const json& request) {
         if (server->get_model_type() != ModelType::AUDIO_GENERATION) {
             throw InvalidRequestException(
                 "model '" + server->get_model_name() +
@@ -2680,7 +2612,7 @@ AudioFormatMetadata Router::audio_generation_format_metadata(
 }
 
 void Router::model_3d_generations(const json& request, httplib::DataSink& sink) {
-    execute_streaming(request.dump(), sink, [&](WrappedServer* server) {
+    execute_streaming(request.dump(), sink, InferenceOperation::Other, [&](WrappedServer* server, const json& request) {
         auto model_server = dynamic_cast<IModel3DServer*>(server);
         if (!model_server) {
             throw UnsupportedOperationException("3D generation", device_type_to_string(server->get_device_type()));
@@ -2975,7 +2907,7 @@ void Router::chat_completion_stream(const std::string& request_body, httplib::Da
     };
 
     try {
-        execute_streaming(request_body, telemetry_sink, [&](WrappedServer* server) {
+        execute_streaming(request_body, telemetry_sink, InferenceOperation::Chat, [&](WrappedServer* server, const json& request) {
             ModelTelemetryIdentity identity = get_telemetry_identity(server);
 
             if (span) {
@@ -2989,7 +2921,7 @@ void Router::chat_completion_stream(const std::string& request_body, httplib::Da
                 if (request_json.contains("max_completion_tokens")) span->set_attribute("llm.config.max_completion_tokens", request_json["max_completion_tokens"]);
             }
 
-            server->forward_streaming_request("/v1/chat/completions", request_body, telemetry_sink, true, 0,
+            server->forward_streaming_request("/v1/chat/completions", request.dump(), telemetry_sink, true, 0,
                 [this, identity, span, accumulated_text, accumulated_reasoning, accumulated_tool_calls, server](
                     const StreamingProxy::TelemetryData& telemetry) {
                     if (!telemetry.error_message.empty()) {
@@ -3102,7 +3034,7 @@ void Router::completion_stream(const std::string& request_body, httplib::DataSin
     };
 
     try {
-        execute_streaming(request_body, telemetry_sink, [&](WrappedServer* server) {
+        execute_streaming(request_body, telemetry_sink, InferenceOperation::Completion, [&](WrappedServer* server, const json& request) {
             ModelTelemetryIdentity identity = get_telemetry_identity(server);
 
             if (span) {
@@ -3115,7 +3047,7 @@ void Router::completion_stream(const std::string& request_body, httplib::DataSin
                 if (request_json.contains("max_tokens")) span->set_attribute("llm.config.max_tokens", request_json["max_tokens"]);
             }
 
-            server->forward_streaming_request("/v1/completions", request_body, telemetry_sink, true, 0,
+            server->forward_streaming_request("/v1/completions", request.dump(), telemetry_sink, true, 0,
                 [this, identity, span, accumulated_text, server](
                     const StreamingProxy::TelemetryData& telemetry) {
                     if (!telemetry.error_message.empty()) {
@@ -3214,7 +3146,7 @@ void Router::responses_stream(const std::string& request_body, httplib::DataSink
     };
 
     try {
-        execute_streaming(request_body, telemetry_sink, [&](WrappedServer* server) {
+        execute_streaming(request_body, telemetry_sink, InferenceOperation::Responses, [&](WrappedServer* server, const json& request) {
             ModelTelemetryIdentity identity = get_telemetry_identity(server);
 
             if (span) {
@@ -3227,7 +3159,7 @@ void Router::responses_stream(const std::string& request_body, httplib::DataSink
                 if (request_json.contains("max_tokens")) span->set_attribute("llm.config.max_tokens", request_json["max_tokens"]);
             }
 
-            server->forward_streaming_request("/v1/responses", request_body, telemetry_sink, true, 0,
+            server->forward_streaming_request("/v1/responses", request.dump(), telemetry_sink, true, 0,
                 [this, identity, span, accumulated_text, server](
                     const StreamingProxy::TelemetryData& telemetry) {
                     if (!telemetry.error_message.empty()) {

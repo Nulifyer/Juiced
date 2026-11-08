@@ -1,5 +1,6 @@
 #include "lemon/runtime_config.h"
 #include "lemon/resource_admission.h"
+#include "lemon/cloud_provider_registry.h"
 #include "lemon/backends/backend_descriptor_registry.h"
 #include "lemon/system_info.h"
 #include "lemon/utils/aixlog.hpp"
@@ -806,6 +807,22 @@ json RuntimeConfig::recipe_options(const std::string& backend) const {
 void RuntimeConfig::validate(const std::string& key, const json& value) const {
     if (key == "admission") {
         ResourceAdmission::validate_config(value);
+    } else if (key == "cloud_providers") {
+        if (!value.is_array()) throw std::invalid_argument("cloud_providers must contain public provider metadata only");
+        const std::unordered_set<std::string> allowed = {"name", "base_url", "allow_insecure_http", "auth_header_name", "auth_header_prefix", "wire_format"};
+        for (const auto& entry : value) {
+            if (!entry.is_object() || !entry.contains("name") || !entry.contains("base_url"))
+                throw std::invalid_argument("Cloud provider metadata requires name and base_url");
+            for (const auto& field : entry.items()) {
+                if (!allowed.count(field.key())) throw std::invalid_argument("Credentials and unknown provider metadata cannot be persisted");
+                if (field.key() == "allow_insecure_http") {
+                    if (!field.value().is_boolean()) throw std::invalid_argument("allow_insecure_http must be boolean");
+                } else if (!field.value().is_string()) throw std::invalid_argument("Provider metadata must be text");
+            }
+            if (!CloudProviderRegistry::validate_provider_name(entry.at("name").get<std::string>()).empty() ||
+                !CloudProviderRegistry::validate_base_url(entry.at("base_url").get<std::string>()).empty())
+                throw std::invalid_argument("Invalid public provider identity");
+        }
     } else if (key == "port") {
         if (!value.is_number_integer()) {
             throw std::invalid_argument("'port' must be an integer");
@@ -1316,10 +1333,16 @@ json RuntimeConfig::set(const json& changes, ConfigSideEffectCallback side_effec
 json RuntimeConfig::set_persisted(const json& changes,
                                   std::function<void(const json&)> persist,
                                   ConfigSideEffectCallback side_effect_cb) {
+    return update_persisted([&] { return changes; }, std::move(persist), std::move(side_effect_cb));
+}
+
+json RuntimeConfig::update_persisted(std::function<json()> read_changes,
+                                     std::function<void(const json&)> persist,
+                                     ConfigSideEffectCallback side_effect_cb) {
+    std::unique_lock writer(write_mutex_);
+    const auto changes = read_changes();
     if (!changes.is_object() || changes.empty())
         throw std::invalid_argument("Request body must be a non-empty JSON object");
-
-    std::unique_lock writer(write_mutex_);
     auto [normalized_changes, message] = normalize_config_set_changes(changes);
     for (auto& [key, value] : normalized_changes.items()) validate(key, value);
 

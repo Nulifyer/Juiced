@@ -133,7 +133,8 @@ public:
     Router(RuntimeConfig* config,
 
            ModelManager* model_manager,
-           BackendManager* backend_manager);
+           BackendManager* backend_manager,
+           ResourceAdmission::Headroom headroom = {});
 
     ~Router();
 
@@ -325,7 +326,8 @@ private:
 
     mutable ResourceAdmission admission_;
     ResourceAdmission::Lease admit_worker(const WrappedServer& server, ResourceAdmission::Operation operation,
-        const json* request = nullptr) const;
+        const RequestEnvelope* request = nullptr,
+        std::optional<ResourceAdmission::Policy> request_policy = std::nullopt) const;
     std::shared_ptr<WrappedServer> shared_worker(WrappedServer* server) const;
 
     mutable std::mutex load_mutex_;              // Protects loading state and loaded_servers_
@@ -432,11 +434,11 @@ private:
                                             const StreamingProxy::TelemetryData& telemetry);
 
     template<typename Func>
-    auto execute_inference(const json& request, Func&& inference_func,
-        ResourceAdmission::Operation operation = ResourceAdmission::Operation::Request) -> decltype(inference_func(nullptr));
+    json execute_inference(const json& request, InferenceOperation request_operation, Func&& inference_func,
+        ResourceAdmission::Operation operation = ResourceAdmission::Operation::Request);
 
     template<typename Func>
-    void execute_streaming(const std::string& request_body, httplib::DataSink& sink, Func&& streaming_func, std::shared_ptr<telemetry::InferenceSpan> span = nullptr);
+    void execute_streaming(const std::string& request_body, httplib::DataSink& sink, InferenceOperation request_operation, Func&& streaming_func, std::shared_ptr<telemetry::InferenceSpan> span = nullptr);
 };
 
 } // namespace lemon

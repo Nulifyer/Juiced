@@ -327,11 +327,7 @@ private:
         const json& request_options = json::object(),
         LoadPurpose load_purpose = LoadPurpose::UserInference);
 
-    // Helper: persist the registry's installed-providers list into config.json
-    // by overlaying onto the current runtime-config snapshot. Called after
-    // install/uninstall. Errors are logged and swallowed — a failure to
-    // persist must not prevent the in-memory state change that already
-    // happened.
+    json publish_config(std::function<json()> read_changes);
     void persist_cloud_providers();
 
     // Load every component of a collection (Omni) model, downloading any that are
@@ -356,6 +352,7 @@ private:
 
     // Helper function to generate detailed model error responses (not found, not supported, load failure)
     nlohmann::json create_model_error(const std::string& requested_model, const std::string& exception_msg);
+    nlohmann::json create_model_error(const std::string& requested_model, const std::exception& error);
     // System stats helper methods
     double get_cpu_usage();
     double get_npu_utilization();

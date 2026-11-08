@@ -569,6 +569,17 @@ json LlamaCppServer::normalize_response_model(json response, const json& request
     return response;
 }
 
+RequestEnvelope LlamaCppServer::resolve_request(InferenceOperation operation, const json& request, bool protected_mode) const {
+    if (operation == InferenceOperation::State)
+        return WrappedServer::resolve_request(operation, request, protected_mode);
+    if (protected_mode && !((get_model_type() == ModelType::LLM &&
+            (operation == InferenceOperation::Chat || operation == InferenceOperation::Completion || operation == InferenceOperation::Responses)) ||
+            (get_model_type() == ModelType::EMBEDDING && operation == InferenceOperation::Embedding) ||
+            (get_model_type() == ModelType::RERANKING && operation == InferenceOperation::Rerank)))
+        throw AdmissionError("workload_unqualified", "This model/provider operation has no qualified request envelope");
+    return llamacpp::resolve_request(operation, request, protected_mode);
+}
+
 json LlamaCppServer::chat_completion(const json& request) {
     return normalize_response_model(
         forward_request("/v1/chat/completions",

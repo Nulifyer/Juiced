@@ -1,4 +1,5 @@
 #include "lemon/backends/backend_registry.h"
+#include "lemon/backends/llamacpp/llamacpp_server.h"
 #include "lemon/config_file.h"
 #include "lemon/request_identity.h"
 #include "lemon/router.h"
@@ -12,9 +13,9 @@
 #include <thread>
 
 namespace lemon {
-class AdmissionWorker : public WrappedServer {
+class AdmissionWorker : public backends::LlamaCppServer {
 public:
-    AdmissionWorker() : WrappedServer("admission-fixture", "error") {
+    AdmissionWorker() : backends::LlamaCppServer("error", nullptr, nullptr) {
         set_model_metadata("admission-model", "immutable-fixture", ModelType::LLM, DEVICE_CPU,
                            RecipeOptions("llamacpp", {{"ctx_size", 2048}}));
         set_state(ModelState::READY);
@@ -97,7 +98,9 @@ int main() {
             {"pools", {{"host", {{"capacity_bytes", 1048576}, {"source", "host physical memory"}}}}},
             {"models", {{worker->get_model_name(), profile}}}};
         config.set({{"admission", admission}});
-        Router router(&config, &models, nullptr);
+        Router router(&config, &models, nullptr, [](const std::string& pool) -> std::optional<uint64_t> {
+            return pool == "host" ? std::optional<uint64_t>(16 * 1024 * 1024) : std::nullopt;
+        });
         RoutingHelperTestHook::add(router, worker);
         std::atomic<bool> allowed{true};
         router.set_model_access_policy([&](const std::string&) { return allowed.load(); });
@@ -184,7 +187,9 @@ int main() {
         defaults["auto_evict"] = false; defaults["auto_check_model_updates"] = false;
         RuntimeConfig config(defaults); RuntimeConfig::set_global(&config);
         ModelManager models;
-        Router router(&config, &models, nullptr);
+        Router router(&config, &models, nullptr, [](const std::string& pool) -> std::optional<uint64_t> {
+            return pool == "host" ? std::optional<uint64_t>(16 * 1024 * 1024) : std::nullopt;
+        });
         auto original = std::make_shared<AdmissionWorker>();
         RoutingHelperTestHook::add(router, original);
         std::weak_ptr<AdmissionWorker> retired = original;

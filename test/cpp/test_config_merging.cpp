@@ -5,8 +5,13 @@
 #include <fstream>
 #include <iostream>
 #include <future>
+#include <atomic>
 #include <thread>
 #include <string>
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 #include <lemon/config_file.h>
 #include <lemon/server.h>
@@ -645,6 +650,36 @@ static void test_durable_publication() {
     check(config.port() == 9124 && disk.at("port") == 9124,
           "concurrent durable and runtime state agree on the final revision");
 
+    {
+        RuntimeConfig publication(ConfigFile::base_defaults());
+        lemon::ResourceAdmission ledger;
+        ledger.configure({{"mode", "legacy"}});
+        json disk = {{"admission", {{"mode", "legacy"}}}};
+        std::promise<void> persisting, commit;
+        auto committed = commit.get_future();
+        std::atomic<int> metadata_reads{0};
+        auto admission = std::async(std::launch::async, [&] {
+            ledger.configure({{"mode", "protected"}}, [&] {
+                publication.set_persisted({{"admission", {{"mode", "protected"}}}}, [&](const json& changes) {
+                    persisting.set_value(); committed.wait(); disk = JsonUtils::merge(disk, changes);
+                });
+            });
+        });
+        persisting.get_future().wait();
+        auto cloud = std::async(std::launch::async, [&] {
+            publication.update_persisted([&] {
+                ++metadata_reads;
+                return json{{"cloud_providers", json::array({{{"name", "fixture"}, {"base_url", "https://localhost.invalid/v1"}}})}};
+            }, [&](const json& changes) { disk = JsonUtils::merge(disk, changes); });
+        });
+        check(cloud.wait_for(std::chrono::milliseconds(25)) == std::future_status::timeout && metadata_reads == 0,
+              "cloud metadata cannot read or publish an older candidate while admission publication is pending");
+        commit.set_value(); admission.get(); cloud.get();
+        check(disk.at("admission") == publication.snapshot().at("admission") && ledger.policy().protected_mode,
+              "cloud publication preserves the successful admission revision on disk, in runtime and in the ledger");
+        check(disk.at("cloud_providers") == publication.snapshot().at("cloud_providers") && metadata_reads == 1,
+              "cloud metadata is read inside the same serialized publication owner");
+    }
     ScopedTempDir temp;
     auto defaults = ConfigFile::get_defaults();
     defaults["auto_check_model_updates"] = false;
@@ -665,6 +700,37 @@ static void test_durable_publication() {
     check(success.status == 200 || success.status == -1, "failed publication leaves the admission transition reusable");
     check(ConfigFile::load_raw(temp.string()).at("admission") == runtime->snapshot().at("admission"),
           "durable admission settings match restart readback");
+    const auto committed = ConfigFile::load_raw(temp.string());
+    const auto before = runtime->snapshot();
+    std::ofstream(temp.path() / "config.json.tmp") << "precreated candidate";
+#ifdef _WIN32
+    HANDLE denied = CreateFileW((temp.path() / "config.json").c_str(), GENERIC_READ,
+        FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    check(denied != INVALID_HANDLE_VALUE, "replacement fixture holds the committed file without delete sharing");
+#else
+    const auto permissions = fs::status(temp.path()).permissions();
+    fs::permissions(temp.path(), fs::perms::owner_read | fs::perms::owner_exec);
+#endif
+    request.body = json{{"admission", {{"mode", "protected"}}}}.dump();
+    httplib::Response blocked;
+    server.handle_config_set(request, blocked);
+    const auto disk_after_failure = ConfigFile::load_raw(temp.string());
+#ifdef _WIN32
+    if (denied != INVALID_HANDLE_VALUE) CloseHandle(denied);
+#else
+    fs::permissions(temp.path(), permissions);
+#endif
+    check(blocked.status == 500 && blocked.body.find("Failed to replace") != std::string::npos,
+          "atomic replacement failure is distinct from staging failure");
+    check(disk_after_failure == committed && runtime->snapshot() == before,
+          "replacement failure preserves complete committed bytes and runtime settings");
+    httplib::Response retried;
+    server.handle_config_set(request, retried);
+    check((retried.status == 200 || retried.status == -1) && !fs::exists(temp.path() / "config.json.tmp"),
+          "successful atomic commit consumes its candidate without post-commit cleanup failure");
+    RuntimeConfig restarted(ConfigFile::load(temp.string(), temp.string()));
+    check(restarted.snapshot().at("admission") == runtime->snapshot().at("admission"),
+          "replacement failure followed by success has consistent restart readback");
     RuntimeConfig::set_global(nullptr);
 }
 

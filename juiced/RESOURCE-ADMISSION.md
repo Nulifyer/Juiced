@@ -14,7 +14,7 @@ inference. Unload idle workers separately when draining for a configuration chan
 The native `admission` setting is a complete value in `config.json`. Update it alone
 through `POST /internal/set`. Changing resource topology requires no active,
 resident, or pending claims. Use pause, wait for requests to settle, unload workers,
-apply settings, then resume. Updates are staged and persisted before publication. A revision-bound transition blocks new admission during publication; write failure retains the old configuration and returns an error. Hot policies remain saved. Runtime pause is temporary
+apply settings, then resume. Updates are staged and persisted before publication. A revision-bound transition blocks new admission during publication. Cloud registry metadata uses the same serialized publication owner; credentials remain process/environment owned. Configuration commits use atomic platform replacement, without overwrite-copy fallback or throwing post-commit cleanup. Write/replacement failure retains the old configuration and returns an error. Hot policies remain saved. Runtime pause is temporary
 and does not survive manager restart.
 
 Settings include `mode`, `active_limit`, `pending_limit`, `service_pending_limit`,
@@ -44,7 +44,7 @@ for outstanding requests whose allocations may not yet appear in operating-syste
 readings. This is deliberately conservative.
 
 Protected mode rejects missing profiles, changed execution options, unknown capacity,
-and operations without explicit ceilings. Protected text requests also require `request_limits` with positive `input_bytes`, `batch`, and, for generation, `output_tokens`. Input size uses a conservative bound over the parsed JSON. Generations require an explicit positive token limit; multimodal and unqualified request shapes reject before dispatch. State requests with caller input use the same input bound. These are execution bounds, not an ingress/upload budget. Request JSON and client headers cannot
+and operations without explicit ceilings. The selected backend resolves each operation before reservation, and Router dispatches that same resolved request. Protected text requests also require `request_limits` with positive `input_bytes`, `batch`, and, for generation, `output_tokens`. Input size uses a conservative bound over the parsed JSON. Generations require an explicit positive token limit. llama.cpp Chat/Completions normalize its supported aliases to `max_tokens`; Responses uses `max_output_tokens`. Conflicting or unsupported aliases, nested `extra_params`, unknown parameters and unqualified probability output reject. Completion count is normalized to the native `n_cmpl` field and included in the batch bound. Multimodal and unqualified request shapes reject before dispatch. State requests with caller input use the same input bound. These are execution bounds, not an ingress/upload budget. Request JSON and client headers cannot
 promote a request to essential priority. Authenticated queues use the accepted
 principal and credential epoch. Anonymous callers share one queue authority.
 
@@ -62,6 +62,8 @@ stable-diffusion.cpp. Other backends retain legacy behavior and reject protected
 admission until their wrapper reports a managed lifetime. Observation alone does not qualify a workload: protected image, speech and transcription requests remain rejected until their request envelopes qualify. The loopback speech tests
 verify HTTP/cancellation behavior, not transcription quality or accelerator performance.
 
+Persistent cache inspection, including `/props`, holds the exact worker and uses its state lease deadline and accepted request cancellation. A canceled inspection cannot proceed to slots, inference, restore or save. Actual transfer dispatch activates the state claim; local metadata errors do not. Automatic model loading preserves typed admission status, code and retry metadata across inference endpoints.
+
 Manual save, restore and erase reject while persistent caching owns that model's slots. Memory-mode mutations claim the same slot owner, preventing cache-mode changes during the operation. Failed state exchanges retain uncertain generation accounting; observed idle inference cannot clear them.
 
 Every load generation, including a legacy retry, retains residency ownership. A failed model load does not evict unrelated workers. Replacement retains its selected generation across admission waits, revalidates registry membership, and retires it atomically against inference acquisition. Completion deadlines cancel managed load/state/GET work; teardown may outlast the deadline, and accounting remains held until termination is established. This is not a hard realtime execution guarantee.
@@ -76,3 +78,11 @@ and realtime execution are rejected until their upstream lifetime is qualified. 
 must not bypass those owners. No GPU/NPU latency or HA service protection is implied
 by the CPU fixtures. The milestone requires the frozen interference suites and council
 review before promotion.
+
+The request-envelope tests inspect actual loopback provider JSON for Chat,
+Completions and Responses in JSON/SSE modes. The supported llama.cpp schema is
+reviewed against the [packaged revision](https://github.com/ggml-org/llama.cpp/blob/dde879bc4f954b809892fd0d660515f42536394a/tools/server/server-schema.cpp)
+and its [Responses conversion](https://github.com/ggml-org/llama.cpp/blob/dde879bc4f954b809892fd0d660515f42536394a/tools/server/server-chat.cpp).
+A future provider version still requires exact-profile qualification. Synthetic
+portable tests inject known physical headroom; they do not certify their runner's
+memory or accelerator telemetry.

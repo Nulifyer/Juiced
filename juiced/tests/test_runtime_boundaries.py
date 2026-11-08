@@ -125,6 +125,47 @@ def acceptance(args):
                         == disk["pools"]["host"]["capacity_bytes"]
                     )
                     transitions.append(statuses)
+            cloud_races = []
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+                for index in range(10):
+                    admission = {
+                        "mode": "legacy",
+                        "pools": {
+                            "host": {
+                                "capacity_bytes": 4096 + index,
+                                "source": "cloud/admission publication fixture",
+                            }
+                        },
+                    }
+                    updated = executor.submit(
+                        fixture.call, "/internal/set", {"admission": admission}
+                    )
+                    installed = executor.submit(
+                        fixture.call,
+                        "/v1/install",
+                        {
+                            "backend": "cloud",
+                            "provider": "fixture-cloud-" + str(index),
+                            "base_url": "https://127.0.0.1:9/v1",
+                        },
+                    )
+                    statuses = [updated.result()[0], installed.result()[0]]
+                    assert statuses[0] in (200, 409) and statuses[1] == 200, statuses
+                    runtime = fixture.ok("/internal/config")
+                    persisted = json.loads((root / "config/config.json").read_text())
+                    ledger = fixture.ok("/v1/juiced/admission")
+                    assert runtime["admission"] == persisted["admission"]
+                    assert runtime["cloud_providers"] == persisted["cloud_providers"]
+                    assert (
+                        ledger["pools"]["host"]["capacity_bytes"]
+                        == persisted["admission"]["pools"]["host"]["capacity_bytes"]
+                    )
+                    cloud_races.append(statuses)
+            disk = persisted["admission"]
+            proof["cloud_admission_publication"] = {
+                "paired_updates": cloud_races,
+                "providers_preserved": len(runtime["cloud_providers"]),
+            }
             old_revision = ledger["configuration_revision"]
             (root / "config/config.json.tmp").mkdir()
             (root / "config/config.json.tmp/fixture").write_text("keep nonempty")
@@ -251,6 +292,10 @@ def acceptance(args):
             fixture.ok(
                 "/v1/juiced/policy", {"model": second_model, "policy": "on-demand"}
             )
+            fixture.ok(
+                "/v1/models/" + second_model + "/options",
+                {"ctx_size": 2048, "llamacpp_backend": "cpu"},
+            )
             first_starts = starts.read_text().splitlines()
             fault.touch()
             fixture.ok(
@@ -334,6 +379,49 @@ def acceptance(args):
                 "elapsed_ms": elapsed * 1000,
                 "worker_stopped_and_claims_released": True,
             }
+
+            automatic = []
+            for paused in (True, False):
+                fixture.ok("/v1/juiced/admission", {"paused": paused})
+                for prefix in PREFIXES:
+                    for endpoint, payload in (
+                        (
+                            "chat/completions",
+                            {
+                                "messages": [{"role": "user", "content": "fixture"}],
+                                "max_tokens": 8,
+                            },
+                        ),
+                        ("completions", {"prompt": "fixture", "max_tokens": 8}),
+                        ("responses", {"input": "fixture", "max_output_tokens": 8}),
+                    ):
+                        for streaming in (False, True):
+                            status, headers, data = fixture.call(
+                                prefix + endpoint,
+                                {"model": second_model, "stream": streaming, **payload},
+                            )
+                            expected = (
+                                "admission_paused"
+                                if paused
+                                else "completion_deadline_exceeded"
+                            )
+                            assert (
+                                status == (503 if paused else 504)
+                                and data["error"]["code"] == expected
+                            ), (status, data)
+                            if paused:
+                                assert data["error"]["details"]["retry_after"] == 1
+                                assert headers.get("Retry-After") == "1", headers
+                            automatic.append(
+                                {
+                                    "prefix": prefix,
+                                    "endpoint": endpoint,
+                                    "stream": streaming,
+                                    "code": expected,
+                                    "status": status,
+                                }
+                            )
+            proof["automatic_load_errors"] = automatic
 
         except Exception:
             fixture.log.flush()

@@ -351,6 +351,11 @@ int get_http_status_from_error(const std::string& error_code) {
     }
 }
 
+void set_model_error_response(const json& response, httplib::Response& res) {
+    const auto fallback = get_http_status_from_error(response.at("error").value("code", std::string("model_load_error")));
+    set_error_response(response, res, fallback);
+}
+
 bool is_quiet_polling_path(const std::string& path) {
     return path == "/api/v0/downloads" || path == "/api/v1/downloads" ||
            path == "/v0/downloads" || path == "/v1/downloads" ||
@@ -2441,6 +2446,19 @@ void Server::stop() {
 //   1. Model exists but was filtered out (e.g., NPU model on non-NPU system)
 //   2. Model doesn't exist in the registry at all
 //   3. Model exists but failed to load (engine error)
+nlohmann::json Server::create_model_error(const std::string& requested_model, const std::exception& error) {
+    if (const auto* admission = dynamic_cast<const AdmissionError*>(&error)) {
+        json result = {{"error", {{"message", admission->what()}, {"type", "admission_error"},
+            {"code", admission->code}, {"status_code", admission->status},
+            {"details", {{"code", admission->code}, {"status_code", admission->status}}},
+            {"requested_model", requested_model}}}};
+        if (admission->status == 429 || admission->status == 503)
+            result["error"]["details"]["retry_after"] = 1;
+        return result;
+    }
+    return create_model_error(requested_model, error.what());
+}
+
 nlohmann::json Server::create_model_error(const std::string& requested_model, const std::string& exception_msg) {
     nlohmann::json error_response;
 
@@ -3697,7 +3715,7 @@ void Server::respond_with_model_options(
         if (!model_manager_->model_exists(model_key)) {
             // The model went away between the existence check and the read.
             res.status = 404;
-            res.set_content(create_model_error(model_key, e.what()).dump(), "application/json");
+            res.set_content(create_model_error(model_key, e).dump(), "application/json");
             return;
         }
         // Anything else is a server-side failure, most often the options file
@@ -3829,10 +3847,8 @@ void Server::handle_collection_chat_completions(const nlohmann::json& request_js
     } catch (const std::exception& e) {
         LOG(ERROR, "Server") << "Failed to load collection '" << collection_info.model_name
                              << "': " << e.what() << std::endl;
-        auto error_response = create_model_error(collection_info.model_name, e.what());
-        std::string error_code = error_response["error"]["code"].get<std::string>();
-        res.status = get_http_status_from_error(error_code);
-        res.set_content(error_response.dump(), "application/json");
+        auto error_response = create_model_error(collection_info.model_name, e);
+        set_model_error_response(error_response, res);
         return;
     }
 
@@ -4176,11 +4192,9 @@ void Server::handle_chat_completions(const httplib::Request& req, httplib::Respo
                 }
             } catch (const std::exception& e) {
                 LOG(ERROR, "Server") << "Failed to load model: " << e.what() << std::endl;
-                auto error_response = create_model_error(requested_model, e.what());
+                auto error_response = create_model_error(requested_model, e);
                 // Set appropriate status code based on error type
-                std::string error_code = error_response["error"]["code"].get<std::string>();
-                res.status = get_http_status_from_error(error_code);
-                res.set_content(error_response.dump(), "application/json");
+                set_model_error_response(error_response, res);
 
                 if (span) {
                     span->end_with_error(e.what());
@@ -4318,11 +4332,9 @@ void Server::handle_completions(const httplib::Request& req, httplib::Response& 
                 }
             } catch (const std::exception& e) {
                 LOG(ERROR, "Server") << "Failed to load model: " << e.what() << std::endl;
-                auto error_response = create_model_error(requested_model, e.what());
+                auto error_response = create_model_error(requested_model, e);
                 // Set appropriate status code based on error type
-                std::string error_code = error_response["error"]["code"].get<std::string>();
-                res.status = get_http_status_from_error(error_code);
-                res.set_content(error_response.dump(), "application/json");
+                set_model_error_response(error_response, res);
 
                 if (span) {
                     span->end_with_error(e.what());
@@ -4440,10 +4452,8 @@ void Server::handle_embeddings(const httplib::Request& req, httplib::Response& r
                 }
             } catch (const std::exception& e) {
                 LOG(ERROR, "Server") << "Failed to load model: " << e.what() << std::endl;
-                auto error_response = create_model_error(requested_model, e.what());
-                std::string error_code = error_response["error"]["code"].get<std::string>();
-                res.status = get_http_status_from_error(error_code);
-                res.set_content(error_response.dump(), "application/json");
+                auto error_response = create_model_error(requested_model, e);
+                set_model_error_response(error_response, res);
 
                 if (span) {
                     span->end_with_error(e.what());
@@ -4500,10 +4510,8 @@ void Server::handle_reranking(const httplib::Request& req, httplib::Response& re
                 }
             } catch (const std::exception& e) {
                 LOG(ERROR, "Server") << "Failed to load model: " << e.what() << std::endl;
-                auto error_response = create_model_error(requested_model, e.what());
-                std::string error_code = error_response["error"]["code"].get<std::string>();
-                res.status = get_http_status_from_error(error_code);
-                res.set_content(error_response.dump(), "application/json");
+                auto error_response = create_model_error(requested_model, e);
+                set_model_error_response(error_response, res);
 
                 if (span) {
                     span->end_with_error(e.what());
@@ -4605,10 +4613,8 @@ void Server::handle_classify(const httplib::Request& req, httplib::Response& res
                 }
             } catch (const std::exception& e) {
                 LOG(ERROR, "Server") << "Failed to load model: " << e.what() << std::endl;
-                auto error_response = create_model_error(requested_model, e.what());
-                std::string error_code = error_response["error"]["code"].get<std::string>();
-                res.status = get_http_status_from_error(error_code);
-                res.set_content(error_response.dump(), "application/json");
+                auto error_response = create_model_error(requested_model, e);
+                set_model_error_response(error_response, res);
 
                 if (span) {
                     span->end_with_error(e.what());
@@ -4927,10 +4933,8 @@ void Server::handle_audio_transcriptions(const httplib::Request& req, httplib::R
                 auto_load_model_if_needed(requested_model, extract_auto_load_options(request_json));
             } catch (const std::exception& e) {
                 LOG(ERROR, "Server") << "Failed to load audio model: " << e.what() << std::endl;
-                auto error_response = create_model_error(requested_model, e.what());
-                std::string error_code = error_response["error"]["code"].get<std::string>();
-                res.status = get_http_status_from_error(error_code);
-                res.set_content(error_response.dump(), "application/json");
+                auto error_response = create_model_error(requested_model, e);
+                set_model_error_response(error_response, res);
                 return;
             }
         } else {
@@ -4995,10 +4999,8 @@ void Server::handle_audio_speech(const httplib::Request& req, httplib::Response&
                 auto_load_model_if_needed(requested_model, extract_auto_load_options(request_json));
             } catch (const std::exception& e) {
                 LOG(ERROR, "Server") << "Failed to load text-to-speech model: " << e.what() << std::endl;
-                auto error_response = create_model_error(requested_model, e.what());
-                std::string error_code = error_response["error"]["code"].get<std::string>();
-                res.status = get_http_status_from_error(error_code);
-                res.set_content(error_response.dump(), "application/json");
+                auto error_response = create_model_error(requested_model, e);
+                set_model_error_response(error_response, res);
                 return;
             }
         } else {
@@ -5247,9 +5249,8 @@ void Server::handle_audio_generations(const httplib::Request& req, httplib::Resp
             auto_load_model_if_needed(requested_model, extract_auto_load_options(request_json));
         } catch (const std::exception& e) {
             LOG(ERROR, "Server") << "Failed to load audio-generation model: " << e.what() << std::endl;
-            auto error_response = create_model_error(requested_model, e.what());
-            res.status = get_http_status_from_error(error_response["error"]["code"].get<std::string>());
-            res.set_content(error_response.dump(), "application/json");
+            auto error_response = create_model_error(requested_model, e);
+            set_model_error_response(error_response, res);
             return;
         }
 
@@ -5384,9 +5385,8 @@ void Server::handle_3d_generations(const httplib::Request& req, httplib::Respons
             auto_load_model_if_needed(requested_model, extract_auto_load_options(request_json));
         } catch (const std::exception& e) {
             LOG(ERROR, "Server") << "Failed to load 3D-generation model: " << e.what() << std::endl;
-            auto error_response = create_model_error(requested_model, e.what());
-            res.status = get_http_status_from_error(error_response["error"]["code"].get<std::string>());
-            res.set_content(error_response.dump(), "application/json");
+            auto error_response = create_model_error(requested_model, e);
+            set_model_error_response(error_response, res);
             return;
         }
 
@@ -5438,10 +5438,8 @@ void Server::handle_image_generations(const httplib::Request& req, httplib::Resp
             auto_load_model_if_needed(requested_model, extract_auto_load_options(request_json));
         } catch (const std::exception& e) {
             LOG(ERROR, "Server") << "Failed to load image model: " << e.what() << std::endl;
-            auto error_response = create_model_error(requested_model, e.what());
-            std::string error_code = error_response["error"]["code"].get<std::string>();
-            res.status = get_http_status_from_error(error_code);
-            res.set_content(error_response.dump(), "application/json");
+            auto error_response = create_model_error(requested_model, e);
+            set_model_error_response(error_response, res);
             return;
         }
 
@@ -5567,10 +5565,8 @@ bool Server::load_image_model(const nlohmann::json& request_json, httplib::Respo
         auto_load_model_if_needed(requested_model, extract_auto_load_options(request_json));
     } catch (const std::exception& e) {
         LOG(ERROR, "Server") << "Failed to load image model: " << e.what() << std::endl;
-        auto error_response = create_model_error(requested_model, e.what());
-        std::string error_code = error_response["error"]["code"].get<std::string>();
-        res.status = get_http_status_from_error(error_code);
-        res.set_content(error_response.dump(), "application/json");
+        auto error_response = create_model_error(requested_model, e);
+        set_model_error_response(error_response, res);
         return false;
     }
     return true;
@@ -5939,10 +5935,8 @@ void Server::handle_responses(const httplib::Request& req, httplib::Response& re
                 auto_load_model_if_needed(requested_model, extract_auto_load_options(request_json));
             } catch (const std::exception& e) {
                 LOG(ERROR, "Server") << "Failed to load model: " << e.what() << std::endl;
-                auto error_response = create_model_error(requested_model, e.what());
-                std::string error_code = error_response["error"]["code"].get<std::string>();
-                res.status = get_http_status_from_error(error_code);
-                res.set_content(error_response.dump(), "application/json");
+                auto error_response = create_model_error(requested_model, e);
+                set_model_error_response(error_response, res);
                 return;
             }
         } else if (!router_->is_model_loaded()) {
@@ -6507,18 +6501,14 @@ void Server::handle_load(const httplib::Request& req, httplib::Response& res) {
         }
 
     } catch (const AdmissionError& error) {
-        res.status = error.status;
-        res.set_content(ErrorResponse::create(error.what(), ErrorType::BACKEND_ERROR,
-            {{"code", error.code}, {"status_code", error.status}}).dump(), "application/json");
+        set_model_error_response(create_model_error(model_name, error), res);
     } catch (const std::exception& e) {
         LOG(ERROR, "Server") << "Failed to load model: " << e.what() << std::endl;
 
         // Use consistent error format
         if (!model_name.empty()) {
-            auto error_response = create_model_error(model_name, e.what());
-            std::string error_code = error_response["error"]["code"].get<std::string>();
-            res.status = get_http_status_from_error(error_code);
-            res.set_content(error_response.dump(), "application/json");
+            auto error_response = create_model_error(model_name, e);
+            set_model_error_response(error_response, res);
         } else {
             // JSON parsing failed before we got model_name - return generic error
             res.status = 400;
@@ -6742,7 +6732,7 @@ void Server::handle_cleanup_cache(const httplib::Request& req, httplib::Response
     } catch (const std::exception& e) {
         LOG(ERROR, "Server") << "ERROR in handle_cleanup_cache: " << e.what() << std::endl;
         res.status = 500;
-        auto error_response = create_model_error("", e.what());
+        auto error_response = create_model_error("", e);
         res.set_content(error_response.dump(), "application/json");
     }
 }
@@ -6896,19 +6886,23 @@ void Server::normalize_and_resolve_request_model(nlohmann::json& request_json) c
     }
 }
 
-void Server::persist_cloud_providers() {
-    if (config_dir_.empty() || !cloud_registry_) return;
-    try {
+json Server::publish_config(std::function<json()> read_changes) {
+    return config_->update_persisted(std::move(read_changes), [this](const json& updated) {
+        if (config_dir_.empty()) return;
         json user_cfg = ConfigFile::load_raw(config_dir_);
-        user_cfg["cloud_providers"] = cloud_registry_->to_config_array();
+        user_cfg = utils::JsonUtils::merge(user_cfg, updated);
+        if (updated.contains("admission")) user_cfg["admission"] = updated["admission"];
+        utils::JsonUtils::prune_matching(user_cfg, ConfigFile::get_defaults());
         ConfigFile::save(config_dir_, user_cfg);
-    } catch (const std::exception& e) {
-        // Persistence failure must not undo the in-memory change — the
-        // registry is already updated and the provider is usable until
-        // restart. Log so the operator can see why config.json is stale.
-        LOG(WARNING, "Server") << "Failed to persist cloud_providers to config.json: "
-                                << e.what() << std::endl;
-    }
+    }, [this](const json& applied) {
+        if (applied.contains("admission") || applied.contains("cloud_providers")) return;
+        apply_config_side_effects(applied);
+    });
+}
+
+void Server::persist_cloud_providers() {
+    if (!cloud_registry_) return;
+    publish_config([this] { return json{{"cloud_providers", cloud_registry_->to_config_array()}}; });
 }
 
 void Server::handle_cloud_auth_set(const httplib::Request& req, httplib::Response& res) {
@@ -7441,20 +7435,13 @@ void Server::handle_shutdown(const httplib::Request& req, httplib::Response& res
 void Server::handle_config_set(const httplib::Request& req, httplib::Response& res) {
     try {
         auto body = nlohmann::json::parse(req.body);
+        if (body.contains("cloud_providers"))
+            throw std::invalid_argument("Use provider install/uninstall to change cloud provider metadata");
         if (body.contains("admission") && body.size() != 1)
             throw std::invalid_argument("Change admission settings separately from other configuration");
 
         json result;
-        const auto publish = [&] {
-            result = config_->set_persisted(body, [this](const json& updated) {
-                if (config_dir_.empty()) return;
-                json user_cfg = ConfigFile::load_raw(config_dir_);
-                user_cfg = utils::JsonUtils::merge(user_cfg, updated);
-                if (updated.contains("admission")) user_cfg["admission"] = updated["admission"];
-                utils::JsonUtils::prune_matching(user_cfg, ConfigFile::get_defaults());
-                ConfigFile::save(config_dir_, user_cfg);
-            }, [this](const json& applied) { apply_config_side_effects(applied); });
-        };
+        const auto publish = [&] { result = publish_config([&] { return body; }); };
         if (body.contains("admission")) router_->configure_admission(body.at("admission"), publish);
         else publish();
 

@@ -91,6 +91,8 @@ void output(httplib::Response &r, const json &j, int code = 200) {
 json post_engine(const std::string &address, const std::string &path,
                  const json &body, WrappedServer::InferenceLease& worker,
                  const std::function<bool()>& disconnected) {
+  if (worker.deadline_expired() || (disconnected && disconnected()))
+    throw AdmissionError("state_operation_cancelled", "State operation was cancelled before dispatch", 499);
   worker.resources_started();
   utils::HttpResponse r;
   try {
@@ -170,7 +172,11 @@ bool JuicedService::unleased_protocol(const httplib::Request &req,
   }
   return false;
 }
-json JuicedService::cache_profile(const std::string &requested) {
+json JuicedService::cache_profile(const std::string &requested, WrappedServer::InferenceLease& worker) {
+  const auto context = current_request_context();
+  const auto cancelled = [&] { return worker.deadline_expired() ||
+      (context && context->cancelled && context->cancelled()); };
+  if (cancelled()) throw AdmissionError("state_operation_cancelled", "State inspection was cancelled", 499);
   auto info = server_.model_manager_->get_model_info(requested);
   if (info.recipe != "llamacpp")
     throw std::invalid_argument(
@@ -205,8 +211,12 @@ json JuicedService::cache_profile(const std::string &requested) {
     address.resize(
         address.size() -
         3); // Backend inference base includes /v1; state APIs are at its root.
+  if (cancelled()) throw AdmissionError("state_operation_cancelled", "State inspection was cancelled before dispatch", 499);
+  worker.resources_started();
   auto props = utils::HttpClient::get(
-      address + "/props", {}, 10, utils::HttpSecurityPolicy::TrustedLoopback);
+      address + "/props", {}, 10, utils::HttpSecurityPolicy::TrustedLoopback, {nullptr, cancelled});
+  worker.resources_completed();
+  if (cancelled()) throw AdmissionError("state_operation_cancelled", "State inspection was cancelled", 499);
   if (props.status_code != 200)
     throw std::runtime_error("Cannot inspect the engine state format");
   identity["engine"] = json::parse(props.body).value("build_info", "unknown");
@@ -282,7 +292,9 @@ void JuicedService::cache_api(const httplib::Request &req,
     }
   }
   if (op == "cache/profile" || op == "cache/qualify") {
-    auto profile = cache_profile(body.at("model").get<std::string>());
+    auto ownership = server_.router_->acquire_model_state_operation(body.at("model").get<std::string>());
+    if (!ownership) throw std::runtime_error("The prompt-state worker is not ready");
+    auto profile = cache_profile(body.at("model").get<std::string>(), ownership);
     if (op == "cache/qualify") {
       if (!profile.value("configured", false))
         throw std::invalid_argument(
@@ -475,7 +487,13 @@ void JuicedService::chat(const httplib::Request &original,
     auto ownership = server_.router_->acquire_model_state_operation(requested_model);
     if (!ownership) throw std::runtime_error("The prompt-state worker is not ready");
     auto worker = std::make_shared<WrappedServer::InferenceLease>(std::move(ownership));
-    auto profile = cache_profile(requested_model);
+    const auto request_context = current_request_context();
+    const auto disconnected = request_context ? request_context->cancelled : std::function<bool()>{};
+    const auto cancelled = [worker, disconnected] {
+      return worker->deadline_expired() || (disconnected && disconnected());
+    };
+    auto profile = cache_profile(requested_model, *worker);
+    if (cancelled()) throw AdmissionError("state_operation_cancelled", "State inspection was cancelled", 499);
     const auto model = profile.at("model").get<std::string>();
     if (!profile.value("qualified", false)) {
       res.set_header("X-Juiced-Cache", "unqualified-profile");
@@ -484,8 +502,6 @@ void JuicedService::chat(const httplib::Request &original,
       return;
     }
     const auto address = profile.at("address").get<std::string>();
-    const auto request_context = current_request_context();
-    const auto disconnected = request_context ? request_context->cancelled : std::function<bool()>{};
     auto sr = utils::HttpClient::get(
         address + "/slots", {}, 10, utils::HttpSecurityPolicy::TrustedLoopback,
         {nullptr, [worker, disconnected] { return worker->deadline_expired() || (disconnected && disconnected()); }});
