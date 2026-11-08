@@ -56,8 +56,7 @@ private:
 };
 
 json admission_failure(const AdmissionError& error) {
-    json details = {{"code", error.code}, {"status_code", error.status}};
-    if (error.status == 429 || error.status == 503) details["retry_after"] = 1;
+    const auto details = error.to_json().at("error").at("details");
     return ErrorResponse::create(error.what(), ErrorType::BACKEND_ERROR, details);
 }
 

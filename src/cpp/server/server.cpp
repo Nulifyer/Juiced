@@ -2448,12 +2448,8 @@ void Server::stop() {
 //   3. Model exists but failed to load (engine error)
 nlohmann::json Server::create_model_error(const std::string& requested_model, const std::exception& error) {
     if (const auto* admission = dynamic_cast<const AdmissionError*>(&error)) {
-        json result = {{"error", {{"message", admission->what()}, {"type", "admission_error"},
-            {"code", admission->code}, {"status_code", admission->status},
-            {"details", {{"code", admission->code}, {"status_code", admission->status}}},
-            {"requested_model", requested_model}}}};
-        if (admission->status == 429 || admission->status == 503)
-            result["error"]["details"]["retry_after"] = 1;
+        auto result = admission->to_json();
+        result["error"]["requested_model"] = requested_model;
         return result;
     }
     return create_model_error(requested_model, error.what());
@@ -6900,12 +6896,12 @@ json Server::publish_config(std::function<json()> read_changes) {
     });
 }
 
-void Server::persist_cloud_providers() {
-    if (!cloud_registry_) return;
-    publish_config([this] { return json{{"cloud_providers", cloud_registry_->to_config_array()}}; });
+void Server::persist_cloud_providers(const json& metadata) {
+    publish_config([&] { return json{{"cloud_providers", metadata}}; });
 }
 
 void Server::handle_cloud_auth_set(const httplib::Request& req, httplib::Response& res) {
+    std::lock_guard<std::mutex> cloud_update(cloud_update_mutex_);
     try {
         const auto body = nlohmann::json::parse(req.body);
         if (!body.contains("provider") || !body["provider"].is_string() ||
@@ -6966,8 +6962,9 @@ void Server::handle_cloud_auth_set(const httplib::Request& req, httplib::Respons
                 return;
             }
             if (allow_insecure_http && !already_allowed) {
-                cloud_registry_->set_allow_insecure_http(provider, true);
-                persist_cloud_providers();
+                cloud_registry_->set_allow_insecure_http(provider, true, [this](const json& metadata) {
+                    persist_cloud_providers(metadata);
+                });
             }
         }
 
@@ -7020,6 +7017,7 @@ void Server::handle_cloud_auth_set(const httplib::Request& req, httplib::Respons
 }
 
 void Server::handle_cloud_auth_clear(const httplib::Request& req, httplib::Response& res) {
+    std::lock_guard<std::mutex> cloud_update(cloud_update_mutex_);
     try {
         const std::string provider = req.matches[1].str();
         if (provider.empty()) {
@@ -7396,12 +7394,16 @@ void Server::handle_jobs_resume(const httplib::Request& req, httplib::Response& 
 }
 
 void Server::handle_jobs_delete(const httplib::Request& req, httplib::Response& res) {
-    bool active = false;
-    if (!job_manager_->remove(job_id_from_path(req), active)) {
-        job_error(res, active ? 409 : 404, active ? "job is active" : "unknown job");
-        return;
+    try {
+        bool active = false;
+        if (!job_manager_->remove(job_id_from_path(req), active)) {
+            job_error(res, active ? 409 : 404, active ? "job is active" : "unknown job");
+            return;
+        }
+        res.set_content(R"({"status":"deleted"})", "application/json");
+    } catch (const jobs::JobError& error) {
+        job_error(res, error.status, error.what());
     }
-    res.set_content(R"({"status":"deleted"})", "application/json");
 }
 
 void Server::handle_shutdown(const httplib::Request& req, httplib::Response& res) {
@@ -8176,6 +8178,7 @@ void Server::handle_install(const httplib::Request& req, httplib::Response& res)
         // form posts just backend / provider / base_url / api_key) keeps the
         // stored value.
         if (request_json.value("backend", "") == "cloud") {
+            std::lock_guard<std::mutex> cloud_update(cloud_update_mutex_);
             const std::string provider = request_json.value("provider", "");
             const std::string base_url = request_json.value("base_url", "");
             const std::string api_key = request_json.value("api_key", "");
@@ -8258,8 +8261,9 @@ void Server::handle_install(const httplib::Request& req, httplib::Response& res)
             }
             LOG(INFO, "Server") << "Installing cloud provider '" << provider
                                   << "' with base_url " << base_url << std::endl;
-            cloud_registry_->install(provider, base_url, install_options);
-            persist_cloud_providers();
+            cloud_registry_->install(provider, base_url, install_options, [this](const json& metadata) {
+                persist_cloud_providers(metadata);
+            });
 
             // Best-effort optional auth: if api_key was supplied, treat this
             // as "install + auth in one shot". Honors the env-wins rule: if
@@ -8477,11 +8481,23 @@ void Server::handle_uninstall(const httplib::Request& req, httplib::Response& re
         // rather than silently succeeding, so CI scripts can tell which
         // case happened.
         if (request_json.value("backend", "") == "cloud") {
+            std::lock_guard<std::mutex> cloud_update(cloud_update_mutex_);
             const std::string provider = request_json.value("provider", "");
             if (provider.empty()) {
                 res.status = 400;
                 nlohmann::json error = {{"error", {
                     {"message", "Cloud uninstall requires 'provider' string field"},
+                    {"type", "invalid_request_error"}}}};
+                res.set_content(error.dump(), "application/json");
+                return;
+            }
+            bool removed = cloud_registry_->uninstall(provider, [this](const json& metadata) {
+                persist_cloud_providers(metadata);
+            });
+            if (!removed) {
+                res.status = 404;
+                nlohmann::json error = {{"error", {
+                    {"message", "Cloud provider '" + provider + "' is not installed"},
                     {"type", "invalid_request_error"}}}};
                 res.set_content(error.dump(), "application/json");
                 return;
@@ -8496,17 +8512,7 @@ void Server::handle_uninstall(const httplib::Request& req, httplib::Response& re
                     router_->unload_model(m.value("model_name", ""));
                 }
             }
-            bool removed = cloud_registry_->uninstall(provider);
             size_t evicted = model_manager_->evict_cloud_models(provider);
-            if (!removed) {
-                res.status = 404;
-                nlohmann::json error = {{"error", {
-                    {"message", "Cloud provider '" + provider + "' is not installed"},
-                    {"type", "invalid_request_error"}}}};
-                res.set_content(error.dump(), "application/json");
-                return;
-            }
-            persist_cloud_providers();
             nlohmann::json response = {
                 {"status", "success"},
                 {"backend", "cloud"},

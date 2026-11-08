@@ -422,6 +422,58 @@ def acceptance(args):
                                 }
                             )
             proof["automatic_load_errors"] = automatic
+            gateways = []
+            for paused in (True, False):
+                fixture.ok("/v1/juiced/admission", {"paused": paused})
+                for path, payload in (
+                    (
+                        "/api/chat",
+                        {"messages": [{"role": "user", "content": "fixture"}]},
+                    ),
+                    ("/api/generate", {"prompt": "fixture"}),
+                    ("/api/embed", {"input": "fixture"}),
+                    ("/api/embeddings", {"prompt": "fixture"}),
+                    (
+                        "/v1/messages",
+                        {
+                            "messages": [{"role": "user", "content": "fixture"}],
+                            "max_tokens": 8,
+                        },
+                    ),
+                    (
+                        "/v1/messages/count_tokens",
+                        {"messages": [{"role": "user", "content": "fixture"}]},
+                    ),
+                ):
+                    for streaming in (False, True):
+                        status, headers, data = fixture.call(
+                            path,
+                            {"model": second_model, "stream": streaming, **payload},
+                        )
+                        expected = (
+                            "admission_paused"
+                            if paused
+                            else "completion_deadline_exceeded"
+                        )
+                        code = (
+                            data.get("code")
+                            if path.startswith("/api/")
+                            else data["error"].get("code")
+                        )
+                        assert (
+                            status == (503 if paused else 504) and code == expected
+                        ), (path, status, data)
+                        if paused:
+                            assert headers.get("Retry-After") == "1", headers
+                        gateways.append(
+                            {
+                                "path": path,
+                                "stream": streaming,
+                                "status": status,
+                                "code": code,
+                            }
+                        )
+            proof["gateway_automatic_load_errors"] = gateways
 
         except Exception:
             fixture.log.flush()

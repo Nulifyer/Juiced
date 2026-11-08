@@ -2251,6 +2251,7 @@ static void save_user_json(const std::string& save_path, const json& to_save) {
         try {
             file << to_save.dump(2);
             file.flush();
+            file.close();
         } catch (const json::exception& e) {
             throw std::runtime_error("Failed to write JSON to file " + path_to_utf8(tmp) + ": " + e.what());
         }
@@ -2260,15 +2261,7 @@ static void save_user_json(const std::string& save_path, const json& to_save) {
     }
 
     std::error_code ec;
-    fs::rename(tmp, target, ec);
-#ifdef _WIN32
-    if (ec) {
-        ec.clear();
-        fs::remove(target, ec);
-        ec.clear();
-        fs::rename(tmp, target, ec);
-    }
-#endif
+    utils::atomic_replace_file(tmp, target, ec);
     if (ec) {
         std::error_code cleanup_ec;
         fs::remove(tmp, cleanup_ec);
@@ -2290,11 +2283,15 @@ void ModelManager::save_model_options(const ModelInfo& info) {
     json snapshot;
     {
         std::lock_guard<std::mutex> lock(models_cache_mutex_);
-        recipe_options_[id] = info.recipe_options.to_json();
         snapshot = recipe_options_;
-        update_model_options_in_cache_locked(info);
+        snapshot[id] = info.recipe_options.to_json();
     }
     save_user_json(get_recipe_options_file(), snapshot);
+    {
+        std::lock_guard<std::mutex> lock(models_cache_mutex_);
+        recipe_options_.swap(snapshot);
+        update_model_options_in_cache_locked(info);
+    }
 }
 
 json ModelManager::get_saved_model_options(const std::string& model_name) {
@@ -2405,12 +2402,14 @@ json ModelManager::write_saved_model_options(const std::string& model_name,
             saved = options;
         }
 
-        if (saved.empty()) {
-            recipe_options_.erase(id);
-        } else {
-            recipe_options_[id] = saved;
-        }
         snapshot = recipe_options_;
+        if (saved.empty()) snapshot.erase(id);
+        else snapshot[id] = saved;
+    }
+    save_user_json(get_recipe_options_file(), snapshot);
+    {
+        std::lock_guard<std::mutex> lock(models_cache_mutex_);
+        recipe_options_.swap(snapshot);
 
         if (have_info) {
             // Same layering as build_cache(), so the two can't drift.
@@ -2422,7 +2421,6 @@ json ModelManager::write_saved_model_options(const std::string& model_name,
 
     if (!have_info) invalidate_models_cache();
 
-    save_user_json(get_recipe_options_file(), snapshot);
     return saved;
 }
 

@@ -199,10 +199,10 @@ void CloudProviderRegistry::load_from_config(const json& cloud_providers_array) 
     }
 }
 
-json CloudProviderRegistry::to_config_array() const {
-    std::shared_lock lock(mu_);
+namespace {
+json serialize_records(const std::vector<CloudProviderRegistry::Record>& records) {
     json arr = json::array();
-    for (const auto& r : installed_) {
+    for (const auto& r : records) {
         json entry = {
             {"name", r.name},
             {"base_url", r.base_url},
@@ -210,7 +210,7 @@ json CloudProviderRegistry::to_config_array() const {
         };
         // Written only when non-default so an existing config.json is left
         // byte-identical by a save that changed nothing.
-        const Record defaults;
+        const CloudProviderRegistry::Record defaults;
         if (r.auth_header_name != defaults.auth_header_name) {
             entry["auth_header_name"] = r.auth_header_name;
         }
@@ -225,44 +225,57 @@ json CloudProviderRegistry::to_config_array() const {
     return arr;
 }
 
+} // namespace
+
+json CloudProviderRegistry::to_config_array() const {
+    std::shared_lock lock(mu_);
+    return serialize_records(installed_);
+}
+
 bool CloudProviderRegistry::install(const std::string& provider,
                                     const std::string& base_url,
-                                    const InstallOptions& options) {
+                                    const InstallOptions& options, Persist persist) {
     std::unique_lock lock(mu_);
-    auto it = std::find_if(installed_.begin(), installed_.end(),
+    auto candidate = installed_;
+    auto it = std::find_if(candidate.begin(), candidate.end(),
                            [&](const Record& r) { return r.name == provider; });
-    if (it == installed_.end()) {
-        installed_.push_back(apply_options(Record{provider, normalize_base_url(base_url)},
-                                           options));
-        return true;
+    if (it == candidate.end()) {
+        candidate.push_back(apply_options(Record{provider, normalize_base_url(base_url)}, options));
+    } else {
+        Record updated = apply_options(*it, options);
+        updated.base_url = normalize_base_url(base_url);
+        if (updated == *it) return false;
+        *it = std::move(updated);
     }
-    Record updated = apply_options(*it, options);
-    updated.base_url = normalize_base_url(base_url);
-    if (updated == *it) {
-        return false;
-    }
-    *it = std::move(updated);
+    if (persist) persist(serialize_records(candidate));
+    installed_.swap(candidate);
     return true;
 }
 
 bool CloudProviderRegistry::set_allow_insecure_http(const std::string& provider,
-                                                    bool allow) {
+                                                    bool allow, Persist persist) {
     std::unique_lock lock(mu_);
-    for (auto& r : installed_) {
+    auto candidate = installed_;
+    for (auto& r : candidate) {
         if (r.name == provider) {
             r.allow_insecure_http = allow;
+            if (persist) persist(serialize_records(candidate));
+            installed_.swap(candidate);
             return true;
         }
     }
     return false;
 }
 
-bool CloudProviderRegistry::uninstall(const std::string& provider) {
+bool CloudProviderRegistry::uninstall(const std::string& provider, Persist persist) {
     std::unique_lock lock(mu_);
-    auto it = std::find_if(installed_.begin(), installed_.end(),
+    auto candidate = installed_;
+    auto it = std::find_if(candidate.begin(), candidate.end(),
                            [&](const Record& r) { return r.name == provider; });
-    if (it == installed_.end()) return false;
-    installed_.erase(it);
+    if (it == candidate.end()) return false;
+    candidate.erase(it);
+    if (persist) persist(serialize_records(candidate));
+    installed_.swap(candidate);
     runtime_keys_.erase(provider);
     return true;
 }

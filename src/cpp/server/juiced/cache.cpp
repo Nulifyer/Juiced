@@ -502,9 +502,11 @@ void JuicedService::chat(const httplib::Request &original,
       return;
     }
     const auto address = profile.at("address").get<std::string>();
+    worker->resources_started();
     auto sr = utils::HttpClient::get(
         address + "/slots", {}, 10, utils::HttpSecurityPolicy::TrustedLoopback,
         {nullptr, [worker, disconnected] { return worker->deadline_expired() || (disconnected && disconnected()); }});
+    worker->resources_completed();
     if (sr.status_code != 200)
       throw std::runtime_error("Cannot reserve a prompt-state slot");
     auto slots = json::parse(sr.body);
@@ -805,7 +807,10 @@ void JuicedService::chat(const httplib::Request &original,
       } catch (...) {
       }
     }
-    if (!inference_started) {
+    if (const auto* admission = dynamic_cast<const AdmissionError*>(&e)) {
+      if (admission->retry_after()) res.set_header("Retry-After", std::to_string(admission->retry_after()));
+      output(res, admission->to_json(), admission->status);
+    } else if (!inference_started) {
       // A miss or invalid snapshot already rebuilds inside its slot lease.
       // If admission itself fails, retry instead of racing a leased engine
       // slot.

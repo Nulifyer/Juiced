@@ -1,0 +1,38 @@
+{
+  "schema": 1,
+  "phase": "P1",
+  "phase_complete": false,
+  "deployed": false,
+  "selected_families": [
+    "durable native configuration and retained-record publication",
+    "cache state-transfer lifetime",
+    "direct gateway admission errors"
+  ],
+  "scope": [
+    "Cloud metadata becomes visible after durable publication; failed mutations retain credentials, discovered model state and retryability.",
+    "ModelManager registrations/options/profiles and Juiced state use shared atomic single-file replacement. Saved options publish after commit.",
+    "Retained job deletion and tombstones acknowledge durable persistence and preserve visible records on failure.",
+    "Every cache inspection transfer activates its state claim; aborted /slots retains uncertainty until exact-generation stop.",
+    "Persistent Chat and native Ollama/Anthropic automatic loading preserve typed status/code/retry metadata.",
+    "Positive ledger concurrency fixtures use dedicated joined threads and readiness observation; explicit short deadline tests and production defaults remain unchanged."
+  ],
+  "verification": {
+    "status": "local Linux gates passed; current-source cross-platform and actual-image qualification pending",
+    "scope": "CPU/loopback/metadata fixtures only. No real speech, accelerators, essential-service latency or production qualification.",
+    "native_contracts": 17,
+    "persistence_checks": 52,
+    "api_cases": 41,
+    "resource_repetitions": 20,
+    "ordinary_openai_automatic_load_cases": 48,
+    "persistent_chat_automatic_load_cases": 4,
+    "gateway_automatic_load_cases": 24,
+    "cache_inspection_cancellation_cases": 4,
+    "cloud_http_failure_retry_restart_cases": 8
+  },
+  "remaining": [
+    "Full P1 native path coverage, ingress/background/preparation/install envelopes, all-writer maintenance, exact execution identities, shared runtime observations and frozen interference gates.",
+    "Operation qualification binds exact engine versions and must distinguish provider source contracts from permissive forwarding mocks.",
+    "Candidate-specific recovery and full P1 council review precede promotion.",
+    "P2-P7 remain under the approved staged plan and selected-family manifests."
+  ]
+}

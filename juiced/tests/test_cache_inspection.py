@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Direct persistent-cache /props cancellation against a controlled subprocess."""
+"""Direct persistent-cache inspection cancellation against a controlled subprocess."""
 
 import argparse
 import json
@@ -20,10 +20,13 @@ def acceptance(args):
         root = Path(directory)
         fixture = Fixture(args, root)
         calls = root / "engine-calls.jsonl"
+        delayed = root / "delayed-path"
+        delayed.write_text("")
         engine = root / "inspection-engine"
         engine.write_text(
             f"#!{sys.executable}\n"
             "import json,sys,time,signal\n"
+            "from pathlib import Path\n"
             "from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer\n"
             "signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))\n"
             "signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGTERM})\n"
@@ -33,8 +36,8 @@ def acceptance(args):
             f"  with open({str(calls)!r},'a') as log: log.write(json.dumps(self.path)+'\\n')\n"
             " def do_GET(self):\n"
             "  self.record()\n"
-            "  if self.path == '/props': time.sleep(10)\n"
-            "  body=json.dumps({'status':'ok','build_info':'mock-state-inspection'}).encode()\n"
+            f"  if self.path == Path({str(delayed)!r}).read_text(): time.sleep(10)\n"
+            "  body=json.dumps({'status':'ok','build_info':'dde879b-fixture-inspection'}).encode()\n"
             "  try:\n"
             "   self.send_response(200);self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)\n"
             "  except (BrokenPipeError,ConnectionResetError): pass\n"
@@ -53,7 +56,11 @@ def acceptance(args):
             fixture.ok("/v1/juiced/policy", {"model": MODEL, "policy": "on-demand"})
             fixture.ok(
                 "/v1/models/" + MODEL + "/options",
-                {"ctx_size": 2048, "llamacpp_backend": "cpu"},
+                {
+                    "ctx_size": 2048,
+                    "llamacpp_backend": "cpu",
+                    "llamacpp_args": "--slot-save-path " + str(root / "snapshots"),
+                },
             )
             fixture.load()
             loaded = next(
@@ -61,6 +68,8 @@ def acceptance(args):
                 for row in fixture.ok("/v1/health")["all_models_loaded"]
                 if row["model_name"] == MODEL
             )
+            mock_profile = fixture.ok("/v1/juiced/cache/profile", {"model": MODEL})
+            assert mock_profile["configured"], mock_profile
             options = loaded["recipe_options"]
             options.pop("pinned", None)
             fixture.ok("/v1/unload", {})
@@ -69,14 +78,19 @@ def acceptance(args):
             state = json.loads(state_path.read_text())
             state["cache"]["mode"] = "persistent"
             state["qualified_profiles"] = {
-                "stale-fixture-profile": {
-                    "evidence": "Controlled stale-profile fixture, not useful-reuse qualification"
+                mock_profile["fingerprint"]: {
+                    "evidence": "Controlled mock profile only; not useful-reuse qualification"
                 }
             }
             state_path.write_text(json.dumps(state))
             fixture.start("fixture-inference", "fixture-admin")
             matrix = []
-            for mode in ("deadline", "disconnect"):
+            for path, mode in (
+                (path, mode)
+                for path in ("/props", "/slots")
+                for mode in ("deadline", "disconnect")
+            ):
+                delayed.write_text(path)
                 completion_ms = 2000 if mode == "deadline" else 7000
                 profile = {
                     "checkpoint": loaded["checkpoint"],
@@ -132,10 +146,10 @@ def acceptance(args):
                     )
                     connection.sendall(headers.encode() + payload)
                     for _ in range(200):
-                        if '"/props"' in calls.read_text():
+                        if json.dumps(path) in calls.read_text():
                             break
                         time.sleep(0.01)
-                    if '"/props"' not in calls.read_text():
+                    if json.dumps(path) not in calls.read_text():
                         connection.settimeout(1)
                         response = connection.recv(65536)
                         raise AssertionError(
@@ -155,7 +169,10 @@ def acceptance(args):
                 assert elapsed_ms < 4000, (mode, elapsed_ms)
                 paths = [json.loads(line) for line in calls.read_text().splitlines()]
                 assert paths.count("/props") == 1, paths
-                assert all(path in ("/health", "/props") for path in paths), paths
+                assert paths.count("/slots") == (1 if path == "/slots" else 0), paths
+                assert all(
+                    item in ("/health", "/props", "/slots") for item in paths
+                ), paths
                 state = fixture.ok("/v1/juiced/admission")
                 assert state["uncertain"] == 1 and state["active"] == 1, state
                 fixture.ok("/v1/unload", {})
@@ -163,6 +180,7 @@ def acceptance(args):
                 assert state["uncertain"] == 0 and state["active"] == 0, state
                 matrix.append(
                     {
+                        "path": path,
                         "mode": mode,
                         "completion_ms": completion_ms,
                         "elapsed_ms": elapsed_ms,
@@ -171,6 +189,27 @@ def acceptance(args):
                     }
                 )
             proof["inspection_cancellation"] = matrix
+            delayed.write_text("/health")
+            automatic = []
+            for paused in (True, False):
+                fixture.ok("/v1/juiced/admission", {"paused": paused})
+                for streaming in (False, True):
+                    status, headers, data = fixture.ask(
+                        "persistent-autoload", stream=streaming
+                    )
+                    expected = (
+                        "admission_paused" if paused else "completion_deadline_exceeded"
+                    )
+                    assert (
+                        status == (503 if paused else 504)
+                        and data["error"]["code"] == expected
+                    ), (status, data)
+                    if paused:
+                        assert headers.get("Retry-After") == "1", headers
+                    automatic.append(
+                        {"status": status, "code": expected, "stream": streaming}
+                    )
+            proof["persistent_automatic_load_errors"] = automatic
         except Exception:
             fixture.log.flush()
             print((root / "server.log").read_text()[-10000:], file=sys.stderr)

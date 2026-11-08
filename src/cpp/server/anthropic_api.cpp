@@ -19,6 +19,17 @@
 
 namespace lemon {
 
+static void set_anthropic_admission_error(const AdmissionError& error, httplib::Response& res) {
+    res.status = error.status;
+    if (error.retry_after()) res.set_header("Retry-After", std::to_string(error.retry_after()));
+    const auto native = error.to_json().at("error");
+    auto body = anthropic::build_anthropic_error(native, error.status);
+    body["error"]["code"] = error.code;
+    body["error"]["status_code"] = error.status;
+    body["error"]["details"] = native.at("details");
+    res.set_content(body.dump(), "application/json");
+}
+
 namespace {
 
 static void add_warning(std::vector<std::string>& warnings, const std::string& warning) {
@@ -438,6 +449,8 @@ void OllamaApi::handle_anthropic_count_tokens(const httplib::Request& req, httpl
     } catch (const json::exception&) {
         res.status = 400;
         res.set_content(R"({"type":"error","error":{"type":"invalid_request_error","message":"Invalid Messages token-count request"}})", "application/json");
+    } catch (const AdmissionError& e) {
+        set_anthropic_admission_error(e, res);
     } catch (const std::exception& e) {
         res.status = 400;
         res.set_content(json{{"type", "error"}, {"error", {{"type", "invalid_request_error"}, {"message", e.what()}}}}.dump(), "application/json");
@@ -1236,6 +1249,9 @@ void OllamaApi::handle_anthropic_messages(const httplib::Request& req, httplib::
 
         try {
             auto_load_model(model, extract_auto_load_options(request_json));
+        } catch (const AdmissionError& e) {
+            set_anthropic_admission_error(e, res);
+            return;
         } catch (const RouterResidencyConflictException& e) {
             set_anthropic_residency_conflict_response(e, res);
             return;
@@ -1289,6 +1305,8 @@ void OllamaApi::handle_anthropic_messages(const httplib::Request& req, httplib::
         auto anthropic_response = convert_openai_chat_to_anthropic(openai_response, model, warnings);
         res.set_content(anthropic_response.dump(), "application/json");
 
+    } catch (const AdmissionError& e) {
+        set_anthropic_admission_error(e, res);
     } catch (const std::exception& e) {
         std::cerr << "[OllamaApi] Error in /v1/messages: " << e.what() << std::endl;
         res.status = 500;

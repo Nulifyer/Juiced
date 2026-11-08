@@ -17,6 +17,14 @@ class AdmissionError : public std::runtime_error {
 public:
     AdmissionError(std::string code, std::string message, int status = 503)
         : std::runtime_error(std::move(message)), code(std::move(code)), status(status) {}
+    nlohmann::json to_json() const {
+        nlohmann::json error = {{"message", what()}, {"type", "admission_error"},
+            {"code", code}, {"status_code", status},
+            {"details", {{"code", code}, {"status_code", status}}}};
+        if (retry_after()) error["details"]["retry_after"] = retry_after();
+        return {{"error", std::move(error)}};
+    }
+    int retry_after() const { return status == 429 || status == 503 ? 1 : 0; }
     std::string code;
     int status;
 };

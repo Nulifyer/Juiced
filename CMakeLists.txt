@@ -3449,6 +3449,11 @@ if(BUILD_TESTING)
     add_cpp_ci_test(RouterAdmissionTest CI ON COMMAND test_router_admission)
     set_tests_properties(RouterAdmissionTest PROPERTIES TIMEOUT 30)
 
+    add_executable(test_persistence_boundaries test/cpp/test_persistence_boundaries.cpp)
+    target_link_libraries(test_persistence_boundaries PRIVATE lemonade-server-core)
+    add_cpp_ci_test(PersistenceBoundariesTest CI ON COMMAND test_persistence_boundaries)
+    set_tests_properties(PersistenceBoundariesTest PROPERTIES TIMEOUT 30)
+
     add_executable(test_resource_admission test/cpp/test_resource_admission.cpp)
     target_link_libraries(test_resource_admission PRIVATE lemonade-server-core)
     add_cpp_ci_test(ResourceAdmissionTest CI ON COMMAND test_resource_admission)

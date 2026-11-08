@@ -7,12 +7,34 @@
 #include <future>
 #include <mutex>
 #include <thread>
+#include <type_traits>
 #include <vector>
 
 using lemon::AdmissionError;
 using lemon::ResourceAdmission;
 using json = nlohmann::json;
 using namespace std::chrono_literals;
+
+template<class T> class ThreadTask {
+public:
+    template<class F> explicit ThreadTask(F action) {
+        std::packaged_task<T()> task(std::move(action));
+        result_ = task.get_future();
+        thread_ = std::thread(std::move(task));
+    }
+    ThreadTask(ThreadTask&&) = default;
+    ~ThreadTask() { if (thread_.joinable()) thread_.join(); }
+    auto get() { return result_.get(); }
+    template<class Rep, class Period> auto wait_for(std::chrono::duration<Rep, Period> duration) {
+        return result_.wait_for(duration);
+    }
+private:
+    std::future<T> result_;
+    std::thread thread_;
+};
+template<class F> auto run_thread(F action) {
+    return ThreadTask<std::invoke_result_t<F>>(std::move(action));
+}
 
 int main() {
     int failures = 0, checks = 0;
@@ -79,19 +101,26 @@ int main() {
     check(controller.snapshot()["uncertain"] == 0 && controller.snapshot()["active"] == 0,
           "observed generation termination reconciles uncertainty");
     {
+        auto handoff_config = config; handoff_config["interactive_wait_ms"] = 10000;
+        controller.configure(handoff_config);
         auto first = controller.acquire(work());
-        auto future = std::async(std::launch::async, [&] {
+        auto future = run_thread([&] {
             auto second = controller.acquire(work()); return bool(second);
         });
-        check(future.wait_for(20ms) == std::future_status::timeout, "concurrent caller waits for atomic slot ownership");
+        const auto ready_deadline = std::chrono::steady_clock::now() + 5s;
+        while (controller.snapshot()["pending"] != 1 && std::chrono::steady_clock::now() < ready_deadline)
+            std::this_thread::sleep_for(1ms);
+        check(controller.snapshot()["pending"] == 1 && future.wait_for(0ms) == std::future_status::timeout,
+              "concurrent caller waits for atomic slot ownership");
         first = {};
         check(future.get(), "lease release wakes queued caller");
+        controller.configure(config);
     }
     {
         auto first = controller.acquire(work());
         std::atomic<bool> cancelled{false};
         auto queued = work(); queued.cancelled = [&] { return cancelled.load(); };
-        auto future = std::async(std::launch::async, [&] {
+        auto future = run_thread([&] {
             return error([&] { controller.acquire(queued); }, "request_cancelled");
         });
         std::this_thread::sleep_for(25ms); cancelled = true;
@@ -148,7 +177,7 @@ int main() {
         bounded["interactive_wait_ms"] = 300;
         ResourceAdmission queued; queued.configure(bounded);
         auto held = queued.acquire(work());
-        auto future = std::async(std::launch::async, [&] {
+        auto future = run_thread([&] {
             return error([&] { queued.acquire(work()); }, "admission_paused");
         });
         for (int i = 0; i < 100 && queued.snapshot()["pending"] != 1; ++i) std::this_thread::sleep_for(1ms);
@@ -180,28 +209,31 @@ int main() {
         fair_config["active_limit"] = 1;
         fair_config["principal_pending_limit"] = 32;
         fair_config["service_pending_limit"] = 32;
-        fair_config["interactive_wait_ms"] = 1000;
-        fair_config["essential_wait_ms"] = 1000;
+        fair_config["interactive_wait_ms"] = 10000;
+        fair_config["essential_wait_ms"] = 10000;
         fair_config["models"]["essential"] = profile;
         fair_config["models"]["essential"]["priority"] = "essential";
         ResourceAdmission fair; fair.configure(fair_config);
         auto held = fair.acquire(work());
-        std::vector<std::future<void>> waiters;
+        std::vector<ThreadTask<void>> waiters;
         std::vector<char> order;
         std::mutex order_mutex;
         for (int i = 0; i < 11; ++i) {
-            waiters.push_back(std::async(std::launch::async, [&, i] {
+            waiters.push_back(run_thread([&, i] {
                 auto candidate = work(); if (i < 10) candidate.model = "essential";
                 auto granted = fair.acquire(candidate);
                 std::lock_guard<std::mutex> lock(order_mutex);
                 order.push_back(i < 10 ? 'E' : 'I');
             }));
         }
-        for (int i = 0; i < 500 && fair.snapshot()["pending"] != 11; ++i) std::this_thread::sleep_for(1ms);
+        const auto ready_deadline = std::chrono::steady_clock::now() + 5s;
+        while (fair.snapshot()["pending"] != 11 && std::chrono::steady_clock::now() < ready_deadline)
+            std::this_thread::sleep_for(1ms);
+        const bool all_queued = fair.snapshot()["pending"] == 11;
         held = {};
         for (auto& waiter : waiters) waiter.get();
         auto ordinary = std::find(order.begin(), order.end(), 'I');
-        check(order.size() == 11 && ordinary != order.end() && std::distance(order.begin(), ordinary) <= 8,
+        check(all_queued && order.size() == 11 && ordinary != order.end() && std::distance(order.begin(), ordinary) <= 8,
               "eligible ordinary work runs after at most eight consecutive essential grants");
     }
     {
@@ -209,11 +241,11 @@ int main() {
         race_config["models"]["model"]["concurrency"] = 8;
         race_config["principal_pending_limit"] = 32;
         race_config["service_pending_limit"] = 32;
-        race_config["interactive_wait_ms"] = 1000;
+        race_config["interactive_wait_ms"] = 10000;
         ResourceAdmission racing; racing.configure(race_config);
         std::atomic<int> running{0}, peak{0};
-        std::vector<std::future<void>> callers;
-        for (int i = 0; i < 20; ++i) callers.push_back(std::async(std::launch::async, [&] {
+        std::vector<ThreadTask<void>> callers;
+        for (int i = 0; i < 20; ++i) callers.push_back(run_thread([&] {
             auto lease = racing.acquire(work()); lease.started();
             int count = ++running, observed = peak;
             while (count > observed && !peak.compare_exchange_weak(observed, count)) {}
@@ -285,7 +317,7 @@ int main() {
               "failed publication leaves the old policy intact and clears the transition gate");
         std::promise<void> publishing, release;
         auto release_future = release.get_future();
-        auto update = std::async(std::launch::async, [&] {
+        auto update = run_thread([&] {
             transitions.configure(config, [&] { publishing.set_value(); release_future.wait(); });
         });
         publishing.get_future().wait();

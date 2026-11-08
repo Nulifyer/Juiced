@@ -50,9 +50,9 @@ jobs:
           python -c "from pathlib import Path; Path('.version').write_text('2026.44.1-juiced\n')"
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_WEB_APP=OFF -DBUILD_TAURI_APP=OFF -DBUILD_TESTING=ON
       - name: Compile core and portable contracts
-        run: cmake --build build --config Release ${{ runner.os != 'Windows' && '--parallel 4' || '' }} --target lemond test_config_merging test_auto_tune test_request_cancellation test_provider_request_observation test_resource_admission test_router_admission test_provider_request_bounds test_request_identity test_backend_mode_contract test_memory_budget test_inference_lease test_realtime_worker_lease test_routing_helper_reconcile test_live_throughput
+        run: cmake --build build --config Release ${{ runner.os != 'Windows' && '--parallel 4' || '' }} --target lemond test_config_merging test_persistence_boundaries test_auto_tune test_request_cancellation test_provider_request_observation test_resource_admission test_router_admission test_provider_request_bounds test_request_identity test_backend_mode_contract test_memory_budget test_inference_lease test_realtime_worker_lease test_routing_helper_reconcile test_live_throughput
       - name: Verify native contracts
-        run: ctest --test-dir build -C Release --output-on-failure -R "^(ConfigMergingTest|AutoTuneTest|RequestCancellationTest|ProviderRequestObservationTest|ResourceAdmissionTest|RouterAdmissionTest|ProviderRequestBoundsTest|RequestIdentityTest|BackendModeContractTest|MemoryBudgetTest|InferenceLeaseTest|RealtimeWorkerLeaseTest|RoutingHelperReconcileTest|LiveThroughputTest)$"
+        run: ctest --test-dir build -C Release --output-on-failure -R "^(ConfigMergingTest|PersistenceBoundariesTest|AutoTuneTest|RequestCancellationTest|ProviderRequestObservationTest|ResourceAdmissionTest|RouterAdmissionTest|ProviderRequestBoundsTest|RequestIdentityTest|BackendModeContractTest|MemoryBudgetTest|InferenceLeaseTest|RealtimeWorkerLeaseTest|RoutingHelperReconcileTest|LiveThroughputTest)$"
       - name: Repeat admission queue and concurrency contract
         run: ctest --test-dir build -C Release --output-on-failure --repeat until-fail:20 -R "^ResourceAdmissionTest$"
   image:
@@ -106,6 +106,9 @@ jobs:
           docker cp juiced/tests/test_runtime_boundaries.py juiced-smoke:/tmp/test_runtime_boundaries.py
           docker exec juiced-smoke python3 /tmp/test_runtime_boundaries.py --binary /opt/lemonade/lemond --engine /opt/juiced/llama/llama-server --model-file /library/stories15M-q4_0.gguf --out /tmp/runtime-boundaries-proof.json
           docker cp juiced-smoke:/tmp/runtime-boundaries-proof.json runtime-boundaries-proof.json
+          docker cp juiced/tests/test_cloud_publication.py juiced-smoke:/tmp/test_cloud_publication.py
+          docker exec juiced-smoke python3 /tmp/test_cloud_publication.py --binary /opt/lemonade/lemond --engine /opt/juiced/llama/llama-server --model-file /library/stories15M-q4_0.gguf --out /tmp/cloud-publication-proof.json
+          docker cp juiced-smoke:/tmp/cloud-publication-proof.json cloud-publication-proof.json
           docker cp juiced/tests/test_cache_inspection.py juiced-smoke:/tmp/test_cache_inspection.py
           docker exec juiced-smoke python3 /tmp/test_cache_inspection.py --binary /opt/lemonade/lemond --engine /opt/juiced/llama/llama-server --model-file /library/stories15M-q4_0.gguf --out /tmp/cache-inspection-proof.json
           docker cp juiced-smoke:/tmp/cache-inspection-proof.json cache-inspection-proof.json

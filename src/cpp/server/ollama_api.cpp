@@ -12,6 +12,16 @@
 
 namespace lemon {
 
+static void set_ollama_admission_error(const AdmissionError& error, httplib::Response& res) {
+    res.status = error.status;
+    if (error.retry_after()) res.set_header("Retry-After", std::to_string(error.retry_after()));
+    auto body = error.to_json();
+    body["message"] = body["error"]["message"];
+    body["code"] = error.code;
+    body["error"] = error.what();
+    res.set_content(body.dump(), "application/json");
+}
+
 // ============================================================================
 // extract parameter size from model name
 // e.g. "Qwen3-0.6B-GGUF" → "0.6B", "Gemma-3-4b-it-GGUF" → "4B"
@@ -757,6 +767,9 @@ void OllamaApi::handle_chat(const httplib::Request& req, httplib::Response& res)
         // Auto-load the model
         try {
             auto_load_model(model, extract_auto_load_options(request_json));
+        } catch (const AdmissionError& e) {
+            set_ollama_admission_error(e, res);
+            return;
         } catch (const RouterResidencyConflictException& e) {
             set_ollama_residency_conflict_response(e, res);
             return;
@@ -847,6 +860,8 @@ void OllamaApi::handle_chat(const httplib::Request& req, httplib::Response& res)
             res.set_content(ollama_response.dump(), "application/json");
         }
 
+    } catch (const AdmissionError& e) {
+        set_ollama_admission_error(e, res);
     } catch (const std::exception& e) {
         LOG(ERROR, "OllamaApi") << "Error in /api/chat: " << e.what() << std::endl;
         res.status = 500;
@@ -893,6 +908,9 @@ void OllamaApi::handle_generate(const httplib::Request& req, httplib::Response& 
 
         try {
             auto_load_model(model, extract_auto_load_options(request_json));
+        } catch (const AdmissionError& e) {
+            set_ollama_admission_error(e, res);
+            return;
         } catch (const RouterResidencyConflictException& e) {
             set_ollama_residency_conflict_response(e, res);
             return;
@@ -1006,6 +1024,8 @@ void OllamaApi::handle_generate(const httplib::Request& req, httplib::Response& 
             res.set_content(ollama_res.dump(), "application/json");
         }
 
+    } catch (const AdmissionError& e) {
+        set_ollama_admission_error(e, res);
     } catch (const std::exception& e) {
         LOG(ERROR, "OllamaApi") << "Error in /api/generate: " << e.what() << std::endl;
         res.status = 500;
@@ -1098,6 +1118,8 @@ void OllamaApi::handle_generate_image(const json& request_json, httplib::Respons
 
         res.set_content(ollama_res.dump(), "application/json");
 
+    } catch (const AdmissionError& e) {
+        set_ollama_admission_error(e, res);
     } catch (const std::exception& e) {
         LOG(ERROR, "OllamaApi") << "Error in image generation: " << e.what() << std::endl;
         res.status = 500;
@@ -1123,6 +1145,8 @@ void OllamaApi::handle_tags(const httplib::Request& req, httplib::Response& res)
 
         res.set_content(response.dump(), "application/json");
 
+    } catch (const AdmissionError& e) {
+        set_ollama_admission_error(e, res);
     } catch (const std::exception& e) {
         LOG(ERROR, "OllamaApi") << "Error in /api/tags: " << e.what() << std::endl;
         res.status = 500;
@@ -1174,6 +1198,8 @@ void OllamaApi::handle_show(const httplib::Request& req, httplib::Response& res)
 
         res.set_content(response.dump(), "application/json");
 
+    } catch (const AdmissionError& e) {
+        set_ollama_admission_error(e, res);
     } catch (const std::exception& e) {
         LOG(ERROR, "OllamaApi") << "Error in /api/show: " << e.what() << std::endl;
         res.status = 500;
@@ -1207,6 +1233,8 @@ void OllamaApi::handle_delete(const httplib::Request& req, httplib::Response& re
         // Ollama returns 200 with no body on success
         res.status = 200;
 
+    } catch (const AdmissionError& e) {
+        set_ollama_admission_error(e, res);
     } catch (const std::exception& e) {
         LOG(ERROR, "OllamaApi") << "Error in /api/delete: " << e.what() << std::endl;
         std::string error_msg = e.what();
@@ -1310,6 +1338,8 @@ void OllamaApi::handle_pull(const httplib::Request& req, httplib::Response& res)
             res.set_content(response.dump(), "application/json");
         }
 
+    } catch (const AdmissionError& e) {
+        set_ollama_admission_error(e, res);
     } catch (const std::exception& e) {
         LOG(ERROR, "OllamaApi") << "Error in /api/pull: " << e.what() << std::endl;
         res.status = 500;
@@ -1335,6 +1365,9 @@ void OllamaApi::handle_embed(const httplib::Request& req, httplib::Response& res
 
         try {
             auto_load_model(model, extract_auto_load_options(request_json));
+        } catch (const AdmissionError& e) {
+            set_ollama_admission_error(e, res);
+            return;
         } catch (const RouterResidencyConflictException& e) {
             set_ollama_residency_conflict_response(e, res);
             return;
@@ -1381,6 +1414,8 @@ void OllamaApi::handle_embed(const httplib::Request& req, httplib::Response& res
 
         res.set_content(ollama_res.dump(), "application/json");
 
+    } catch (const AdmissionError& e) {
+        set_ollama_admission_error(e, res);
     } catch (const std::exception& e) {
         LOG(ERROR, "OllamaApi") << "Error in /api/embed: " << e.what() << std::endl;
         res.status = 500;
@@ -1406,6 +1441,9 @@ void OllamaApi::handle_embeddings(const httplib::Request& req, httplib::Response
 
         try {
             auto_load_model(model, extract_auto_load_options(request_json));
+        } catch (const AdmissionError& e) {
+            set_ollama_admission_error(e, res);
+            return;
         } catch (const RouterResidencyConflictException& e) {
             set_ollama_residency_conflict_response(e, res);
             return;
@@ -1448,6 +1486,8 @@ void OllamaApi::handle_embeddings(const httplib::Request& req, httplib::Response
 
         res.set_content(ollama_res.dump(), "application/json");
 
+    } catch (const AdmissionError& e) {
+        set_ollama_admission_error(e, res);
     } catch (const std::exception& e) {
         LOG(ERROR, "OllamaApi") << "Error in /api/embeddings: " << e.what() << std::endl;
         res.status = 500;
@@ -1486,6 +1526,8 @@ void OllamaApi::handle_ps(const httplib::Request& req, httplib::Response& res) {
 
         res.set_content(response.dump(), "application/json");
 
+    } catch (const AdmissionError& e) {
+        set_ollama_admission_error(e, res);
     } catch (const std::exception& e) {
         LOG(ERROR, "OllamaApi") << "Error in /api/ps: " << e.what() << std::endl;
         res.status = 500;

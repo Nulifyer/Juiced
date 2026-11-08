@@ -1,5 +1,6 @@
 #pragma once
 
+#include <functional>
 #include <mutex>
 #include <optional>
 #include <shared_mutex>
@@ -57,6 +58,9 @@ public:
         bool runtime_key_set = false;
     };
 
+    // Durable metadata callbacks run under the registry lock and must not re-enter it.
+    using Persist = std::function<void(const nlohmann::json&)>;
+
     CloudProviderRegistry() = default;
 
     // Seed from a parsed JSON array (the value of "cloud_providers" in
@@ -87,15 +91,15 @@ public:
     // validators below; passing one here stores it unchecked.
     bool install(const std::string& provider,
                  const std::string& base_url,
-                 const InstallOptions& options = {});
+                 const InstallOptions& options = {}, Persist persist = {});
 
     // Opts an already-installed provider into plaintext-HTTP key transmission
     // without disturbing any other field. Returns false if not installed.
-    bool set_allow_insecure_http(const std::string& provider, bool allow);
+    bool set_allow_insecure_http(const std::string& provider, bool allow, Persist persist = {});
 
     // Removes the provider record AND its runtime key. Returns true if a
     // record was removed.
-    bool uninstall(const std::string& provider);
+    bool uninstall(const std::string& provider, Persist persist = {});
 
     bool is_installed(const std::string& provider) const;
 

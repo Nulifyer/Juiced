@@ -158,11 +158,11 @@ void JobManager::load_from_disk() {
     }
 }
 
-void JobManager::persist_locked() {
+void JobManager::persist_locked(bool required, const std::string& exclude) {
     json arr = json::array();
     for (const auto& id : order_) {
         auto it = jobs_.find(id);
-        if (it != jobs_.end()) arr.push_back(it->second.to_json());
+        if (it != jobs_.end() && id != exclude) arr.push_back(it->second.to_json());
     }
     json doc = {{"version", 1}, {"jobs", arr}};
     const std::string tmp = storage_path_ + ".tmp";
@@ -171,6 +171,7 @@ void JobManager::persist_locked() {
         std::ofstream out(lemon::utils::path_from_utf8(tmp), std::ios::trunc);
         out << doc.dump(2);
         out.flush();
+        out.close();
         write_ok = out.good();
     }
     if (!write_ok) {
@@ -178,12 +179,18 @@ void JobManager::persist_locked() {
                              << " (keeping previous state on disk)" << std::endl;
         std::error_code rm;
         fs::remove(lemon::utils::path_from_utf8(tmp), rm);
+        if (required) throw JobError(500, "Could not durably delete job: staging failed");
         return;
     }
     std::error_code ec;
     lemon::utils::atomic_replace_file(lemon::utils::path_from_utf8(tmp),
                                       lemon::utils::path_from_utf8(storage_path_), ec);
-    if (ec) LOG(WARNING, "Jobs") << "Could not persist jobs: " << ec.message() << std::endl;
+    if (ec) {
+        LOG(WARNING, "Jobs") << "Could not persist jobs: " << ec.message() << std::endl;
+        std::error_code cleanup;
+        fs::remove(lemon::utils::path_from_utf8(tmp), cleanup);
+        if (required) throw JobError(500, "Could not durably delete job: replacement failed");
+    }
 }
 
 void JobManager::enqueue_locked(const std::string& id) {
@@ -351,7 +358,8 @@ bool JobManager::remove(const std::string& id, bool& active_out) {
     if (id == active_id_) {
         active_out = true;
         it->second.deleted = true;
-        persist_locked();
+        try { persist_locked(true); }
+        catch (...) { it->second.deleted = false; throw; }
         auto ctrl = control_for_locked(id);
         ctrl->interrupt_requested.store(true);
         ctrl->cancel.store(true);
@@ -362,8 +370,9 @@ bool JobManager::remove(const std::string& id, bool& active_out) {
     }
     if (it->second.status == JobStatus::Paused || it->second.status == JobStatus::Interrupted) {
         it->second.deleted = true;
+        try { persist_locked(true); }
+        catch (...) { it->second.deleted = false; throw; }
         control_for_locked(id)->delete_requested.store(true);
-        persist_locked();
         enqueue_locked(id);
         cv_.notify_all();
         LOG(INFO, "Jobs") << "delete requested for " << to_string(it->second.status)
@@ -371,11 +380,11 @@ bool JobManager::remove(const std::string& id, bool& active_out) {
                           << std::endl;
         return true;
     }
+    persist_locked(true, id);
     jobs_.erase(id);
     controls_.erase(id);
     order_.erase(std::remove(order_.begin(), order_.end(), id), order_.end());
     queue_.erase(std::remove(queue_.begin(), queue_.end(), id), queue_.end());
-    persist_locked();
     LOG(INFO, "Jobs") << "deleted job " << id << std::endl;
     return true;
 }

@@ -14,7 +14,7 @@ inference. Unload idle workers separately when draining for a configuration chan
 The native `admission` setting is a complete value in `config.json`. Update it alone
 through `POST /internal/set`. Changing resource topology requires no active,
 resident, or pending claims. Use pause, wait for requests to settle, unload workers,
-apply settings, then resume. Updates are staged and persisted before publication. A revision-bound transition blocks new admission during publication. Cloud registry metadata uses the same serialized publication owner; credentials remain process/environment owned. Configuration commits use atomic platform replacement, without overwrite-copy fallback or throwing post-commit cleanup. Write/replacement failure retains the old configuration and returns an error. Hot policies remain saved. Runtime pause is temporary
+apply settings, then resume. Updates are staged and persisted before publication. A revision-bound transition blocks new admission during publication. Cloud metadata mutations stage a candidate under the registry owner, use the serialized configuration publication owner, and become visible only after durable commit. Failed install, opt-in or uninstall leaves metadata and process keys unchanged. HTTP cloud mutations serialize discovery and credential effects. Credentials remain process/environment owned. Configuration commits use atomic platform replacement, without overwrite-copy fallback or throwing post-commit cleanup. Write/replacement failure retains the old configuration and returns an error. Hot policies remain saved. Runtime pause is temporary
 and does not survive manager restart.
 
 Settings include `mode`, `active_limit`, `pending_limit`, `service_pending_limit`,
@@ -86,3 +86,15 @@ and its [Responses conversion](https://github.com/ggml-org/llama.cpp/blob/dde879
 A future provider version still requires exact-profile qualification. Synthetic
 portable tests inject known physical headroom; they do not certify their runner's
 memory or accelerator telemetry.
+
+
+Persistent-cache inspection tracks each direct backend exchange separately. Aborted
+`/props` or `/slots` inspection retains its reservation until exact-generation stop.
+Typed admission failures retain their HTTP status, machine-readable code and retry
+header through persistent Chat, Ollama and Anthropic formatting.
+
+Model registration, saved options, execution profiles and Juiced state use the
+shared atomic file replacement helper. Saved option changes publish in memory after
+their file commits. Retained job deletion acknowledges success only after durable
+deletion or a durable tombstone. These single-file guarantees do not establish P3
+complete-model promotion or multi-file rollback.

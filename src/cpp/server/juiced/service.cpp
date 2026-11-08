@@ -72,10 +72,17 @@ void atomic_json(const std::filesystem::path &p, const json &j) {
     std::ofstream f(tmp);
     f << j.dump(2);
     f.flush();
+    f.close();
     if (!f)
       throw std::runtime_error("Could not save state");
   }
-  std::filesystem::rename(tmp, p);
+  std::error_code ec;
+  utils::atomic_replace_file(tmp, p, ec);
+  if (ec) {
+    std::error_code cleanup;
+    std::filesystem::remove(tmp, cleanup);
+    throw std::runtime_error("Could not replace state: " + ec.message());
+  }
 }
 std::string service(const json &m) {
   auto labels = m.value("labels", std::vector<std::string>{});

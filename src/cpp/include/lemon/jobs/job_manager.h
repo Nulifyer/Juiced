@@ -40,7 +40,7 @@ private:
 
     void worker_main();
     void execute(const std::string& id, const std::shared_ptr<Control>& ctrl);
-    void persist_locked();
+    void persist_locked(bool required = false, const std::string& exclude = {});
     void load_from_disk();
     void enqueue_locked(const std::string& id);
     std::shared_ptr<Control> control_for_locked(const std::string& id);

@@ -328,7 +328,7 @@ private:
         LoadPurpose load_purpose = LoadPurpose::UserInference);
 
     json publish_config(std::function<json()> read_changes);
-    void persist_cloud_providers();
+    void persist_cloud_providers(const nlohmann::json& metadata);
 
     // Load every component of a collection (Omni) model, downloading any that are
     // missing. Shared by handle_load and auto_load_model_if_needed.
@@ -386,6 +386,7 @@ private:
     std::unique_ptr<ModelManager> model_manager_;
     std::unique_ptr<BackendManager> backend_manager_;
     std::unique_ptr<CloudProviderRegistry> cloud_registry_;
+    std::mutex cloud_update_mutex_;
     std::unique_ptr<WebSocketServer> websocket_server_;
     std::unique_ptr<lemon::jobs::JobManager> job_manager_;
 
