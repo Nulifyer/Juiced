@@ -195,6 +195,7 @@ void CloudProviderRegistry::load_from_config(const json& cloud_providers_array) 
             r.wire_format = entry["wire_format"].get<std::string>();
         }
         if (r.name.empty() || r.base_url.empty()) continue;
+        revisions_[r.name] = ++next_revision_;
         installed_.push_back(std::move(r));
     }
 }
@@ -232,11 +233,24 @@ json CloudProviderRegistry::to_config_array() const {
     return serialize_records(installed_);
 }
 
+void CloudProviderRegistry::commit_locked(std::vector<Record> records,
+        std::unordered_map<std::string, std::string> keys, const std::string& provider, Persist persist) {
+    auto revisions = revisions_;
+    revisions[provider] = next_revision_ + 1;
+    if (persist) persist(serialize_records(records));
+    installed_.swap(records);
+    runtime_keys_.swap(keys);
+    revisions_.swap(revisions);
+    ++next_revision_;
+}
+
 bool CloudProviderRegistry::install(const std::string& provider,
                                     const std::string& base_url,
-                                    const InstallOptions& options, Persist persist) {
+                                    const InstallOptions& options, Persist persist, const std::string& runtime_key) {
     std::unique_lock lock(mu_);
     auto candidate = installed_;
+    auto candidate_keys = runtime_keys_;
+    bool changed = true;
     auto it = std::find_if(candidate.begin(), candidate.end(),
                            [&](const Record& r) { return r.name == provider; });
     if (it == candidate.end()) {
@@ -244,12 +258,13 @@ bool CloudProviderRegistry::install(const std::string& provider,
     } else {
         Record updated = apply_options(*it, options);
         updated.base_url = normalize_base_url(base_url);
-        if (updated == *it) return false;
+        changed = !(updated == *it);
         *it = std::move(updated);
     }
-    if (persist) persist(serialize_records(candidate));
-    installed_.swap(candidate);
-    return true;
+    const auto env = std::getenv(env_var_name(provider).c_str());
+    if (!runtime_key.empty() && (!env || !*env)) candidate_keys[provider] = runtime_key;
+    commit_locked(std::move(candidate), std::move(candidate_keys), provider, changed ? std::move(persist) : Persist{});
+    return changed;
 }
 
 bool CloudProviderRegistry::set_allow_insecure_http(const std::string& provider,
@@ -259,8 +274,7 @@ bool CloudProviderRegistry::set_allow_insecure_http(const std::string& provider,
     for (auto& r : candidate) {
         if (r.name == provider) {
             r.allow_insecure_http = allow;
-            if (persist) persist(serialize_records(candidate));
-            installed_.swap(candidate);
+            commit_locked(std::move(candidate), runtime_keys_, provider, std::move(persist));
             return true;
         }
     }
@@ -274,9 +288,9 @@ bool CloudProviderRegistry::uninstall(const std::string& provider, Persist persi
                            [&](const Record& r) { return r.name == provider; });
     if (it == candidate.end()) return false;
     candidate.erase(it);
-    if (persist) persist(serialize_records(candidate));
-    installed_.swap(candidate);
-    runtime_keys_.erase(provider);
+    auto keys = runtime_keys_;
+    keys.erase(provider);
+    commit_locked(std::move(candidate), std::move(keys), provider, std::move(persist));
     return true;
 }
 
@@ -325,41 +339,67 @@ std::string CloudProviderRegistry::wire_format_for(const std::string& provider) 
     return "openai";
 }
 
-std::string CloudProviderRegistry::resolve_key(const std::string& provider) const {
-    // Env var is checked WITHOUT holding the registry lock so we don't pin the
-    // shared lock across libc calls; std::getenv reads process-global state
-    // that isn't ours to guard anyway.
-    const std::string env_name = env_var_name(provider);
-    if (const char* v = std::getenv(env_name.c_str()); v && *v) {
-        return v;
-    }
-    std::shared_lock lock(mu_);
-    auto it = runtime_keys_.find(provider);
-    if (it != runtime_keys_.end()) return it->second;
-    return "";
+std::string CloudProviderRegistry::key_locked(const std::string& provider) const {
+    const auto env_name = env_var_name(provider);
+    if (const char* value = std::getenv(env_name.c_str()); value && *value) return value;
+    const auto it = runtime_keys_.find(provider);
+    return it == runtime_keys_.end() ? std::string{} : it->second;
 }
 
-bool CloudProviderRegistry::set_runtime_key(const std::string& provider,
-                                            const std::string& key) {
-    // Env-wins-over-runtime: refuse silently with a false return so callers
-    // can surface a 409 to the client. Checked without the registry lock for
-    // the same reason as resolve_key.
-    const std::string env_name = env_var_name(provider);
-    if (const char* v = std::getenv(env_name.c_str()); v && *v) {
-        return false;
-    }
+std::string CloudProviderRegistry::resolve_key(const std::string& provider) const {
+    std::shared_lock lock(mu_);
+    return key_locked(provider);
+}
+
+std::optional<CloudProviderRegistry::Snapshot> CloudProviderRegistry::snapshot(const std::string& provider) const {
+    std::shared_lock lock(mu_);
+    for (const auto& record : installed_)
+        if (record.name == provider) return Snapshot{record, key_locked(provider), revisions_.at(provider)};
+    return std::nullopt;
+}
+
+std::vector<CloudProviderRegistry::Snapshot> CloudProviderRegistry::snapshots() const {
+    std::shared_lock lock(mu_);
+    std::vector<Snapshot> result;
+    for (const auto& record : installed_)
+        result.push_back({record, key_locked(record.name), revisions_.at(record.name)});
+    return result;
+}
+
+bool CloudProviderRegistry::with_revision(const std::string& provider, uint64_t revision,
+                                         const std::function<void()>& commit) const {
+    std::shared_lock lock(mu_);
+    const auto it = revisions_.find(provider);
+    if (it == revisions_.end() || it->second != revision ||
+        std::none_of(installed_.begin(), installed_.end(), [&](const auto& record) { return record.name == provider; })) return false;
+    commit();
+    return true;
+}
+
+bool CloudProviderRegistry::set_runtime_key(const std::string& provider, const std::string& key,
+                                           std::optional<bool> allow_insecure_http, Persist persist) {
     std::unique_lock lock(mu_);
-    if (key.empty()) {
-        runtime_keys_.erase(provider);
-    } else {
-        runtime_keys_[provider] = key;
+    const auto env = std::getenv(env_var_name(provider).c_str());
+    if (env && *env) return false;
+    auto candidate = installed_;
+    auto keys = runtime_keys_;
+    if (key.empty()) keys.erase(provider);
+    else keys[provider] = key;
+    bool changed = false;
+    if (allow_insecure_http) for (auto& record : candidate) if (record.name == provider) {
+        changed = record.allow_insecure_http != *allow_insecure_http;
+        record.allow_insecure_http = *allow_insecure_http;
     }
+    commit_locked(std::move(candidate), std::move(keys), provider, changed ? std::move(persist) : Persist{});
     return true;
 }
 
 bool CloudProviderRegistry::clear_runtime_key(const std::string& provider) {
     std::unique_lock lock(mu_);
-    return runtime_keys_.erase(provider) > 0;
+    auto keys = runtime_keys_;
+    const bool removed = keys.erase(provider) > 0;
+    commit_locked(installed_, std::move(keys), provider, {});
+    return removed;
 }
 
 CloudProviderRegistry::AuthState

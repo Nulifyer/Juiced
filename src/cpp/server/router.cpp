@@ -1474,6 +1474,36 @@ void Router::unload_model(const std::string& model_name) {
             evict_server(server.get());
 }
 
+json Router::uninstall_cloud_provider(const std::string& provider, const std::function<bool()>& publish) {
+    std::unique_lock<std::mutex> lock(load_mutex_);
+    if (is_loading_) throw RouterResidencyConflictException(provider, provider, "wait for the current load before removing a provider");
+    std::vector<std::shared_ptr<WrappedServer>> targets;
+    try {
+        for (const auto& worker : loaded_servers_) {
+            if (worker->cloud_provider() != provider) continue;
+            if (!worker->try_begin_retirement())
+                throw RouterResidencyConflictException(worker->get_model_name(), worker->get_model_name(), "provider workers must be idle before uninstall");
+            targets.push_back(worker);
+        }
+        const bool removed = publish();
+        json result = {{"removed", removed}, {"workers_removed", 0}, {"cleanup_pending", json::array()}};
+        for (const auto& worker : targets) {
+            try {
+                if (!worker->commit_retirement()) throw std::runtime_error("Worker retirement changed during publication");
+                evict_server(worker.get());
+                result["workers_removed"] = result["workers_removed"].get<int>() + 1;
+            } catch (const std::exception& error) {
+                result["cleanup_pending"].push_back(worker->get_model_name());
+                LOG(WARNING, "Router") << "Committed provider removal has retryable worker cleanup: " << error.what() << std::endl;
+            }
+        }
+        return result;
+    } catch (...) {
+        for (const auto& worker : targets) worker->cancel_retirement();
+        throw;
+    }
+}
+
 void Router::evict_if_committed(const std::string& model_name) {
     std::lock_guard<std::mutex> lock(load_mutex_);
 
@@ -1562,6 +1592,7 @@ json Router::get_all_loaded_models() const {
         json model_info;
         model_info["model_name"] = model_manager_->get_public_model_name(server->get_model_name());
         model_info["checkpoint"] = server->get_checkpoint();
+        if (!server->cloud_provider().empty()) model_info["cloud_provider"] = server->cloud_provider();
         model_info["type"] = model_type_to_string(server->get_model_type());
         model_info["residency_class"] = residency_class_to_string(server->get_residency_class());
         model_info["slot_pool"] = is_unmetered_recipe(

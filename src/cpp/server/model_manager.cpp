@@ -2456,43 +2456,55 @@ void ModelManager::select_execution_profile(const std::string& model_name, const
     const auto id = cache_key_to_canonical_id(key);
     const auto profile_id = profile.at("id").get<std::string>();
     if (profile_id.empty() || profile_id.size() > 160) throw std::invalid_argument("Invalid execution profile identifier");
-    if (profile_id != "registered" &&
-        !backends::descriptor_for(profile.at("recipe").get<std::string>()))
+    if (profile_id != "registered" && !backends::descriptor_for(profile.at("recipe").get<std::string>()))
         throw std::invalid_argument("Unknown execution runtime");
-    std::lock_guard<std::mutex> write_lock(execution_profiles_write_mutex_);
+    std::lock_guard<std::mutex> writer(recipe_options_write_mutex_);
     const auto current = get_model_info(model_name);
     const auto current_options = current.recipe_options.to_json();
     const auto previous_saved = get_saved_model_options(model_name);
-    json previous_state, next_state, snapshot;
+    json previous_profiles, next_profiles, previous_options, next_options;
     {
         std::lock_guard<std::mutex> lock(models_cache_mutex_);
-        previous_state = execution_profiles_.value(id, json{{"selected", "registered"}, {"profiles", json::object()}});
-        next_state = previous_state;
-        const auto selected = next_state.value("selected", "registered");
-        next_state["profiles"][selected] = {{"id", selected}, {"recipe", current.recipe}, {"options", current_options}};
-        if (selected == "registered") next_state["profiles"][selected]["saved_options"] = previous_saved;
-        if (profile_id != "registered") next_state["profiles"][profile_id] = profile;
-        next_state["profiles"][profile_id]["options"]["pinned"] = current_options.value("pinned", false);
-        next_state["selected"] = profile_id;
-        execution_profiles_[id] = next_state;
-        snapshot = execution_profiles_;
+        previous_profiles = execution_profiles_;
+        previous_options = recipe_options_;
     }
-    const auto path = path_to_utf8(path_from_utf8(get_recipe_options_file()).parent_path() / "execution_profiles.json");
+    next_profiles = previous_profiles;
+    next_options = previous_options;
+    auto& state = next_profiles[id];
+    if (!state.is_object()) state = json{{"selected", "registered"}, {"profiles", json::object()}};
+    const auto selected = state.value("selected", "registered");
+    state["profiles"][selected] = {{"id", selected}, {"recipe", current.recipe}, {"options", current_options}};
+    if (selected == "registered") state["profiles"][selected]["saved_options"] = previous_saved;
+    if (profile_id != "registered") state["profiles"][profile_id] = profile;
+    state["profiles"][profile_id]["options"]["pinned"] = current_options.value("pinned", false);
+    state["selected"] = profile_id;
+    const auto& target = state.at("profiles").at(profile_id);
+    auto saved = profile_id == "registered" ? target.value("saved_options", target.value("options", json::object()))
+                                            : target.value("options", json::object());
+    saved["pinned"] = current_options.value("pinned", false);
+    next_options[id] = saved;
+    RecipeOptions(target.at("recipe").get<std::string>(), saved);
+    const auto profiles_path = path_to_utf8(path_from_utf8(get_recipe_options_file()).parent_path() / "execution_profiles.json");
+    bool profiles_saved = false;
+    if (profile_persistence_barrier_) profile_persistence_barrier_();
     try {
-        save_user_json(path, snapshot);
-        const auto& target = next_state.at("profiles").at(profile_id);
-        auto saved = profile_id == "registered" ? target.value("saved_options", target.value("options", json::object()))
-                                                : target.value("options", json::object());
-        saved["pinned"] = current_options.value("pinned", false);
-        write_saved_model_options(model_name, saved, false);
+        save_user_json(profiles_path, next_profiles);
+        profiles_saved = true;
+        save_user_json(get_recipe_options_file(), next_options);
     } catch (...) {
-        {
-            std::lock_guard<std::mutex> lock(models_cache_mutex_);
-            execution_profiles_[id] = previous_state;
-            snapshot = execution_profiles_;
+        if (profiles_saved) {
+            try { save_user_json(profiles_path, previous_profiles); }
+            catch (const std::exception& error) {
+                LOG(ERROR, "ModelManager") << "Execution-profile rollback requires recovery: " << error.what() << std::endl;
+            }
         }
-        try { save_user_json(path, snapshot); write_saved_model_options(model_name, previous_saved, false); } catch (...) {}
         throw;
+    }
+    {
+        std::lock_guard<std::mutex> lock(models_cache_mutex_);
+        execution_profiles_.swap(next_profiles);
+        recipe_options_.swap(next_options);
+        cache_valid_ = false;
     }
 }
 
@@ -4046,7 +4058,10 @@ void ModelManager::build_cache() {
         if (info.downloaded && !backend_self_manages_downloads(info.recipe)) {
             refresh_on_disk_size(info);
         }
-        models_cache_[name] = info;
+        if (info.recipe == "cloud" && info.extras.count("cloud_revision") != 0 && cloud_registry_) {
+            cloud_registry_->with_revision(info.cloud_provider, info.extras.at("cloud_revision").get<uint64_t>(),
+                [&] { models_cache_[name] = info; });
+        } else models_cache_[name] = info;
     }
 
     rebuild_public_model_aliases_locked();
@@ -4680,91 +4695,67 @@ size_t ModelManager::refresh_cloud_models(const std::string& provider) {
         return 0;
     }
 
-    // Resolve creds outside the cache lock - resolve_key takes a shared
-    // lock on the registry's mutex internally; holding the cache lock here
-    // doesn't matter but keeping it tight is cheaper.
-    const std::string api_key = cloud_registry_->resolve_key(provider);
-    const std::string base_url = cloud_registry_->base_url_for(provider);
-    if (api_key.empty() || base_url.empty()) {
-        // Drop any stale entries for this provider but don't try to discover -
-        // there's nothing to discover with. The contract is "models present
-        // after refresh", so return 0 (not the evicted count).
-        evict_cloud_models(provider);
-        return 0;
-    }
-    if (CloudProviderRegistry::is_http_base_url(base_url) &&
-        !cloud_registry_->allow_insecure_http_for(provider)) {
-        LOG(WARNING, "ModelManager") << "Skipping cloud discovery for provider '"
-                                      << provider << "': http:// with API key "
-                                      << "requires allow_insecure_http=true"
-                                      << std::endl;
-        evict_cloud_models(provider);
-        return 0;
-    }
-
-    // discover_models() is best-effort; it logs upstream failures and
-    // returns an empty list rather than throwing, so we can keep going for
-    // other providers regardless of network state. This call happens
-    // outside the cache lock because it can take up to 15 s on a slow
-    // provider and we don't want to block /models on it.
+    const auto snapshot = cloud_registry_->snapshot(provider);
+    if (!snapshot) return 0;
+    const auto& record = snapshot->record;
     std::vector<ModelInfo> models;
-    try {
-        models = backends::CloudServer::discover_models(
-            provider, api_key, base_url,
-            cloud_registry_->allow_insecure_http_for(provider),
-            cloud_registry_->auth_header_for(provider),
-            cloud_registry_->wire_format_for(provider));
-    } catch (const std::exception& e) {
-        LOG(WARNING, "ModelManager") << "Cloud discovery threw for provider '"
-                                      << provider << "': " << e.what() << std::endl;
-        // Same contract: evict stale entries, report 0 present after refresh.
-        evict_cloud_models(provider);
-        return 0;
+    if (!snapshot->api_key.empty() && !record.base_url.empty() &&
+        (!CloudProviderRegistry::is_http_base_url(record.base_url) || record.allow_insecure_http)) {
+        try {
+            models = backends::CloudServer::discover_models(provider, snapshot->api_key,
+                record.base_url, record.allow_insecure_http,
+                {record.auth_header_name, record.auth_header_prefix}, record.wire_format);
+        } catch (const std::exception& error) {
+            LOG(WARNING, "ModelManager") << "Cloud discovery failed for '" << provider << "': " << error.what() << std::endl;
+        }
     }
 
     std::lock_guard<std::mutex> lock(models_cache_mutex_);
 
-    // Reseed: drop this provider's previously-registered entries before
-    // inserting the fresh list, so a model the provider stopped exposing
-    // disappears. Other providers' entries are untouched.
-    for (auto it = models_cache_.begin(); it != models_cache_.end();) {
-        if (it->second.recipe == "cloud" && it->second.cloud_provider == provider) {
-            it = models_cache_.erase(it);
-        } else {
-            ++it;
-        }
-    }
-
     size_t added = 0;
-    for (const auto& m : models) {
-        if (m.recipe != "cloud" || m.model_name.empty()) continue;
-        // Match build_cache()'s precedence exactly: emplace, don't overwrite.
-        // Any pre-existing entry under the same bare cache key wins - whether
-        // it's an FLM model, another cloud provider that discovered first, or
-        // a builtin/extra/user record. This provider's previously-registered
-        // entries are already cleared above, so emplace here is symmetric
-        // with build_cache and immune to a fast /cloud/auth racing past an
-        // already-populated cache.
-        ModelInfo info = m;
-        // discover_models() populates name/checkpoint/labels/context/cost but
-        // not recipe_options; Router needs it to construct CloudServer.
-        info.recipe_options = RecipeOptions("cloud", json::object());
-        auto [it, inserted] = models_cache_.emplace(info.model_name, std::move(info));
-        if (!inserted) {
-            LOG(INFO, "ModelManager")
-                << "Cloud discovery for '" << provider << "' skipping '"
-                << it->first << "': name already held (recipe="
-                << it->second.recipe << ")" << std::endl;
-            continue;
+    cloud_registry_->with_revision(provider, snapshot->revision, [&] {
+        // Reseed: drop this provider's previously-registered entries before
+        // inserting the fresh list, so a model the provider stopped exposing
+        // disappears. Other providers' entries are untouched.
+        for (auto it = models_cache_.begin(); it != models_cache_.end();) {
+            if (it->second.recipe == "cloud" && it->second.cloud_provider == provider) {
+                it = models_cache_.erase(it);
+            } else {
+                ++it;
+            }
         }
-        ++added;
-    }
 
-    rebuild_public_model_aliases_locked();
+        for (const auto& m : models) {
+            if (m.recipe != "cloud" || m.model_name.empty()) continue;
+            // Match build_cache()'s precedence exactly: emplace, don't overwrite.
+            // Any pre-existing entry under the same bare cache key wins - whether
+            // it's an FLM model, another cloud provider that discovered first, or
+            // a builtin/extra/user record. This provider's previously-registered
+            // entries are already cleared above, so emplace here is symmetric
+            // with build_cache and immune to a fast /cloud/auth racing past an
+            // already-populated cache.
+            ModelInfo info = m;
+            // discover_models() populates name/checkpoint/labels/context/cost but
+            // not recipe_options; Router needs it to construct CloudServer.
+            info.recipe_options = RecipeOptions("cloud", json::object());
+            info.extras["cloud_revision"] = snapshot->revision;
+            auto [it, inserted] = models_cache_.emplace(info.model_name, std::move(info));
+            if (!inserted) {
+                LOG(INFO, "ModelManager")
+                    << "Cloud discovery for '" << provider << "' skipping '"
+                    << it->first << "': name already held (recipe="
+                    << it->second.recipe << ")" << std::endl;
+                continue;
+            }
+            ++added;
+        }
 
-    LOG(INFO, "ModelManager") << "Refreshed cloud models for provider '"
-                               << provider << "': " << added << " model(s)"
-                               << std::endl;
+        rebuild_public_model_aliases_locked();
+
+        LOG(INFO, "ModelManager") << "Refreshed cloud models for provider '"
+                                   << provider << "': " << added << " model(s)"
+                                   << std::endl;
+    });
     return added;
 }
 

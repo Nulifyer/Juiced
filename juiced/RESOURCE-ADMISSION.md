@@ -98,3 +98,25 @@ shared atomic file replacement helper. Saved option changes publish in memory af
 their file commits. Retained job deletion acknowledges success only after durable
 deletion or a durable tombstone. These single-file guarantees do not establish P3
 complete-model promotion or multi-file rollback.
+
+Policy changes and legacy pin requests stage the Juiced state candidate and its
+revision before publication. That saved policy owns eligibility and Hot residency;
+saved engine options do not duplicate policy. Runtime pin effects follow the
+committed policy and reconciliation retries a changed generation. Profile selection
+and saved options share ModelManager's writer. Concurrent readers retain the old
+selection until both files commit, then receive the new selection and options
+together. This does not establish crash-consistent P3 multi-file promotion.
+
+Cloud forwarding and discovery use one per-provider snapshot of endpoint, credential,
+auth header, plaintext permission, wire format and revision. Existing requests retain
+their captured snapshot. New requests observe subsequent updates. Credentials remain
+in process/environment memory. Delayed discovery checks its revision at publication.
+Provider removal rejects busy generations before committing. Idle generations have
+an acquisition gate while metadata commits. Failed publication reopens those gates.
+Committed cleanup failure returns retryable pending generations; repeating uninstall
+can finish cleanup after the provider record has already been removed.
+
+The Juiced state owner retains a private last-committed checkpoint. Failed writes
+restore legacy state mutations under the same mutex, including cache controls.
+Revision advances only after commit. This checkpoint does not provide a consistent
+multi-writer volume backup or complete model/runtime revision recovery.

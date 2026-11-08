@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <functional>
 #include <mutex>
 #include <optional>
@@ -61,6 +62,17 @@ public:
     // Durable metadata callbacks run under the registry lock and must not re-enter it.
     using Persist = std::function<void(const nlohmann::json&)>;
 
+    struct Snapshot {
+        Record record;
+        std::string api_key;
+        uint64_t revision;
+    };
+    std::optional<Snapshot> snapshot(const std::string& provider) const;
+    std::vector<Snapshot> snapshots() const;
+    // Commit callbacks hold the registry read lock and must not re-enter it.
+    bool with_revision(const std::string& provider, uint64_t revision,
+                       const std::function<void()>& commit) const;
+
     CloudProviderRegistry() = default;
 
     // Seed from a parsed JSON array (the value of "cloud_providers" in
@@ -91,7 +103,8 @@ public:
     // validators below; passing one here stores it unchecked.
     bool install(const std::string& provider,
                  const std::string& base_url,
-                 const InstallOptions& options = {}, Persist persist = {});
+                 const InstallOptions& options = {}, Persist persist = {},
+                 const std::string& runtime_key = {});
 
     // Opts an already-installed provider into plaintext-HTTP key transmission
     // without disturbing any other field. Returns false if not installed.
@@ -136,7 +149,8 @@ public:
     //     this as a 409 conflict; the runtime key is NOT stored, env wins).
     //   - true on success.
     // No-op-if-empty: passing an empty key is treated as a delete.
-    bool set_runtime_key(const std::string& provider, const std::string& key);
+    bool set_runtime_key(const std::string& provider, const std::string& key, std::optional<bool> allow_insecure_http = {},
+                         Persist persist = {});
 
     // Removes the in-memory runtime key. Returns true if one was present.
     bool clear_runtime_key(const std::string& provider);
@@ -195,6 +209,11 @@ private:
 
     mutable std::shared_mutex mu_;
     std::vector<Record> installed_;
+    std::unordered_map<std::string, uint64_t> revisions_;
+    uint64_t next_revision_ = 0;
+    std::string key_locked(const std::string& provider) const;
+    void commit_locked(std::vector<Record> records, std::unordered_map<std::string, std::string> keys,
+                       const std::string& provider, Persist persist);
     std::unordered_map<std::string, std::string> runtime_keys_;
 };
 

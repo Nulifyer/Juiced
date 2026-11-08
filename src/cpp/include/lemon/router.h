@@ -130,6 +130,7 @@ public:
     // Test-only access to routing-helper reconciliation internals (inject stub
     // servers, seed the needed set, drive prune). Defined in the test binary.
     friend struct RoutingHelperTestHook;
+    friend struct StatePublicationTestHook;
     Router(RuntimeConfig* config,
 
            ModelManager* model_manager,
@@ -142,6 +143,7 @@ public:
     // CloudServer instances with a credential source. Pointer (not
     // ownership) — Server owns the registry.
     void set_cloud_registry(CloudProviderRegistry* registry);
+    json uninstall_cloud_provider(const std::string& provider, const std::function<bool()>& publish);
     void set_model_access_policy(std::function<bool(const std::string&)> policy);
     json admission_snapshot() const;
     void pause_admission(bool paused);

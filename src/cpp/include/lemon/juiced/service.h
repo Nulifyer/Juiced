@@ -33,11 +33,13 @@ public:
 
 private:
   friend class Server;
+  friend struct StatePublicationTestHook;
   using json = nlohmann::json;
   Server &server_;
   std::filesystem::path directory_;
   mutable std::mutex mutex_;
   std::condition_variable wake_;
+  json committed_state_;
   json state_, catalog_ = json::array(), operations_ = json::object();
   std::deque<json> pending_;
   std::mutex requests_mutex_;
@@ -61,7 +63,10 @@ private:
   json mutate_prompt_slot(const std::string& model, int slot,
                           const std::function<json()>& invoke);
   void prune_cache_locked();
+  json save_state_locked(json candidate);
   void persist_locked();
+  void set_policy_locked(const std::string& model, const std::string& policy);
+  void apply_policy_pin(const std::string& model, bool pinned);
   void reconcile();
   void reconcile_voice();
   void compatibility_routes(httplib::Server &http);

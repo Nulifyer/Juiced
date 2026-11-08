@@ -143,6 +143,7 @@ JuicedService::JuicedService(Server &server)
       job["phase"] = "interrupted";
     }
   if (!state_.contains("execution_trials")) state_["execution_trials"] = json::object();
+  committed_state_ = state_;
   std::vector<std::string> recovered;
   for (const auto &[name, trial] : state_["execution_trials"].items()) {
     try {
@@ -167,9 +168,36 @@ void JuicedService::stop() {
   if (preparation_worker_.joinable()) preparation_worker_.join();
   voice_process_.reset();
 }
+JuicedService::json JuicedService::save_state_locked(json candidate) {
+  candidate["revision"] = state_.value("revision", 0) + 1;
+  auto durable_candidate = candidate;
+  atomic_json(directory_ / "state.json", candidate);
+  committed_state_.swap(durable_candidate);
+  return candidate;
+}
 void JuicedService::persist_locked() {
-  state_["revision"] = state_.value("revision", 0) + 1;
-  atomic_json(directory_ / "state.json", state_);
+  auto rollback = committed_state_;
+  try {
+    const auto committed = save_state_locked(state_);
+    state_["revision"] = committed["revision"];
+  } catch (...) {
+    state_.swap(rollback);
+    throw;
+  }
+}
+void JuicedService::set_policy_locked(const std::string& model, const std::string& policy) {
+  auto candidate = state_;
+  candidate["policies"][model] = policy;
+  auto committed = save_state_locked(std::move(candidate));
+  state_.swap(committed);
+}
+void JuicedService::apply_policy_pin(const std::string& model, bool pinned) {
+  try {
+    if (server_.router_->is_model_loaded(model)) server_.router_->set_model_pinned(model, pinned);
+  } catch (const std::exception& error) {
+    LOG(WARNING, "Juiced") << "Committed policy will reconcile worker pin: " << error.what() << std::endl;
+  }
+  wake_.notify_all();
 }
 bool JuicedService::allows(const std::string &requested) const {
   const auto target = server_.alias_manager_
@@ -193,13 +221,14 @@ void JuicedService::set_hot(const std::string &requested, bool pinned) {
       server_.model_manager_->resolve_model_name(requested));
   if (is_omni_collection_recipe(server_.model_manager_->get_model_info(model).recipe))
     throw std::invalid_argument("Agent collections cannot be enabled as runtime services");
-  server_.model_manager_->update_saved_model_options(model,
-                                                     {{"pinned", pinned}});
-  std::lock_guard<std::mutex> lock(mutex_);
-  if (pinned || state_["policies"].value(model, "disabled") != "disabled")
-    state_["policies"][model] = pinned ? "hot" : "on-demand";
-  persist_locked();
-  wake_.notify_all();
+  bool effective_hot;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto current = state_["policies"].value(model, "disabled");
+    set_policy_locked(model, pinned ? "hot" : current == "disabled" ? "disabled" : "on-demand");
+    effective_hot = state_["policies"].value(model, "disabled") == "hot";
+  }
+  apply_policy_pin(model, effective_hot);
 }
 bool JuicedService::inference_guard(const httplib::Request &req,
                                     httplib::Response &res) {
@@ -791,14 +820,9 @@ void JuicedService::handle(const httplib::Request &req, httplib::Response &res,
             reply(res, {{"error", "Wait for model removal to finish"}}, 409);
             return;
           }
-          state_["policies"][model] = policy;
-          persist_locked();
+          set_policy_locked(model, policy);
         }
-        server_.model_manager_->update_saved_model_options(
-            model, {{"pinned", policy == "hot"}});
-        if (server_.router_->is_model_loaded(model))
-          server_.router_->set_model_pinned(model, policy == "hot");
-        wake_.notify_all();
+        apply_policy_pin(model, policy == "hot");
         reply(res, {{"accepted", true}});
         return;
       }

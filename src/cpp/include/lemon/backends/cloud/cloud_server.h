@@ -64,6 +64,7 @@ public:
 
     void unload() override;
 
+    std::string cloud_provider() const override { return provider_; }
     bool is_backend_alive() const override;
     std::string get_backend_health_state() const override;
 
@@ -127,6 +128,7 @@ private:
     struct ResolvedCreds {
         std::string api_key;
         std::string base_url;
+        std::string wire_format = "openai";
         CloudProviderRegistry::AuthHeader auth_header;
         bool insecure_http_blocked = false;
         utils::HttpSecurityPolicy policy =
@@ -143,9 +145,8 @@ private:
     json rewrite_model_field(const json& request) const;
     // When true, the endpoints implemented here are unreachable for this
     // provider — it is served from /v1/messages instead.
-    bool wire_format_mismatch() const;
-    std::string wire_format_message() const;
-    json wire_format_error() const;
+    std::string wire_format_message(const std::string& wire_format) const;
+    json wire_format_error(const std::string& wire_format) const;
     json missing_creds_error() const;
     std::string missing_creds_sse() const;
     json insecure_http_error() const;

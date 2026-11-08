@@ -11,41 +11,7 @@ namespace anthropic {
 // Lemonade and the streaming proxy report an upstream HTTP status as
 // "status_code"; llama.cpp's own error bodies carry a numeric "code" instead.
 inline int backend_error_http_status(const nlohmann::json& error) {
-    if (!error.is_object()) {
-        return 500;
-    }
-
-    const auto read_status = [](const nlohmann::json& object) {
-        for (const char* key : {"status_code", "code"}) {
-            if (object.contains(key) && object[key].is_number_integer()) {
-                const int status = object[key].get<int>();
-                if (status >= 400 && status <= 599) {
-                    return status;
-                }
-            }
-        }
-        return 0;
-    };
-
-    if (const int status = read_status(error); status != 0) {
-        return status;
-    }
-    if (error.contains("details") && error["details"].is_object()) {
-        if (const int status = read_status(error["details"]); status != 0) {
-            return status;
-        }
-    }
-
-    const std::string type = error.value("type", "");
-    if (type == ErrorType::INVALID_REQUEST || type == "invalid_request_error" ||
-        type == ErrorType::UNSUPPORTED_OPERATION) {
-        return 400;
-    }
-    if (type == ErrorType::MODEL_NOT_LOADED) {
-        return 404;
-    }
-
-    return 500;
+    return ErrorResponse::http_status({{"error", error}});
 }
 
 inline nlohmann::json build_anthropic_error(const nlohmann::json& error, int status) {

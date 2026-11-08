@@ -421,8 +421,8 @@ void JuicedService::cache_api(const httplib::Request &req,
                                 "model_modes"})
       if (body.contains(k))
         state_["cache"][k] = body[k];
-    prune_cache_locked();
     persist_locked();
+    wake_.notify_all();
   }
   json entries = json::array();
   for (const auto &[id, j] : state_["snapshots"].items()) {

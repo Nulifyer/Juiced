@@ -176,6 +176,7 @@ struct ModelFileInfo {
 class CloudProviderRegistry;
 
 class ModelManager {
+    friend struct ModelPublicationTestHook;
 public:
     explicit ModelManager(const std::string& extra_models_dir = "");
 
@@ -567,7 +568,7 @@ private:
     json user_models_;
     json recipe_options_;
     json execution_profiles_ = json::object();
-    std::mutex execution_profiles_write_mutex_;
+    std::function<void()> profile_persistence_barrier_;
     ModelInfo apply_execution_profile_locked(const std::string& cache_key, ModelInfo info) const;
     json architecture_defaults_;  // Per-architecture recipe option overlays (from resources)
     std::string extra_models_dir_;  // Secondary directory for GGUF model discovery

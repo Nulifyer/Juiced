@@ -1,0 +1,35 @@
+{
+  "schema": 1,
+  "phase": "P1",
+  "phase_complete": false,
+  "deployed": false,
+  "selected_families": [
+    "native single-file state and profile publication",
+    "coherent cloud request/discovery snapshots and generation retirement",
+    "direct gateway admission-error formatting"
+  ],
+  "scope": [
+    "Juiced state writes retain a private last-committed checkpoint; failed writes restore rejected policy/cache controls and revision. Policy is the sole authority for Hot residency.",
+    "ModelManager serializes profile/options writers and keeps changed candidates private until both files commit. This is not P3 crash-consistent multi-file promotion.",
+    "Cloud requests capture endpoint, credential, header, permission, wire format and revision together. Combined install/auth publication is coherent, and delayed discovery revalidates before publishing.",
+    "Provider-scoped retirement rejects busy workers before commit, gates concurrent acquisition during publication and supports retryable cleanup after committed metadata removal.",
+    "Returned native errors and thrown AdmissionError share status/code/retry classification before Ollama/Anthropic formatting.",
+    "CI retains native logs and cloud proof artifacts on failure; positive cancellation fixtures use explicit pending-state observation without changing production or negative-test deadlines."
+  ],
+  "verification": {
+    "status": "local Linux gates passed; current-source cross-platform/container/recovery evidence pending",
+    "native_contracts": 21,
+    "persistence_checks": 90,
+    "gateway_assertions": 34,
+    "cloud_runtime_assertions": 12,
+    "api_cases": 41,
+    "ledger_repetitions": 20,
+    "scope": "Synthetic CPU/native/loopback and actual neutral Stories15M serving/cache. No accelerator, real speech, model quality or essential-service protection qualification."
+  },
+  "remaining": [
+    "Full P1 fourteen-family path coverage, ingress/background/acquisition/preparation/install bounds, all-writer maintenance, exact execution identities, Realtime context/quiescence, termination reconciliation, early streaming status, shared observations and frozen service-protection gates.",
+    "Existing requests retain captured cloud snapshots. Full provider/protocol conformance and cloud routing/access qualification remain P4/P5 obligations.",
+    "Complete crash-consistent model/runtime revision promotion and references remain P3. Current candidate recovery is required before production promotion.",
+    "P2-P7 retain approved gates and selected-family manifests."
+  ]
+}

@@ -126,7 +126,7 @@ public:
 
     InferenceLease try_acquire_ready_inference() {
         std::lock_guard<std::mutex> lock(state_mutex_);
-        if (maintenance_in_progress_ || (state_ != ModelState::READY &&
+        if (retirement_pending_ || maintenance_in_progress_ || (state_ != ModelState::READY &&
             state_ != ModelState::IN_USE && state_ != ModelState::EVICTING)) return {};
         ++active_request_count_;
         state_ = ModelState::IN_USE;
@@ -136,7 +136,7 @@ public:
 
     InferenceLease try_acquire_ready_state_operation() {
         std::lock_guard<std::mutex> lock(state_mutex_);
-        if (maintenance_in_progress_ || (state_ != ModelState::READY &&
+        if (retirement_pending_ || maintenance_in_progress_ || (state_ != ModelState::READY &&
             state_ != ModelState::IN_USE && state_ != ModelState::EVICTING)) return {};
         ++active_request_count_;
         ++active_state_operations_;
@@ -163,6 +163,7 @@ public:
     void release_resource_residency() { residency_resources_ = {}; }
 
     virtual ~WrappedServer();
+    virtual std::string cloud_provider() const { return {}; }
 
 
     void set_log_level(const std::string& log_level) { log_level_ = log_level; }
@@ -228,7 +229,7 @@ public:
         // ensures restore() below never races a concurrent downsize() on the same
         // backend subprocess. Looped because the state can change while we wait.
         const auto ready_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-        while (state_ == ModelState::LOADING || maintenance_in_progress_) {
+        while (state_ == ModelState::LOADING || maintenance_in_progress_ || retirement_pending_) {
             if (current_request_cancel_context().cancelled() || std::chrono::steady_clock::now() >= ready_deadline)
                 return false;
             state_cv_.wait_for(lock, std::chrono::milliseconds(20));
@@ -272,7 +273,7 @@ public:
     // to IN_USE) or it is otherwise busy, reverting it to READY.
     bool try_commit_eviction() {
         std::lock_guard<std::mutex> lock(state_mutex_);
-        if (state_ == ModelState::EVICTING && active_request_count_ == 0) {
+        if (!retirement_pending_ && state_ == ModelState::EVICTING && active_request_count_ == 0) {
             state_ = ModelState::UNLOADED;
             state_cv_.notify_all();
             return true;
@@ -293,13 +294,34 @@ public:
     // used by the async engine, this never clobbers an IN_USE / DOWNSIZING state.
     bool try_evict_if_idle() {
         std::lock_guard<std::mutex> lock(state_mutex_);
-        if (active_request_count_ == 0 && !maintenance_in_progress_ &&
+        if (active_request_count_ == 0 && !maintenance_in_progress_ && !retirement_pending_ &&
             state_ != ModelState::LOADING) {
             state_ = ModelState::UNLOADED;
             state_cv_.notify_all();
             return true;
         }
         return false;
+    }
+
+    bool try_begin_retirement() {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        if (retirement_pending_ || maintenance_in_progress_ || active_request_count_ != 0 ||
+            (state_ != ModelState::READY && state_ != ModelState::UNLOADED)) return false;
+        retirement_pending_ = true;
+        return true;
+    }
+    void cancel_retirement() {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        retirement_pending_ = false;
+        state_cv_.notify_all();
+    }
+    bool commit_retirement() {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        if (!retirement_pending_ || active_request_count_ != 0 || maintenance_in_progress_) return false;
+        state_ = ModelState::UNLOADED;
+        retirement_pending_ = false;
+        state_cv_.notify_all();
+        return true;
     }
 
     void rescue_from_eviction() {
@@ -384,7 +406,7 @@ public:
     // router lock with only a raw pointer to it.
     bool try_begin_downsize() {
         std::lock_guard<std::mutex> lock(state_mutex_);
-        if (state_ == ModelState::READY && active_request_count_ == 0) {
+        if (!retirement_pending_ && state_ == ModelState::READY && active_request_count_ == 0) {
             state_ = ModelState::DOWNSIZING;
             maintenance_in_progress_ = true;
             state_cv_.notify_all();
@@ -414,7 +436,7 @@ public:
 
     bool is_busy() const {
         std::lock_guard<std::mutex> lock(state_mutex_);
-        return active_request_count_ > 0 || maintenance_in_progress_;
+        return active_request_count_ > 0 || maintenance_in_progress_ || retirement_pending_;
     }
 
     int active_inference_count() const {
@@ -758,6 +780,7 @@ protected:
     // evict_server()) blocks until the operation completes, preventing the server
     // from being unloaded/destroyed while the engine holds a raw pointer to it.
     bool maintenance_in_progress_;
+    bool retirement_pending_ = false;
     bool is_streaming_ = false;
     // Set when this routing helper was dropped by a policy change while busy;
     // reclaim_notifier_ (installed once when the server enters the router) is

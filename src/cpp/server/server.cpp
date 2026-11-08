@@ -229,43 +229,7 @@ bool valid_error_status(int status_code) {
 }
 
 int get_error_status_code(const json& response, int default_status_code = 500) {
-    if (!response.contains("error") || !response["error"].is_object()) {
-        return default_status_code;
-    }
-
-    const auto& error = response["error"];
-    if (error.contains("status_code") && error["status_code"].is_number_integer()) {
-        int status_code = error["status_code"].get<int>();
-        if (valid_error_status(status_code)) {
-            return status_code;
-        }
-    }
-
-    if (error.contains("details") && error["details"].is_object()) {
-        const auto& details = error["details"];
-        if (details.contains("status_code") && details["status_code"].is_number_integer()) {
-            int status_code = details["status_code"].get<int>();
-            if (valid_error_status(status_code)) {
-                return status_code;
-            }
-        }
-    }
-
-    if (error.contains("type") && error["type"].is_string()) {
-        const std::string type = error["type"].get<std::string>();
-
-        if (type == ErrorType::INVALID_REQUEST ||
-            type == "invalid_request_error" ||
-            type == ErrorType::UNSUPPORTED_OPERATION) {
-            return 400;
-        }
-
-        if (type == ErrorType::MODEL_NOT_LOADED) {
-            return 404;
-        }
-    }
-
-    return default_status_code;
+    return ErrorResponse::http_status(response, default_status_code);
 }
 
 void set_error_response(const json& response, httplib::Response& res,
@@ -6614,9 +6578,14 @@ void Server::handle_pin(const httplib::Request& req, httplib::Response& res) {
             request_json["model_name"].get<std::string>();
         bool pinned = request_json["pinned"].get<bool>();
 
+        if (!model_manager_->model_exists(model_name)) {
+            res.status = 404;
+            res.set_content(ErrorResponse::create("Model not found", ErrorType::MODEL_NOT_LOADED).dump(), "application/json");
+            return;
+        }
         std::string canonical_name = model_manager_->resolve_model_name(model_name);
         if (juiced_) juiced_->set_hot(canonical_name, pinned);
-        if (router_->is_model_loaded(canonical_name)) router_->set_model_pinned(canonical_name, pinned);
+        else if (router_->is_model_loaded(canonical_name)) router_->set_model_pinned(canonical_name, pinned);
 
         nlohmann::json response = {
             {"status", "success"},
@@ -6625,14 +6594,13 @@ void Server::handle_pin(const httplib::Request& req, httplib::Response& res) {
         };
         res.status = 200;
         res.set_content(response.dump(), "application/json");
-    } catch (const std::exception& e) {
-        LOG(ERROR, "Server") << "Pin/unpin failed: " << e.what() << std::endl;
-        res.status = 400;
-        nlohmann::json error = {{"error", {
-            {"message", e.what()},
-            {"type", "invalid_request_error"}
-        }}};
-        res.set_content(error.dump(), "application/json");
+    } catch (const nlohmann::json::exception& error) {
+        set_error_response(ErrorResponse::create(error.what(), ErrorType::INVALID_REQUEST), res, 400);
+    } catch (const std::invalid_argument& error) {
+        set_error_response(ErrorResponse::create(error.what(), ErrorType::INVALID_REQUEST), res, 400);
+    } catch (const std::exception& error) {
+        LOG(ERROR, "Server") << "Pin/unpin failed: " << error.what() << std::endl;
+        set_error_response(ErrorResponse::create(error.what()), res, 500);
     }
 }
 
@@ -6961,16 +6929,14 @@ void Server::handle_cloud_auth_set(const httplib::Request& req, httplib::Respons
                 res.set_content(error.dump(), "application/json");
                 return;
             }
-            if (allow_insecure_http && !already_allowed) {
-                cloud_registry_->set_allow_insecure_http(provider, true, [this](const json& metadata) {
-                    persist_cloud_providers(metadata);
-                });
-            }
+
         }
 
         // env-wins-over-runtime: if the env var is set, refuse the runtime
         // key with 409 so the caller knows their POST had no effect.
-        if (!cloud_registry_->set_runtime_key(provider, api_key)) {
+        if (!cloud_registry_->set_runtime_key(provider, api_key,
+                CloudProviderRegistry::is_http_base_url(base_url) && allow_insecure_http ? std::optional<bool>(true) : std::nullopt,
+                [this](const json& metadata) { persist_cloud_providers(metadata); })) {
             res.status = 409;
             const auto env_name = CloudProviderRegistry::env_var_name(provider);
             nlohmann::json error = {{"error", {
@@ -8263,7 +8229,7 @@ void Server::handle_install(const httplib::Request& req, httplib::Response& res)
                                   << "' with base_url " << base_url << std::endl;
             cloud_registry_->install(provider, base_url, install_options, [this](const json& metadata) {
                 persist_cloud_providers(metadata);
-            });
+            }, api_key);
 
             // Best-effort optional auth: if api_key was supplied, treat this
             // as "install + auth in one shot". Honors the env-wins rule: if
@@ -8271,7 +8237,7 @@ void Server::handle_install(const httplib::Request& req, httplib::Response& res)
             // we don't error — install still succeeds, env var still wins.
             bool runtime_key_stored = false;
             if (!api_key.empty()) {
-                runtime_key_stored = cloud_registry_->set_runtime_key(provider, api_key);
+                runtime_key_stored = !cloud_registry_->auth_state(provider).env_var_set;
             }
 
             // Best-effort discovery. Empty result is fine — install means
@@ -8491,34 +8457,26 @@ void Server::handle_uninstall(const httplib::Request& req, httplib::Response& re
                 res.set_content(error.dump(), "application/json");
                 return;
             }
-            bool removed = cloud_registry_->uninstall(provider, [this](const json& metadata) {
-                persist_cloud_providers(metadata);
+            const auto retirement = router_->uninstall_cloud_provider(provider, [&] {
+                return cloud_registry_->uninstall(provider, [this](const json& metadata) {
+                    persist_cloud_providers(metadata);
+                });
             });
-            if (!removed) {
+            if (!retirement.at("removed").get<bool>() && retirement.at("workers_removed") == 0 && retirement.at("cleanup_pending").empty()) {
                 res.status = 404;
-                nlohmann::json error = {{"error", {
-                    {"message", "Cloud provider '" + provider + "' is not installed"},
-                    {"type", "invalid_request_error"}}}};
-                res.set_content(error.dump(), "application/json");
+                res.set_content(json{{"error", {{"message", "Cloud provider is not installed"}, {"type", "invalid_request_error"}}}}.dump(), "application/json");
                 return;
-            }
-            // Unload any loaded cloud-recipe models for this provider before
-            // erasing them from the cache. Router::unload_model expects a
-            // model_name, not a recipe filter — walk the loaded list manually.
-            auto loaded = router_->get_all_loaded_models();
-            for (const auto& m : loaded) {
-                if (m.value("recipe", "") == "cloud" &&
-                    m.value("cloud_provider", "") == provider) {
-                    router_->unload_model(m.value("model_name", ""));
-                }
             }
             size_t evicted = model_manager_->evict_cloud_models(provider);
             nlohmann::json response = {
                 {"status", "success"},
                 {"backend", "cloud"},
                 {"provider", provider},
-                {"models_evicted", evicted}
+                {"models_evicted", evicted},
+                {"workers_removed", retirement.at("workers_removed")},
+                {"cleanup_pending", retirement.at("cleanup_pending")}
             };
+            if (!retirement.at("cleanup_pending").empty()) res.status = 202;
             res.set_content(response.dump(), "application/json");
             return;
         }
@@ -8567,6 +8525,9 @@ void Server::handle_uninstall(const httplib::Request& req, httplib::Response& re
         };
         res.set_content(response.dump(), "application/json");
 
+    } catch (const RouterResidencyConflictException& error) {
+        set_router_residency_conflict_response(error, res);
+        res.set_header("Retry-After", "1");
     } catch (const std::exception& e) {
         LOG(ERROR, "Server") << "ERROR in handle_uninstall: " << e.what() << std::endl;
         res.status = 500;

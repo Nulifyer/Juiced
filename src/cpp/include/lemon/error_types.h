@@ -146,6 +146,42 @@ public:
         return error;
     }
 
+    static int http_status(const json& response, int fallback = 500) {
+        if (!response.contains("error") || !response["error"].is_object()) return fallback;
+        const auto& error = response["error"];
+        for (const auto& object : {error, error.value("details", json::object())}) {
+            if (!object.is_object()) continue;
+            for (const auto* key : {"status_code", "code"}) {
+                if (object.contains(key) && object[key].is_number_integer()) {
+                    const auto status = object[key].get<int64_t>();
+                    if (status >= 400 && status <= 599) return static_cast<int>(status);
+                }
+            }
+        }
+        const auto type = error.value("type", std::string{});
+        if (type == ErrorType::INVALID_REQUEST || type == "invalid_request_error" || type == ErrorType::UNSUPPORTED_OPERATION) return 400;
+        if (type == ErrorType::MODEL_NOT_LOADED) return 404;
+        return fallback;
+    }
+
+    static std::string code(const json& response) {
+        if (!response.contains("error") || !response["error"].is_object()) return {};
+        const auto& error = response["error"];
+        if (error.contains("code") && error["code"].is_string()) return error["code"];
+        const auto details = error.value("details", json::object());
+        if (details.is_object() && details.contains("code") && details["code"].is_string()) return details["code"];
+        return {};
+    }
+
+    static int retry_after(const json& response) {
+        const auto status = http_status(response);
+        if ((status != 429 && status != 503) || !response.contains("error") || !response["error"].is_object()) return 0;
+        const auto details = response["error"].value("details", json::object());
+        if (!details.is_object() || !details.contains("retry_after") || !details["retry_after"].is_number_integer()) return 0;
+        const auto seconds = details["retry_after"].get<int64_t>();
+        return seconds > 0 && seconds <= 300 ? static_cast<int>(seconds) : 0;
+    }
+
     static json from_exception(const LemonException& e) {
         return e.to_json();
     }

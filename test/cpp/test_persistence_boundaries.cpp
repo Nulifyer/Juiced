@@ -1,8 +1,10 @@
 #include "lemon/cloud_provider_registry.h"
 #include "lemon/config_file.h"
 #include "lemon/jobs/job_manager.h"
+#include "lemon/juiced/service.h"
 #include "lemon/model_manager.h"
 #include "lemon/runtime_config.h"
+#include "lemon/server.h"
 #include "lemon/utils/json_utils.h"
 #include "lemon/utils/path_utils.h"
 #include "support/test_state_isolation.h"
@@ -12,11 +14,65 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <future>
 #include <thread>
 
 #ifdef _WIN32
 #include <windows.h>
 #endif
+
+namespace lemon {
+struct ModelPublicationTestHook {
+    static void barrier(ModelManager& models, std::function<void()> callback) {
+        models.profile_persistence_barrier_ = std::move(callback);
+    }
+};
+class PolicyWorker : public WrappedServer {
+public:
+    explicit PolicyWorker(const std::string& name) : WrappedServer("policy-fixture", "error") {
+        set_model_metadata(name, "fixture", ModelType::LLM, DEVICE_CPU, RecipeOptions("llamacpp", {{"ctx_size", 2048}}));
+        set_state(ModelState::READY);
+    }
+    void load(const std::string&, const ModelInfo&, const RecipeOptions&, bool) override {}
+    void unload() override { set_state(ModelState::UNLOADED); }
+    bool is_backend_alive() const override { return get_state() != ModelState::UNLOADED; }
+    json chat_completion(const json&) override { return json::object(); }
+};
+struct StatePublicationTestHook {
+    static void add_worker(Server& server, const std::string& name) {
+        auto worker = std::make_shared<PolicyWorker>(name);
+        std::lock_guard<std::mutex> lock(server.router_->load_mutex_);
+        server.router_->loaded_servers_.push_back(worker);
+    }
+    static bool pinned(Server& server, const std::string& name) {
+        const auto public_name = server.model_manager_->get_public_model_name(name);
+        for (const auto& row : server.router_->get_all_loaded_models())
+            if (row.at("model_name") == public_name) return row.value("pinned", false);
+        return false;
+    }
+    static json options(Server& server, const std::string& name) { return server.model_manager_->get_saved_model_options(name); }
+
+    static void register_model(Server& server, const std::string& name) {
+        server.model_manager_->register_user_model(name, {{"recipe", "llamacpp"}, {"checkpoint", "fixture/repo:Q4_K_M"}});
+    }
+    static json state(Server& server) {
+        std::lock_guard<std::mutex> lock(server.juiced_->mutex_);
+        return server.juiced_->state_;
+    }
+    static bool allows(Server& server, const std::string& name) { return server.juiced_->allows(name); }
+    static httplib::Response cache(Server& server, const json& body) {
+        httplib::Request req; req.method = "POST"; req.path = "/v1/juiced/cache"; req.body = body.dump();
+        httplib::Response response; server.juiced_->handle(req, response, "cache"); return response;
+    }
+    static httplib::Response mutate(Server& server, const json& body, bool pin = false) {
+        httplib::Request req; req.method = "POST"; req.path = pin ? "/internal/pin" : "/v1/juiced/policy"; req.body = body.dump();
+        httplib::Response response;
+        if (pin) server.handle_pin(req, response);
+        else server.juiced_->handle(req, response, "policy");
+        return response;
+    }
+};
+}
 
 using json = nlohmann::json;
 namespace fs = std::filesystem;
@@ -169,8 +225,116 @@ static void model_files() {
     lemon::RuntimeConfig::set_global(nullptr);
 }
 
+static void profile_concurrency() {
+    auto defaults = lemon::ConfigFile::base_defaults(); defaults["offline"] = true;
+    lemon::RuntimeConfig runtime(defaults); lemon::RuntimeConfig::set_global(&runtime);
+    {
+        lemon::ModelManager models;
+        const auto before = models.get_execution_profiles("user.Persistence");
+        const auto previous = models.get_model_info("user.Persistence");
+        std::promise<void> entered, release;
+        auto released = release.get_future();
+        lemon::ModelPublicationTestHook::barrier(models, [&] {
+            entered.set_value(); released.wait(); throw std::runtime_error("controlled persistence failure");
+        });
+        auto selection = std::async(std::launch::async, [&] {
+            try { models.select_execution_profile("user.Persistence", {{"id", "changed"}, {"recipe", "vllm"}, {"options", {{"ctx_size", 4096}}}}); }
+            catch (const std::runtime_error&) { return true; }
+            return false;
+        });
+        entered.get_future().wait();
+        check(models.get_execution_profiles("user.Persistence") == before && models.get_model_info("user.Persistence").recipe == previous.recipe,
+              "blocked changed profile stays private while concurrent readers retain the committed recipe");
+        auto options = std::async(std::launch::async, [&] { return models.update_saved_model_options("user.Persistence", {{"ctx_size", 8192}}); });
+        release.set_value();
+        check(selection.get(), "controlled profile publication failure returns an error");
+        options.get();
+        lemon::ModelPublicationTestHook::barrier(models, {});
+        lemon::ModelManager restarted;
+        check(models.get_execution_profiles("user.Persistence") == before && models.get_saved_model_options("user.Persistence").at("ctx_size") == 8192 &&
+              restarted.get_saved_model_options("user.Persistence") == models.get_saved_model_options("user.Persistence"),
+              "failed profile selection cannot overwrite a concurrent successful option update or restart state");
+        models.select_execution_profile("user.Persistence", {{"id", "changed"}, {"recipe", "vllm"}, {"options", {{"ctx_size", 4096}}}});
+        check(models.get_model_info("user.Persistence").recipe == "vllm" && models.get_model_info("user.Persistence").recipe_options.get_option("ctx_size") == 4096,
+              "successful changed profile publishes its recipe with matching options");
+        const auto config_root = fs::path(lemon::utils::get_config_dir());
+        const auto options_path = config_root / "recipe_options.json";
+        const auto profiles_path = config_root / "execution_profiles.json";
+        const auto committed_profiles = read(profiles_path);
+        fs::rename(options_path, config_root / "recipe_options.backup");
+        fs::create_directory(options_path);
+        bool second_failed = false;
+        try { models.select_execution_profile("user.Persistence", {{"id", "registered"}}); }
+        catch (const std::exception&) { second_failed = true; }
+        fs::remove(options_path);
+        fs::rename(config_root / "recipe_options.backup", options_path);
+        check(second_failed && read(profiles_path) == committed_profiles && models.get_model_info("user.Persistence").recipe == "vllm" &&
+              models.get_model_info("user.Persistence").recipe_options.get_option("ctx_size") == 4096,
+              "second-file publication failure restores the profile file without exposing a mixed selection");
+        lemon::ModelManager accepted;
+        check(accepted.get_model_info("user.Persistence").recipe == "vllm" && accepted.get_model_info("user.Persistence").recipe_options.get_option("ctx_size") == 4096,
+              "changed profile and matching options survive restart together");
+    }
+    lemon::RuntimeConfig::set_global(nullptr);
+}
+
+static void policy_failures() {
+    for (bool pin : {false, true}) for (bool staging : {false, true}) {
+        const auto root = lemon::test::make_scratch_dir("policy");
+        const auto name = "user.Policy" + root.filename().string();
+        auto defaults = lemon::ConfigFile::base_defaults();
+        defaults["offline"] = true; defaults["broadcast"] = false; defaults["auto_check_model_updates"] = false;
+        auto runtime = std::make_shared<lemon::RuntimeConfig>(defaults); lemon::RuntimeConfig::set_global(runtime.get());
+        json committed;
+        {
+            lemon::Server server(runtime, root.string(), root.string());
+            lemon::StatePublicationTestHook::register_model(server, name);
+            auto initial = lemon::StatePublicationTestHook::mutate(server, {{"model", name}, {"policy", pin ? "on-demand" : "disabled"}});
+            if (pin) lemon::StatePublicationTestHook::add_worker(server, name);
+            const auto before_options = lemon::StatePublicationTestHook::options(server, name);
+            check(initial.status == 200, "initial policy is committed through the native handler");
+            const auto before = lemon::StatePublicationTestHook::state(server);
+            auto mutate = [&] { return lemon::StatePublicationTestHook::mutate(server,
+                pin ? json{{"model", name}, {"pinned", true}} : json{{"model", name}, {"policy", "hot"}}, pin); };
+            httplib::Response rejected;
+            const auto target = root / "juiced/state.json";
+            if (staging) {
+                fs::create_directory(root / "juiced/state.json.tmp");
+                rejected = mutate();
+                fs::remove(root / "juiced/state.json.tmp");
+            } else {
+                write(root / "juiced/state.json.tmp", json::object());
+                BlockReplacement block(target);
+                rejected = mutate();
+            }
+            check(rejected.status == 500 && lemon::StatePublicationTestHook::state(server) == before && read(target) == before,
+                  "failed policy and pin persistence preserves policy, revision and committed bytes");
+            check(lemon::StatePublicationTestHook::allows(server, name) == pin, "failed policy or pin update preserves inference eligibility");
+            check(!lemon::StatePublicationTestHook::pinned(server, name) && lemon::StatePublicationTestHook::options(server, name) == before_options,
+                  "failed policy or pin update preserves live pin effects and saved options");
+            fs::remove(root / "juiced/state.json.tmp");
+            const auto before_cache = lemon::StatePublicationTestHook::state(server);
+            fs::create_directory(root / "juiced/state.json.tmp");
+            const auto cache_failure = lemon::StatePublicationTestHook::cache(server, {{"retention_days", 14}, {"disk_budget_gib", 16}});
+            fs::remove(root / "juiced/state.json.tmp");
+            check(cache_failure.status == 500 && lemon::StatePublicationTestHook::state(server) == before_cache,
+                  "shared state-save failure restores rejected cache controls as well as policy");
+            auto accepted = mutate();
+            check(accepted.status == 200 && lemon::StatePublicationTestHook::allows(server, name), "rejected policy and pin changes remain retryable");
+            check(!pin || lemon::StatePublicationTestHook::pinned(server, name), "successful pin publication updates the existing worker");
+            committed = lemon::StatePublicationTestHook::state(server);
+        }
+        {
+            lemon::Server restarted(runtime, root.string(), root.string());
+            check(lemon::StatePublicationTestHook::state(restarted) == committed && lemon::StatePublicationTestHook::allows(restarted, name),
+                  "successful policy and pin publication retains revision and eligibility after restart");
+        }
+        lemon::RuntimeConfig::set_global(nullptr);
+    }
+}
+
 int main() {
-    cloud_failures(); retained_jobs(); model_files();
+    cloud_failures(); retained_jobs(); model_files(); profile_concurrency(); policy_failures();
     std::fprintf(stderr, "Persistence boundaries: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

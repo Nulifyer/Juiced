@@ -12,16 +12,6 @@
 
 namespace lemon {
 
-static void set_ollama_admission_error(const AdmissionError& error, httplib::Response& res) {
-    res.status = error.status;
-    if (error.retry_after()) res.set_header("Retry-After", std::to_string(error.retry_after()));
-    auto body = error.to_json();
-    body["message"] = body["error"]["message"];
-    body["code"] = error.code;
-    body["error"] = error.what();
-    res.set_content(body.dump(), "application/json");
-}
-
 // ============================================================================
 // extract parameter size from model name
 // e.g. "Qwen3-0.6B-GGUF" → "0.6B", "Gemma-3-4b-it-GGUF" → "4B"
@@ -105,10 +95,18 @@ static std::string extract_quantization_level(const std::string& checkpoint) {
 static bool send_backend_error(const json& response, httplib::Response& res) {
     if (!response.contains("error")) return false;
     LOG(ERROR, "OllamaApi") << "Backend returned error: " << response["error"].dump() << std::endl;
-    res.status = 500;
-    json error = {{"error", response["error"].value("message", "backend error")}};
+    res.status = ErrorResponse::http_status(response);
+    json error = {{"error", response["error"].is_object() ? response["error"].value("message", "backend error") : response["error"].dump()}};
+    const auto code = ErrorResponse::code(response);
+    if (!code.empty()) error["code"] = code;
+    if (response["error"].is_object() && response["error"].contains("details")) error["details"] = response["error"]["details"];
+    if (const auto retry = ErrorResponse::retry_after(response)) res.set_header("Retry-After", std::to_string(retry));
     res.set_content(error.dump(), "application/json");
     return true;
+}
+
+static void set_ollama_admission_error(const AdmissionError& error, httplib::Response& res) {
+    send_backend_error(error.to_json(), res);
 }
 
 // ============================================================================

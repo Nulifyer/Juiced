@@ -19,17 +19,6 @@
 
 namespace lemon {
 
-static void set_anthropic_admission_error(const AdmissionError& error, httplib::Response& res) {
-    res.status = error.status;
-    if (error.retry_after()) res.set_header("Retry-After", std::to_string(error.retry_after()));
-    const auto native = error.to_json().at("error");
-    auto body = anthropic::build_anthropic_error(native, error.status);
-    body["error"]["code"] = error.code;
-    body["error"]["status_code"] = error.status;
-    body["error"]["details"] = native.at("details");
-    res.set_content(body.dump(), "application/json");
-}
-
 namespace {
 
 static void add_warning(std::vector<std::string>& warnings, const std::string& warning) {
@@ -180,8 +169,17 @@ static bool set_anthropic_backend_error_response(const json& response, httplib::
 
     const int status = anthropic::backend_error_http_status(error);
     res.status = status;
-    res.set_content(anthropic::build_anthropic_error(error, status).dump(), "application/json");
+    auto body = anthropic::build_anthropic_error(error, status);
+    const auto code = ErrorResponse::code(response);
+    if (!code.empty()) body["error"]["code"] = code;
+    if (error.is_object() && error.contains("details")) body["error"]["details"] = error["details"];
+    if (const auto retry = ErrorResponse::retry_after(response)) res.set_header("Retry-After", std::to_string(retry));
+    res.set_content(body.dump(), "application/json");
     return true;
+}
+
+static void set_anthropic_admission_error(const AdmissionError& error, httplib::Response& res) {
+    set_anthropic_backend_error_response(error.to_json(), res);
 }
 
 static void set_anthropic_residency_conflict_response(
@@ -246,7 +244,9 @@ static AnthropicUpstreamMatch resolve_anthropic_upstream(ModelManager* model_man
         return match;
     }
     if (info.recipe != "cloud" || info.cloud_provider.empty()) return match;
-    if (registry->wire_format_for(info.cloud_provider) != "anthropic") return match;
+    const auto provider_snapshot = registry->snapshot(info.cloud_provider);
+    if (!provider_snapshot || provider_snapshot->record.wire_format != "anthropic") return match;
+    const auto& record = provider_snapshot->record;
 
     match.claimed = true;
     auto fail = [&match](int status, std::string message) {
@@ -255,19 +255,18 @@ static AnthropicUpstreamMatch resolve_anthropic_upstream(ModelManager* model_man
         return match;
     };
 
-    const std::string base_url = registry->base_url_for(info.cloud_provider);
+    const auto& base_url = record.base_url;
     if (base_url.empty()) {
         return fail(500, "provider '" + info.cloud_provider +
                          "' has no base URL configured");
     }
-    const std::string api_key = registry->resolve_key(info.cloud_provider);
+    const auto& api_key = provider_snapshot->api_key;
     if (api_key.empty()) {
         return fail(401, "no API key for provider '" + info.cloud_provider + "'; set " +
                          CloudProviderRegistry::env_var_name(info.cloud_provider) +
                          " or POST /v1/cloud/auth");
     }
-    const bool allow_insecure_http =
-        registry->allow_insecure_http_for(info.cloud_provider);
+    const bool allow_insecure_http = record.allow_insecure_http;
     if (CloudProviderRegistry::is_http_base_url(base_url) && !allow_insecure_http) {
         return fail(400, "provider '" + info.cloud_provider +
                          "' uses an http:// base URL; re-install it with "
@@ -287,7 +286,7 @@ static AnthropicUpstreamMatch resolve_anthropic_upstream(ModelManager* model_man
     json forwarded = request_json;
     forwarded["model"] = info.checkpoint();
 
-    const auto auth_header = registry->auth_header_for(info.cloud_provider);
+    const CloudProviderRegistry::AuthHeader auth_header{record.auth_header_name, record.auth_header_prefix};
     AnthropicUpstream upstream;
     upstream.url = backends::CloudServer::upstream_url(base_url, "/messages");
     // The Anthropic API reads `beta` from the query string, so it has to be
@@ -440,8 +439,9 @@ void OllamaApi::handle_anthropic_count_tokens(const httplib::Request& req, httpl
         body["model"] = model;
         auto_load_model(model);
         auto result = router_->count_anthropic_tokens(body);
+        if (set_anthropic_backend_error_response(result, res)) return;
         if (!result.contains("input_tokens") || !result["input_tokens"].is_number_unsigned()) {
-            res.status = result.contains("error") ? 501 : 502;
+            res.status = 502;
             result = {{"type", "error"}, {"error", {{"type", "api_error"},
                 {"message", "The selected backend cannot count this Messages request"}}}};
         }

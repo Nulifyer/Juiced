@@ -45,7 +45,10 @@ int main() {
     };
     auto error = [&](auto action, const char* code) {
         try { action(); return false; }
-        catch (const AdmissionError& e) { return e.code == code; }
+        catch (const AdmissionError& e) {
+            if (e.code != code) std::fprintf(stderr, "Expected %s, received %s: %s\n", code, e.code.c_str(), e.what());
+            return e.code == code;
+        }
     };
     json profile = {{"checkpoint", "fixture@immutable"}, {"options", {{"ctx_size", 2048}}},
         {"priority", "interactive"}, {"concurrency", 1}, {"completion_ms", 100},
@@ -117,15 +120,22 @@ int main() {
         controller.configure(config);
     }
     {
+        auto cancellation_config = config; cancellation_config["interactive_wait_ms"] = 10000;
+        controller.configure(cancellation_config);
         auto first = controller.acquire(work());
         std::atomic<bool> cancelled{false};
         auto queued = work(); queued.cancelled = [&] { return cancelled.load(); };
         auto future = run_thread([&] {
             return error([&] { controller.acquire(queued); }, "request_cancelled");
         });
-        std::this_thread::sleep_for(25ms); cancelled = true;
+        const auto pending_deadline = std::chrono::steady_clock::now() + 5s;
+        while (controller.snapshot()["pending"] != 1 && std::chrono::steady_clock::now() < pending_deadline)
+            std::this_thread::sleep_for(1ms);
+        cancelled = true;
         check(future.get(), "disconnected queued client is rejected promptly");
         check(controller.snapshot()["pending"] == 0, "cancelled waiter leaves no claim");
+        first = {};
+        controller.configure(config);
     }
     controller.pause(true);
     check(error([&] { controller.acquire(work()); }, "admission_paused"), "maintenance pause rejects new work");

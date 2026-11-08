@@ -409,9 +409,13 @@ CloudServer::ResolvedCreds CloudServer::resolve_creds() const {
     if (registry_ == nullptr) {
         return creds;
     }
-    creds.api_key = registry_->resolve_key(provider_);
-    creds.base_url = registry_->base_url_for(provider_);
-    creds.auth_header = registry_->auth_header_for(provider_);
+    const auto snapshot = registry_->snapshot(provider_);
+    if (!snapshot) return creds;
+    const auto& record = snapshot->record;
+    creds.api_key = snapshot->api_key;
+    creds.base_url = record.base_url;
+    creds.auth_header = {record.auth_header_name, record.auth_header_prefix};
+    creds.wire_format = record.wire_format;
 
     // The registry already normalizes base_url on install, but a defensive
     // strip here keeps the contract local — anyone tracing post_with_auth
@@ -420,8 +424,7 @@ CloudServer::ResolvedCreds CloudServer::resolve_creds() const {
         creds.base_url.pop_back();
     }
 
-    const bool allow_insecure_http =
-        registry_->allow_insecure_http_for(provider_);
+    const bool allow_insecure_http = record.allow_insecure_http;
     creds.policy = discovery_policy(creds.base_url, allow_insecure_http);
     if (!creds.api_key.empty() &&
         CloudProviderRegistry::is_http_base_url(creds.base_url) &&
@@ -447,7 +450,8 @@ json CloudServer::missing_creds_error() const {
     return ErrorResponse::create(
         msg,
         ErrorType::BACKEND_ERROR,
-        {{"provider", provider_}}
+        {{"provider", provider_}, {"status_code", installed ? 401 : 404},
+         {"code", installed ? "cloud_auth_required" : "cloud_provider_not_installed"}}
     );
 }
 
@@ -464,29 +468,21 @@ std::string CloudServer::missing_creds_sse() const {
     json err = {{"error", {
         {"message", msg},
         {"type", "backend_error"},
-        {"provider", provider_}
+        {"provider", provider_},
+        {"status_code", installed ? 401 : 404},
+        {"code", installed ? "cloud_auth_required" : "cloud_provider_not_installed"}
     }}};
     return "data: " + err.dump() + "\n\n";
 }
 
-bool CloudServer::wire_format_mismatch() const {
-    return registry_ != nullptr && registry_->wire_format_for(provider_) != "openai";
-}
-
-std::string CloudServer::wire_format_message() const {
-    const std::string wire_format = registry_->wire_format_for(provider_);
+std::string CloudServer::wire_format_message(const std::string& wire_format) const {
     return "Cloud provider '" + provider_ + "' speaks the '" + wire_format +
-           "' wire format, which this endpoint does not serve. Send " + wire_format +
-           "-shaped requests to POST /v1/messages instead.";
+           "' wire format, which this endpoint does not serve. Send requests to POST /v1/messages instead.";
 }
 
-json CloudServer::wire_format_error() const {
-    return ErrorResponse::create(
-        wire_format_message(),
-        ErrorType::UNSUPPORTED_OPERATION,
-        {{"provider", provider_},
-         {"wire_format", registry_->wire_format_for(provider_)}}
-    );
+json CloudServer::wire_format_error(const std::string& wire_format) const {
+    return ErrorResponse::create(wire_format_message(wire_format), ErrorType::UNSUPPORTED_OPERATION,
+                                {{"provider", provider_}, {"wire_format", wire_format}});
 }
 
 json CloudServer::insecure_http_error() const {
@@ -496,7 +492,7 @@ json CloudServer::insecure_http_error() const {
     return ErrorResponse::create(
         msg,
         ErrorType::BACKEND_ERROR,
-        {{"provider", provider_}, {"code", "insecure_http_requires_opt_in"}}
+        {{"provider", provider_}, {"code", "insecure_http_requires_opt_in"}, {"status_code", 400}}
     );
 }
 
@@ -525,6 +521,7 @@ json CloudServer::post_with_auth(const std::string& path, const json& request,
     if (!loaded_) {
         return ErrorResponse::from_exception(ModelNotLoadedException(server_name_));
     }
+    if (creds.wire_format != "openai") return wire_format_error(creds.wire_format);
     if (creds.insecure_http_blocked) {
         return insecure_http_error();
     }
@@ -578,17 +575,11 @@ json CloudServer::post_with_auth(const std::string& path, const json& request,
 }
 
 json CloudServer::chat_completion(const json& request) {
-    if (wire_format_mismatch()) {
-        return wire_format_error();
-    }
     json modified = rewrite_model_field(request);
     return post_with_auth("/chat/completions", modified, resolve_creds());
 }
 
 json CloudServer::completion(const json& request) {
-    if (wire_format_mismatch()) {
-        return wire_format_error();
-    }
     json modified = rewrite_model_field(request);
     return post_with_auth("/completions", modified, resolve_creds());
 }
@@ -635,12 +626,13 @@ void CloudServer::forward_streaming_request(const std::string& endpoint,
         return;
     }
 
-    if (wire_format_mismatch()) {
-        const std::string message = wire_format_message();
+    const auto creds = resolve_creds();
+    if (creds.wire_format != "openai") {
+        const std::string message = wire_format_message(creds.wire_format);
         std::string error_msg = sse_error(
             message, ErrorType::UNSUPPORTED_OPERATION,
             {{"provider", provider_},
-             {"wire_format", registry_->wire_format_for(provider_)}});
+             {"wire_format", creds.wire_format}});
         sink.write(error_msg.c_str(), error_msg.size());
         sink.done();
         if (telemetry_callback) {
@@ -682,7 +674,6 @@ void CloudServer::forward_streaming_request(const std::string& endpoint,
         // Best-effort: forward whatever we got.
     }
 
-    ResolvedCreds creds = resolve_creds();
     if (creds.insecure_http_blocked) {
         std::string error_msg = insecure_http_sse();
         sink.write(error_msg.c_str(), error_msg.size());
@@ -1142,8 +1133,9 @@ public:
         if (ctx.cloud_registry == nullptr) {
             return out;
         }
-        for (const auto& rec : ctx.cloud_registry->list_installed()) {
-            const std::string api_key = ctx.cloud_registry->resolve_key(rec.name);
+        for (const auto& snapshot : ctx.cloud_registry->snapshots()) {
+            const auto& rec = snapshot.record;
+            const auto& api_key = snapshot.api_key;
             if (api_key.empty() || rec.base_url.empty()) {
                 LOG(INFO, "CloudOps") << "Skipping cloud discovery for '" << rec.name
                                       << "': no API key resolvable (set "
@@ -1165,7 +1157,8 @@ public:
                          {rec.auth_header_name, rec.auth_header_prefix},
                          rec.wire_format)) {
                     if (m.recipe == "cloud" && !m.model_name.empty()) {
-                        out.push_back(std::move(m));
+                        m.extras["cloud_revision"] = snapshot.revision;
+                        ctx.cloud_registry->with_revision(rec.name, snapshot.revision, [&] { out.push_back(std::move(m)); });
                     }
                 }
             } catch (const std::exception& e) {

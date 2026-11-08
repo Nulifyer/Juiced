@@ -49,6 +49,7 @@ struct RouterDispatchResult {
 class JuicedService;
 class Server {
     friend class JuicedService;
+    friend struct StatePublicationTestHook;
 public:
     Server(std::shared_ptr<RuntimeConfig> config,
            const std::string& cache_dir,
