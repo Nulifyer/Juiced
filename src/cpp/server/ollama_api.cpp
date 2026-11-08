@@ -153,17 +153,21 @@ OllamaApi::OllamaApi(Router* router, ModelManager* model_manager, RequestGuard g
     : guard_(std::move(guard)), loader_(std::move(loader)), visible_(std::move(visible)), router_(router), model_manager_(model_manager) {
 }
 
-void OllamaApi::register_routes(httplib::Server& server) {
+void OllamaApi::register_routes(httplib::Server& server, HttpHandlerDecorator decorate) {
+    decorator_ = std::move(decorate);
+    auto post = [&](const std::string& path, httplib::Server::Handler handler) {
+        server.Post(path, decorator_ ? decorator_(std::move(handler)) : std::move(handler));
+    };
     // Capture shared_ptr to keep OllamaApi alive as long as route handlers exist
     auto self = shared_from_this();
 
     // Chat completion
-    server.Post("/api/chat", [self](const httplib::Request& req, httplib::Response& res) {
+    post("/api/chat", [self](const httplib::Request& req, httplib::Response& res) {
         self->handle_chat(req, res);
     });
 
     // Text generation (completion)
-    server.Post("/api/generate", [self](const httplib::Request& req, httplib::Response& res) {
+    post("/api/generate", [self](const httplib::Request& req, httplib::Response& res) {
         self->handle_generate(req, res);
     });
 
@@ -173,7 +177,7 @@ void OllamaApi::register_routes(httplib::Server& server) {
     });
 
     // Show model info
-    server.Post("/api/show", [self](const httplib::Request& req, httplib::Response& res) {
+    post("/api/show", [self](const httplib::Request& req, httplib::Response& res) {
         self->handle_show(req, res);
     });
 
@@ -188,7 +192,7 @@ void OllamaApi::register_routes(httplib::Server& server) {
     });
 
     // Pull (download) model
-    server.Post("/api/pull", [self](const httplib::Request& req, httplib::Response& res) {
+    post("/api/pull", [self](const httplib::Request& req, httplib::Response& res) {
         if (self->visible_) {
             res.status = 501;
             res.set_content(R"({"error":"Use Juiced model management to download weights"})", "application/json");
@@ -198,12 +202,12 @@ void OllamaApi::register_routes(httplib::Server& server) {
     });
 
     // Embeddings (new format)
-    server.Post("/api/embed", [self](const httplib::Request& req, httplib::Response& res) {
+    post("/api/embed", [self](const httplib::Request& req, httplib::Response& res) {
         self->handle_embed(req, res);
     });
 
     // Embeddings (legacy format)
-    server.Post("/api/embeddings", [self](const httplib::Request& req, httplib::Response& res) {
+    post("/api/embeddings", [self](const httplib::Request& req, httplib::Response& res) {
         self->handle_embeddings(req, res);
     });
 
@@ -224,10 +228,10 @@ void OllamaApi::register_routes(httplib::Server& server) {
         res.status = 501;
         res.set_content(R"({"error":"not supported by Lemonade"})", "application/json");
     };
-    server.Post("/api/create", not_supported);
-    server.Post("/api/copy", not_supported);
-    server.Post("/api/push", not_supported);
-    server.Post(R"(/api/blobs/(.+))", not_supported);
+    post("/api/create", not_supported);
+    post("/api/copy", not_supported);
+    post("/api/push", not_supported);
+    post(R"(/api/blobs/(.+))", not_supported);
 
     LOG(DEBUG, "OllamaApi") << "Ollama-compatible routes registered" << std::endl;
 }

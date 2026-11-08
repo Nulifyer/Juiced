@@ -6,6 +6,7 @@
 #include <vector>
 #include <nlohmann/json.hpp>
 #include <httplib.h>
+#include "request_identity.h"
 #include "router.h"
 #include "model_manager.h"
 #include "model_types.h"
@@ -22,9 +23,10 @@ public:
     OllamaApi(Router* router, ModelManager* model_manager, RequestGuard guard = {}, ModelLoader loader = {}, ModelVisibility visible = {});
 
     // Must be called on a shared_ptr instance (uses shared_from_this internally)
-    void register_routes(httplib::Server& server);
+    void register_routes(httplib::Server& server, HttpHandlerDecorator decorate = {});
 
 private:
+    HttpHandlerDecorator decorator_;
     RequestGuard guard_;
     ModelLoader loader_;
     ModelVisibility visible_;

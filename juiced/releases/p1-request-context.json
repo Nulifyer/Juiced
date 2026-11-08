@@ -1,0 +1,21 @@
+{
+  "schema": 1,
+  "phase": "P1",
+  "phase_complete": false,
+  "deployed": false,
+  "scope": [
+    "Native OpenAI, Ollama, Anthropic, MCP and AUTOMATIC1111 POST handlers carry the accepted credential identity, protocol and valid ephemeral session ID.",
+    "RAII context survives deferred streaming and cleanup callbacks on another thread without leaking to subsequent requests.",
+    "Cache namespaces consume the same normalized request context."
+  ],
+  "verification": [
+    "Linux core build and RequestIdentityTest including nested exceptions and callback-thread restoration.",
+    "MemoryBudgetTest, InferenceLeaseTest and RealtimeWorkerLeaseTest pass locally.",
+    "Real CPU cache acceptance passes all 64 name/mode/prefix/stream combinations and authenticated save/restart/restore isolation."
+  ],
+  "remaining": [
+    "No resource admission or protected latency is claimed.",
+    "Realtime WebSocket and background operation contexts require explicit propagation during admission integration.",
+    "Other operating systems require CI."
+  ]
+}

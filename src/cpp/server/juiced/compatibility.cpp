@@ -100,9 +100,9 @@ void JuicedService::compatibility_routes(httplib::Server &http) {
     });
   }
   for (const std::string op : {"txt2img", "options", "interrupt", "img2img"}) {
-    http.Post("/sdapi/v1/" + op, [this, op](const auto &req, auto &res) {
+    http.Post("/sdapi/v1/" + op, server_.contextual_handler([this, op](const auto &req, auto &res) {
       image_compatibility(req, res, op);
-    });
+    }));
   }
 }
 

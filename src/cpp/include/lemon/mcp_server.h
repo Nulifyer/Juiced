@@ -11,6 +11,7 @@
 
 #include "mcp_tool.h"
 #include "model_manager.h"
+#include "request_identity.h"
 #include "router.h"
 
 namespace lemon {
@@ -31,7 +32,7 @@ public:
     ~McpServer();
 
     // Must be called on a shared_ptr instance — handlers capture shared_from_this().
-    void register_routes(httplib::Server& server);
+    void register_routes(httplib::Server& server, HttpHandlerDecorator decorate = {});
 
     std::string handle_request_body(const std::string& body);
 

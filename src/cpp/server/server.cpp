@@ -1152,6 +1152,12 @@ httplib::Server::HandlerResponse Server::authenticate_request(const httplib::Req
 }
 
 
+httplib::Server::Handler Server::contextual_handler(httplib::Server::Handler handler) {
+    return bind_request_context(std::move(handler), [this](const httplib::Request& request) {
+        return make_request_context(request, api_key_, admin_api_key_);
+    });
+}
+
 void Server::setup_routes(httplib::Server &web_server) {
     if (juiced_) juiced_->routes(web_server);
     // Add pre-routing handler to log ALL incoming requests (except health checks)
@@ -1226,6 +1232,7 @@ void Server::setup_routes(httplib::Server &web_server) {
             if (juiced_ && juiced_->inference_guard(req, res)) return;
             actual(req, res);
         };
+        handler = contextual_handler(std::move(handler));
         web_server.Post("/api/v0/" + endpoint, handler);
         web_server.Post("/api/v1/" + endpoint, handler);
         web_server.Post("/v0/" + endpoint, handler);
@@ -1592,7 +1599,7 @@ void Server::setup_routes(httplib::Server &web_server) {
         [this](const httplib::Request& req, httplib::Response& res) { return juiced_ && juiced_->inference_guard(req, res); },
         [this](const std::string& model, const nlohmann::json& options) { auto_load_model_if_needed(model, options); },
         [this](const std::string& model) { return !juiced_ || juiced_->allows(model); });
-    ollama_api->register_routes(web_server);
+    ollama_api->register_routes(web_server, [this](auto handler) { return contextual_handler(std::move(handler)); });
 
     // Register MCP gateway (POST /mcp). NOTE: /mcp is an INTENTIONAL EXCEPTION
     // to the quad-prefix invariant (AGENTS.md #1) — the MCP spec mandates a
@@ -1607,7 +1614,7 @@ void Server::setup_routes(httplib::Server &web_server) {
         },
         [this](const std::string& m) { return !juiced_ || juiced_->allows(m); },
         juiced_ != nullptr);
-    mcp_server->register_routes(web_server);
+    mcp_server->register_routes(web_server, [this](auto handler) { return contextual_handler(std::move(handler)); });
 
     // Setup static file serving for web UI
     setup_static_files(web_server);

@@ -469,18 +469,13 @@ void JuicedService::chat(const httplib::Request &original,
     auto slots = json::parse(sr.body);
     if (!slots.is_array())
       throw std::runtime_error("Unsupported slot inventory");
-    const auto requested_session =
-        original.get_header_value("X-Juiced-Session-Id");
-    const auto thread = requested_session.empty()
-                            ? original.get_header_value("X-Juiced-Thread-Id")
-                            : requested_session;
-    const bool has_thread =
-        !thread.empty() && thread.size() < 160 &&
-        thread.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRS"
-                                 "TUVWXYZ0123456789._-") == std::string::npos;
+    const auto context = current_request_context();
+    const auto thread = context ? context->session : request_session_id(original);
+    const bool has_thread = !thread.empty();
     const bool reuse_enabled = request.value("cache_prompt", true);
     const bool identified = has_thread && reuse_enabled;
-    const auto principal = resolve_request_identity(original, server_.api_key_, server_.admin_api_key_);
+    const auto principal = context ? context->identity
+        : resolve_request_identity(original, server_.api_key_, server_.admin_api_key_);
     const auto identity = digest(json::array({"principal-v1", principal.principal,
         principal.credential_epoch, "chat.completions"}).dump());
     json semantics = json::object();

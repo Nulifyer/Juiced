@@ -401,10 +401,13 @@ static void forward_anthropic_upstream(AnthropicUpstream upstream,
 }  // namespace
 
 void OllamaApi::register_anthropic_routes(httplib::Server& server, const std::shared_ptr<OllamaApi>& self) {
-    server.Post("/v1/messages", [self](const httplib::Request& req, httplib::Response& res) {
+    auto post = [&](const std::string& path, httplib::Server::Handler handler) {
+        server.Post(path, self->decorator_ ? self->decorator_(std::move(handler)) : std::move(handler));
+    };
+    post("/v1/messages", [self](const httplib::Request& req, httplib::Response& res) {
         self->handle_anthropic_messages(req, res);
     });
-    server.Post("/v1/messages/count_tokens", [self](const auto& req, auto& res) {
+    post("/v1/messages/count_tokens", [self](const auto& req, auto& res) {
         self->handle_anthropic_count_tokens(req, res);
     });
 }

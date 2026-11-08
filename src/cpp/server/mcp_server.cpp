@@ -231,10 +231,10 @@ McpServer::McpServer(Router* router, ModelManager* model_manager, EnsureLoadedFn
 
 McpServer::~McpServer() = default;
 
-void McpServer::register_routes(httplib::Server& server) {
+void McpServer::register_routes(httplib::Server& server, HttpHandlerDecorator decorate) {
     auto self = shared_from_this();
 
-    server.Post("/mcp", [self](const httplib::Request& req, httplib::Response& res) {
+    httplib::Server::Handler handler = [self](const httplib::Request& req, httplib::Response& res) {
         std::string response_body;
         try {
             response_body = self->handle_request_body(req.body);
@@ -254,7 +254,8 @@ void McpServer::register_routes(httplib::Server& server) {
 
         res.status = 200;
         res.set_content(response_body, "application/json");
-    });
+    };
+    server.Post("/mcp", decorate ? decorate(std::move(handler)) : std::move(handler));
 
     server.Get("/mcp", [](const httplib::Request&, httplib::Response& res) {
         // No SSE channel in this MVP; refuse GET explicitly.
