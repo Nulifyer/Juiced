@@ -92,6 +92,25 @@ namespace lemon {
 
 namespace {
 
+nlohmann::json memory_budget_json(const MemoryBudget& snapshot) {
+    auto optional = [](const std::optional<uint64_t>& value) {
+        return value ? nlohmann::json(*value) : nlohmann::json();
+    };
+    nlohmann::json limits = nlohmann::json::array();
+    for (const auto& item : snapshot.constraints) limits.push_back({
+        {"source", item.source}, {"limit_bytes", optional(item.limit_bytes)},
+        {"charged_bytes", optional(item.used_bytes)}});
+    return {{"schema_version", 1}, {"physical_pool", "host-ram"},
+            {"source", snapshot.source}, {"host_total_bytes", optional(snapshot.host_total_bytes)},
+            {"host_available_bytes", optional(snapshot.host_available_bytes)},
+            {"containment", snapshot.containment},
+            {"visible_constraints_complete", snapshot.constraints_complete},
+            {"constraints", limits}, {"available_bytes", optional(snapshot.available_bytes())},
+            {"reservation_status", "not-reserved"}, {"hidden_ancestor_limits", "unobserved"},
+            {"shared_gpu_accounting", "overlaps-host-ram"},
+            {"charged_memory_covers_device_allocations", "unverified"}};
+}
+
 nlohmann::json gpu_device_details_json(const SystemGpuMetrics& snapshot) {
     nlohmann::json result;
     result["primary_gpu_id"] = snapshot.primary_gpu_id.empty()
@@ -103,8 +122,13 @@ nlohmann::json gpu_device_details_json(const SystemGpuMetrics& snapshot) {
         entry["vendor"] = gpu.vendor;
         entry["name"] = gpu.name;
         entry["memory_type"] = gpu.memory_type;
+        entry["physical_pool"] = gpu.memory_type == "shared" ? nlohmann::json("host-ram")
+            : gpu.memory_type == "dedicated" ? nlohmann::json("device:" + gpu.id)
+            : nlohmann::json();
         entry["gpu_percent"] = gpu.gpu_percent >= 0.0
             ? nlohmann::json(gpu.gpu_percent) : nlohmann::json();
+        entry["utilization_source"] = gpu.utilization_source.empty()
+            ? nlohmann::json() : nlohmann::json(gpu.utilization_source);
         entry["memory_total_gb"] = gpu.memory_total_gb >= 0.0
             ? nlohmann::json(gpu.memory_total_gb) : nlohmann::json();
         entry["memory_used_gb"] = gpu.memory_used_gb >= 0.0
@@ -7236,6 +7260,7 @@ void Server::handle_system_stats(const httplib::Request& req, httplib::Response&
 
     // Get memory info
     stats["memory_gb"] = metrics_platform_->get_memory_usage_gb();
+    stats["memory_budget"] = memory_budget_json(metrics_platform_->get_memory_budget());
 
     const auto gpu_metrics = metrics_platform_->get_system_gpu_metrics();
     stats["gpu_percent"] = gpu_metrics.gpu_percent >= 0

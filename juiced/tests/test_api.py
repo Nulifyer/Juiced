@@ -248,6 +248,23 @@ class ApiContract(unittest.TestCase):
      process.terminate()
      try:process.wait(timeout=20)
      except subprocess.TimeoutExpired:process.kill();process.wait()
+ def test_resource_memory_snapshot(self):
+  for prefix in ['/api/v0/','/api/v1/','/v0/','/v1/']:
+   status,data=self.request(prefix+'system-stats');self.assertEqual(status,200,data)
+   memory=data['memory_budget']
+   self.assertEqual(memory['schema_version'],1)
+   self.assertEqual(memory['physical_pool'],'host-ram')
+   self.assertEqual(memory['reservation_status'],'not-reserved')
+   self.assertEqual(memory['charged_memory_covers_device_allocations'],'unverified')
+   self.assertIsInstance(memory['visible_constraints_complete'],bool)
+   for key in ['host_total_bytes','host_available_bytes','available_bytes']:
+    value=memory[key]
+    self.assertTrue(value is None or type(value) is int and value>=0)
+   if memory['available_bytes'] is not None:
+    self.assertLessEqual(memory['available_bytes'],memory['host_available_bytes'])
+   for gpu in data.get('gpus',[]):
+    if gpu['memory_type']=='shared':self.assertEqual(gpu['physical_pool'],'host-ram')
+    if gpu['memory_type']=='unknown':self.assertIsNone(gpu['physical_pool'])
  def test_capability_contract(self):
   model='ZZExecution-F16'
   self.request('juiced/policy',{'model':model,'policy':'on-demand'})

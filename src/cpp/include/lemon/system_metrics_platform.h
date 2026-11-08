@@ -9,6 +9,7 @@
 #include <vector>
 #include <memory>
 #include <mutex>
+#include "memory_budget.h"
 
 namespace lemon {
 
@@ -20,6 +21,7 @@ struct GpuDeviceMetrics {
     double gpu_percent = -1.0;
     double memory_total_gb = -1.0;
     double memory_used_gb = -1.0;
+    std::string utilization_source;
 };
 
 struct SystemGpuMetrics {
@@ -57,6 +59,7 @@ public:
             device.id = sample.id;
             if (!sample.vendor.empty()) device.vendor = sample.vendor;
             if (!sample.name.empty()) device.name = sample.name;
+            device.utilization_source = sample.utilization_source;
             if (!sample.memory_type.empty() && sample.memory_type != "unknown")
                 device.memory_type = sample.memory_type;
             if (std::isfinite(sample.memory_total_gb) && sample.memory_total_gb >= 0.0)
@@ -113,6 +116,19 @@ public:
 
     // Total physical RAM in GB, 0 if not available
     virtual double get_memory_total_gb() { return 0.0; }
+
+    virtual MemoryBudget get_memory_budget() {
+        MemoryBudget result;
+        result.source = "platform-host-estimate";
+        const auto total = get_memory_total_gb();
+        const auto used = get_memory_usage_gb();
+        if (std::isfinite(total) && total > 0.0 && total * BYTES_PER_GIB < UINT64_MAX)
+            result.host_total_bytes = static_cast<uint64_t>(total * BYTES_PER_GIB);
+        if (result.host_total_bytes && std::isfinite(used) && used >= 0.0 && used <= total)
+            result.host_available_bytes = static_cast<uint64_t>((total - used) * BYTES_PER_GIB);
+        // Host statistics do not establish process/job/container limits.
+        return result;
+    }
 
     // GPU usage percentage (0-100), -1 if not available or unsupported
     virtual double get_gpu_usage() = 0;

@@ -135,8 +135,15 @@ inline double get_available_memory_gb(DeviceType device_type,
                     << "get_available_memory_gb: no reliable GPU/RAM usage; using context fallback";
                 return 0.0;
             }
+            double available = *available_gpu_gb;
+#ifdef __linux__
+            if (pool.unified) {
+                const auto memory = read_linux_memory_budget().available_bytes();
+                if (!memory) return 0.0;
+                available = (std::min)(available, *memory / BYTES_PER_GIB);
+            }
+#endif
             if (memory_known_out) *memory_known_out = true;
-            const double available = *available_gpu_gb;
             LOG(DEBUG, "AutoTune") << "get_available_memory_gb: GPU (" << pool.label
                                    << ") total=" << std::fixed << std::setprecision(2)
                                    << pool.total_gb << " GB, used=" << gpu_used_gb
@@ -152,6 +159,12 @@ inline double get_available_memory_gb(DeviceType device_type,
     }
 
     // CPU / NPU: use system RAM
+#ifdef __linux__
+    const auto memory = read_linux_memory_budget().available_bytes();
+    if (!memory) return 0.0;
+    if (memory_known_out) *memory_known_out = true;
+    return *memory / BYTES_PER_GIB;
+#else
     const double used_gb = get_used_memory_gb(device_type);
     // Apple Silicon: the full unified-memory pool (total physical RAM) is reported
     // as virtual_gb on the Apple Silicon device.
@@ -195,6 +208,7 @@ inline double get_available_memory_gb(DeviceType device_type,
 
     LOG(DEBUG, "AutoTune") << "get_available_memory_gb: could not determine memory, returning 0.0";
     return 0.0;  // Could not determine
+#endif
 }
 inline int64_t compute_auto_context_size(const ModelInfo& model_info,
                                           double available_memory_gb,

@@ -1026,6 +1026,7 @@ include_directories(
 set(SOURCES_CORE
     src/cpp/server/server.cpp
     src/cpp/server/request_identity.cpp
+    src/cpp/server/memory_budget.cpp
     src/cpp/server/juiced/service.cpp
     src/cpp/server/juiced/capabilities.cpp
     src/cpp/server/juiced/compatibility.cpp
@@ -3440,6 +3441,9 @@ if(BUILD_TESTING)
     add_executable(test_request_identity test/cpp/test_request_identity.cpp)
     target_link_libraries(test_request_identity PRIVATE lemonade-server-core)
     add_cpp_ci_test(RequestIdentityTest CI ON COMMAND test_request_identity)
+    add_executable(test_memory_budget test/cpp/test_memory_budget.cpp)
+    target_link_libraries(test_memory_budget PRIVATE lemonade-server-core)
+    add_cpp_ci_test(MemoryBudgetTest CI ON COMMAND test_memory_budget)
 endif()
 
 set(_SESSION_UTILS_TEST_SRC "${CMAKE_CURRENT_SOURCE_DIR}/test/cpp/test_session_utils.cpp")

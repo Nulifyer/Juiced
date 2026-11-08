@@ -80,6 +80,7 @@ std::vector<GpuDeviceMetrics> query_amd_gpu_metrics() {
             std::ifstream usage_file(device_path / "gpu_busy_percent");
             double usage = -1.0;
             if (usage_file >> usage) gpu.gpu_percent = usage;
+            gpu.utilization_source = "sysfs-gpu_busy_percent";
 
             uint64_t vram_total = 0, vram_used = 0;
             uint64_t gtt_total = 0, gtt_used = 0;
@@ -196,6 +197,10 @@ public:
             }
         }
         return total_kb / (1024.0 * 1024.0);
+    }
+
+    MemoryBudget get_memory_budget() override {
+        return read_linux_memory_budget();
     }
 
     double get_gpu_usage() override {
