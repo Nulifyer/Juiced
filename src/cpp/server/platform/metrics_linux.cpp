@@ -76,7 +76,8 @@ std::vector<GpuDeviceMetrics> query_amd_gpu_metrics() {
             const bool shared = static_info.shared;
             if (!static_info.marketing_name.empty())
                 gpu.name = static_info.marketing_name;
-            gpu.memory_type = shared ? "shared" : "dedicated";
+            gpu.memory_type = static_info.confirmed
+                ? (shared ? "shared" : "dedicated") : "unknown";
             std::ifstream usage_file(device_path / "gpu_busy_percent");
             double usage = -1.0;
             if (usage_file >> usage) gpu.gpu_percent = usage;
