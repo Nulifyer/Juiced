@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "batch": "P1 generation ownership and cache-state drain",
+  "plan_revision": 2,
+  "phase_complete": false,
+  "baseline": "source 35e86b1bfdf9f8383c22e00186b32b77f396a333; deployed v0.9.2 remains separate",
+  "selected_families": [
+    "Managed worker lifetime after registry retirement",
+    "Cache restore/save JSON and SSE state-operation ownership",
+    "Explicit unload work-drain outside the Router lifecycle lock",
+    "Busy automatic replacement rejection and generation revalidation"
+  ],
+  "acceptance": {
+    "ownership_checks": 24,
+    "realtime_policy_drain_checks": 23,
+    "local_native_contracts": 10,
+    "api_cases": 40,
+    "engine": "Real forced-CPU cache admission/authentication/failure fixture passed unchanged",
+    "platform": "Local Linux only; cross-platform and hardware delivery remain unqualified"
+  },
+  "state": {
+    "schema_migration": false,
+    "saved_options_changed": false
+  },
+  "limits": [
+    "Only the reference-drain wait has a five-second bound; slot waits and backend teardown remain separate lifecycle work",
+    "Cache state operations require a ready worker; sleeping-state restoration still requires coordinated readiness work",
+    "HTTP transfer completion or cancellation acknowledgement is not proof of upstream kernel termination",
+    "Scoped references are not physical-pool memory reservations or essential-service protection"
+  ],
+  "not_delivered": [
+    "Full P1 admission/queues/fairness/maintenance controls",
+    "Provider-specific resource estimates and conservative peaks",
+    "Generation-bound upstream-stop reconciliation",
+    "Whole-operation and lifecycle-slot deadlines",
+    "Real streaming speech or unseen-device qualification"
+  ]
+}

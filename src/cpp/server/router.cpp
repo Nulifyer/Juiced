@@ -134,7 +134,11 @@ Router::~Router() {
     }
     load_cv_.notify_all();
     if (reclaim_executor_) reclaim_executor_->stop();
-    unload_model("");  // Unload all
+    try {
+        unload_model("");
+    } catch (const std::exception& e) {
+        LOG(WARNING, "Router") << "Shutdown retained referenced workers: " << e.what() << std::endl;
+    }
 }
 
 void Router::set_model_access_policy(std::function<bool(const std::string&)> policy) {
@@ -672,34 +676,23 @@ void Router::evict_all_npu_servers() {
     }
 }
 
-void Router::evict_server(WrappedServer* server, int timeout_seconds) {
+void Router::evict_server(WrappedServer* server) {
     if (!server) return;
 
     std::string model_name = server->get_model_name();
     LOG(INFO, "Router") << "Evicting model: " << model_name << std::endl;
 
-    // Wait for any ongoing inference to complete. For watchdog-reset/dead
-    // backends the wait is bounded so recovery can continue, but the object must
-    // not be destroyed while a request thread may still be using this raw
-    // pointer. In that case we leave a tombstoned server in loaded_servers_;
-    // future prune/load calls will remove it once the request unwinds.
-    const int wait_timeout = server->is_backend_alive() ? timeout_seconds : EVICTION_TIMEOUT;
-    const bool idle = server->wait_until_not_busy(wait_timeout);
-    if (!idle) {
-        LOG(WARNING, "Router") << "Deferring eviction for model " << model_name
-                                << " because requests are still unwinding after "
-                                << EVICTION_TIMEOUT << "s (state="
-                                << server->get_backend_health_state() << ")"
-                                << std::endl;
-        return;
-    }
+    // Busy waiting belongs outside load_mutex_. Automatic replacement must
+    // fail rather than block the operations whose release it needs.
+    if (!server->wait_until_not_busy(0))
+        throw RouterResidencyConflictException(model_name, model_name, "the worker has active operations");
 
     server->unload();
 
     // Remove from vector
     loaded_servers_.erase(
         std::remove_if(loaded_servers_.begin(), loaded_servers_.end(),
-                      [server](const std::unique_ptr<WrappedServer>& s) {
+                      [server](const std::shared_ptr<WrappedServer>& s) {
                           return s.get() == server;
                       }),
         loaded_servers_.end()
@@ -711,10 +704,6 @@ void Router::evict_server(WrappedServer* server, int timeout_seconds) {
 void Router::evict_all_servers() {
     LOG(INFO, "Router") << "Evicting all models (" << loaded_servers_.size() << " total)" << std::endl;
 
-    // Copy raw pointers first; evict_server may erase entries and move
-    // unique_ptrs inside the vector, but the pointed-to WrappedServer objects
-    // remain stable until their individual eviction completes. Busy/dead
-    // servers are safely left as tombstones for a later prune pass.
     std::vector<WrappedServer*> servers;
     servers.reserve(loaded_servers_.size());
     for (const auto& server : loaded_servers_) {
@@ -722,7 +711,7 @@ void Router::evict_all_servers() {
     }
 
     for (auto* server : servers) {
-        evict_server(server, EVICTION_TIMEOUT);
+        evict_server(server);
     }
 
     LOG(INFO, "Router") << "Evict all completed. Remaining tombstoned models: "
@@ -1293,21 +1282,32 @@ void Router::load_model(const std::string& model_name,
 void Router::unload_model(const std::string& model_name) {
     std::unique_lock<std::mutex> lock(load_mutex_);
     wait_for_slot_clearance(lock);
-
-    if (model_name.empty()) {
-        // Unload all models
-        LOG(INFO, "Router") << "Unload all models called" << std::endl;
-        evict_all_servers();
-    } else {
-        // Unload specific model
-        LOG(INFO, "Router") << "Unload model called: " << model_name << std::endl;
-        std::string canonical_model_name = resolve_model_name(model_name);
-        WrappedServer* server = find_server_by_model_name(canonical_model_name);
-        if (!server) {
-            throw std::runtime_error("Model not loaded: " + model_name);
-        }
-        evict_server(server);
+    std::vector<std::shared_ptr<WrappedServer>> targets;
+    const auto canonical = model_name.empty() ? "" : resolve_model_name(model_name);
+    for (const auto& server : loaded_servers_)
+        if (canonical.empty() || server->get_model_name() == canonical) targets.push_back(server);
+    if (!canonical.empty() && targets.empty())
+        throw std::runtime_error("Model not loaded: " + model_name);
+    lock.unlock();
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(EVICTION_TIMEOUT);
+    for (const auto& server : targets) {
+        const auto remaining = std::chrono::ceil<std::chrono::seconds>(deadline - std::chrono::steady_clock::now()).count();
+        if (!server->wait_until_not_busy(static_cast<int>((std::max)(int64_t(0), int64_t(remaining)))))
+            throw RouterResidencyConflictException(server->get_model_name(), server->get_model_name(),
+                                                   "active operations did not drain before the deadline");
     }
+    lock.lock();
+    wait_for_slot_clearance(lock);
+    for (const auto& current : loaded_servers_) {
+        if (!canonical.empty() && current->get_model_name() != canonical) continue;
+        const bool retained = std::find(targets.begin(), targets.end(), current) != targets.end();
+        if (!retained || current->is_busy())
+            throw RouterResidencyConflictException(current->get_model_name(), current->get_model_name(),
+                                                   "the worker generation or activity changed during drain");
+    }
+    for (const auto& server : targets)
+        if (std::find(loaded_servers_.begin(), loaded_servers_.end(), server) != loaded_servers_.end())
+            evict_server(server.get());
 }
 
 void Router::evict_if_committed(const std::string& model_name) {
@@ -1574,6 +1574,14 @@ std::string Router::get_backend_address() const {
     std::lock_guard<std::mutex> lock(load_mutex_);
     WrappedServer* server = get_most_recent_server();
     return (server && server->is_backend_alive()) ? server->get_address() : "";
+}
+
+WrappedServer::InferenceLease Router::acquire_model_state_operation(const std::string& model_name) const {
+    if (!model_access_allowed(model_name)) return {};
+    std::lock_guard<std::mutex> lock(load_mutex_);
+    auto* server = find_server_by_model_name(resolve_model_name(model_name));
+    if (!server || !server->is_backend_alive()) return {};
+    return server->try_acquire_ready_state_operation();
 }
 
 Router::StreamingTranscriptionLease Router::acquire_streaming_transcription(const std::string& model_name) const {

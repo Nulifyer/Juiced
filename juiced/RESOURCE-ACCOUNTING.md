@@ -72,6 +72,15 @@ recovery relinquishes that reference before replacing the worker. Telemetry copi
 its URL/parser while the worker is owned. A failed sleep restore returns to the
 downsized state and wakes waiters instead of leaving the worker stuck loading.
 
+Managed worker references retain the exact worker generation even after registry
+ownership is removed. Cache restore/save holds a separate state-operation reference
+through JSON/SSE finalization. It blocks eviction without adding another inference
+request to the active-call counter. Explicit unload waits for references outside
+Router's lifecycle lock, then revalidates the selected generations. The work-drain
+wait is limited to five seconds; later slot waits and process teardown are separate
+lifecycle work. A timeout preserves the worker. Automatic replacement rejects busy
+workers rather than waiting for their release while holding the global lock.
+
 This worker reference prevents eviction during native calls. Cancellation
 acknowledgement or completion of a proxy transfer does not prove that a device
 kernel has stopped. Future resource reservations must retain or reconcile that

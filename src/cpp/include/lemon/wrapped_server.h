@@ -80,7 +80,7 @@ struct Telemetry {
     }
 };
 
-class WrappedServer : public ICompletionServer {
+class WrappedServer : public ICompletionServer, public std::enable_shared_from_this<WrappedServer> {
 public:
     // Holds one busy reference. Release before any operation that may destroy
     // the worker, such as watchdog reload. Moving transfers sole ownership.
@@ -97,8 +97,10 @@ public:
         void release() noexcept;
     private:
         friend class WrappedServer;
-        explicit InferenceLease(WrappedServer* server) : server_(server) {}
+        explicit InferenceLease(WrappedServer* server, bool state_operation = false);
         WrappedServer* server_ = nullptr;
+        std::shared_ptr<WrappedServer> lifetime_;
+        bool state_operation_ = false;
     };
 
     InferenceLease try_acquire_inference() {
@@ -115,6 +117,17 @@ public:
         return InferenceLease(this);
     }
 
+    InferenceLease try_acquire_ready_state_operation() {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        if (maintenance_in_progress_ || (state_ != ModelState::READY &&
+            state_ != ModelState::IN_USE && state_ != ModelState::EVICTING)) return {};
+        ++active_request_count_;
+        ++active_state_operations_;
+        state_ = ModelState::IN_USE;
+        state_cv_.notify_all();
+        return InferenceLease(this, true);
+    }
+
     WrappedServer(const std::string& server_name, const std::string& log_level,
                   ModelManager* model_manager = nullptr, BackendManager* backend_manager = nullptr)
         : server_name_(server_name), port_(0), log_level_(log_level),
@@ -122,6 +135,7 @@ public:
           last_access_time_(std::chrono::steady_clock::now()),
           state_(ModelState::LOADING),
           active_request_count_(0),
+          active_state_operations_(0),
           maintenance_in_progress_(false),
           load_duration_ms_(0),
           last_backend_activity_(std::chrono::steady_clock::now()),
@@ -274,10 +288,11 @@ public:
         }
     }
 
-    void release_inference() {
+    void release_inference(bool state_operation = false) {
         std::function<void()> on_idle;
         {
             std::lock_guard<std::mutex> lock(state_mutex_);
+            if (state_operation) --active_state_operations_;
             // Note: is_streaming_ is managed by end_backend_request() which correctly
             // clears the flag only when the last streaming request completes.
             if (--active_request_count_ == 0) {
@@ -382,7 +397,7 @@ public:
 
     int active_inference_count() const {
         std::lock_guard<std::mutex> lock(state_mutex_);
-        return active_request_count_;
+        return active_request_count_ - active_state_operations_;
     }
 
     void set_streaming(bool streaming) {
@@ -697,6 +712,7 @@ protected:
     mutable std::condition_variable state_cv_;
     ModelState state_;
     int active_request_count_;
+    int active_state_operations_;
 
     // True while the eviction engine is performing a maintenance downsize on this
     // server. Counts as "busy" so wait_until_not_busy() (and therefore

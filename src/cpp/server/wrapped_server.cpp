@@ -178,21 +178,28 @@ WrappedServer::~WrappedServer() {
     stop_server();
 }
 
+WrappedServer::InferenceLease::InferenceLease(WrappedServer* server, bool state_operation)
+    : server_(server), lifetime_(server->weak_from_this().lock()), state_operation_(state_operation) {}
+
 WrappedServer::InferenceLease::~InferenceLease() { release(); }
 
 WrappedServer::InferenceLease::InferenceLease(InferenceLease&& other) noexcept
-    : server_(std::exchange(other.server_, nullptr)) {}
+    : server_(std::exchange(other.server_, nullptr)), lifetime_(std::move(other.lifetime_)),
+      state_operation_(other.state_operation_) {}
 
 WrappedServer::InferenceLease& WrappedServer::InferenceLease::operator=(InferenceLease&& other) noexcept {
     if (this != &other) {
         release();
         server_ = std::exchange(other.server_, nullptr);
+        lifetime_ = std::move(other.lifetime_);
+        state_operation_ = other.state_operation_;
     }
     return *this;
 }
 
 void WrappedServer::InferenceLease::release() noexcept {
-    if (auto* server = std::exchange(server_, nullptr)) server->release_inference();
+    auto lifetime = std::move(lifetime_);
+    if (auto* server = std::exchange(server_, nullptr)) server->release_inference(state_operation_);
 }
 
 void WrappedServer::notify_reclaim(const std::function<void()>& callback) noexcept {

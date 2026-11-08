@@ -224,6 +224,7 @@ public:
         WrappedServer::InferenceLease ownership;
         explicit operator bool() const { return bool(ownership) && !address.empty(); }
     };
+    WrappedServer::InferenceLease acquire_model_state_operation(const std::string& model_name) const;
     StreamingTranscriptionLease acquire_streaming_transcription(const std::string& model_name) const;
 
     json chat_completion(const json& request, std::atomic<bool>* cancel = nullptr);
@@ -291,7 +292,7 @@ public:
 
 private:
     // Multi-model support: Manage multiple WrappedServers
-    std::vector<std::unique_ptr<WrappedServer>> loaded_servers_;
+    std::vector<std::shared_ptr<WrappedServer>> loaded_servers_;
 
     // Configuration (non-owning pointer; same lifetime as Server)
     RuntimeConfig* config_;
@@ -369,7 +370,7 @@ private:
     WrappedServer* find_npu_server_by_recipe(const std::string& recipe) const;
     WrappedServer* find_coexisting_server_by_type(ModelType type) const;
     void evict_all_npu_servers();
-    void evict_server(WrappedServer* server, int timeout_seconds = -1);
+    void evict_server(WrappedServer* server);
     void evict_all_servers();
     // Publish the (already-canonicalized) needed-helper set under load_mutex_,
     // then defer the eviction pass until no load holds the slot. Split out from

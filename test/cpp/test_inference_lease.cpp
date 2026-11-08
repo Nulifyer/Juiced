@@ -134,6 +134,31 @@ int main() {
         for (auto& worker : workers) worker.join();
         check(server.references() == 0 && server.try_evict_if_idle(), "concurrent release reconciles to idle once");
     }
+    {
+        auto server = std::make_shared<LeaseServer>();
+        std::weak_ptr<LeaseServer> observer = server;
+        auto lease = server->try_acquire_inference();
+        server.reset();
+        check(!observer.expired(), "managed lease retains the exact worker generation after registry ownership is removed");
+        lease.release();
+        check(observer.expired(), "releasing the final lease destroys the retired worker exactly once");
+    }
+    {
+        auto server = std::make_shared<LeaseServer>();
+        auto operation = server->try_acquire_ready_state_operation();
+        check(operation && server->is_busy() && server->references() == 1 && server->active_inference_count() == 0,
+              "state ownership blocks eviction without inventing an inference request");
+        {
+            auto inference = server->try_acquire_inference();
+            check(server->references() == 2 && server->active_inference_count() == 1,
+                  "nested inference and state ownership keep separate activity accounting");
+        }
+        check(server->is_busy() && server->active_inference_count() == 0,
+              "state save remains protected after native inference finishes");
+        operation.release();
+        check(!server->is_busy() && server->references() == 0,
+              "final state operation releases residency ownership");
+    }
     std::printf("Inference lease checks: %d checks, %d failures\n", checks, failed);
     return failed ? 1 : 0;
 }

@@ -450,10 +450,14 @@ void JuicedService::chat(const httplib::Request &original,
       return;
     }
     server_.auto_load_model_if_needed(requested_model);
+    auto ownership = server_.router_->acquire_model_state_operation(requested_model);
+    if (!ownership) throw std::runtime_error("The prompt-state worker is not ready");
+    auto worker = std::make_shared<WrappedServer::InferenceLease>(std::move(ownership));
     auto profile = cache_profile(requested_model);
     const auto model = profile.at("model").get<std::string>();
     if (!profile.value("qualified", false)) {
       res.set_header("X-Juiced-Cache", "unqualified-profile");
+      worker->release();
       server_.handle_chat_completions(normalized, res);
       return;
     }
@@ -561,7 +565,7 @@ void JuicedService::chat(const httplib::Request &original,
     request["cache_prompt"] = reuse_enabled;
     auto req = std::make_shared<httplib::Request>(original);
     req->body = request.dump();
-    auto finish = [this, guard, identified, key, thread, model, profile,
+    auto finish = [this, guard, worker, identified, key, thread, model, profile,
                    address, slot, messages](bool success) {
       if (!success || !identified)
         return;
@@ -744,7 +748,7 @@ void JuicedService::chat(const httplib::Request &original,
         return ok && !status->transport_failed;
       };
       auto previous = std::move(res.content_provider_resource_releaser_);
-      res.content_provider_resource_releaser_ = [previous, release, guard,
+      res.content_provider_resource_releaser_ = [previous, release, guard, worker,
                                                  req](bool ok) {
         if (previous)
           previous(ok);

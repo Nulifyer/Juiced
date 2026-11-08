@@ -1,4 +1,5 @@
 #include "lemon/config_file.h"
+#include "lemon/error_types.h"
 #include "lemon/model_manager.h"
 #include "lemon/realtime_session.h"
 #include "lemon/router.h"
@@ -180,6 +181,28 @@ int main() {
             check(!one->try_evict_if_idle(), "borrowed streaming worker cannot be evicted");
         }
         check(!one->is_busy(), "unconnected lease releases exactly once");
+        {
+            auto* state_worker = RoutingHelperTestHook::add(router,
+                std::make_unique<StreamingWorker>("state-worker", first.address()));
+            auto state = router.acquire_model_state_operation("state-worker");
+            check(state && state_worker->is_busy() && router.get_stats()["live"]["active_requests"] == 0,
+                  "state operation pins its generation without inflating inference activity");
+            auto drain = std::async(std::launch::async, [&] {
+                try { router.unload_model("state-worker"); }
+                catch (const RouterResidencyConflictException&) { return true; }
+                return false;
+            });
+            if (drain.wait_for(std::chrono::seconds(10)) != std::future_status::ready) {
+                std::fprintf(stderr, "FAIL: bounded state-operation drain did not settle\n");
+                std::quick_exit(1);
+            }
+            check(drain.get() && state_worker->is_busy() && router.is_model_loaded("state-worker"),
+                  "drain timeout preserves the referenced generation instead of reporting a false unload");
+            state.release();
+            router.unload_model("state-worker");
+            check(!router.is_model_loaded("state-worker"), "settled state operation permits an explicit retry");
+        }
+
         for (const auto state : {ModelState::LOADING, ModelState::DOWNSIZING, ModelState::DOWNSIZED}) {
             one->set_state(state);
             check(!router.acquire_streaming_transcription("stream-one") && !one->is_busy(), "transient worker is rejected without waiting or restoring under Router lock");
@@ -219,12 +242,16 @@ int main() {
             ready.wait();
             check(unload.wait_for(std::chrono::milliseconds(30)) == std::future_status::timeout,
                   "explicit unload cannot destroy a connected streaming worker");
+            auto inspection = std::async(std::launch::async, [&] { return router.get_stats(); });
+            const bool responsive = inspection.wait_for(std::chrono::milliseconds(200)) == std::future_status::ready;
             manager.close_session(id);
             if (unload.wait_for(std::chrono::seconds(10)) != std::future_status::ready) {
                 std::fprintf(stderr, "FAIL: unload did not settle after disconnect\n");
                 std::quick_exit(1);
             }
             unload.get();
+            inspection.get();
+            check(responsive, "inspection remains responsive while unload waits for a live connection");
             check(first.closed == 3, "disconnect releases ownership and permits the pending unload");
         }
     }
