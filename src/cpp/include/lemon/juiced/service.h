@@ -72,7 +72,11 @@ private:
   json cache_disk_usage_locked() const;
   uint64_t cache_disk_bytes_locked() const;
   bool reserve_snapshot_write_locked(const std::string& pending, const std::string& model,
-                                     uint64_t generation, uint64_t bound);
+                                     uint64_t generation, uint64_t bound, const std::string& profile = "");
+  void stage_snapshot_publication_locked(const std::string& pending, const json& candidate);
+  void publish_snapshot_write(const std::string& pending, const json& intent);
+  void invalidate_snapshot_write_bound_locked(const std::string& pending, const json& entry);
+  std::function<void()> snapshot_publication_barrier_;
   void cleanup_snapshot_writes_locked();
   void reconcile_snapshot_writes();
   json save_state_locked(json candidate);

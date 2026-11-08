@@ -143,7 +143,8 @@ pin, readiness, activity and idle duration before claiming maintenance.
 
 Native options responses capture model/profile, saved values and default inputs
 through one ModelManager snapshot. Expensive derived settings are computed after
-releasing that lock. A dry-run derives its preview from the same snapshot.
+releasing that lock. A dry-run derives its preview from the same snapshot and the same validated
+set-or-clear mutation as a committed update, including sentinel clear values.
 
 Cache disk diagnostics distinguish saved bytes, pending-cleanup bytes and reserved
 write bytes. Undeleted files retain their charge. Pending snapshot writes reserve
@@ -151,7 +152,19 @@ capacity before dispatch and include aggregate temporary-write headroom. Exact
 profile qualification may declare `max_snapshot_bytes`, a conservative bound that
 must be supported by its evidence. Legacy qualification reserves the full disk
 budget. A file exceeding its declared bound invalidates further writes for that
-qualification. These declared provider envelopes are not a generic filesystem quota.
+qualification, including error responses, malformed responses and late writes after
+transfer cancellation. Disk evidence is checked again before cleanup and before
+another save. Explicit requalification follows termination and cleanup of uncertain
+writes. These declared provider envelopes are not a generic filesystem quota.
+
+A completed snapshot save seals its checksum and metadata in a durable publication
+intent before replacing the final file. The intent retains prior and candidate
+ownership and charges pending, final and previous files. Previous-file cleanup uses
+a durable tombstone after new metadata commits. The previous checksum is hidden during
+publication. Metadata failure retains the intent; recovery verifies content outside
+the shared state lock, then commits matching metadata. Sealed publication can recover
+after manager restart; unsealed writes still require termination evidence. Conflicting
+retain/forget operations reject until publication resolves.
 
 Aborted writes remain charged until the current manager observes exact-generation
 stop. Idle inference is insufficient. Interrupted writes from an unknown previous

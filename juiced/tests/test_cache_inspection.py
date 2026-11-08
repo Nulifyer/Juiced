@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Direct persistent-cache inspection cancellation against a controlled subprocess."""
+"""Persistent-cache exchange cancellation and failed-write ownership."""
 
 import argparse
 import json
@@ -220,6 +220,206 @@ def acceptance(args):
     return proof
 
 
+def wait_for(predicate, description):
+    for _ in range(200):
+        value = predicate()
+        if value:
+            return value
+        time.sleep(0.05)
+    raise AssertionError(description)
+
+
+def save_failure_acceptance(args):
+    proof = {
+        "scope": "controlled subprocess HTTP and disk ownership; no useful-cache, hardware or model qualification"
+    }
+    with tempfile.TemporaryDirectory(prefix="juiced-save-failures-") as directory:
+        root = Path(directory)
+        fixture = Fixture(args, root)
+        mode_file, calls = root / "mode", root / "save-calls"
+        mode_file.write_text("non200")
+        engine = root / "save-engine"
+        engine.write_text(
+            f"#!{sys.executable}\n"
+            "import json,os,sys,time,signal\n"
+            "from pathlib import Path\n"
+            "from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer\n"
+            "signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))\n"
+            "signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGTERM})\n"
+            f"mode_file=Path({str(mode_file)!r});calls=Path({str(calls)!r});snapshots=Path({str(root / 'snapshots')!r})\n"
+            "class Handler(BaseHTTPRequestHandler):\n"
+            " def log_message(self,*_): pass\n"
+            " def reply(self,body,status=200):\n"
+            "  if not isinstance(body,bytes): body=json.dumps(body).encode()\n"
+            "  try:\n"
+            "   self.send_response(status);self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)\n"
+            "  except (BrokenPipeError,ConnectionResetError): pass\n"
+            " def do_GET(self):\n"
+            "  if self.path == '/slots': self.reply([{'id':0,'is_processing':False}])\n"
+            "  else: self.reply({'status':'ok','build_info':'dde879b-mock-save-failures'})\n"
+            " def do_POST(self):\n"
+            "  body=json.loads(self.rfile.read(int(self.headers.get('Content-Length','0'))))\n"
+            "  if 'action=save' in self.path:\n"
+            "   mode=mode_file.read_text();file=snapshots/body['filename'];file.write_bytes(b'x' if mode=='late-disconnect' else b'oversize')\n"
+            "   with calls.open('a') as log: log.write(mode+'\\n')\n"
+            "   if mode=='late-disconnect': time.sleep(3);file.write_bytes(b'oversize');time.sleep(6)\n"
+            "   if mode=='timeout': time.sleep(9)\n"
+            "   if mode=='upstream-disconnect': self.connection.close();return\n"
+            "   self.reply(b'not json' if mode=='malformed' else {'n_saved':1},500 if mode=='non200' else 200)\n"
+            "  elif 'action=restore' in self.path: self.reply({'n_restored':1})\n"
+            "  else: self.reply({'id':'mock','choices':[{'index':0,'message':{'role':'assistant','content':'ok'},'finish_reason':'stop'}],'usage':{'prompt_tokens':1,'completion_tokens':1,'total_tokens':2}})\n"
+            "port=int(sys.argv[sys.argv.index('--port')+1])\n"
+            "ThreadingHTTPServer(('127.0.0.1',port),Handler).serve_forever()\n"
+        )
+        engine.chmod(0o700)
+        config_path = root / "config/config.json"
+        config = json.loads(config_path.read_text())
+        config["llamacpp"] = {"cpu_bin": str(engine)}
+        config_path.write_text(json.dumps(config))
+        try:
+            fixture.start("fixture-inference", "fixture-admin")
+            fixture.ok("/v1/juiced/policy", {"model": MODEL, "policy": "on-demand"})
+            fixture.ok(
+                "/v1/models/" + MODEL + "/options",
+                {
+                    "ctx_size": 2048,
+                    "llamacpp_backend": "cpu",
+                    "llamacpp_args": "--slot-save-path " + str(root / "snapshots"),
+                },
+            )
+            fixture.ok("/v1/load", {"model_name": MODEL, "llamacpp_backend": "cpu"})
+            loaded = next(
+                row
+                for row in fixture.ok("/v1/health")["all_models_loaded"]
+                if row["model_name"] == MODEL
+            )
+            profile = fixture.ok("/v1/juiced/cache/profile", {"model": MODEL})
+            options = dict(loaded["recipe_options"])
+            options.pop("pinned", None)
+            fixture.ok("/v1/unload", {})
+            fixture.ok(
+                "/internal/set",
+                {
+                    "admission": {
+                        "mode": "legacy",
+                        "pools": {
+                            "host": {
+                                "capacity_bytes": 1024**3,
+                                "source": "controlled test pool",
+                            }
+                        },
+                        "models": {
+                            MODEL: {
+                                "checkpoint": loaded["checkpoint"],
+                                "options": options,
+                                "completion_ms": 2000,
+                                "source": "mock save failure",
+                                "load_bytes": {"host": 16 * 1024**2},
+                                "resident_bytes": {"host": 8 * 1024**2},
+                                "state_bytes": {"host": 1024},
+                            }
+                        },
+                    }
+                },
+            )
+            fixture.ok("/v1/load", {"model_name": MODEL, "llamacpp_backend": "cpu"})
+            matrix = []
+            for mode in (
+                "non200",
+                "malformed",
+                "upstream-disconnect",
+                "timeout",
+                "late-disconnect",
+            ):
+                mode_file.write_text(mode)
+                fixture.ok(
+                    "/v1/juiced/cache/qualify",
+                    {
+                        "model": MODEL,
+                        "fingerprint": profile["fingerprint"],
+                        "max_snapshot_bytes": 1,
+                        "evidence": "Deliberately false bound for controlled failure testing only",
+                    },
+                )
+                fixture.ok("/v1/juiced/cache", {"mode": "persistent"})
+                calls.write_text("")
+                if mode == "late-disconnect":
+                    connection = socket.create_connection(
+                        ("127.0.0.1", fixture.port), timeout=5
+                    )
+                    payload = json.dumps(BODY).encode()
+                    connection.sendall(
+                        (
+                            "POST /v1/chat/completions HTTP/1.1\r\n"
+                            + f"Host: 127.0.0.1:{fixture.port}\r\nAuthorization: Bearer {fixture.api}\r\nX-Juiced-Session-Id: {mode}\r\nContent-Type: application/json\r\nContent-Length: {len(payload)}\r\n\r\n"
+                        ).encode()
+                        + payload
+                    )
+                    wait_for(
+                        lambda: calls.exists() and mode in calls.read_text(),
+                        "save did not start",
+                    )
+                    connection.close()
+                else:
+                    status, _, data = fixture.ask(mode)
+                    assert status == 200, (mode, status, data)
+                cache = wait_for(
+                    lambda: (
+                        state
+                        if (state := fixture.ok("/v1/juiced/cache"))[
+                            "qualified_profiles"
+                        ][profile["fingerprint"]].get("write_bound_invalid")
+                        else None
+                    ),
+                    "observed oversize did not invalidate qualification",
+                )
+                assert cache["pending_writes"] and cache["disk"][
+                    "reserved_write_bytes"
+                ] >= len(b"oversize"), (mode, cache)
+                fixture.ask(mode + "-disabled")
+                assert calls.read_text().splitlines() == [mode], (
+                    mode,
+                    calls.read_text(),
+                )
+                fixture.ok("/v1/unload", {})
+                cache = wait_for(
+                    lambda: (
+                        state
+                        if not (state := fixture.ok("/v1/juiced/cache"))[
+                            "pending_writes"
+                        ]
+                        else None
+                    ),
+                    "stopped generation write was not reclaimed",
+                )
+                assert cache["qualified_profiles"][profile["fingerprint"]][
+                    "write_bound_invalid"
+                ], cache
+                fixture.ok("/v1/load", {"model_name": MODEL, "llamacpp_backend": "cpu"})
+                fixture.ask(mode + "-after-stop")
+                assert calls.read_text().splitlines() == [mode], (
+                    mode,
+                    calls.read_text(),
+                )
+                matrix.append(
+                    {
+                        "mode": mode,
+                        "invalidated": True,
+                        "charged_until_stop": True,
+                        "disabled_after_stop": True,
+                    }
+                )
+            proof["failures"] = matrix
+        finally:
+            fixture.stop()
+            fixture.log.flush()
+            args.out.with_suffix(".save-failures.server.log").write_text(
+                (root / "server.log").read_text()
+            )
+            fixture.log.close()
+    return proof
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     for name in ("binary", "engine", "model-file", "out"):
@@ -229,5 +429,6 @@ if __name__ == "__main__":
     arguments.engine = arguments.engine.resolve()
     arguments.model_file = arguments.model_file.resolve()
     result = acceptance(arguments)
+    result["save_failures"] = save_failure_acceptance(arguments)
     arguments.out.write_text(json.dumps(result, indent=2) + "\n")
     print(json.dumps(result, indent=2))

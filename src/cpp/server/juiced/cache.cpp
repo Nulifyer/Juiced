@@ -253,19 +253,81 @@ JuicedService::json JuicedService::cache_disk_usage_locked() const {
     saved += file_bytes(snapshot_directory_ / (id + ".bin"), entry.value("bytes", uint64_t(0)));
   for (const auto& [id, entry] : state_.at("snapshot_cleanup").items())
     cleanup += file_bytes(snapshot_directory_ / (id + ".bin"), entry.value("bytes", uint64_t(0)));
-  for (const auto& [file, entry] : state_.at("snapshot_writes").items())
+  for (const auto& [file, entry] : state_.at("snapshot_writes").items()) {
     writes += file_bytes(snapshot_directory_ / file, entry.value("bytes", uint64_t(0)));
+    if (entry.value("state", "") == "publishing") {
+      writes += file_bytes(snapshot_directory_ / entry.at("destination").get<std::string>(),
+                          entry.at("candidate").value("bytes", uint64_t(0)));
+      if (!entry.at("previous").empty())
+        writes += file_bytes(snapshot_directory_ / entry.at("backup").get<std::string>(),
+                            entry.at("previous").value("bytes", uint64_t(0)));
+    }
+  }
   return {{"saved_bytes", saved}, {"pending_cleanup_bytes", cleanup}, {"reserved_write_bytes", writes},
           {"used_bytes", saved + cleanup + writes},
           {"budget_bytes", budget}, {"usage_known", known}};
 }
 uint64_t JuicedService::cache_disk_bytes_locked() const { return cache_disk_usage_locked().at("used_bytes"); }
 
+void JuicedService::invalidate_snapshot_write_bound_locked(const std::string& pending, const json& entry) {
+  const auto profile = entry.value("profile", "");
+  if (profile.empty()) return;
+  std::error_code ec;
+  const auto bytes = std::filesystem::file_size(snapshot_directory_ / pending, ec);
+  if (!ec && bytes > entry.value("bytes", uint64_t(0)) && state_["qualified_profiles"].contains(profile))
+    state_["qualified_profiles"][profile]["write_bound_invalid"] = true;
+}
+void JuicedService::stage_snapshot_publication_locked(const std::string& pending, const json& candidate) {
+  const auto key = candidate.at("id").get<std::string>();
+  auto& intent = state_["snapshot_writes"].at(pending);
+  intent["state"] = "publishing";
+  intent["destination"] = key + ".bin";
+  intent["backup"] = key + ".previous.bin";
+  intent["candidate"] = candidate;
+  intent["previous"] = state_["snapshots"].value(key, json::object());
+  state_["snapshots"].erase(key);
+  persist_locked();
+}
+void JuicedService::publish_snapshot_write(const std::string& pending, const json& intent) {
+  const auto source = snapshot_directory_ / pending;
+  const auto destination = snapshot_directory_ / intent.at("destination").get<std::string>();
+  const auto& candidate = intent.at("candidate");
+  const auto matches = [&](const std::filesystem::path& path) {
+    std::error_code ec;
+    return std::filesystem::file_size(path, ec) == candidate.at("bytes").get<uint64_t>() && !ec &&
+           file_digest(path) == candidate.at("checksum").get<std::string>();
+  };
+  const bool source_ready = matches(source);
+  if (!source_ready && (std::filesystem::exists(source) || !matches(destination)))
+    throw std::runtime_error("Snapshot publication files require recovery; disk ownership retained");
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (!state_["snapshot_writes"].contains(pending) || state_["snapshot_writes"][pending] != intent) return;
+  if (source_ready) {
+    std::error_code ec;
+    const auto backup = snapshot_directory_ / intent.at("backup").get<std::string>();
+    if (!intent.at("previous").empty() && !std::filesystem::exists(backup) && std::filesystem::exists(destination)) {
+      if (!utils::atomic_replace_file(destination, backup, ec))
+        throw std::runtime_error("Cannot retain previous snapshot: " + ec.message());
+    }
+    if (!utils::atomic_replace_file(source, destination, ec))
+      throw std::runtime_error("Cannot atomically replace snapshot: " + ec.message());
+  }
+  if (snapshot_publication_barrier_) snapshot_publication_barrier_();
+  const auto key = candidate.at("id").get<std::string>();
+  state_["snapshots"][key] = candidate;
+  if (!intent.at("previous").empty()) state_["snapshot_cleanup"][key + ".previous"] = intent.at("previous");
+  state_["snapshot_writes"].erase(pending);
+  persist_locked();
+  cleanup_snapshots_locked();
+}
 void JuicedService::cleanup_snapshot_writes_locked() {
   const auto writes = state_["snapshot_writes"];
   bool changed = false;
   for (const auto& [file, entry] : writes.items()) {
     if (entry.value("state", "") != "cleanup") continue;
+    invalidate_snapshot_write_bound_locked(file, entry);
+    // Persist disproven bounds before deleting the evidence, even after a failed response.
+    if (state_ != committed_state_) persist_locked();
     std::error_code ec;
     std::filesystem::remove(snapshot_directory_ / file, ec);
     if (!ec) { state_["snapshot_writes"].erase(file); changed = true; }
@@ -281,6 +343,20 @@ void JuicedService::reconcile_snapshot_writes() {
   json writes;
   { std::lock_guard<std::mutex> lock(mutex_); writes = state_["snapshot_writes"]; }
   for (const auto& [file, entry] : writes.items()) {
+    if (entry.value("state", "") == "publishing") {
+      try { publish_snapshot_write(file, entry); }
+      catch (const std::exception& error) {
+        LOG(WARNING, "Juiced") << "Snapshot publication remains charged: " << error.what() << std::endl;
+      }
+      continue;
+    }
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (state_["snapshot_writes"].contains(file) && state_["snapshot_writes"][file] == entry) {
+        invalidate_snapshot_write_bound_locked(file, entry);
+        if (state_ != committed_state_) persist_locked();
+      }
+    }
     if (entry.value("owner", "") != cache_run_id_ ||
         !server_.router_->generation_was_stopped(entry.value("generation", uint64_t(0)))) continue;
     std::lock_guard<std::mutex> lock(mutex_);
@@ -291,11 +367,17 @@ void JuicedService::reconcile_snapshot_writes() {
   }
 }
 bool JuicedService::reserve_snapshot_write_locked(const std::string& pending, const std::string& model,
-                                                  uint64_t generation, uint64_t bound) {
+                                                  uint64_t generation, uint64_t bound, const std::string& profile) {
+  for (const auto& [file, entry] : state_["snapshot_writes"].items())
+    invalidate_snapshot_write_bound_locked(file, entry);
+  if (state_ != committed_state_) persist_locked();
+  if (!profile.empty() && state_["qualified_profiles"].value(profile, json::object()).value("write_bound_invalid", false))
+    return false;
   prune_cache_locked();
   const auto budget = cache_disk_usage_locked().at("budget_bytes").get<uint64_t>();
   const auto key = pending.size() >= 8 ? pending.substr(0, pending.size() - 8) : pending;
-  if (!bound || bound > budget || state_["snapshot_writes"].contains(pending) || state_["snapshot_cleanup"].contains(key)) return false;
+  if (!bound || bound > budget || state_["snapshot_writes"].contains(pending) || state_["snapshot_cleanup"].contains(key) ||
+      state_["snapshot_cleanup"].contains(key + ".previous") || std::filesystem::exists(snapshot_directory_ / (key + ".previous.bin"))) return false;
   auto fits = [&] { const auto used = cache_disk_bytes_locked(); return used <= budget && bound <= budget - used; };
   if (!fits()) {
     std::vector<std::pair<std::string, json>> order;
@@ -314,7 +396,7 @@ bool JuicedService::reserve_snapshot_write_locked(const std::string& pending, co
   const auto space = std::filesystem::space(snapshot_directory_, space_error);
   if (space_error || space.available < reserved + 1024ULL * 1024 * 1024) return false;
   state_["snapshot_writes"][pending] = {{"bytes", bound}, {"model", model}, {"generation", generation},
-                                        {"owner", cache_run_id_}, {"state", "writing"}};
+                                        {"owner", cache_run_id_}, {"state", "writing"}, {"profile", profile}};
   persist_locked();
   return true;
 }
@@ -438,6 +520,15 @@ void JuicedService::cache_api(const httplib::Request &req,
         (!body.contains("retained") || !body["retained"].is_boolean()))
       throw std::invalid_argument("retained must be a boolean");
     std::lock_guard<std::mutex> lock(mutex_);
+    for (const auto& [file, intent] : state_["snapshot_writes"].items()) {
+      if (intent.value("state", "") != "publishing") continue;
+      const auto& candidate = intent.at("candidate");
+      if ((!snapshot.empty() && candidate.at("id") == snapshot) ||
+          (snapshot.empty() && candidate.value("session", "") == session)) {
+        output(res, {{"error", "Snapshot publication requires recovery before mutation"}}, 409);
+        return;
+      }
+    }
     std::vector<std::string> ids;
     for (const auto &[id, j] : state_["snapshots"].items()) {
       if ((!snapshot.empty() && id == snapshot) ||
@@ -731,7 +822,7 @@ void JuicedService::chat(const httplib::Request &original,
         return;
       const auto pending = key + ".pending";
       auto file = snapshot_directory_ / pending;
-      bool reserved = false, dispatched = false, completed = false;
+      bool reserved = false, dispatched = false, response_valid = false;
       uint64_t budget = 0, bound = 0;
       try {
         {
@@ -743,7 +834,7 @@ void JuicedService::chat(const httplib::Request &original,
           if (!bound) bound = budget;
           if (qualification.value("write_bound_invalid", false))
             throw std::runtime_error("Snapshot profile exceeded its write bound; repeat qualification before saving");
-          if (!reserve_snapshot_write_locked(pending, model, worker->generation(), bound))
+          if (!reserve_snapshot_write_locked(pending, model, worker->generation(), bound, profile.at("fingerprint").get<std::string>()))
             throw std::runtime_error("Snapshot save skipped: disk budget or headroom is unavailable");
           reserved = true;
         }
@@ -755,43 +846,43 @@ void JuicedService::chat(const httplib::Request &original,
         auto result = post_engine(
             address, "/slots/" + std::to_string(slot) + "?action=save",
             {{"filename", pending}}, *worker, disconnected);
-        completed = true;
+        response_valid = true;
         auto size = std::filesystem::file_size(file);
         if (size > bound)
           throw std::runtime_error(
               "Snapshot exceeds retained-state disk budget");
         const auto checksum = file_digest(file);
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (cache_disk_bytes_locked() > budget)
-          throw std::runtime_error("Snapshot save exceeds disk budget including pending writes and cleanup");
-        std::error_code replace_error;
-        if (!utils::atomic_replace_file(file, snapshot_directory_ / (key + ".bin"), replace_error))
-          throw std::runtime_error("Cannot atomically replace snapshot: " + replace_error.message());
-        const bool retained = state_["snapshots"].contains(key) &&
-                              state_["snapshots"][key].value("retained", false);
-        state_["snapshots"][key] = {
-            {"id", key},
-            {"session", thread},
-            {"model", model},
-            {"profile", profile["fingerprint"]},
-            {"bytes", size},
-            {"tokens", result.value("n_saved", 0)},
-            {"checksum", checksum},
-            {"prefix_messages", messages.size()},
-            {"prefix_digest", prefix_hash(messages, messages.size())},
-            {"last_used", timestamp()},
-            {"retained", retained},
-            {"state", "saved"}};
-        state_["snapshot_writes"].erase(pending);
-        persist_locked();
+        json intent;
+        {
+          std::lock_guard<std::mutex> lock(mutex_);
+          if (cache_disk_bytes_locked() > budget)
+            throw std::runtime_error("Snapshot save exceeds disk budget including pending writes and cleanup");
+          const bool retained = state_["snapshots"].contains(key) &&
+                                state_["snapshots"][key].value("retained", false);
+          const json candidate = {
+              {"id", key},
+              {"session", thread},
+              {"model", model},
+              {"profile", profile["fingerprint"]},
+              {"bytes", size},
+              {"tokens", result.value("n_saved", 0)},
+              {"checksum", checksum},
+              {"prefix_messages", messages.size()},
+              {"prefix_digest", prefix_hash(messages, messages.size())},
+              {"last_used", timestamp()},
+              {"retained", retained},
+              {"state", "saved"}};
+          stage_snapshot_publication_locked(pending, candidate);
+          intent = state_["snapshot_writes"].at(pending);
+        }
+        publish_snapshot_write(pending, intent);
       } catch (const std::exception &e) {
         std::lock_guard<std::mutex> lock(mutex_);
         if (reserved && state_["snapshot_writes"].contains(pending)) {
-          state_["snapshot_writes"][pending]["state"] = !dispatched || completed ? "cleanup" : "uncertain";
-          std::error_code size_error;
-          const auto size = std::filesystem::file_size(file, size_error);
-          if (completed && !size_error && size > bound)
-            state_["qualified_profiles"][profile.at("fingerprint").get<std::string>()]["write_bound_invalid"] = true;
+          auto& write = state_["snapshot_writes"][pending];
+          if (write.value("state", "") != "publishing")
+            write["state"] = !dispatched || response_valid ? "cleanup" : "uncertain";
+          invalidate_snapshot_write_bound_locked(pending, write);
         }
         state_["cache"]["last_error"] = e.what();
         try {

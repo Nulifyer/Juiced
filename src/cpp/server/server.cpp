@@ -3613,7 +3613,7 @@ static std::string validate_option_value(const std::string& key,
 
 void Server::respond_with_model_options(
     const httplib::Request& req, httplib::Response& res,
-    const std::function<bool(const std::string&, ModelInfo&, httplib::Response&)>& mutation) {
+    const std::function<bool(const std::string&, ModelInfo&, httplib::Response&, nlohmann::json&)>& mutation) {
     const std::string model_id = utils::normalize_model_name(req.matches[1]);
     std::string model_key = model_id;
 
@@ -3642,12 +3642,10 @@ void Server::respond_with_model_options(
         auto snapshot = model_manager_->get_model_options_snapshot(model_key);
         ModelInfo info = snapshot.info;
         if (mutation) {
-            if (!mutation(model_key, info, res)) return;
-            auto body = req.method == "POST" ? nlohmann::json::parse(req.body) : nlohmann::json::object();
-            if (body.value("dry_run", false)) {
-                body.erase("dry_run");
-                body.erase("model_name");
-                snapshot.info.recipe_options = model_manager_->preview_saved_model_options(snapshot, body);
+            nlohmann::json preview;
+            if (!mutation(model_key, info, res, preview)) return;
+            if (!preview.is_null()) {
+                snapshot.info.recipe_options = model_manager_->preview_saved_model_options(snapshot, preview);
             } else snapshot = model_manager_->get_model_options_snapshot(model_key);
         }
         info = snapshot.info;
@@ -3709,7 +3707,7 @@ void Server::handle_model_options_get(const httplib::Request& req, httplib::Resp
 
 void Server::handle_model_options_post(const httplib::Request& req, httplib::Response& res) {
     respond_with_model_options(req, res,
-        [this, &req](const std::string& model_key, ModelInfo& info, httplib::Response& r) {
+        [this, &req](const std::string& model_key, ModelInfo& info, httplib::Response& r, nlohmann::json& preview) {
             nlohmann::json body;
             if (!parse_required_json_body(req, r, body)) return false;
             if (!body.is_object()) {
@@ -3782,6 +3780,7 @@ void Server::handle_model_options_post(const httplib::Request& req, httplib::Res
             }
 
             if (dry_run) {
+                preview = changes;
                 return true;
             }
             if (!changes.empty()) {
@@ -3793,7 +3792,7 @@ void Server::handle_model_options_post(const httplib::Request& req, httplib::Res
 
 void Server::handle_model_options_delete(const httplib::Request& req, httplib::Response& res) {
     respond_with_model_options(req, res,
-        [this](const std::string& model_key, ModelInfo& info, httplib::Response&) {
+        [this](const std::string& model_key, ModelInfo& info, httplib::Response&, nlohmann::json&) {
             if (!model_manager_->get_saved_model_options(model_key).empty()) {
                 model_manager_->set_saved_model_options(model_key, nlohmann::json::object(), info.recipe);
             }

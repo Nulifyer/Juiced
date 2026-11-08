@@ -126,6 +126,34 @@ struct StatePublicationTestHook {
     static bool reserve_write(Server& server, const std::string& file, uint64_t bytes, uint64_t generation = 10001) {
         std::lock_guard<std::mutex> lock(server.juiced_->mutex_); return server.juiced_->reserve_snapshot_write_locked(file, "disk-fixture", generation, bytes);
     }
+    static json stage_publication(Server& server, bool existing) {
+        std::lock_guard<std::mutex> lock(server.juiced_->mutex_);
+        const auto directory = server.juiced_->snapshot_directory_;
+        server.juiced_->state_["cache"]["disk_budget_gib"] = 20.0 / (1024 * 1024 * 1024);
+        server.juiced_->persist_locked();
+        if (existing) {
+            { std::ofstream out(directory / "publication.bin"); out << "old"; }
+            server.juiced_->state_["snapshots"]["publication"] = {{"bytes", 3}, {"checksum", "old-checksum"}, {"retained", true}};
+            server.juiced_->persist_locked();
+        }
+        if (!server.juiced_->reserve_snapshot_write_locked("publication.pending", "fixture", 11, 16))
+            throw std::runtime_error("Cannot reserve publication fixture");
+        { std::ofstream out(directory / "publication.pending"); out << "new"; }
+        server.juiced_->stage_snapshot_publication_locked("publication.pending", {
+            {"id", "publication"}, {"session", "publication"}, {"bytes", 3}, {"retained", true},
+            {"checksum", "11507a0e2f5e69d5dfa40a62a1bd7b6ee57e6bcd85c67c9b8431b36fff21c437"}});
+        return server.juiced_->state_["snapshot_writes"].at("publication.pending");
+    }
+    static void publish(Server& server, const json& intent, std::function<void()> barrier) {
+        server.juiced_->snapshot_publication_barrier_ = std::move(barrier);
+        try { server.juiced_->publish_snapshot_write("publication.pending", intent); }
+        catch (...) { server.juiced_->snapshot_publication_barrier_ = {}; throw; }
+        server.juiced_->snapshot_publication_barrier_ = {};
+    }
+    static void recover_publications(Server& server) { server.juiced_->reconcile_snapshot_writes(); }
+    static void clean_writes(Server& server) {
+        std::lock_guard<std::mutex> lock(server.juiced_->mutex_); server.juiced_->cleanup_snapshot_writes_locked();
+    }
     static void uncertain_write(Server& server, const std::string& file) {
         std::lock_guard<std::mutex> lock(server.juiced_->mutex_);
         server.juiced_->state_["snapshot_writes"][file]["state"] = "uncertain"; server.juiced_->persist_locked();
@@ -850,6 +878,122 @@ static void cache_disk_budget() {
     }
 }
 
+static void snapshot_publication_failures() {
+    using Hook = lemon::StatePublicationTestHook;
+    for (bool existing : {false, true}) for (bool staging : {false, true}) {
+        const auto root = lemon::test::make_scratch_dir("snapshot-publication");
+        auto defaults = lemon::ConfigFile::base_defaults(); defaults["offline"] = true; defaults["broadcast"] = false;
+        auto runtime = std::make_shared<lemon::RuntimeConfig>(defaults); lemon::RuntimeConfig::set_global(runtime.get());
+        {
+            lemon::Server server(runtime, root.string(), root.string()); Hook::stop(server);
+            const auto intent = Hook::stage_publication(server, existing);
+            check(!Hook::state(server).at("snapshots").contains("publication") && intent.at("previous").empty() == !existing,
+                  "sealed publication hides previous metadata and durably retains previous ownership before replacement");
+            const auto target = root / "juiced/state.json";
+            std::unique_ptr<BlockReplacement> blocked;
+            bool rejected = false;
+            try {
+                Hook::publish(server, intent, [&] {
+                    check(!fs::exists(root / "juiced/snapshots/publication.pending") && fs::file_size(root / "juiced/snapshots/publication.bin") == 3,
+                          "fault is injected after actual pending-to-final replacement");
+                    if (staging) fs::create_directory(root / "juiced/state.json.tmp");
+                    else blocked = std::make_unique<BlockReplacement>(target);
+                });
+            } catch (...) { rejected = true; }
+            check(rejected && Hook::state(server).at("snapshot_writes").at("publication.pending") == intent &&
+                  read(target).at("snapshot_writes").at("publication.pending") == intent && !Hook::state(server).at("snapshots").contains("publication"),
+                  "failed final metadata staging/replacement preserves durable destination ownership without stale checksums");
+            if (existing) {
+                std::ifstream previous(root / "juiced/snapshots/publication.previous.bin"); std::string contents; previous >> contents;
+                check(contents == "old", "failed replacement publication preserves the previous committed file under its durable intent");
+            }
+            Hook::clean_writes(server);
+            check(Hook::disk(server).at("used_bytes").get<uint64_t>() >= 3 && fs::exists(root / "juiced/snapshots/publication.bin"),
+                  "generic cleanup cannot remove publishing intent or release retained final-file charges");
+            blocked.reset(); fs::remove_all(root / "juiced/state.json.tmp");
+            check(!Hook::reserve_write(server, "other.pending", 10), "failed final publication cannot grant unavailable replacement credit");
+            if (staging) {
+                Hook::recover_publications(server);
+                check(Hook::state(server).at("snapshot_writes").empty() && Hook::disk(server).at("used_bytes") == 3,
+                      "publication retry in the same manager commits the verified final file");
+            }
+        }
+        {
+            std::unique_ptr<BlockReplacement> no_cleanup;
+            if (existing && !staging)
+                no_cleanup = std::make_unique<BlockReplacement>(root / "juiced/snapshots/publication.previous.bin");
+            lemon::Server server(runtime, root.string(), root.string()); Hook::stop(server);
+            Hook::recover_publications(server);
+            const auto state = Hook::state(server);
+            check(state.at("snapshot_writes").empty() && state.at("snapshots").at("publication").at("checksum") ==
+                  "11507a0e2f5e69d5dfa40a62a1bd7b6ee57e6bcd85c67c9b8431b36fff21c437" && Hook::disk(server).at("used_bytes").get<uint64_t>() >= 3,
+                  "restart recovery verifies final content and commits its matching metadata despite unavailable cleanup");
+            if (no_cleanup)
+                check(fs::exists(root / "juiced/snapshots/publication.previous.bin") && Hook::disk(server).at("pending_cleanup_bytes") == 3,
+                      "failed previous-file cleanup after restart retains the old file and its exact disk charge");
+            no_cleanup.reset();
+            Hook::cleanup(server);
+            check(Hook::disk(server).at("used_bytes") == 3, "previous-file cleanup releases its charge only after confirmed reclamation");
+            check(Hook::reserve_write(server, "next.pending", 10), "publication recovery reopens only reclaimed storage credit");
+        }
+        lemon::RuntimeConfig::set_global(nullptr);
+    }
+}
+
+static void interrupted_snapshot_publication() {
+    using Hook = lemon::StatePublicationTestHook;
+    const auto root = lemon::test::make_scratch_dir("snapshot-pre-rename");
+    auto defaults = lemon::ConfigFile::base_defaults(); defaults["offline"] = true; defaults["broadcast"] = false;
+    auto runtime = std::make_shared<lemon::RuntimeConfig>(defaults); lemon::RuntimeConfig::set_global(runtime.get());
+    {
+        lemon::Server server(runtime, root.string(), root.string()); Hook::stop(server);
+        Hook::stage_publication(server, true);
+    }
+    { std::ofstream file(root / "juiced/snapshots/publication.pending"); file << "bad"; }
+    {
+        lemon::Server server(runtime, root.string(), root.string()); Hook::stop(server);
+        Hook::recover_publications(server);
+        check(!Hook::state(server).at("snapshot_writes").empty() && Hook::disk(server).at("used_bytes").get<uint64_t>() >= 6 &&
+              fs::exists(root / "juiced/snapshots/publication.bin"),
+              "unverified pending content retains both file charges and previous ownership across restart");
+        { std::ofstream file(root / "juiced/snapshots/publication.pending"); file << "new"; }
+        Hook::recover_publications(server);
+        check(Hook::state(server).at("snapshot_writes").empty() && Hook::disk(server).at("used_bytes") == 3,
+              "sealed pre-rename restart completes replacement only after verifying candidate contents");
+    }
+    lemon::RuntimeConfig::set_global(nullptr);
+}
+
+static void options_clear_parity() {
+    using Hook = lemon::StatePublicationTestHook;
+    const auto root = lemon::test::make_scratch_dir("options-clears");
+    auto defaults = lemon::ConfigFile::base_defaults(); defaults["offline"] = true; defaults["broadcast"] = false;
+    auto runtime = std::make_shared<lemon::RuntimeConfig>(defaults); lemon::RuntimeConfig::set_global(runtime.get());
+    {
+        lemon::Server server(runtime, root.string(), root.string()); Hook::stop(server);
+        auto& models = Hook::models(server);
+        const std::string name = "user.ClearPreview";
+        models.register_user_model(name, {{"recipe", "sd-cpp"}, {"checkpoint", "fixture/repo:Q4_K_M"}, {"recipe_options", {{"steps", 7}}}});
+        for (const json clear : {json(nullptr), json(""), json("auto"), json(-1)}) {
+            models.set_saved_model_options(name, {{"steps", 11}});
+            const auto preview = Hook::options_response(server, name, "POST", {{"dry_run", true}, {"steps", clear}});
+            check(preview.status == 200 && models.get_saved_model_options(name).at("steps") == 11,
+                  "clear preview validates without changing committed saved settings");
+            const auto applied = Hook::options_response(server, name, "POST", {{"steps", clear}});
+            check(preview.status == 200 && applied.status == 200 && json::parse(preview.body).at("effective").at("steps") == 7 &&
+                  json::parse(preview.body).at("effective") == json::parse(applied.body).at("effective"),
+                  "normalized null/empty/auto/minus-one preview restores the registry default exactly like real POST");
+        }
+        Hook::register_model(server, "user.ContextClearPreview");
+        const auto preview = Hook::options_response(server, "user.ContextClearPreview", "POST", {{"dry_run", true}, {"ctx_size", -1}});
+        const auto applied = Hook::options_response(server, "user.ContextClearPreview", "POST", {{"ctx_size", -1}});
+        check(preview.status == 200 && applied.status == 200 && json::parse(preview.body).at("effective").at("ctx_size") == -1 &&
+              models.get_saved_model_options("user.ContextClearPreview").at("ctx_size") == -1,
+              "context minus-one remains an explicit setting in preview and committed mutation");
+    }
+    lemon::RuntimeConfig::set_global(nullptr);
+}
+
 static void policy_failures() {
     for (bool pin : {false, true}) for (bool staging : {false, true}) {
         const auto root = lemon::test::make_scratch_dir("policy");
@@ -906,7 +1050,9 @@ static void policy_failures() {
 }
 
 int main(int argc, char** argv) {
-    if (argc > 1 && std::string(argv[1]) == "--lifecycle") {
+    if (argc > 1 && std::string(argv[1]) == "--snapshots") {
+        snapshot_publication_failures(); interrupted_snapshot_publication(); options_clear_parity();
+    } else if (argc > 1 && std::string(argv[1]) == "--lifecycle") {
         native_load_publication(); deferred_maintenance(); options_response_versions(); cache_disk_budget();
     } else if (argc > 1 && std::string(argv[1]) == "--ordering") {
         successful_profile_overlap(); profile_discovery(); policy_ordering(); cache_forget_failures();

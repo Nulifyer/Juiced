@@ -9,7 +9,7 @@
     "direct gateway admission-error formatting",
     "revision-bound native load publication and deferred maintenance",
     "coherent model-options response snapshots",
-    "snapshot cleanup and temporary-write disk accounting"
+    "durable snapshot publication, cleanup and write-bound invalidation"
   ],
   "scope": [
     "Juiced state writes retain a private last-committed checkpoint; failed writes restore rejected policy/cache controls and revision. Policy is the sole authority for Hot residency.",
@@ -27,11 +27,14 @@
     "Deferred downsizing retains the selected generation and rechecks pin, readiness, activity and current idle duration atomically before maintenance.",
     "Model-options GET/POST/DELETE and dry-run responses derive recipe/profile, saved values and defaults from one native snapshot.",
     "Undeleted cache tombstones retain disk charges. Qualified snapshot writes reserve capacity and headroom before dispatch. Unknown or uncertain writes remain charged; only confirmed completion or exact current-generation stop permits cleanup.",
-    "Actual Linux CPU acceptance verifies inference continues while failed cleanup occupies the full snapshot budget, restart cleanup reopens saving, and an incorrect declared write bound invalidates saving without failing inference."
+    "Actual Linux CPU acceptance verifies inference continues while failed cleanup occupies the full snapshot budget, restart cleanup reopens saving, and an incorrect declared write bound invalidates saving without failing inference.",
+    "Snapshot publication seals candidate checksum, prior metadata and both file destinations before replacement. Previous files remain owned until new metadata commits, then retain tombstone charges until cleanup succeeds. Restart recovery verifies content outside the shared state lock.",
+    "Any observed snapshot write exceeding its declared maximum invalidates further saving, including non-200, malformed, disconnected and delayed responses. Uncertain writes retain disk ownership until exact-generation stop; requalification is explicit.",
+    "Dry-run options previews consume the validated normalized mutation, preserving registry defaults when null, empty, auto or minus-one clears an override. Context minus-one remains explicit."
   ],
   "verification": {
-    "status": "local Linux native/API and actual CPU/cache/disk/cloud integration gates passed; exact-source cross-platform/container/recovery evidence pending",
-    "native_contracts": 23,
+    "status": "Local Linux native/API, actual CPU/cache/disk and controlled state HTTP gates passed; new exact-source cross-platform/container/recovery evidence pending",
+    "native_contracts": 22,
     "persistence_checks": 90,
     "gateway_assertions": 34,
     "cloud_runtime_assertions": 12,
@@ -40,7 +43,9 @@
     "scope": "Synthetic CPU/native/loopback and actual neutral Stories15M serving/cache. No accelerator, real speech, model quality or essential-service protection qualification.",
     "publication_ordering_checks": 34,
     "runtime_lifecycle_assertions": 53,
-    "lease_assertions": 39
+    "lease_assertions": 39,
+    "snapshot_publication_assertions": 48,
+    "failed_save_exchange_cases": 5
   },
   "remaining": [
     "Full P1 fourteen-family path coverage, ingress/background/acquisition/preparation/install bounds, all-writer maintenance, exact execution identities, Realtime context/quiescence, termination reconciliation, early streaming status, shared observations and frozen service-protection gates.",
