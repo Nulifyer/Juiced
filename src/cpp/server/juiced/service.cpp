@@ -135,6 +135,8 @@ JuicedService::JuicedService(Server &server)
   if (!state_.contains("snapshots"))
     state_["snapshots"] = json::object();
   if (!state_.contains("snapshot_cleanup")) state_["snapshot_cleanup"] = json::object();
+  if (!state_.contains("snapshot_writes")) state_["snapshot_writes"] = json::object();
+  cache_run_id_ = identifier();
   if (!state_.contains("qualified_profiles"))
     state_["qualified_profiles"] = json::object();
   if (!state_.contains("preparations")) state_["preparations"] = json::object();
@@ -157,6 +159,8 @@ JuicedService::JuicedService(Server &server)
   }
   for (const auto &name : recovered) state_["execution_trials"].erase(name);
   if (!recovered.empty()) persist_locked();
+  for (const auto& [model, policy] : state_["policies"].items())
+    server_.router_->publish_residency_policy(model, policy_revision_locked(model), policy == "hot");
   worker_ = std::thread([this] { run(); });
   preparation_worker_ = std::thread([this] { preparation_run(); });
 }
@@ -170,7 +174,7 @@ void JuicedService::stop() {
   voice_process_.reset();
 }
 JuicedService::json JuicedService::save_state_locked(json candidate) {
-  candidate["revision"] = state_.value("revision", 0) + 1;
+  candidate["revision"] = state_.value("revision", uint64_t(0)) + 1;
   auto durable_candidate = candidate;
   atomic_json(directory_ / "state.json", candidate);
   committed_state_.swap(durable_candidate);
@@ -205,8 +209,7 @@ void JuicedService::apply_policy_pin_locked(const std::string& model, uint64_t r
     pinned = state_["policies"].value(model, "disabled") == "hot";
   }
   try {
-    if (!generation) generation = server_.router_->get_model_generation(model);
-    if (generation) server_.router_->apply_model_policy(model, generation, pinned);
+    server_.router_->publish_residency_policy(model, revision, pinned, generation);
   } catch (const std::exception& error) {
     LOG(WARNING, "Juiced") << "Committed policy will reconcile worker pin: " << error.what() << std::endl;
   }
@@ -429,6 +432,11 @@ void JuicedService::execute(const json &command) {
 
     {
       std::lock_guard<std::mutex> lock(mutex_);
+      if (command.contains("policy_revision") &&
+          (command.at("policy_revision") != policy_revision_locked(name) || state_["policies"].value(name, "disabled") != "hot")) {
+        operations_.erase(name);
+        return;
+      }
       operations_[name] = {{"pending", true},
                            {"state", action == "reload" ? "reloading"
                                      : action == "load" ? "loading"
@@ -489,7 +497,8 @@ void JuicedService::execute(const json &command) {
       }
       server_.router_->load_model(
           name, info, RecipeOptions(info.recipe, json::object()), true, false,
-          policy == "hot", LoadPurpose::UserInference, &stopping_);
+          policy == "hot", LoadPurpose::UserInference, &stopping_,
+          command.contains("policy_revision") ? std::optional<uint64_t>(command.at("policy_revision").get<uint64_t>()) : std::nullopt);
     }
     {
       std::lock_guard<std::mutex> effects(policy_effect_mutex_);
@@ -503,6 +512,15 @@ void JuicedService::execute(const json &command) {
       if (trial_started) { state_["execution_trials"].erase(name); persist_locked(); }
     }
   } catch (const std::exception &e) {
+    if (command.contains("policy_revision") && !command.contains("profile")) {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (command.at("policy_revision") != policy_revision_locked(name)) {
+        operations_.erase(name);
+        wake_.notify_all();
+        return;
+      }
+    }
+
     std::string error = e.what();
     if (trial_started) {
       try {
@@ -598,6 +616,7 @@ void JuicedService::run() {
       if (!cmd.is_null())
         execute(cmd);
       refresh();
+      reconcile_snapshot_writes();
       {
         std::lock_guard<std::mutex> lock(mutex_);
         prune_cache_locked();

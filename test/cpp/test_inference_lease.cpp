@@ -201,6 +201,20 @@ int main() {
         check(acquired && !server->try_evict_if_idle(),
               "inference acquisition winning the race prevents retirement");
     }
+    {
+        LeaseServer server;
+        server.set_pinned(true);
+        check(!server.try_begin_downsize(), "pinned worker rejects atomic maintenance claim");
+        server.set_pinned(false);
+        server.update_access_time();
+        check(!server.try_begin_downsize(std::chrono::hours(1)), "maintenance rechecks current idle duration under the worker lock");
+        auto acquired = server.try_acquire_inference();
+        check(!server.try_begin_downsize(), "request acquisition excludes maintenance");
+        acquired.release();
+        check(server.try_begin_downsize() && !server.try_acquire_ready_inference(), "eligible maintenance excludes later request acquisition");
+        server.finish_downsize(false);
+        check(server.get_state() == lemon::ModelState::READY, "failed maintenance releases ownership and readiness");
+    }
     std::printf("Inference lease checks: %d checks, %d failures\n", checks, failed);
     return failed ? 1 : 0;
 }

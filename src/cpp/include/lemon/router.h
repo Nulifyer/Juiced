@@ -146,6 +146,7 @@ public:
     json uninstall_cloud_provider(const std::string& provider, const std::function<bool()>& publish);
     void set_model_access_policy(std::function<bool(const std::string&)> policy);
     json admission_snapshot() const;
+    bool generation_was_stopped(uint64_t generation) const;
     void pause_admission(bool paused);
     void configure_admission(const json& config, std::function<void()> publish = {});
     void require_realtime_admission() const;
@@ -161,7 +162,8 @@ public:
         bool allow_reload_on_option_change = false,
         std::optional<bool> pinned = std::nullopt,
         LoadPurpose load_purpose = LoadPurpose::UserInference,
-        std::atomic<bool>* cancel_flag = nullptr);
+        std::atomic<bool>* cancel_flag = nullptr,
+        std::optional<uint64_t> policy_revision = std::nullopt);
 
     // Collapse the option precedence chain into the set a load would use.
     // *_args are resolved by scope: a concrete request replaces model/architecture
@@ -215,6 +217,8 @@ public:
     // Pin or unpin a model
     void set_model_pinned(const std::string& model_name, bool pinned);
     uint64_t get_model_generation(const std::string& model_name) const;
+    void publish_residency_policy(const std::string& model_name, uint64_t revision,
+                                  bool pinned, uint64_t generation = 0);
     bool apply_model_policy(const std::string& model_name, uint64_t generation,
                             bool pinned, bool unload = false);
 
@@ -332,10 +336,19 @@ private:
     mutable ResourceAdmission admission_;
     ResourceAdmission::Lease admit_worker(const WrappedServer& server, ResourceAdmission::Operation operation,
         const RequestEnvelope* request = nullptr,
-        std::optional<ResourceAdmission::Policy> request_policy = std::nullopt) const;
+        std::optional<ResourceAdmission::Policy> request_policy = std::nullopt,
+        std::function<bool()> intent_cancelled = {}) const;
     std::shared_ptr<WrappedServer> shared_worker(WrappedServer* server) const;
 
     mutable std::mutex load_mutex_;              // Protects loading state and loaded_servers_
+    struct ResidencyPolicy {
+        uint64_t revision;
+        bool pinned;
+        std::shared_ptr<std::atomic<uint64_t>> token;
+    };
+    // Runtime projection only: Juiced's durable policy remains authoritative.
+    std::map<std::string, ResidencyPolicy> residency_policies_;
+    bool residency_pinned_locked(const std::string& model, bool fallback) const;
     bool is_loading_ = false;                    // True when a load operation is in progress
     std::condition_variable load_cv_;            // Signals when load completes
 
@@ -432,6 +445,8 @@ private:
     // EVICTING, but only if it has not been rescued by an in-flight request
     // (see WrappedServer::try_commit_eviction). Safe against request races.
     void evict_if_committed(const std::string& model_name);
+    std::function<std::unique_ptr<WrappedServer>(const ModelInfo&)> backend_factory_override_;
+    std::function<void()> load_entry_barrier_;
     std::unique_ptr<WrappedServer> create_backend_server(const ModelInfo& model_info);
     std::string resolve_model_name(const std::string& model_name) const;
     ModelTelemetryIdentity get_telemetry_identity(WrappedServer* server) const;

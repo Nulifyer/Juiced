@@ -81,6 +81,7 @@ struct ResourceAdmission::State {
     std::map<std::string, Pool> pools;
     std::deque<std::shared_ptr<Entry>> pending;
     std::map<uint64_t, std::shared_ptr<Entry>> active;
+    std::set<uint64_t> stopped_generations;
     uint64_t next_id = 0, rejected = 0, admitted = 0;
     size_t essential_streak = 0;
     bool paused = false, stopped = false, configuration_pending = false;
@@ -409,6 +410,7 @@ void ResourceAdmission::shutdown() {
 }
 void ResourceAdmission::reconcile_stopped_generation(uint64_t generation) {
     std::lock_guard<std::mutex> lock(state_->mutex);
+    if (generation) state_->stopped_generations.insert(generation);
     for (auto it = state_->active.begin(); it != state_->active.end();) {
         if (it->second->work.generation == generation && it->second->uncertain) it = state_->active.erase(it);
         else ++it;
@@ -423,6 +425,10 @@ void ResourceAdmission::reconcile_idle_requests(uint64_t generation) {
         else ++it;
     }
     state_->changed.notify_all();
+}
+bool ResourceAdmission::generation_was_stopped(uint64_t generation) const {
+    std::lock_guard<std::mutex> lock(state_->mutex);
+    return state_->stopped_generations.count(generation) != 0;
 }
 bool ResourceAdmission::has_uncertain_generation(uint64_t generation) const {
     std::lock_guard<std::mutex> lock(state_->mutex);

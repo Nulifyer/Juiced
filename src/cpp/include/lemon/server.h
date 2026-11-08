@@ -50,6 +50,7 @@ class JuicedService;
 class Server {
     friend class JuicedService;
     friend struct StatePublicationTestHook;
+    std::function<void()> options_response_barrier_;
 public:
     Server(std::shared_ptr<RuntimeConfig> config,
            const std::string& cache_dir,

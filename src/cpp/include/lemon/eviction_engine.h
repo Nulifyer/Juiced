@@ -4,6 +4,7 @@
 #include <thread>
 #include <atomic>
 #include <mutex>
+#include <functional>
 
 namespace lemon {
 
@@ -23,6 +24,8 @@ public:
     void on_vram_pressure(double pct);
 
 private:
+    friend struct StatePublicationTestHook;
+    std::function<void()> downsize_selection_barrier_;
     void evaluation_loop();
     void evaluate_servers(double current_vram_pct);
 

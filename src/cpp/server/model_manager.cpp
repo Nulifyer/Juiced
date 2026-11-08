@@ -2309,26 +2309,38 @@ json ModelManager::get_saved_model_options(const std::string& model_name) {
     return json::object();
 }
 
+ModelManager::ModelOptionsSnapshot ModelManager::get_model_options_snapshot(const std::string& model_name) {
+    auto lock = lock_current_models_cache();
+    const auto alias = public_model_aliases_.find(model_name);
+    const auto key = alias == public_model_aliases_.end() ? model_name : alias->second;
+    const auto found = models_cache_.find(key);
+    if (found == models_cache_.end()) throw std::runtime_error("Model not found: " + model_name);
+    const auto id = cache_key_to_canonical_id(key);
+    auto info = apply_execution_profile_locked(key, found->second);
+    const auto defaults = build_recipe_options(info, registry_recipe_options_locked(key), "", json::object());
+    const auto profile = execution_profiles_.value(id, json::object()).value("selected", "registered");
+    return {std::move(info), recipe_options_.value(id, json::object()), defaults, profile};
+}
+
+RecipeOptions ModelManager::preview_saved_model_options(const ModelOptionsSnapshot& snapshot, const json& changes) {
+    auto saved = snapshot.saved;
+    for (const auto& [key, value] : changes.items()) {
+        if (value.is_null()) saved.erase(key);
+        else saved[key] = value;
+    }
+    return RecipeOptions::merge_precedence_layers(snapshot.info.recipe, json::object(), snapshot.defaults.to_json(), saved);
+}
+
 RecipeOptions ModelManager::get_model_default_options(const ModelInfo& info) {
     return build_recipe_options(info, registry_recipe_options(resolve_model_name(info.model_name)),
                                 "", json::object());
 }
 
 RecipeOptions ModelManager::preview_saved_model_options(const ModelInfo& info, const json& changes) {
-    const std::string cache_key = resolve_model_name(info.model_name);
-    const std::string id = cache_key_to_canonical_id(cache_key);
-
-    json saved = get_saved_model_options(cache_key);
-    for (const auto& [key, value] : changes.items()) {
-        if (value.is_null()) {
-            saved.erase(key);
-        } else {
-            saved[key] = value;
-        }
-    }
-    // Same layering as write_saved_model_options, so a preview cannot differ
-    // from the state the real write would produce.
-    return build_recipe_options(info, registry_recipe_options(cache_key), id, json{{id, saved}});
+    auto snapshot = get_model_options_snapshot(info.model_name);
+    if (snapshot.info.recipe != info.recipe)
+        throw std::invalid_argument("Execution profile changed before preview; refresh and retry");
+    return preview_saved_model_options(snapshot, changes);
 }
 
 // The model's own `recipe_options` block from user_models.json/server_models.json,

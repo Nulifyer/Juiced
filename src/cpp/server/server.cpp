@@ -3639,14 +3639,25 @@ void Server::respond_with_model_options(
     model_key = model_manager_->resolve_model_name(model_key);
 
     try {
-        ModelInfo info = model_manager_->get_model_info(model_key);
-        if (mutation && !mutation(model_key, info, res)) return;
+        auto snapshot = model_manager_->get_model_options_snapshot(model_key);
+        ModelInfo info = snapshot.info;
+        if (mutation) {
+            if (!mutation(model_key, info, res)) return;
+            auto body = req.method == "POST" ? nlohmann::json::parse(req.body) : nlohmann::json::object();
+            if (body.value("dry_run", false)) {
+                body.erase("dry_run");
+                body.erase("model_name");
+                snapshot.info.recipe_options = model_manager_->preview_saved_model_options(snapshot, body);
+            } else snapshot = model_manager_->get_model_options_snapshot(model_key);
+        }
+        info = snapshot.info;
+        if (options_response_barrier_) options_response_barrier_();
 
         const RecipeOptions no_request_options(info.recipe, nlohmann::json::object());
         RecipeOptions effective = router_->resolve_effective_options(info, no_request_options);
 
         ModelInfo without_saved = info;
-        without_saved.recipe_options = model_manager_->get_model_default_options(info);
+        without_saved.recipe_options = snapshot.defaults;
         RecipeOptions defaults = router_->resolve_effective_options(without_saved, no_request_options);
 
         // `effective` and `defaults` double as replayable /v1/load bodies.
@@ -3663,7 +3674,8 @@ void Server::respond_with_model_options(
         nlohmann::json response = {
             {"model_name", model_id},
             {"recipe", info.recipe},
-            {"saved", model_manager_->get_saved_model_options(model_key)},
+            {"saved", snapshot.saved},
+            {"execution_profile", snapshot.profile},
             {"effective", effective_json},
             {"defaults", defaults_json},
             {"resolved_ctx_size", resolved_ctx}
@@ -3770,13 +3782,11 @@ void Server::handle_model_options_post(const httplib::Request& req, httplib::Res
             }
 
             if (dry_run) {
-                info.recipe_options = model_manager_->preview_saved_model_options(info, changes);
                 return true;
             }
             if (!changes.empty()) {
                 model_manager_->update_saved_model_options(model_key, changes, info.recipe);
             }
-            info = model_manager_->get_model_info(model_key);
             return true;
         });
 }
@@ -3787,7 +3797,6 @@ void Server::handle_model_options_delete(const httplib::Request& req, httplib::R
             if (!model_manager_->get_saved_model_options(model_key).empty()) {
                 model_manager_->set_saved_model_options(model_key, nlohmann::json::object(), info.recipe);
             }
-            info = model_manager_->get_model_info(model_key);
             return true;
         });
 }

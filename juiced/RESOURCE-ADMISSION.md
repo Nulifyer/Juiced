@@ -130,5 +130,33 @@ multi-writer volume backup or complete model/runtime revision recovery.
 Snapshot forgetting and pruning commit removal metadata and cleanup tombstones
 before deleting saved computation. A failed metadata commit preserves every file.
 Filesystem cleanup failures remain retryable across restart and do not advertise
-forgotten snapshots. A new request cannot reuse a snapshot key while its destructive
-cleanup remains pending. Source weights and consumer messages are unaffected.
+forgotten snapshots. Pending cleanup blocks writes to that snapshot key. Inference can execute cold
+while opportunistic saving skips unavailable disk capacity. Source weights and consumer messages are unaffected.
+
+Router keeps a revisioned runtime projection of Juiced's durable residency policy.
+Native load reuse, fresh publication, retry and restoration apply that projection.
+Policy-generated Hot commands bind their revision before admission and revalidate
+it through startup and publication. Explicit On-demand loading remains available.
+Slow backend startup does not hold the policy effects or Juiced state mutex.
+Deferred downsizing retains its selected worker and atomically rechecks generation,
+pin, readiness, activity and idle duration before claiming maintenance.
+
+Native options responses capture model/profile, saved values and default inputs
+through one ModelManager snapshot. Expensive derived settings are computed after
+releasing that lock. A dry-run derives its preview from the same snapshot.
+
+Cache disk diagnostics distinguish saved bytes, pending-cleanup bytes and reserved
+write bytes. Undeleted files retain their charge. Pending snapshot writes reserve
+capacity before dispatch and include aggregate temporary-write headroom. Exact
+profile qualification may declare `max_snapshot_bytes`, a conservative bound that
+must be supported by its evidence. Legacy qualification reserves the full disk
+budget. A file exceeding its declared bound invalidates further writes for that
+qualification. These declared provider envelopes are not a generic filesystem quota.
+
+Aborted writes remain charged until the current manager observes exact-generation
+stop. Idle inference is insufficient. Interrupted writes from an unknown previous
+manager remain conservatively charged and visible in `pending_writes`. Complete
+operator recovery of those interrupted writes remains a P1 prerequisite before
+promotion. Snapshot restore and cold inference do not require a new opportunistic
+save to succeed. None of these cache controls changes source weights or stores
+consumer conversation messages.

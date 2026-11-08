@@ -178,6 +178,7 @@ bool Router::model_access_allowed(const std::string& model) const {
 }
 
 json Router::admission_snapshot() const { return admission_.snapshot(); }
+bool Router::generation_was_stopped(uint64_t generation) const { return admission_.generation_was_stopped(generation); }
 void Router::pause_admission(bool paused) { admission_.pause(paused); }
 void Router::configure_admission(const json& config, std::function<void()> publish) { admission_.configure(config, std::move(publish)); }
 void Router::require_realtime_admission() const {
@@ -190,7 +191,7 @@ std::shared_ptr<WrappedServer> Router::shared_worker(WrappedServer* server) cons
     return server ? server->shared_from_this() : nullptr;
 }
 
-ResourceAdmission::Lease Router::admit_worker(const WrappedServer& server, ResourceAdmission::Operation operation, const RequestEnvelope* request, std::optional<ResourceAdmission::Policy> request_policy) const {
+ResourceAdmission::Lease Router::admit_worker(const WrappedServer& server, ResourceAdmission::Operation operation, const RequestEnvelope* request, std::optional<ResourceAdmission::Policy> request_policy, std::function<bool()> intent_cancelled) const {
     const auto policy = request_policy ? *request_policy : admission_.policy();
     const auto protected_mode = policy.protected_mode;
     if (protected_mode && operation == ResourceAdmission::Operation::Load &&
@@ -246,8 +247,8 @@ ResourceAdmission::Lease Router::admit_worker(const WrappedServer& server, Resou
     }
     const auto native_cancel = WrappedServer::current_request_cancel_context();
     const auto http_cancel = work.cancelled;
-    work.cancelled = [native_cancel, http_cancel] {
-        return native_cancel.cancelled() || (http_cancel && http_cancel());
+    work.cancelled = [native_cancel, http_cancel, intent_cancelled] {
+        return native_cancel.cancelled() || (http_cancel && http_cancel()) || (intent_cancelled && intent_cancelled());
     };
     return admission_.acquire(std::move(work));
 }
@@ -825,6 +826,7 @@ void Router::simulate_vram_pressure(double pct) {
 }
 
 std::unique_ptr<WrappedServer> Router::create_backend_server(const ModelInfo& model_info) {
+    if (backend_factory_override_) return backend_factory_override_(model_info);
     std::string log_level = config_->log_level();
 
     backends::BackendContext ctx;
@@ -920,12 +922,13 @@ std::map<std::string, json> Router::unload_job_models(const std::map<std::string
         const std::string name = server->get_model_name();
         auto pin_it = snapshot_pins.find(name);
         if (pin_it != snapshot_pins.end()) {
-            if (server->is_pinned() != pin_it->second) server->set_pinned(pin_it->second);
+            server->set_pinned(residency_pinned_locked(name, pin_it->second));
             continue;
         }
         auto own_it = resolved_owned.find(name);
         if (own_it == resolved_owned.end()) continue;
         if (server->get_process_id() != own_it->second) continue;
+        if (residency_pinned_locked(name, server->is_pinned())) continue;
         captured[name] = {{"options", server->get_recipe_options().to_json()},
                           {"pinned", server->is_pinned()}};
         victims.push_back(server.get());
@@ -957,7 +960,9 @@ void Router::load_model(const std::string& model_name,
                         bool allow_reload_on_option_change,
                         std::optional<bool> pinned,
                         LoadPurpose load_purpose,
-                        std::atomic<bool>* cancel_flag) {
+                        std::atomic<bool>* cancel_flag,
+                        std::optional<uint64_t> policy_revision) {
+    if (load_entry_barrier_) load_entry_barrier_();
     const std::string canonical_model_name = resolve_model_name(model_name);
     const ResidencyClass requested_residency_class =
         residency_class_for_load_purpose(load_purpose);
@@ -971,6 +976,19 @@ void Router::load_model(const std::string& model_name,
                && (!exclusive_active_ || exclusive_owner_ == std::this_thread::get_id());
     });
 
+    std::shared_ptr<std::atomic<uint64_t>> intent_token;
+    if (policy_revision) {
+        const auto policy = residency_policies_.find(canonical_model_name);
+        if (policy == residency_policies_.end() || policy->second.revision != *policy_revision || !policy->second.pinned)
+            throw AdmissionError("policy_intent_changed", "Automatic Hot load no longer matches committed policy", 409);
+        intent_token = policy->second.token;
+    }
+    const auto intent_cancelled = [intent_token, policy_revision] {
+        return intent_token && intent_token->load(std::memory_order_acquire) != *policy_revision;
+    };
+    const auto require_intent = [&] {
+        if (intent_cancelled()) throw AdmissionError("policy_intent_changed", "Automatic Hot load was superseded", 409);
+    };
     is_loading_ = true;
 
     LOG(DEBUG, "Router") << "Loading model: " << canonical_model_name
@@ -992,6 +1010,7 @@ void Router::load_model(const std::string& model_name,
             final_pinned = (effective_options.get_option("pinned").is_boolean() && effective_options.get_option("pinned").get<bool>());
         }
 
+        final_pinned = residency_pinned_locked(canonical_model_name, final_pinned);
         prune_unavailable_servers_locked();
 
         // Reclaim any idle routing helper a policy change already dropped from
@@ -1049,7 +1068,8 @@ void Router::load_model(const std::string& model_name,
                 transition_server_residency_locked(
                     existing, requested_residency_class);
                 LOG(DEBUG, "Router") << "Model already loaded, updating access time and pinned status" << std::endl;
-                existing->set_pinned(final_pinned);
+                require_intent();
+                existing->set_pinned(residency_pinned_locked(canonical_model_name, final_pinned));
                 existing->update_access_time();
                 is_loading_ = false;
                 load_cv_.notify_all();
@@ -1063,9 +1083,10 @@ void Router::load_model(const std::string& model_name,
         DeviceType device_type = new_server->effective_device(effective_options);
         new_server->set_model_metadata(canonical_model_name, model_info.checkpoint(), model_type, device_type, effective_options);
         lock.unlock();
-        auto load_resources = admit_worker(*new_server, ResourceAdmission::Operation::Load);
+        auto load_resources = admit_worker(*new_server, ResourceAdmission::Operation::Load, nullptr, std::nullopt, intent_cancelled);
         const bool protected_admission = load_resources.protected_mode();
         lock.lock();
+        require_intent();
         if (replace_existing) {
             if (find_server_by_model_name(canonical_model_name) != replace_existing.get())
                 throw RouterResidencyConflictException(canonical_model_name, canonical_model_name,
@@ -1229,7 +1250,7 @@ void Router::load_model(const std::string& model_name,
                 while (!timer_wake.wait_for(timer_lock, std::chrono::milliseconds(20), [&] { return finished; })) {
                     try {
                         if (resources.deadline_expired() || (cancel_flag && cancel_flag->load()) ||
-                            (request_cancelled && request_cancelled())) abort_load = true;
+                            (request_cancelled && request_cancelled()) || intent_cancelled()) abort_load = true;
                     } catch (...) { abort_load = true; }
                 }
             });
@@ -1241,16 +1262,19 @@ void Router::load_model(const std::string& model_name,
                 worker.set_load_cancel_flag(nullptr);
             };
             try {
+                require_intent();
                 if ((cancel_flag && cancel_flag->load()) || resources.deadline_expired()) abort_load = true;
                 if (abort_load.load()) throw std::runtime_error("load cancelled before startup");
                 worker.load(canonical_model_name, model_info, effective_options, do_not_upgrade);
                 stop_timer();
+                require_intent();
                 if (abort_load.load() || resources.deadline_expired())
                     throw AdmissionError("completion_deadline_exceeded", "Model load exceeded its completion deadline", 504);
                 worker.set_load_duration_ms(std::chrono::duration_cast<std::chrono::milliseconds>(
                     std::chrono::steady_clock::now() - load_start).count());
             } catch (...) {
                 if (timer.joinable()) stop_timer();
+                require_intent();
                 if (resources.deadline_expired())
                     throw AdmissionError("completion_deadline_exceeded", "Model load exceeded its completion deadline", 504);
                 if (abort_load.load()) throw AdmissionError("request_cancelled", "Model load was cancelled", 499);
@@ -1282,6 +1306,12 @@ void Router::load_model(const std::string& model_name,
         lock.lock();
 
         if (load_success) {
+            if (intent_cancelled()) {
+                new_server->unload();
+                admission_.reconcile_stopped_generation(new_server->get_instance_id());
+                require_intent();
+            }
+            new_server->set_pinned(residency_pinned_locked(canonical_model_name, final_pinned));
             // A policy change may have dropped this helper while its backend was
             // starting (the load ran with load_mutex_ released). Now that we hold
             // the lock again, validate against the authoritative needed set so a
@@ -1379,7 +1409,7 @@ void Router::load_model(const std::string& model_name,
 
             LOG(DEBUG, "Router") << "Retrying backend load..." << std::endl;
             try {
-                auto retry_resources = admit_worker(*retry_server, ResourceAdmission::Operation::Load);
+                auto retry_resources = admit_worker(*retry_server, ResourceAdmission::Operation::Load, nullptr, std::nullopt, intent_cancelled);
                 try {
                     load_generation(*retry_server, retry_resources);
                     retry_resources.retain_residency();
@@ -1412,6 +1442,12 @@ void Router::load_model(const std::string& model_name,
                     return;
                 }
 
+                if (intent_cancelled()) {
+                    retry_server->unload();
+                    admission_.reconcile_stopped_generation(retry_server->get_instance_id());
+                    require_intent();
+                }
+                retry_server->set_pinned(residency_pinned_locked(canonical_model_name, final_pinned));
                 retry_server->set_state(ModelState::READY);
                 const auto retry_duration_ms = retry_server->get_load_duration_ms();
                 install_reclaim_notifier(retry_server.get());
@@ -3272,6 +3308,29 @@ json Router::get_pinned_helper_counts() const {
     };
 }
 
+bool Router::residency_pinned_locked(const std::string& model, bool fallback) const {
+    const auto policy = residency_policies_.find(model);
+    return policy == residency_policies_.end() ? fallback : policy->second.pinned;
+}
+
+void Router::publish_residency_policy(const std::string& model_name, uint64_t revision,
+                                      bool pinned, uint64_t generation) {
+    std::lock_guard<std::mutex> lock(load_mutex_);
+    const auto model = resolve_model_name(model_name);
+    auto it = residency_policies_.find(model);
+    if (it != residency_policies_.end() && revision < it->second.revision) return;
+    if (it == residency_policies_.end()) {
+        it = residency_policies_.emplace(model, ResidencyPolicy{revision, pinned,
+            std::make_shared<std::atomic<uint64_t>>(revision)}).first;
+    } else {
+        it->second.revision = revision;
+        it->second.pinned = pinned;
+        it->second.token->store(revision, std::memory_order_release);
+    }
+    auto* worker = find_server_by_model_name(model);
+    if (worker && (!generation || worker->get_instance_id() == generation)) worker->set_pinned(pinned);
+}
+
 uint64_t Router::get_model_generation(const std::string& model_name) const {
     std::lock_guard<std::mutex> lock(load_mutex_);
     const auto* worker = find_server_by_model_name(resolve_model_name(model_name));
@@ -3284,7 +3343,9 @@ bool Router::apply_model_policy(const std::string& model_name, uint64_t generati
     wait_for_slot_clearance(lock);
     auto* worker = find_server_by_model_name(resolve_model_name(model_name));
     if (!worker || worker->get_instance_id() != generation) return false;
-    worker->set_pinned(pinned);
+    const bool current_pinned = residency_pinned_locked(worker->get_model_name(), pinned);
+    if (unload && current_pinned) return false;
+    worker->set_pinned(current_pinned);
     if (unload) {
         if (worker->is_busy()) return false;
         evict_server(worker);
@@ -3299,7 +3360,7 @@ void Router::set_model_pinned(const std::string& model_name, bool pinned) {
     if (!server) {
         throw std::runtime_error("Model not loaded: " + model_name);
     }
-    server->set_pinned(pinned);
+    server->set_pinned(residency_pinned_locked(server->get_model_name(), pinned));
 }
 
 } // namespace lemon

@@ -58,7 +58,7 @@ void EvictionEngine::evaluation_loop() {
 
 void EvictionEngine::evaluate_servers(double current_vram_pct) {
     std::string model_to_evict;
-    std::vector<std::string> models_to_downsize;
+    std::vector<std::shared_ptr<WrappedServer>> models_to_downsize;
 
     {
         std::lock_guard<std::mutex> lock(router_->load_mutex_);
@@ -133,7 +133,7 @@ void EvictionEngine::evaluate_servers(double current_vram_pct) {
             // re-checks that it is still idle and transitions it to DOWNSIZING.
             if (idle_ms >= downsize_timeout_sec * 1000 && state == ModelState::READY) {
                 LOG(INFO) << "Model " << server->get_model_name() << " reached downsize idle timeout (" << downsize_timeout_sec << "s). Marking for downsize." << std::endl;
-                models_to_downsize.push_back(server->get_model_name());
+                models_to_downsize.push_back(server_ptr);
             }
 
             // 3. VRAM Pressure tracking
@@ -152,25 +152,27 @@ void EvictionEngine::evaluate_servers(double current_vram_pct) {
         }
     } // release lock
 
-    // Perform downsizes outside the lock so they don't block the router. Each
-    // downsize is an owned maintenance operation: try_begin_downsize() (under the
-    // router lock) atomically claims the model and marks it busy, so a concurrent
-    // evict_server() waits in wait_until_not_busy() instead of unloading and
-    // destroying the server while we still hold a raw pointer to it. The matching
-    // finish_downsize() releases that guard and records success/failure.
-    for (const auto& name : models_to_downsize) {
-        WrappedServer* s = nullptr;
+    // A deferred candidate retains its generation; selection alone grants no maintenance ownership.
+    if (downsize_selection_barrier_) downsize_selection_barrier_();
+    for (const auto& selected : models_to_downsize) {
+        const auto name = selected->get_model_name();
         {
             std::lock_guard<std::mutex> lk(router_->load_mutex_);
             if (router_->exclusive_active_) break;
-            s = router_->find_server_by_model_name(name);
-            if (!s || !s->try_begin_downsize()) {
-                continue;  // gone, busy, or no longer idle since phase 1
-            }
+            if (router_->find_server_by_model_name(name) != selected.get()) continue;
+            const auto options = selected->get_recipe_options().to_json();
+            const bool auto_evict = options.value("auto_evict", RuntimeConfig::global()->auto_evict());
+            const auto timeout = options.value("downsize_idle_timeout", int64_t(60));
+            if (!auto_evict || !selected->try_begin_downsize(std::chrono::milliseconds(timeout * 1000))) continue;
         }
-        // s is kept alive by the maintenance guard set in try_begin_downsize().
-        bool ok = s->downsize();
-        s->finish_downsize(ok);
+        bool ok = false;
+        try { ok = selected->downsize(); }
+        catch (const std::exception& error) {
+            LOG(WARNING) << "Downsize failed: " << error.what() << std::endl;
+        } catch (...) {
+            LOG(WARNING) << "Downsize failed with an unknown error" << std::endl;
+        }
+        selected->finish_downsize(ok);
         if (ok) {
             LOG(INFO) << "Model " << name << " downsized." << std::endl;
         } else {

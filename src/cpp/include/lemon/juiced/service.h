@@ -59,6 +59,7 @@ private:
   std::map<std::string, std::set<int>> active_slots_;
   std::set<std::string> active_snapshots_;
   std::filesystem::path snapshot_directory_;
+  std::string cache_run_id_;
   std::string cache_mode_locked(const std::string &model) const;
   json cache_profile(const std::string &model, WrappedServer::InferenceLease& worker);
   void cache_api(const httplib::Request &, httplib::Response &,
@@ -68,6 +69,12 @@ private:
   void prune_cache_locked();
   void forget_snapshots_locked(const std::vector<std::string>& ids);
   void cleanup_snapshots_locked();
+  json cache_disk_usage_locked() const;
+  uint64_t cache_disk_bytes_locked() const;
+  bool reserve_snapshot_write_locked(const std::string& pending, const std::string& model,
+                                     uint64_t generation, uint64_t bound);
+  void cleanup_snapshot_writes_locked();
+  void reconcile_snapshot_writes();
   json save_state_locked(json candidate);
   void persist_locked();
   void set_policy_locked(const std::string& model, const std::string& policy);

@@ -102,6 +102,7 @@ public:
         void resources_started() { resources_.started(); }
         void resources_completed() { resources_.completed(); }
         bool deadline_expired() const { return resources_.deadline_expired(); }
+        uint64_t generation() const { return server_ ? server_->get_instance_id() : 0; }
     private:
         friend class WrappedServer;
         explicit InferenceLease(WrappedServer* server, bool state_operation = false);
@@ -172,10 +173,12 @@ public:
 
     // Multi-model support: Track last access time (for LRU eviction)
     void update_access_time() {
+        std::lock_guard<std::mutex> lock(state_mutex_);
         last_access_time_ = std::chrono::steady_clock::now();
     }
 
     std::chrono::steady_clock::time_point get_last_access_time() const {
+        std::lock_guard<std::mutex> lock(state_mutex_);
         return last_access_time_;
     }
 
@@ -404,9 +407,10 @@ public:
     // evict_server() — blocks until the matching finish_downsize() runs. This is
     // what keeps the server alive while the engine performs downsize() outside the
     // router lock with only a raw pointer to it.
-    bool try_begin_downsize() {
+    bool try_begin_downsize(std::chrono::milliseconds idle_for = std::chrono::milliseconds(0)) {
         std::lock_guard<std::mutex> lock(state_mutex_);
-        if (!retirement_pending_ && state_ == ModelState::READY && active_request_count_ == 0) {
+        if (!pinned_ && !retirement_pending_ && state_ == ModelState::READY && active_request_count_ == 0 &&
+            std::chrono::steady_clock::now() - last_access_time_ >= idle_for) {
             state_ = ModelState::DOWNSIZING;
             maintenance_in_progress_ = true;
             state_cv_.notify_all();

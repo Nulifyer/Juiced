@@ -82,6 +82,7 @@ public:
     void shutdown();
     void reconcile_stopped_generation(uint64_t generation);
     bool has_uncertain_generation(uint64_t generation) const;
+    bool generation_was_stopped(uint64_t generation) const;
     void reconcile_idle_requests(uint64_t generation);
     nlohmann::json snapshot() const;
 private:

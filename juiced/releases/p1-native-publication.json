@@ -6,7 +6,10 @@
   "selected_families": [
     "native single-file state and profile publication",
     "coherent cloud request/discovery snapshots and generation retirement",
-    "direct gateway admission-error formatting"
+    "direct gateway admission-error formatting",
+    "revision-bound native load publication and deferred maintenance",
+    "coherent model-options response snapshots",
+    "snapshot cleanup and temporary-write disk accounting"
   ],
   "scope": [
     "Juiced state writes retain a private last-committed checkpoint; failed writes restore rejected policy/cache controls and revision. Policy is the sole authority for Hot residency.",
@@ -19,23 +22,31 @@
     "Supported/downloaded/direct model discovery and the console catalog project the committed execution profile consistently.",
     "Per-model committed policy revisions and exact worker generations order pin, reconciliation and queued unload effects. The Juiced state mutex is never held across those Router calls.",
     "Cache forgetting and pruning commit tombstones before file deletion. Failed metadata publication preserves files; cleanup failure remains retryable across restart.",
-    "Portable ordering fixtures cover successful profile/policy races, obsolete queued commands, replacement generations, discovery parity and multi-snapshot failure/retry/restart. CPU fixtures explicitly select CPU before Hot loading."
+    "Portable ordering fixtures cover successful profile/policy races, obsolete queued commands, replacement generations, discovery parity and multi-snapshot failure/retry/restart. CPU fixtures explicitly select CPU before Hot loading.",
+    "Router projects committed Juiced residency policy at existing/fresh/retry/restoration publication. Obsolete policy-generated preloads reject before admission and revalidate through startup without holding shared policy locks over slow loading.",
+    "Deferred downsizing retains the selected generation and rechecks pin, readiness, activity and current idle duration atomically before maintenance.",
+    "Model-options GET/POST/DELETE and dry-run responses derive recipe/profile, saved values and defaults from one native snapshot.",
+    "Undeleted cache tombstones retain disk charges. Qualified snapshot writes reserve capacity and headroom before dispatch. Unknown or uncertain writes remain charged; only confirmed completion or exact current-generation stop permits cleanup.",
+    "Actual Linux CPU acceptance verifies inference continues while failed cleanup occupies the full snapshot budget, restart cleanup reopens saving, and an incorrect declared write bound invalidates saving without failing inference."
   ],
   "verification": {
-    "status": "local Linux native/API and isolated CPU/cloud integration gates passed; exact-source cross-platform/container/recovery evidence pending",
-    "native_contracts": 22,
+    "status": "local Linux native/API and actual CPU/cache/disk/cloud integration gates passed; exact-source cross-platform/container/recovery evidence pending",
+    "native_contracts": 23,
     "persistence_checks": 90,
     "gateway_assertions": 34,
     "cloud_runtime_assertions": 12,
     "api_cases": 41,
     "ledger_repetitions": 20,
     "scope": "Synthetic CPU/native/loopback and actual neutral Stories15M serving/cache. No accelerator, real speech, model quality or essential-service protection qualification.",
-    "publication_ordering_checks": 34
+    "publication_ordering_checks": 34,
+    "runtime_lifecycle_assertions": 53,
+    "lease_assertions": 39
   },
   "remaining": [
     "Full P1 fourteen-family path coverage, ingress/background/acquisition/preparation/install bounds, all-writer maintenance, exact execution identities, Realtime context/quiescence, termination reconciliation, early streaming status, shared observations and frozen service-protection gates.",
     "Existing requests retain captured cloud snapshots. Full provider/protocol conformance and cloud routing/access qualification remain P4/P5 obligations.",
     "Complete crash-consistent model/runtime revision promotion and references remain P3. Current candidate recovery is required before production promotion.",
-    "P2-P7 retain approved gates and selected-family manifests."
+    "P2-P7 retain approved gates and selected-family manifests.",
+    "Interrupted snapshot writes from an unknown previous manager remain conservatively charged. Complete operator recovery, and hard filesystem enforcement beyond declared qualified provider envelopes, remain unqualified; no generic filesystem quota is claimed."
   ]
 }

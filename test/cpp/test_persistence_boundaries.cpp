@@ -1,5 +1,6 @@
 #include "lemon/cloud_provider_registry.h"
 #include "lemon/config_file.h"
+#include "lemon/eviction_engine.h"
 #include "lemon/jobs/job_manager.h"
 #include "lemon/juiced/service.h"
 #include "lemon/model_manager.h"
@@ -17,6 +18,7 @@
 #include <functional>
 #include <future>
 #include <thread>
+#include <regex>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -43,11 +45,101 @@ public:
         set_state(ModelState::READY);
     }
     void load(const std::string&, const ModelInfo&, const RecipeOptions&, bool) override {}
+    void age(std::chrono::seconds age) { std::lock_guard<std::mutex> lock(state_mutex_); last_access_time_ = std::chrono::steady_clock::now() - age; }
     void unload() override { set_state(ModelState::UNLOADED); }
     bool is_backend_alive() const override { return get_state() != ModelState::UNLOADED; }
     json chat_completion(const json&) override { return json::object(); }
 };
+class LoadingPolicyWorker : public PolicyWorker {
+public:
+    LoadingPolicyWorker(const std::string& name, std::function<void()> load) : PolicyWorker(name), on_load_(std::move(load)) {}
+    void load(const std::string&, const ModelInfo&, const RecipeOptions&, bool) override { if (on_load_) on_load_(); }
+private:
+    std::function<void()> on_load_;
+};
 struct StatePublicationTestHook {
+    static void stop_eviction(Server& server) { server.router_->eviction_engine_->stop(); }
+    static void factory(Server& server, std::function<void()> load) {
+        server.router_->backend_factory_override_ = [load](const ModelInfo& info) { return std::make_unique<LoadingPolicyWorker>(info.model_name, load); };
+    }
+    static void load_entry(Server& server, std::function<void()> barrier) { server.router_->load_entry_barrier_ = std::move(barrier); }
+    static httplib::Response native_load(Server& server, const std::string& name, int context = 2048) {
+        httplib::Request req; req.method = "POST"; req.path = "/v1/load";
+        req.body = json{{"model_name", name}, {"ctx_size", context}}.dump();
+        httplib::Response res; res.status = 200; server.handle_load(req, res); return res;
+    }
+    static void auto_load(Server& server, const std::string& name) { server.auto_load_model_if_needed(name, {{"ctx_size", 2048}}); }
+    static void unload(Server& server, const std::string& name) { server.router_->unload_model(name); }
+    static void options_barrier(Server& server, std::function<void()> barrier) { server.options_response_barrier_ = std::move(barrier); }
+    static httplib::Response options_response(Server& server, const std::string& name, const std::string& method, const json& body) {
+        httplib::Request req; req.method = method; req.path = "/v1/models/" + name + "/options"; req.body = body.dump();
+        const std::regex route("/v1/models/(.+)/options"); std::regex_match(req.path, req.matches, route);
+        httplib::Response res; res.status = 200;
+        if (method == "GET") server.handle_model_options_get(req, res);
+        else if (method == "POST") server.handle_model_options_post(req, res);
+        else server.handle_model_options_delete(req, res);
+        return res;
+    }
+    static void downsize_barrier(Server& server, std::function<void()> barrier) { server.router_->eviction_engine_->downsize_selection_barrier_ = std::move(barrier); }
+    static void evaluate(Server& server) { server.router_->eviction_engine_->evaluate_servers(-1.0); }
+    static ModelState worker_state(Server& server, const std::string& name) {
+        std::lock_guard<std::mutex> lock(server.router_->load_mutex_);
+        return server.router_->find_server_by_model_name(name)->get_state();
+    }
+    static void touch(Server& server, const std::string& name, bool age = false) {
+        std::lock_guard<std::mutex> lock(server.router_->load_mutex_);
+        auto* worker = server.router_->find_server_by_model_name(name);
+        if (age) dynamic_cast<PolicyWorker*>(worker)->age(std::chrono::seconds(2));
+        else worker->update_access_time();
+    }
+    static void crash(Server& server, const std::string& name) {
+        std::lock_guard<std::mutex> lock(server.router_->load_mutex_); server.router_->find_server_by_model_name(name)->set_state(ModelState::UNLOADED);
+    }
+    static json intent_load(Server& server, const std::string& name, uint64_t revision) {
+        try {
+            auto info = server.model_manager_->get_model_info(name);
+            server.router_->load_model(name, info, RecipeOptions(info.recipe, {{"ctx_size", 2048}}), true, false, true, LoadPurpose::UserInference, nullptr, revision);
+            return {{"status", 200}};
+        } catch (const AdmissionError& error) { return {{"status", error.status}, {"code", error.code}}; }
+    }
+    static json admission(Server& server) { return server.router_->admission_snapshot(); }
+    static void idle_options(Server& server, const std::string& name, int idle = 0) {
+        std::lock_guard<std::mutex> lock(server.router_->load_mutex_);
+        auto* worker = server.router_->find_server_by_model_name(name);
+        worker->set_model_metadata(name, "fixture", ModelType::LLM, DEVICE_CPU,
+            RecipeOptions("llamacpp", {{"ctx_size", 2048}, {"auto_evict", true}, {"downsize_idle_timeout", idle}, {"evict_idle_timeout", 3600}}));
+    }
+    static json disk(Server& server) { std::lock_guard<std::mutex> lock(server.juiced_->mutex_); return server.juiced_->cache_disk_usage_locked(); }
+    static void seed_disk(Server& server, uint64_t budget, uint64_t first, uint64_t second, bool expired = false) {
+        std::lock_guard<std::mutex> lock(server.juiced_->mutex_);
+        server.juiced_->state_["cache"]["disk_budget_gib"] = double(budget) / (1024 * 1024 * 1024);
+        server.juiced_->state_["snapshots"] = json::object(); server.juiced_->state_["snapshot_cleanup"] = json::object();
+        for (const auto& item : std::vector<std::pair<std::string, uint64_t>>{{"first", first}, {"second", second}}) {
+            if (!item.second) continue;
+            const auto file = server.juiced_->snapshot_directory_ / (item.first + ".bin");
+            { std::ofstream out(file); out << "fixture"; } std::filesystem::resize_file(file, item.second);
+            server.juiced_->state_["snapshots"][item.first] = {{"session", "disk-fixture"}, {"bytes", item.second}, {"last_used", expired ? 0LL : 4102444800LL}, {"retained", false}};
+        }
+        server.juiced_->persist_locked();
+    }
+    static void prune(Server& server) { std::lock_guard<std::mutex> lock(server.juiced_->mutex_); server.juiced_->prune_cache_locked(); }
+    static bool reserve_write(Server& server, const std::string& file, uint64_t bytes, uint64_t generation = 10001) {
+        std::lock_guard<std::mutex> lock(server.juiced_->mutex_); return server.juiced_->reserve_snapshot_write_locked(file, "disk-fixture", generation, bytes);
+    }
+    static void uncertain_write(Server& server, const std::string& file) {
+        std::lock_guard<std::mutex> lock(server.juiced_->mutex_);
+        server.juiced_->state_["snapshot_writes"][file]["state"] = "uncertain"; server.juiced_->persist_locked();
+    }
+    static void reconcile_writes(Server& server, uint64_t generation, bool stop) {
+        if (stop) server.router_->admission_.reconcile_stopped_generation(generation);
+        else server.router_->admission_.reconcile_idle_requests(generation);
+        server.juiced_->reconcile_snapshot_writes();
+        std::lock_guard<std::mutex> lock(server.juiced_->mutex_); server.juiced_->cleanup_snapshot_writes_locked();
+    }
+    static void complete_write(Server& server, const std::string& file) {
+        std::lock_guard<std::mutex> lock(server.juiced_->mutex_); server.juiced_->state_["snapshot_writes"][file]["state"] = "cleanup";
+        server.juiced_->persist_locked(); server.juiced_->cleanup_snapshot_writes_locked();
+    }
     static void stop(Server& server) { server.juiced_->stop(); }
     static ModelManager& models(Server& server) { return *server.model_manager_; }
     static void effect_barrier(Server& server, std::function<void()> callback) { server.juiced_->policy_effect_barrier_ = std::move(callback); }
@@ -60,6 +152,12 @@ struct StatePublicationTestHook {
         auto cmd = server.juiced_->pending_.front(); server.juiced_->pending_.pop_front(); return cmd;
     }
     static void execute(Server& server, const json& command) { server.juiced_->execute(command); }
+    static void execute_live(Server& server, const json& command) {
+        server.juiced_->stopping_ = false;
+        server.juiced_->execute(command);
+        server.juiced_->stopping_ = true;
+    }
+    static json operations(Server& server) { std::lock_guard<std::mutex> lock(server.juiced_->mutex_); return server.juiced_->operations_; }
     static uint64_t generation(Server& server, const std::string& name) { return server.router_->get_model_generation(name); }
     static void stale_pin(Server& server, const std::string& name, uint64_t revision, uint64_t generation) {
         std::lock_guard<std::mutex> effects(server.juiced_->policy_effect_mutex_);
@@ -104,6 +202,15 @@ struct StatePublicationTestHook {
     }
     static json options(Server& server, const std::string& name) { return server.model_manager_->get_saved_model_options(name); }
 
+    static void register_local_model(Server& server, const std::string& name) {
+        const auto file = std::filesystem::path(server.config_dir_) / "native-fixture.gguf";
+        if (!std::filesystem::exists(file)) {
+            char header[24] = {'G', 'G', 'U', 'F', 3};
+            std::ofstream out(file, std::ios::binary); out.write(header, sizeof(header));
+        }
+        server.model_manager_->register_user_model(name, {{"recipe", "llamacpp"}, {"source", "local_path"},
+            {"checkpoints", {{"main", file.string()}}}, {"recipe_options", {{"ctx_size", 2048}, {"llamacpp_backend", "cpu"}}}});
+    }
     static void register_model(Server& server, const std::string& name) {
         server.model_manager_->register_user_model(name, {{"recipe", "llamacpp"}, {"checkpoint", "fixture/repo:Q4_K_M"}});
     }
@@ -522,6 +629,227 @@ static void cache_forget_failures() {
     }
 }
 
+struct TestGate {
+    std::promise<void> entered, released;
+    std::shared_future<void> go = released.get_future().share();
+    std::atomic<bool> signaled{false}, opened{false};
+    void pause() { if (!signaled.exchange(true)) entered.set_value(); go.wait(); }
+    bool await() { const bool ready = entered.get_future().wait_for(std::chrono::seconds(10)) == std::future_status::ready; if (!ready) open(); return ready; }
+    void open() { if (!opened.exchange(true)) released.set_value(); }
+    ~TestGate() { open(); }
+};
+
+static void native_load_publication() {
+    using Hook = lemon::StatePublicationTestHook;
+    const auto root = lemon::test::make_scratch_dir("native-load-policy");
+    auto defaults = lemon::ConfigFile::base_defaults(); defaults["offline"] = true; defaults["broadcast"] = false; defaults["auto_evict"] = false; defaults["max_loaded_models"] = 20;
+    auto runtime = std::make_shared<lemon::RuntimeConfig>(defaults); lemon::RuntimeConfig::set_global(runtime.get());
+    {
+        lemon::Server server(runtime, root.string(), root.string()); Hook::stop(server); Hook::stop_eviction(server);
+        int index = 0;
+        for (bool automatic : {false, true}) for (bool reverse : {false, true}) for (bool retry : {false, true}) {
+            const auto name = "user.LoadPublication" + std::to_string(index++);
+            Hook::register_local_model(server, name);
+            Hook::mutate(server, {{"model", name}, {"policy", reverse ? "hot" : "on-demand"}});
+            TestGate startup; std::atomic<int> starts{0};
+            Hook::factory(server, [&] { const auto start = ++starts; if (retry && start == 1) throw std::runtime_error("controlled first startup failure"); startup.pause(); });
+            auto load = std::async(std::launch::async, [&] {
+                if (automatic) { try { Hook::auto_load(server, name); return 200; } catch (...) { return 500; } }
+                return Hook::native_load(server, name).status;
+            });
+            const auto entered = startup.await();
+            const auto policy = Hook::mutate(server, {{"model", name}, {"policy", reverse ? "on-demand" : "hot"}});
+            startup.open(); const auto status = load.get();
+            check(entered && status == 200 && policy.status == 200 && Hook::pinned(server, name) == !reverse,
+                  "native and automatic fresh/retry publication obey newer policy in both directions");
+            Hook::factory(server, {});
+            if (!automatic) {
+                TestGate entry; Hook::load_entry(server, [&] { entry.pause(); });
+                auto reuse = std::async(std::launch::async, [&] { return Hook::native_load(server, name); });
+                const auto reached = entry.await();
+                Hook::mutate(server, {{"model", name}, {"policy", reverse ? "hot" : "on-demand"}});
+                entry.open(); const auto response = reuse.get(); Hook::load_entry(server, {});
+                check(reached && response.status == 200 && Hook::pinned(server, name) == reverse,
+                      "older native reuse cannot overwrite a newer committed pin");
+                TestGate replacement; Hook::factory(server, [&] { replacement.pause(); });
+                const auto old_generation = Hook::generation(server, name);
+                auto reload = std::async(std::launch::async, [&] { return Hook::native_load(server, name, 4096); });
+                const auto replacing = replacement.await(); Hook::mutate(server, {{"model", name}, {"policy", reverse ? "on-demand" : "hot"}});
+                replacement.open(); const auto reloaded = reload.get();
+                check(replacing && reloaded.status == 200 && Hook::generation(server, name) != old_generation && Hook::pinned(server, name) == !reverse,
+                      "replacement publication applies current policy to its exact new generation");
+            }
+            Hook::unload(server, name);
+        }
+        const std::string name = "user.AutomaticIntent"; Hook::register_local_model(server, name);
+        const auto public_name = Hook::models(server).get_public_model_name(name);
+        Hook::mutate(server, {{"model", name}, {"policy", "hot"}});
+        const auto revision = Hook::state(server).at("policy_revisions").at(public_name);
+        const json old = {{"model", public_name}, {"action", "load"}, {"policy_revision", revision}};
+        std::atomic<int> starts{0}; Hook::factory(server, [&] { ++starts; });
+        Hook::mutate(server, {{"model", name}, {"policy", "on-demand"}}); Hook::execute(server, old);
+        Hook::mutate(server, {{"model", name}, {"policy", "hot"}}); Hook::execute(server, old);
+        check(starts == 0 && Hook::generation(server, name) == 0, "obsolete automatic Hot commands reject before acquisition, including away-and-back changes");
+        const auto new_revision = Hook::state(server).at("policy_revisions").at(public_name).get<uint64_t>();
+        TestGate in_progress; Hook::factory(server, [&] { in_progress.pause(); });
+        auto automatic = std::async(std::launch::async, [&] { return Hook::intent_load(server, name, new_revision); });
+        const auto begun = in_progress.await();
+        Hook::mutate(server, {{"model", name}, {"policy", "on-demand"}});
+        Hook::mutate(server, {{"model", name}, {"policy", "hot"}});
+        in_progress.open(); const auto rejected = automatic.get();
+        check(begun && rejected.at("status") == 409 && rejected.at("code") == "policy_intent_changed" && Hook::generation(server, name) == 0,
+              "automatic startup revalidates away-and-back policy changes before worker publication");
+        check(Hook::admission(server).at("resident") == 0 && Hook::admission(server).at("active") == 0,
+              "superseded automatic generation releases residency and active reservations after confirmed stop");
+        TestGate queued_start; Hook::factory(server, [&] { queued_start.pause(); });
+        const auto current = Hook::state(server).at("policy_revisions").at(public_name);
+        auto queued = std::async(std::launch::async, [&] { Hook::execute_live(server, {{"model", public_name}, {"action", "load"}, {"policy_revision", current}}); });
+        const auto running = queued_start.await();
+        Hook::mutate(server, {{"model", name}, {"policy", "on-demand"}});
+        Hook::mutate(server, {{"model", name}, {"policy", "hot"}});
+        queued_start.open(); queued.get();
+        check(running && Hook::generation(server, name) == 0 && !Hook::operations(server).contains(public_name),
+              "obsolete automatic startup clears its queued status instead of delaying newer Hot intent as a failure");
+        Hook::factory(server, [&] { ++starts; });
+        Hook::mutate(server, {{"model", name}, {"policy", "on-demand"}});
+        check(Hook::native_load(server, name).status == 200 && starts == 1 && !Hook::pinned(server, name), "explicit On-demand loading remains available");
+        Hook::unload(server, name);
+        const std::string recovery = "user.WatchdogPolicy"; Hook::register_local_model(server, recovery);
+        Hook::mutate(server, {{"model", recovery}, {"policy", "on-demand"}}); Hook::native_load(server, recovery);
+        const auto recovery_generation = Hook::generation(server, recovery); Hook::crash(server, recovery);
+        TestGate restart; Hook::factory(server, [&] { restart.pause(); });
+        auto recovering = std::async(std::launch::async, [&] { return Hook::native_load(server, recovery); });
+        const auto restarting = restart.await(); Hook::mutate(server, {{"model", recovery}, {"policy", "hot"}});
+        restart.open(); const auto recovered = recovering.get();
+        check(restarting && recovered.status == 200 && Hook::generation(server, recovery) != recovery_generation && Hook::pinned(server, recovery),
+              "unavailable-worker recovery publishes a new generation with current Hot pinning");
+    }
+    lemon::RuntimeConfig::set_global(nullptr);
+}
+
+static void deferred_maintenance() {
+    using Hook = lemon::StatePublicationTestHook;
+    const auto root = lemon::test::make_scratch_dir("deferred-downsize");
+    auto defaults = lemon::ConfigFile::base_defaults(); defaults["offline"] = true; defaults["broadcast"] = false;
+    auto runtime = std::make_shared<lemon::RuntimeConfig>(defaults); lemon::RuntimeConfig::set_global(runtime.get());
+    {
+        lemon::Server server(runtime, root.string(), root.string()); Hook::stop(server); Hook::stop_eviction(server);
+        const std::string name = "user.DownsizeOrdering"; Hook::register_model(server, name); Hook::add_worker(server, name); Hook::idle_options(server, name);
+        for (bool replace : {false, true}) {
+            Hook::mutate(server, {{"model", name}, {"policy", "on-demand"}});
+            TestGate selected; Hook::downsize_barrier(server, [&] { selected.pause(); });
+            auto evaluation = std::async(std::launch::async, [&] { Hook::evaluate(server); });
+            const auto reached = selected.await();
+            if (replace) { Hook::add_worker(server, name, true); Hook::idle_options(server, name); }
+            else Hook::mutate(server, {{"model", name}, {"policy", "hot"}});
+            selected.open(); evaluation.get(); Hook::downsize_barrier(server, {});
+            check(reached && Hook::worker_state(server, name) == lemon::ModelState::READY,
+                  "deferred downsizing rejects a newly Hot or replaced generation");
+        }
+        Hook::idle_options(server, name, 1); Hook::touch(server, name, true);
+        TestGate idle; Hook::downsize_barrier(server, [&] { idle.pause(); });
+        auto evaluation = std::async(std::launch::async, [&] { Hook::evaluate(server); });
+        const auto selected = idle.await(); Hook::touch(server, name); idle.open(); evaluation.get(); Hook::downsize_barrier(server, {});
+        check(selected && Hook::worker_state(server, name) == lemon::ModelState::READY, "maintenance revalidates recent access after deferred selection");
+        Hook::idle_options(server, name);
+        Hook::evaluate(server);
+        check(Hook::worker_state(server, name) == lemon::ModelState::DOWNSIZED, "eligible unchanged idle generation can still claim maintenance");
+    }
+    lemon::RuntimeConfig::set_global(nullptr);
+}
+
+static void options_response_versions() {
+    using Hook = lemon::StatePublicationTestHook;
+    const auto root = lemon::test::make_scratch_dir("options-response");
+    auto defaults = lemon::ConfigFile::base_defaults(); defaults["offline"] = true; defaults["broadcast"] = false;
+    auto runtime = std::make_shared<lemon::RuntimeConfig>(defaults); lemon::RuntimeConfig::set_global(runtime.get());
+    {
+        lemon::Server server(runtime, root.string(), root.string()); Hook::stop(server);
+        const std::string name = "user.OptionsResponse"; Hook::register_model(server, name); auto& models = Hook::models(server);
+        for (const auto& method : {"GET", "POST", "DELETE"}) for (bool profile : {false, true}) {
+            models.select_execution_profile(name, {{"id", "registered"}});
+            models.set_saved_model_options(name, {{"ctx_size", 2048}});
+            TestGate derived; Hook::options_barrier(server, [&] { derived.pause(); });
+            auto request = std::async(std::launch::async, [&] { return Hook::options_response(server, name, method, {{"ctx_size", 3072}}); });
+            const auto reached = derived.await();
+            if (profile) models.select_execution_profile(name, {{"id", "alternate"}, {"recipe", "vllm"}, {"options", {{"ctx_size", 8192}}}});
+            else models.set_saved_model_options(name, {{"ctx_size", 8192}});
+            derived.open(); const auto response = request.get(); Hook::options_barrier(server, {});
+            const auto body = json::parse(response.body);
+            const auto expected = std::string(method) == "DELETE" ? json::object() : json{{"ctx_size", std::string(method) == "POST" ? 3072 : 2048}};
+            check(reached && response.status == 200 && body.at("recipe") == "llamacpp" && body.at("execution_profile") == "registered" && body.at("saved") == expected &&
+                  body.at("effective").at("ctx_size") == expected.value("ctx_size", -1),
+                  "options GET/POST/DELETE responses retain one committed recipe, saved and effective version across successful concurrent updates");
+        }
+        models.select_execution_profile(name, {{"id", "registered"}}); models.set_saved_model_options(name, {{"ctx_size", 2048}});
+        TestGate preview; Hook::options_barrier(server, [&] { preview.pause(); });
+        auto request = std::async(std::launch::async, [&] { return Hook::options_response(server, name, "POST", {{"dry_run", true}, {"ctx_size", 3072}}); });
+        const auto reached = preview.await(); models.select_execution_profile(name, {{"id", "alternate"}, {"recipe", "vllm"}, {"options", {{"ctx_size", 8192}}}});
+        preview.open(); const auto response = request.get(); Hook::options_barrier(server, {}); const auto body = json::parse(response.body);
+        check(reached && response.status == 200 && body.at("recipe") == "llamacpp" && body.at("saved").at("ctx_size") == 2048 && body.at("effective").at("ctx_size") == 3072 && models.get_model_info(name).recipe == "vllm",
+              "dry-run derives preview and unchanged saved values from one committed snapshot without publishing over another profile");
+    }
+    lemon::RuntimeConfig::set_global(nullptr);
+}
+
+static void cache_disk_budget() {
+    using Hook = lemon::StatePublicationTestHook;
+    for (bool ttl : {false, true}) {
+        const auto root = lemon::test::make_scratch_dir("disk-budget");
+        auto defaults = lemon::ConfigFile::base_defaults(); defaults["offline"] = true; defaults["broadcast"] = false;
+        auto runtime = std::make_shared<lemon::RuntimeConfig>(defaults); lemon::RuntimeConfig::set_global(runtime.get());
+        {
+            lemon::Server server(runtime, root.string(), root.string()); Hook::stop(server);
+            Hook::seed_disk(server, 64, 40, 40, ttl);
+            const auto before = Hook::state(server);
+            for (bool staging : {false, true}) {
+                bool rejected = false;
+                if (staging) {
+                    fs::create_directory(root / "juiced/state.json.tmp");
+                    try { Hook::prune(server); } catch (...) { rejected = true; }
+                    fs::remove(root / "juiced/state.json.tmp");
+                } else {
+                    write(root / "juiced/state.json.tmp", json::object()); BlockReplacement denied(root / "juiced/state.json");
+                    try { Hook::prune(server); } catch (...) { rejected = true; }
+                }
+                check(rejected && Hook::state(server) == before && fs::file_size(root / "juiced/snapshots/first.bin") == 40 && fs::file_size(root / "juiced/snapshots/second.bin") == 40,
+                      "TTL and budget pruning preserve populated files/metadata on staging and replacement failure");
+                fs::remove(root / "juiced/state.json.tmp");
+            }
+            {
+                BlockReplacement denied_first(root / "juiced/snapshots/first.bin");
+#ifdef _WIN32
+                BlockReplacement denied_second(root / "juiced/snapshots/second.bin");
+#endif
+                Hook::prune(server);
+                check(Hook::disk(server).at("pending_cleanup_bytes") == 80 && Hook::disk(server).at("used_bytes") == 80 &&
+                      !Hook::reserve_write(server, "new.pending", 32), "undeleted TTL/budget tombstones retain disk credit and block another key");
+            }
+        }
+        {
+            lemon::Server server(runtime, root.string(), root.string()); Hook::stop(server);
+            Hook::cleanup(server);
+            check(Hook::disk(server).at("used_bytes") == 0 && Hook::reserve_write(server, "first.pending", 40), "confirmed cleanup restores admission after retry/restart");
+            check(Hook::disk(server).at("reserved_write_bytes") == 40 && !Hook::reserve_write(server, "second.pending", 40) && !Hook::reserve_write(server, "first.pending", 1),
+                  "outstanding writes reserve disk capacity and exclude concurrent reuse of their key");
+        }
+        {
+            lemon::Server server(runtime, root.string(), root.string()); Hook::stop(server);
+            check(Hook::disk(server).at("reserved_write_bytes") == 40 && !Hook::reserve_write(server, "second.pending", 40),
+                  "interrupted unknown-owner write remains conservatively charged after restart");
+            Hook::reconcile_writes(server, 10001, true);
+            check(Hook::disk(server).at("reserved_write_bytes") == 40, "a reused generation number in another manager run cannot release interrupted disk ownership");
+            Hook::complete_write(server, "first.pending");
+            check(Hook::disk(server).at("used_bytes") == 0 && Hook::reserve_write(server, "second.pending", 40, 10002), "explicitly confirmed complete write releases disk credit only after cleanup");
+            Hook::uncertain_write(server, "second.pending"); Hook::reconcile_writes(server, 10002, false);
+            check(Hook::disk(server).at("reserved_write_bytes") == 40, "idle inference does not establish termination of an uncertain snapshot write");
+            Hook::reconcile_writes(server, 10002, true);
+            check(Hook::disk(server).at("used_bytes") == 0, "exact-generation stop permits cleanup and release of the current manager's uncertain write");
+        }
+        lemon::RuntimeConfig::set_global(nullptr);
+    }
+}
+
 static void policy_failures() {
     for (bool pin : {false, true}) for (bool staging : {false, true}) {
         const auto root = lemon::test::make_scratch_dir("policy");
@@ -578,7 +906,9 @@ static void policy_failures() {
 }
 
 int main(int argc, char** argv) {
-    if (argc > 1 && std::string(argv[1]) == "--ordering") {
+    if (argc > 1 && std::string(argv[1]) == "--lifecycle") {
+        native_load_publication(); deferred_maintenance(); options_response_versions(); cache_disk_budget();
+    } else if (argc > 1 && std::string(argv[1]) == "--ordering") {
         successful_profile_overlap(); profile_discovery(); policy_ordering(); cache_forget_failures();
     } else {
         cloud_failures(); retained_jobs(); model_files(); profile_concurrency(); policy_failures();
