@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import signal
 import socket
+import stat
 import subprocess
 import tempfile
 import time
@@ -459,6 +460,40 @@ def acceptance(args):
                 ), headers
             finally:
                 fixture.admin = admin
+            for staging in (True, False):
+                fixture.stop()
+                state_path = fixture.root / "config/juiced/state.json"
+                before = state_path.read_bytes()
+                temporary = state_path.with_suffix(".json.tmp")
+                permissions = stat.S_IMODE(state_path.parent.stat().st_mode)
+                if staging:
+                    temporary.mkdir()
+                else:
+                    temporary.write_text("{}")
+                    os.chmod(state_path.parent, stat.S_IRUSR | stat.S_IXUSR)
+                rejected = False
+                try:
+                    fixture.start("fixture-inference-rejected", "fixture-operator-v1")
+                except AssertionError:
+                    rejected = (
+                        fixture.process is not None
+                        and fixture.process.poll() is not None
+                    )
+                finally:
+                    fixture.stop()
+                    os.chmod(state_path.parent, permissions)
+                    if temporary.is_dir():
+                        temporary.rmdir()
+                    elif temporary.exists():
+                        temporary.unlink()
+                assert (
+                    rejected and state_path.read_bytes() == before
+                ), "Failed authentication activation changed committed state"
+                fixture.start("fixture-inference-v1", "fixture-operator-v1")
+                fixture.load()
+                isolated_turn(
+                    "failed auth activation retains namespace", inference, "restored"
+                )
             fixture.start("fixture-inference-v2", "fixture-operator-v1")
             fixture.load()
             isolated_turn(
@@ -484,8 +519,24 @@ def acceptance(args):
             isolated_turn(
                 "authentication restored",
                 {"Authorization": "Bearer fixture-inference-v2"},
-                "restored",
+                "cold",
             )
+            fixture.start()
+            fixture.load()
+            isolated_turn("anonymous reinstated", {}, "cold")
+            fixture.start("fixture-inference-v1", "fixture-operator-v1")
+            fixture.load()
+            isolated_turn("original credential reinstated", inference, "cold")
+            fixture.start("fixture-inference-v2", "fixture-operator-v1")
+            fixture.load()
+            isolated_turn(
+                "replacement credential reinstated",
+                {"Authorization": "Bearer fixture-inference-v2"},
+                "cold",
+            )
+            fixture.start("fixture-inference-v1", "fixture-operator-v1")
+            fixture.load()
+            isolated_turn("original credential returns again", inference, "cold")
             proof["identity_isolation"] = {
                 "principal_namespaces_distinct": True,
                 "same_worker_principal_switch_cold": True,
@@ -493,6 +544,9 @@ def acceptance(args):
                 "bearer_api_key_equivalent": True,
                 "credential_rotation_cold": True,
                 "auth_mode_change_cold": True,
+                "failed_auth_activation_preserves_namespace": True,
+                "returning_auth_mode_cold": True,
+                "returning_credentials_cold": True,
                 "old_credential_rejected": True,
                 "retained_same_session_namespaces": len(ids_anonymous),
             }

@@ -1130,7 +1130,7 @@ httplib::Server::HandlerResponse Server::authenticate_request(const httplib::Req
 
 httplib::Server::Handler Server::contextual_handler(httplib::Server::Handler handler) {
     return bind_request_context(std::move(handler), [this](const httplib::Request& request) {
-        return make_request_context(request, api_key_, admin_api_key_);
+        return make_request_context(request, api_key_, admin_api_key_, authentication_epoch_);
     });
 }
 

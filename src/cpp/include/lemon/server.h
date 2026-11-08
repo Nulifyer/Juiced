@@ -402,6 +402,7 @@ private:
 
     std::string api_key_;
     std::string admin_api_key_;
+    std::string authentication_epoch_;
     NetworkBeacon udp_beacon_;
 
     // CPU usage tracking

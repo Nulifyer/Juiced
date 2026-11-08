@@ -162,7 +162,9 @@ intent before replacing the final file. The intent retains prior and candidate
 ownership and charges pending, final and previous files. Previous-file cleanup uses
 a durable tombstone after new metadata commits. The previous checksum is hidden during
 publication. Metadata failure retains the intent; recovery verifies content outside
-the shared state lock, then commits matching metadata. Sealed publication can recover
+the shared state lock, then commits matching metadata. Each publication retains exclusive ownership
+through verification and mutation; a duplicate reconciliation returns pending
+without blocking unrelated state access. Sealed publication can recover
 after manager restart; unsealed writes still require termination evidence. Conflicting
 retain/forget operations reject until publication resolves.
 
@@ -173,3 +175,33 @@ operator recovery of those interrupted writes remains a P1 prerequisite before
 promotion. Snapshot restore and cold inference do not require a new opportunistic
 save to succeed. None of these cache controls changes source weights or stores
 consumer conversation messages.
+
+
+Recovery qualification currently covers manager-process restart with filesystem
+contents retained, plus injected synchronous write/replacement failures. The
+flush/close/rename path does not establish ordered storage across host crash or
+power loss. That durability remains unqualified; atomic pathname replacement is
+not evidence of synchronized file and directory contents.
+
+`POST /v1/juiced/cache/recover` (also registered under the other three native
+prefixes) takes an empty object and retries cache-owner reconciliation. A sealed
+publication with missing/corrupt candidate restores checksum-verified previous
+content when available. Otherwise it commits tracked cleanup. Failed deletion
+retains file charges. Unsealed uncertain writes still require termination proof.
+
+The existing Juiced state owner retains an authentication namespace epoch across
+manager-process restarts. Unchanged restarts retain it; every
+observed credential/auth-mode transition commits a new opaque epoch before serving.
+Returning to earlier keys or anonymous mode does not reactivate earlier namespaces.
+Failure to publish the new epoch prevents manager activation. Credentials remain
+process/environment owned; only a configuration fingerprint and opaque epoch persist.
+
+Chunked import publication commits its file/checksum, destination and registration
+intent before moving the upload. Finish, cancel and late chunks share one import
+claim. ModelManager commits registration without replacing another variant and
+recognizes retries by import provenance. Restart or finish retry reconciles pending
+publication. A competing name leaves explicit conflict ownership and can finish
+under a distinct name. Published intent must finish before model removal; cancel
+cannot delete its artifact. Earlier cancellation commits before deleting the part
+file, and failed cleanup remains visible and retryable. The 1-byte-to-8-MiB chunk
+protocol, declared-size bounds and free-space accounting remain in place.

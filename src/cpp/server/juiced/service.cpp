@@ -3,6 +3,7 @@
 #include "lemon/gguf_reader.h"
 #include "lemon/model_manager.h"
 #include "lemon/router.h"
+#include "lemon/request_identity.h"
 #include "lemon/server.h"
 #include "lemon/utils/http_client.h"
 #include "lemon/utils/path_utils.h"
@@ -11,6 +12,7 @@
 #include <chrono>
 #include <fstream>
 #include <iomanip>
+#include <limits>
 #include <random>
 #include <set>
 #include <sstream>
@@ -159,6 +161,17 @@ JuicedService::JuicedService(Server &server)
   }
   for (const auto &name : recovered) state_["execution_trials"].erase(name);
   if (!recovered.empty()) persist_locked();
+  const auto fingerprint = credential_configuration_fingerprint(server_.api_key_, server_.admin_api_key_);
+  if (state_.value("authentication", json::object()).value("configuration", "") != fingerprint ||
+      state_.value("authentication", json::object()).value("epoch", "").empty()) {
+    const auto generation = state_.value("authentication", json::object()).value("generation", uint64_t(0));
+    if (generation == (std::numeric_limits<uint64_t>::max)()) throw std::runtime_error("Authentication epoch generation is exhausted");
+    auto candidate = state_;
+    candidate["authentication"] = {{"configuration", fingerprint}, {"generation", generation + 1},
+                                    {"epoch", std::to_string(generation + 1) + ":" + identifier()}};
+    state_ = save_state_locked(std::move(candidate));
+  }
+  server_.authentication_epoch_ = state_.at("authentication").at("epoch").get<std::string>();
   for (const auto& [model, policy] : state_["policies"].items())
     server_.router_->publish_residency_policy(model, policy_revision_locked(model), policy == "hot");
   worker_ = std::thread([this] { run(); });
@@ -616,6 +629,7 @@ void JuicedService::run() {
       if (!cmd.is_null())
         execute(cmd);
       refresh();
+      reconcile_imports();
       reconcile_snapshot_writes();
       {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -741,7 +755,7 @@ void JuicedService::routes(httplib::Server &http) {
                });
     for (const std::string operation :
          {"operation", "policy", "thread", "cache", "cache/forget",
-          "cache/profile", "cache/qualify", "cache/retain", "removal"})
+          "cache/profile", "cache/qualify", "cache/retain", "cache/recover", "removal"})
       http.Post(prefix + "juiced/" + operation,
                 [this, operation](const auto &q, auto &r) {
                   handle(q, r, operation);
@@ -928,7 +942,7 @@ void JuicedService::handle(const httplib::Request &req, httplib::Response &res,
       return;
     }
     if (op == "cache" || op == "cache/forget" || op == "cache/profile" ||
-        op == "cache/qualify" || op == "cache/retain") {
+        op == "cache/qualify" || op == "cache/retain" || op == "cache/recover") {
       cache_api(req, res, op);
       return;
     }
@@ -954,190 +968,232 @@ void JuicedService::handle(const httplib::Request &req, httplib::Response &res,
     reply(res, {{"error", e.what()}}, 500);
   }
 }
+void JuicedService::publish_import(const std::string& id) {
+  json job;
+  { std::lock_guard<std::mutex> lock(mutex_); job = state_["imports"].at(id); }
+  const auto intent = job.at("publication");
+  const auto source = directory_ / "imports" / (id + ".part");
+  const auto destination = std::filesystem::path(intent.at("destination").get<std::string>());
+  const auto valid = [&](const std::filesystem::path& path) {
+    std::error_code ec;
+    const auto bytes = std::filesystem::file_size(path, ec);
+    return !ec && bytes == job.at("size").get<uint64_t>() && file_digest(path) == intent.at("checksum").get<std::string>();
+  };
+  if (!valid(destination)) {
+    if (!valid(source)) throw std::runtime_error("Import publication file needs recovery; ownership retained");
+    std::filesystem::create_directories(destination.parent_path());
+    std::error_code ec;
+    if (!utils::atomic_replace_file(source, destination, ec))
+      throw std::runtime_error("Cannot publish imported artifact: " + ec.message());
+  }
+  if (import_publication_barrier_) import_publication_barrier_("renamed");
+  try {
+    server_.model_manager_->register_user_model(intent.at("name"), intent.at("definition"), "local_path", false, id);
+  } catch (const ModelRegistrationConflict& error) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    state_["imports"][id]["publication"]["conflict"] = true;
+    state_["imports"][id]["last_error"] = error.what();
+    persist_locked();
+    throw;
+  }
+  if (import_publication_barrier_) import_publication_barrier_("registered");
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (state_["imports"].at(id).at("publication") != intent || state_["imports"].at(id).at("status") != "publishing")
+    throw std::runtime_error("Import intent changed before final publication");
+  state_["imports"][id]["status"] = "complete";
+  state_["imports"][id]["model"] = intent.at("name");
+  state_["imports"][id].erase("last_error");
+  persist_locked();
+}
+void JuicedService::reconcile_imports() {
+  json jobs;
+  { std::lock_guard<std::mutex> lock(mutex_); jobs = state_["imports"]; }
+  for (const auto& [id, job] : jobs.items()) {
+    const auto status = job.value("status", "");
+    if (status == "publishing" && job.at("publication").value("conflict", false)) continue;
+    if (status != "publishing" && !(status == "cancelled" && job.value("cleanup_pending", false))) continue;
+    httplib::Request request; request.method = "POST"; request.body = json{{"id", id}}.dump();
+    httplib::Response response;
+    import_file(request, response, status == "publishing" ? "finish" : "cancel");
+  }
+}
 void JuicedService::import_file(const httplib::Request &req,
                                 httplib::Response &res, const std::string &op) {
+  MutationClaim claim{mutex_, active_imports_};
+  const auto published_response = [&](const std::string& name, const std::string& path) {
+    std::string policy;
+    { std::lock_guard<std::mutex> lock(mutex_); policy = state_["policies"].value(name, "disabled"); }
+    reply(res, {{"model", name}, {"policy", policy}, {"loaded", server_.router_->is_model_loaded(name)}, {"path", path}}, 201);
+  };
   try {
     if (op == "chunk") {
       const auto id = req.get_param_value("id");
-      if (!safe_name(id))
-        throw std::invalid_argument("Invalid upload identity");
-      const auto offset = std::stoull(req.get_param_value("offset"));
+      if (!safe_name(id)) throw std::invalid_argument("Invalid upload identity");
+      const auto raw_offset = req.get_param_value("offset");
+      if (raw_offset.empty() || raw_offset.size() > 12 ||
+          !std::all_of(raw_offset.begin(), raw_offset.end(), [](char c) { return c >= '0' && c <= '9'; }))
+        throw std::invalid_argument("Offset must be a nonnegative upload byte position");
+      const auto offset = std::stoull(raw_offset);
+      if (offset > 100ULL * 1024 * 1024 * 1024) throw std::invalid_argument("Offset exceeds the upload size limit");
       if (req.body.empty() || req.body.size() > 8 * 1024 * 1024)
         throw std::invalid_argument("Use chunks between 1 byte and 8 MiB");
       std::lock_guard<std::mutex> lock(mutex_);
-      if (!state_["imports"].contains(id))
-        throw std::invalid_argument("Unknown upload");
-      auto &job = state_["imports"][id];
-      if (job.value("status", "") != "uploading")
-        throw std::invalid_argument("Upload is not writable");
+      if (!state_["imports"].contains(id)) throw std::invalid_argument("Unknown upload");
+      auto& job = state_["imports"][id];
+      if (active_imports_.count(id)) { reply(res, {{"error", "Import publication is in progress"}}, 409); return; }
+      if (job.value("status", "") != "uploading") throw std::invalid_argument("Upload is not writable");
       auto file = directory_ / "imports" / (id + ".part");
-      const auto actual =
-          std::filesystem::exists(file) ? std::filesystem::file_size(file) : 0;
-      if (offset != actual) {
-        reply(res, {{"error", "Offset mismatch"}, {"offset", actual}}, 409);
-        return;
-      }
-      if (actual + req.body.size() > job.at("size").get<uint64_t>())
-        throw std::invalid_argument("Chunk exceeds declared file size");
+      const auto actual = std::filesystem::exists(file) ? std::filesystem::file_size(file) : 0;
+      if (offset != actual) { reply(res, {{"error", "Offset mismatch"}, {"offset", actual}}, 409); return; }
+      if (actual + req.body.size() > job.at("size").get<uint64_t>()) throw std::invalid_argument("Chunk exceeds declared file size");
       std::ofstream f(file, std::ios::binary | std::ios::app);
-      f.write(req.body.data(), req.body.size());
-      f.close();
-      if (!f)
-        throw std::runtime_error("Could not store upload chunk");
-      job["received"] = actual + req.body.size();
-      persist_locked();
-      reply(res, job);
-      return;
+      f.write(req.body.data(), req.body.size()); f.close();
+      if (!f) throw std::runtime_error("Could not store upload chunk");
+      job["received"] = actual + req.body.size(); persist_locked(); reply(res, job); return;
     }
     auto body = json::parse(req.body);
     if (op == "start") {
       const auto filename = body.at("filename").get<std::string>();
-      if (!safe_name(filename) ||
-          std::filesystem::path(filename).extension() != ".gguf")
-        throw std::invalid_argument(
-            "Upload a GGUF filename without directories");
+      if (!safe_name(filename) || std::filesystem::path(filename).extension() != ".gguf")
+        throw std::invalid_argument("Upload a GGUF filename without directories");
       const auto size = body.at("size").get<uint64_t>();
-      auto free = std::filesystem::space(directory_).available;
-      if (size < 24 || size > 100ULL * 1024 * 1024 * 1024 ||
-          free < size + 1024ULL * 1024 * 1024)
+      const auto free = std::filesystem::space(directory_).available;
+      if (size < 24 || size > 100ULL * 1024 * 1024 * 1024 || free < size + 1024ULL * 1024 * 1024)
         throw std::invalid_argument("Invalid size or insufficient free disk");
       const auto id = identifier();
-      json job = {{"id", id},      {"filename", filename},  {"size", size},
-                  {"received", 0}, {"status", "uploading"}, {"created", now()}};
+      json job = {{"id", id}, {"filename", filename}, {"size", size}, {"received", 0}, {"status", "uploading"}, {"created", now()}};
       {
         std::lock_guard<std::mutex> lock(mutex_);
         uint64_t reserved = 0;
-        for (const auto &[key, previous] : state_["imports"].items())
+        for (const auto& [key, previous] : state_["imports"].items())
           if (previous.value("status", "") == "uploading")
-            reserved += previous.value("size", uint64_t(0)) -
-                        previous.value("received", uint64_t(0));
+            reserved += previous.value("size", uint64_t(0)) - previous.value("received", uint64_t(0));
         if (reserved > free || size + 1024ULL * 1024 * 1024 > free - reserved)
-          throw std::invalid_argument(
-              "Insufficient free disk after pending uploads");
-        state_["imports"][id] = job;
-        persist_locked();
+          throw std::invalid_argument("Insufficient free disk after pending uploads");
+        state_["imports"][id] = job; persist_locked();
       }
-      reply(res, job, 201);
-      return;
+      reply(res, job, 201); return;
+    }
+    std::string id;
+    json job;
+    if (op == "finish" || op == "cancel") {
+      id = body.at("id").get<std::string>();
+      if (!safe_name(id)) throw std::invalid_argument("Invalid upload identity");
+      if (!claim.acquire(id)) { reply(res, {{"error", "Import mutation is in progress; retry"}}, 409); return; }
+      { std::lock_guard<std::mutex> lock(mutex_); job = state_["imports"].at(id); }
     }
     if (op == "cancel") {
-      const auto id = body.at("id").get<std::string>();
-      if (!safe_name(id))
-        throw std::invalid_argument("Invalid upload identity");
-      std::lock_guard<std::mutex> lock(mutex_);
-      if (!state_["imports"].contains(id))
-        throw std::invalid_argument("Unknown upload");
-      auto &j = state_["imports"][id];
-      if (j.value("status", "") == "complete")
-        throw std::invalid_argument(
-            "Completed models cannot be removed through cancel");
-      std::filesystem::remove(directory_ / "imports" / (id + ".part"));
-      j["status"] = "cancelled";
-      persist_locked();
-      reply(res, j);
-      return;
-    }
-    if (op == "finish" || op == "server") {
-      std::filesystem::path file;
-      std::string id;
-      if (op == "finish") {
-        id = body.at("id").get<std::string>();
-        if (!safe_name(id))
-          throw std::invalid_argument("Invalid upload identity");
-        std::lock_guard<std::mutex> lock(mutex_);
-        auto j = state_["imports"].at(id);
-        file = directory_ / "imports" / (id + ".part");
-        if (j.value("status", "") != "uploading" ||
-            std::filesystem::file_size(file) != j.at("size").get<uint64_t>())
-          throw std::invalid_argument("Upload is incomplete");
-      } else {
-        file = std::filesystem::canonical(body.at("path").get<std::string>());
-        auto allowed = std::filesystem::canonical("/library");
-        auto rel = file.lexically_relative(allowed);
-        if (rel.empty() || *rel.begin() == ".." ||
-            !std::filesystem::is_regular_file(file))
-          throw std::invalid_argument(
-              "Import only regular files beneath /library");
+      const auto status = job.value("status", "");
+      if (status == "complete" || status == "publishing") {
+        reply(res, {{"error", "Published import intent cannot be cancelled; finish recovery, then use model removal"}}, 409); return;
       }
       {
-        std::ifstream f(file, std::ios::binary);
-        char magic[4];
-        f.read(magic, 4);
-        if (!f || std::string(magic, 4) != "GGUF")
-          throw std::invalid_argument("The file does not have a GGUF header");
-      }
-      GgufMetadata metadata;
-      if (!read_gguf_metadata(metadata, file.string()) ||
-          metadata.architecture.empty())
-        throw std::invalid_argument("Incomplete or unsupported GGUF metadata; "
-                                    "use a valid complete model");
-      const auto recipe = body.value("recipe", "llamacpp");
-      if (recipe != "llamacpp" && recipe != "asr4all" && recipe != "parakeet" &&
-          recipe != "whispercpp")
-        throw std::invalid_argument("Unsupported GGUF backend");
-      const auto purpose = body.value("purpose", "chat");
-      if (recipe == "llamacpp" && purpose != "chat" && purpose != "embedding" &&
-          purpose != "reranking")
-        throw std::invalid_argument(
-            "Choose Chat, Embeddings or Rerank for llama.cpp imports");
-      auto name = body.value("name", file.stem().string());
-      if (!safe_name(name))
-        throw std::invalid_argument(
-            "Use the proper model name without path separators");
-      auto stored = read_json(std::filesystem::path(server_.config_dir_) /
-                                  "user_models.json",
-                              json::object());
-      if (server_.model_manager_->model_exists(name) || stored.contains(name))
-        throw std::invalid_argument(
-            "That model name is already registered. Use a distinct "
-            "publisher/quant variant name; working models are not overwritten "
-            "by import.");
-      if (op == "finish") {
-        auto dir = directory_ / "artifacts" / id;
-        std::filesystem::create_directories(dir);
-        json j;
-        {
-          std::lock_guard<std::mutex> lock(mutex_);
-          j = state_["imports"][id];
-        }
-        auto dest = dir / j.at("filename").get<std::string>();
-        std::filesystem::rename(file, dest);
-        file = dest;
-      }
-      auto labels = recipe == "llamacpp" ? json::array({purpose})
-                                         : json::array({"transcription"});
-      json model = {{"recipe", recipe},
-                    {"source", "local_path"},
-                    {"checkpoints", {{"main", file.string()}}},
-                    {"labels", labels},
-                    {"size", std::filesystem::file_size(file) / 1e9}};
-      try {
-        server_.model_manager_->register_user_model(name, model, "local_path");
-      } catch (...) {
-        if (op == "finish")
-          std::filesystem::rename(file,
-                                  directory_ / "imports" / (id + ".part"));
-        throw;
-      }
-      if (op == "finish") {
         std::lock_guard<std::mutex> lock(mutex_);
-        auto &j = state_["imports"][id];
-        j["status"] = "complete";
-        j["model"] = name;
+        state_["imports"][id]["status"] = "cancelled";
+        state_["imports"][id]["cleanup_pending"] = true;
         persist_locked();
       }
-      wake_.notify_all();
-      reply(res,
-            {{"model", name},
-             {"policy", "disabled"},
-             {"loaded", false},
-             {"path", file.string()}},
-            201);
+      std::error_code ec;
+      std::filesystem::remove(directory_ / "imports" / (id + ".part"), ec);
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        state_["imports"][id]["cleanup_pending"] = bool(ec);
+        persist_locked();
+        reply(res, state_["imports"][id], ec ? 202 : 200);
+      }
       return;
     }
-    reply(res, {{"error", "Unknown import operation"}}, 404);
-  } catch (const std::exception &e) {
-    reply(res, {{"error", e.what()}}, 400);
-  }
+    if (op != "finish" && op != "server") { reply(res, {{"error", "Unknown import operation"}}, 404); return; }
+    if (op == "finish" && (job.value("status", "") == "publishing" || job.value("status", "") == "complete")) {
+      auto intent = job.at("publication");
+      if ((body.contains("recipe") && body.at("recipe") != intent.at("definition").at("recipe")) ||
+          (body.contains("purpose") && json::array({body.at("purpose")}) != intent.at("definition").at("labels")))
+        throw std::invalid_argument("Retry must retain the committed import recipe and purpose");
+      if (job.at("status") == "publishing" && intent.value("conflict", false) && body.contains("name") && body.at("name") != intent.at("name")) {
+        const auto name = body.at("name").get<std::string>();
+        if (!safe_name(name)) throw std::invalid_argument("Use a model name without path separators");
+        intent["name"] = name;
+        intent.erase("conflict");
+        std::lock_guard<std::mutex> lock(mutex_);
+        state_["imports"][id]["publication"] = intent;
+        persist_locked();
+      }
+      if (body.contains("name") && body.at("name") != intent.at("name"))
+        throw std::invalid_argument("Retry must retain the committed import definition");
+      if (job.at("status") == "publishing") publish_import(id);
+      else {
+        const auto name = intent.at("name").get<std::string>();
+        if (!server_.model_manager_->model_exists(name) || !std::filesystem::is_regular_file(intent.at("destination").get<std::string>())) {
+          reply(res, {{"error", "The completed import was removed or its artifact is unavailable"}}, 410);
+          return;
+        }
+        const auto current = server_.model_manager_->get_model_info(name);
+        if (!current.extras.count("juiced_import") || current.extras.at("juiced_import") != id) {
+          reply(res, {{"error", "The model registration changed after this import completed"}}, 409);
+          return;
+        }
+      }
+      published_response(intent.at("name"), intent.at("destination"));
+      return;
+    }
+    std::filesystem::path file;
+    if (op == "finish") {
+      file = directory_ / "imports" / (id + ".part");
+      if (job.value("status", "") != "uploading" || std::filesystem::file_size(file) != job.at("size").get<uint64_t>())
+        throw std::invalid_argument("Upload is incomplete");
+    } else {
+      std::error_code ec;
+      file = std::filesystem::canonical(body.at("path").get<std::string>(), ec);
+      if (ec) throw std::invalid_argument("Import an existing regular file beneath /library");
+      const auto allowed = std::filesystem::canonical("/library", ec);
+      if (ec) throw std::invalid_argument("Server library imports are unavailable on this deployment");
+      const auto rel = file.lexically_relative(allowed);
+      if (rel.empty() || *rel.begin() == ".." || !std::filesystem::is_regular_file(file))
+        throw std::invalid_argument("Import only regular files beneath /library");
+    }
+    GgufMetadata metadata;
+    if (!read_gguf_metadata(metadata, file.string()) || metadata.architecture.empty())
+      throw std::invalid_argument("Incomplete or unsupported GGUF metadata; use a valid complete model");
+    const auto recipe = body.value("recipe", "llamacpp");
+    if (recipe != "llamacpp" && recipe != "asr4all" && recipe != "parakeet" && recipe != "whispercpp")
+      throw std::invalid_argument("Unsupported GGUF backend");
+    const auto purpose = body.value("purpose", "chat");
+    if (recipe == "llamacpp" && purpose != "chat" && purpose != "embedding" && purpose != "reranking")
+      throw std::invalid_argument("Choose Chat, Embeddings or Rerank for llama.cpp imports");
+    const auto name = body.value("name", op == "finish" ? std::filesystem::path(job.at("filename").get<std::string>()).stem().string() : file.stem().string());
+    if (!safe_name(name)) throw std::invalid_argument("Use the proper model name without path separators");
+    if (server_.model_manager_->model_exists(name)) throw std::invalid_argument("That model name is already registered; working models are not overwritten by import");
+    const auto destination = op == "finish" ? std::filesystem::absolute(directory_ / "artifacts" / id / job.at("filename").get<std::string>()) : file;
+    const auto labels = recipe == "llamacpp" ? json::array({purpose}) : json::array({"transcription"});
+    const json definition = {{"recipe", recipe}, {"source", "local_path"}, {"checkpoints", {{"main", destination.string()}}},
+                             {"labels", labels}, {"size", std::filesystem::file_size(file) / 1e9}};
+    if (op == "finish") {
+      if (import_publication_barrier_) import_publication_barrier_("validated");
+      const auto checksum = file_digest(file);
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        state_["imports"][id]["status"] = "publishing";
+        state_["imports"][id]["publication"] = {{"destination", destination.string()}, {"name", name}, {"definition", definition}, {"checksum", checksum}};
+        persist_locked();
+      }
+      if (import_publication_barrier_) import_publication_barrier_("sealed");
+      publish_import(id);
+    } else server_.model_manager_->register_user_model(name, definition, "local_path", false);
+    wake_.notify_all();
+    published_response(name, destination.string());
+  } catch (const ModelRegistrationConflict& error) { reply(res, {{"error", error.what()}, {"retry", "Choose a distinct model name when finishing this import"}}, 409); }
+    catch (const std::invalid_argument& error) { reply(res, {{"error", error.what()}}, 400); }
+    catch (const json::exception& error) { reply(res, {{"error", error.what()}}, 400); }
+    catch (const std::exception& error) {
+      try {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!claim.id.empty() && state_["imports"].at(claim.id).value("status", "") == "publishing" &&
+            state_["imports"].at(claim.id).value("last_error", "") != error.what()) {
+          state_["imports"][claim.id]["last_error"] = error.what();
+          persist_locked();
+        }
+      } catch (...) {}
+      reply(res, {{"error", error.what()}}, 500);
+    }
 }
 } // namespace lemon

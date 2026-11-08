@@ -26,6 +26,10 @@ std::string epoch(const std::string& role, const std::string& api,
 }
 }
 
+std::string credential_configuration_fingerprint(const std::string& api_key, const std::string& admin_key) {
+    return epoch("credential-configuration", api_key, admin_key);
+}
+
 std::string request_credential(const httplib::Request& request) {
     if (request.has_header("Authorization")) {
         const auto value = request.get_header_value("Authorization");
@@ -40,7 +44,8 @@ std::string request_credential(const httplib::Request& request) {
 
 RequestIdentity resolve_request_identity(const httplib::Request& request,
                                          const std::string& api_key,
-                                         const std::string& admin_key) {
+                                         const std::string& admin_key,
+                                         const std::string& transition_epoch) {
     const auto credential = request_credential(request);
     RequestIdentity identity{"anonymous", "anonymous", {}, false};
     if (!admin_key.empty() && credential == admin_key)
@@ -49,7 +54,7 @@ RequestIdentity resolve_request_identity(const httplib::Request& request,
         identity = {"legacy-api", "inference", {}, true};
     else if (!api_key.empty())
         identity = {"unauthenticated", "none", {}, false};
-    identity.credential_epoch = epoch(identity.principal, api_key, admin_key);
+    identity.credential_epoch = epoch(identity.principal + ":" + transition_epoch, api_key, admin_key);
     return identity;
 }
 
@@ -68,13 +73,14 @@ std::string request_session_id(const httplib::Request& request) {
 
 NativeRequestContext make_request_context(const httplib::Request& request,
                                          const std::string& api_key,
-                                         const std::string& admin_key) {
+                                         const std::string& admin_key,
+                                         const std::string& transition_epoch) {
     std::string protocol = "openai";
     if (request.path == "/mcp") protocol = "mcp";
     else if (request.path.rfind("/sdapi/", 0) == 0) protocol = "automatic1111";
     else if (request.path == "/v1/messages" || request.path == "/v1/messages/count_tokens") protocol = "anthropic";
     else if (request.path.rfind("/api/", 0) == 0 && request.path.rfind("/api/v", 0) != 0) protocol = "ollama";
-    return {resolve_request_identity(request, api_key, admin_key), protocol,
+    return {resolve_request_identity(request, api_key, admin_key, transition_epoch), protocol,
             request_session_id(request), ++request_sequence, request.is_connection_closed};
 }
 

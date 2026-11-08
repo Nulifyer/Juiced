@@ -4837,7 +4837,8 @@ static bool user_entry_is_router_collection(const json& user_models,
 
 void ModelManager::register_user_model(const std::string& model_name,
                                       const json& model_data,
-                                      const std::string& source, bool replace_existing) {
+                                      const std::string& source, bool replace_existing,
+                                      const std::string& publication_id) {
     const std::string recipe = model_data.value("recipe", std::string());
 
     // Remove "user." prefix if present
@@ -4853,6 +4854,7 @@ void ModelManager::register_user_model(const std::string& model_name,
             model_entry[prop] = model_data[prop];
         }
     }
+    if (!publication_id.empty()) model_entry["juiced_import"] = publication_id;
     // Every registration path funnels through here — direct registration, an
     // imported collection's inline components, re-registration — so this is the
     // one gate that refuses an illegal set of mode labels. Loading an
@@ -4900,8 +4902,16 @@ void ModelManager::register_user_model(const std::string& model_name,
         if (!updated_user_models.is_object()) {
             updated_user_models = json::object();
         }
-        if (!replace_existing && updated_user_models.contains(clean_name))
-            throw std::runtime_error("That model variant was registered while preparation was running; existing settings were preserved");
+        if (!replace_existing && updated_user_models.contains(clean_name)) {
+            if (!publication_id.empty() && updated_user_models.at(clean_name).value("juiced_import", "") == publication_id &&
+                updated_user_models.at(clean_name).value("checkpoints", json::object()) == model_entry.value("checkpoints", json::object()) &&
+                updated_user_models.at(clean_name).value("source", "") == "local_path") {
+                user_models_ = std::move(updated_user_models);
+                cache_valid_ = false;
+                return;
+            }
+            throw ModelRegistrationConflict("That model variant is already registered; existing settings were preserved");
+        }
         overwrote_router_collection =
             user_entry_is_router_collection(updated_user_models, clean_name);
         updated_user_models[clean_name] = model_entry;

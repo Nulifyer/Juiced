@@ -368,6 +368,10 @@ class ApiContract(unittest.TestCase):
   _,data=self.request('models?service=transcribe');self.assertIn('ZZRemovalExternal',[m['id'] for m in data['data']])
   _,data=self.request('models?service=chat');self.assertNotIn('ZZRemovalExternal',[m['id'] for m in data['data']])
   self.request('juiced/policy',{'model':'ZZRemovalExternal','policy':'disabled'})
+ def test_cache_recovery_protocol(self):
+  for prefix in ['/api/v0/','/api/v1/','/v0/','/v1/']:
+   status,data=self.request(prefix+'juiced/cache/recover',{});self.assertEqual(status,200);self.assertIn('pending_writes',data);self.assertIn('disk',data)
+   status,_=self.request(prefix+'juiced/cache/recover',{'filename':'untrusted.bin'});self.assertEqual(status,400)
  def test_cache_snapshot_validation(self):
   for prefix in ['/api/v0/','/api/v1/','/v0/','/v1/']:
    status,_=self.request(prefix+'juiced/cache/retain',{'snapshot':'missing','retained':True});self.assertEqual(status,404)
@@ -385,6 +389,8 @@ class ApiContract(unittest.TestCase):
   s,x=self.request('juiced/cache',{'model_modes':{}});self.assertEqual(s,200);self.assertEqual(x['settings']['model_modes'],{})
  def test_chunk_offset_and_invalid_gguf(self):
   s,j=self.request('juiced/import/start',{'filename':'bad.gguf','size':32});self.assertEqual(s,201)
+  for offset in ['-1','0suffix','18446744073709551616']:
+   s,_=self.request('juiced/import/chunk?id='+j['id']+'&offset='+offset,b'x',True);self.assertEqual(s,400)
   s,_=self.request('juiced/import/chunk?id='+j['id']+'&offset=1',b'x'*32,True);self.assertEqual(s,409)
   s,_=self.request('juiced/import/chunk?id='+j['id']+'&offset=0',b'x'*32,True);self.assertEqual(s,200)
   s,_=self.request('juiced/import/finish',{'id':j['id'],'name':'BadFixture'});self.assertEqual(s,400)
@@ -423,6 +429,7 @@ class ApiContract(unittest.TestCase):
   status,plan=self.request('juiced/removal?model=RemovalFixture');self.assertEqual(status,200);self.assertEqual(plan['action'],'upload');self.assertTrue(plan['allowed'])
   status,_=self.request('juiced/removal',{'model':'RemovalFixture','expected':plan,'confirmation':'RemovalFixture'});self.assertEqual(status,200)
   self.assertFalse(file.exists());self.assertTrue(self.external.exists())
+  status,_=self.request('juiced/import/finish',{'id':job['id']});self.assertEqual(status,410)
  def test_removal_shared_upload_preserves_file(self):
   model='ZZSharedUpload1';status,plan=self.request('juiced/removal?model='+model);self.assertEqual(status,200,plan);self.assertEqual(plan['action'],'unregister')
   status,_=self.request('juiced/removal',{'model':model,'expected':plan,'confirmation':model});self.assertEqual(status,200);self.assertEqual(self.shared_upload.read_bytes(),b'shared fixture')

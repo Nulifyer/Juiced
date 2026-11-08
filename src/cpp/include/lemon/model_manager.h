@@ -40,6 +40,11 @@ class UnknownModelError : public std::runtime_error {
 public:
     using std::runtime_error::runtime_error;
 };
+class ModelRegistrationConflict : public std::runtime_error {
+public:
+    using std::runtime_error::runtime_error;
+};
+
 constexpr const char* kUnknownModelErrorCode = "unknown_model";
 
 // Thrown when a definition names a deployment mode its recipe's backend cannot
@@ -255,7 +260,8 @@ public:
     void register_user_model(const std::string& model_name,
                             const json& model_data,
                             const std::string& source = "",
-                            bool replace_existing = true);
+                            bool replace_existing = true,
+                            const std::string& publication_id = "");
 
     // Remove a user registration without deleting its source files.
     void unregister_user_model(const std::string& model_name);

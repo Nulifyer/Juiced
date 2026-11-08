@@ -2,6 +2,7 @@
 """Actual CPU serving while failed snapshot cleanup retains its disk charge."""
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -135,6 +136,70 @@ def acceptance(args):
             ), cache
             assert not cache["pending_writes"], cache
             proof["qualified_write_ceiling_can_be_repaired"] = True
+            recovered = []
+            for renamed in (False, True):
+                session = "verified-previous-" + str(renamed)
+                assert fixture.ask(session)[0] == 200
+                fixture.stop()
+                state = json.loads(state_path.read_text())
+                key, previous = next(
+                    (key, entry)
+                    for key, entry in state["snapshots"].items()
+                    if entry.get("session") == session
+                )
+                destination = snapshots / (key + ".bin")
+                backup = snapshots / (key + ".previous.bin")
+                pending = snapshots / (key + ".pending")
+                candidate = {
+                    **previous,
+                    "checksum": hashlib.sha256(b"unavailable new snapshot").hexdigest(),
+                    "bytes": len(b"unavailable new snapshot"),
+                }
+                if renamed:
+                    destination.rename(backup)
+                    destination.write_bytes(b"corrupt")
+                else:
+                    pending.write_bytes(b"corrupt")
+                state["snapshots"].pop(key)
+                state["snapshot_writes"][pending.name] = {
+                    "bytes": 64 * 1024 * 1024,
+                    "model": MODEL,
+                    "generation": 0,
+                    "owner": "controlled-sealed-publication",
+                    "profile": profile["fingerprint"],
+                    "state": "publishing",
+                    "destination": destination.name,
+                    "backup": backup.name,
+                    "candidate": candidate,
+                    "previous": previous,
+                }
+                state_path.write_text(json.dumps(state))
+                fixture.start()
+                fixture.ok("/v1/juiced/cache/recover", {})
+                for _ in range(200):
+                    cache = fixture.ok("/v1/juiced/cache")
+                    if not cache["pending_writes"]:
+                        break
+                    time.sleep(0.05)
+                assert not cache["pending_writes"], cache
+                restored = next(
+                    entry for entry in cache["snapshots"] if entry["id"] == key
+                )
+                assert restored["checksum"] == previous["checksum"], restored
+                status, headers, response = fixture.ask(session)
+                assert (
+                    status == 200
+                    and headers.get("X-Juiced-Cache") == "restored"
+                    and response["timings"]["cache_n"] > 30
+                ), (status, headers, response)
+                recovered.append(
+                    {
+                        "after_rename": renamed,
+                        "verified_previous_restored": True,
+                        "useful_reuse": True,
+                    }
+                )
+            proof["terminal_recovery_of_real_cpu_snapshots"] = recovered
         finally:
             fixture.stop()
             fixture.log.close()

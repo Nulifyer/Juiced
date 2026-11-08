@@ -16,9 +16,11 @@ struct RequestIdentity {
 };
 
 std::string request_credential(const httplib::Request& request);
+std::string credential_configuration_fingerprint(const std::string& api_key, const std::string& admin_key);
 RequestIdentity resolve_request_identity(const httplib::Request& request,
                                          const std::string& api_key,
-                                         const std::string& admin_key);
+                                         const std::string& admin_key,
+                                         const std::string& transition_epoch = "");
 
 struct NativeRequestContext {
     RequestIdentity identity;
@@ -30,7 +32,8 @@ struct NativeRequestContext {
 
 NativeRequestContext make_request_context(const httplib::Request& request,
                                          const std::string& api_key,
-                                         const std::string& admin_key);
+                                         const std::string& admin_key,
+                                         const std::string& transition_epoch = "");
 std::string request_session_id(const httplib::Request& request);
 std::optional<NativeRequestContext> current_request_context();
 

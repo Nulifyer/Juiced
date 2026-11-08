@@ -54,7 +54,53 @@ std::string digest(const std::string &data) {
     s << std::hex << std::setw(2) << std::setfill('0') << int(c);
   return s.str();
 }
-std::string file_digest(const std::filesystem::path &file) {
+void output(httplib::Response &r, const json &j, int code = 200) {
+  r.status = code;
+  r.set_content(j.dump(), "application/json");
+  r.set_header("Cache-Control", "no-store");
+}
+json post_engine(const std::string &address, const std::string &path,
+                 const json &body, WrappedServer::InferenceLease& worker,
+                 const std::function<bool()>& disconnected, bool* dispatched = nullptr) {
+  if (worker.deadline_expired() || (disconnected && disconnected()))
+    throw AdmissionError("state_operation_cancelled", "State operation was cancelled before dispatch", 499);
+  const auto payload = body.dump();
+  worker.resources_started();
+  utils::HttpResponse r;
+  try {
+    if (dispatched) *dispatched = true;
+    r = utils::HttpClient::post(address + path, payload,
+                                 {{"Content-Type", "application/json"}}, 120,
+                                 utils::HttpSecurityPolicy::TrustedLoopback,
+                                 {nullptr, [&] { return worker.deadline_expired() || (disconnected && disconnected()); }});
+  } catch (const std::exception&) {
+    throw AdmissionError("state_operation_unresolved", "Engine state operation termination could not be confirmed");
+  }
+  worker.resources_completed();
+  if (r.status_code != 200)
+    throw std::runtime_error("Engine state operation failed (" +
+                             std::to_string(r.status_code) +
+                             "): " + r.body.substr(0, 400));
+  return json::parse(r.body);
+}
+json snapshot_owned_files(const std::string& pending, const json& entry) {
+  if (entry.contains("files")) return entry.at("files");
+  json files = {{pending, entry.value("bytes", uint64_t(0))}};
+  if (entry.value("state", "") == "publishing") {
+    files[entry.at("destination").get<std::string>()] = entry.at("candidate").value("bytes", uint64_t(0));
+    if (!entry.at("previous").empty())
+      files[entry.at("backup").get<std::string>()] = entry.at("previous").value("bytes", uint64_t(0));
+  }
+  return files;
+}
+std::string prefix_hash(const json &messages, size_t n) {
+  json prefix = json::array();
+  for (size_t i = 0; i < std::min(n, messages.size()); i++)
+    prefix.push_back(messages[i]);
+  return digest(prefix.dump());
+}
+} // namespace
+std::string JuicedService::file_digest(const std::filesystem::path &file) {
   mbedtls_md_context_t ctx;
   mbedtls_md_init(&ctx);
   struct Cleanup {
@@ -84,40 +130,6 @@ std::string file_digest(const std::filesystem::path &file) {
     s << std::hex << std::setw(2) << std::setfill('0') << int(c);
   return s.str();
 }
-void output(httplib::Response &r, const json &j, int code = 200) {
-  r.status = code;
-  r.set_content(j.dump(), "application/json");
-  r.set_header("Cache-Control", "no-store");
-}
-json post_engine(const std::string &address, const std::string &path,
-                 const json &body, WrappedServer::InferenceLease& worker,
-                 const std::function<bool()>& disconnected) {
-  if (worker.deadline_expired() || (disconnected && disconnected()))
-    throw AdmissionError("state_operation_cancelled", "State operation was cancelled before dispatch", 499);
-  worker.resources_started();
-  utils::HttpResponse r;
-  try {
-    r = utils::HttpClient::post(address + path, body.dump(),
-                                 {{"Content-Type", "application/json"}}, 120,
-                                 utils::HttpSecurityPolicy::TrustedLoopback,
-                                 {nullptr, [&] { return worker.deadline_expired() || (disconnected && disconnected()); }});
-  } catch (const std::exception&) {
-    throw AdmissionError("state_operation_unresolved", "Engine state operation termination could not be confirmed");
-  }
-  worker.resources_completed();
-  if (r.status_code != 200)
-    throw std::runtime_error("Engine state operation failed (" +
-                             std::to_string(r.status_code) +
-                             "): " + r.body.substr(0, 400));
-  return json::parse(r.body);
-}
-std::string prefix_hash(const json &messages, size_t n) {
-  json prefix = json::array();
-  for (size_t i = 0; i < std::min(n, messages.size()); i++)
-    prefix.push_back(messages[i]);
-  return digest(prefix.dump());
-}
-} // namespace
 JuicedService::json JuicedService::mutate_prompt_slot(
     const std::string& model, int slot, const std::function<json()>& invoke) {
   auto claim = std::make_shared<PromptStateClaim>(mutex_, active_slots_, active_snapshots_, model, "");
@@ -253,15 +265,10 @@ JuicedService::json JuicedService::cache_disk_usage_locked() const {
     saved += file_bytes(snapshot_directory_ / (id + ".bin"), entry.value("bytes", uint64_t(0)));
   for (const auto& [id, entry] : state_.at("snapshot_cleanup").items())
     cleanup += file_bytes(snapshot_directory_ / (id + ".bin"), entry.value("bytes", uint64_t(0)));
-  for (const auto& [file, entry] : state_.at("snapshot_writes").items()) {
-    writes += file_bytes(snapshot_directory_ / file, entry.value("bytes", uint64_t(0)));
-    if (entry.value("state", "") == "publishing") {
-      writes += file_bytes(snapshot_directory_ / entry.at("destination").get<std::string>(),
-                          entry.at("candidate").value("bytes", uint64_t(0)));
-      if (!entry.at("previous").empty())
-        writes += file_bytes(snapshot_directory_ / entry.at("backup").get<std::string>(),
-                            entry.at("previous").value("bytes", uint64_t(0)));
-    }
+  for (const auto& [pending, entry] : state_.at("snapshot_writes").items()) {
+    const auto files = snapshot_owned_files(pending, entry);
+    for (const auto& [file, declared] : files.items())
+      writes += file_bytes(snapshot_directory_ / file, declared.get<uint64_t>());
   }
   return {{"saved_bytes", saved}, {"pending_cleanup_bytes", cleanup}, {"reserved_write_bytes", writes},
           {"used_bytes", saved + cleanup + writes},
@@ -289,23 +296,55 @@ void JuicedService::stage_snapshot_publication_locked(const std::string& pending
   persist_locked();
 }
 void JuicedService::publish_snapshot_write(const std::string& pending, const json& intent) {
+  MutationClaim claim(mutex_, active_snapshot_publications_);
+  if (!claim.acquire(pending)) return;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!state_["snapshot_writes"].contains(pending) || state_["snapshot_writes"][pending] != intent) return;
+  }
+  if (snapshot_verification_barrier_) snapshot_verification_barrier_();
   const auto source = snapshot_directory_ / pending;
   const auto destination = snapshot_directory_ / intent.at("destination").get<std::string>();
+  const auto backup = snapshot_directory_ / intent.at("backup").get<std::string>();
   const auto& candidate = intent.at("candidate");
-  const auto matches = [&](const std::filesystem::path& path) {
+  const auto& previous = intent.at("previous");
+  const auto matches = [&](const std::filesystem::path& path, const json& metadata) {
+    if (metadata.empty() || !metadata.contains("checksum")) return false;
     std::error_code ec;
-    return std::filesystem::file_size(path, ec) == candidate.at("bytes").get<uint64_t>() && !ec &&
-           file_digest(path) == candidate.at("checksum").get<std::string>();
+    const auto bytes = std::filesystem::file_size(path, ec);
+    if (ec == std::errc::no_such_file_or_directory) return false;
+    if (ec) throw std::runtime_error("Cannot verify snapshot publication file: " + ec.message());
+    return bytes == metadata.at("bytes").get<uint64_t>() && file_digest(path) == metadata.at("checksum").get<std::string>();
   };
-  const bool source_ready = matches(source);
-  if (!source_ready && (std::filesystem::exists(source) || !matches(destination)))
-    throw std::runtime_error("Snapshot publication files require recovery; disk ownership retained");
+  const bool source_ready = matches(source, candidate);
+  const bool destination_ready = !source_ready && matches(destination, candidate);
+  const bool previous_backup = !source_ready && !destination_ready && matches(backup, previous);
+  const bool previous_destination = !source_ready && !destination_ready && !previous_backup && matches(destination, previous);
   std::lock_guard<std::mutex> lock(mutex_);
   if (!state_["snapshot_writes"].contains(pending) || state_["snapshot_writes"][pending] != intent) return;
+  const auto key = candidate.at("id").get<std::string>();
+  if (!source_ready && !destination_ready) {
+    // Sealed intent follows completed provider I/O; only this owner can still publish its files.
+    auto cleanup = intent;
+    cleanup["state"] = "cleanup";
+    cleanup["files"] = snapshot_owned_files(pending, intent);
+    if (previous_backup || previous_destination) {
+      if (previous_backup) {
+        std::error_code ec;
+        if (!utils::atomic_replace_file(backup, destination, ec))
+          throw std::runtime_error("Cannot restore previous snapshot: " + ec.message());
+      }
+      state_["snapshots"][key] = previous;
+      cleanup["files"].erase(intent.at("destination").get<std::string>());
+    }
+    state_["snapshot_writes"][pending] = std::move(cleanup);
+    persist_locked();
+    cleanup_snapshot_writes_locked();
+    return;
+  }
   if (source_ready) {
     std::error_code ec;
-    const auto backup = snapshot_directory_ / intent.at("backup").get<std::string>();
-    if (!intent.at("previous").empty() && !std::filesystem::exists(backup) && std::filesystem::exists(destination)) {
+    if (!previous.empty() && !std::filesystem::exists(backup) && std::filesystem::exists(destination)) {
       if (!utils::atomic_replace_file(destination, backup, ec))
         throw std::runtime_error("Cannot retain previous snapshot: " + ec.message());
     }
@@ -313,11 +352,17 @@ void JuicedService::publish_snapshot_write(const std::string& pending, const jso
       throw std::runtime_error("Cannot atomically replace snapshot: " + ec.message());
   }
   if (snapshot_publication_barrier_) snapshot_publication_barrier_();
-  const auto key = candidate.at("id").get<std::string>();
   state_["snapshots"][key] = candidate;
-  if (!intent.at("previous").empty()) state_["snapshot_cleanup"][key + ".previous"] = intent.at("previous");
-  state_["snapshot_writes"].erase(pending);
+  if (!previous.empty()) state_["snapshot_cleanup"][key + ".previous"] = previous;
+  if (source_ready || !std::filesystem::exists(source)) state_["snapshot_writes"].erase(pending);
+  else {
+    auto cleanup = intent;
+    cleanup["state"] = "cleanup";
+    cleanup["files"] = {{pending, intent.at("bytes")}};
+    state_["snapshot_writes"][pending] = std::move(cleanup);
+  }
   persist_locked();
+  cleanup_snapshot_writes_locked();
   cleanup_snapshots_locked();
 }
 void JuicedService::cleanup_snapshot_writes_locked() {
@@ -328,9 +373,15 @@ void JuicedService::cleanup_snapshot_writes_locked() {
     invalidate_snapshot_write_bound_locked(file, entry);
     // Persist disproven bounds before deleting the evidence, even after a failed response.
     if (state_ != committed_state_) persist_locked();
-    std::error_code ec;
-    std::filesystem::remove(snapshot_directory_ / file, ec);
-    if (!ec) { state_["snapshot_writes"].erase(file); changed = true; }
+    auto files = snapshot_owned_files(file, entry);
+    const auto owned = files;
+    for (const auto& [path, bytes] : owned.items()) {
+      std::error_code ec;
+      std::filesystem::remove(snapshot_directory_ / path, ec);
+      if (!ec) { files.erase(path); changed = true; }
+    }
+    if (files.empty()) state_["snapshot_writes"].erase(file);
+    else state_["snapshot_writes"][file]["files"] = std::move(files);
   }
   if (changed) {
     try { persist_locked(); }
@@ -476,6 +527,14 @@ void JuicedService::cache_api(const httplib::Request &req,
       if (!server_.model_manager_->model_exists(model) || canonical != model)
         throw std::invalid_argument("Use an existing canonical model name");
     }
+  }
+  if (op == "cache/recover") {
+    if (!body.is_object() || !body.empty()) throw std::invalid_argument("Recovery takes no file paths or overrides");
+    reconcile_snapshot_writes();
+    std::lock_guard<std::mutex> lock(mutex_);
+    prune_cache_locked();
+    output(res, {{"pending_writes", state_["snapshot_writes"]}, {"disk", cache_disk_usage_locked()}});
+    return;
   }
   if (op == "cache/profile" || op == "cache/qualify") {
     auto ownership = server_.router_->acquire_model_state_operation(body.at("model").get<std::string>());
@@ -726,7 +785,7 @@ void JuicedService::chat(const httplib::Request &original,
     const bool reuse_enabled = request.value("cache_prompt", true);
     const bool identified = has_thread && reuse_enabled;
     const auto principal = context ? context->identity
-        : resolve_request_identity(original, server_.api_key_, server_.admin_api_key_);
+        : resolve_request_identity(original, server_.api_key_, server_.admin_api_key_, server_.authentication_epoch_);
     const auto identity = digest(json::array({"principal-v1", principal.principal,
         principal.credential_epoch, "chat.completions"}).dump());
     json semantics = json::object();
@@ -780,8 +839,11 @@ void JuicedService::chat(const httplib::Request &original,
         active_snapshots_.insert(key);
         guard->session_claimed = true;
       }
+      const auto write = state_["snapshot_writes"].value(key + ".pending", json::object());
+      const bool publishing = !write.empty() && (write.value("state", "") != "cleanup" ||
+          snapshot_owned_files(key + ".pending", write).contains(key + ".bin"));
       if (identified && !state_["snapshot_cleanup"].contains(key) &&
-          !state_["snapshot_writes"].contains(key + ".pending") && state_["snapshots"].contains(key))
+          !publishing && state_["snapshots"].contains(key))
         saved = state_["snapshots"][key];
     }
     auto messages = request.value("messages", json::array());
@@ -842,10 +904,10 @@ void JuicedService::chat(const httplib::Request &original,
             bound + 1024ULL * 1024 * 1024)
           throw std::runtime_error(
               "Insufficient free disk for a snapshot temporary file");
-        dispatched = true;
+        if (snapshot_save_barrier_) snapshot_save_barrier_();
         auto result = post_engine(
             address, "/slots/" + std::to_string(slot) + "?action=save",
-            {{"filename", pending}}, *worker, disconnected);
+            {{"filename", pending}}, *worker, disconnected, &dispatched);
         response_valid = true;
         auto size = std::filesystem::file_size(file);
         if (size > bound)

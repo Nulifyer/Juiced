@@ -35,6 +35,26 @@ private:
   friend class Server;
   friend struct StatePublicationTestHook;
   using json = nlohmann::json;
+  struct MutationClaim {
+    std::mutex& mutex;
+    std::set<std::string>& active;
+    std::string id;
+    MutationClaim(std::mutex& owner, std::set<std::string>& claims) : mutex(owner), active(claims) {}
+    MutationClaim(const MutationClaim&) = delete;
+    MutationClaim& operator=(const MutationClaim&) = delete;
+    bool acquire(const std::string& requested) {
+      std::string candidate = requested;
+      std::lock_guard<std::mutex> lock(mutex);
+      if (!active.insert(candidate).second) return false;
+      id.swap(candidate);
+      return true;
+    }
+    ~MutationClaim() {
+      if (id.empty()) return;
+      std::lock_guard<std::mutex> lock(mutex);
+      active.erase(id);
+    }
+  };
   Server &server_;
   std::filesystem::path directory_;
   mutable std::mutex mutex_;
@@ -60,6 +80,11 @@ private:
   std::set<std::string> active_snapshots_;
   std::filesystem::path snapshot_directory_;
   std::string cache_run_id_;
+  std::set<std::string> active_imports_, active_snapshot_publications_;
+  std::function<void(const std::string&)> import_publication_barrier_;
+  void publish_import(const std::string& id);
+  void reconcile_imports();
+  static std::string file_digest(const std::filesystem::path& file);
   std::string cache_mode_locked(const std::string &model) const;
   json cache_profile(const std::string &model, WrappedServer::InferenceLease& worker);
   void cache_api(const httplib::Request &, httplib::Response &,
@@ -76,7 +101,7 @@ private:
   void stage_snapshot_publication_locked(const std::string& pending, const json& candidate);
   void publish_snapshot_write(const std::string& pending, const json& intent);
   void invalidate_snapshot_write_bound_locked(const std::string& pending, const json& entry);
-  std::function<void()> snapshot_publication_barrier_;
+  std::function<void()> snapshot_publication_barrier_, snapshot_save_barrier_, snapshot_verification_barrier_;
   void cleanup_snapshot_writes_locked();
   void reconcile_snapshot_writes();
   json save_state_locked(json candidate);
