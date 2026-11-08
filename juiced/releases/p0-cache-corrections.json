@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "batch": "P0 cache and resource-inspection corrections",
+  "plan_revision": 2,
+  "baseline": "v0.9.1 / df00eb862036d521e901648d0474b0976dd88e2b",
+  "phase_complete": false,
+  "selected_families": {
+    "operations": [
+      "Canonical target cache admission",
+      "Exception-safe prompt-state slot/session ownership",
+      "Configured-principal snapshot isolation acceptance",
+      "Shared Omni pin exclusion",
+      "Linux cgroup limit failure handling"
+    ]
+  },
+  "acceptance": {
+    "memory": "35 deterministic checks, including genuine root absence and malformed/unreadable mounted-subtree limits; Linux ASan/UBSan",
+    "api": "40 native API contracts including legacy Omni pin rejection",
+    "engine": "Real CPU Stories15M fixture: 64 name/global-override/prefix/stream combinations; useful save/restart/restore; concurrency, disconnect, malformed input and filesystem failures; inference/operator separation, supported credential headers, rotation and auth-mode changes"
+  },
+  "state": {
+    "schema_migration": false,
+    "weights_or_saved_profiles_changed": false
+  },
+  "limitations": [
+    "Routed or implicit target access is rejected while any qualified model requires persistent slots; selected-target routing admission is not qualified",
+    "Resource reservations, bounded queues and essential-service protection remain P1 work",
+    "Tests establish serving and cache behavior, not model quality or accelerator qualification"
+  ]
+}

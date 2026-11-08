@@ -94,6 +94,10 @@ jobs:
           echo '66967fbece6dbe97886593fdbb73589584927e29119ec31f08090732d1861739  stories15M-q4_0.gguf' | sha256sum -c -
           docker cp stories15M-q4_0.gguf juiced-smoke:/library/stories15M-q4_0.gguf
           python3 juiced/tests/test_engine_cache.py --url http://127.0.0.1:18080 --container juiced-smoke --model-file /library/stories15M-q4_0.gguf --snapshots /data/prompt-state --out engine-cache-proof.json
+          docker cp juiced/tests/test_engine_cache.py juiced-smoke:/tmp/test_engine_cache.py
+          docker cp juiced/tests/test_cache_admission.py juiced-smoke:/tmp/test_cache_admission.py
+          docker exec juiced-smoke python3 /tmp/test_cache_admission.py --binary /opt/lemonade/lemond --engine /opt/juiced/llama/llama-server --model-file /library/stories15M-q4_0.gguf --out /tmp/cache-admission-proof.json
+          docker cp juiced-smoke:/tmp/cache-admission-proof.json cache-admission-proof.json
           python3 juiced/tests/test_preparation.py --url http://127.0.0.1:18080 --out preparation-proof.json
           docker cp juiced/tests/test_preparation_worker.py juiced-smoke:/tmp/test_preparation_worker.py
           docker exec juiced-smoke python3 /tmp/test_preparation_worker.py --python /opt/juiced/preparation/bin/python3 --script /opt/juiced/preparation/prepare.py --source /library/stories15M-q4_0.gguf
@@ -137,6 +141,7 @@ jobs:
             state.json
             catalog.json
             engine-cache-proof.json
+            cache-admission-proof.json
             preparation-proof.json
             hf-preparation-proof.json
             execution-switch-proof.json

@@ -6856,6 +6856,7 @@ std::string Server::resolve_alias_target(const std::string& model_name) const {
 }
 
 void Server::normalize_and_resolve_request_model(nlohmann::json& request_json) const {
+    normalize_client_model_name(request_json);
     if (request_json.contains("model") && request_json["model"].is_string()) {
         std::string raw_name = request_json["model"].get<std::string>();
         std::string resolved = resolve_alias_target(raw_name);

@@ -314,6 +314,8 @@ class ApiContract(unittest.TestCase):
   self.assertFalse(omni[0]['capability_contract']['runtime_service'])
   self.assertEqual(omni[0]['capability_contract']['operations'],[])
   status,_=self.request('juiced/policy',{'model':model,'policy':'hot'});self.assertEqual(status,400)
+  self.assertEqual(self.request('/internal/pin',{'model':model,'pinned':True})[0],400)
+  _,after=self.request('juiced/catalog');self.assertNotEqual(next(m for m in after['data'] if m['id']==model)['policy'],'hot')
   for prefix in ['/api/v0/','/api/v1/','/v0/','/v1/']:
    for stream in [False,True]:
     status,_=self.request(prefix+'chat/completions',{'model':model,'stream':stream,'messages':[{'role':'user','content':'fixture'}]});self.assertEqual(status,409)

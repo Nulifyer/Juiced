@@ -184,7 +184,8 @@ bool JuicedService::hot(const std::string &requested) const {
 void JuicedService::set_hot(const std::string &requested, bool pinned) {
   auto model = server_.model_manager_->get_public_model_name(
       server_.model_manager_->resolve_model_name(requested));
-  server_.model_manager_->get_model_info(model);
+  if (is_omni_collection_recipe(server_.model_manager_->get_model_info(model).recipe))
+    throw std::invalid_argument("Agent collections cannot be enabled as runtime services");
   server_.model_manager_->update_saved_model_options(model,
                                                      {{"pinned", pinned}});
   std::lock_guard<std::mutex> lock(mutex_);

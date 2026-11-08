@@ -17,6 +17,31 @@ long long timestamp() {
              std::chrono::system_clock::now().time_since_epoch())
       .count();
 }
+struct PromptStateClaim {
+  std::mutex &mutex;
+  std::map<std::string, std::set<int>> &slots;
+  std::set<std::string> &snapshots;
+  const std::string model, key;
+  int slot = -1;
+  bool session_claimed = false;
+  std::atomic<bool> released{false};
+
+  PromptStateClaim(std::mutex &m, std::map<std::string, std::set<int>> &s,
+                   std::set<std::string> &sessions, std::string name,
+                   std::string snapshot)
+      : mutex(m), slots(s), snapshots(sessions), model(std::move(name)),
+        key(std::move(snapshot)) {}
+  void release() {
+    if (released.exchange(true)) return;
+    std::lock_guard<std::mutex> lock(mutex);
+    if (slot >= 0) {
+      auto it = slots.find(model);
+      if (it != slots.end()) it->second.erase(slot);
+    }
+    if (session_claimed) snapshots.erase(key);
+  }
+  ~PromptStateClaim() { release(); }
+};
 std::string digest(const std::string &data) {
   unsigned char out[32];
   if (mbedtls_md(mbedtls_md_info_from_type(MBEDTLS_MD_SHA256),
@@ -89,14 +114,20 @@ std::string JuicedService::cache_mode_locked(const std::string &model) const {
   return settings.value("mode", "memory");
 }
 bool JuicedService::requires_prompt_state_lease(const std::string &requested) const {
-  auto model = requested;
-  if (model.size() > 7 && model.substr(model.size() - 7) == ":latest")
-    model.resize(model.size() - 7);
-  if (server_.alias_manager_)
-    model = server_.alias_manager_->resolve_alias(model).value_or(model);
-  model = server_.model_manager_->get_public_model_name(
-      server_.model_manager_->resolve_model_name(model));
+  json request = {{"model", requested}};
+  server_.normalize_and_resolve_request_model(request);
+  const auto model = server_.model_manager_->get_public_model_name(
+      server_.model_manager_->resolve_model_name(request.at("model").get<std::string>()));
+  const bool routed = model.empty() || (server_.model_manager_->model_exists(model) &&
+      is_router_collection_recipe(server_.model_manager_->get_model_info(model).recipe));
   std::lock_guard<std::mutex> lock(mutex_);
+  if (routed) {
+    // Classifiers can run before the final target is known. Until routed slot
+    // admission is qualified, reject rather than enter any protected worker.
+    for (const auto &[fingerprint, profile] : state_["qualified_profiles"].items())
+      if (cache_mode_locked(profile.value("model", "")) == "persistent") return true;
+    return false;
+  }
   if (cache_mode_locked(model) != "persistent") return false;
   for (const auto &[fingerprint, profile] : state_["qualified_profiles"].items())
     if (profile.value("model", "") == model) return true;
@@ -379,31 +410,43 @@ void JuicedService::cache_api(const httplib::Request &req,
 }
 void JuicedService::chat(const httplib::Request &original,
                          httplib::Response &res) {
+  json request;
+  httplib::Request normalized = original;
   std::string model_name;
   try {
-    auto request = json::parse(original.body);
+    request = json::parse(original.body);
+    server_.normalize_and_resolve_request_model(request);
     model_name = server_.model_manager_->get_public_model_name(
         server_.model_manager_->resolve_model_name(request.value("model", "")));
+    request["model"] = model_name;
+    if ((request.contains("cache_prompt") && !request["cache_prompt"].is_boolean()) ||
+        (request.contains("messages") && !request["messages"].is_array())) {
+      output(res, {{"error", {{"message", "cache_prompt must be boolean and messages must be an array"},
+                              {"type", "invalid_request_error"}}}}, 400);
+      return;
+    }
+    normalized.body = request.dump();
   } catch (const std::exception &) {
     server_.handle_chat_completions(original, res);
     return;
   }
+  if ((model_name.empty() || (server_.model_manager_->model_exists(model_name) &&
+      is_router_collection_recipe(server_.model_manager_->get_model_info(model_name).recipe))) &&
+      unleased_protocol(normalized, res)) return;
   bool persistent = false;
   {
     std::lock_guard<std::mutex> lock(mutex_);
     persistent = cache_mode_locked(model_name) == "persistent";
   }
   if (!persistent) {
-    server_.handle_chat_completions(original, res);
+    server_.handle_chat_completions(normalized, res);
     return;
   }
   bool inference_started = false;
   try {
-    auto request = json::parse(original.body);
-    const auto requested_model = request.at("model").get<std::string>();
-    if (server_.model_manager_->get_model_info(requested_model).recipe !=
-        "llamacpp") {
-      server_.handle_chat_completions(original, res);
+    const auto requested_model = model_name;
+    if (server_.model_manager_->get_model_info(requested_model).recipe != "llamacpp") {
+      server_.handle_chat_completions(normalized, res);
       return;
     }
     server_.auto_load_model_if_needed(requested_model);
@@ -411,7 +454,7 @@ void JuicedService::chat(const httplib::Request &original,
     const auto model = profile.at("model").get<std::string>();
     if (!profile.value("qualified", false)) {
       res.set_header("X-Juiced-Cache", "unqualified-profile");
-      server_.handle_chat_completions(original, res);
+      server_.handle_chat_completions(normalized, res);
       return;
     }
     const auto address = profile.at("address").get<std::string>();
@@ -422,28 +465,6 @@ void JuicedService::chat(const httplib::Request &original,
     auto slots = json::parse(sr.body);
     if (!slots.is_array())
       throw std::runtime_error("Unsupported slot inventory");
-    int slot = -1;
-    {
-      std::lock_guard<std::mutex> lock(mutex_);
-      for (const auto &s : slots) {
-        int id = s.at("id").get<int>();
-        if (!active_slots_[model].count(id) &&
-            !s.value("is_processing", false)) {
-          slot = id;
-          active_slots_[model].insert(id);
-          break;
-        }
-      }
-    }
-    if (slot < 0) {
-      res.set_header("Retry-After", "1");
-      output(res,
-             {{"error",
-               {{"message", "All prompt-state slots are busy; retry shortly"},
-                {"type", "capacity_exceeded"}}}},
-             429);
-      return;
-    }
     const auto requested_session =
         original.get_header_value("X-Juiced-Session-Id");
     const auto thread = requested_session.empty()
@@ -466,11 +487,36 @@ void JuicedService::chat(const httplib::Request &original,
     const auto key = digest(
         json::array({identity, thread, profile.at("fingerprint"), semantics})
             .dump());
+    auto guard = std::make_shared<PromptStateClaim>(
+        mutex_, active_slots_, active_snapshots_, model, key);
+    auto release = [guard] { guard->release(); };
+    int slot = -1;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      for (const auto &s : slots) {
+        int id = s.at("id").get<int>();
+        if (!active_slots_[model].count(id) &&
+            !s.value("is_processing", false)) {
+          slot = id;
+          active_slots_[model].insert(id);
+          guard->slot = id;
+          break;
+        }
+      }
+    }
+    if (slot < 0) {
+      res.set_header("Retry-After", "1");
+      output(res,
+             {{"error",
+               {{"message", "All prompt-state slots are busy; retry shortly"},
+                {"type", "capacity_exceeded"}}}},
+             429);
+      return;
+    }
     json saved;
     {
       std::lock_guard<std::mutex> lock(mutex_);
       if (has_thread && active_snapshots_.count(key)) {
-        active_slots_[model].erase(slot);
         output(res,
                {{"error",
                  {{"message",
@@ -480,25 +526,13 @@ void JuicedService::chat(const httplib::Request &original,
         return;
       }
       prune_cache_locked();
-      if (has_thread)
+      if (has_thread) {
         active_snapshots_.insert(key);
+        guard->session_claimed = true;
+      }
       if (identified && state_["snapshots"].contains(key))
         saved = state_["snapshots"][key];
     }
-    auto released = std::make_shared<std::atomic<bool>>(false);
-    auto release = [this, model, slot, key, has_thread, released] {
-      if (released->exchange(true))
-        return;
-      std::lock_guard<std::mutex> lock(mutex_);
-      active_slots_[model].erase(slot);
-      if (has_thread)
-        active_snapshots_.erase(key);
-    };
-    // Shared RAII guard survives the streaming content-provider lifetime.
-    auto guard = std::shared_ptr<int>(new int(slot), [release](int *p) {
-      release();
-      delete p;
-    });
     auto messages = request.value("messages", json::array());
     std::string restore = reuse_enabled ? "cold" : "off";
     if (!saved.is_null()) {
