@@ -497,11 +497,15 @@ json WhisperServer::forward_multipart_audio_request(const std::string& file_path
     utils::HttpResponse res;
     {
         std::lock_guard<std::mutex> lock(inference_mutex_);
+        const auto cancel = current_request_cancel_context();
+        if (cancel.cancelled()) throw InvalidRequestException("Transcription cancelled before dispatch");
+        BackendRequestScope transfer(*this, BackendRequestKind::NonStreaming);
         res = utils::HttpClient::post_multipart(
             url,
             fields,
             0,
-            utils::HttpSecurityPolicy::TrustedLoopback);
+            utils::HttpSecurityPolicy::TrustedLoopback, cancel);
+        note_request_completed();
     }
 
     LOG(DEBUG, "WhisperServer") << "Response status: " << res.status_code << std::endl;
@@ -554,11 +558,15 @@ json WhisperServer::forward_multipart_audio_data(const std::string& audio_data,
     utils::HttpResponse res;
     {
         std::lock_guard<std::mutex> lock(inference_mutex_);
+        const auto cancel = current_request_cancel_context();
+        if (cancel.cancelled()) throw InvalidRequestException("Transcription cancelled before dispatch");
+        BackendRequestScope transfer(*this, BackendRequestKind::NonStreaming);
         res = utils::HttpClient::post_multipart(
             url,
             fields,
             0,
-            utils::HttpSecurityPolicy::TrustedLoopback);
+            utils::HttpSecurityPolicy::TrustedLoopback, cancel);
+        note_request_completed();
     }
 
     LOG(DEBUG, "WhisperServer") << "Response status: " << res.status_code << std::endl;

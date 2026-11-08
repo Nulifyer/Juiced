@@ -50,9 +50,9 @@ jobs:
           python -c "from pathlib import Path; Path('.version').write_text('2026.44.1-juiced\n')"
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_WEB_APP=OFF -DBUILD_TAURI_APP=OFF -DBUILD_TESTING=ON
       - name: Compile core and portable contracts
-        run: cmake --build build --config Release ${{ runner.os != 'Windows' && '--parallel 4' || '' }} --target lemond test_resource_admission test_router_admission test_request_identity test_backend_mode_contract test_memory_budget test_inference_lease test_realtime_worker_lease test_routing_helper_reconcile test_live_throughput
+        run: cmake --build build --config Release ${{ runner.os != 'Windows' && '--parallel 4' || '' }} --target lemond test_auto_tune test_request_cancellation test_provider_request_observation test_resource_admission test_router_admission test_request_identity test_backend_mode_contract test_memory_budget test_inference_lease test_realtime_worker_lease test_routing_helper_reconcile test_live_throughput
       - name: Verify native contracts
-        run: ctest --test-dir build -C Release --output-on-failure -R "^(ResourceAdmissionTest|RouterAdmissionTest|RequestIdentityTest|BackendModeContractTest|MemoryBudgetTest|InferenceLeaseTest|RealtimeWorkerLeaseTest|RoutingHelperReconcileTest|LiveThroughputTest)$"
+        run: ctest --test-dir build -C Release --output-on-failure -R "^(AutoTuneTest|RequestCancellationTest|ProviderRequestObservationTest|ResourceAdmissionTest|RouterAdmissionTest|RequestIdentityTest|BackendModeContractTest|MemoryBudgetTest|InferenceLeaseTest|RealtimeWorkerLeaseTest|RoutingHelperReconcileTest|LiveThroughputTest)$"
   image:
     needs: [ui-acceptance, native-contracts]
     runs-on: ubuntu-24.04

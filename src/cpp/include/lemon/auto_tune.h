@@ -378,6 +378,8 @@ inline int64_t resolve_auto_ctx_size(const RecipeOptions& effective_options,
         &ctx_unified_gpu, &memory_known);
 
     if (available_gb <= 0) {
+        if (memory_known)
+            throw std::runtime_error("Measured memory headroom is exhausted; free memory before automatic context sizing");
         int64_t fallback = is_embedding ? EMBEDDING_CTX_SIZE : AUTO_CTX_FALLBACK;
         LOG(DEBUG, "AutoTune") << "resolve_auto_ctx_size: " << model_info.model_name
                                << " — memory undetectable, returning " << fallback;

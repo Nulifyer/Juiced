@@ -18,12 +18,21 @@ namespace lemon {
 
 static thread_local utils::RequestCancelToken t_request_cancel_ctx{};
 static thread_local std::pair<size_t, size_t>* t_request_completed = nullptr;
+static thread_local std::function<void()>* t_request_observer = nullptr;
 
-WrappedServer::RequestCompletionScope::RequestCompletionScope() : previous_(t_request_completed) {
+WrappedServer::RequestCompletionScope::RequestCompletionScope(std::function<void()> on_started)
+    : previous_(t_request_completed), on_started_(std::move(on_started)), previous_observer_(t_request_observer) {
     t_request_completed = &operations_;
+    t_request_observer = &on_started_;
 }
-WrappedServer::RequestCompletionScope::~RequestCompletionScope() { t_request_completed = previous_; }
-void WrappedServer::note_request_started() { if (t_request_completed) ++t_request_completed->first; }
+WrappedServer::RequestCompletionScope::~RequestCompletionScope() {
+    t_request_completed = previous_;
+    t_request_observer = previous_observer_;
+}
+void WrappedServer::note_request_started() {
+    if (t_request_completed) ++t_request_completed->first;
+    if (t_request_observer && *t_request_observer) (*t_request_observer)();
+}
 void WrappedServer::note_request_completed() { if (t_request_completed) ++t_request_completed->second; }
 
 WrappedServer::RequestCancelScope::RequestCancelScope(const utils::RequestCancelToken& token)
@@ -728,8 +737,6 @@ json WrappedServer::forward_request(const std::string& endpoint,
         return ErrorResponse::from_exception(ModelNotLoadedException(server_name_));
     }
 
-    BackendRequestScope request_scope(*this, BackendRequestKind::NonStreaming);
-
     std::string url = get_base_url() + endpoint;
     std::map<std::string, std::string> headers = {{"Content-Type", "application/json"}};
 
@@ -738,6 +745,8 @@ json WrappedServer::forward_request(const std::string& endpoint,
         LOG(WARNING, "WrappedServer") << "Client request already cancelled before forwarding non-streaming request; aborting." << std::endl;
         return ErrorResponse::create("Request cancelled by client", ErrorType::INVALID_REQUEST);
     }
+
+    BackendRequestScope request_scope(*this, BackendRequestKind::NonStreaming);
 
     try {
         auto response = utils::HttpClient::post(
@@ -797,8 +806,6 @@ json WrappedServer::forward_multipart_request(const std::string& endpoint,
         return ErrorResponse::from_exception(ModelNotLoadedException(server_name_));
     }
 
-    BackendRequestScope request_scope(*this, BackendRequestKind::NonStreaming);
-
     std::string url = get_base_url() + endpoint;
 
     auto cancel_token = current_request_cancel_context();
@@ -806,6 +813,8 @@ json WrappedServer::forward_multipart_request(const std::string& endpoint,
         LOG(WARNING, "WrappedServer") << "Client request already cancelled before forwarding multipart request; aborting." << std::endl;
         return ErrorResponse::create("Request cancelled by client", ErrorType::INVALID_REQUEST);
     }
+
+    BackendRequestScope request_scope(*this, BackendRequestKind::NonStreaming);
 
     try {
         auto response = utils::HttpClient::post_multipart(

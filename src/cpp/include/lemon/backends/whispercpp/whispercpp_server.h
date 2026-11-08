@@ -14,6 +14,7 @@ namespace backends {
 
 class WhisperServer : public WrappedServer, public ITranscriptionServer {
 public:
+    bool observes_inference_completion() const override { return true; }
     static InstallParams get_install_params(const std::string& backend, const std::string& version);
 
     explicit WhisperServer(const std::string& log_level,

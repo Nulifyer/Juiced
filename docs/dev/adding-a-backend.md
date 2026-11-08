@@ -199,3 +199,22 @@ Pick the API-doc file by protocol: extend `docs/api/openai.md` for an OpenAI-com
 **Moonshine** is the minimal case: a single descriptor option, no backend selection, CPU-only, one capability interface. See `src/cpp/server/backends/moonshine/` and `include/lemon/backends/moonshine/`.
 
 > Note: collections (`collection.omni`) are orchestrator-driven, not `WrappedServer` subprocesses, and are the one explicit exception to this model.
+
+## Managed execution observations
+
+`WrappedServer::observes_inference_completion()` defaults to false. Protected
+admission rejects a backend until its request lifetime is observable. This flag
+describes wrapper behavior, not hardware qualification or protected latency.
+
+Only opt in after auditing every inference handler. A handler must reject invalid
+input before dispatch, use the shared forwarding methods, or wrap a direct exchange
+in `BackendRequestScope`. Pass `current_request_cancel_context()` to the upstream
+client and call `note_request_completed()` after the complete transport returns.
+A job-submission acknowledgement does not establish completion of an asynchronous
+job. Disconnect and timeout must leave completion unconfirmed until the worker
+finishes or stops. Streaming handlers should use the shared streaming proxy.
+
+Router binds resource activation to the actual managed dispatch observation.
+Validation errors consume no ongoing reservation. Started but unfinished exchanges
+retain their reservation. Tests must cover actual upstream cancellation as well
+as successful output, early rejection and worker-generation reconciliation.

@@ -3439,6 +3439,11 @@ if(BUILD_TESTING AND EXISTS "${_CLOUD_DISCOVERY_POLICY_TEST_SRC}")
 endif()
 
 if(BUILD_TESTING)
+    add_executable(test_provider_request_observation test/cpp/test_provider_request_observation.cpp)
+    target_link_libraries(test_provider_request_observation PRIVATE lemonade-server-core)
+    add_cpp_ci_test(ProviderRequestObservationTest CI ON COMMAND test_provider_request_observation)
+    set_tests_properties(ProviderRequestObservationTest PROPERTIES TIMEOUT 30)
+
     add_executable(test_router_admission test/cpp/test_router_admission.cpp)
     target_link_libraries(test_router_admission PRIVATE lemonade-server-core)
     add_cpp_ci_test(RouterAdmissionTest CI ON COMMAND test_router_admission)

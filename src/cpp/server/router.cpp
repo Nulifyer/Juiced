@@ -187,6 +187,8 @@ std::shared_ptr<WrappedServer> Router::shared_worker(WrappedServer* server) cons
 
 ResourceAdmission::Lease Router::admit_worker(const WrappedServer& server, ResourceAdmission::Operation operation) const {
     const auto protected_mode = admission_.snapshot().value("mode", std::string("legacy")) == "protected";
+    if (protected_mode && !server.observes_inference_completion())
+        throw AdmissionError("operation_unqualified", "This backend does not yet report managed execution lifetime");
     if (protected_mode && server.get_recipe_options().get_recipe() == "cloud")
         throw AdmissionError("operation_unqualified", "Cloud upstream lifetime is not qualified for protected admission");
     if (protected_mode && operation == ResourceAdmission::Operation::Realtime)
@@ -1517,6 +1519,7 @@ json Router::get_all_loaded_models() const {
         }
         model_info["status"] = model_state_to_string(server->get_state());
         model_info["backend_alive"] = true;
+        model_info["managed_execution_observation"] = server->observes_inference_completion();
         model_info["backend_health"] = server->get_backend_health_state();
         model_info["loaded"] = true;
         model_info["watchdog_reset"] = server->was_watchdog_triggered();
@@ -1797,7 +1800,7 @@ auto Router::execute_inference(const json& request, Func&& inference_func, Resou
 
         InhibitGuard inhibit_guard(suspend_inhibitor_.get(), config_->inhibit_suspend());
 
-        lease.resources_started();
+        if (!server->observes_inference_completion()) lease.resources_started();
         const auto upstream_cancel = WrappedServer::current_request_cancel_context();
         const auto context = current_request_context();
         WrappedServer::RequestCancelScope deadline_scope({upstream_cancel.flag,
@@ -1805,7 +1808,8 @@ auto Router::execute_inference(const json& request, Func&& inference_func, Resou
                 return upstream_cancel.cancelled() || lease.deadline_expired() ||
                     (context && context->cancelled && context->cancelled());
             }});
-        WrappedServer::RequestCompletionScope completion;
+        WrappedServer::RequestCompletionScope completion(server->observes_inference_completion()
+            ? std::function<void()>([&lease] { lease.resources_started(); }) : std::function<void()>());
         auto response = inference_func(server);
         if (completion.completed()) lease.resources_completed();
 
@@ -1955,7 +1959,7 @@ void Router::execute_streaming(const std::string& request_body, httplib::DataSin
 
         InhibitGuard inhibit_guard(suspend_inhibitor_.get(), config_->inhibit_suspend());
 
-        lease.resources_started();
+        if (!server->observes_inference_completion()) lease.resources_started();
         const auto upstream_cancel = WrappedServer::current_request_cancel_context();
         const auto context = current_request_context();
         WrappedServer::RequestCancelScope deadline_scope({upstream_cancel.flag,
@@ -1963,7 +1967,8 @@ void Router::execute_streaming(const std::string& request_body, httplib::DataSin
                 return upstream_cancel.cancelled() || lease.deadline_expired() ||
                     (context && context->cancelled && context->cancelled());
             }});
-        WrappedServer::RequestCompletionScope completion;
+        WrappedServer::RequestCompletionScope completion(server->observes_inference_completion()
+            ? std::function<void()>([&lease] { lease.resources_started(); }) : std::function<void()>());
         try {
             streaming_func(server);
             if (completion.completed()) lease.resources_completed();

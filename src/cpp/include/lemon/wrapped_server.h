@@ -489,6 +489,7 @@ public:
     // Cheap liveness gate used by the router. On POSIX this relies on
     // ProcessManager::is_running(), which intentionally checks without reaping.
     virtual bool is_backend_alive() const;
+    virtual bool observes_inference_completion() const { return false; }
 
     // True once the backend watchdog force-reset the child process.
     bool was_watchdog_triggered() const { return watchdog_triggered_.load(std::memory_order_acquire); }
@@ -526,7 +527,7 @@ public:
     static utils::RequestCancelToken current_request_cancel_context();
     class RequestCompletionScope {
     public:
-        RequestCompletionScope();
+        explicit RequestCompletionScope(std::function<void()> on_started = {});
         ~RequestCompletionScope();
         RequestCompletionScope(const RequestCompletionScope&) = delete;
         RequestCompletionScope& operator=(const RequestCompletionScope&) = delete;
@@ -535,6 +536,8 @@ public:
         friend class WrappedServer;
         std::pair<size_t, size_t> operations_{0, 0};
         std::pair<size_t, size_t>* previous_;
+        std::function<void()> on_started_;
+        std::function<void()>* previous_observer_;
     };
     static void note_request_started();
     static void note_request_completed();

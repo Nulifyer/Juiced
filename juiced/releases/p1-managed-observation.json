@@ -1,0 +1,36 @@
+{
+  "schema": 1,
+  "phase": "P1",
+  "phase_complete": false,
+  "deployed": false,
+  "selected_families": [
+    "llama.cpp",
+    "FUTO/asr4all",
+    "whisper.cpp",
+    "Kokoro",
+    "stable-diffusion.cpp"
+  ],
+  "scope": [
+    "Observed wrappers activate a resource claim at managed dispatch, allowing local validation/capability rejection without quarantine.",
+    "FUTO and both Whisper multipart paths report transport completion and use native cancellation.",
+    "Protected admission rejects wrappers without managed lifetime observations; realtime/cloud/restore restrictions remain.",
+    "Automatic context sizing rejects measured exhausted headroom while preserving unknown-memory fallback."
+  ],
+  "verification": {
+    "platform": "local Linux only",
+    "native_contracts": 11,
+    "speech_protocol_checks": 20,
+    "router_checks": 14,
+    "inference_lease_checks": 31,
+    "api_cases": 41,
+    "speech_scope": "Loopback mock HTTP protocols, cancellation and confirmed mock shutdown. No ASR model, microphone or accelerator qualification.",
+    "real_cpu": "Stories15M load/request/state, eight concurrent requests and OpenAI/Ollama/Anthropic/MCP ingress pass.",
+    "cache": "Real CPU alias/mode/prefix/stream and authenticated snapshot gates pass."
+  },
+  "remaining": [
+    "Full P1 is not delivered. Frozen GPU/essential-service interference, scratch/restore, early streaming status, complete admission-path audit, shared observations and council release review remain.",
+    "The exhausted-host branch is a compiled policy guard; no real host was driven to exhaustion.",
+    "Other providers require audited observations before protected admission.",
+    "No new image or live deployment; broader platforms await CI. P2-P7 remain planned."
+  ]
+}

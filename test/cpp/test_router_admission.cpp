@@ -18,6 +18,7 @@ public:
                            RecipeOptions("llamacpp", {{"ctx_size", 2048}}));
         set_state(ModelState::READY);
     }
+    bool observes_inference_completion() const override { return observed; }
     void load(const std::string&, const ModelInfo&, const RecipeOptions&, bool) override {}
     void unload() override { set_state(ModelState::UNLOADED); }
     bool is_backend_alive() const override { return get_state() != ModelState::UNLOADED; }
@@ -31,6 +32,7 @@ public:
         note_request_completed();
         return {{"choices", json::array({{{"message", {{"role", "assistant"}, {"content", "fixture"}}}}})}};
     }
+    bool observed = true;
     std::atomic<int> calls{0};
     std::atomic<bool> hold{false}, running{false};
 };
@@ -86,6 +88,14 @@ int main() {
         auto result = router.chat_completion(request);
         check(!result.contains("error") && worker->calls == 1 && router.admission_snapshot()["active"] == 0,
               "native request reserves and releases its declared resources");
+        worker->observed = false;
+        result = router.chat_completion(request);
+        check(result.contains("error") && result["error"]["details"]["code"] == "operation_unqualified" && worker->calls == 1,
+              "unobserved provider cannot enter protected execution even with a resource profile");
+        worker->observed = true;
+        result = router.embeddings({{"model", worker->get_model_name()}, {"input", "fixture"}});
+        check(result.contains("error") && router.admission_snapshot()["active"] == 0 && worker->calls == 1,
+              "unsupported local capability cannot quarantine a managed generation");
         router.pause_admission(true);
         result = router.chat_completion(request);
         check(result.contains("error") && worker->calls == 1 && !worker->is_busy(),

@@ -16,6 +16,7 @@ namespace backends {
 
 class SDServer : public WrappedServer, public IImageServer, public IUpscaleServer {
 public:
+    bool observes_inference_completion() const override { return true; }
     static InstallParams get_install_params(const std::string& backend, const std::string& version);
 
     explicit SDServer(const std::string& log_level,

@@ -28,7 +28,8 @@ int main() {
         if (!condition) { std::fprintf(stderr, "FAIL: %s\n", name); ++failed; }
     };
     {
-        lemon::WrappedServer::RequestCompletionScope outcome;
+        int started = 0;
+        lemon::WrappedServer::RequestCompletionScope outcome([&] { ++started; });
         check(!outcome.completed(), "no transfer is not proof of upstream completion");
         lemon::WrappedServer::note_request_started(); lemon::WrappedServer::note_request_completed();
         check(outcome.completed(), "one confirmed transfer is complete");
@@ -42,6 +43,8 @@ int main() {
         check(!outcome.completed(), "nested success cannot release unfinished outer work");
         lemon::WrappedServer::note_request_completed();
         check(outcome.completed(), "all started transfers must complete before release");
+        lemon::WrappedServer::note_request_started(); lemon::WrappedServer::note_request_completed();
+        check(started == 3 && outcome.completed(), "nested scopes restore the real dispatch observer");
     }
     {
         LeaseServer server;

@@ -13,6 +13,7 @@ namespace backends {
 
 class KokoroServer : public WrappedServer, public ITextToSpeechServer {
 public:
+    bool observes_inference_completion() const override { return true; }
     static InstallParams get_install_params(const std::string& backend, const std::string& version);
 
     explicit KokoroServer(const std::string& log_level,

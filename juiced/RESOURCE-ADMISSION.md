@@ -48,12 +48,19 @@ and operations without explicit ceilings. Request JSON and client headers cannot
 promote a request to essential priority. Authenticated queues use the accepted
 principal and credential epoch. Anonymous callers share one queue authority.
 
-A completed backend transport can release its request reservation. Disconnect,
+Resource activation follows actual managed dispatch. Local validation and
+unsupported capabilities that never dispatch release without quarantine. A completed
+backend transport can release its request reservation. Disconnect,
 exception, timeout, and an unreachable health check do not establish termination.
 Uncertain reservations remain held. A supported engine's observed idle inference
 slots can reconcile request work. They cannot certify that failed state exports or
 loads stopped. Confirmed worker unload reconciles that exact generation. Successful
 metadata calls cannot overwrite an earlier incomplete transfer in the same operation.
+
+The initial observed wrappers are llama.cpp, FUTO/asr4all, whisper.cpp, Kokoro and
+stable-diffusion.cpp. Other backends retain legacy behavior and reject protected
+admission until their wrapper reports a managed lifetime. The loopback speech tests
+verify HTTP/cancellation behavior, not transcription quality or accelerator performance.
 
 Current limits remain explicit: realtime termination, downsized restore peaks,
 provider installation and preparation scratch, early HTTP status

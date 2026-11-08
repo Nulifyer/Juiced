@@ -56,9 +56,14 @@ json Asr4allServer::audio_transcriptions(const json &request) {
     field.data = request.at(key).get<std::string>();
     fields.push_back(std::move(field));
   }
+  const auto cancel = current_request_cancel_context();
+  if (cancel.cancelled())
+    return {{"error", {{"message", "Transcription cancelled before dispatch"}, {"type", "request_cancelled"}}}};
+  BackendRequestScope transfer(*this, BackendRequestKind::NonStreaming);
   auto response = utils::HttpClient::post_multipart(
       "http://127.0.0.1:" + std::to_string(port_) + "/inference", fields, 180,
-      utils::HttpSecurityPolicy::TrustedLoopback);
+      utils::HttpSecurityPolicy::TrustedLoopback, cancel);
+  note_request_completed();
   if (response.status_code != 200)
     return json{{"error",
                  {{"message", "FUTO transcription failed: " + response.body},

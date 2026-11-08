@@ -6,6 +6,7 @@
 namespace lemon::backends {
 class Asr4allServer : public WrappedServer, public ITranscriptionServer {
 public:
+    bool observes_inference_completion() const override { return true; }
   Asr4allServer(const std::string &log_level, ModelManager *models,
                 BackendManager *backends);
   void load(const std::string &, const ModelInfo &, const RecipeOptions &,

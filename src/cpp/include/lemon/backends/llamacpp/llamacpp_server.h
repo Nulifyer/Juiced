@@ -11,6 +11,7 @@ namespace backends {
 
 class LlamaCppServer : public WrappedServer, public IEmbeddingsServer, public IRerankingServer, public ISlotsServer, public ITokenizerServer {
 public:
+    bool observes_inference_completion() const override { return true; }
     static InstallParams get_install_params(const std::string& backend, const std::string& version);
 
 
