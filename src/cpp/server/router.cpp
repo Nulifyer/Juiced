@@ -137,6 +137,22 @@ Router::~Router() {
     unload_model("");  // Unload all
 }
 
+void Router::set_model_access_policy(std::function<bool(const std::string&)> policy) {
+    std::lock_guard<std::mutex> lock(access_policy_mutex_);
+    access_policy_ = std::move(policy);
+}
+
+bool Router::model_access_allowed(const std::string& model) const {
+    std::function<bool(const std::string&)> policy;
+    {
+        std::lock_guard<std::mutex> lock(access_policy_mutex_);
+        policy = access_policy_;
+    }
+    // The policy owner can inspect model/service state. Never call it under
+    // the lifecycle lock, including for direct realtime connections.
+    return !policy || (!model.empty() && policy(model));
+}
+
 void Router::set_cloud_registry(CloudProviderRegistry* registry) {
     cloud_registry_ = registry;
 }
@@ -1560,22 +1576,17 @@ std::string Router::get_backend_address() const {
     return (server && server->is_backend_alive()) ? server->get_address() : "";
 }
 
-std::string Router::get_streaming_transcription_address(const std::string& model_name) const {
+Router::StreamingTranscriptionLease Router::acquire_streaming_transcription(const std::string& model_name) const {
+    if (!model_access_allowed(model_name)) return {};
     std::lock_guard<std::mutex> lock(load_mutex_);
-    WrappedServer* server = nullptr;
-    if (!model_name.empty()) {
-        // Route by the session's requested model, like the normal inference
-        // path — most-recent would misroute multi-model setups (e.g. a
-        // Whisper session connecting to Moonshine's stream)
-        server = find_server_by_model_name(resolve_model_name(model_name));
-    } else {
-        server = get_most_recent_server();
-    }
-    if (!server) {
-        return "";
-    }
+    auto* server = model_name.empty() ? get_most_recent_server()
+        : find_server_by_model_name(resolve_model_name(model_name));
     auto* streaming = dynamic_cast<IStreamingTranscriptionServer*>(server);
-    return streaming ? streaming->get_streaming_address() : "";
+    if (!streaming || !server->is_backend_alive()) return {};
+    auto ownership = server->try_acquire_ready_inference();
+    if (!ownership) return {};
+    return {streaming->get_streaming_address(), server->get_model_name(),
+            server->get_instance_id(), std::move(ownership)};
 }
 
 template<typename Func>
@@ -1587,6 +1598,11 @@ auto Router::execute_inference(const json& request, Func&& inference_func) -> de
 
     if (requested_model.empty()) {
         return ErrorResponse::from_exception(InvalidRequestException("No model specified in request"));
+    }
+
+    if (!model_access_allowed(requested_model)) {
+        return ErrorResponse::create("Model is disabled for runtime inference", ErrorType::INVALID_REQUEST,
+                                     {{"code", "model_disabled"}});
     }
 
     // A watchdog reset should be transparent for non-streaming calls when the
@@ -1694,6 +1710,15 @@ void Router::execute_streaming(const std::string& request_body, httplib::DataSin
         json error = ErrorResponse::from_exception(InvalidRequestException("No model specified in request"));
         std::string error_msg = "data: " + error.dump() + "\n\n";
         sink.write(error_msg.c_str(), error_msg.size());
+        sink.done();
+        return;
+    }
+
+    if (!model_access_allowed(requested_model)) {
+        auto error = ErrorResponse::create("Model is disabled for runtime inference", ErrorType::INVALID_REQUEST,
+                                           {{"code", "model_disabled"}});
+        const auto frame = "data: " + error.dump() + "\n\n";
+        sink.write(frame.data(), frame.size());
         sink.done();
         return;
     }

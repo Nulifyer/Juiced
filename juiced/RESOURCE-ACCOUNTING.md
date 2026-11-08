@@ -80,6 +80,13 @@ separate lifetime before reusing its budget.
 `stats.live.active_requests` counts native worker calls, including prefill, speech
 and images. `generating_requests` retains the narrower recent text-output count.
 The throughput estimate counts output only. Prefill must not invent token output
-or disappear from the active-work counter. Direct realtime backend sessions remain
-outside this counter's `native-worker-calls` scope until their separate lifetime
-is integrated. A zero text-output count does not establish idle hardware.
+or disappear from the active-work counter. Direct realtime backend sessions hold
+one worker reference per connected TCP session, including periods awaiting audio.
+Their address and worker generation are acquired together through Router without
+waiting for restoration under its lifecycle lock. Model changes close the old
+connection before borrowing the new worker. Failed connections and session close
+release the reference; manager shutdown closes sessions before waiting for pending
+transcriptions. These references prevent unloading a connected worker, not reserve
+memory or prove kernel termination. Cache save/restore lifetime integration and
+shared admission remain unfinished. A zero text-output count does not establish
+idle hardware.

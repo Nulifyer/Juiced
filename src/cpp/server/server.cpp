@@ -787,6 +787,9 @@ Server::Server(std::shared_ptr<RuntimeConfig> config,
     }
 
     juiced_ = std::make_unique<JuicedService>(*this);
+    router_->set_model_access_policy([this](const std::string& model) {
+        return juiced_->allows(model);
+    });
     setup_http_servers();
 
     // Initialize WebSocket server for realtime API and log streaming

@@ -11,6 +11,7 @@
 #include <nlohmann/json.hpp>
 #include "streaming_audio_buffer.h"
 #include "vad.h"
+#include "wrapped_server.h"
 #include "utils/tcp_jsonl_client.h"
 
 namespace lemon {
@@ -59,6 +60,8 @@ struct RealtimeSession {
     // Streaming backend connection (used when backend supports IStreamingTranscriptionServer).
     // streaming_mutex guards streaming_client against concurrent forward/disconnect.
     std::mutex streaming_mutex;
+    WrappedServer::InferenceLease streaming_ownership;
+    std::string streaming_model;
     std::unique_ptr<utils::TcpJsonlClient> streaming_client;
     std::atomic<bool> use_streaming_backend{false};
 

@@ -21,6 +21,15 @@ RealtimeSessionManager::RealtimeSessionManager(Router* router)
 }
 
 RealtimeSessionManager::~RealtimeSessionManager() {
+    std::vector<std::shared_ptr<RealtimeSession>> sessions;
+    {
+        std::lock_guard<std::mutex> lock(sessions_mutex_);
+        for (const auto& item : sessions_) sessions.push_back(item.second);
+    }
+    for (const auto& session : sessions) {
+        session->session_active.store(false);
+        disconnect_streaming_backend(session);
+    }
     // Wait for pending transcriptions to complete
     {
         std::lock_guard<std::mutex> lock(transcriptions_mutex_);
@@ -152,6 +161,7 @@ void RealtimeSessionManager::update_session(const std::string& session_id, const
     }
 
     if (config.contains("model")) {
+        std::lock_guard<std::mutex> lock(session->streaming_mutex);
         session->model = config["model"].get<std::string>();
     }
 
@@ -556,24 +566,19 @@ void RealtimeSessionManager::connect_streaming_backend(std::shared_ptr<RealtimeS
         return;
     }
 
-    std::string address = router_->get_streaming_transcription_address(session->model);
-    if (address.empty()) {
-        // Backend does not support streaming transcription
-        disconnect_streaming_backend(session);
+    std::unique_lock<std::mutex> connection_lock(session->streaming_mutex);
+    if (session->use_streaming_backend.load() && session->streaming_client &&
+        session->streaming_client->is_connected() && session->streaming_model == session->model)
         return;
+    session->use_streaming_backend.store(false);
+    if (session->streaming_client) {
+        session->streaming_client->close();
+        session->streaming_client.reset();
     }
-
-    {
-        // If already connected to the same address, nothing to do
-        std::lock_guard<std::mutex> lock(session->streaming_mutex);
-        if (session->use_streaming_backend.load() && session->streaming_client &&
-            session->streaming_client->is_connected()) {
-            return;
-        }
-    }
-
-    // Disconnect any existing streaming connection
-    disconnect_streaming_backend(session);
+    session->streaming_ownership.release();
+    auto backend = router_->acquire_streaming_transcription(session->model);
+    if (!backend) return;
+    const auto address = backend.address;
 
     // Capture weak_ptr: the session owns the client, and the client's read
     // thread owns this callback — a shared_ptr capture would be a cycle.
@@ -611,8 +616,9 @@ void RealtimeSessionManager::connect_streaming_backend(std::shared_ptr<RealtimeS
         ok = client->connect(address, callback);
     }
 
-    if (ok) {
-        std::lock_guard<std::mutex> lock(session->streaming_mutex);
+    if (ok && session->session_active.load()) {
+        session->streaming_model = session->model;
+        session->streaming_ownership = std::move(backend.ownership);
         session->streaming_client = std::move(client);
         session->use_streaming_backend.store(true);
         LOG(INFO, "RealtimeSession") << "Connected to streaming backend at " << address << std::endl;
@@ -631,6 +637,8 @@ void RealtimeSessionManager::disconnect_streaming_backend(std::shared_ptr<Realti
         session->streaming_client->close();
         session->streaming_client.reset();
     }
+    session->streaming_ownership.release();
+    session->streaming_model.clear();
 }
 
 void RealtimeSessionManager::forward_streaming_audio(std::shared_ptr<RealtimeSession> session,

@@ -105,6 +105,16 @@ public:
         return acquire_for_inference() ? InferenceLease(this) : InferenceLease();
     }
 
+    InferenceLease try_acquire_ready_inference() {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        if (maintenance_in_progress_ || (state_ != ModelState::READY &&
+            state_ != ModelState::IN_USE && state_ != ModelState::EVICTING)) return {};
+        ++active_request_count_;
+        state_ = ModelState::IN_USE;
+        state_cv_.notify_all();
+        return InferenceLease(this);
+    }
+
     WrappedServer(const std::string& server_name, const std::string& log_level,
                   ModelManager* model_manager = nullptr, BackendManager* backend_manager = nullptr)
         : server_name_(server_name), port_(0), log_level_(log_level),

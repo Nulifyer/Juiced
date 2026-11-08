@@ -140,6 +140,7 @@ public:
     // CloudServer instances with a credential source. Pointer (not
     // ownership) — Server owns the registry.
     void set_cloud_registry(CloudProviderRegistry* registry);
+    void set_model_access_policy(std::function<bool(const std::string&)> policy);
 
     // allow_reload_on_option_change: intended for explicit /load callers only.
     // Auto-load callers (inference-triggered) should leave this false so they
@@ -216,10 +217,14 @@ public:
 
     std::string get_backend_address() const;
 
-    // Get the streaming transcription address for the given model (falls back
-    // to the most recently used server when model_name is empty).
-    // Returns empty string if the backend does not support streaming transcription.
-    std::string get_streaming_transcription_address(const std::string& model_name) const;
+    struct StreamingTranscriptionLease {
+        std::string address;
+        std::string model;
+        uint64_t instance_id = 0;
+        WrappedServer::InferenceLease ownership;
+        explicit operator bool() const { return bool(ownership) && !address.empty(); }
+    };
+    StreamingTranscriptionLease acquire_streaming_transcription(const std::string& model_name) const;
 
     json chat_completion(const json& request, std::atomic<bool>* cancel = nullptr);
     json completion(const json& request);
@@ -307,6 +312,10 @@ private:
         route_last_target_;
 
     // Concurrency control for load operations
+    mutable std::mutex access_policy_mutex_;
+    std::function<bool(const std::string&)> access_policy_;
+    bool model_access_allowed(const std::string& model) const;
+
     mutable std::mutex load_mutex_;              // Protects loading state and loaded_servers_
     bool is_loading_ = false;                    // True when a load operation is in progress
     std::condition_variable load_cv_;            // Signals when load completes
