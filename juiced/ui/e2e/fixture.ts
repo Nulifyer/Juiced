@@ -6,6 +6,7 @@ export const test = base.extend<{ runtime: any }>({
     const errors: string[] = [];
     page.on("pageerror", error => errors.push(error.message));
     const state = {
+      stats: { tokens_per_second: 35, time_to_first_token: .25, input_tokens: 12, output_tokens: 32, cache_tokens: 2, request_count_total: 2, live: { active_requests: 0, generating_requests: 0, estimated_tokens_per_second: 0 } },
       preparedArtifacts: [{id: 'a'.repeat(64), bytes: 4096, quant: 'Q5_K_M', models: [modelId], removable: false}, {id: 'b'.repeat(64), bytes: 2048, quant: 'Q4_K_M', models: [], removable: true}],
       existingPrepared: false, executionSelected: 'registered', preparationJobs: {} as Record<string, any>,
       saved: { ctx_size: 8192, llamacpp_args: '--parallel 2', llamacpp_backend: 'cpu' } as Record<string, any>,
@@ -70,7 +71,7 @@ export const test = base.extend<{ runtime: any }>({
       if (path === 'juiced/devices') return reply({ devices: [{ id: 'Vulkan0', name: 'AMD Radeon 890M Graphics' }] });
       if (path === 'system-info') return reply({ devices: { cpu: { name: 'Test CPU', cores: 8, threads: 16, available: true }, gpu: [{ name: 'Test GPU', available: true }] }, recipes: { llamacpp: { display_name: 'llama.cpp', modality: 'llm', backends: { cpu: { state: 'update_available', version: 'b123', message: 'Update is available' }, vulkan: { state: state.gpuInstalled ? 'installed' : 'installable' }, rocm: { state: 'unsupported' } } }, whispercpp: { display_name: 'Whisper.cpp', modality: 'stt', backends: { cpu: { state: 'installed', version: 'v1.8.0' } } } } });
       if (path === 'system-stats') return reply({ cpu_percent: 25, memory_gb: 34, npu_percent: 0, primary_gpu_id: 'gpu0', gpus: [{ id: 'gpu0', name: 'Test GPU', gpu_percent: 40, memory_used_gb: 24, memory_type: 'shared' }] });
-      if (path === 'stats') return reply({ tokens_per_second: 35, time_to_first_token: .25, input_tokens: 12, output_tokens: 32, cache_tokens: 2, request_count_total: 2, live: { active_requests: 0 } });
+      if (path === 'stats') return reply(state.stats);
       if (path === 'juiced/requests') return state.failRequests ? reply({ error: 'Fixture diagnostics unavailable' }, 503) : reply({ data: state.requests });
       if (path === 'juiced/removal' || path === 'juiced/removal' && !body) return reply({ allowed: false, description: 'External weights are preserved', reason: 'Disable and unload this model before removal', label: 'Remove model' });
       return reply({});

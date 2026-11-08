@@ -475,6 +475,24 @@ static void test_shutdown_with_pending_reclaim(RuntimeConfig& config) {
     check("router shutdown wakes and joins a pending deferred reclaim", completed);
 }
 
+static void test_request_counts_include_prefill(RuntimeConfig& config) {
+    Router router(&config, nullptr, nullptr);
+    auto* helper = RoutingHelperTestHook::add_server(router, make_helper("counter.helper"));
+    {
+        auto first = helper->try_acquire_inference();
+        auto stats = router.get_stats();
+        check("prefill is active before any output", stats["live"]["active_requests"] == 1);
+        check("prefill is not invented token generation", stats["live"]["generating_requests"] == 0 &&
+              stats["live"]["estimated_tokens_per_second"] == 0);
+        {
+            auto second = helper->try_acquire_inference();
+            check("simultaneous native calls are counted", router.get_stats()["live"]["active_requests"] == 2);
+        }
+        check("one terminal call preserves the other", router.get_stats()["live"]["active_requests"] == 1);
+    }
+    check("terminal calls return the request counter to zero", router.get_stats()["live"]["active_requests"] == 0);
+}
+
 int main() {
     json cfg = json::object();
     cfg["max_loaded_models"] = 4;
@@ -502,6 +520,7 @@ int main() {
     }
 
     test_shutdown_with_pending_reclaim(config);
+    test_request_counts_include_prefill(config);
 
     RuntimeConfig::set_global(nullptr);
 

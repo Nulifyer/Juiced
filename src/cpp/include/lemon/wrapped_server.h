@@ -370,6 +370,11 @@ public:
         return active_request_count_ > 0 || maintenance_in_progress_;
     }
 
+    int active_inference_count() const {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        return active_request_count_;
+    }
+
     void set_streaming(bool streaming) {
         std::lock_guard<std::mutex> lock(state_mutex_);
         is_streaming_ = streaming;

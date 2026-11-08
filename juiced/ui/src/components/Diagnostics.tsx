@@ -41,6 +41,7 @@ function Performance({ data, models }: { data: RuntimeTelemetry; models: Model[]
   const stats = current.stale ? undefined : current.inference;
   const gpu = system?.gpus?.find((g: any) => g.id === (gpuId || system.primary_gpu_id));
   const active = stats?.live?.active_requests;
+  const generating = stats?.live?.generating_requests ?? active;
   const rate = finite(active) ? active > 0 ? stats?.live?.estimated_tokens_per_second : 0 : undefined;
   const last = (stats?.request_count_total ?? stats?.output_tokens ?? 0) > 0 ? stats : undefined;
   return <section className="performance-view" aria-label="Runtime performance">
@@ -48,7 +49,7 @@ function Performance({ data, models }: { data: RuntimeTelemetry; models: Model[]
       <Button variant="outline" size="sm" onClick={() => setFrozen(frozen ? null : data)}>{frozen ? <Play size={14} /> : <Pause size={14} />}{frozen ? "Resume performance" : "Pause performance"}</Button></div>
     <div className="performance-summary">
       <div><span>Active requests</span><strong>{format(stats?.live?.active_requests, "", 0)}</strong></div>
-      <div><span>{stats?.live?.active_requests > 0 ? "Live output estimate" : "Live output"}</span><strong>{current.stale ? "Not reported" : format(rate, " tok/s")}</strong></div>
+      <div><span>{generating > 0 ? "Live output estimate" : "Live output"}</span><strong>{current.stale ? "Not reported" : format(rate, " tok/s")}</strong></div>
       <div><span>Loaded workers</span><strong>{models.filter((model) => model.loaded).length}</strong></div>
       <div><span>Last first token</span><strong>{format(last?.time_to_first_token, " s", 3)}</strong></div>
     </div>

@@ -50,6 +50,7 @@ export function RuntimeMetrics({ data }: { data: RuntimeTelemetry }) {
   const stats = data.stale ? undefined : data.inference;
   const gpu = system?.gpus?.find((g: any) => g.id === system.primary_gpu_id);
   const active = stats?.live?.active_requests;
+  const generating = stats?.live?.generating_requests ?? active;
   return (
     <footer
       className="runtime-metrics"
@@ -76,20 +77,20 @@ export function RuntimeMetrics({ data }: { data: RuntimeTelemetry }) {
       </span>
       <span
         className="metrics-throughput"
-        title="Aggregate live output estimate while requests are active; last completed request rate while idle"
+        title="Recent text output estimate. Prefill, speech and images can be active without emitting text tokens."
       >
         <Activity size={13} />
-        {active > 0 ? "Live estimate" : "Last decode"}
+        {generating > 0 ? "Live estimate" : active > 0 ? "Text output" : "Last decode"}
         <strong>
           {number(
-            active > 0
+            generating > 0 || active > 0
               ? stats?.live?.estimated_tokens_per_second
               : stats?.tokens_per_second,
             " tok/s",
           )}
         </strong>
       </span>
-      <span title="Currently active model inference requests">
+      <span title="Native model calls in progress, including prefill, speech and images">
         Active <strong>{active ?? "—"}</strong>
       </span>
       <details>

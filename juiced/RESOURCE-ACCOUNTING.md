@@ -73,3 +73,10 @@ This worker reference prevents eviction during native calls. Cancellation
 acknowledgement or completion of a proxy transfer does not prove that a device
 kernel has stopped. Future resource reservations must retain or reconcile that
 separate lifetime before reusing its budget.
+
+`stats.live.active_requests` counts native worker calls, including prefill, speech
+and images. `generating_requests` retains the narrower recent text-output count.
+The throughput estimate counts output only. Prefill must not invent token output
+or disappear from the active-work counter. Direct realtime backend sessions remain
+outside this counter's `native-worker-calls` scope until their separate lifetime
+is integrated. A zero text-output count does not establish idle hardware.

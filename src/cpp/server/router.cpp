@@ -2415,12 +2415,20 @@ void Router::model_3d_generations(const json& request, httplib::DataSink& sink) 
 }
 
 json Router::get_stats() const {
+    int64_t active_requests = 0;
+    {
+        std::lock_guard<std::mutex> lock(load_mutex_);
+        for (const auto& server : loaded_servers_)
+            active_requests += server->active_inference_count();
+    }
     std::lock_guard<std::mutex> lock(telemetry_mutex_);
     json stats = aggregate_telemetry_.to_json();
     stats["routing_decisions_total"] = routing_decisions_total_;
     stats["routing_switches_total"] = routing_switches_total_;
     const auto live = live_throughput_.snapshot();
-    stats["live"] = {{"active_requests", live.active_requests},
+    stats["live"] = {{"active_requests", active_requests},
+                     {"active_scope", "native-worker-calls"},
+                     {"generating_requests", live.active_requests},
                      {"estimated_tokens_per_second", live.estimated_tokens_per_second}};
     return stats;
 }

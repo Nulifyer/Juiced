@@ -337,3 +337,23 @@ test('hardware selection reviews an independent profile before reloading', async
   expect(runtime.writes).toEqual([]); await page.getByRole('button', { name: 'Apply & reload' }).click();
   expect(runtime.writes.find((w: any) => w.path==='juiced/execution').body).toMatchObject({ profile: 'llamacpp:vulkan', device: 'Vulkan0', reload: true });
 });
+
+for (const width of [1440, 390]) test(`prefill stays active without inventing text output at ${width}px`, async ({ page, runtime }) => {
+  await page.setViewportSize({ width, height: 960 });
+  runtime.models[0].runtime.is_busy = true;
+  runtime.stats.live = { active_requests: 2, generating_requests: 0, estimated_tokens_per_second: 0 };
+  await page.goto('/');
+  const footer = page.getByLabel('Runtime hardware and inference metrics');
+  await expect(footer).toContainText('Active 2');
+  await expect(footer).toContainText('Text output');
+  await expect(footer).toContainText('0.0 tok/s');
+  expect(await page.evaluate(() => document.documentElement.scrollHeight <= innerHeight + 1)).toBe(true);
+  if (process.env.JUICED_DESIGN_CAPTURES) await page.screenshot({ path: `${process.env.JUICED_DESIGN_CAPTURES}/active-prefill-${width}.png` });
+  runtime.stats.live = { active_requests: 2, generating_requests: 1, estimated_tokens_per_second: 8.5 };
+  await expect(footer).toContainText('Live estimate');
+  await expect(footer).toContainText('8.5 tok/s');
+  runtime.stats.live = { active_requests: 0, generating_requests: 0, estimated_tokens_per_second: 0 };
+  await expect(footer).toContainText('Last decode');
+  await expect(footer).toContainText('35.0 tok/s');
+  expect(runtime.writes).toEqual([]);
+});

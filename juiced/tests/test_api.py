@@ -250,6 +250,10 @@ class ApiContract(unittest.TestCase):
      except subprocess.TimeoutExpired:process.kill();process.wait()
  def test_resource_memory_snapshot(self):
   for prefix in ['/api/v0/','/api/v1/','/v0/','/v1/']:
+   status,stats=self.request(prefix+'stats');self.assertEqual(status,200,stats)
+   self.assertEqual(stats['live']['active_scope'],'native-worker-calls')
+   for key in ['active_requests','generating_requests']:
+    self.assertIsInstance(stats['live'][key],int);self.assertGreaterEqual(stats['live'][key],0)
    status,data=self.request(prefix+'system-stats');self.assertEqual(status,200,data)
    memory=data['memory_budget']
    self.assertEqual(memory['schema_version'],1)
