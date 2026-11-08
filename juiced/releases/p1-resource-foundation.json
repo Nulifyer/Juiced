@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "batch": "P1 resource foundation",
+  "phase_complete": false,
+  "plan_revision": 2,
+  "plan_sha256": "987a9cd9dbf23edcdb4efc83d26a05ad9cfb0fa8e4a30c2a7546b102694d532b",
+  "baseline": "v0.9.0 / 8a6b868953955f587af8927a2ebe4decc7225e49",
+  "selected_families": {
+    "operations": ["native memory inspection", "Linux automatic context bounds", "native worker busy-reference lifetime"],
+    "memory": ["Linux procfs", "cgroup v2", "cgroup v1 memory controller", "shared versus dedicated GPU pool identity"],
+    "compile_targets": ["Linux GCC", "Windows MSVC", "macOS AppleClang"],
+    "retained_runtime": "Existing engines, explicit model options and downstream endpoints"
+  },
+  "acceptance": {
+    "memory": "25 deterministic fixtures pass, including missing readings, finite/unlimited limits, enforcing ancestors, unknowns, zero capacity and overflow; run under ASan/UBSan on Linux",
+    "ownership": "18 scoped worker lease assertions pass, including exception, explicit release before retry, move, failed restore, failed reclaim notification and 32 simultaneous claims",
+    "native": "MemoryBudgetTest, InferenceLeaseTest, SystemInfoHelpersTest, AutoTuneTest, RoutingHelperReconcileTest and RequestCancellationTest pass",
+    "api": "All 40 isolated native API cases pass, including memory projection on all four prefixes",
+    "engine": "Actual forced-CPU engine cache/stream/restart fixtures continue to pass",
+    "qualification": "Cross-platform compilation and fixtures qualify only that contract. P1 resource protection requires separate real-device interference acceptance before promotion."
+  },
+  "state": {
+    "schema_migration": false,
+    "explicit_model_options_changed": false,
+    "behavior": "Linux automatic context sizing uses visible host/container headroom; unknown readings retain the existing fallback. Loaded workers and explicit context sizes are unchanged."
+  },
+  "not_delivered": [
+    "Atomic resource reservations",
+    "Essential-service latency protection",
+    "Bounded request admission queues and fairness",
+    "Maintenance drain controls",
+    "Exact GPU/NPU allocation coverage or full device-workspace fit",
+    "Unseen hardware qualification",
+    "Model-quality or performance improvement"
+  ]
+}

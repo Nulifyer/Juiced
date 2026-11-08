@@ -82,6 +82,29 @@ struct Telemetry {
 
 class WrappedServer : public ICompletionServer {
 public:
+    // Holds one busy reference. Release before any operation that may destroy
+    // the worker, such as watchdog reload. Moving transfers sole ownership.
+    // This is residency ownership, not a memory reservation or kernel-stop proof.
+    class InferenceLease {
+    public:
+        InferenceLease() = default;
+        ~InferenceLease();
+        InferenceLease(InferenceLease&& other) noexcept;
+        InferenceLease& operator=(InferenceLease&& other) noexcept;
+        InferenceLease(const InferenceLease&) = delete;
+        InferenceLease& operator=(const InferenceLease&) = delete;
+        explicit operator bool() const { return server_ != nullptr; }
+        void release() noexcept;
+    private:
+        friend class WrappedServer;
+        explicit InferenceLease(WrappedServer* server) : server_(server) {}
+        WrappedServer* server_ = nullptr;
+    };
+
+    InferenceLease try_acquire_inference() {
+        return acquire_for_inference() ? InferenceLease(this) : InferenceLease();
+    }
+
     WrappedServer(const std::string& server_name, const std::string& log_level,
                   ModelManager* model_manager = nullptr, BackendManager* backend_manager = nullptr)
         : server_name_(server_name), port_(0), log_level_(log_level),
@@ -175,7 +198,14 @@ public:
             state_ = ModelState::LOADING; // temporarily block others
             lock.unlock();
 
-            this->restore();
+            try {
+                this->restore();
+            } catch (...) {
+                lock.lock();
+                state_ = ModelState::DOWNSIZED;
+                state_cv_.notify_all();
+                throw;
+            }
 
             lock.lock();
             state_ = ModelState::READY;
@@ -249,9 +279,7 @@ public:
         // Dispatch outside state_mutex_. The callback hands the reclaim to the
         // router's executor thread; it must not run the actual unload on this
         // release call stack (that would destroy this very object mid-method).
-        if (on_idle) {
-            on_idle();
-        }
+        notify_reclaim(on_idle);
     }
 
     // Install, once, the callback that hands this server's reclaim to the router's
@@ -334,9 +362,7 @@ public:
             state_cv_.notify_all();
             on_idle = take_pending_reclaim_if_idle_locked();
         }
-        if (on_idle) {
-            on_idle();
-        }
+        notify_reclaim(on_idle);
     }
 
     bool is_busy() const {
@@ -673,6 +699,7 @@ protected:
     std::atomic<bool>* load_cancel_ = nullptr;
 
 private:
+    static void notify_reclaim(const std::function<void()>& callback) noexcept;
     static uint64_t next_instance_id() {
         static std::atomic<uint64_t> counter{0};
         return ++counter;

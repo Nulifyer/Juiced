@@ -1594,6 +1594,7 @@ auto Router::execute_inference(const json& request, Func&& inference_func) -> de
     // lazy reload; streaming paths deliberately do not retry after partial data.
     for (int attempt = 0; attempt < 2; ++attempt) {
         WrappedServer* server = nullptr;
+        WrappedServer::InferenceLease lease;
         RecipeOptions restart_options;
         std::string restart_model_name;
         bool should_reload_before_request = false;
@@ -1614,7 +1615,8 @@ auto Router::execute_inference(const json& request, Func&& inference_func) -> de
                 restart_model_name = server->get_model_name();
                 should_reload_before_request = true;
             } else {
-                if (!server->acquire_for_inference()) {
+                lease = server->try_acquire_inference();
+                if (!lease) {
                     return ErrorResponse::from_exception(ModelNotLoadedException(requested_model));
                 }
                 server->update_access_time();
@@ -1637,38 +1639,33 @@ auto Router::execute_inference(const json& request, Func&& inference_func) -> de
 
         InhibitGuard inhibit_guard(suspend_inhibitor_.get(), config_->inhibit_suspend());
 
-        try {
-            auto response = inference_func(server);
+        auto response = inference_func(server);
 
-            if (!server->was_watchdog_triggered() && is_watchdog_reset_response(response)) {
-                server->request_backend_reset_from_watchdog("GPU Hang / compute error detected");
-            }
-
-            const bool watchdog_reset =
-                server->was_watchdog_triggered() || is_watchdog_reset_response(response);
-
-            if (attempt == 0 && watchdog_reset) {
-                restart_options = server->get_recipe_options();
-                restart_model_name = server->get_model_name();
-                failed_instance_id = server->get_instance_id();
-            }
-
-            server->release_inference();
-
-            if (attempt == 0 && watchdog_reset) {
-                if (restart_model_name.empty()) {
-                    restart_model_name = requested_model;
-                }
-                if (reload_model_after_watchdog_reset(restart_model_name, restart_options, failed_instance_id)) {
-                    continue;
-                }
-            }
-
-            return response;
-        } catch (...) {
-            server->release_inference();
-            throw;
+        if (!server->was_watchdog_triggered() && is_watchdog_reset_response(response)) {
+            server->request_backend_reset_from_watchdog("GPU Hang / compute error detected");
         }
+
+        const bool watchdog_reset =
+            server->was_watchdog_triggered() || is_watchdog_reset_response(response);
+
+        if (attempt == 0 && watchdog_reset) {
+            restart_options = server->get_recipe_options();
+            restart_model_name = server->get_model_name();
+            failed_instance_id = server->get_instance_id();
+        }
+
+        lease.release();
+
+        if (attempt == 0 && watchdog_reset) {
+            if (restart_model_name.empty()) {
+                restart_model_name = requested_model;
+            }
+            if (reload_model_after_watchdog_reset(restart_model_name, restart_options, failed_instance_id)) {
+                continue;
+            }
+        }
+
+        return response;
     }
 
     return ErrorResponse::create(
@@ -1703,6 +1700,7 @@ void Router::execute_streaming(const std::string& request_body, httplib::DataSin
 
     for (int attempt = 0; attempt < 2; ++attempt) {
         WrappedServer* server = nullptr;
+        WrappedServer::InferenceLease lease;
         RecipeOptions restart_options;
         std::string restart_model_name;
         bool should_reload_before_request = false;
@@ -1727,7 +1725,8 @@ void Router::execute_streaming(const std::string& request_body, httplib::DataSin
                 restart_model_name = server->get_model_name();
                 should_reload_before_request = true;
             } else {
-                if (!server->acquire_for_inference()) {
+                lease = server->try_acquire_inference();
+                if (!lease) {
                     std::string error_msg =
                         "data: {\"error\":{\"message\":\"Model evicted: " + requested_model +
                         "\",\"type\":\"model_not_loaded\"}}\n\n";
@@ -1762,32 +1761,12 @@ void Router::execute_streaming(const std::string& request_body, httplib::DataSin
 
         try {
             streaming_func(server);
-            const bool watchdog_reset = server->was_watchdog_triggered();
-
-            if (watchdog_reset) {
-                restart_options = server->get_recipe_options();
-                restart_model_name = server->get_model_name();
-                failed_instance_id = server->get_instance_id();
-            }
-
-            server->release_inference();
-
-            // Do not replay a streaming response after bytes may have reached the
-            // client. Reload immediately so the next request does not see a
-            // stale tombstone, then return the stream outcome as-is.
-            if (watchdog_reset) {
-                if (restart_model_name.empty()) {
-                    restart_model_name = requested_model;
-                }
-                reload_model_after_watchdog_reset(restart_model_name, restart_options, failed_instance_id);
-            }
-            return;
         } catch (const BackendStreamRetryableReset& e) {
             restart_options = server->get_recipe_options();
             restart_model_name = server->get_model_name();
             failed_instance_id = server->get_instance_id();
 
-            server->release_inference();
+            lease.release();
 
             if (restart_model_name.empty()) {
                 restart_model_name = requested_model;
@@ -1810,10 +1789,27 @@ void Router::execute_streaming(const std::string& request_body, httplib::DataSin
             sink.write(error_msg.c_str(), error_msg.size());
             sink.done();
             return;
-        } catch (...) {
-            server->release_inference();
-            throw;
         }
+        const bool watchdog_reset = server->was_watchdog_triggered();
+
+        if (watchdog_reset) {
+            restart_options = server->get_recipe_options();
+            restart_model_name = server->get_model_name();
+            failed_instance_id = server->get_instance_id();
+        }
+
+        lease.release();
+
+        // Do not replay a streaming response after bytes may have reached the
+        // client. Reload immediately so the next request does not see a
+        // stale tombstone, then return the stream outcome as-is.
+        if (watchdog_reset) {
+            if (restart_model_name.empty()) {
+                restart_model_name = requested_model;
+            }
+            reload_model_after_watchdog_reset(restart_model_name, restart_options, failed_instance_id);
+        }
+        return;
     }
 }
 
@@ -1827,9 +1823,13 @@ json Router::chat_completion(const json& request, std::atomic<bool>* cancel) {
     }
 
     try {
-        WrappedServer* active_server = nullptr;
+        std::string telemetry_url;
+        std::function<std::map<std::string, nlohmann::json>(const std::string&)> telemetry_parser;
         json response = execute_inference(request, [&](WrappedServer* server) {
-            active_server = server;
+            if (span) {
+                telemetry_url = server->get_additional_telemetry_url();
+                telemetry_parser = server->get_additional_telemetry_parser();
+            }
             ModelTelemetryIdentity identity = get_telemetry_identity(server);
             if (span) {
                 span->set_attribute("llm.backend", identity.recipe);
@@ -1925,13 +1925,7 @@ json Router::chat_completion(const json& request, std::atomic<bool>* cancel) {
                     }
                 }
 
-                std::string url;
-                std::function<std::map<std::string, nlohmann::json>(const std::string&)> parser;
-                if (active_server) {
-                    url = active_server->get_additional_telemetry_url();
-                    parser = active_server->get_additional_telemetry_parser();
-                }
-                telemetry::end_llm_span_async(span, url, parser, usage_payload, text_output, tool_calls);
+                telemetry::end_llm_span_async(span, telemetry_url, telemetry_parser, usage_payload, text_output, tool_calls);
             }
         }
         return response;
@@ -1946,9 +1940,13 @@ json Router::completion(const json& request) {
     std::shared_ptr<telemetry::InferenceSpan> span = telemetry::TelemetryTracker::start_span("LLM", "completions", requested_model, request);
 
     try {
-        WrappedServer* active_server = nullptr;
+        std::string telemetry_url;
+        std::function<std::map<std::string, nlohmann::json>(const std::string&)> telemetry_parser;
         json response = execute_inference(request, [&](WrappedServer* server) {
-            active_server = server;
+            if (span) {
+                telemetry_url = server->get_additional_telemetry_url();
+                telemetry_parser = server->get_additional_telemetry_parser();
+            }
             ModelTelemetryIdentity identity = get_telemetry_identity(server);
             if (span) {
                 span->set_attribute("llm.backend", identity.recipe);
@@ -1993,13 +1991,7 @@ json Router::completion(const json& request) {
                     }
                 }
 
-                std::string url;
-                std::function<std::map<std::string, nlohmann::json>(const std::string&)> parser;
-                if (active_server) {
-                    url = active_server->get_additional_telemetry_url();
-                    parser = active_server->get_additional_telemetry_parser();
-                }
-                telemetry::end_llm_span_async(span, url, parser, usage_payload, text_output);
+                telemetry::end_llm_span_async(span, telemetry_url, telemetry_parser, usage_payload, text_output);
             }
         }
         return response;
@@ -2158,6 +2150,7 @@ json Router::classify(const json& request) {
 
 json Router::get_slots() {
     WrappedServer* server = nullptr;
+    WrappedServer::InferenceLease lease;
     ISlotsServer* slots_server = nullptr;
 
     {
@@ -2179,25 +2172,20 @@ json Router::get_slots() {
         }
 
         // Mark as busy and update access time
-        if (!server->acquire_for_inference()) {
+        lease = server->try_acquire_inference();
+        if (!lease) {
             return ErrorResponse::from_exception(ModelNotLoadedException("No models loaded"));
         }
         server->update_access_time();
     } // Lock released here
 
     // Execute without holding lock (but busy flag prevents eviction)
-    try {
-        auto response = slots_server->get_slots();
-        server->release_inference();
-        return response;
-    } catch (...) {
-        server->release_inference();
-        throw;
-    }
+    return slots_server->get_slots();
 }
 
 json Router::slots_action(int slot_id, const std::string& action, const json& request_body) {
     WrappedServer* server = nullptr;
+    WrappedServer::InferenceLease lease;
     ISlotsServer* slots_server = nullptr;
 
     {
@@ -2219,25 +2207,20 @@ json Router::slots_action(int slot_id, const std::string& action, const json& re
         }
 
         // Mark as busy and update access time
-        if (!server->acquire_for_inference()) {
+        lease = server->try_acquire_inference();
+        if (!lease) {
             return ErrorResponse::from_exception(ModelNotLoadedException("No models loaded"));
         }
         server->update_access_time();
     } // Lock released here
 
     // Execute without holding lock (but busy flag prevents eviction)
-    try {
-        auto response = slots_server->slots_action(slot_id, action, request_body);
-        server->release_inference();
-        return response;
-    } catch (...) {
-        server->release_inference();
-        throw;
-    }
+    return slots_server->slots_action(slot_id, action, request_body);
 }
 
 json Router::tokenize(const json& request_body) {
     WrappedServer* server = nullptr;
+    WrappedServer::InferenceLease lease;
     ITokenizerServer* tokenizer_server = nullptr;
 
     {
@@ -2259,21 +2242,15 @@ json Router::tokenize(const json& request_body) {
         }
 
         // Mark as busy and update access time
-        if (!server->acquire_for_inference()) {
+        lease = server->try_acquire_inference();
+        if (!lease) {
             return ErrorResponse::from_exception(ModelNotLoadedException("No models loaded"));
         }
         server->update_access_time();
     } // Lock released here
 
     // Execute without holding lock (but busy flag prevents eviction)
-    try {
-        auto response = tokenizer_server->tokenize(request_body);
-        server->release_inference();
-        return response;
-    } catch (...) {
-        server->release_inference();
-        throw;
-    }
+    return tokenizer_server->tokenize(request_body);
 }
 
 json Router::responses(const json& request) {

@@ -11,6 +11,7 @@
 #include <chrono>
 #include <iostream>
 #include <cstdlib>
+#include <utility>
 #include <lemon/utils/aixlog.hpp>
 
 namespace lemon {
@@ -175,6 +176,36 @@ json create_backend_error_response(const std::string& server_name, int status_co
 
 WrappedServer::~WrappedServer() {
     stop_server();
+}
+
+WrappedServer::InferenceLease::~InferenceLease() { release(); }
+
+WrappedServer::InferenceLease::InferenceLease(InferenceLease&& other) noexcept
+    : server_(std::exchange(other.server_, nullptr)) {}
+
+WrappedServer::InferenceLease& WrappedServer::InferenceLease::operator=(InferenceLease&& other) noexcept {
+    if (this != &other) {
+        release();
+        server_ = std::exchange(other.server_, nullptr);
+    }
+    return *this;
+}
+
+void WrappedServer::InferenceLease::release() noexcept {
+    if (auto* server = std::exchange(server_, nullptr)) server->release_inference();
+}
+
+void WrappedServer::notify_reclaim(const std::function<void()>& callback) noexcept {
+    if (!callback) return;
+    try {
+        callback();
+    } catch (const std::exception& e) {
+        // The busy reference is already released. A failed asynchronous reclaim
+        // notification must not turn cleanup into another release or terminate.
+        LOG(ERROR, "WrappedServer") << "Reclaim notification failed: " << e.what() << std::endl;
+    } catch (...) {
+        LOG(ERROR, "WrappedServer") << "Reclaim notification failed" << std::endl;
+    }
 }
 
 WrappedServer::BackendRequestScope::BackendRequestScope(WrappedServer& server, BackendRequestKind kind)

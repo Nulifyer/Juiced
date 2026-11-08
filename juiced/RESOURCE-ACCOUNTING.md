@@ -60,3 +60,16 @@ Explicit saved context sizes and existing loaded workers are unchanged. This doe
 not make context sizing an atomic resource reservation. Shared load/request leases,
 bounded queues, maintenance drain and essential-service interference acceptance
 remain the rest of platform phase P1.
+
+## Worker ownership
+
+Router inference, streaming, tokenization and raw slot operations hold a scoped
+worker reference. Success, exceptions and retry paths release it once. Watchdog
+recovery relinquishes that reference before replacing the worker. Telemetry copies
+its URL/parser while the worker is owned. A failed sleep restore returns to the
+downsized state and wakes waiters instead of leaving the worker stuck loading.
+
+This worker reference prevents eviction during native calls. Cancellation
+acknowledgement or completion of a proxy transfer does not prove that a device
+kernel has stopped. Future resource reservations must retain or reconcile that
+separate lifetime before reusing its budget.
