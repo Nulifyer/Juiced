@@ -17,11 +17,26 @@ std::optional<uint64_t> number(const std::string& text) {
     return value;
 }
 
-std::optional<std::string> token(const std::filesystem::path& path) {
+struct TokenRead {
+    std::optional<std::string> value;
+    bool missing = false;
+};
+
+TokenRead read_token(const std::filesystem::path& path) {
     std::ifstream file(path);
+    if (!file.is_open()) {
+        std::error_code error;
+        const auto status = std::filesystem::status(path, error);
+        return {std::nullopt, status.type() == std::filesystem::file_type::not_found &&
+            (!error || error == std::errc::no_such_file_or_directory)};
+    }
     std::string result, extra;
-    if (!(file >> result) || file >> extra) return std::nullopt;
-    return result;
+    if (!(file >> result) || file >> extra || file.bad()) return {};
+    return {result, false};
+}
+
+std::optional<std::string> token(const std::filesystem::path& path) {
+    return read_token(path).value;
 }
 
 bool contains(const std::string& list, const std::string& item) {
@@ -64,16 +79,23 @@ std::optional<std::filesystem::path> relative_group(
 }
 
 void read_constraints(MemoryBudget& budget, const std::filesystem::path& mount,
-                      std::filesystem::path leaf, bool v2) {
+                      std::filesystem::path leaf, bool v2, bool hierarchy_root_visible) {
     budget.containment = v2 ? "cgroup-v2" : "cgroup-v1";
     budget.constraints_complete = true;
     for (;;) {
-        const auto limit = token(leaf / (v2 ? "memory.max" : "memory.limit_in_bytes"));
+        const auto limit_read = read_token(leaf / (v2 ? "memory.max" : "memory.limit_in_bytes"));
+        const auto& limit = limit_read.value;
         if (!limit) {
-            // The v2 hierarchy root itself has no memory.max/current files.
-            // A missing controller on the current non-root group is unknown.
+            const auto used = read_token(leaf / "memory.current");
             std::ifstream controllers(leaf / "cgroup.controllers");
-            if (!(v2 && leaf == mount && controllers.is_open()))
+            std::string controller;
+            bool memory_controller = false;
+            while (controllers >> controller)
+                memory_controller = memory_controller || controller == "memory";
+            // Only a visible hierarchy root genuinely lacks both memory files.
+            // A subtree or an unreadable/malformed interface is not unlimited.
+            if (!(v2 && leaf == mount && hierarchy_root_visible &&
+                  limit_read.missing && used.missing && memory_controller && !controllers.bad()))
                 budget.constraints_complete = false;
         } else {
             MemoryConstraint constraint;
@@ -170,7 +192,7 @@ MemoryBudget read_linux_memory_budget(const std::filesystem::path& proc_root,
         const auto physical_mount = filesystem_root / mount_path.relative_path();
         const auto leaf = relative->empty() || *relative == "."
             ? physical_mount : physical_mount / *relative;
-        read_constraints(budget, physical_mount, leaf, v2);
+        read_constraints(budget, physical_mount, leaf, v2, unescape_mount(root) == "/");
         return budget;
     }
     // An absent/unreadable mount or membership is not an unlimited container.

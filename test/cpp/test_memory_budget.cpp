@@ -69,6 +69,31 @@ int main() {
         check(f.read().available_bytes() == 1000, "host cgroup namespace resolves mounted subtree correctly");
     }
     {
+        Fixture f; f.v2();
+        f.write("sys/fs/cgroup/cgroup.controllers", "cpu memory\n");
+        check(f.read().available_bytes() == 409600, "genuine hierarchy root lacks both memory interfaces");
+        for (const auto& value : {"", "max trailing", "not-a-limit"}) {
+            f.write("sys/fs/cgroup/memory.max", value);
+            check(!f.read().available_bytes(), "readable controllers do not hide empty or malformed limits");
+        }
+        fs::remove(f.root / "sys/fs/cgroup/memory.max");
+        fs::create_directory(f.root / "sys/fs/cgroup/memory.max");
+        check(!f.read().available_bytes(), "unreadable limit interface is not absent root metadata");
+        fs::remove(f.root / "sys/fs/cgroup/memory.max");
+        f.write("sys/fs/cgroup/memory.current", "0\n");
+        check(!f.read().available_bytes(), "missing limit with existing charge is not a hierarchy root");
+        fs::remove(f.root / "sys/fs/cgroup/memory.current");
+        f.v2("/", "/docker/container");
+        check(!f.read().available_bytes(), "subtree root controllers cannot establish unlimited capacity");
+        f.write("sys/fs/cgroup/memory.max", "");
+        check(!f.read().available_bytes(), "empty mounted-subtree limit remains unknown");
+        f.write("sys/fs/cgroup/memory.max", "max trailing");
+        check(!f.read().available_bytes(), "malformed mounted-subtree limit remains unknown");
+        fs::remove(f.root / "sys/fs/cgroup/memory.max");
+        fs::create_directory(f.root / "sys/fs/cgroup/memory.max");
+        check(!f.read().available_bytes(), "inaccessible mounted-subtree limit remains unknown");
+    }
+    {
         Fixture f; f.v2("/outside", "/container"); f.scope("", "200000", "100000");
         check(!f.read().available_bytes(), "unresolvable mount is not unlimited capacity");
         f.v2("/../escape");

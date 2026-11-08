@@ -23,7 +23,10 @@ The Linux reader resolves `/proc/self/cgroup` against `/proc/self/mountinfo`.
 It supports cgroup v2 and the v1 memory controller. V1 ancestor constraints apply
 only where hierarchical accounting is enabled. Unlimited is distinct from unknown.
 An unreadable finite constraint or an unresolved mount makes effective availability
-null. No shell command, host repair or driver installation occurs.
+null. Missing root interfaces are accepted only at the visible hierarchy root
+when both memory files are genuinely absent and the memory controller is visible.
+An empty, malformed or unreadable interface is never treated as root-file absence.
+No shell command, host repair or driver installation occurs.
 
 `visible_constraints_complete` covers the mounted hierarchy only. A container
 namespace can hide ancestor limits. `hidden_ancestor_limits` remains `unobserved`.
