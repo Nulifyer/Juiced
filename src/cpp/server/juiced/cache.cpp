@@ -562,7 +562,9 @@ void JuicedService::chat(const httplib::Request &original,
     }
     res.set_header("X-Juiced-Cache", restore);
     request["id_slot"] = slot;
-    request["cache_prompt"] = reuse_enabled;
+    // An identified cold session must not inherit the previous slot owner's
+    // memory prefix, even when its prompt happens to match.
+    request["cache_prompt"] = reuse_enabled && (!identified || restore == "restored");
     auto req = std::make_shared<httplib::Request>(original);
     req->body = request.dump();
     auto finish = [this, guard, worker, identified, key, thread, model, profile,

@@ -54,6 +54,11 @@ existing volume identities and read-only original weight mounts during updates.
 Use the deployment's exact release image/digest and retain previous image/state for
 recovery. Do not run two writable managers against one state directory.
 
+Qualified persistent snapshots bind the principal, credential epoch, consumer session,
+protocol and model/engine profile. An identified session starts with a cold prefix
+unless its validated snapshot is restored. Clients without session affinity keep
+the memory fallback. Juiced stores computation snapshots, not conversation history.
+
 ## Development and checks
 
 - Native: `cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_WEB_APP=OFF -DBUILD_TAURI_APP=OFF -DBUILD_TESTING=ON`, then `cmake --build build -j4 --target lemond test_request_identity`.
@@ -62,6 +67,7 @@ recovery. Do not run two writable managers against one state directory.
 - UI: `cd juiced/ui && bun install --frozen-lockfile && bun run build`.
 - UI workflows: `bun run test:e2e` in `juiced/ui`; `JUICED_TEST_CHROMIUM` can select an installed test browser.
 - Actual CPU snapshot gate: `python3 juiced/tests/test_engine_cache.py --help`; a retained tiny fixture checks useful save/reload/restore, not general model quality.
+- Cache admission/isolation: `python3 juiced/tests/test_cache_admission.py --help`; isolated real-engine checks cover alternate model names, failure cleanup, same-worker principal changes and restart/credential boundaries.
 - Image: `docker build -f juiced/Dockerfile -t juiced:development .`.
 
 The UI builds root `web/`, copied into native resources by the image. Its development

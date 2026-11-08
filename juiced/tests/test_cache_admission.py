@@ -392,7 +392,7 @@ def acceptance(args):
             operator = {"Authorization": "Bearer fixture-operator-v1"}
 
             def isolated_turn(label, credential, expected):
-                status, headers, _ = fixture.ask(
+                status, headers, response = fixture.ask(
                     "same-client-session", headers=credential
                 )
                 assert status == 200 and headers.get("X-Juiced-Cache") == expected, (
@@ -400,14 +400,24 @@ def acceptance(args):
                     status,
                     headers,
                 )
+                if expected == "cold":
+                    assert response["timings"]["cache_n"] == 0, (
+                        label,
+                        response["timings"],
+                    )
+                elif expected == "restored":
+                    assert response["timings"]["cache_n"] > 30, (
+                        label,
+                        response["timings"],
+                    )
                 snapshots = fixture.ok("/v1/juiced/cache")["snapshots"]
                 return {
                     x["id"] for x in snapshots if x["session"] == "same-client-session"
                 }
 
             ids_api = isolated_turn("inference first", inference, "cold")
-            fixture.reload()
-            ids_admin = isolated_turn("operator first", operator, "cold")
+            ids_admin = isolated_turn("operator first, same worker", operator, "cold")
+            isolated_turn("inference returns, same worker", inference, "restored")
             assert len(ids_admin - ids_api) == 1
             fixture.start("fixture-inference-v1", "fixture-operator-v1")
             fixture.load()
@@ -464,6 +474,7 @@ def acceptance(args):
             )
             proof["identity_isolation"] = {
                 "principal_namespaces_distinct": True,
+                "same_worker_principal_switch_cold": True,
                 "restart_restore": True,
                 "bearer_api_key_equivalent": True,
                 "credential_rotation_cold": True,
