@@ -357,3 +357,46 @@ for (const width of [1440, 390]) test(`prefill stays active without inventing te
   await expect(footer).toContainText('35.0 tok/s');
   expect(runtime.writes).toEqual([]);
 });
+
+for (const width of [1440, 390]) test(`import recovery retains errors and resolves native publication at ${width}px`, async ({ page, runtime }) => {
+  await page.setViewportSize({ width, height: 960 });
+  const jobs: Record<string, any> = {
+    pending: { id: 'pending', filename: 'pending.gguf', size: 32, received: 32, status: 'publishing', publication: { name: 'Pending' }, last_error: 'Final publication needs retry' },
+    conflict: { id: 'conflict', filename: 'speech.gguf', size: 32, received: 32, status: 'publishing', publication: { name: 'Occupied', conflict: true }, last_error: 'That public name is occupied' },
+    cleanup: { id: 'cleanup', filename: 'cancelled.gguf', size: 32, status: 'cancelled', cleanup_pending: true },
+  };
+  const writes: any[] = []; let fail = true;
+  await page.route('**/v1/juiced/imports', route => route.fulfill({ json: { data: jobs } }));
+  await page.route('**/v1/juiced/import/*', async route => {
+    const body = route.request().postDataJSON(); writes.push({ path: new URL(route.request().url()).pathname, body });
+    if (body.id === 'pending' && fail) { fail = false; jobs.pending.last_error = 'Temporary storage failure'; await route.fulfill({ status: 500, json: { error: 'Temporary storage failure' } }); return; }
+    if (body.id === 'cleanup') jobs.cleanup.cleanup_pending = false;
+    else { jobs[body.id].status = 'complete'; delete jobs[body.id].last_error; }
+    await route.fulfill({ json: { model: body.name || 'Pending' } });
+  });
+  await page.goto('/');
+  if (await page.getByLabel('Toggle navigation').isVisible()) await page.getByLabel('Toggle navigation').click();
+  await page.getByRole('button', { name: 'Library', exact: true }).click();
+  await page.getByRole('button', { name: 'Import GGUF', exact: true }).first().click();
+  const pending = page.locator('article').filter({ hasText: 'pending.gguf' });
+  await expect(pending).toContainText('Final publication needs retry');
+  await pending.getByRole('button', { name: 'Finish import', exact: true }).click();
+  await expect(pending).toContainText('Temporary storage failure');
+  await pending.getByRole('button', { name: 'Finish import', exact: true }).click();
+  await expect(pending).toContainText('complete');
+  const conflict = page.locator('article').filter({ hasText: 'speech.gguf' });
+  await expect(conflict.getByRole('button', { name: 'Register with new name' })).toBeDisabled();
+  await page.getByLabel('New model name for speech.gguf').fill('Unused-Speech');
+  await conflict.getByRole('button', { name: 'Register with new name' }).click();
+  await expect(conflict).toContainText('complete');
+  await page.getByRole('button', { name: 'Retry cleanup', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Retry cleanup', exact: true })).toHaveCount(0);
+  expect(writes).toEqual([
+    { path: '/v1/juiced/import/finish', body: { id: 'pending' } },
+    { path: '/v1/juiced/import/finish', body: { id: 'pending' } },
+    { path: '/v1/juiced/import/finish', body: { id: 'conflict', name: 'Unused-Speech' } },
+    { path: '/v1/juiced/import/cancel', body: { id: 'cleanup' } },
+  ]);
+  expect(runtime.writes).toEqual([]);
+  expect(await page.evaluate(() => document.body.scrollWidth <= window.innerWidth)).toBe(true);
+});

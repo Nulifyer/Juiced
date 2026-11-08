@@ -5,6 +5,7 @@
 #include "lemon/request_identity.h"
 #include "lemon/utils/http_client.h"
 #include "lemon/utils/path_utils.h"
+#include "lemon/utils/custom_args.h"
 #include <algorithm>
 #include <fstream>
 #include <iomanip>
@@ -233,11 +234,16 @@ json JuicedService::cache_profile(const std::string &requested, WrappedServer::I
   if (props.status_code != 200)
     throw std::runtime_error("Cannot inspect the engine state format");
   identity["engine"] = json::parse(props.body).value("build_info", "unknown");
-  auto options = identity["options"].dump();
-  bool configured =
-      options.find(snapshot_directory_.string()) != std::string::npos &&
-      identity["engine"].get<std::string>().find("dde879b") !=
-          std::string::npos;
+  const auto args = utils::build_custom_args_map(utils::parse_custom_args(
+      identity["options"].value("llamacpp_args", std::string())));
+  const auto directory = args.find("--slot-save-path");
+  bool correct_directory = false;
+  if (directory != args.end() && directory->second.size() == 1 && directory->second.front().size() == 1) {
+    std::error_code ec;
+    correct_directory = std::filesystem::equivalent(
+        std::filesystem::path(directory->second.front().front()), snapshot_directory_, ec) && !ec;
+  }
+  const bool configured = correct_directory && identity["engine"].get<std::string>().find("dde879b") != std::string::npos;
   auto fingerprint = digest(identity.dump());
   bool qualified;
   {

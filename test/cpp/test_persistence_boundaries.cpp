@@ -30,6 +30,14 @@ namespace lemon {
 struct ModelPublicationTestHook {
     static void read_barrier(ModelManager& models, std::function<void()> callback) { models.cache_read_barrier_ = std::move(callback); }
     static void write_barrier(ModelManager& models, std::function<void()> callback) { models.options_write_barrier_ = std::move(callback); }
+    static void discovered(ModelManager& models, const std::string& name) {
+        models.get_supported_models();
+        std::lock_guard<std::mutex> lock(models.models_cache_mutex_);
+        ModelInfo info; info.model_name = name; info.recipe = "cloud"; info.source = "discovered";
+        info.checkpoints["main"] = "https://fixture.invalid/model"; info.labels = {"chat"};
+        info.recipe_options = RecipeOptions("cloud", json::object());
+        models.models_cache_[name] = std::move(info); models.rebuild_public_model_aliases_locked();
+    }
     static void downloaded(ModelManager& models, const std::string& name) {
         const auto key = models.resolve_model_name(name);
         models.get_model_info(name);
@@ -57,7 +65,7 @@ public:
     CacheBoundaryWorker(const std::string& name, int port, const std::filesystem::path& directory) : PolicyWorker(name) {
         port_ = port;
         set_model_metadata(name, "fixture", ModelType::LLM, DEVICE_CPU, RecipeOptions("llamacpp", {
-            {"ctx_size", 2048}, {"llamacpp_backend", "cpu"}, {"llamacpp_args", "--slot-save-path " + directory.string()}}));
+            {"ctx_size", 2048}, {"llamacpp_backend", "cpu"}, {"llamacpp_args", "--slot-save-path \"" + directory.string() + "\""}}));
     }
     json chat_completion(const json&) override {
         return {{"id", "fixture"}, {"choices", json::array({{{"index", 0}, {"message", {{"role", "assistant"}, {"content", "ok"}}}, {"finish_reason", "stop"}}})}};
@@ -74,6 +82,11 @@ struct StatePublicationTestHook {
     static void cache_worker(Server& server, const std::string& name, int port) {
         std::lock_guard<std::mutex> lock(server.router_->load_mutex_);
         server.router_->loaded_servers_.push_back(std::make_shared<CacheBoundaryWorker>(name, port, server.juiced_->snapshot_directory_));
+    }
+    static void cache_arguments(Server& server, const std::string& name, const std::string& args) {
+        std::lock_guard<std::mutex> lock(server.router_->load_mutex_);
+        server.router_->find_server_by_model_name(name)->set_model_metadata(name, "fixture", ModelType::LLM, DEVICE_CPU,
+            RecipeOptions("llamacpp", {{"ctx_size", 2048}, {"llamacpp_backend", "cpu"}, {"llamacpp_args", args}}));
     }
     static void save_barrier(Server& server, std::function<void()> callback) { server.juiced_->snapshot_save_barrier_ = std::move(callback); }
     static httplib::Response cache_chat(Server& server, const std::string& model, const std::string& session, bool stream, std::atomic<bool>& closed) {
@@ -194,6 +207,18 @@ struct StatePublicationTestHook {
         request.body = operation == "chunk" ? chunk : body.dump();
         if (operation == "chunk") { request.params.emplace("id", body.at("id").get<std::string>()); request.params.emplace("offset", body.value("offset", "0")); }
         httplib::Response response; response.status = 200; server.juiced_->import_file(request, response, operation); return response;
+    }
+    static httplib::Response remove(Server& server, const std::string& name, bool native = false, bool review = false) {
+        httplib::Request request; request.method = review ? "GET" : "POST";
+        request.path = native ? "/v1/delete" : "/v1/juiced/removal";
+        request.params.emplace("model", name);
+        json body = {{"model", name}, {"confirmation", name}};
+        if (!native && !review) { body["expected"] = server.juiced_->removal_plan(name); body["confirmation"] = body["expected"]["model"]; }
+        request.body = body.dump();
+        httplib::Response response; response.status = 200;
+        if (native) server.handle_delete(request, response);
+        else server.juiced_->handle(request, response, "removal");
+        return response;
     }
     static void import_barrier(Server& server, std::function<void(const std::string&)> barrier) { server.juiced_->import_publication_barrier_ = std::move(barrier); }
     static void uncertain_write(Server& server, const std::string& file) {
@@ -1078,7 +1103,11 @@ static void options_clear_parity() {
 static void cache_pre_dispatch() {
     using Hook = lemon::StatePublicationTestHook;
     for (bool stream : {false, true}) {
-        const auto root = lemon::test::make_scratch_dir("save-pre-dispatch");
+#ifdef _WIN32
+        const auto root = lemon::test::make_scratch_dir("save pre dispatch");
+#else
+        const auto root = lemon::test::make_scratch_dir("save\\pre dispatch");
+#endif
         const auto snapshots = root / "juiced/snapshots";
         std::atomic<int> saves{0};
         httplib::Server engine;
@@ -1104,11 +1133,21 @@ static void cache_pre_dispatch() {
             const std::string name = "user.CacheBoundary"; Hook::register_local_model(server, name);
             Hook::cache_worker(server, name, port);
             Hook::mutate(server, {{"model", name}, {"policy", "on-demand"}});
+            const auto quoted = "\"" + snapshots.string() + "\"";
+            Hook::cache_arguments(server, name, "--prompt " + quoted);
+            const auto unrelated = Hook::cache(server, {{"model", name}}, "cache/profile");
+            check(unrelated.status == 200 && !json::parse(unrelated.body).at("configured").get<bool>(),
+                  "a directory appearing in an unrelated option cannot qualify prompt-state storage");
+            Hook::cache_arguments(server, name, "--slot-save-path " + quoted + " --slot-save-path " + quoted);
+            const auto duplicated = Hook::cache(server, {{"model", name}}, "cache/profile");
+            check(duplicated.status == 200 && !json::parse(duplicated.body).at("configured").get<bool>(),
+                  "ambiguous duplicate storage flags cannot qualify a cache profile");
+            Hook::cache_arguments(server, name, "--slot-save-path " + quoted);
             const auto profile_response = Hook::cache(server, {{"model", name}}, "cache/profile");
             if (profile_response.status != 200) throw std::runtime_error(profile_response.body);
             const auto profile = json::parse(profile_response.body);
             check(Hook::cache(server, {{"model", name}, {"fingerprint", profile.at("fingerprint")}, {"evidence", "Controlled pre-dispatch ownership fixture only"}}, "cache/qualify").status == 200,
-                  "controlled save boundary qualifies only the fixture profile");
+                  ("controlled save boundary qualifies only the fixture profile: " + profile.dump()).c_str());
             check(Hook::cache(server, {{"mode", "persistent"}, {"disk_budget_gib", 1}}).status == 200, "full-budget legacy snapshot reservation is enabled for the boundary fixture");
             std::atomic<bool> closed{false};
             Hook::save_barrier(server, [&] { closed = true; });
@@ -1241,6 +1280,129 @@ static void import_publication_races() {
     lemon::RuntimeConfig::set_global(nullptr);
 }
 
+static void import_removal_ownership() {
+    using Hook = lemon::StatePublicationTestHook;
+    for (const auto& fault : {"interrupt", "staging", "replacement"}) {
+        const auto root = lemon::test::make_scratch_dir("import-removal");
+        const auto name = (std::string(fault) == "interrupt" ? "user.PendingRemoval-" : "PendingRemoval-") + root.filename().string();
+        auto defaults = lemon::ConfigFile::base_defaults(); defaults["offline"] = true; defaults["broadcast"] = false;
+        auto runtime = std::make_shared<lemon::RuntimeConfig>(defaults); lemon::RuntimeConfig::set_global(runtime.get());
+        std::string id; fs::path destination; std::unique_ptr<BlockReplacement> denied;
+        {
+            lemon::Server server(runtime, root.string(), root.string()); Hook::stop(server);
+            id = upload_fixture(server);
+            bool rejected = false;
+            Hook::import_barrier(server, [&](const std::string& phase) {
+                if (phase != "registered") return;
+                const auto plan = Hook::remove(server, name, false, true);
+                rejected = !json::parse(plan.body).at("allowed").get<bool>() && Hook::remove(server, name).status == 409 && Hook::remove(server, name, true).status == 409;
+                if (std::string(fault) == "interrupt") throw std::runtime_error("Controlled interruption after registration");
+                if (std::string(fault) == "staging") fs::create_directory(root / "juiced/state.json.tmp");
+                else { write(root / "juiced/state.json.tmp", json::object()); denied = std::make_unique<BlockReplacement>(root / "juiced/state.json"); }
+            });
+            const auto failed = Hook::import_request(server, "finish", {{"id", id}, {"name", name}}); Hook::import_barrier(server, {});
+            destination = Hook::state(server).at("imports").at(id).at("publication").at("destination").get<std::string>();
+            check(rejected && failed.status == 500 && fs::exists(destination) && Hook::models(server).model_exists(name),
+                  "native and Juiced removal reject the post-registration window without deleting an owned artifact or registration");
+            check(Hook::remove(server, name).status == 409 && Hook::remove(server, name, true).status == 409,
+                  "failed final import metadata publication keeps both removal paths rejected");
+            if (std::string(fault) == "interrupt") fs::create_directory(root / "juiced/state.json.tmp");
+        }
+        {
+            lemon::Server server(runtime, root.string(), root.string()); Hook::stop(server);
+            check(Hook::remove(server, name).status == 409 && Hook::remove(server, name, true).status == 409 && fs::exists(destination),
+                  "restart preserves unresolved import ownership against both removal interfaces");
+            denied.reset(); fs::remove_all(root / "juiced/state.json.tmp");
+            check(Hook::import_request(server, "finish", {{"id", id}}).status == 201,
+                  "owned import finishes after synchronous publication faults are repaired");
+            check(Hook::remove(server, name, std::string(fault) == "replacement").status == 200 && !Hook::models(server).model_exists(name),
+                  "ordinary removal succeeds after completion and cannot be undone by publishing reconciliation");
+            check(Hook::import_request(server, "finish", {{"id", id}}).status == 410,
+                  "completed import replay preserves deletion instead of recreating registration");
+        }
+        lemon::RuntimeConfig::set_global(nullptr);
+    }
+}
+static void import_deletion_overlap() {
+    using Hook = lemon::StatePublicationTestHook;
+    const auto root = lemon::test::make_scratch_dir("import-delete-overlap");
+    const auto name = "ConcurrentRemoval-" + root.filename().string();
+    auto defaults = lemon::ConfigFile::base_defaults(); defaults["offline"] = true; defaults["broadcast"] = false;
+    auto runtime = std::make_shared<lemon::RuntimeConfig>(defaults); lemon::RuntimeConfig::set_global(runtime.get());
+    {
+        lemon::Server server(runtime, root.string(), root.string()); Hook::stop(server);
+        const auto id = upload_fixture(server); TestGate registered;
+        Hook::import_barrier(server, [&](const std::string& phase) {
+            if (phase == "registered") { fs::create_directory(root / "juiced/state.json.tmp"); registered.pause(); }
+        });
+        auto finish = std::async(std::launch::async, [&] { return Hook::import_request(server, "finish", {{"id", id}, {"name", name}}); });
+        const auto reached = registered.await();
+        const auto denied = Hook::remove(server, name);
+        auto deletion = std::async(std::launch::async, [&] { return Hook::remove(server, name, true); });
+        const auto blocked = deletion.wait_for(std::chrono::milliseconds(30)) == std::future_status::timeout;
+        registered.open(); const auto failed = finish.get(); const auto rejected = deletion.get(); Hook::import_barrier(server, {});
+        check(reached && blocked && denied.status == 409 && failed.status == 500 && rejected.status == 409 && Hook::models(server).model_exists(name),
+              "concurrent native deletion serializes with publication then rejects the unresolved durable intent without removing registration");
+        fs::remove_all(root / "juiced/state.json.tmp");
+        check(Hook::import_request(server, "finish", {{"id", id}}).status == 201 && Hook::remove(server, name).status == 200,
+              "overlapped failed publication remains recoverable and ordinary removal succeeds after completion");
+    }
+    lemon::RuntimeConfig::set_global(nullptr);
+}
+static void import_definition_replays() {
+    using Hook = lemon::StatePublicationTestHook;
+    const auto root = lemon::test::make_scratch_dir("import-definitions");
+    auto defaults = lemon::ConfigFile::base_defaults(); defaults["offline"] = true; defaults["broadcast"] = false; defaults["disable_model_filtering"] = true;
+    auto runtime = std::make_shared<lemon::RuntimeConfig>(defaults); lemon::RuntimeConfig::set_global(runtime.get());
+    std::vector<json> bodies;
+    {
+        lemon::Server server(runtime, root.string(), root.string()); Hook::stop(server);
+        for (const auto& recipe : {"llamacpp", "asr4all", "parakeet", "whispercpp"}) for (bool explicit_purpose : {false, true}) {
+            const auto id = upload_fixture(server);
+            json body = {{"id", id}, {"name", "Replay-" + root.filename().string() + "-" + recipe + (explicit_purpose ? "-explicit" : "-default")}, {"recipe", recipe}};
+            if (explicit_purpose) body["purpose"] = "chat";
+            Hook::import_barrier(server, [&](const std::string& phase) { if (phase == "registered") fs::create_directory(root / "juiced/state.json.tmp"); });
+            const auto failed = Hook::import_request(server, "finish", body); Hook::import_barrier(server, {}); fs::remove_all(root / "juiced/state.json.tmp");
+            check(failed.status == 500, "all accepted recipes retain publication intent after a final metadata failure");
+            bodies.push_back(body);
+        }
+    }
+    {
+        lemon::Server server(runtime, root.string(), root.string()); Hook::stop(server);
+        for (const auto& body : bodies) {
+            const auto before = read(fs::path(lemon::utils::get_config_dir()) / "user_models.json").at(body.at("name").get<std::string>());
+            const auto retry = Hook::import_request(server, "finish", body);
+            const auto replay = Hook::import_request(server, "finish", body);
+            const auto state = Hook::state(server).at("imports").at(body.at("id").get<std::string>());
+            check(retry.status == 201 && replay.status == 201 && state.at("status") == "complete" &&
+                  read(fs::path(lemon::utils::get_config_dir()) / "user_models.json").at(body.at("name").get<std::string>()) == before,
+                  "identical omitted/explicit purpose requests recover and replay without replacing any recipe's registration");
+            auto changed = body; changed["recipe"] = body.at("recipe") == "llamacpp" ? "whispercpp" : "llamacpp";
+            check(Hook::import_request(server, "finish", changed).status == 400,
+                  "replay still rejects genuinely changed effective definitions");
+        }
+        const auto id = upload_fixture(server);
+        const auto occupied = "OccupiedDiscovery-" + root.filename().string();
+        const auto builtins = Hook::models(server).get_supported_models();
+        const auto builtin = builtins.find("Whisper-Tiny");
+        if (builtin == builtins.end()) throw std::runtime_error("Missing builtin namespace fixture");
+        const auto original = builtin->second.checkpoint();
+        auto conflict = Hook::import_request(server, "finish", {{"id", id}, {"name", "Whisper-Tiny"}});
+        check(conflict.status == 409 && Hook::models(server).get_model_info("Whisper-Tiny").checkpoint() == original,
+              "initial no-overwrite rejects an occupied builtin public name through ModelManager");
+        lemon::ModelPublicationTestHook::discovered(Hook::models(server), occupied);
+        conflict = Hook::import_request(server, "finish", {{"id", id}, {"name", occupied}});
+        check(conflict.status == 409 && Hook::models(server).get_model_info(occupied).source == "discovered",
+              "conflict renaming cannot shadow a discovered public model");
+        conflict = Hook::import_request(server, "finish", {{"id", id}, {"name", "Whisper-Tiny"}});
+        check(conflict.status == 409 && Hook::models(server).get_model_info("Whisper-Tiny").checkpoint() == original,
+              "conflict renaming cannot shadow a builtin public model");
+        check(Hook::import_request(server, "finish", {{"id", id}, {"name", "Unused-" + root.filename().string()}}).status == 201,
+              "conflicted publication remains recoverable under a genuinely unused public name");
+    }
+    lemon::RuntimeConfig::set_global(nullptr);
+}
+
 static void policy_failures() {
     for (bool pin : {false, true}) for (bool staging : {false, true}) {
         const auto root = lemon::test::make_scratch_dir("policy");
@@ -1297,7 +1459,9 @@ static void policy_failures() {
 }
 
 int main(int argc, char** argv) {
-    if (argc > 1 && std::string(argv[1]) == "--save-dispatch") {
+    if (argc > 1 && std::string(argv[1]) == "--import-ownership") {
+        import_removal_ownership(); import_deletion_overlap(); import_definition_replays();
+    } else if (argc > 1 && std::string(argv[1]) == "--save-dispatch") {
         cache_pre_dispatch();
     } else if (argc > 1 && std::string(argv[1]) == "--cache-recovery") {
         terminal_snapshot_recovery(); concurrent_snapshot_recovery();

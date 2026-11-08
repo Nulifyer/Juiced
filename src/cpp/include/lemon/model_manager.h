@@ -266,6 +266,20 @@ public:
     // Remove a user registration without deleting its source files.
     void unregister_user_model(const std::string& model_name);
 
+    // One model's publication/removal spans registry and artifact/state commits.
+    // Recursive ownership lets those operations call the normal registry writers.
+    struct ModelMutation {
+        std::shared_ptr<std::recursive_mutex> owner;
+        std::unique_lock<std::recursive_mutex> lock;
+        ModelMutation(std::shared_ptr<std::recursive_mutex> mutex, bool wait)
+            : owner(std::move(mutex)), lock(*owner, std::defer_lock) {
+            if (wait) lock.lock(); else (void)lock.try_lock();
+        }
+    };
+    ModelMutation model_mutation(const std::string& model_name, bool wait = true);
+    // Installed before serving; the durable import owner can veto deletion.
+    void set_model_removal_guard(std::function<void(const std::string&)> guard) { model_removal_guard_ = std::move(guard); }
+
     // Register or validate a model definition without downloading its files.
     // Uses the same registration path as download_model.
     void register_model(const std::string& model_name,
@@ -604,6 +618,9 @@ private:
 
     // Cache of all models with their download status
     mutable std::mutex models_cache_mutex_;
+    std::mutex model_mutations_mutex_;
+    std::map<std::string, std::shared_ptr<std::recursive_mutex>> model_mutations_;
+    std::function<void(const std::string&)> model_removal_guard_;
     // Orders recipe_options.json rewrites without holding models_cache_mutex_
     // (which every request thread contends on) across disk I/O.
     std::mutex recipe_options_write_mutex_;

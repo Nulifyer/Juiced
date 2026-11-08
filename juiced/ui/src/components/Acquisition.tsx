@@ -65,6 +65,7 @@ export function Acquisition({
     [path, setPath] = useState(""),
     [uploadProgress, setUploadProgress] = useState(""),
     [importJobs, setImportJobs] = useState<any[]>([]);
+  const [importNames, setImportNames] = useState<Record<string, string>>({});
   const uploading = useRef<AbortController | null>(null);
   const selectedVariant = variants?.variants?.find(
     (v: any) => v.name === variant,
@@ -243,6 +244,22 @@ export function Acquisition({
       await refresh();
     } catch (e) {
       notify((e as Error).message);
+    }
+  }
+  async function recoverImport(job: any) {
+    setBusy(true);
+    try {
+      const body = job.publication?.conflict
+        ? { id: job.id, name: importNames[job.id]?.trim() }
+        : { id: job.id };
+      await api("juiced/import/" + (job.status === "publishing" ? "finish" : "cancel"), body);
+      notify(job.status === "publishing" ? "Import registered. Its loading policy is unchanged." : "Upload cleanup retried.");
+      await refresh();
+    } catch (e) {
+      notify((e as Error).message);
+    } finally {
+      await loadImports();
+      setBusy(false);
     }
   }
   return (
@@ -693,6 +710,18 @@ export function Acquisition({
                 <p>
                   {j.status} · {bytes(j.received || 0)} / {bytes(j.size || 0)}
                 </p>
+                {j.last_error && <p role="status">{j.last_error}</p>}
+                {j.status === "publishing" && j.publication?.conflict && (
+                  <label>
+                    New model name
+                    <input
+                      aria-label={`New model name for ${j.filename}`}
+                      value={importNames[j.id] || ""}
+                      onChange={(e) => setImportNames({ ...importNames, [j.id]: e.target.value })}
+                      placeholder="Choose an unused model name"
+                    />
+                  </label>
+                )}
               </div>
               {j.status === "uploading" && (
                 <Button
@@ -702,6 +731,16 @@ export function Acquisition({
                   onClick={() => void upload(j)}
                 >
                   Resume with selected file
+                </Button>
+              )}
+              {(j.status === "publishing" || (j.status === "cancelled" && j.cleanup_pending)) && (
+                <Button
+                  size="compact"
+                  variant="outline"
+                  disabled={busy || (j.publication?.conflict && !importNames[j.id]?.trim())}
+                  onClick={() => void recoverImport(j)}
+                >
+                  {j.status === "cancelled" ? "Retry cleanup" : j.publication?.conflict ? "Register with new name" : "Finish import"}
                 </Button>
               )}
             </article>

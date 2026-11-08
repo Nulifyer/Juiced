@@ -134,6 +134,8 @@ private:
   void handle(const httplib::Request &, httplib::Response &,
               const std::string &operation);
   json removal_plan(const std::string &model);
+  bool import_owns_model_locked(const std::string& name) const;
+  void with_model_removal(const std::string& model, const std::function<void()>& remove);
   void remove_model(const httplib::Request &, httplib::Response &);
   void import_file(const httplib::Request &, httplib::Response &,
                    const std::string &operation);

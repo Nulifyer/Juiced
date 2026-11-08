@@ -754,9 +754,10 @@ Server::Server(std::shared_ptr<RuntimeConfig> config,
     const char* api_key_env = std::getenv("LEMONADE_API_KEY");
     api_key_ = api_key_env ? std::string(api_key_env) : "";
 
-    // Read admin API key - if not set, defaults to regular API key value
+    // Unset and empty admin overrides both inherit the regular key. Normalize
+    // before enforcement, request identity and persisted epoch activation.
     const char* admin_api_key_env = std::getenv("LEMONADE_ADMIN_API_KEY");
-    if (admin_api_key_env) {
+    if (admin_api_key_env && *admin_api_key_env) {
         admin_api_key_ = std::string(admin_api_key_env);
     } else {
         admin_api_key_ = api_key_;
@@ -940,6 +941,7 @@ Server::~Server() {
         }
     }
     background_sync_threads_.clear();
+    if (model_manager_) model_manager_->set_model_removal_guard({});
 }
 
 
@@ -1092,7 +1094,7 @@ httplib::Server::HandlerResponse Server::authenticate_request(const httplib::Req
     // Authentication hierarchy. Two credentials gate two classes of endpoints:
     // api_key_ gates the regular API endpoints (/api, /v0, /v1); admin_api_key_
     // gates the internal control endpoints (/internal/*). admin_api_key_ defaults
-    // to api_key_ when LEMONADE_ADMIN_API_KEY is unset.
+    // to api_key_ when LEMONADE_ADMIN_API_KEY is unset or empty.
     // - admin_api_key_ authenticates against both regular and internal endpoints.
     // - api_key_ authenticates against the regular endpoints only. It cannot
     //   reach /internal/* when LEMONADE_ADMIN_API_KEY is set to a distinct value;
@@ -1116,7 +1118,9 @@ httplib::Server::HandlerResponse Server::authenticate_request(const httplib::Req
         }
     } else if ((is_api_route || is_metrics_route) && req.method != "OPTIONS") {
         if (!api_key_.empty()) {
-            if ((auth_token != api_key_) && (auth_token != admin_api_key_)) {
+            const bool regular_match = !auth_token.empty() && auth_token == api_key_;
+            const bool admin_match = !auth_token.empty() && !admin_api_key_.empty() && auth_token == admin_api_key_;
+            if (!regular_match && !admin_match) {
                 res.status = 401;
                 res.set_content("{\"error\": \"Invalid or missing API key\"}", "application/json");
                 return httplib::Server::HandlerResponse::Handled;
@@ -6677,6 +6681,8 @@ void Server::handle_delete(const httplib::Request& req, httplib::Response& res) 
             }
         }
 
+    } catch (const AdmissionError& error) {
+        set_model_error_response(create_model_error(request_json.value("model", request_json.value("model_name", "")), error), res);
     } catch (const std::exception& e) {
         LOG(ERROR, "Server") << "ERROR in handle_delete: " << e.what() << std::endl;
 

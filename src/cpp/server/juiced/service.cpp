@@ -20,6 +20,14 @@
 namespace lemon {
 namespace {
 using json = nlohmann::json;
+json import_labels(const std::string& recipe, const std::string& purpose) {
+  if (recipe != "llamacpp" && recipe != "asr4all" && recipe != "parakeet" && recipe != "whispercpp")
+    throw std::invalid_argument("Unsupported GGUF backend");
+  if (recipe != "llamacpp") return json::array({"transcription"});
+  if (purpose != "chat" && purpose != "embedding" && purpose != "reranking")
+    throw std::invalid_argument("Choose Chat, Embeddings or Rerank for llama.cpp imports");
+  return json::array({purpose});
+}
 thread_local std::chrono::steady_clock::time_point request_start;
 thread_local json request_usage = json::object();
 json response_usage(const httplib::Response &res) {
@@ -172,6 +180,11 @@ JuicedService::JuicedService(Server &server)
     state_ = save_state_locked(std::move(candidate));
   }
   server_.authentication_epoch_ = state_.at("authentication").at("epoch").get<std::string>();
+  server_.model_manager_->set_model_removal_guard([this](const std::string& name) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (import_owns_model_locked(name))
+      throw AdmissionError("import_publication_pending", "Finish import publication before removing this model", 409);
+  });
   for (const auto& [model, policy] : state_["policies"].items())
     server_.router_->publish_residency_policy(model, policy_revision_locked(model), policy == "hot");
   worker_ = std::thread([this] { run(); });
@@ -960,6 +973,8 @@ void JuicedService::handle(const httplib::Request &req, httplib::Response &res,
       return;
     }
     reply(res, {{"error", "Unknown operation"}}, 404);
+  } catch (const AdmissionError& e) {
+    reply(res, e.to_json(), e.status);
   } catch (const json::exception &e) {
     reply(res, {{"error", e.what()}}, 400);
   } catch (const std::invalid_argument &e) {
@@ -972,6 +987,8 @@ void JuicedService::publish_import(const std::string& id) {
   json job;
   { std::lock_guard<std::mutex> lock(mutex_); job = state_["imports"].at(id); }
   const auto intent = job.at("publication");
+  auto mutation = server_.model_manager_->model_mutation(intent.at("name").get<std::string>(), false);
+  if (!mutation.lock.owns_lock()) throw AdmissionError("model_mutation_busy", "Wait for the current model mutation to finish", 409);
   const auto source = directory_ / "imports" / (id + ".part");
   const auto destination = std::filesystem::path(intent.at("destination").get<std::string>());
   const auto valid = [&](const std::filesystem::path& path) {
@@ -997,6 +1014,10 @@ void JuicedService::publish_import(const std::string& id) {
     throw;
   }
   if (import_publication_barrier_) import_publication_barrier_("registered");
+  const auto registered = server_.model_manager_->get_model_info(intent.at("name").get<std::string>());
+  if (!registered.extras.count("juiced_import") || registered.extras.at("juiced_import") != id ||
+      registered.checkpoint() != intent.at("destination").get<std::string>())
+    throw std::runtime_error("Import registration changed before final publication; ownership retained");
   std::lock_guard<std::mutex> lock(mutex_);
   if (state_["imports"].at(id).at("publication") != intent || state_["imports"].at(id).at("status") != "publishing")
     throw std::runtime_error("Import intent changed before final publication");
@@ -1106,8 +1127,9 @@ void JuicedService::import_file(const httplib::Request &req,
     if (op != "finish" && op != "server") { reply(res, {{"error", "Unknown import operation"}}, 404); return; }
     if (op == "finish" && (job.value("status", "") == "publishing" || job.value("status", "") == "complete")) {
       auto intent = job.at("publication");
+      const auto committed_recipe = intent.at("definition").at("recipe").get<std::string>();
       if ((body.contains("recipe") && body.at("recipe") != intent.at("definition").at("recipe")) ||
-          (body.contains("purpose") && json::array({body.at("purpose")}) != intent.at("definition").at("labels")))
+          (body.contains("purpose") && import_labels(committed_recipe, body.at("purpose").get<std::string>()) != intent.at("definition").at("labels")))
         throw std::invalid_argument("Retry must retain the committed import recipe and purpose");
       if (job.at("status") == "publishing" && intent.value("conflict", false) && body.contains("name") && body.at("name") != intent.at("name")) {
         const auto name = body.at("name").get<std::string>();
@@ -1155,16 +1177,11 @@ void JuicedService::import_file(const httplib::Request &req,
     if (!read_gguf_metadata(metadata, file.string()) || metadata.architecture.empty())
       throw std::invalid_argument("Incomplete or unsupported GGUF metadata; use a valid complete model");
     const auto recipe = body.value("recipe", "llamacpp");
-    if (recipe != "llamacpp" && recipe != "asr4all" && recipe != "parakeet" && recipe != "whispercpp")
-      throw std::invalid_argument("Unsupported GGUF backend");
     const auto purpose = body.value("purpose", "chat");
-    if (recipe == "llamacpp" && purpose != "chat" && purpose != "embedding" && purpose != "reranking")
-      throw std::invalid_argument("Choose Chat, Embeddings or Rerank for llama.cpp imports");
+    const auto labels = import_labels(recipe, purpose);
     const auto name = body.value("name", op == "finish" ? std::filesystem::path(job.at("filename").get<std::string>()).stem().string() : file.stem().string());
     if (!safe_name(name)) throw std::invalid_argument("Use the proper model name without path separators");
-    if (server_.model_manager_->model_exists(name)) throw std::invalid_argument("That model name is already registered; working models are not overwritten by import");
     const auto destination = op == "finish" ? std::filesystem::absolute(directory_ / "artifacts" / id / job.at("filename").get<std::string>()) : file;
-    const auto labels = recipe == "llamacpp" ? json::array({purpose}) : json::array({"transcription"});
     const json definition = {{"recipe", recipe}, {"source", "local_path"}, {"checkpoints", {{"main", destination.string()}}},
                              {"labels", labels}, {"size", std::filesystem::file_size(file) / 1e9}};
     if (op == "finish") {
@@ -1181,7 +1198,8 @@ void JuicedService::import_file(const httplib::Request &req,
     } else server_.model_manager_->register_user_model(name, definition, "local_path", false);
     wake_.notify_all();
     published_response(name, destination.string());
-  } catch (const ModelRegistrationConflict& error) { reply(res, {{"error", error.what()}, {"retry", "Choose a distinct model name when finishing this import"}}, 409); }
+  } catch (const AdmissionError& error) { reply(res, error.to_json(), error.status); }
+    catch (const ModelRegistrationConflict& error) { reply(res, {{"error", error.what()}, {"retry", "Choose a distinct model name when finishing this import"}}, 409); }
     catch (const std::invalid_argument& error) { reply(res, {{"error", error.what()}}, 400); }
     catch (const json::exception& error) { reply(res, {{"error", error.what()}}, 400); }
     catch (const std::exception& error) {

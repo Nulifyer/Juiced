@@ -4835,10 +4835,23 @@ static bool user_entry_is_router_collection(const json& user_models,
         user_models.at(key).value("recipe", std::string()));
 }
 
+ModelManager::ModelMutation ModelManager::model_mutation(const std::string& model_name, bool wait) {
+    const auto name = is_user_model_name(model_name) ? strip_user_model_prefix(model_name) : model_name;
+    std::shared_ptr<std::recursive_mutex> owner;
+    {
+        std::lock_guard<std::mutex> lock(model_mutations_mutex_);
+        auto& entry = model_mutations_[name];
+        if (!entry) entry = std::make_shared<std::recursive_mutex>();
+        owner = entry;
+    }
+    return ModelMutation(std::move(owner), wait);
+}
+
 void ModelManager::register_user_model(const std::string& model_name,
                                       const json& model_data,
                                       const std::string& source, bool replace_existing,
                                       const std::string& publication_id) {
+    auto mutation = model_mutation(model_name);
     const std::string recipe = model_data.value("recipe", std::string());
 
     // Remove "user." prefix if present
@@ -4897,7 +4910,7 @@ void ModelManager::register_user_model(const std::string& model_name,
     // stale in-memory state cannot overwrite another registration.
     bool overwrote_router_collection = false;
     {
-        std::lock_guard<std::mutex> lock(models_cache_mutex_);
+        auto lock = replace_existing ? std::unique_lock<std::mutex>(models_cache_mutex_) : lock_current_models_cache();
         json updated_user_models = load_optional_json(get_user_models_file());
         if (!updated_user_models.is_object()) {
             updated_user_models = json::object();
@@ -4912,6 +4925,8 @@ void ModelManager::register_user_model(const std::string& model_name,
             }
             throw ModelRegistrationConflict("That model variant is already registered; existing settings were preserved");
         }
+        if (!replace_existing && (server_models_.contains(clean_name) || models_cache_.count(clean_name) || public_model_aliases_.count(clean_name)))
+            throw ModelRegistrationConflict("That public model name is already occupied; choose a distinct variant name");
         overwrote_router_collection =
             user_entry_is_router_collection(updated_user_models, clean_name);
         updated_user_models[clean_name] = model_entry;
@@ -4932,6 +4947,8 @@ void ModelManager::register_user_model(const std::string& model_name,
 }
 
 void ModelManager::unregister_user_model(const std::string& model_name) {
+    auto mutation = model_mutation(model_name);
+    if (model_removal_guard_) model_removal_guard_(model_name);
     std::string clean_name = model_name;
     if (is_user_model_name(clean_name)) {
         clean_name = strip_user_model_prefix(clean_name);
@@ -6735,6 +6752,9 @@ static bool path_inside(const fs::path& path, const fs::path& root) {
 
 void ModelManager::delete_model(const std::string& model_name) {
     auto info = get_model_info(model_name);
+    auto mutation = model_mutation(info.model_name);
+    info = get_model_info(model_name);
+    if (model_removal_guard_) model_removal_guard_(info.model_name);
     std::string canonical_model_name = info.model_name;
 
     LOG(INFO, "ModelManager") << "Deleting model: " << canonical_model_name << std::endl;

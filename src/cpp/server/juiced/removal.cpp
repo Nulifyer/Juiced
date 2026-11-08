@@ -19,6 +19,22 @@ void respond(httplib::Response &res, const nlohmann::json &data,
   res.set_header("Cache-Control", "no-store");
 }
 } // namespace
+bool JuicedService::import_owns_model_locked(const std::string& name) const {
+  const auto bare = [](const std::string& value) { return value.rfind("user.", 0) == 0 ? value.substr(5) : value; };
+  for (const auto& [id, job] : state_.at("imports").items())
+    if (job.value("status", "") == "publishing" && bare(job.at("publication").at("name").get<std::string>()) == bare(name)) return true;
+  return false;
+}
+void JuicedService::with_model_removal(const std::string& model, const std::function<void()>& remove) {
+  auto mutation = server_.model_manager_->model_mutation(model, false);
+  if (!mutation.lock.owns_lock()) throw AdmissionError("model_mutation_busy", "Wait for model publication to finish", 409);
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (import_owns_model_locked(model))
+      throw AdmissionError("import_publication_pending", "Finish import publication before removing this model", 409);
+  }
+  remove();
+}
 JuicedService::json JuicedService::removal_plan(const std::string &requested) {
   json plan;
   json stored = json::object();
@@ -87,6 +103,7 @@ JuicedService::json JuicedService::removal_plan(const std::string &requested) {
   std::string reason;
   {
     std::lock_guard<std::mutex> lock(mutex_);
+    if (import_owns_model_locked(name)) reason = "Finish import publication before removing this model.";
     for (const auto &[id, job] : state_["preparations"].items())
       if (job.value("model", "") == name && job.value("pending", false))
         reason = "Cancel or finish preparation before removing its source model.";
@@ -150,6 +167,7 @@ void JuicedService::remove_model(const httplib::Request &req,
     operations_[name] = {{"pending", true}, {"state", "removing"}};
   }
   try {
+    with_model_removal(plan["canonical"], [&] {
     if (plan["action"] == "upload") {
       const auto file = plan["checkpoints"].at("main").get<std::string>();
       std::filesystem::remove(file);
@@ -158,6 +176,7 @@ void JuicedService::remove_model(const httplib::Request &req,
       server_.model_manager_->unregister_user_model(plan["canonical"]);
     } else
       server_.model_manager_->delete_model(plan["canonical"]);
+    });
     {
       std::lock_guard<std::mutex> lock(mutex_);
       operations_.erase(name);

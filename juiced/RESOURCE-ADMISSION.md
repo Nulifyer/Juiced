@@ -205,3 +205,24 @@ under a distinct name. Published intent must finish before model removal; cancel
 cannot delete its artifact. Earlier cancellation commits before deleting the part
 file, and failed cleanup remains visible and retryable. The 1-byte-to-8-MiB chunk
 protocol, declared-size bounds and free-space accounting remain in place.
+
+The effective admin credential inherits the regular API key when its environment
+variable is unset or empty. Empty/malformed credentials never match a configured
+key. Enforcement, principal resolution and transition fingerprints consume that
+same normalized configuration. With no keys, trusted-LAN access remains open;
+an admin-only configuration protects control routes while regular APIs remain open.
+
+ModelManager serializes each model's registration, import publication and removal.
+Unresolved import intent rejects deletion, including native/gateway calls through
+ModelManager, and upload removal claims ownership before touching files. Public
+and user-prefixed names share the guard. Import no-overwrite checks the current
+native namespace, including built-in/discovered names, and retains same-publication
+idempotency. Initial and replayed recipe/purpose values use the same effective
+labels. Library rows expose pending publication, errors, conflict-name resolution
+and cleanup retries through those native operations.
+
+Cache-profile qualification parses the native slot-save argument and compares its
+filesystem directory with Juiced storage. It accepts quoted paths containing spaces
+or backslashes and rejects missing or duplicate storage flags. An unrelated option
+containing the directory does not establish cache configuration. Backend version
+and exact-profile useful-reuse acceptance still apply.

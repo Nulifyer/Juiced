@@ -85,7 +85,7 @@ class Fixture:
 
     def start(self, api="", admin=""):
         self.stop()
-        self.api, self.admin = api, admin
+        self.api, self.admin = api, admin or api
         env = {
             **os.environ,
             "HOME": str(self.root),
@@ -94,8 +94,10 @@ class Fixture:
             "HF_HUB_CACHE": str(self.root / "hf"),
             "JUICED_SNAPSHOT_DIR": str(self.root / "snapshots"),
             "LEMONADE_API_KEY": api,
-            "LEMONADE_ADMIN_API_KEY": admin,
+            "LEMONADE_ADMIN_API_KEY": admin or "",
         }
+        if admin is None:
+            env.pop("LEMONADE_ADMIN_API_KEY", None)
         self.process = subprocess.Popen(
             [
                 str(self.args.binary),
@@ -537,6 +539,21 @@ def acceptance(args):
             fixture.start("fixture-inference-v1", "fixture-operator-v1")
             fixture.load()
             isolated_turn("original credential returns again", inference, "cold")
+            fallback = {"Authorization": "Bearer fixture-fallback"}
+            fixture.start("fixture-fallback", None)
+            fixture.load()
+            isolated_turn("unset admin fallback", fallback, "cold")
+            fixture.start("fixture-fallback", "")
+            fixture.load()
+            isolated_turn("empty admin keeps effective namespace", fallback, "restored")
+            isolated_turn(
+                "fallback x-api-key equivalent",
+                {
+                    "Authorization": "Bearer fixture-fallback",
+                    "x-api-key": "fixture-fallback",
+                },
+                "restored",
+            )
             proof["identity_isolation"] = {
                 "principal_namespaces_distinct": True,
                 "same_worker_principal_switch_cold": True,
@@ -547,6 +564,7 @@ def acceptance(args):
                 "failed_auth_activation_preserves_namespace": True,
                 "returning_auth_mode_cold": True,
                 "returning_credentials_cold": True,
+                "unset_empty_admin_effective_namespace_preserved": True,
                 "old_credential_rejected": True,
                 "retained_same_session_namespaces": len(ids_anonymous),
             }

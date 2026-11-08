@@ -36,15 +36,19 @@
     "Sealed snapshot recovery restores checksum-verified previous content or commits tracked cleanup for missing/corrupt candidates. A per-publication claim excludes concurrent verification/mutation while hashing stays outside the shared state lock. Unknown unsealed writes still require termination proof.",
     "Save dispatch is recorded by the exchange owner after its cancellation check. Proven pre-dispatch cancellation durably releases unused disk credit in JSON/SSE without unloading the worker.",
     "Accepted credential/auth-mode changes commit a new persistent transition generation before serving. Unchanged restarts retain their namespace; A/anonymous/A and A/B/A do not revive old namespaces. Failed activation leaves the previous configuration and namespace intact.",
-    "Chunked imports seal file/checksum/destination/registration intent before rename, serialize finish/cancel/chunk ownership and reconcile restart/retry. ModelManager owns no-overwrite and provenance-based idempotency. Conflicting names remain explicit and can finish under a distinct name. Cancellation commits before cleanup. Completed import replay does not recreate removed models."
+    "Chunked imports seal file/checksum/destination/registration intent before rename, serialize finish/cancel/chunk ownership and reconcile restart/retry. ModelManager owns no-overwrite and provenance-based idempotency. Conflicting names remain explicit and can finish under a distinct name. Cancellation commits before cleanup. Completed import replay does not recreate removed models.",
+    "ModelManager per-model mutation ownership serializes registration, import publication and removal. Committed publishing intent vetoes native/gateway removal; final publication revalidates provenance. Import no-overwrite protects the full current public namespace, including conflict rename.",
+    "Initial/replayed import recipe and purpose normalize to one effective definition. Compact Library controls retry publication, resolve name conflicts and retry cleanup through native endpoints.",
+    "Unset/empty admin overrides inherit the regular key before enforcement, identity and epoch activation. Empty credentials never match configured keys. Trusted-LAN and admin-only behavior remain explicit.",
+    "Cache-profile qualification parses the actual slot-save argument through the backend argument owner and compares filesystem directories. JSON escaping, unrelated option values and ambiguous duplicate flags cannot qualify storage."
   ],
   "verification": {
-    "status": "Local Linux native/API, actual CPU/cache/disk and controlled protocol/configuration gates passed; new exact-source platform/image/recovery evidence pending",
-    "native_contracts": 27,
+    "status": "Final local Linux28 native/API43/UI77, actual CPU cache/auth/disk and controlled cancellation/save-failure gates passed. Fresh exact-source platform/image/recovery evidence pending.",
+    "native_contracts": 28,
     "persistence_checks": 90,
     "gateway_assertions": 34,
     "cloud_runtime_assertions": 12,
-    "api_cases": 42,
+    "api_cases": 43,
     "ledger_repetitions": 20,
     "scope": "Synthetic CPU/native/loopback and actual neutral Stories15M serving/cache. No accelerator, real speech, model quality or essential-service protection qualification.",
     "publication_ordering_checks": 34,
@@ -54,10 +58,12 @@
     "failed_save_exchange_cases": 5,
     "terminal_snapshot_recovery_assertions": 38,
     "import_publication_assertions": 32,
-    "save_dispatch_assertions": 8,
+    "save_dispatch_assertions": 12,
     "real_cpu_previous_snapshot_recoveries": 2,
     "failed_authentication_activation_cases": 2,
-    "recovery_scope": "Manager-process restart with filesystem contents retained and synchronous injected failures. Host-crash/power-loss ordering is unqualified; no file/directory synchronization is claimed."
+    "recovery_scope": "Manager-process restart with filesystem contents retained and synchronous injected failures. Host-crash/power-loss ordering is unqualified; no file/directory synchronization is claimed.",
+    "import_ownership_assertions": 48,
+    "ui_workflows": 77
   },
   "remaining": [
     "Full P1 fourteen-family path coverage, ingress/background/acquisition/preparation/install bounds, all-writer maintenance, exact execution identities, Realtime context/quiescence, termination reconciliation, early streaming status, shared observations and frozen service-protection gates.",

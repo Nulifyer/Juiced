@@ -248,6 +248,59 @@ class ApiContract(unittest.TestCase):
      process.terminate()
      try:process.wait(timeout=20)
      except subprocess.TimeoutExpired:process.kill();process.wait()
+ def test_effective_authentication_configuration(self):
+  with tempfile.TemporaryDirectory(prefix='juiced-effective-auth-') as tmp:
+   root=pathlib.Path(tmp)
+   for directory in ['config','cache','run']:(root/directory).mkdir()
+   with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
+   (root/'config/config.json').write_text(json.dumps({'port':port,'broadcast':False,'offline':True,'auto_check_model_updates':False}))
+   def request(path,headers,body=None):
+    q=urllib.request.Request(f'http://127.0.0.1:{port}'+path,headers=headers,data=None if body is None else json.dumps(body).encode())
+    try:
+     with urllib.request.urlopen(q,timeout=10) as response:return response.status
+    except urllib.error.HTTPError as response:
+     with response:return response.code
+   def stop(process):
+    process.terminate()
+    try:process.wait(timeout=20)
+    except subprocess.TimeoutExpired:process.kill();process.wait()
+   previous_epoch=None
+   for api,admin in [('fixture-regular',None),('fixture-regular',''),('','fixture-admin'),('','')]:
+    env={k:v for k,v in os.environ.items() if k not in ['LEMONADE_API_KEY','LEMONADE_ADMIN_API_KEY']}
+    env.update(HOME=str(root),XDG_RUNTIME_DIR=str(root/'run'),LEMONADE_API_KEY=api)
+    if admin is not None:env['LEMONADE_ADMIN_API_KEY']=admin
+    with open(root/'server.log','w') as log:
+     process=subprocess.Popen([BINARY,str(root/'cache'),str(root/'config'),'--host','127.0.0.1','--port',str(port)],stdout=log,stderr=log,env=env)
+     try:
+      for _ in range(150):
+       try:
+        if request('/v1/models',{'Authorization':'Bearer '+(api or admin or '')})==200:break
+       except OSError:pass
+       if process.poll() is not None:self.fail('Authentication fixture exited')
+       time.sleep(.1)
+      else:self.fail('Authentication fixture did not start')
+      effective_admin=admin or api
+      candidates=[{}, {'Authorization':'Basic invalid'}, {'Authorization':'Bearer '}, {'Authorization':'Bearer wrong'}, {'Authorization':'Bearer '+(api or effective_admin)}, {'x-api-key':api or effective_admin}]
+      for headers in candidates:
+       credential=headers.get('x-api-key',headers.get('Authorization','').removeprefix('Bearer '))
+       regular_allowed=not api or bool(credential) and credential in [api,effective_admin]
+       operator_allowed=not effective_admin or bool(credential) and credential==effective_admin
+       for prefix in ['/api/v0/','/api/v1/','/v0/','/v1/']:
+        self.assertEqual(request(prefix+'models',headers),200 if regular_allowed else 401,(prefix,api,admin,headers))
+        self.assertEqual(request(prefix+'juiced/admission',headers),200 if operator_allowed else 401,(prefix,api,admin,headers))
+       self.assertEqual(request('/internal/config',headers),200 if operator_allowed else 401,('internal/config',api,admin,headers))
+       for path,body,accepted in [('/api/tags',None,200),('/sdapi/v1/sd-models',None,200),('/v1/messages/count_tokens',{},400),('/mcp',{'jsonrpc':'2.0','id':1,'method':'ping'},200)]:
+        self.assertEqual(request(path,headers,body),accepted if regular_allowed else 401,(path,api,admin,headers))
+      epoch=json.loads((root/'config/juiced/state.json').read_text())['authentication']['epoch']
+      if api and admin=='':self.assertEqual(epoch,previous_epoch,'Equivalent unset/empty override must retain restart namespace')
+      previous_epoch=epoch
+     finally:stop(process)
+   before=(root/'config/juiced/state.json').read_bytes();temporary=root/'config/juiced/state.json.tmp';temporary.mkdir()
+   env.update(LEMONADE_API_KEY='fixture-rejected',LEMONADE_ADMIN_API_KEY='')
+   with open(root/'rejected.log','w') as log:
+    process=subprocess.Popen([BINARY,str(root/'cache'),str(root/'config'),'--host','127.0.0.1','--port',str(port)],stdout=log,stderr=log,env=env)
+    try:process.wait(timeout=20);self.assertNotEqual(process.returncode,0);self.assertEqual((root/'config/juiced/state.json').read_bytes(),before)
+    finally:stop(process);temporary.rmdir()
  def test_native_admission_controls(self):
   for prefix in ['/v1/','/v0/','/api/v1/','/api/v0/']:
    status,state=self.request(prefix+'juiced/admission');self.assertEqual(status,200);self.assertEqual(state['mode'],'legacy');self.assertFalse(state['latency_qualified'])
