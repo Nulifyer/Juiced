@@ -1027,6 +1027,7 @@ set(SOURCES_CORE
     src/cpp/server/server.cpp
     src/cpp/server/request_identity.cpp
     src/cpp/server/memory_budget.cpp
+    src/cpp/server/resource_admission.cpp
     src/cpp/server/juiced/service.cpp
     src/cpp/server/juiced/capabilities.cpp
     src/cpp/server/juiced/compatibility.cpp
@@ -3438,6 +3439,16 @@ if(BUILD_TESTING AND EXISTS "${_CLOUD_DISCOVERY_POLICY_TEST_SRC}")
 endif()
 
 if(BUILD_TESTING)
+    add_executable(test_router_admission test/cpp/test_router_admission.cpp)
+    target_link_libraries(test_router_admission PRIVATE lemonade-server-core)
+    add_cpp_ci_test(RouterAdmissionTest CI ON COMMAND test_router_admission)
+    set_tests_properties(RouterAdmissionTest PROPERTIES TIMEOUT 30)
+
+    add_executable(test_resource_admission test/cpp/test_resource_admission.cpp)
+    target_link_libraries(test_resource_admission PRIVATE lemonade-server-core)
+    add_cpp_ci_test(ResourceAdmissionTest CI ON COMMAND test_resource_admission)
+    set_tests_properties(ResourceAdmissionTest PROPERTIES TIMEOUT 30)
+
     add_executable(test_request_identity test/cpp/test_request_identity.cpp)
     target_link_libraries(test_request_identity PRIVATE lemonade-server-core)
     add_cpp_ci_test(RequestIdentityTest CI ON COMMAND test_request_identity)

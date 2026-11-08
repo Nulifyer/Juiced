@@ -1,4 +1,6 @@
 #include "lemon/router.h"
+#include "lemon/request_identity.h"
+#include "lemon/memory_budget.h"
 #include "lemon/cloud_provider_registry.h"
 #include "lemon/backends/backend_ops.h"
 #include "lemon/backends/backend_registry.h"
@@ -53,6 +55,12 @@ private:
     SuspendInhibitor* inhibitor_;
 };
 
+json admission_failure(const AdmissionError& error) {
+    json details = {{"code", error.code}, {"status_code", error.status}};
+    if (error.status == 429 || error.status == 503) details["retry_after"] = 1;
+    return ErrorResponse::create(error.what(), ErrorType::BACKEND_ERROR, details);
+}
+
 // Only OpenAI output-delta events count. Generic SSE payloads, keepalives,
 // request state, usage and complete/cumulative "response" fields are not tokens.
 void observe_stream_content(LiveThroughput::Request& live, const json& event) {
@@ -98,7 +106,18 @@ void observe_stream_content(LiveThroughput::Request& live, const json& event) {
 } // namespace
 
 Router::Router(RuntimeConfig* config, ModelManager* model_manager, BackendManager* backend_manager)
-    : config_(config), model_manager_(model_manager), backend_manager_(backend_manager) {
+    : config_(config), model_manager_(model_manager), backend_manager_(backend_manager),
+      admission_([](const std::string& pool) -> std::optional<uint64_t> {
+          if (pool != "host") return std::nullopt;
+#ifdef __linux__
+          return read_linux_memory_budget().available_bytes();
+#else
+          bool known = false;
+          const auto available = get_available_memory_gb(DEVICE_CPU, GpuMemoryVendor::Any, "", nullptr, &known);
+          return known ? std::optional<uint64_t>(static_cast<uint64_t>(std::max(0.0, available) * 1073741824.0)) : std::nullopt;
+#endif
+      }) {
+    admission_.configure(config_->snapshot().value("admission", json::object()));
 
     int max = config_->max_loaded_models();
     if (max == -1) {
@@ -123,6 +142,7 @@ Router::Router(RuntimeConfig* config, ModelManager* model_manager, BackendManage
 }
 
 Router::~Router() {
+    admission_.shutdown();
     LOG(DEBUG, "Router") << "Destructor: stopping monitors and unloading all models" << std::endl;
     if (eviction_engine_) eviction_engine_->stop();
     if (vram_monitor_) vram_monitor_->stop();
@@ -155,6 +175,63 @@ bool Router::model_access_allowed(const std::string& model) const {
     // The policy owner can inspect model/service state. Never call it under
     // the lifecycle lock, including for direct realtime connections.
     return !policy || (!model.empty() && policy(model));
+}
+
+json Router::admission_snapshot() const { return admission_.snapshot(); }
+void Router::pause_admission(bool paused) { admission_.pause(paused); }
+void Router::configure_admission(const json& config) { admission_.configure(config); }
+
+std::shared_ptr<WrappedServer> Router::shared_worker(WrappedServer* server) const {
+    return server ? server->shared_from_this() : nullptr;
+}
+
+ResourceAdmission::Lease Router::admit_worker(const WrappedServer& server, ResourceAdmission::Operation operation) const {
+    const auto protected_mode = admission_.snapshot().value("mode", std::string("legacy")) == "protected";
+    if (protected_mode && server.get_recipe_options().get_recipe() == "cloud")
+        throw AdmissionError("operation_unqualified", "Cloud upstream lifetime is not qualified for protected admission");
+    if (protected_mode && operation == ResourceAdmission::Operation::Realtime)
+        throw AdmissionError("operation_unqualified", "Realtime upstream-stop reconciliation is not qualified for protected admission");
+    if (protected_mode && operation != ResourceAdmission::Operation::Load && server.get_state() == ModelState::DOWNSIZED)
+        throw AdmissionError("operation_unqualified", "Restore peaks are not yet qualified for protected admission");
+    if (admission_.has_uncertain_generation(server.get_instance_id())) {
+        if (server.is_backend_alive() && dynamic_cast<const ISlotsServer*>(&server)) {
+            auto reference = const_cast<WrappedServer&>(server).try_acquire_ready_state_operation();
+            if (reference) {
+                auto address = server.get_address();
+                if (address.size() >= 3 && address.substr(address.size() - 3) == "/v1") address.resize(address.size() - 3);
+                try {
+                    auto response = utils::HttpClient::get(address + "/slots", {}, 1,
+                        utils::HttpSecurityPolicy::TrustedLoopback);
+                    auto slots = json::parse(response.body, nullptr, false);
+                    if (response.status_code == 200 && slots.is_array() && !slots.empty() &&
+                        std::all_of(slots.begin(), slots.end(), [](const auto& slot) {
+                            return slot.is_object() && slot.contains("is_processing") &&
+                                slot.at("is_processing").is_boolean() && !slot.at("is_processing").template get<bool>();
+                        })) admission_.reconcile_idle_requests(server.get_instance_id());
+                } catch (const std::exception&) {}
+            }
+        }
+    }
+    ResourceAdmission::Work work;
+    work.model = model_manager_->get_public_model_name(server.get_model_name());
+    work.service = model_type_to_string(server.get_model_type());
+    work.generation = server.get_instance_id();
+    work.checkpoint = server.get_checkpoint();
+    work.options = server.get_recipe_options().to_json();
+    work.options.erase("pinned");
+    work.operation = operation;
+    if (const auto context = current_request_context()) {
+        work.principal = context->identity.principal + ":" + context->identity.credential_epoch;
+        work.cancelled = context->cancelled;
+    } else {
+        work.principal = "internal-runtime";
+    }
+    const auto native_cancel = WrappedServer::current_request_cancel_context();
+    const auto http_cancel = work.cancelled;
+    work.cancelled = [native_cancel, http_cancel] {
+        return native_cancel.cancelled() || (http_cancel && http_cancel());
+    };
+    return admission_.acquire(std::move(work));
 }
 
 void Router::set_cloud_registry(CloudProviderRegistry* registry) {
@@ -688,6 +765,8 @@ void Router::evict_server(WrappedServer* server) {
         throw RouterResidencyConflictException(model_name, model_name, "the worker has active operations");
 
     server->unload();
+    admission_.reconcile_stopped_generation(server->get_instance_id());
+    server->release_resource_residency();
 
     // Remove from vector
     loaded_servers_.erase(
@@ -790,9 +869,13 @@ void Router::end_exclusive() {
 }
 
 void Router::wait_for_slot_clearance(std::unique_lock<std::mutex>& lock) {
-    exclusive_cv_.wait(lock, [&] {
-        return !exclusive_active_ || exclusive_owner_ == std::this_thread::get_id();
-    });
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (exclusive_active_ && exclusive_owner_ != std::this_thread::get_id()) {
+        if (WrappedServer::current_request_cancel_context().cancelled())
+            throw AdmissionError("request_cancelled", "Request cancelled while waiting for maintenance", 499);
+        if (exclusive_cv_.wait_until(lock, deadline) == std::cv_status::timeout && exclusive_active_)
+            throw AdmissionError("queue_deadline_exceeded", "Runtime maintenance wait exceeded its deadline", 429);
+    }
 }
 
 std::map<std::string, bool> Router::snapshot_loaded_models() const {
@@ -912,6 +995,7 @@ void Router::load_model(const std::string& model_name,
         // Check if model is already loaded. Watchdog-reset or otherwise dead
         // entries are evicted first so auto-load performs a real lazy restart.
         WrappedServer* existing = find_server_by_model_name(canonical_model_name);
+        WrappedServer* replace_existing = nullptr;
         if (existing && (!existing->is_backend_alive() || existing->was_watchdog_triggered())) {
             LOG(WARNING, "Router") << "Existing backend for " << canonical_model_name
                                     << " is unavailable or watchdog triggered, evicting before reload" << std::endl;
@@ -936,8 +1020,7 @@ void Router::load_model(const std::string& model_name,
             }
             if (allow_reload_on_option_change && existing_opts != requested_opts) {
                 LOG(INFO, "Router") << "Options changed, reloading model: " << canonical_model_name << std::endl;
-                evict_server(existing);
-                // Fall through to create and load with new options
+                replace_existing = existing;
             } else {
                 // Residency follows the current use of the live process. Promotion
                 // and demotion both reuse the process and obey destination-pool
@@ -957,6 +1040,14 @@ void Router::load_model(const std::string& model_name,
         ModelType model_type = model_info.type;
         std::unique_ptr<WrappedServer> new_server = create_backend_server(model_info);
         DeviceType device_type = new_server->effective_device(effective_options);
+        const bool protected_admission = admission_.snapshot().value("mode", std::string("legacy")) == "protected";
+        if (protected_admission && effective_options.get_option("ctx_size") == -1)
+            throw AdmissionError("admission_profile_unknown", "Protected loads require an explicit context ceiling");
+        new_server->set_model_metadata(canonical_model_name, model_info.checkpoint(), model_type, device_type, effective_options);
+        lock.unlock();
+        auto load_resources = admit_worker(*new_server, ResourceAdmission::Operation::Load);
+        lock.lock();
+        if (replace_existing) evict_server(replace_existing);
 
         // NPU EXCLUSIVITY CHECK — driven by the backend's slot policy (descriptor).
         //   ExclusiveNpu (ryzenai-llm, whisper-on-npu): lock the entire NPU,
@@ -1103,6 +1194,7 @@ void Router::load_model(const std::string& model_name,
         new_server->set_load_cancel_flag(cancel_flag);
 
         try {
+            load_resources.started();
             new_server->load(canonical_model_name, model_info, effective_options, do_not_upgrade);
             load_success = true;
             auto load_end = std::chrono::steady_clock::now();
@@ -1120,6 +1212,16 @@ void Router::load_model(const std::string& model_name,
         }
 
         new_server->set_load_cancel_flag(nullptr);
+        if (load_success) {
+            load_resources.retain_residency();
+            new_server->retain_resource_residency(std::move(load_resources));
+        } else {
+            try {
+                new_server->unload();
+                load_resources.completed();
+                admission_.reconcile_stopped_generation(new_server->get_instance_id());
+            } catch (const std::exception&) {}
+        }
 
         lock.lock();
 
@@ -1179,7 +1281,8 @@ void Router::load_model(const std::string& model_name,
                 throw ConfigurationException(error_message);
             }
 
-            if (model_info.extra<bool>("execution_trial", false) ||
+            if (protected_admission || config_->snapshot().value("admission", json::object()).value("models", json::object()).contains(model_manager_->get_public_model_name(canonical_model_name)) ||
+                model_info.extra<bool>("execution_trial", false) ||
                 !model_info.extra<std::string>("execution_profile", "").empty()) {
                 throw std::runtime_error(error_message);
             }
@@ -1578,27 +1681,39 @@ std::string Router::get_backend_address() const {
 
 WrappedServer::InferenceLease Router::acquire_model_state_operation(const std::string& model_name) const {
     if (!model_access_allowed(model_name)) return {};
-    std::lock_guard<std::mutex> lock(load_mutex_);
-    auto* server = find_server_by_model_name(resolve_model_name(model_name));
-    if (!server || !server->is_backend_alive()) return {};
-    return server->try_acquire_ready_state_operation();
+    std::shared_ptr<WrappedServer> server;
+    WrappedServer::InferenceLease reference;
+    {
+        std::lock_guard<std::mutex> lock(load_mutex_);
+        server = shared_worker(find_server_by_model_name(resolve_model_name(model_name)));
+        if (!server || !server->is_backend_alive()) return {};
+        reference = server->try_acquire_ready_state_operation();
+    }
+    if (reference) reference.attach_resources(admit_worker(*server, ResourceAdmission::Operation::State));
+    return reference;
 }
 
 Router::StreamingTranscriptionLease Router::acquire_streaming_transcription(const std::string& model_name) const {
     if (!model_access_allowed(model_name)) return {};
-    std::lock_guard<std::mutex> lock(load_mutex_);
-    auto* server = model_name.empty() ? get_most_recent_server()
-        : find_server_by_model_name(resolve_model_name(model_name));
-    auto* streaming = dynamic_cast<IStreamingTranscriptionServer*>(server);
-    if (!streaming || !server->is_backend_alive()) return {};
-    auto ownership = server->try_acquire_ready_inference();
-    if (!ownership) return {};
-    return {streaming->get_streaming_address(), server->get_model_name(),
-            server->get_instance_id(), std::move(ownership)};
+    std::shared_ptr<WrappedServer> server;
+    WrappedServer::InferenceLease ownership;
+    std::string address;
+    {
+        std::lock_guard<std::mutex> lock(load_mutex_);
+        server = shared_worker(model_name.empty() ? get_most_recent_server()
+            : find_server_by_model_name(resolve_model_name(model_name)));
+        auto* streaming = dynamic_cast<IStreamingTranscriptionServer*>(server.get());
+        if (!streaming || !server->is_backend_alive()) return {};
+        ownership = server->try_acquire_ready_inference();
+        if (!ownership) return {};
+        address = streaming->get_streaming_address();
+    }
+    ownership.attach_resources(admit_worker(*server, ResourceAdmission::Operation::Realtime));
+    return {address, server->get_model_name(), server->get_instance_id(), std::move(ownership)};
 }
 
 template<typename Func>
-auto Router::execute_inference(const json& request, Func&& inference_func) -> decltype(inference_func(nullptr)) {
+auto Router::execute_inference(const json& request, Func&& inference_func, ResourceAdmission::Operation operation) -> decltype(inference_func(nullptr)) {
     std::string requested_model;
     if (request.contains("model") && request["model"].is_string()) {
         requested_model = request["model"].get<std::string>();
@@ -1618,6 +1733,7 @@ auto Router::execute_inference(const json& request, Func&& inference_func) -> de
     // lazy reload; streaming paths deliberately do not retry after partial data.
     for (int attempt = 0; attempt < 2; ++attempt) {
         WrappedServer* server = nullptr;
+        std::shared_ptr<WrappedServer> lifetime;
         WrappedServer::InferenceLease lease;
         RecipeOptions restart_options;
         std::string restart_model_name;
@@ -1639,13 +1755,31 @@ auto Router::execute_inference(const json& request, Func&& inference_func) -> de
                 restart_model_name = server->get_model_name();
                 should_reload_before_request = true;
             } else {
-                lease = server->try_acquire_inference();
-                if (!lease) {
-                    return ErrorResponse::from_exception(ModelNotLoadedException(requested_model));
-                }
+                lifetime = shared_worker(server);
                 server->update_access_time();
             }
-        } // Lock released here
+        }
+        if (lifetime) {
+            try {
+                auto resources = admit_worker(*lifetime, operation);
+                if (!model_access_allowed(requested_model))
+                    throw AdmissionError("model_disabled", "Model was disabled while waiting for admission", 403);
+                const auto prior = WrappedServer::current_request_cancel_context();
+                const auto context = current_request_context();
+                WrappedServer::RequestCancelScope readiness({prior.flag, [prior, context, &resources] {
+                    return prior.cancelled() || resources.deadline_expired() ||
+                        (context && context->cancelled && context->cancelled());
+                }});
+                lease = operation == ResourceAdmission::Operation::State ? lifetime->try_acquire_ready_state_operation()
+                    : lifetime->try_acquire_inference();
+                lease.attach_resources(std::move(resources));
+            } catch (const AdmissionError& error) {
+                return admission_failure(error);
+            }
+            if (!lease) {
+                return ErrorResponse::from_exception(ModelNotLoadedException(requested_model));
+            }
+        }
 
         if (should_reload_before_request) {
             if (restart_model_name.empty()) {
@@ -1663,7 +1797,17 @@ auto Router::execute_inference(const json& request, Func&& inference_func) -> de
 
         InhibitGuard inhibit_guard(suspend_inhibitor_.get(), config_->inhibit_suspend());
 
+        lease.resources_started();
+        const auto upstream_cancel = WrappedServer::current_request_cancel_context();
+        const auto context = current_request_context();
+        WrappedServer::RequestCancelScope deadline_scope({upstream_cancel.flag,
+            [upstream_cancel, context, &lease] {
+                return upstream_cancel.cancelled() || lease.deadline_expired() ||
+                    (context && context->cancelled && context->cancelled());
+            }});
+        WrappedServer::RequestCompletionScope completion;
         auto response = inference_func(server);
+        if (completion.completed()) lease.resources_completed();
 
         if (!server->was_watchdog_triggered() && is_watchdog_reset_response(response)) {
             server->request_backend_reset_from_watchdog("GPU Hang / compute error detected");
@@ -1733,6 +1877,7 @@ void Router::execute_streaming(const std::string& request_body, httplib::DataSin
 
     for (int attempt = 0; attempt < 2; ++attempt) {
         WrappedServer* server = nullptr;
+        std::shared_ptr<WrappedServer> lifetime;
         WrappedServer::InferenceLease lease;
         RecipeOptions restart_options;
         std::string restart_model_name;
@@ -1758,8 +1903,28 @@ void Router::execute_streaming(const std::string& request_body, httplib::DataSin
                 restart_model_name = server->get_model_name();
                 should_reload_before_request = true;
             } else {
-                lease = server->try_acquire_inference();
-                if (!lease) {
+                lifetime = shared_worker(server);
+                server->update_access_time();
+            }
+        }
+        if (lifetime) {
+            try {
+                auto resources = admit_worker(*lifetime, ResourceAdmission::Operation::Request);
+                if (!model_access_allowed(requested_model))
+                    throw AdmissionError("model_disabled", "Model was disabled while waiting for admission", 403);
+                const auto prior = WrappedServer::current_request_cancel_context();
+                const auto context = current_request_context();
+                WrappedServer::RequestCancelScope readiness({prior.flag, [prior, context, &resources] {
+                    return prior.cancelled() || resources.deadline_expired() ||
+                        (context && context->cancelled && context->cancelled());
+                }});
+                lease = lifetime->try_acquire_inference();
+                lease.attach_resources(std::move(resources));
+            } catch (const AdmissionError& error) {
+                const auto frame = "data: " + admission_failure(error).dump() + "\n\n";
+                sink.write(frame.data(), frame.size()); sink.done(); return;
+            }
+            if (!lease) {
                     std::string error_msg =
                         "data: {\"error\":{\"message\":\"Model evicted: " + requested_model +
                         "\",\"type\":\"model_not_loaded\"}}\n\n";
@@ -1767,9 +1932,7 @@ void Router::execute_streaming(const std::string& request_body, httplib::DataSin
                     sink.done();
                     return;
                 }
-                server->update_access_time();
-            }
-        } // Lock released here
+        }
 
         if (should_reload_before_request) {
             if (restart_model_name.empty()) {
@@ -1792,8 +1955,18 @@ void Router::execute_streaming(const std::string& request_body, httplib::DataSin
 
         InhibitGuard inhibit_guard(suspend_inhibitor_.get(), config_->inhibit_suspend());
 
+        lease.resources_started();
+        const auto upstream_cancel = WrappedServer::current_request_cancel_context();
+        const auto context = current_request_context();
+        WrappedServer::RequestCancelScope deadline_scope({upstream_cancel.flag,
+            [upstream_cancel, context, &lease] {
+                return upstream_cancel.cancelled() || lease.deadline_expired() ||
+                    (context && context->cancelled && context->cancelled());
+            }});
+        WrappedServer::RequestCompletionScope completion;
         try {
             streaming_func(server);
+            if (completion.completed()) lease.resources_completed();
         } catch (const BackendStreamRetryableReset& e) {
             restart_options = server->get_recipe_options();
             restart_model_name = server->get_model_name();
@@ -2182,108 +2355,31 @@ json Router::classify(const json& request) {
 }
 
 json Router::get_slots() {
-    WrappedServer* server = nullptr;
-    WrappedServer::InferenceLease lease;
-    ISlotsServer* slots_server = nullptr;
-
-    {
-        std::unique_lock<std::mutex> lock(load_mutex_);
-        wait_for_slot_clearance(lock);
-        server = get_most_recent_server();
-        if (!server) {
-            return ErrorResponse::from_exception(
-                ModelNotLoadedException("No models loaded")
-            );
-        }
-
-        // Check if server supports slots capability
-        slots_server = dynamic_cast<ISlotsServer*>(server);
-        if (!slots_server) {
-            return ErrorResponse::from_exception(
-                UnsupportedOperationException("Slots", device_type_to_string(server->get_device_type()))
-            );
-        }
-
-        // Mark as busy and update access time
-        lease = server->try_acquire_inference();
-        if (!lease) {
-            return ErrorResponse::from_exception(ModelNotLoadedException("No models loaded"));
-        }
-        server->update_access_time();
-    } // Lock released here
-
-    // Execute without holding lock (but busy flag prevents eviction)
-    return slots_server->get_slots();
+    return execute_inference({{"model", get_loaded_model()}}, [](WrappedServer* server) {
+        auto* slots = dynamic_cast<ISlotsServer*>(server);
+        return slots ? slots->get_slots() : ErrorResponse::from_exception(
+            UnsupportedOperationException("Slots", device_type_to_string(server->get_device_type())));
+    }, ResourceAdmission::Operation::State);
 }
 
 json Router::slots_action(int slot_id, const std::string& action, const json& request_body) {
-    WrappedServer* server = nullptr;
-    WrappedServer::InferenceLease lease;
-    ISlotsServer* slots_server = nullptr;
-
-    {
-        std::unique_lock<std::mutex> lock(load_mutex_);
-        wait_for_slot_clearance(lock);
-        server = get_most_recent_server();
-        if (!server) {
-            return ErrorResponse::from_exception(
-                ModelNotLoadedException("No models loaded")
-            );
-        }
-
-        // Check if server supports slots capability
-        slots_server = dynamic_cast<ISlotsServer*>(server);
-        if (!slots_server) {
-            return ErrorResponse::from_exception(
-                UnsupportedOperationException("Slots", device_type_to_string(server->get_device_type()))
-            );
-        }
-
-        // Mark as busy and update access time
-        lease = server->try_acquire_inference();
-        if (!lease) {
-            return ErrorResponse::from_exception(ModelNotLoadedException("No models loaded"));
-        }
-        server->update_access_time();
-    } // Lock released here
-
-    // Execute without holding lock (but busy flag prevents eviction)
-    return slots_server->slots_action(slot_id, action, request_body);
+    auto request = request_body;
+    request["model"] = request_body.value("model", get_loaded_model());
+    return execute_inference(request, [&](WrappedServer* server) {
+        auto* slots = dynamic_cast<ISlotsServer*>(server);
+        return slots ? slots->slots_action(slot_id, action, request_body) : ErrorResponse::from_exception(
+            UnsupportedOperationException("Slots", device_type_to_string(server->get_device_type())));
+    }, ResourceAdmission::Operation::State);
 }
 
 json Router::tokenize(const json& request_body) {
-    WrappedServer* server = nullptr;
-    WrappedServer::InferenceLease lease;
-    ITokenizerServer* tokenizer_server = nullptr;
-
-    {
-        std::unique_lock<std::mutex> lock(load_mutex_);
-        wait_for_slot_clearance(lock);
-        server = get_most_recent_server();
-        if (!server) {
-            return ErrorResponse::from_exception(
-                ModelNotLoadedException("No models loaded")
-            );
-        }
-
-        // Check if server supports tokenize capability
-        tokenizer_server = dynamic_cast<ITokenizerServer*>(server);
-        if (!tokenizer_server) {
-            return ErrorResponse::from_exception(
-                UnsupportedOperationException("Tokenization", device_type_to_string(server->get_device_type()))
-            );
-        }
-
-        // Mark as busy and update access time
-        lease = server->try_acquire_inference();
-        if (!lease) {
-            return ErrorResponse::from_exception(ModelNotLoadedException("No models loaded"));
-        }
-        server->update_access_time();
-    } // Lock released here
-
-    // Execute without holding lock (but busy flag prevents eviction)
-    return tokenizer_server->tokenize(request_body);
+    auto request = request_body;
+    request["model"] = request_body.value("model", get_loaded_model());
+    return execute_inference(request, [&](WrappedServer* server) {
+        auto* tokenizer = dynamic_cast<ITokenizerServer*>(server);
+        return tokenizer ? tokenizer->tokenize(request_body) : ErrorResponse::from_exception(
+            UnsupportedOperationException("Tokenization", device_type_to_string(server->get_device_type())));
+    }, ResourceAdmission::Operation::State);
 }
 
 json Router::responses(const json& request) {

@@ -113,14 +113,14 @@ bool is_gpu_hang_or_compute_error(const std::string& message) {
 } // namespace
 
 
-void StreamingProxy::forward_sse_stream(
+bool StreamingProxy::forward_sse_stream(
     const std::string& backend_url,
     const std::string& request_body,
     httplib::DataSink& sink,
     std::function<void(const TelemetryData&)> on_complete,
     long timeout_seconds,
     std::function<void()> on_chunk,
-    long heartbeat_interval_ms) {
+    long heartbeat_interval_ms, utils::RequestCancelToken cancel) {
 
     TelemetryData telemetry;
     try {
@@ -220,7 +220,8 @@ void StreamingProxy::forward_sse_stream(
         timeout_seconds,
         [&backend_status](int status) { backend_status = status; },
         utils::HttpSecurityPolicy::TrustedLoopback,
-        [&sink, &last_activity_time, &backend_status, heartbeat_interval_ms]() {
+        [&sink, &last_activity_time, &backend_status, heartbeat_interval_ms, cancel]() {
+            if (cancel.cancelled()) return true;
             if (sink.is_writable && !sink.is_writable()) {
                 return true;
             }
@@ -371,14 +372,15 @@ void StreamingProxy::forward_sse_stream(
             on_complete(telemetry);
         }
     }
+    return result.curl_code == CURLE_OK;
 }
 
-void StreamingProxy::forward_byte_stream(
+bool StreamingProxy::forward_byte_stream(
     const std::string& backend_url,
     const std::string& request_body,
     httplib::DataSink& sink,
     long timeout_seconds,
-    std::function<void()> on_chunk) {
+    std::function<void()> on_chunk, utils::RequestCancelToken cancel) {
 
     bool stream_error = false;
 
@@ -413,7 +415,8 @@ void StreamingProxy::forward_byte_stream(
         {},
         timeout_seconds,
         [&backend_status](int status) { backend_status = status; },
-        utils::HttpSecurityPolicy::TrustedLoopback
+        utils::HttpSecurityPolicy::TrustedLoopback,
+        [&sink, cancel] { return cancel.cancelled() || (sink.is_writable && !sink.is_writable()); }
     );
 
     const bool transport_interrupted =
@@ -470,6 +473,7 @@ void StreamingProxy::forward_byte_stream(
         LOG(INFO, "Server") << "Streaming completed - 200 OK" << std::endl;
     }
     sink.done();
+    return result.curl_code == CURLE_OK;
 }
 
 StreamingProxy::TelemetryData StreamingProxy::extract_telemetry(const nlohmann::json& payload) {

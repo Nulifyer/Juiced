@@ -9,6 +9,7 @@
 #include <thread>
 #include <atomic>
 #include <stdexcept>
+#include <utility>
 #include <nlohmann/json.hpp>
 #include <httplib.h>
 #include "utils/process_manager.h"
@@ -18,6 +19,7 @@
 #include "model_residency.h"
 #include "backend_manager.h"
 #include "recipe_options.h"
+#include "resource_admission.h"
 #include "streaming_proxy.h"
 #include "backends/backend_descriptor.h"
 #include "server_process.h"
@@ -95,12 +97,17 @@ public:
         InferenceLease& operator=(const InferenceLease&) = delete;
         explicit operator bool() const { return server_ != nullptr; }
         void release() noexcept;
+        void attach_resources(ResourceAdmission::Lease resources) { resources_ = std::move(resources); }
+        void resources_started() { resources_.started(); }
+        void resources_completed() { resources_.completed(); }
+        bool deadline_expired() const { return resources_.deadline_expired(); }
     private:
         friend class WrappedServer;
         explicit InferenceLease(WrappedServer* server, bool state_operation = false);
         WrappedServer* server_ = nullptr;
         std::shared_ptr<WrappedServer> lifetime_;
         bool state_operation_ = false;
+        ResourceAdmission::Lease resources_;
     };
 
     InferenceLease try_acquire_inference() {
@@ -142,6 +149,8 @@ public:
           instance_id_(next_instance_id()) {}
 
     uint64_t get_instance_id() const { return instance_id_; }
+    void retain_resource_residency(ResourceAdmission::Lease lease) { residency_resources_ = std::move(lease); }
+    void release_resource_residency() { residency_resources_ = {}; }
 
     virtual ~WrappedServer();
 
@@ -208,8 +217,11 @@ public:
         // restore) and an in-flight maintenance downsize. Waiting for the latter
         // ensures restore() below never races a concurrent downsize() on the same
         // backend subprocess. Looped because the state can change while we wait.
+        const auto ready_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
         while (state_ == ModelState::LOADING || maintenance_in_progress_) {
-            state_cv_.wait(lock);
+            if (current_request_cancel_context().cancelled() || std::chrono::steady_clock::now() >= ready_deadline)
+                return false;
+            state_cv_.wait_for(lock, std::chrono::milliseconds(20));
         }
 
         if (state_ == ModelState::UNLOADED) {
@@ -512,6 +524,20 @@ public:
     };
 
     static utils::RequestCancelToken current_request_cancel_context();
+    class RequestCompletionScope {
+    public:
+        RequestCompletionScope();
+        ~RequestCompletionScope();
+        RequestCompletionScope(const RequestCompletionScope&) = delete;
+        RequestCompletionScope& operator=(const RequestCompletionScope&) = delete;
+        bool completed() const { return operations_.first > 0 && operations_.first == operations_.second; }
+    private:
+        friend class WrappedServer;
+        std::pair<size_t, size_t> operations_{0, 0};
+        std::pair<size_t, size_t>* previous_;
+    };
+    static void note_request_started();
+    static void note_request_completed();
 
     // Downsize the model on soft idle (e.g., clear KV cache). Returns true if the
     // downsize succeeded (or was a no-op), false if the backend operation failed.
@@ -735,6 +761,7 @@ private:
         static std::atomic<uint64_t> counter{0};
         return ++counter;
     }
+    ResourceAdmission::Lease residency_resources_;
     uint64_t instance_id_;
 
     void begin_backend_request(BackendRequestKind kind);

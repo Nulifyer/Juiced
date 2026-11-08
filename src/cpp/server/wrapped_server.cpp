@@ -17,6 +17,14 @@
 namespace lemon {
 
 static thread_local utils::RequestCancelToken t_request_cancel_ctx{};
+static thread_local std::pair<size_t, size_t>* t_request_completed = nullptr;
+
+WrappedServer::RequestCompletionScope::RequestCompletionScope() : previous_(t_request_completed) {
+    t_request_completed = &operations_;
+}
+WrappedServer::RequestCompletionScope::~RequestCompletionScope() { t_request_completed = previous_; }
+void WrappedServer::note_request_started() { if (t_request_completed) ++t_request_completed->first; }
+void WrappedServer::note_request_completed() { if (t_request_completed) ++t_request_completed->second; }
 
 WrappedServer::RequestCancelScope::RequestCancelScope(const utils::RequestCancelToken& token)
     : prev_token_(t_request_cancel_ctx) {
@@ -185,7 +193,7 @@ WrappedServer::InferenceLease::~InferenceLease() { release(); }
 
 WrappedServer::InferenceLease::InferenceLease(InferenceLease&& other) noexcept
     : server_(std::exchange(other.server_, nullptr)), lifetime_(std::move(other.lifetime_)),
-      state_operation_(other.state_operation_) {}
+      state_operation_(other.state_operation_), resources_(std::move(other.resources_)) {}
 
 WrappedServer::InferenceLease& WrappedServer::InferenceLease::operator=(InferenceLease&& other) noexcept {
     if (this != &other) {
@@ -193,11 +201,13 @@ WrappedServer::InferenceLease& WrappedServer::InferenceLease::operator=(Inferenc
         server_ = std::exchange(other.server_, nullptr);
         lifetime_ = std::move(other.lifetime_);
         state_operation_ = other.state_operation_;
+        resources_ = std::move(other.resources_);
     }
     return *this;
 }
 
 void WrappedServer::InferenceLease::release() noexcept {
+    resources_ = {};
     auto lifetime = std::move(lifetime_);
     if (auto* server = std::exchange(server_, nullptr)) server->release_inference(state_operation_);
 }
@@ -217,6 +227,7 @@ void WrappedServer::notify_reclaim(const std::function<void()>& callback) noexce
 
 WrappedServer::BackendRequestScope::BackendRequestScope(WrappedServer& server, BackendRequestKind kind)
     : server_(server), kind_(kind) {
+    note_request_started();
     server_.begin_backend_request(kind_);
 }
 
@@ -676,6 +687,7 @@ json WrappedServer::forward_get_request(const std::string& endpoint, long timeou
         auto response = utils::HttpClient::get(url, headers, 0,
                                                utils::HttpSecurityPolicy::TrustedLoopback);
         note_backend_activity();
+        note_request_completed();
 
         if (response.status_code == 200) {
             return json::parse(response.body);
@@ -736,6 +748,7 @@ json WrappedServer::forward_request(const std::string& endpoint,
             utils::HttpSecurityPolicy::TrustedLoopback,
             cancel_token);
         note_backend_activity();
+        note_request_completed();
 
         if (response.status_code == 200) {
             return json::parse(response.body);
@@ -802,6 +815,7 @@ json WrappedServer::forward_multipart_request(const std::string& endpoint,
             utils::HttpSecurityPolicy::TrustedLoopback,
             cancel_token);
         note_backend_activity();
+        note_request_completed();
 
         if (response.status_code == 200) {
             return json::parse(response.body);
@@ -878,19 +892,21 @@ void WrappedServer::forward_streaming_request(const std::string& endpoint,
         if (sse) {
             // Use StreamingProxy to forward the SSE stream with telemetry callback
             // Use INFERENCE_TIMEOUT_SECONDS (0 = infinite) as chat completions can take a long time
-            StreamingProxy::forward_sse_stream(url, request_body, sink,
+            const bool completed = StreamingProxy::forward_sse_stream(url, request_body, sink,
                 [telemetry_callback](const StreamingProxy::TelemetryData& telemetry) {
                     if (telemetry_callback) {
                         telemetry_callback(telemetry);
                     }
                 },
                 timeout_seconds,
-                mark_stream_progress
+                mark_stream_progress, 1000, current_request_cancel_context()
             );
+            if (completed) note_request_completed();
         } else {
-            StreamingProxy::forward_byte_stream(url, request_body, sink, timeout_seconds,
-                mark_stream_progress
+            const bool completed = StreamingProxy::forward_byte_stream(url, request_body, sink, timeout_seconds,
+                mark_stream_progress, current_request_cancel_context()
             );
+            if (completed) note_request_completed();
         }
     } catch (const std::exception& e) {
         // Log the error but don't crash the server

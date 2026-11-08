@@ -1,0 +1,240 @@
+#include "lemon/resource_admission.h"
+
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <cstdio>
+#include <future>
+#include <mutex>
+#include <thread>
+#include <vector>
+
+using lemon::AdmissionError;
+using lemon::ResourceAdmission;
+using json = nlohmann::json;
+using namespace std::chrono_literals;
+
+int main() {
+    int failures = 0, checks = 0;
+    auto check = [&](bool ok, const char* name) {
+        ++checks;
+        if (!ok) { ++failures; std::fprintf(stderr, "FAIL: %s\n", name); }
+    };
+    auto error = [&](auto action, const char* code) {
+        try { action(); return false; }
+        catch (const AdmissionError& e) { return e.code == code; }
+    };
+    json profile = {{"checkpoint", "fixture@immutable"}, {"options", {{"ctx_size", 2048}}},
+        {"priority", "interactive"}, {"concurrency", 1}, {"completion_ms", 100},
+        {"load_bytes", {{"uma", 600}}}, {"resident_bytes", {{"uma", 400}}},
+        {"request_bytes", {{"uma", 300}}}, {"source", "frozen fixture peak"}};
+    json config = {{"mode", "protected"}, {"interactive_wait_ms", 120}, {"essential_wait_ms", 120},
+        {"batch_wait_ms", 120}, {"pools", {{"uma", {{"capacity_bytes", 1000},
+        {"essential_headroom_bytes", 200}, {"source", "one shared physical pool"}}}}},
+        {"models", {{"model", profile}}}};
+    auto work = [&](uint64_t generation = 1) {
+        ResourceAdmission::Work w;
+        w.model = "model"; w.service = "chat"; w.generation = generation;
+        w.checkpoint = "fixture@immutable"; w.options = {{"ctx_size", 2048}};
+        return w;
+    };
+    ResourceAdmission controller;
+    controller.configure(config);
+    check(controller.snapshot()["pools"].size() == 1, "CPU/GPU UMA is one pool");
+    {
+        auto load_work = work(); load_work.operation = ResourceAdmission::Operation::Load;
+        auto load = controller.acquire(load_work);
+        check(controller.snapshot()["pools"]["uma"]["reserved_bytes"] == 600, "load peak reserved atomically");
+        load.started(); load.retain_residency();
+        check(controller.snapshot()["resident"] == 1 && controller.snapshot()["active"] == 0 &&
+              controller.snapshot()["pools"]["uma"]["reserved_bytes"] == 400,
+              "load peak converts to one generation's retained weights");
+        {
+            auto request = controller.acquire(work());
+            check(controller.snapshot()["pools"]["uma"]["reserved_bytes"] == 700,
+                  "request reserves incremental state without repeating weights");
+            request.started(); request.completed();
+        }
+        check(controller.snapshot()["pools"]["uma"]["reserved_bytes"] == 400,
+              "completed request releases only its incremental reservation");
+        auto next = work(2); next.operation = ResourceAdmission::Operation::Load;
+        check(error([&] { controller.acquire(next); }, "queue_deadline_exceeded"),
+              "another load cannot consume essential headroom");
+    }
+    check(controller.snapshot()["pools"]["uma"]["reserved_bytes"] == 0,
+          "worker residency release restores capacity");
+    {
+        auto lease = controller.acquire(work()); lease.started();
+    }
+    check(controller.snapshot()["uncertain"] == 1 && controller.snapshot()["active"] == 1,
+          "uncertain upstream termination retains capacity");
+    check(error([&] { controller.acquire(work()); }, "queue_deadline_exceeded"),
+          "same generation cannot reuse a quarantined slot");
+    controller.reconcile_stopped_generation(2);
+    check(controller.snapshot()["uncertain"] == 1, "different generation cannot clear quarantine");
+    controller.reconcile_stopped_generation(1);
+    check(controller.snapshot()["uncertain"] == 0 && controller.snapshot()["active"] == 0,
+          "observed generation termination reconciles uncertainty");
+    {
+        auto first = controller.acquire(work());
+        auto future = std::async(std::launch::async, [&] {
+            auto second = controller.acquire(work()); return bool(second);
+        });
+        check(future.wait_for(20ms) == std::future_status::timeout, "concurrent caller waits for atomic slot ownership");
+        first = {};
+        check(future.get(), "lease release wakes queued caller");
+    }
+    {
+        auto first = controller.acquire(work());
+        std::atomic<bool> cancelled{false};
+        auto queued = work(); queued.cancelled = [&] { return cancelled.load(); };
+        auto future = std::async(std::launch::async, [&] {
+            return error([&] { controller.acquire(queued); }, "request_cancelled");
+        });
+        std::this_thread::sleep_for(25ms); cancelled = true;
+        check(future.get(), "disconnected queued client is rejected promptly");
+        check(controller.snapshot()["pending"] == 0, "cancelled waiter leaves no claim");
+    }
+    controller.pause(true);
+    check(error([&] { controller.acquire(work()); }, "admission_paused"), "maintenance pause rejects new work");
+    controller.pause(false);
+    {
+        auto lease = controller.acquire(work());
+        check(bool(lease), "resume restores admission without model-policy changes");
+        std::this_thread::sleep_for(105ms);
+        check(lease.deadline_expired(), "completion deadline is distinct from queue wait");
+    }
+    {
+        auto mismatch = work(); mismatch.options["ctx_size"] = 4096;
+        check(error([&] { controller.acquire(mismatch); }, "admission_profile_mismatch"),
+              "changed execution options cannot borrow old resource ceilings");
+        auto missing = work(); missing.model = "unknown";
+        check(error([&] { controller.acquire(missing); }, "admission_profile_unknown"),
+              "protected mode rejects unmeasured profiles");
+        auto state = work(); state.operation = ResourceAdmission::Operation::State;
+        check(error([&] { controller.acquire(state); }, "operation_unqualified"),
+              "unqualified operation is rejected before execution");
+    }
+    auto unknown = config; unknown["pools"]["uma"]["capacity_bytes"] = nullptr;
+    controller.configure(unknown);
+    check(error([&] { controller.acquire(work()); }, "capacity_unknown"), "unknown physical capacity is not free memory");
+    auto zero = config; zero["pools"]["uma"]["capacity_bytes"] = 0;
+    controller.configure(zero);
+    check(error([&] { controller.acquire(work()); }, "capacity_exceeded"), "known zero rejects rather than using a fallback");
+    controller.configure(config);
+    {
+        auto lease = controller.acquire(work());
+        check(error([&] { controller.configure(zero); }, "admission_configuration_busy"),
+              "resource topology cannot change under live reservations");
+    }
+    {
+        std::optional<uint64_t> available = 200;
+        ResourceAdmission sampled([&](const std::string&) { return available; });
+        sampled.configure(config);
+        check(error([&] { sampled.acquire(work()); }, "queue_deadline_exceeded"),
+              "sampled physical shortage prevents admission below the configured ceiling");
+        available = 700;
+        auto first = sampled.acquire(work(1));
+        auto second = sampled.acquire(work(2));
+        check(error([&] { sampled.acquire(work(3)); }, "queue_deadline_exceeded"),
+              "unmaterialized concurrent claims cannot reuse the same sampled headroom");
+    }
+    {
+        json bounded = config;
+        bounded["principal_pending_limit"] = 1;
+        bounded["interactive_wait_ms"] = 300;
+        ResourceAdmission queued; queued.configure(bounded);
+        auto held = queued.acquire(work());
+        auto future = std::async(std::launch::async, [&] {
+            return error([&] { queued.acquire(work()); }, "admission_paused");
+        });
+        for (int i = 0; i < 100 && queued.snapshot()["pending"] != 1; ++i) std::this_thread::sleep_for(1ms);
+        check(error([&] { queued.acquire(work()); }, "queue_full"), "anonymous clients share the same bounded principal queue");
+        queued.pause(true);
+        check(future.get() && queued.snapshot()["pending"] == 0, "pause drains pending callers with bounded errors");
+    }
+    {
+        auto legacy = json::object();
+        ResourceAdmission compatibility; compatibility.configure(legacy);
+        auto unmeasured = work(); unmeasured.model = "operator-approved-legacy";
+        auto lease = compatibility.acquire(unmeasured);
+        check(bool(lease) && compatibility.snapshot()["mode"] == "legacy", "legacy profiles remain explicitly unprotected");
+    }
+    {
+        auto state_config = config;
+        state_config["models"]["model"]["state_bytes"] = {{"uma", 50}};
+        ResourceAdmission state_operations; state_operations.configure(state_config);
+        auto state_work = work(); state_work.operation = ResourceAdmission::Operation::State;
+        { auto state_lease = state_operations.acquire(state_work); state_lease.started(); }
+        state_operations.reconcile_idle_requests(1);
+        check(state_operations.snapshot()["uncertain"] == 1,
+              "idle inference slots cannot certify a failed state export stopped");
+        state_operations.reconcile_stopped_generation(1);
+        check(state_operations.snapshot()["uncertain"] == 0, "worker termination releases uncertain state operations");
+    }
+    {
+        auto fair_config = config;
+        fair_config["active_limit"] = 1;
+        fair_config["principal_pending_limit"] = 32;
+        fair_config["service_pending_limit"] = 32;
+        fair_config["interactive_wait_ms"] = 1000;
+        fair_config["essential_wait_ms"] = 1000;
+        fair_config["models"]["essential"] = profile;
+        fair_config["models"]["essential"]["priority"] = "essential";
+        ResourceAdmission fair; fair.configure(fair_config);
+        auto held = fair.acquire(work());
+        std::vector<std::future<void>> waiters;
+        std::vector<char> order;
+        std::mutex order_mutex;
+        for (int i = 0; i < 11; ++i) {
+            waiters.push_back(std::async(std::launch::async, [&, i] {
+                auto candidate = work(); if (i < 10) candidate.model = "essential";
+                auto granted = fair.acquire(candidate);
+                std::lock_guard<std::mutex> lock(order_mutex);
+                order.push_back(i < 10 ? 'E' : 'I');
+            }));
+        }
+        for (int i = 0; i < 500 && fair.snapshot()["pending"] != 11; ++i) std::this_thread::sleep_for(1ms);
+        held = {};
+        for (auto& waiter : waiters) waiter.get();
+        auto ordinary = std::find(order.begin(), order.end(), 'I');
+        check(order.size() == 11 && ordinary != order.end() && std::distance(order.begin(), ordinary) <= 8,
+              "eligible ordinary work runs after at most eight consecutive essential grants");
+    }
+    {
+        auto race_config = config;
+        race_config["models"]["model"]["concurrency"] = 8;
+        race_config["principal_pending_limit"] = 32;
+        race_config["service_pending_limit"] = 32;
+        race_config["interactive_wait_ms"] = 1000;
+        ResourceAdmission racing; racing.configure(race_config);
+        std::atomic<int> running{0}, peak{0};
+        std::vector<std::future<void>> callers;
+        for (int i = 0; i < 20; ++i) callers.push_back(std::async(std::launch::async, [&] {
+            auto lease = racing.acquire(work()); lease.started();
+            int count = ++running, observed = peak;
+            while (count > observed && !peak.compare_exchange_weak(observed, count)) {}
+            std::this_thread::sleep_for(2ms);
+            --running; lease.completed();
+        }));
+        for (auto& caller : callers) caller.get();
+        check(peak <= 2 && racing.snapshot()["active"] == 0 && racing.snapshot()["pending"] == 0,
+              "racing callers cannot oversubscribe one physical pool or leak reservations");
+    }
+    {
+        int samples = 0;
+        ResourceAdmission failing([&](const std::string&) -> std::optional<uint64_t> {
+            if (++samples > 1) throw std::runtime_error("fixture sample failed");
+            return 1000;
+        });
+        failing.configure(config);
+        bool thrown = false;
+        try { failing.acquire(work()); } catch (const std::runtime_error&) { thrown = true; }
+        check(thrown && failing.snapshot()["pending"] == 0 && failing.snapshot()["active"] == 0,
+              "sampling exceptions clean pending entries without partial claims");
+    }
+    controller.shutdown();
+    check(error([&] { controller.acquire(work()); }, "admission_paused"), "shutdown rejects new requests");
+    std::printf("Resource admission: %d checks, %d failures\n", checks, failures);
+    return failures ? 1 : 0;
+}

@@ -618,6 +618,18 @@ void JuicedService::routes(httplib::Server &http) {
     });
   }
   for (const std::string prefix : {"/api/v0/", "/api/v1/", "/v0/", "/v1/"}) {
+    http.Get(prefix + "juiced/admission", [this](const auto&, auto& res) {
+      reply(res, server_.router_->admission_snapshot());
+    });
+    http.Post(prefix + "juiced/admission", [this](const auto& req, auto& res) {
+      try {
+        auto body = json::parse(req.body);
+        if (!body.is_object() || body.size() != 1 || !body.contains("paused") || !body.at("paused").is_boolean())
+          throw std::invalid_argument("Expected only a boolean paused setting");
+        server_.router_->pause_admission(body.at("paused").template get<bool>());
+        reply(res, server_.router_->admission_snapshot());
+      } catch (const std::exception& error) { reply(res, {{"error", error.what()}}, 400); }
+    });
     http.Get(prefix + "juiced/capabilities", [this](const auto &q, auto &r) { capabilities_api(q, r); });
     http.Get(prefix + "juiced/preparation", [this](const auto &q, auto &r) { preparation_api(q, r); });
     http.Post(prefix + "juiced/preparation", [this](const auto &q, auto &r) { preparation_api(q, r); });

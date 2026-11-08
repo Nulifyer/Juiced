@@ -1,0 +1,42 @@
+{
+  "schema": 1,
+  "phase": "P1",
+  "phase_complete": false,
+  "deployed": false,
+  "selected_families": [
+    "Native Router resource reservations and queues",
+    "HTTP request context and generation-bound worker ownership",
+    "llama.cpp CPU load/request/state serving fixture"
+  ],
+  "delivered": [
+    "Atomic declared physical-pool reservations; load peaks become generation-owned resident allocations; requests and state operations add incremental ceilings.",
+    "Bounded principal/service/global queues, configured class deadlines, eligible aging, pause/resume and shutdown rejection.",
+    "Native JSON, SSE, slot/token and realtime ownership enter the same Router-owned coordinator outside its lifecycle mutex.",
+    "Configured resource profiles bind public model identity, checkpoint and effective options. Unknown capacities and unqualified protected operations reject.",
+    "Managed transports report completion; uncertain work retains reservations until qualified idle-request evidence or confirmed generation unload. Failed state operations cannot be cleared by idle inference slots.",
+    "Operator-only native metadata/control routes exist under all four prefixes, with complete-value RuntimeConfig persistence."
+  ],
+  "verification": {
+    "platform": "local Linux only",
+    "native_contracts": 8,
+    "ledger_checks": 35,
+    "router_checks": 12,
+    "api_cases": 41,
+    "sanitizers": "35 ledger checks pass ASan and UBSan",
+    "real_cpu": [
+      "All four OpenAI prefixes with JSON and SSE",
+      "Eight concurrent requests and Ollama/Anthropic/MCP ingress",
+      "Load-to-residency conversion and complete unload release",
+      "Operator pause/resume, unauthorized control rejection and busy topology rejection"
+    ],
+    "cache": "64 real CPU name/mode/prefix/stream combinations, concurrency/failure cleanup and authenticated save/restart/restore pass."
+  },
+  "remaining": [
+    "No full P1, GPU/NPU or protected-latency qualification.",
+    "Complete every provider and background-operation path or reject it explicitly in protected mode. Speech providers with direct HTTP calls need managed completion/cancellation receipts.",
+    "Protect deferred streaming before headers, and finish shared native runtime-state projection.",
+    "Complete restore and scratch peaks, manual slot/cache exclusion, resource sampling under load, and all negative early-validation cleanup paths.",
+    "Qualify essential services under frozen prefill/image/speech/combined interference, cancellation and fairness workloads; obtain the major-milestone council review.",
+    "P2-P7 remain planned."
+  ]
+}

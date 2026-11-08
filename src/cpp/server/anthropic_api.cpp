@@ -1220,6 +1220,13 @@ void OllamaApi::handle_anthropic_messages(const httplib::Request& req, httplib::
                                              match.error_message);
                 return;
             }
+            const auto admission = router_->admission_snapshot();
+            if (admission.value("paused", false) || admission.value("mode", std::string("legacy")) == "protected") {
+                set_anthropic_error_response(res, 503,
+                    "Cloud passthrough is unavailable while admission is paused or protected");
+                res.set_header("Retry-After", "1");
+                return;
+            }
             forward_anthropic_upstream(std::move(*match.upstream),
                                        request_json.value("stream", false), model, res);
             return;

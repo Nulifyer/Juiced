@@ -89,10 +89,17 @@ void output(httplib::Response &r, const json &j, int code = 200) {
   r.set_header("Cache-Control", "no-store");
 }
 json post_engine(const std::string &address, const std::string &path,
-                 const json &body) {
-  auto r = utils::HttpClient::post(address + path, body.dump(),
-                                   {{"Content-Type", "application/json"}}, 120,
-                                   utils::HttpSecurityPolicy::TrustedLoopback);
+                 const json &body, WrappedServer::InferenceLease& worker) {
+  worker.resources_started();
+  utils::HttpResponse r;
+  try {
+    r = utils::HttpClient::post(address + path, body.dump(),
+                                 {{"Content-Type", "application/json"}}, 120,
+                                 utils::HttpSecurityPolicy::TrustedLoopback);
+  } catch (const std::exception&) {
+    throw AdmissionError("state_operation_unresolved", "Engine state operation termination could not be confirmed");
+  }
+  worker.resources_completed();
   if (r.status_code != 200)
     throw std::runtime_error("Engine state operation failed (" +
                              std::to_string(r.status_code) +
@@ -545,10 +552,12 @@ void JuicedService::chat(const httplib::Request &original,
             throw std::runtime_error("Snapshot checksum mismatch");
           auto restored = post_engine(
               address, "/slots/" + std::to_string(slot) + "?action=restore",
-              {{"filename", key + ".bin"}});
+              {{"filename", key + ".bin"}}, *worker);
           restore = "restored";
           res.set_header("X-Juiced-Restored-Tokens",
                          std::to_string(restored.value("n_restored", 0)));
+        } catch (const AdmissionError&) {
+          throw;
         } catch (const std::exception &) {
           restore = "rebuild-invalid-snapshot";
         }
@@ -583,7 +592,7 @@ void JuicedService::chat(const httplib::Request &original,
               "Insufficient free disk for a snapshot temporary file");
         auto result = post_engine(
             address, "/slots/" + std::to_string(slot) + "?action=save",
-            {{"filename", pending}});
+            {{"filename", pending}}, *worker);
         auto size = std::filesystem::file_size(file);
         if (size > budget)
           throw std::runtime_error(

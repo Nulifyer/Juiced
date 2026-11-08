@@ -271,6 +271,13 @@ int get_error_status_code(const json& response, int default_status_code = 500) {
 void set_error_response(const json& response, httplib::Response& res,
                         int default_status_code = 500) {
     res.status = get_error_status_code(response, default_status_code);
+    if ((res.status == 429 || res.status == 503) && response.contains("error") && response["error"].is_object()) {
+        const auto details = response["error"].value("details", json::object());
+        if (details.is_object() && details.contains("retry_after") && details["retry_after"].is_number_integer()) {
+            const auto seconds = details["retry_after"].get<int64_t>();
+            if (seconds > 0 && seconds <= 300) res.set_header("Retry-After", std::to_string(seconds));
+        }
+    }
     res.set_content(response.dump(), "application/json");
 }
 
@@ -1219,6 +1226,7 @@ void Server::setup_routes(httplib::Server &web_server) {
     // Helper lambda to register routes for both v0 and v1 (with and without /api prefix for OpenAI compatibility)
     auto register_get = [this, &web_server](const std::string& endpoint,
                                std::function<void(const httplib::Request&, httplib::Response&)> handler) {
+        handler = contextual_handler(std::move(handler));
         web_server.Get("/api/v0/" + endpoint, handler);
         web_server.Get("/api/v1/" + endpoint, handler);
         web_server.Get("/v0/" + endpoint, handler);
@@ -1364,19 +1372,11 @@ void Server::setup_routes(httplib::Server &web_server) {
         handle_slots(req, res);
     });
 
-    // Slots action endpoints (need to register for both versions with regex, with and without /api prefix)
-    web_server.Post(R"(/api/v0/slots/(\d+))", [this](const httplib::Request& req, httplib::Response& res) {
+    const auto slot_action = contextual_handler([this](const httplib::Request& req, httplib::Response& res) {
         handle_slots_by_id(req, res);
     });
-    web_server.Post(R"(/api/v1/slots/(\d+))", [this](const httplib::Request& req, httplib::Response& res) {
-        handle_slots_by_id(req, res);
-    });
-    web_server.Post(R"(/v0/slots/(\d+))", [this](const httplib::Request& req, httplib::Response& res) {
-        handle_slots_by_id(req, res);
-    });
-    web_server.Post(R"(/v1/slots/(\d+))", [this](const httplib::Request& req, httplib::Response& res) {
-        handle_slots_by_id(req, res);
-    });
+    for (const std::string prefix : {"/api/v0/", "/api/v1/", "/v0/", "/v1/"})
+        web_server.Post(prefix + R"(slots/(\d+))", slot_action);
 
     // Tokenize endpoint (llama.cpp specific)
     register_post("tokenize", [this](const httplib::Request& req, httplib::Response& res) {
@@ -7428,6 +7428,10 @@ void Server::handle_shutdown(const httplib::Request& req, httplib::Response& res
 void Server::handle_config_set(const httplib::Request& req, httplib::Response& res) {
     try {
         auto body = nlohmann::json::parse(req.body);
+        if (body.contains("admission")) {
+            if (body.size() != 1) throw std::invalid_argument("Change admission settings separately from other configuration");
+            router_->configure_admission(body.at("admission"));
+        }
 
         auto result = config_->set(body, [this](const json& applied) {
             apply_config_side_effects(applied);
@@ -7438,6 +7442,8 @@ void Server::handle_config_set(const httplib::Request& req, httplib::Response& r
                 json user_cfg = ConfigFile::load_raw(config_dir_);
                 if (result.contains("updated") && result["updated"].is_object()) {
                     user_cfg = utils::JsonUtils::merge(user_cfg, result["updated"]);
+                    if (result["updated"].contains("admission"))
+                        user_cfg["admission"] = result["updated"]["admission"];
                 }
                 json defaults = ConfigFile::get_defaults();
                 utils::JsonUtils::prune_matching(user_cfg, defaults);
@@ -7448,6 +7454,10 @@ void Server::handle_config_set(const httplib::Request& req, httplib::Response& r
         }
 
         res.set_content(result.dump(), "application/json");
+    } catch (const AdmissionError& error) {
+        res.status = error.status;
+        res.set_content(ErrorResponse::create(error.what(), ErrorType::CONFIGURATION_ERROR,
+            {{"code", error.code}, {"retry_after", 1}}).dump(), "application/json");
     } catch (const nlohmann::json::parse_error& e) {
         res.status = 400;
         nlohmann::json error = {{"error", "Invalid JSON in request body"}};

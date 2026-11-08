@@ -28,6 +28,22 @@ int main() {
         if (!condition) { std::fprintf(stderr, "FAIL: %s\n", name); ++failed; }
     };
     {
+        lemon::WrappedServer::RequestCompletionScope outcome;
+        check(!outcome.completed(), "no transfer is not proof of upstream completion");
+        lemon::WrappedServer::note_request_started(); lemon::WrappedServer::note_request_completed();
+        check(outcome.completed(), "one confirmed transfer is complete");
+        lemon::WrappedServer::note_request_started();
+        check(!outcome.completed(), "an unfinished later transfer invalidates completion");
+        {
+            lemon::WrappedServer::RequestCompletionScope nested;
+            lemon::WrappedServer::note_request_started(); lemon::WrappedServer::note_request_completed();
+            check(nested.completed(), "nested outcome has independent transfer ownership");
+        }
+        check(!outcome.completed(), "nested success cannot release unfinished outer work");
+        lemon::WrappedServer::note_request_completed();
+        check(outcome.completed(), "all started transfers must complete before release");
+    }
+    {
         LeaseServer server;
         {
             auto lease = server.try_acquire_inference();

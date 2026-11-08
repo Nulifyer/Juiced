@@ -248,6 +248,18 @@ class ApiContract(unittest.TestCase):
      process.terminate()
      try:process.wait(timeout=20)
      except subprocess.TimeoutExpired:process.kill();process.wait()
+ def test_native_admission_controls(self):
+  for prefix in ['/v1/','/v0/','/api/v1/','/api/v0/']:
+   status,state=self.request(prefix+'juiced/admission');self.assertEqual(status,200);self.assertEqual(state['mode'],'legacy');self.assertFalse(state['latency_qualified'])
+   self.assertEqual(self.request(prefix+'juiced/admission',{'paused':'false'})[0],400)
+   status,state=self.request(prefix+'juiced/admission',{'paused':True});self.assertEqual(status,200);self.assertTrue(state['paused'])
+   status,state=self.request(prefix+'juiced/admission',{'paused':False});self.assertEqual(status,200);self.assertFalse(state['paused'])
+  for config in [{'mode':'unknown'},{'mode':42},{'pending_limit':-1},{'pools':{'host':{'source':42}}}]:
+   self.assertEqual(self.request('/internal/set',{'admission':config})[0],400)
+  self.assertEqual(self.request('/internal/set',{'admission':{},'port':1234})[0],400)
+  status,_=self.request('/internal/set',{'admission':{'mode':'protected'}});self.assertEqual(status,200)
+  self.assertEqual(self.request('/internal/set',{'admission':{}})[0],200)
+  saved=json.loads((self.root/'config/config.json').read_text());self.assertEqual(saved['admission'],{})
  def test_resource_memory_snapshot(self):
   for prefix in ['/api/v0/','/api/v1/','/v0/','/v1/']:
    status,stats=self.request(prefix+'stats');self.assertEqual(status,200,stats)

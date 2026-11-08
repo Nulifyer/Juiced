@@ -1,0 +1,384 @@
+#include "lemon/resource_admission.h"
+
+#include <algorithm>
+#include <condition_variable>
+#include <deque>
+#include <limits>
+#include <map>
+#include <mutex>
+#include <set>
+#include <vector>
+
+namespace lemon {
+namespace {
+using json = nlohmann::json;
+using Clock = std::chrono::steady_clock;
+using Charges = std::map<std::string, uint64_t>;
+
+uint64_t natural(const json& object, const char* key, uint64_t fallback,
+                 uint64_t maximum = std::numeric_limits<int64_t>::max()) {
+    if (!object.contains(key)) return fallback;
+    const auto& value = object.at(key);
+    if (!value.is_number_integer() || (value.is_number_integer() && !value.is_number_unsigned() && value.get<int64_t>() < 0) ||
+        value.get<uint64_t>() > maximum)
+        throw std::invalid_argument(std::string("Invalid admission ") + key);
+    return value.get<uint64_t>();
+}
+void known_keys(const json& object, std::initializer_list<const char*> keys) {
+    if (!object.is_object()) throw std::invalid_argument("Admission settings must be objects");
+    for (const auto& entry : object.items()) {
+        if (std::none_of(keys.begin(), keys.end(), [&](const char* key) { return entry.key() == key; }))
+            throw std::invalid_argument("Unknown admission setting: " + entry.key());
+    }
+}
+std::string text(const json& object, const char* key, const std::string& fallback = {}) {
+    if (!object.contains(key)) return fallback;
+    if (!object.at(key).is_string()) throw std::invalid_argument(std::string("Admission ") + key + " must be a string");
+    return object.at(key).get<std::string>();
+}
+Charges charges(const json& object, const char* key) {
+    Charges result;
+    if (!object.contains(key)) return result;
+    if (!object.at(key).is_object()) throw std::invalid_argument("Admission charges must be objects");
+    for (const auto& item : object.at(key).items()) {
+        if (item.key().empty()) throw std::invalid_argument("Empty physical pool identifier");
+        result[item.key()] = natural(object.at(key), item.key().c_str(), 0);
+    }
+    return result;
+}
+std::string operation_name(ResourceAdmission::Operation operation) {
+    switch (operation) {
+        case ResourceAdmission::Operation::Load: return "load";
+        case ResourceAdmission::Operation::State: return "state";
+        case ResourceAdmission::Operation::Realtime: return "realtime";
+        default: return "request";
+    }
+}
+}
+
+struct ResourceAdmission::State {
+    struct Pool { std::optional<uint64_t> capacity; uint64_t essential_headroom = 0; std::string source; };
+    struct Entry {
+        uint64_t id = 0;
+        Work work;
+        Charges costs;
+        Charges resident_costs;
+        std::string priority = "interactive";
+        size_t concurrency = 64;
+        Clock::time_point queue_deadline;
+        Clock::time_point completion_deadline;
+        std::chrono::milliseconds completion_limit{300000};
+        bool started = false;
+        bool complete = false;
+        bool resident = false;
+        bool uncertain = false;
+    };
+    mutable std::mutex mutex;
+    std::condition_variable changed;
+    Headroom headroom;
+    json config = json::object();
+    std::map<std::string, Pool> pools;
+    std::deque<std::shared_ptr<Entry>> pending;
+    std::map<uint64_t, std::shared_ptr<Entry>> active;
+    uint64_t next_id = 0, rejected = 0, admitted = 0;
+    size_t essential_streak = 0;
+    bool paused = false, stopped = false;
+
+    Charges reserved() const {
+        Charges result;
+        for (const auto& item : active) for (const auto& cost : item.second->costs) result[cost.first] += cost.second;
+        return result;
+    }
+    bool eligible(const Entry& entry) const {
+        size_t running = 0, state_running = 0, generation_running = 0;
+        for (const auto& item : active) {
+            if (item.second->resident) continue;
+            if (item.second->uncertain && item.second->work.generation == entry.work.generation &&
+                item.second->work.operation != Operation::Request) return false;
+            if (item.second->work.operation == Operation::State) { ++state_running; continue; }
+            ++running;
+            if (item.second->work.generation == entry.work.generation) ++generation_running;
+        }
+        if (entry.work.operation == Operation::State) {
+            if (state_running >= natural(config, "active_limit", 64, 4096)) return false;
+        } else if (running >= natural(config, "active_limit", 64, 4096) || generation_running >= entry.concurrency) return false;
+        const auto used = reserved();
+        for (const auto& cost : entry.costs) {
+            const auto pool = pools.find(cost.first);
+            if (pool == pools.end() || !pool->second.capacity) return false;
+            uint64_t cap = *pool->second.capacity;
+            if (entry.priority != "essential") cap -= std::min(cap, pool->second.essential_headroom);
+            const auto taken = used.find(cost.first);
+            const uint64_t occupied = taken == used.end() ? 0 : taken->second;
+            if (occupied > cap || cost.second > cap - occupied) return false;
+            if (headroom) {
+                auto available = headroom(cost.first);
+                uint64_t outstanding = 0;
+                for (const auto& active_entry : active) {
+                    if (active_entry.second->resident) continue;
+                    const auto claim = active_entry.second->costs.find(cost.first);
+                    if (claim != active_entry.second->costs.end()) outstanding += claim->second;
+                }
+                if (!available || outstanding > *available || cost.second > *available - outstanding) return false;
+            }
+        }
+        return true;
+    }
+    std::shared_ptr<Entry> selected() const {
+        std::shared_ptr<Entry> essential, ordinary;
+        std::set<std::string> seen;
+        for (const auto& waiter : pending) {
+            if (seen.count(waiter->priority) || !eligible(*waiter)) continue;
+            seen.insert(waiter->priority);
+            if (waiter->priority == "essential") essential = waiter;
+            else if (!ordinary) ordinary = waiter;
+        }
+        return essential && (essential_streak < 8 || !ordinary) ? essential : ordinary;
+    }
+};
+
+ResourceAdmission::ResourceAdmission(Headroom headroom) : state_(std::make_shared<State>()) {
+    state_->headroom = std::move(headroom);
+}
+
+void ResourceAdmission::validate_config(const json& config) {
+    known_keys(config, {"mode", "pending_limit", "service_pending_limit", "principal_pending_limit", "active_limit",
+                        "essential_wait_ms", "interactive_wait_ms", "batch_wait_ms", "pools", "models"});
+    const auto mode = text(config, "mode", "legacy");
+    if (mode != "legacy" && mode != "protected") throw std::invalid_argument("Admission mode must be legacy or protected");
+    for (const auto* key : {"pending_limit", "service_pending_limit", "principal_pending_limit", "active_limit"})
+        if (!natural(config, key, 1, 4096)) throw std::invalid_argument("Admission queue limits must be positive");
+    for (const auto* key : {"essential_wait_ms", "interactive_wait_ms", "batch_wait_ms"})
+        if (!natural(config, key, 1, 300000)) throw std::invalid_argument("Admission wait bounds must be positive");
+    const auto pools = config.value("pools", json::object());
+    if (!pools.is_object()) throw std::invalid_argument("Admission pools must be objects");
+    for (const auto& item : pools.items()) {
+        if (item.key().empty()) throw std::invalid_argument("Empty physical pool identifier");
+        const auto& pool = item.value();
+        known_keys(pool, {"capacity_bytes", "essential_headroom_bytes", "source"});
+        if (pool.contains("capacity_bytes") && !pool.at("capacity_bytes").is_null()) natural(pool, "capacity_bytes", 0);
+        natural(pool, "essential_headroom_bytes", 0);
+        if (text(pool, "source").empty()) throw std::invalid_argument("Physical pools require an accounting source");
+    }
+    const auto models = config.value("models", json::object());
+    if (!models.is_object()) throw std::invalid_argument("Admission models must be objects");
+    for (const auto& item : models.items()) {
+        const auto& model = item.value();
+        known_keys(model, {"checkpoint", "options", "priority", "concurrency", "completion_ms", "load_bytes",
+                           "resident_bytes", "request_bytes", "state_bytes", "realtime_bytes", "source"});
+        if (model.contains("options") && model.at("options").is_object() && model.at("options").contains("ctx_size") &&
+            model.at("options").at("ctx_size").is_number() && model.at("options").at("ctx_size").get<int64_t>() < 0)
+            throw std::invalid_argument("Resource profiles require an explicit context ceiling");
+        const auto priority = text(model, "priority", "interactive");
+        if (priority != "essential" && priority != "interactive" && priority != "batch")
+            throw std::invalid_argument("Invalid admission priority");
+        if (!natural(model, "concurrency", 1, 4096) || !natural(model, "completion_ms", 300000, 86400000))
+            throw std::invalid_argument("Admission execution limits must be positive");
+        if (!model.contains("options") || !model.at("options").is_object() ||
+            text(model, "checkpoint").empty() || text(model, "source").empty())
+            throw std::invalid_argument("Admission profiles require checkpoint, options and estimate source");
+        const auto resident = charges(model, "resident_bytes"), load = charges(model, "load_bytes");
+        for (const auto& cost : resident) {
+            const auto peak = load.find(cost.first);
+            if (peak == load.end() || peak->second < cost.second)
+                throw std::invalid_argument("Load peak must include resident allocations");
+        }
+        for (const auto* key : {"load_bytes", "resident_bytes", "request_bytes", "state_bytes", "realtime_bytes"})
+            for (const auto& cost : charges(model, key))
+                if (!pools.contains(cost.first)) throw std::invalid_argument("Model charge references an unknown physical pool");
+        if (mode == "protected" && (load.empty() || resident.empty() || charges(model, "request_bytes").empty()))
+            throw std::invalid_argument("Protected profiles require explicit load, resident and request ceilings");
+    }
+}
+
+void ResourceAdmission::configure(const json& config) {
+    validate_config(config);
+    std::lock_guard<std::mutex> lock(state_->mutex);
+    if (state_->config == config) return;
+    if (!state_->active.empty() || !state_->pending.empty())
+        throw AdmissionError("admission_configuration_busy", "Drain work and unload models before changing admission settings", 409);
+    std::map<std::string, State::Pool> pools;
+    const auto pool_config = config.value("pools", json::object());
+    for (const auto& item : pool_config.items()) {
+        State::Pool pool;
+        if (item.value().contains("capacity_bytes") && !item.value().at("capacity_bytes").is_null())
+            pool.capacity = natural(item.value(), "capacity_bytes", 0);
+        pool.essential_headroom = natural(item.value(), "essential_headroom_bytes", 0);
+        pool.source = item.value().at("source").get<std::string>();
+        pools.emplace(item.key(), std::move(pool));
+    }
+    state_->pools = std::move(pools);
+    state_->config = config;
+    state_->changed.notify_all();
+}
+
+ResourceAdmission::Lease ResourceAdmission::acquire(Work work) {
+    auto entry = std::make_shared<State::Entry>();
+    entry->work = std::move(work);
+    std::unique_lock<std::mutex> lock(state_->mutex);
+    auto reject = [&](const char* code, const char* message, int status) -> void {
+        ++state_->rejected;
+        throw AdmissionError(code, message, status);
+    };
+    if (state_->stopped || state_->paused) reject("admission_paused", "Runtime admission is paused", 503);
+    if (entry->work.cancelled && entry->work.cancelled()) reject("request_cancelled", "Request disconnected before admission", 499);
+    const auto& config = state_->config;
+    const auto profiles = config.value("models", json::object());
+    const auto profile = profiles.find(entry->work.model);
+    if (profile != profiles.end()) {
+        if (profile->at("checkpoint") != entry->work.checkpoint || profile->at("options") != entry->work.options)
+            reject("admission_profile_mismatch", "Execution settings differ from the declared resource profile", 409);
+        entry->priority = profile->value("priority", std::string("interactive"));
+        entry->concurrency = natural(*profile, "concurrency", 1, 4096);
+        entry->completion_limit = std::chrono::milliseconds(natural(*profile, "completion_ms", 300000, 86400000));
+        const auto key = operation_name(entry->work.operation) + "_bytes";
+        entry->costs = charges(*profile, key.c_str());
+        entry->resident_costs = charges(*profile, "resident_bytes");
+        if (config.value("mode", std::string("legacy")) == "protected" && entry->costs.empty())
+            reject("operation_unqualified", "This operation has no declared resource ceiling", 503);
+    } else if (config.value("mode", std::string("legacy")) == "protected") {
+        reject("admission_profile_unknown", "Protected admission requires an explicit execution resource profile", 503);
+    }
+    for (const auto& cost : entry->costs) {
+        const auto& pool = state_->pools.at(cost.first);
+        if (!pool.capacity) reject("capacity_unknown", "Physical pool capacity is unknown", 503);
+        if (state_->headroom && !state_->headroom(cost.first))
+            reject("capacity_unknown", "Current physical pool headroom cannot be measured", 503);
+        if (cost.second > *pool.capacity) reject("capacity_exceeded", "Operation cannot fit the physical pool ceiling", 429);
+    }
+    const auto wait_ms = entry->priority == "essential" ? natural(config, "essential_wait_ms", 2000, 300000)
+        : entry->priority == "batch" ? natural(config, "batch_wait_ms", 30000, 300000)
+        : natural(config, "interactive_wait_ms", 10000, 300000);
+    entry->queue_deadline = Clock::now() + std::chrono::milliseconds(wait_ms);
+    entry->id = ++state_->next_id;
+    size_t service_pending = 0, principal_pending = 0;
+    for (const auto& waiter : state_->pending) {
+        if (waiter->work.service == entry->work.service) ++service_pending;
+        if (waiter->work.principal == entry->work.principal) ++principal_pending;
+    }
+    if (state_->pending.size() >= natural(config, "pending_limit", 64, 4096) ||
+        service_pending >= natural(config, "service_pending_limit", 16, 4096) ||
+        principal_pending >= natural(config, "principal_pending_limit", 8, 4096))
+        reject("queue_full", "Runtime request queue is full", 429);
+    state_->pending.push_back(entry);
+    auto erase = [&] { state_->pending.erase(std::find(state_->pending.begin(), state_->pending.end(), entry)); state_->changed.notify_all(); };
+    try {
+        while (true) {
+            if (state_->stopped || state_->paused) reject("admission_paused", "Runtime admission is paused", 503);
+            if (entry->work.cancelled && entry->work.cancelled()) reject("request_cancelled", "Request disconnected while queued", 499);
+            if (Clock::now() >= entry->queue_deadline) reject("queue_deadline_exceeded", "Runtime queue wait deadline exceeded", 429);
+            if (state_->selected() == entry) {
+                entry->completion_deadline = Clock::now() + entry->completion_limit;
+                entry->work.cancelled = {};
+                state_->active.emplace(entry->id, entry);
+                erase();
+                state_->essential_streak = entry->priority == "essential" ? std::min<size_t>(8, state_->essential_streak + 1) : 0;
+                ++state_->admitted;
+                return Lease(state_, entry->id);
+            }
+            state_->changed.wait_until(lock, std::min(entry->queue_deadline, Clock::now() + std::chrono::milliseconds(20)));
+        }
+    } catch (...) { erase(); throw; }
+}
+
+ResourceAdmission::Lease::Lease(std::shared_ptr<State> state, uint64_t id) : state_(std::move(state)), id_(id) {}
+ResourceAdmission::Lease::~Lease() { release(); }
+ResourceAdmission::Lease::Lease(Lease&& other) noexcept : state_(std::move(other.state_)), id_(other.id_) { other.id_ = 0; }
+ResourceAdmission::Lease& ResourceAdmission::Lease::operator=(Lease&& other) noexcept {
+    if (this != &other) { release(); state_ = std::move(other.state_); id_ = other.id_; other.id_ = 0; }
+    return *this;
+}
+void ResourceAdmission::Lease::started() {
+    if (!id_) return;
+    std::lock_guard<std::mutex> lock(state_->mutex);
+    auto& entry = *state_->active.at(id_);
+    entry.started = !entry.costs.empty();
+    entry.complete = false;
+}
+void ResourceAdmission::Lease::completed() {
+    if (!id_) return;
+    std::lock_guard<std::mutex> lock(state_->mutex);
+    state_->active.at(id_)->complete = true;
+}
+void ResourceAdmission::Lease::retain_residency() {
+    if (!id_) return;
+    std::lock_guard<std::mutex> lock(state_->mutex);
+    auto& entry = *state_->active.at(id_);
+    if (entry.work.operation != Operation::Load) throw std::logic_error("Only load leases can retain residency");
+    entry.costs = std::move(entry.resident_costs);
+    entry.resident = true;
+    entry.complete = true;
+    state_->changed.notify_all();
+}
+bool ResourceAdmission::Lease::deadline_expired() const {
+    if (!id_) return false;
+    std::lock_guard<std::mutex> lock(state_->mutex);
+    return Clock::now() >= state_->active.at(id_)->completion_deadline;
+}
+void ResourceAdmission::Lease::release() noexcept {
+    if (!id_) return;
+    {
+        std::lock_guard<std::mutex> lock(state_->mutex);
+        const auto found = state_->active.find(id_);
+        if (found != state_->active.end()) {
+            if (found->second->started && !found->second->complete) found->second->uncertain = true;
+            else state_->active.erase(found);
+        }
+    }
+    id_ = 0;
+    state_->changed.notify_all();
+}
+void ResourceAdmission::pause(bool paused) {
+    std::lock_guard<std::mutex> lock(state_->mutex);
+    state_->paused = paused;
+    state_->changed.notify_all();
+}
+void ResourceAdmission::shutdown() {
+    std::lock_guard<std::mutex> lock(state_->mutex);
+    state_->stopped = true;
+    state_->changed.notify_all();
+}
+void ResourceAdmission::reconcile_stopped_generation(uint64_t generation) {
+    std::lock_guard<std::mutex> lock(state_->mutex);
+    for (auto it = state_->active.begin(); it != state_->active.end();) {
+        if (it->second->work.generation == generation && it->second->uncertain) it = state_->active.erase(it);
+        else ++it;
+    }
+    state_->changed.notify_all();
+}
+void ResourceAdmission::reconcile_idle_requests(uint64_t generation) {
+    std::lock_guard<std::mutex> lock(state_->mutex);
+    for (auto it = state_->active.begin(); it != state_->active.end();) {
+        if (it->second->work.generation == generation && it->second->uncertain &&
+            it->second->work.operation == Operation::Request) it = state_->active.erase(it);
+        else ++it;
+    }
+    state_->changed.notify_all();
+}
+bool ResourceAdmission::has_uncertain_generation(uint64_t generation) const {
+    std::lock_guard<std::mutex> lock(state_->mutex);
+    return std::any_of(state_->active.begin(), state_->active.end(), [generation](const auto& item) {
+        return item.second->work.generation == generation && item.second->uncertain;
+    });
+}
+json ResourceAdmission::snapshot() const {
+    std::lock_guard<std::mutex> lock(state_->mutex);
+    json pools = json::object();
+    const auto used = state_->reserved();
+    for (const auto& pool : state_->pools) {
+        const auto found = used.find(pool.first);
+        pools[pool.first] = {{"capacity_bytes", pool.second.capacity ? json(*pool.second.capacity) : json(nullptr)},
+            {"reserved_bytes", found == used.end() ? 0 : found->second}, {"source", pool.second.source},
+            {"essential_headroom_bytes", pool.second.essential_headroom}};
+    }
+    size_t running = 0, resident = 0, uncertain = 0;
+    for (const auto& item : state_->active) {
+        if (item.second->resident) ++resident; else ++running;
+        if (item.second->uncertain) ++uncertain;
+    }
+    return {{"mode", state_->config.value("mode", std::string("legacy"))}, {"paused", state_->paused},
+        {"stopped", state_->stopped}, {"pending", state_->pending.size()}, {"active", running},
+        {"resident", resident}, {"uncertain", uncertain}, {"pools", pools}, {"latency_qualified", false},
+        {"admitted_total", state_->admitted}, {"rejected_total", state_->rejected}};
+}
+} // namespace lemon

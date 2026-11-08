@@ -1,4 +1,5 @@
 #include "lemon/runtime_config.h"
+#include "lemon/resource_admission.h"
 #include "lemon/backends/backend_descriptor_registry.h"
 #include "lemon/system_info.h"
 #include "lemon/utils/aixlog.hpp"
@@ -797,7 +798,9 @@ json RuntimeConfig::recipe_options(const std::string& backend) const {
 }
 
 void RuntimeConfig::validate(const std::string& key, const json& value) const {
-    if (key == "port") {
+    if (key == "admission") {
+        ResourceAdmission::validate_config(value);
+    } else if (key == "port") {
         if (!value.is_number_integer()) {
             throw std::invalid_argument("'port' must be an integer");
         }

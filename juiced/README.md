@@ -29,7 +29,8 @@ caller-authored job graphs are excluded. Legacy records and weights are preserve
 There is no stored-conversation API, agent tool execution or creative gallery.
 
 Read [runtime profiles and preparation](RUNTIME-PROFILES.md),
-[capability discovery and identity](CAPABILITIES.md), and
+[capability discovery and identity](CAPABILITIES.md),
+[native resource admission](RESOURCE-ADMISSION.md), and
 [operator UI design](UI-DESIGN.md) for implemented behavior and limits.
 The approved [platform plan](PLATFORM-PLAN.md) and its
 [feature disposition](PLATFORM-FEATURES.json) describe future phases. Their approval
@@ -61,8 +62,9 @@ the memory fallback. Juiced stores computation snapshots, not conversation histo
 
 ## Development and checks
 
-- Native: `cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_WEB_APP=OFF -DBUILD_TAURI_APP=OFF -DBUILD_TESTING=ON`, then `cmake --build build -j4 --target lemond test_request_identity`.
+- Native: `cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_WEB_APP=OFF -DBUILD_TAURI_APP=OFF -DBUILD_TESTING=ON`, then `cmake --build build -j4 --target lemond test_request_identity test_resource_admission test_router_admission`.
 - Native API: `python3 juiced/tests/test_api.py build/lemond` uses isolated model-free fixtures.
+- Resource admission: `python3 juiced/tests/test_resource_admission.py --help` exercises an isolated real CPU worker, standard client ingress, concurrency and maintenance. Native `ResourceAdmissionTest` and `RouterAdmissionTest` cover races, bounds, fairness and uncertain termination.
 - Identity: `ctest --test-dir build --output-on-failure -R '^RequestIdentityTest$'`.
 - UI: `cd juiced/ui && bun install --frozen-lockfile && bun run build`.
 - UI workflows: `bun run test:e2e` in `juiced/ui`; `JUICED_TEST_CHROMIUM` can select an installed test browser.

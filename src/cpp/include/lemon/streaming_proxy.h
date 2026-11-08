@@ -48,22 +48,24 @@ public:
         }
     };
 
-    static void forward_sse_stream(
+    static bool forward_sse_stream(
         const std::string& backend_url,
         const std::string& request_body,
         httplib::DataSink& sink,
         std::function<void(const TelemetryData&)> on_complete = nullptr,
         long timeout_seconds = 300,
         std::function<void()> on_chunk = nullptr,
-        long heartbeat_interval_ms = 1000
+        long heartbeat_interval_ms = 1000,
+        utils::RequestCancelToken cancel = {}
     );
 
-    static void forward_byte_stream(
+    static bool forward_byte_stream(
         const std::string& backend_url,
         const std::string& request_body,
         httplib::DataSink& sink,
         long timeout_seconds = 300,
-        std::function<void()> on_chunk = nullptr
+        std::function<void()> on_chunk = nullptr,
+        utils::RequestCancelToken cancel = {}
     );
 
     // Splits on all three SSE line terminators (LF, CRLF, CR). A trailing CR is

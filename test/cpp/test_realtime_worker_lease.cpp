@@ -252,7 +252,7 @@ int main() {
             unload.get();
             inspection.get();
             check(responsive, "inspection remains responsive while unload waits for a live connection");
-            check(first.closed == 3, "disconnect releases ownership and permits the pending unload");
+            check(wait_for([&] { return first.closed == 3; }), "disconnect releases ownership and permits the pending unload");
         }
     }
     RuntimeConfig::set_global(nullptr);

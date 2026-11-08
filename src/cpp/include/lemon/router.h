@@ -17,6 +17,7 @@
 #include <nlohmann/json.hpp>
 #include <httplib.h>
 #include "wrapped_server.h"
+#include "lemon/resource_admission.h"
 #include "lemon/live_throughput.h"
 #include "model_residency.h"
 #include "model_manager.h"
@@ -141,6 +142,9 @@ public:
     // ownership) — Server owns the registry.
     void set_cloud_registry(CloudProviderRegistry* registry);
     void set_model_access_policy(std::function<bool(const std::string&)> policy);
+    json admission_snapshot() const;
+    void pause_admission(bool paused);
+    void configure_admission(const json& config);
 
     // allow_reload_on_option_change: intended for explicit /load callers only.
     // Auto-load callers (inference-triggered) should leave this false so they
@@ -317,6 +321,10 @@ private:
     std::function<bool(const std::string&)> access_policy_;
     bool model_access_allowed(const std::string& model) const;
 
+    mutable ResourceAdmission admission_;
+    ResourceAdmission::Lease admit_worker(const WrappedServer& server, ResourceAdmission::Operation operation) const;
+    std::shared_ptr<WrappedServer> shared_worker(WrappedServer* server) const;
+
     mutable std::mutex load_mutex_;              // Protects loading state and loaded_servers_
     bool is_loading_ = false;                    // True when a load operation is in progress
     std::condition_variable load_cv_;            // Signals when load completes
@@ -421,7 +429,8 @@ private:
                                             const StreamingProxy::TelemetryData& telemetry);
 
     template<typename Func>
-    auto execute_inference(const json& request, Func&& inference_func) -> decltype(inference_func(nullptr));
+    auto execute_inference(const json& request, Func&& inference_func,
+        ResourceAdmission::Operation operation = ResourceAdmission::Operation::Request) -> decltype(inference_func(nullptr));
 
     template<typename Func>
     void execute_streaming(const std::string& request_body, httplib::DataSink& sink, Func&& streaming_func, std::shared_ptr<telemetry::InferenceSpan> span = nullptr);
