@@ -102,7 +102,7 @@ int main() {
             auto profile = json{{"checkpoint", worker->get_checkpoint()}, {"options", worker->get_recipe_options().to_json()},
                 {"source", "mock speech transport, no model or accelerator"}, {"concurrency", 1}, {"completion_ms", 10000},
                 {"load_bytes", {{"host", 1024}}}, {"resident_bytes", {{"host", 512}}}, {"request_bytes", {{"host", 256}}}};
-            auto admission = json{{"mode", "protected"}, {"interactive_wait_ms", 100},
+            auto admission = json{{"mode", "legacy"}, {"interactive_wait_ms", 100},
                 {"pools", {{"host", {{"capacity_bytes", 1048576}, {"source", "single physical pool"}}}}},
                 {"models", {{worker->get_model_name(), profile}}}};
             config.set({{"admission", admission}});

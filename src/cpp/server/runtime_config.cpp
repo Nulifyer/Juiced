@@ -333,6 +333,7 @@ int RuntimeConfig::port() const {
 }
 
 void RuntimeConfig::set_port_override(std::optional<int> override_val) {
+    std::lock_guard writer(write_mutex_);
     std::unique_lock lock(mutex_);
     port_override_ = override_val;
 }
@@ -346,6 +347,7 @@ std::string RuntimeConfig::host() const {
 }
 
 void RuntimeConfig::set_host_override(std::optional<std::string> override_val) {
+    std::lock_guard writer(write_mutex_);
     std::unique_lock lock(mutex_);
     host_override_ = override_val;
 }
@@ -375,6 +377,7 @@ std::string RuntimeConfig::log_file() const {
 }
 
 void RuntimeConfig::set_log_file_override(std::optional<std::string> override_val) {
+    std::lock_guard writer(write_mutex_);
     std::unique_lock lock(mutex_);
     log_file_override_ = std::move(override_val);
 }
@@ -390,6 +393,7 @@ int RuntimeConfig::log_max_file_size_mb() const {
 }
 
 void RuntimeConfig::set_log_max_file_size_mb_override(std::optional<int> override_val) {
+    std::lock_guard writer(write_mutex_);
     std::unique_lock lock(mutex_);
     log_max_file_size_mb_override_ = override_val;
 }
@@ -405,6 +409,7 @@ int RuntimeConfig::log_max_files() const {
 }
 
 void RuntimeConfig::set_log_max_files_override(std::optional<int> override_val) {
+    std::lock_guard writer(write_mutex_);
     std::unique_lock lock(mutex_);
     log_max_files_override_ = override_val;
 }
@@ -429,6 +434,7 @@ bool RuntimeConfig::broadcast() const {
 }
 
 void RuntimeConfig::set_broadcast_override(std::optional<bool> override_val) {
+    std::lock_guard writer(write_mutex_);
     std::unique_lock lock(mutex_);
     broadcast_override_ = override_val;
 }
@@ -1193,16 +1199,18 @@ void RuntimeConfig::validate_backend(const std::string& backend, const std::stri
     }
 }
 
-void RuntimeConfig::apply_changes(const json& changes, json& applied_diff) {
+void RuntimeConfig::apply_changes(json& target, const json& changes, json& applied_diff,
+                                  std::optional<bool>& broadcast_override,
+                                  std::optional<std::string>& origins_override) {
     for (auto& [key, value] : changes.items()) {
         if (value.is_object() && is_backend_name(key)) {
             // Merge nested backend changes; record per-sub-key diffs.
-            if (!config_.contains(key)) {
-                config_[key] = json::object();
+            if (!target.contains(key)) {
+                target[key] = json::object();
             }
             for (auto& [sub_key, sub_value] : value.items()) {
-                if (!config_[key].contains(sub_key) || config_[key][sub_key] != sub_value) {
-                    config_[key][sub_key] = sub_value;
+                if (!target[key].contains(sub_key) || target[key][sub_key] != sub_value) {
+                    target[key][sub_key] = sub_value;
                     if (!applied_diff.contains(key)) {
                         applied_diff[key] = json::object();
                     }
@@ -1210,17 +1218,17 @@ void RuntimeConfig::apply_changes(const json& changes, json& applied_diff) {
                 }
             }
         } else if (key == "telemetry" && value.is_object()) {
-            if (!config_.contains("telemetry") || !config_["telemetry"].is_object()) {
-                config_["telemetry"] = json::object();
+            if (!target.contains("telemetry") || !target["telemetry"].is_object()) {
+                target["telemetry"] = json::object();
             }
             for (auto& [t_key, t_val] : value.items()) {
                 if (t_key == "otlp" && t_val.is_object()) {
-                    if (!config_["telemetry"].contains("otlp") || !config_["telemetry"]["otlp"].is_object()) {
-                        config_["telemetry"]["otlp"] = json::object();
+                    if (!target["telemetry"].contains("otlp") || !target["telemetry"]["otlp"].is_object()) {
+                        target["telemetry"]["otlp"] = json::object();
                     }
                     for (auto& [otlp_key, otlp_val] : t_val.items()) {
-                        if (!config_["telemetry"]["otlp"].contains(otlp_key) || config_["telemetry"]["otlp"][otlp_key] != otlp_val) {
-                            config_["telemetry"]["otlp"][otlp_key] = otlp_val;
+                        if (!target["telemetry"]["otlp"].contains(otlp_key) || target["telemetry"]["otlp"][otlp_key] != otlp_val) {
+                            target["telemetry"]["otlp"][otlp_key] = otlp_val;
                             if (!applied_diff.contains("telemetry")) {
                                 applied_diff["telemetry"] = json::object();
                             }
@@ -1231,16 +1239,16 @@ void RuntimeConfig::apply_changes(const json& changes, json& applied_diff) {
                         }
                     }
                 } else if (t_key == "session" && t_val.is_object()) {
-                    if (!config_["telemetry"].contains("session") || !config_["telemetry"]["session"].is_object()) {
-                        config_["telemetry"]["session"] = json::object();
+                    if (!target["telemetry"].contains("session") || !target["telemetry"]["session"].is_object()) {
+                        target["telemetry"]["session"] = json::object();
                     }
                     if (t_val.contains("headers") && t_val["headers"].is_object()) {
-                        if (!config_["telemetry"]["session"].contains("headers") || !config_["telemetry"]["session"]["headers"].is_object()) {
-                            config_["telemetry"]["session"]["headers"] = json::object();
+                        if (!target["telemetry"]["session"].contains("headers") || !target["telemetry"]["session"]["headers"].is_object()) {
+                            target["telemetry"]["session"]["headers"] = json::object();
                         }
                         for (auto& [h_key, h_val] : t_val["headers"].items()) {
-                            if (!config_["telemetry"]["session"]["headers"].contains(h_key) || config_["telemetry"]["session"]["headers"][h_key] != h_val) {
-                                config_["telemetry"]["session"]["headers"][h_key] = h_val;
+                            if (!target["telemetry"]["session"]["headers"].contains(h_key) || target["telemetry"]["session"]["headers"][h_key] != h_val) {
+                                target["telemetry"]["session"]["headers"][h_key] = h_val;
                                 if (!applied_diff.contains("telemetry")) {
                                     applied_diff["telemetry"] = json::object();
                                 }
@@ -1255,8 +1263,8 @@ void RuntimeConfig::apply_changes(const json& changes, json& applied_diff) {
                         }
                     }
                 } else {
-                    if (!config_["telemetry"].contains(t_key) || config_["telemetry"][t_key] != t_val) {
-                        config_["telemetry"][t_key] = t_val;
+                    if (!target["telemetry"].contains(t_key) || target["telemetry"][t_key] != t_val) {
+                        target["telemetry"][t_key] = t_val;
                         if (!applied_diff.contains("telemetry")) {
                             applied_diff["telemetry"] = json::object();
                         }
@@ -1266,35 +1274,35 @@ void RuntimeConfig::apply_changes(const json& changes, json& applied_diff) {
             }
         } else if (key == "no_broadcast") {
             bool bcast = !value.get<bool>();
-            bool prev_effective_bcast = (broadcast_override_.has_value())
-                ? *broadcast_override_
-                : (config_.contains("broadcast") && config_["broadcast"].is_boolean() ? config_["broadcast"].get<bool>() : true);
-            config_["broadcast"] = bcast;
-            broadcast_override_ = std::nullopt;
+            bool prev_effective_bcast = (broadcast_override.has_value())
+                ? *broadcast_override
+                : (target.contains("broadcast") && target["broadcast"].is_boolean() ? target["broadcast"].get<bool>() : true);
+            target["broadcast"] = bcast;
+            broadcast_override = std::nullopt;
             if (prev_effective_bcast != bcast) {
                 applied_diff["broadcast"] = bcast;
             }
         } else if (key == "broadcast") {
             bool bcast = value.get<bool>();
-            bool prev_effective_bcast = (broadcast_override_.has_value())
-                ? *broadcast_override_
-                : (config_.contains("broadcast") && config_["broadcast"].is_boolean() ? config_["broadcast"].get<bool>() : true);
-            config_["broadcast"] = bcast;
-            broadcast_override_ = std::nullopt;
+            bool prev_effective_bcast = (broadcast_override.has_value())
+                ? *broadcast_override
+                : (target.contains("broadcast") && target["broadcast"].is_boolean() ? target["broadcast"].get<bool>() : true);
+            target["broadcast"] = bcast;
+            broadcast_override = std::nullopt;
             if (prev_effective_bcast != bcast) {
                 applied_diff["broadcast"] = bcast;
             }
         } else if (key == "allowed_origins") {
             std::string prev_effective = allowed_origins_unlocked();
             std::string new_origins = value.is_string() ? value.get<std::string>() : "";
-            config_["allowed_origins"] = new_origins;
-            allowed_origins_override_ = new_origins;
+            target["allowed_origins"] = new_origins;
+            origins_override = new_origins;
             if (prev_effective != new_origins) {
                 applied_diff["allowed_origins"] = new_origins;
             }
         } else {
-            if (!config_.contains(key) || config_[key] != value) {
-                config_[key] = value;
+            if (!target.contains(key) || target[key] != value) {
+                target[key] = value;
                 applied_diff[key] = value;
             }
         }
@@ -1302,39 +1310,42 @@ void RuntimeConfig::apply_changes(const json& changes, json& applied_diff) {
 }
 
 json RuntimeConfig::set(const json& changes, ConfigSideEffectCallback side_effect_cb) {
-    if (!changes.is_object() || changes.empty()) {
+    return set_persisted(changes, nullptr, std::move(side_effect_cb));
+}
+
+json RuntimeConfig::set_persisted(const json& changes,
+                                  std::function<void(const json&)> persist,
+                                  ConfigSideEffectCallback side_effect_cb) {
+    if (!changes.is_object() || changes.empty())
         throw std::invalid_argument("Request body must be a non-empty JSON object");
-    }
 
+    std::unique_lock writer(write_mutex_);
     auto [normalized_changes, message] = normalize_config_set_changes(changes);
-
-    // Validate all keys before acquiring write lock
-    for (auto& [key, value] : normalized_changes.items()) {
-        validate(key, value);
-    }
+    for (auto& [key, value] : normalized_changes.items()) validate(key, value);
 
     json applied_diff = json::object();
-    json updated = json::object();
-
+    json candidate;
+    std::optional<bool> broadcast;
+    std::optional<std::string> origins;
     {
         std::unique_lock lock(mutex_);
-        apply_changes(normalized_changes, applied_diff);
-
-        // Build updated response
-        for (auto& [key, value] : normalized_changes.items()) {
-            updated[key] = value;
-        }
-    } // Lock released
-
-    // Execute side effects outside the lock
-    if (side_effect_cb && !applied_diff.empty()) {
-        side_effect_cb(applied_diff);
+        candidate = config_;
+        broadcast = broadcast_override_;
+        origins = allowed_origins_override_;
+        apply_changes(candidate, normalized_changes, applied_diff, broadcast, origins);
     }
+    json response = {{"status", "success"}, {"updated", normalized_changes}};
+    if (!message.empty()) response["message"] = message;
 
-    json response = {{"status", "success"}, {"updated", updated}};
-    if (!message.empty()) {
-        response["message"] = message;
+    if (persist) persist(normalized_changes);
+    {
+        std::unique_lock lock(mutex_);
+        config_.swap(candidate);
+        broadcast_override_.swap(broadcast);
+        allowed_origins_override_.swap(origins);
     }
+    writer.unlock();
+    if (side_effect_cb && !applied_diff.empty()) side_effect_cb(applied_diff);
     return response;
 }
 

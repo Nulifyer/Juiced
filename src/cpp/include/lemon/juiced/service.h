@@ -57,6 +57,8 @@ private:
   json cache_profile(const std::string &model);
   void cache_api(const httplib::Request &, httplib::Response &,
                  const std::string &);
+  json mutate_prompt_slot(const std::string& model, int slot,
+                          const std::function<json()>& invoke);
   void prune_cache_locked();
   void persist_locked();
   void reconcile();

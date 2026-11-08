@@ -50,9 +50,9 @@ jobs:
           python -c "from pathlib import Path; Path('.version').write_text('2026.44.1-juiced\n')"
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_WEB_APP=OFF -DBUILD_TAURI_APP=OFF -DBUILD_TESTING=ON
       - name: Compile core and portable contracts
-        run: cmake --build build --config Release ${{ runner.os != 'Windows' && '--parallel 4' || '' }} --target lemond test_auto_tune test_request_cancellation test_provider_request_observation test_resource_admission test_router_admission test_request_identity test_backend_mode_contract test_memory_budget test_inference_lease test_realtime_worker_lease test_routing_helper_reconcile test_live_throughput
+        run: cmake --build build --config Release ${{ runner.os != 'Windows' && '--parallel 4' || '' }} --target lemond test_config_merging test_auto_tune test_request_cancellation test_provider_request_observation test_resource_admission test_router_admission test_request_identity test_backend_mode_contract test_memory_budget test_inference_lease test_realtime_worker_lease test_routing_helper_reconcile test_live_throughput
       - name: Verify native contracts
-        run: ctest --test-dir build -C Release --output-on-failure -R "^(AutoTuneTest|RequestCancellationTest|ProviderRequestObservationTest|ResourceAdmissionTest|RouterAdmissionTest|RequestIdentityTest|BackendModeContractTest|MemoryBudgetTest|InferenceLeaseTest|RealtimeWorkerLeaseTest|RoutingHelperReconcileTest|LiveThroughputTest)$"
+        run: ctest --test-dir build -C Release --output-on-failure -R "^(ConfigMergingTest|AutoTuneTest|RequestCancellationTest|ProviderRequestObservationTest|ResourceAdmissionTest|RouterAdmissionTest|RequestIdentityTest|BackendModeContractTest|MemoryBudgetTest|InferenceLeaseTest|RealtimeWorkerLeaseTest|RoutingHelperReconcileTest|LiveThroughputTest)$"
   image:
     needs: [ui-acceptance, native-contracts]
     runs-on: ubuntu-24.04
@@ -98,6 +98,12 @@ jobs:
           docker cp juiced/tests/test_cache_admission.py juiced-smoke:/tmp/test_cache_admission.py
           docker exec juiced-smoke python3 /tmp/test_cache_admission.py --binary /opt/lemonade/lemond --engine /opt/juiced/llama/llama-server --model-file /library/stories15M-q4_0.gguf --out /tmp/cache-admission-proof.json
           docker cp juiced-smoke:/tmp/cache-admission-proof.json cache-admission-proof.json
+          docker cp juiced/tests/test_resource_admission.py juiced-smoke:/tmp/test_resource_admission.py
+          docker exec juiced-smoke python3 /tmp/test_resource_admission.py --binary /opt/lemonade/lemond --engine /opt/juiced/llama/llama-server --model-file /library/stories15M-q4_0.gguf --out /tmp/resource-admission-proof.json
+          docker cp juiced-smoke:/tmp/resource-admission-proof.json resource-admission-proof.json
+          docker cp juiced/tests/test_runtime_boundaries.py juiced-smoke:/tmp/test_runtime_boundaries.py
+          docker exec juiced-smoke python3 /tmp/test_runtime_boundaries.py --binary /opt/lemonade/lemond --engine /opt/juiced/llama/llama-server --model-file /library/stories15M-q4_0.gguf --out /tmp/runtime-boundaries-proof.json
+          docker cp juiced-smoke:/tmp/runtime-boundaries-proof.json runtime-boundaries-proof.json
           python3 juiced/tests/test_preparation.py --url http://127.0.0.1:18080 --out preparation-proof.json
           docker cp juiced/tests/test_preparation_worker.py juiced-smoke:/tmp/test_preparation_worker.py
           docker exec juiced-smoke python3 /tmp/test_preparation_worker.py --python /opt/juiced/preparation/bin/python3 --script /opt/juiced/preparation/prepare.py --source /library/stories15M-q4_0.gguf
@@ -142,6 +148,8 @@ jobs:
             catalog.json
             engine-cache-proof.json
             cache-admission-proof.json
+            resource-admission-proof.json
+            runtime-boundaries-proof.json
             preparation-proof.json
             hf-preparation-proof.json
             execution-switch-proof.json

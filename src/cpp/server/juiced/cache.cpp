@@ -89,13 +89,15 @@ void output(httplib::Response &r, const json &j, int code = 200) {
   r.set_header("Cache-Control", "no-store");
 }
 json post_engine(const std::string &address, const std::string &path,
-                 const json &body, WrappedServer::InferenceLease& worker) {
+                 const json &body, WrappedServer::InferenceLease& worker,
+                 const std::function<bool()>& disconnected) {
   worker.resources_started();
   utils::HttpResponse r;
   try {
     r = utils::HttpClient::post(address + path, body.dump(),
                                  {{"Content-Type", "application/json"}}, 120,
-                                 utils::HttpSecurityPolicy::TrustedLoopback);
+                                 utils::HttpSecurityPolicy::TrustedLoopback,
+                                 {nullptr, [&] { return worker.deadline_expired() || (disconnected && disconnected()); }});
   } catch (const std::exception&) {
     throw AdmissionError("state_operation_unresolved", "Engine state operation termination could not be confirmed");
   }
@@ -113,6 +115,19 @@ std::string prefix_hash(const json &messages, size_t n) {
   return digest(prefix.dump());
 }
 } // namespace
+JuicedService::json JuicedService::mutate_prompt_slot(
+    const std::string& model, int slot, const std::function<json()>& invoke) {
+  auto claim = std::make_shared<PromptStateClaim>(mutex_, active_slots_, active_snapshots_, model, "");
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (slot < 0 || cache_mode_locked(model) == "persistent" || active_slots_[model].count(slot))
+      throw AdmissionError("prompt_state_busy", "Manual slot mutation is unavailable while persistent caching owns slots", 409);
+    active_slots_[model].insert(slot);
+    claim->slot = slot;
+  }
+  return invoke();
+}
+
 std::string JuicedService::cache_mode_locked(const std::string &model) const {
   const auto &settings = state_.at("cache");
   if (settings.contains("model_modes") &&
@@ -469,8 +484,11 @@ void JuicedService::chat(const httplib::Request &original,
       return;
     }
     const auto address = profile.at("address").get<std::string>();
+    const auto request_context = current_request_context();
+    const auto disconnected = request_context ? request_context->cancelled : std::function<bool()>{};
     auto sr = utils::HttpClient::get(
-        address + "/slots", {}, 10, utils::HttpSecurityPolicy::TrustedLoopback);
+        address + "/slots", {}, 10, utils::HttpSecurityPolicy::TrustedLoopback,
+        {nullptr, [worker, disconnected] { return worker->deadline_expired() || (disconnected && disconnected()); }});
     if (sr.status_code != 200)
       throw std::runtime_error("Cannot reserve a prompt-state slot");
     auto slots = json::parse(sr.body);
@@ -552,7 +570,7 @@ void JuicedService::chat(const httplib::Request &original,
             throw std::runtime_error("Snapshot checksum mismatch");
           auto restored = post_engine(
               address, "/slots/" + std::to_string(slot) + "?action=restore",
-              {{"filename", key + ".bin"}}, *worker);
+              {{"filename", key + ".bin"}}, *worker, disconnected);
           restore = "restored";
           res.set_header("X-Juiced-Restored-Tokens",
                          std::to_string(restored.value("n_restored", 0)));
@@ -572,7 +590,7 @@ void JuicedService::chat(const httplib::Request &original,
     auto req = std::make_shared<httplib::Request>(original);
     req->body = request.dump();
     auto finish = [this, guard, worker, identified, key, thread, model, profile,
-                   address, slot, messages](bool success) {
+                   address, slot, messages, disconnected](bool success) {
       if (!success || !identified)
         return;
       const auto pending = key + ".pending";
@@ -592,7 +610,7 @@ void JuicedService::chat(const httplib::Request &original,
               "Insufficient free disk for a snapshot temporary file");
         auto result = post_engine(
             address, "/slots/" + std::to_string(slot) + "?action=save",
-            {{"filename", pending}}, *worker);
+            {{"filename", pending}}, *worker, disconnected);
         auto size = std::filesystem::file_size(file);
         if (size > budget)
           throw std::runtime_error(

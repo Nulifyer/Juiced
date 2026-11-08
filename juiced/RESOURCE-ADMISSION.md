@@ -14,7 +14,7 @@ inference. Unload idle workers separately when draining for a configuration chan
 The native `admission` setting is a complete value in `config.json`. Update it alone
 through `POST /internal/set`. Changing resource topology requires no active,
 resident, or pending claims. Use pause, wait for requests to settle, unload workers,
-apply settings, then resume. Hot policies remain saved. Runtime pause is temporary
+apply settings, then resume. Updates are staged and persisted before publication. A revision-bound transition blocks new admission during publication; write failure retains the old configuration and returns an error. Hot policies remain saved. Runtime pause is temporary
 and does not survive manager restart.
 
 Settings include `mode`, `active_limit`, `pending_limit`, `service_pending_limit`,
@@ -37,14 +37,14 @@ Each model profile binds its public model ID, `checkpoint`, and exact effective
 `options`, excluding `pinned`. It declares `source`, `priority`, `concurrency`,
 `completion_ms`, and allocation maps `load_bytes`, `resident_bytes`, `request_bytes`,
 `state_bytes`, or `realtime_bytes`. Map keys identify physical pools. Context ceilings
-must be explicit. Loading reserves its full peak, then retains only resident weights
+must be positive and explicit; zero is not a ceiling. The llama.cpp embedding context floor is resolved before admission and stored in the effective options. Loading reserves its full peak, then retains only resident weights
 and workspace for that worker generation. Requests add their incremental ceilings.
 Concurrent reservations update one ledger atomically. Sampled headroom also accounts
 for outstanding requests whose allocations may not yet appear in operating-system
 readings. This is deliberately conservative.
 
 Protected mode rejects missing profiles, changed execution options, unknown capacity,
-and operations without explicit ceilings. Request JSON and client headers cannot
+and operations without explicit ceilings. Protected text requests also require `request_limits` with positive `input_bytes`, `batch`, and, for generation, `output_tokens`. Input size uses a conservative bound over the parsed JSON. Generations require an explicit positive token limit; multimodal and unqualified request shapes reject before dispatch. State requests with caller input use the same input bound. These are execution bounds, not an ingress/upload budget. Request JSON and client headers cannot
 promote a request to essential priority. Authenticated queues use the accepted
 principal and credential epoch. Anonymous callers share one queue authority.
 
@@ -59,8 +59,14 @@ metadata calls cannot overwrite an earlier incomplete transfer in the same opera
 
 The initial observed wrappers are llama.cpp, FUTO/asr4all, whisper.cpp, Kokoro and
 stable-diffusion.cpp. Other backends retain legacy behavior and reject protected
-admission until their wrapper reports a managed lifetime. The loopback speech tests
+admission until their wrapper reports a managed lifetime. Observation alone does not qualify a workload: protected image, speech and transcription requests remain rejected until their request envelopes qualify. The loopback speech tests
 verify HTTP/cancellation behavior, not transcription quality or accelerator performance.
+
+Manual save, restore and erase reject while persistent caching owns that model's slots. Memory-mode mutations claim the same slot owner, preventing cache-mode changes during the operation. Failed state exchanges retain uncertain generation accounting; observed idle inference cannot clear them.
+
+Every load generation, including a legacy retry, retains residency ownership. A failed model load does not evict unrelated workers. Replacement retains its selected generation across admission waits, revalidates registry membership, and retires it atomically against inference acquisition. Completion deadlines cancel managed load/state/GET work; teardown may outlast the deadline, and accounting remains held until termination is established. This is not a hard realtime execution guarantee.
+
+Juiced rejects direct `/images/upscale` execution until it uses the same policy, loading and admission owners. Realtime rejects protected execution before either direct TCP or batch fallback, and pause rejects new Realtime input. WebSocket callback exceptions become bounded protocol errors rather than escaping the callback boundary.
 
 Current limits remain explicit: realtime termination, downsized restore peaks,
 provider installation and preparation scratch, early HTTP status

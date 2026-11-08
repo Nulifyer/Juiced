@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <mutex>
 #include <optional>
 #include <shared_mutex>
 #include <string>
@@ -102,6 +103,10 @@ public:
     // Returns JSON: {"status":"success","updated":{...}} or throws on validation error.
     json set(const json& changes, ConfigSideEffectCallback side_effect_cb = nullptr);
 
+    json set_persisted(const json& changes,
+                       std::function<void(const json&)> persist,
+                       ConfigSideEffectCallback side_effect_cb = nullptr);
+
     // --- Full snapshot ---
     json snapshot() const;
 
@@ -150,7 +155,9 @@ private:
     // Apply changes and emit the subset that actually differed from the previous
     // state into `applied_diff`. Mirrors the shape of `changes` (nested for
     // backend sections).
-    void apply_changes(const json& changes, json& applied_diff);
+    void apply_changes(json& target, const json& changes, json& applied_diff,
+                       std::optional<bool>& broadcast_override,
+                       std::optional<std::string>& origins_override);
 
     // Helpers to retrieve configuration options with environment variable override
     // and fallback to config JSON under a shared lock.
@@ -160,6 +167,7 @@ private:
     std::string get_string_opt(const char* env_name, const std::vector<std::string>& path, const std::string& default_val) const;
     std::string allowed_origins_unlocked() const;
 
+    std::mutex write_mutex_;
     mutable std::shared_mutex mutex_;
 
     // Config stored as nested JSON matching config.json structure.

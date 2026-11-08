@@ -155,6 +155,7 @@ std::string RealtimeSessionManager::create_session(
 }
 
 void RealtimeSessionManager::update_session(const std::string& session_id, const json& config) {
+    if (router_) router_->require_realtime_admission();
     auto session = get_session(session_id);
     if (!session) {
         return;
@@ -187,6 +188,7 @@ void RealtimeSessionManager::update_session(const std::string& session_id, const
 }
 
 void RealtimeSessionManager::append_audio(const std::string& session_id, const std::string& base64_audio) {
+    if (router_) router_->require_realtime_admission();
     auto session = get_session(session_id);
     if (!session || !session->session_active) {
         return;
@@ -341,6 +343,7 @@ void RealtimeSessionManager::transcribe_interim(std::shared_ptr<RealtimeSession>
 }
 
 void RealtimeSessionManager::commit_audio(const std::string& session_id) {
+    if (router_) router_->require_realtime_admission();
     auto session = get_session(session_id);
     if (!session) {
         return;
@@ -488,7 +491,7 @@ void RealtimeSessionManager::transcribe_wav(
         // Call router for transcription
         LOG(DEBUG, "RealtimeSession") << "Calling Whisper " << tag << " transcription ("
                   << wav_data.size() << " bytes)..." << std::endl;
-        json response = router_->audio_transcriptions(request);
+        json response = router_->audio_transcriptions(request, true);
 
         // Drop stale result (including stale errors) instead of publishing it.
         if (is_interim &&

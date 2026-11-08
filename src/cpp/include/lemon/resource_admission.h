@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -33,6 +34,13 @@ public:
         nlohmann::json options = nlohmann::json::object();
         Operation operation = Operation::Request;
         std::function<bool()> cancelled;
+        std::optional<uint64_t> config_revision;
+        std::map<std::string, uint64_t> workload;
+    };
+    struct Policy {
+        uint64_t revision;
+        bool protected_mode;
+        bool paused;
     };
     class Lease {
     public:
@@ -47,6 +55,7 @@ public:
         void completed();
         void retain_residency();
         bool deadline_expired() const;
+        bool protected_mode() const;
     private:
         friend class ResourceAdmission;
         Lease(std::shared_ptr<State> state, uint64_t id);
@@ -58,7 +67,8 @@ public:
 
     explicit ResourceAdmission(Headroom headroom = {});
     static void validate_config(const nlohmann::json& config);
-    void configure(const nlohmann::json& config);
+    void configure(const nlohmann::json& config, std::function<void()> publish = {});
+    Policy policy() const;
     Lease acquire(Work work);
     void pause(bool paused);
     void shutdown();

@@ -4,6 +4,8 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <future>
+#include <thread>
 #include <string>
 
 #include <lemon/config_file.h>
@@ -612,6 +614,60 @@ static void test_server_handle_config_set_direct() {
     RuntimeConfig::set_global(nullptr);
 }
 
+static void test_durable_publication() {
+    RuntimeConfig config(ConfigFile::base_defaults());
+    const auto initial = config.snapshot();
+    config.set_broadcast_override(false);
+    bool failed = false;
+    try {
+        config.set_persisted({{"broadcast", true}, {"port", 9123}}, [](const json&) {
+            throw std::runtime_error("injected durable write failure");
+        });
+    } catch (const std::runtime_error&) { failed = true; }
+    check(failed && config.snapshot() == initial && !config.broadcast(),
+          "persistence failure preserves configuration and CLI overrides");
+    std::promise<void> writing, release;
+    auto released = release.get_future();
+    json disk;
+    auto first = std::async(std::launch::async, [&] {
+        config.set_persisted({{"port", 9123}}, [&](const json& changes) {
+            writing.set_value(); released.wait(); disk = changes;
+        });
+    });
+    writing.get_future().wait();
+    check(config.port() == initial.at("port"), "readers retain the old configuration during disk publication");
+    auto second = std::async(std::launch::async, [&] {
+        config.set_persisted({{"port", 9124}}, [&](const json& changes) { disk = changes; });
+    });
+    check(second.wait_for(std::chrono::milliseconds(25)) == std::future_status::timeout,
+          "concurrent writers cannot overtake durable publication");
+    release.set_value(); first.get(); second.get();
+    check(config.port() == 9124 && disk.at("port") == 9124,
+          "concurrent durable and runtime state agree on the final revision");
+
+    ScopedTempDir temp;
+    auto defaults = ConfigFile::get_defaults();
+    defaults["auto_check_model_updates"] = false;
+    defaults["broadcast"] = false;
+    auto runtime = std::make_shared<RuntimeConfig>(defaults);
+    RuntimeConfig::set_global(runtime.get());
+    Server server(runtime, temp.string(), temp.string());
+    fs::create_directory(temp.path() / "config.json.tmp");
+    httplib::Request request; request.method = "POST"; request.path = "/internal/set";
+    request.body = json{{"admission", {{"mode", "legacy"}, {"interactive_wait_ms", 123}}}}.dump();
+    httplib::Response response;
+    server.handle_config_set(request, response);
+    check(response.status == 500 && runtime->snapshot().value("admission", json::object()) == defaults.value("admission", json::object()),
+          "real persistence failure returns an error without publishing admission settings");
+    fs::remove(temp.path() / "config.json.tmp");
+    httplib::Response success;
+    server.handle_config_set(request, success);
+    check(success.status == 200 || success.status == -1, "failed publication leaves the admission transition reusable");
+    check(ConfigFile::load_raw(temp.string()).at("admission") == runtime->snapshot().at("admission"),
+          "durable admission settings match restart readback");
+    RuntimeConfig::set_global(nullptr);
+}
+
 int main() {
     std::puts("=== Config Merging and Sparse Lifecycle Unit Tests ===\n");
 
@@ -632,6 +688,7 @@ int main() {
     test_unset_override_to_default();
     test_cli_startup_persistence_idempotent();
     test_server_handle_config_set_direct();
+    test_durable_publication();
 
     std::printf("\n================================================\n");
     if (failures > 0) {

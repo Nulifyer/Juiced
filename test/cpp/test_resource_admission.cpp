@@ -27,6 +27,7 @@ int main() {
     json profile = {{"checkpoint", "fixture@immutable"}, {"options", {{"ctx_size", 2048}}},
         {"priority", "interactive"}, {"concurrency", 1}, {"completion_ms", 100},
         {"load_bytes", {{"uma", 600}}}, {"resident_bytes", {{"uma", 400}}},
+        {"request_limits", {{"input_bytes", 65536}, {"batch", 1}, {"output_tokens", 128}}},
         {"request_bytes", {{"uma", 300}}}, {"source", "frozen fixture peak"}};
     json config = {{"mode", "protected"}, {"interactive_wait_ms", 120}, {"essential_wait_ms", 120},
         {"batch_wait_ms", 120}, {"pools", {{"uma", {{"capacity_bytes", 1000},
@@ -35,6 +36,7 @@ int main() {
     auto work = [&](uint64_t generation = 1) {
         ResourceAdmission::Work w;
         w.model = "model"; w.service = "chat"; w.generation = generation;
+        w.workload = {{"input_bytes", 1}, {"batch", 1}, {"output_tokens", 32}};
         w.checkpoint = "fixture@immutable"; w.options = {{"ctx_size", 2048}};
         return w;
     };
@@ -133,7 +135,7 @@ int main() {
         sampled.configure(config);
         check(error([&] { sampled.acquire(work()); }, "queue_deadline_exceeded"),
               "sampled physical shortage prevents admission below the configured ceiling");
-        available = 700;
+        available = 900;
         auto first = sampled.acquire(work(1));
         auto second = sampled.acquire(work(2));
         check(error([&] { sampled.acquire(work(3)); }, "queue_deadline_exceeded"),
@@ -235,6 +237,66 @@ int main() {
     }
     controller.shutdown();
     check(error([&] { controller.acquire(work()); }, "admission_paused"), "shutdown rejects new requests");
+    {
+        auto invalid = config;
+        invalid["models"]["model"]["options"]["ctx_size"] = 0;
+        bool rejected = false;
+        try { ResourceAdmission::validate_config(invalid); }
+        catch (const std::invalid_argument&) { rejected = true; }
+        check(rejected, "model-native zero context is not a protected resource ceiling");
+        ResourceAdmission bounded; bounded.configure(config);
+        auto oversized = work(); oversized.workload["output_tokens"] = 129;
+        check(error([&] { bounded.acquire(oversized); }, "workload_limit_exceeded"),
+              "oversized output is rejected before acquiring capacity");
+        auto unbounded = work(); unbounded.workload.erase("batch");
+        check(error([&] { bounded.acquire(unbounded); }, "workload_unqualified"),
+              "missing workload dimensions cannot use a fixed reservation");
+    }
+    {
+        std::optional<uint64_t> available = 400;
+        ResourceAdmission sampled([&](const std::string&) { return available; });
+        sampled.configure(config);
+        check(error([&] { sampled.acquire(work()); }, "queue_deadline_exceeded"),
+              "external memory pressure cannot consume the essential sampled reserve");
+        available = 1000;
+        auto resident_work = work(); resident_work.operation = ResourceAdmission::Operation::Load;
+        auto resident = sampled.acquire(resident_work); resident.started(); resident.retain_residency();
+        available = 600;
+        auto request = sampled.acquire(work());
+        check(sampled.snapshot()["pools"]["uma"]["reserved_bytes"] == 700,
+              "materialized residency is not subtracted twice from sampled availability");
+        available = 350;
+        check(error([&] { sampled.acquire(work(2)); }, "queue_deadline_exceeded"),
+              "outstanding claims and pressure preserve essential headroom together");
+    }
+    {
+        ResourceAdmission transitions; transitions.configure(config);
+        auto stale = work(); stale.config_revision = transitions.policy().revision;
+        auto replacement = config; replacement["interactive_wait_ms"] = 121;
+        transitions.configure(replacement);
+        check(error([&] { transitions.acquire(stale); }, "admission_configuration_changed"),
+              "preflight from an older policy cannot enter a new admission revision");
+        const auto revision = transitions.policy().revision;
+        bool failed = false;
+        try { transitions.configure(config, [] { throw std::runtime_error("persistence fixture"); }); }
+        catch (const std::runtime_error&) { failed = true; }
+        check(failed && transitions.policy().revision == revision && !transitions.snapshot()["configuration_pending"].get<bool>(),
+              "failed publication leaves the old policy intact and clears the transition gate");
+        std::promise<void> publishing, release;
+        auto release_future = release.get_future();
+        auto update = std::async(std::launch::async, [&] {
+            transitions.configure(config, [&] { publishing.set_value(); release_future.wait(); });
+        });
+        publishing.get_future().wait();
+        check(error([&] { transitions.acquire(work()); }, "admission_configuration_pending") &&
+              transitions.snapshot()["configuration_revision"] == revision,
+              "durable publication gates new work while inspection remains responsive");
+        check(error([&] { transitions.configure(replacement); }, "admission_configuration_busy"),
+              "concurrent configuration cannot overtake an in-progress publication");
+        release.set_value(); update.get();
+        check(transitions.policy().revision == revision + 1,
+              "successful publication advances one policy revision");
+    }
     std::printf("Resource admission: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

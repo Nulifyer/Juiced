@@ -4773,7 +4773,10 @@ void Server::handle_slots_by_id(const httplib::Request& req, httplib::Response& 
         }
 
         // Call router's slots_action method with slot ID, action, and request body
-        auto response = router_->slots_action(slot_id, action_param, request_body);
+        auto response = router_->slots_action(slot_id, action_param, request_body,
+            [&](const std::string& model, const std::function<json()>& invoke) {
+                return juiced_ ? juiced_->mutate_prompt_slot(model, slot_id, invoke) : invoke();
+            });
         if (response.contains("error")) {
             set_error_response(response, res);
             return;
@@ -5793,6 +5796,12 @@ void Server::handle_image_variations(const httplib::Request& req, httplib::Respo
 }
 
 void Server::handle_image_upscale(const httplib::Request& req, httplib::Response& res) {
+    if (juiced_) {
+        res.status = 503;
+        res.set_content(ErrorResponse::create("Upscaling has no qualified managed execution path",
+            ErrorType::UNSUPPORTED_OPERATION, {{"code", "operation_unqualified"}}).dump(), "application/json");
+        return;
+    }
     try {
         LOG(INFO, "Server") << "POST /api/v1/images/upscale" << std::endl;
 
@@ -6497,6 +6506,10 @@ void Server::handle_load(const httplib::Request& req, httplib::Response& res) {
             res.set_content(response.dump(), "application/json");
         }
 
+    } catch (const AdmissionError& error) {
+        res.status = error.status;
+        res.set_content(ErrorResponse::create(error.what(), ErrorType::BACKEND_ERROR,
+            {{"code", error.code}, {"status_code", error.status}}).dump(), "application/json");
     } catch (const std::exception& e) {
         LOG(ERROR, "Server") << "Failed to load model: " << e.what() << std::endl;
 
@@ -7428,30 +7441,22 @@ void Server::handle_shutdown(const httplib::Request& req, httplib::Response& res
 void Server::handle_config_set(const httplib::Request& req, httplib::Response& res) {
     try {
         auto body = nlohmann::json::parse(req.body);
-        if (body.contains("admission")) {
-            if (body.size() != 1) throw std::invalid_argument("Change admission settings separately from other configuration");
-            router_->configure_admission(body.at("admission"));
-        }
+        if (body.contains("admission") && body.size() != 1)
+            throw std::invalid_argument("Change admission settings separately from other configuration");
 
-        auto result = config_->set(body, [this](const json& applied) {
-            apply_config_side_effects(applied);
-        });
-
-        if (!config_dir_.empty()) {
-            try {
+        json result;
+        const auto publish = [&] {
+            result = config_->set_persisted(body, [this](const json& updated) {
+                if (config_dir_.empty()) return;
                 json user_cfg = ConfigFile::load_raw(config_dir_);
-                if (result.contains("updated") && result["updated"].is_object()) {
-                    user_cfg = utils::JsonUtils::merge(user_cfg, result["updated"]);
-                    if (result["updated"].contains("admission"))
-                        user_cfg["admission"] = result["updated"]["admission"];
-                }
-                json defaults = ConfigFile::get_defaults();
-                utils::JsonUtils::prune_matching(user_cfg, defaults);
+                user_cfg = utils::JsonUtils::merge(user_cfg, updated);
+                if (updated.contains("admission")) user_cfg["admission"] = updated["admission"];
+                utils::JsonUtils::prune_matching(user_cfg, ConfigFile::get_defaults());
                 ConfigFile::save(config_dir_, user_cfg);
-            } catch (const std::exception& e) {
-                LOG(WARNING, "Server") << "Failed to persist config.json: " << e.what() << std::endl;
-            }
-        }
+            }, [this](const json& applied) { apply_config_side_effects(applied); });
+        };
+        if (body.contains("admission")) router_->configure_admission(body.at("admission"), publish);
+        else publish();
 
         res.set_content(result.dump(), "application/json");
     } catch (const AdmissionError& error) {

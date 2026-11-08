@@ -465,6 +465,7 @@ bool WrappedServer::has_backend_process_exited() const {
 
 void WrappedServer::start_server(std::unique_ptr<ServerProcess> process,
                                  const ServerCommand& command, long timeout_seconds) {
+    if (load_cancelled()) throw std::runtime_error("load cancelled before process startup");
     const std::string host = process->start(command);
     std::unique_ptr<ServerProcess> previous;
     {
@@ -676,7 +677,6 @@ bool WrappedServer::wait_for_ready(const std::string& endpoint, long timeout_sec
 }
 
 json WrappedServer::forward_get_request(const std::string& endpoint, long timeout_seconds) {
-    (void)timeout_seconds;
     if (!is_backend_alive()) {
         if (was_watchdog_triggered() || has_backend_process_exited()) {
             if (!was_watchdog_triggered()) {
@@ -693,8 +693,9 @@ json WrappedServer::forward_get_request(const std::string& endpoint, long timeou
     std::map<std::string, std::string> headers;
 
     try {
-        auto response = utils::HttpClient::get(url, headers, 0,
-                                               utils::HttpSecurityPolicy::TrustedLoopback);
+        auto response = utils::HttpClient::get(url, headers, timeout_seconds,
+                                               utils::HttpSecurityPolicy::TrustedLoopback,
+                                               current_request_cancel_context());
         note_backend_activity();
         note_request_completed();
 

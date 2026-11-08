@@ -249,6 +249,8 @@ void ConfigFile::save(const std::string& config_dir, const json& config) {
             throw std::runtime_error("Failed to write " + temp_path.string());
         }
         file << config.dump(2) << std::endl;
+        file.flush();
+        if (!file) throw std::runtime_error("Failed to flush " + temp_path.string());
     }
 
     std::error_code ec;

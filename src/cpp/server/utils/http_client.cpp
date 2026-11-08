@@ -528,7 +528,8 @@ bool apply_http_security_policy(
 HttpResponse HttpClient::get(const std::string& url,
                              const std::map<std::string, std::string>& headers,
                              long timeout_seconds,
-                             HttpSecurityPolicy policy) {
+                             HttpSecurityPolicy policy,
+                             const RequestCancelToken& cancel) {
     CURL* curl = curl_easy_init();
     if (!curl) {
         throw std::runtime_error("Failed to initialize CURL");
@@ -548,6 +549,12 @@ HttpResponse HttpClient::get(const std::string& url,
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, kConnectTimeoutSeconds);
     curl_easy_setopt(curl, CURLOPT_USERAGENT, "lemon.cpp/1.0");
 
+    if (cancel.flag || cancel.should_cancel) {
+        curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+        curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, post_cancel_xferinfo_callback);
+        curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &cancel);
+    }
+
     // Add custom headers
     struct curl_slist* header_list = nullptr;
     for (const auto& header : headers) {
@@ -564,7 +571,8 @@ HttpResponse HttpClient::get(const std::string& url,
         std::string error = "CURL error: " + std::string(curl_easy_strerror(res));
         curl_slist_free_all(header_list);
         curl_easy_cleanup(curl);
-        throw std::runtime_error(error);
+        if (res == CURLE_ABORTED_BY_CALLBACK) throw HttpClientCancellationException(res, error);
+        throw HttpClientException(res, error);
     }
 
     long response_code;

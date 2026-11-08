@@ -1,0 +1,33 @@
+{
+  "schema": 1,
+  "phase": "P1",
+  "phase_complete": false,
+  "deployed": false,
+  "scope": [
+    "Atomic worker retirement and retained replacement generations; retries keep residency without broad eviction.",
+    "Revision-bound admission and persist-before-publish configuration with failure recovery.",
+    "Essential sampled headroom and positive effective context ceilings.",
+    "Bounded protected text/state request envelopes; unqualified services reject.",
+    "Shared manual/cache slot exclusion and deadline-aware managed state HTTP.",
+    "Juiced upscale rejection and complete protected Realtime rejection with callback containment."
+  ],
+  "verification": {
+    "status": "passed local Linux gates; cross-platform CI pending",
+    "native_contracts": 15,
+    "resource_checks": 46,
+    "router_checks": 28,
+    "inference_lease_checks": 34,
+    "configuration_checks": 118,
+    "api_cases": 41,
+    "sanitizers": "ResourceAdmission ASan/UBSan, 46 checks; not a full-core sanitizer claim",
+    "real_cpu": "Stories15M load/request/state, concurrency, direct protocols and persistent cache matrix",
+    "runtime_boundaries": "20 concurrent config updates, real persistence failure and restart readback; eight WebSocket rejection combinations and recovery; retry Hot preservation and slow-load deadline",
+    "scope": "Synthetic CPU engine and loopback protocols only; no accelerator, real speech or essential-service qualification"
+  },
+  "remaining": [
+    "Full P1 coverage and frozen interference/service qualification remain open.",
+    "All-writer maintenance, ingress budgets, provider preparation/install envelopes, realtime identity and termination, early streaming status and shared runtime observations remain.",
+    "P2-P7 remain subject to the approved plan, selected-family manifests and qualification gates.",
+    "No image or deployment is included."
+  ]
+}

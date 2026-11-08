@@ -144,7 +144,8 @@ public:
     void set_model_access_policy(std::function<bool(const std::string&)> policy);
     json admission_snapshot() const;
     void pause_admission(bool paused);
-    void configure_admission(const json& config);
+    void configure_admission(const json& config, std::function<void()> publish = {});
+    void require_realtime_admission() const;
 
     // allow_reload_on_option_change: intended for explicit /load callers only.
     // Auto-load callers (inference-triggered) should leave this false so they
@@ -237,11 +238,12 @@ public:
     json reranking(const json& request);
     json classify(const json& request);
     json get_slots();
-    json slots_action(int slot_id, const std::string& action, const json& request_body);
+    json slots_action(int slot_id, const std::string& action, const json& request_body,
+                      const std::function<json(const std::string&, const std::function<json()>&)>& guard);
     json tokenize(const json& request);
     json responses(const json& request);
 
-    json audio_transcriptions(const json& request);
+    json audio_transcriptions(const json& request, bool from_realtime = false);
     void audio_speech(const json& request, httplib::DataSink& sink);
     std::vector<std::string> audio_speech_supported_formats(const std::string& model_name);
     std::vector<std::string> audio_speech_supported_streaming_formats(const std::string& model_name);
@@ -322,7 +324,8 @@ private:
     bool model_access_allowed(const std::string& model) const;
 
     mutable ResourceAdmission admission_;
-    ResourceAdmission::Lease admit_worker(const WrappedServer& server, ResourceAdmission::Operation operation) const;
+    ResourceAdmission::Lease admit_worker(const WrappedServer& server, ResourceAdmission::Operation operation,
+        const json* request = nullptr) const;
     std::shared_ptr<WrappedServer> shared_worker(WrappedServer* server) const;
 
     mutable std::mutex load_mutex_;              // Protects loading state and loaded_servers_

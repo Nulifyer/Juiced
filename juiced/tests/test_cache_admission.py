@@ -242,6 +242,7 @@ def acceptance(args):
                 check=True,
             )
             proof["useful_restart_reuse"] = True
+            proof["manual_persistent_slot_mutations_rejected"] = True
             fixture.ok("/internal/aliases", {"alias": ALIAS, "target": MODEL})
             fixture.ok("/v1/juiced/policy", {"model": ROUTE, "policy": "on-demand"})
             matrix = []
@@ -254,6 +255,18 @@ def acceptance(args):
                     {"mode": global_mode, "model_modes": {MODEL: override}},
                 )
                 for prefix in PREFIXES:
+                    if override == "persistent":
+                        for action in ("erase", "save", "restore"):
+                            status, _, data = fixture.call(
+                                prefix + "slots/0?action=" + action,
+                                {"model": MODEL, "filename": "manual-fixture.bin"},
+                            )
+                            assert (
+                                status == 409
+                                and data["error"]["details"]["code"]
+                                == "prompt_state_busy"
+                            ), (status, data)
+                        assert fixture.ok(prefix + "juiced/admission")["uncertain"] == 0
                     for name in (MODEL, ALIAS, MODEL + ":latest", ALIAS + ":latest"):
                         for streaming in (False, True):
                             session = f"matrix-{len(matrix)}"

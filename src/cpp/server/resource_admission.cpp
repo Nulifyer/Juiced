@@ -72,6 +72,7 @@ struct ResourceAdmission::State {
         bool complete = false;
         bool resident = false;
         bool uncertain = false;
+        bool protected_mode = false;
     };
     mutable std::mutex mutex;
     std::condition_variable changed;
@@ -82,7 +83,8 @@ struct ResourceAdmission::State {
     std::map<uint64_t, std::shared_ptr<Entry>> active;
     uint64_t next_id = 0, rejected = 0, admitted = 0;
     size_t essential_streak = 0;
-    bool paused = false, stopped = false;
+    bool paused = false, stopped = false, configuration_pending = false;
+    uint64_t revision = 0;
 
     Charges reserved() const {
         Charges result;
@@ -119,7 +121,11 @@ struct ResourceAdmission::State {
                     const auto claim = active_entry.second->costs.find(cost.first);
                     if (claim != active_entry.second->costs.end()) outstanding += claim->second;
                 }
-                if (!available || outstanding > *available || cost.second > *available - outstanding) return false;
+                if (!available) return false;
+                uint64_t available_for_class = *available;
+                if (entry.priority != "essential")
+                    available_for_class -= std::min(available_for_class, pool->second.essential_headroom);
+                if (outstanding > available_for_class || cost.second > available_for_class - outstanding) return false;
             }
         }
         return true;
@@ -165,10 +171,19 @@ void ResourceAdmission::validate_config(const json& config) {
     for (const auto& item : models.items()) {
         const auto& model = item.value();
         known_keys(model, {"checkpoint", "options", "priority", "concurrency", "completion_ms", "load_bytes",
-                           "resident_bytes", "request_bytes", "state_bytes", "realtime_bytes", "source"});
-        if (model.contains("options") && model.at("options").is_object() && model.at("options").contains("ctx_size") &&
-            model.at("options").at("ctx_size").is_number() && model.at("options").at("ctx_size").get<int64_t>() < 0)
-            throw std::invalid_argument("Resource profiles require an explicit context ceiling");
+                           "resident_bytes", "request_bytes", "state_bytes", "realtime_bytes", "request_limits", "source"});
+        if (model.contains("options") && model.at("options").is_object() && model.at("options").contains("ctx_size")) {
+            const auto& context = model.at("options").at("ctx_size");
+            if (!context.is_number_integer() || context.get<int64_t>() <= 0)
+                throw std::invalid_argument("Resource profiles require a positive explicit context ceiling");
+        }
+        if (model.contains("request_limits")) {
+            const auto& limits = model.at("request_limits");
+            known_keys(limits, {"input_bytes", "batch", "output_tokens"});
+            for (const auto& item : limits.items())
+                if (!natural(limits, item.key().c_str(), 0))
+                    throw std::invalid_argument("Request limits must be positive");
+        }
         const auto priority = text(model, "priority", "interactive");
         if (priority != "essential" && priority != "interactive" && priority != "batch")
             throw std::invalid_argument("Invalid admission priority");
@@ -191,12 +206,9 @@ void ResourceAdmission::validate_config(const json& config) {
     }
 }
 
-void ResourceAdmission::configure(const json& config) {
+void ResourceAdmission::configure(const json& config, std::function<void()> publish) {
     validate_config(config);
-    std::lock_guard<std::mutex> lock(state_->mutex);
-    if (state_->config == config) return;
-    if (!state_->active.empty() || !state_->pending.empty())
-        throw AdmissionError("admission_configuration_busy", "Drain work and unload models before changing admission settings", 409);
+    json next = config;
     std::map<std::string, State::Pool> pools;
     const auto pool_config = config.value("pools", json::object());
     for (const auto& item : pool_config.items()) {
@@ -207,9 +219,30 @@ void ResourceAdmission::configure(const json& config) {
         pool.source = item.value().at("source").get<std::string>();
         pools.emplace(item.key(), std::move(pool));
     }
-    state_->pools = std::move(pools);
-    state_->config = config;
+    std::unique_lock<std::mutex> lock(state_->mutex);
+    if (state_->configuration_pending)
+        throw AdmissionError("admission_configuration_busy", "Admission configuration is already changing", 409);
+    if (state_->config == config && !publish) return;
+    if (!state_->active.empty() || !state_->pending.empty())
+        throw AdmissionError("admission_configuration_busy", "Drain work and unload models before changing admission settings", 409);
+    state_->configuration_pending = true;
+    lock.unlock();
+    try { if (publish) publish(); }
+    catch (...) {
+        lock.lock(); state_->configuration_pending = false; state_->changed.notify_all(); throw;
+    }
+    lock.lock();
+    state_->pools.swap(pools);
+    state_->config.swap(next);
+    ++state_->revision;
+    state_->configuration_pending = false;
     state_->changed.notify_all();
+}
+
+ResourceAdmission::Policy ResourceAdmission::policy() const {
+    std::lock_guard<std::mutex> lock(state_->mutex);
+    return {state_->revision, state_->config.value("mode", std::string("legacy")) == "protected",
+            state_->paused || state_->stopped || state_->configuration_pending};
 }
 
 ResourceAdmission::Lease ResourceAdmission::acquire(Work work) {
@@ -220,6 +253,10 @@ ResourceAdmission::Lease ResourceAdmission::acquire(Work work) {
         ++state_->rejected;
         throw AdmissionError(code, message, status);
     };
+    if (state_->configuration_pending) reject("admission_configuration_pending", "Admission configuration is changing", 503);
+    if (entry->work.config_revision && *entry->work.config_revision != state_->revision)
+        reject("admission_configuration_changed", "Admission policy changed before reservation; retry", 503);
+    entry->protected_mode = state_->config.value("mode", std::string("legacy")) == "protected";
     if (state_->stopped || state_->paused) reject("admission_paused", "Runtime admission is paused", 503);
     if (entry->work.cancelled && entry->work.cancelled()) reject("request_cancelled", "Request disconnected before admission", 499);
     const auto& config = state_->config;
@@ -234,6 +271,32 @@ ResourceAdmission::Lease ResourceAdmission::acquire(Work work) {
         const auto key = operation_name(entry->work.operation) + "_bytes";
         entry->costs = charges(*profile, key.c_str());
         entry->resident_costs = charges(*profile, "resident_bytes");
+        if (entry->protected_mode && entry->work.operation == Operation::Request) {
+            const auto limits = profile->value("request_limits", json::object());
+            for (const auto* key : {"input_bytes", "batch"}) {
+                if (!limits.contains(key) || !entry->work.workload.count(key))
+                    reject("workload_unqualified", "Protected requests require a validated workload envelope", 503);
+            }
+            for (const auto& fact : entry->work.workload)
+                if (!limits.contains(fact.first))
+                    reject("workload_unqualified", "The resource profile does not bound every workload dimension", 503);
+            for (const auto& limit : limits.items()) {
+                const auto fact = entry->work.workload.find(limit.key());
+                if (fact == entry->work.workload.end())
+                    reject("workload_unqualified", "This request shape has no validated resource envelope", 503);
+                if (fact->second > limit.value().get<uint64_t>())
+                    reject("workload_limit_exceeded", "Request exceeds its declared resource envelope", 413);
+            }
+        }
+        if (entry->protected_mode && entry->work.operation == Operation::State && !entry->work.workload.empty()) {
+            const auto limits = profile->value("request_limits", json::object());
+            for (const auto& fact : entry->work.workload) {
+                if (!limits.contains(fact.first))
+                    reject("workload_unqualified", "State request input has no declared resource bound", 503);
+                if (fact.second > limits.at(fact.first).get<uint64_t>())
+                    reject("workload_limit_exceeded", "State request exceeds its declared input bound", 413);
+            }
+        }
         if (config.value("mode", std::string("legacy")) == "protected" && entry->costs.empty())
             reject("operation_unqualified", "This operation has no declared resource ceiling", 503);
     } else if (config.value("mode", std::string("legacy")) == "protected") {
@@ -264,6 +327,7 @@ ResourceAdmission::Lease ResourceAdmission::acquire(Work work) {
     auto erase = [&] { state_->pending.erase(std::find(state_->pending.begin(), state_->pending.end(), entry)); state_->changed.notify_all(); };
     try {
         while (true) {
+            if (state_->configuration_pending) reject("admission_configuration_pending", "Admission configuration is changing", 503);
             if (state_->stopped || state_->paused) reject("admission_paused", "Runtime admission is paused", 503);
             if (entry->work.cancelled && entry->work.cancelled()) reject("request_cancelled", "Request disconnected while queued", 499);
             if (Clock::now() >= entry->queue_deadline) reject("queue_deadline_exceeded", "Runtime queue wait deadline exceeded", 429);
@@ -292,7 +356,7 @@ void ResourceAdmission::Lease::started() {
     if (!id_) return;
     std::lock_guard<std::mutex> lock(state_->mutex);
     auto& entry = *state_->active.at(id_);
-    entry.started = !entry.costs.empty();
+    entry.started = !entry.costs.empty() || entry.work.operation == Operation::State;
     entry.complete = false;
 }
 void ResourceAdmission::Lease::completed() {
@@ -314,6 +378,11 @@ bool ResourceAdmission::Lease::deadline_expired() const {
     if (!id_) return false;
     std::lock_guard<std::mutex> lock(state_->mutex);
     return Clock::now() >= state_->active.at(id_)->completion_deadline;
+}
+bool ResourceAdmission::Lease::protected_mode() const {
+    if (!id_) return false;
+    std::lock_guard<std::mutex> lock(state_->mutex);
+    return state_->active.at(id_)->protected_mode;
 }
 void ResourceAdmission::Lease::release() noexcept {
     if (!id_) return;
@@ -377,7 +446,8 @@ json ResourceAdmission::snapshot() const {
         if (item.second->uncertain) ++uncertain;
     }
     return {{"mode", state_->config.value("mode", std::string("legacy"))}, {"paused", state_->paused},
-        {"stopped", state_->stopped}, {"pending", state_->pending.size()}, {"active", running},
+        {"stopped", state_->stopped}, {"configuration_revision", state_->revision},
+        {"configuration_pending", state_->configuration_pending}, {"pending", state_->pending.size()}, {"active", running},
         {"resident", resident}, {"uncertain", uncertain}, {"pools", pools}, {"latency_qualified", false},
         {"admitted_total", state_->admitted}, {"rejected_total", state_->rejected}};
 }

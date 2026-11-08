@@ -284,7 +284,7 @@ public:
     bool try_evict_if_idle() {
         std::lock_guard<std::mutex> lock(state_mutex_);
         if (active_request_count_ == 0 && !maintenance_in_progress_ &&
-            state_ != ModelState::LOADING && state_ != ModelState::UNLOADED) {
+            state_ != ModelState::LOADING) {
             state_ = ModelState::UNLOADED;
             state_cv_.notify_all();
             return true;
@@ -508,7 +508,7 @@ public:
                      bool do_not_upgrade = false) = 0;
 
     // Unload the model and stop the server
-    virtual void unload() { stop_server(); }
+    virtual void unload() { set_state(ModelState::UNLOADED); stop_server(); }
 
     void set_load_cancel_flag(std::atomic<bool>* f) { load_cancel_ = f; }
 

@@ -69,6 +69,7 @@ int WebSocketServer::ws_callback(struct lws* wsi,
 
     auto* pss = static_cast<PerSessionData*>(user);
 
+    try {
     switch (reason) {
         case LWS_CALLBACK_FILTER_PROTOCOL_CONNECTION: {
             auto origin_opt = get_header(wsi, WSI_TOKEN_ORIGIN);
@@ -192,6 +193,20 @@ int WebSocketServer::ws_callback(struct lws* wsi,
 
         default:
             break;
+    }
+
+    } catch (const std::exception& error) {
+        try {
+            if (pss && (reason == LWS_CALLBACK_RECEIVE || reason == LWS_CALLBACK_ESTABLISHED)) {
+                server->send_json(pss->connection_id, {
+                    {"type", "error"}, {"error", {{"type", "invalid_request_error"},
+                    {"message", std::string(error.what()).substr(0, 512)}}}});
+                return 0;
+            }
+        } catch (...) {}
+        return -1;
+    } catch (...) {
+        return -1;
     }
 
     return 0;

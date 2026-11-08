@@ -1,3 +1,4 @@
+#include "lemon/backends/backend_registry.h"
 #include "lemon/config_file.h"
 #include "lemon/request_identity.h"
 #include "lemon/router.h"
@@ -37,6 +38,10 @@ public:
     std::atomic<bool> hold{false}, running{false};
 };
 struct RoutingHelperTestHook {
+    static void retire(Router& router, const std::shared_ptr<AdmissionWorker>& worker) {
+        std::lock_guard<std::mutex> lock(router.load_mutex_);
+        router.evict_server(worker.get());
+    }
     static void add(Router& router, const std::shared_ptr<AdmissionWorker>& worker) {
         std::lock_guard<std::mutex> lock(router.load_mutex_);
         router.loaded_servers_.push_back(worker);
@@ -59,6 +64,17 @@ int main() {
         }
         return false;
     };
+    {
+        ModelInfo embedding; embedding.type = ModelType::EMBEDDING;
+        RecipeOptions options("llamacpp", {{"ctx_size", 1024}});
+        backends::ops_for("llamacpp")->resolve_runtime_options(embedding, options);
+        check(options.get_option("ctx_size") == 8192,
+              "embedding context floor is resolved before reservation and stored as effective execution settings");
+        RecipeOptions native("llamacpp", {{"ctx_size", 0}});
+        backends::ops_for("llamacpp")->resolve_runtime_options(embedding, native);
+        check(native.get_option("ctx_size") == 8192,
+              "embedding model-native context resolves to the actual positive backend floor");
+    }
     auto root = std::filesystem::temp_directory_path() /
         ("juiced-router-admission-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     std::filesystem::create_directories(root);
@@ -74,6 +90,7 @@ int main() {
         json profile = {{"checkpoint", worker->get_checkpoint()}, {"options", worker->get_recipe_options().to_json()},
             {"priority", "interactive"}, {"concurrency", 1}, {"completion_ms", 1000},
             {"load_bytes", {{"host", 1024}}}, {"resident_bytes", {{"host", 512}}},
+            {"request_limits", {{"input_bytes", 65536}, {"batch", 1}, {"output_tokens", 128}}},
             {"request_bytes", {{"host", 256}}}, {"state_bytes", {{"host", 64}}},
             {"source", "native synthetic fixture"}};
         json admission = {{"mode", "protected"}, {"interactive_wait_ms", 120},
@@ -84,10 +101,33 @@ int main() {
         RoutingHelperTestHook::add(router, worker);
         std::atomic<bool> allowed{true};
         router.set_model_access_policy([&](const std::string&) { return allowed.load(); });
-        json request = {{"model", worker->get_model_name()}, {"messages", json::array()}, {"priority", "essential"}};
+        json request = {{"model", worker->get_model_name()}, {"messages", json::array()}, {"max_tokens", 32}, {"priority", "essential"}};
         auto result = router.chat_completion(request);
         check(!result.contains("error") && worker->calls == 1 && router.admission_snapshot()["active"] == 0,
               "native request reserves and releases its declared resources");
+        for (const auto& changes : std::vector<json>{
+                {{"max_tokens", 129}}, {{"max_tokens", 0}}, {{"n", 2}},
+                {{"messages", json::array({{{"role", "user"}, {"content", std::string(12000, 'x')}}})}},
+                {{"messages", json::array({{{"role", "user"}, {"content", json::array({{{"type", "image_url"}, {"image_url", "fixture"}}})}}})}},
+                {{"width", 4096}, {"image_data", "fixture"}}}) {
+            auto invalid = request; invalid.update(changes);
+            result = router.chat_completion(invalid);
+            check(result.contains("error") && worker->calls == 1 && router.admission_snapshot()["active"] == 0,
+                  "unbounded or oversized request is rejected before provider dispatch");
+        }
+        auto image_request = request;
+        worker->set_model_metadata(worker->get_model_name(), worker->get_checkpoint(), ModelType::IMAGE, DEVICE_CPU,
+                                   worker->get_recipe_options());
+        result = router.chat_completion(image_request);
+        check(result.contains("error") && worker->calls == 1,
+              "image workloads cannot use an unqualified flat protected request estimate");
+        worker->set_model_metadata(worker->get_model_name(), worker->get_checkpoint(), ModelType::LLM, DEVICE_CPU,
+                                   worker->get_recipe_options());
+        bool realtime_rejected = false;
+        try { router.acquire_streaming_transcription(worker->get_model_name()); }
+        catch (const AdmissionError& e) { realtime_rejected = e.code == "operation_unqualified"; }
+        check(realtime_rejected && worker->calls == 1,
+              "protected Realtime rejects before a nonstreaming provider can choose batch fallback");
         worker->observed = false;
         result = router.chat_completion(request);
         check(result.contains("error") && result["error"]["details"]["code"] == "operation_unqualified" && worker->calls == 1,
@@ -137,6 +177,41 @@ int main() {
         router.unload_model(worker->get_model_name());
         check(router.admission_snapshot()["uncertain"] == 0 && router.admission_snapshot()["active"] == 0,
               "confirmed unload reconciles the exact worker generation");
+    }
+    RuntimeConfig::set_global(nullptr);
+    {
+        auto defaults = ConfigFile::base_defaults();
+        defaults["auto_evict"] = false; defaults["auto_check_model_updates"] = false;
+        RuntimeConfig config(defaults); RuntimeConfig::set_global(&config);
+        ModelManager models;
+        Router router(&config, &models, nullptr);
+        auto original = std::make_shared<AdmissionWorker>();
+        RoutingHelperTestHook::add(router, original);
+        std::weak_ptr<AdmissionWorker> retired = original;
+        std::promise<void> waiting, resume;
+        auto resumed = resume.get_future();
+        auto replacement = std::async(std::launch::async, [&, selected = original] {
+            waiting.set_value(); resumed.wait();
+            try { RoutingHelperTestHook::retire(router, selected); return false; }
+            catch (const std::exception&) { return true; }
+        });
+        waiting.get_future().wait();
+        router.unload_model(original->get_model_name());
+        original.reset();
+        auto current = std::make_shared<AdmissionWorker>();
+        RoutingHelperTestHook::add(router, current);
+        check(!retired.expired(), "replacement retains the selected generation while admission waits");
+        resume.set_value();
+        check(replacement.get() && current->get_state() == ModelState::READY,
+              "a stale replacement cannot retire a newly registered generation with the same model name");
+        check(retired.expired(), "rejected replacement releases its retained generation");
+        auto acquired = current->try_acquire_inference();
+        bool rejected = false;
+        try { RoutingHelperTestHook::retire(router, current); }
+        catch (const std::exception&) { rejected = true; }
+        check(rejected && current->get_state() == ModelState::IN_USE,
+              "native retirement cannot interrupt an acquisition that won the race");
+        acquired.release();
     }
     RuntimeConfig::set_global(nullptr);
     std::filesystem::remove_all(root);

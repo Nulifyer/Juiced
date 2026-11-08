@@ -47,6 +47,11 @@ def acceptance(args):
                 "completion_ms": 30000,
                 "load_bytes": {"host": 512 * 1024**2},
                 "resident_bytes": {"host": 128 * 1024**2},
+                "request_limits": {
+                    "input_bytes": 65536,
+                    "batch": 1,
+                    "output_tokens": 128,
+                },
                 "request_bytes": {"host": 64 * 1024**2},
                 "state_bytes": {"host": 16 * 1024**2},
                 "source": "bounded synthetic CPU fixture; not a general estimate",

@@ -203,7 +203,7 @@ bool JuicedService::inference_guard(const httplib::Request &req,
       last == "completions" || last == "responses" || last == "messages" ||
       last == "chat" || last == "generate" || last == "embeddings" ||
       last == "embed" || last == "rerank" || last == "reranking" ||
-      last == "classify" || last == "generations" || last == "speech";
+      last == "classify" || last == "generations" || last == "speech" || last == "upscale";
   if (!inference)
     return false;
   try {

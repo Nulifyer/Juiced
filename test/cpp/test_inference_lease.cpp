@@ -1,6 +1,7 @@
 #include "lemon/wrapped_server.h"
 #include <cstdio>
 #include <condition_variable>
+#include <future>
 #include <type_traits>
 #include <vector>
 
@@ -177,6 +178,28 @@ int main() {
         operation.release();
         check(!server->is_busy() && server->references() == 0,
               "final state operation releases residency ownership");
+    }
+    {
+        auto server = std::make_shared<LeaseServer>();
+        auto borrowed_generation = server;
+        std::promise<void> retired, teardown;
+        auto teardown_allowed = teardown.get_future();
+        auto retiring = std::async(std::launch::async, [&] {
+            const bool owned = server->try_evict_if_idle();
+            retired.set_value(); teardown_allowed.wait();
+            server->WrappedServer::unload();
+            return owned;
+        });
+        retired.get_future().wait();
+        check(!borrowed_generation->try_acquire_inference() && !borrowed_generation->try_acquire_ready_inference(),
+              "atomic retirement blocks borrowed generations before physical teardown");
+        teardown.set_value();
+        check(retiring.get() && server->get_state() == lemon::ModelState::UNLOADED,
+              "default teardown preserves the retired state");
+        server->set_state(lemon::ModelState::READY);
+        auto acquired = server->try_acquire_inference();
+        check(acquired && !server->try_evict_if_idle(),
+              "inference acquisition winning the race prevents retirement");
     }
     std::printf("Inference lease checks: %d checks, %d failures\n", checks, failed);
     return failed ? 1 : 0;

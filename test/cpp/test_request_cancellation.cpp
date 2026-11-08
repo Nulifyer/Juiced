@@ -38,6 +38,10 @@ public:
         return forward_request(endpoint, request);
     }
 
+    lemon::json test_get(const std::string& endpoint, long timeout) {
+        return forward_get_request(endpoint, timeout);
+    }
+
     lemon::json test_forward_multipart(const std::string& endpoint,
                                        const std::vector<lemon::utils::MultipartField>& fields) {
         return forward_multipart_request(endpoint, fields);
@@ -568,6 +572,58 @@ bool test_streaming_proxy_cancel() {
     return failures == 0;
 }
 
+bool test_state_get_deadline_and_timeout() {
+    bool ok = true;
+    for (const bool use_deadline : {false, true}) {
+        httplib::Server backend;
+        std::atomic<bool> entered{false}, release{false}, active{false};
+        backend.Get("/state", [&](const httplib::Request&, httplib::Response& response) {
+            active = true; entered = true;
+            while (!release) std::this_thread::sleep_for(2ms);
+            active = false;
+            response.set_content("{}", "application/json");
+        });
+        const int port = backend.bind_to_any_port("127.0.0.1");
+        if (port <= 0) return false;
+        std::thread listening([&] { backend.listen_after_bind(); });
+        backend.wait_until_ready();
+        TestCancellationServer worker(port);
+        lemon::ResourceAdmission admission;
+        admission.configure({{"mode", "legacy"}, {"models", {{"fixture", {
+            {"checkpoint", "fixture"}, {"options", lemon::json::object()}, {"source", "controlled delayed state HTTP"},
+            {"completion_ms", use_deadline ? 100 : 10000}}}}}});
+        lemon::ResourceAdmission::Work work;
+        work.model = "fixture"; work.checkpoint = "fixture"; work.generation = 1;
+        work.operation = lemon::ResourceAdmission::Operation::State;
+        auto lease = worker.try_acquire_ready_state_operation();
+        lease.attach_resources(admission.acquire(work));
+        const auto start = std::chrono::steady_clock::now();
+        lemon::json response;
+        {
+            lemon::WrappedServer::RequestCompletionScope outcome([&] { lease.resources_started(); });
+            lemon::WrappedServer::RequestCancelScope cancel({nullptr, [&] {
+                return use_deadline && lease.deadline_expired();
+            }});
+            response = worker.test_get("/state", use_deadline ? 10 : 1);
+            if (outcome.completed()) lease.resources_completed();
+        }
+        const auto elapsed = std::chrono::steady_clock::now() - start;
+        lease.release();
+        const bool retained = entered && active && response.contains("error") && elapsed < 2500ms &&
+                              admission.snapshot()["uncertain"] == 1;
+        admission.reconcile_idle_requests(1);
+        const bool state_retained = admission.snapshot()["uncertain"] == 1;
+        release = true;
+        backend.stop(); listening.join();
+        admission.reconcile_stopped_generation(1);
+        const bool passed = retained && state_retained && admission.snapshot()["active"] == 0;
+        std::printf("[%s] state GET %s abort retains uncertain work until generation-stop reconciliation\n",
+                    passed ? "PASS" : "FAIL", use_deadline ? "deadline" : "explicit timeout");
+        ok = passed && ok;
+    }
+    return ok;
+}
+
 } // namespace
 
 int main() {
@@ -579,6 +635,7 @@ int main() {
     ok = test_wrapped_server_multipart_cancel() && ok;
     ok = test_http_client_direct_cancellation() && ok;
     ok = test_streaming_proxy_cancel() && ok;
+    ok = test_state_get_deadline_and_timeout() && ok;
 
     if (ok) {
         std::printf("All request cancellation tests passed!\n");

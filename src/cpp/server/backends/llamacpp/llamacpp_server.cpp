@@ -325,13 +325,6 @@ void LlamaCppServer::load(const std::string& model_name,
     bool supports_embeddings = (model_info.type == ModelType::EMBEDDING);
     bool supports_reranking = (model_info.type == ModelType::RERANKING);
 
-    // For embedding models, use a larger context size to support longer individual
-    // strings. Embedding requests can include multiple strings in a batch, and each
-    // string needs to fit within the context window.
-    if (supports_embeddings && ctx_size < EMBEDDING_CTX_SIZE) {
-        ctx_size = EMBEDDING_CTX_SIZE;
-    }
-
     // Build command arguments while tracking reserved flags
     std::vector<std::string> args;
     std::set<std::string> reserved_flags;
@@ -756,6 +749,10 @@ public:
     }
 
     void resolve_runtime_options(const ModelInfo& info, RecipeOptions& options) const override {
+        const auto context = options.get_option("ctx_size");
+        if (info.type == ModelType::EMBEDDING && context.is_number_integer() &&
+            context.get<int64_t>() >= 0 && context.get<int64_t>() < EMBEDDING_CTX_SIZE)
+            options.set_option("ctx_size", EMBEDDING_CTX_SIZE);
         const json merge_args_value = options.get_option("merge_args");
         const bool merge_args =
             merge_args_value.is_boolean() ? merge_args_value.get<bool>() : true;
