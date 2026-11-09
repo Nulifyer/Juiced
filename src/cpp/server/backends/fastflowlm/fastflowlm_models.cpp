@@ -782,12 +782,14 @@ bool run_flm_validate(const std::string& flm_path, std::string& error_message) {
 }
 
 
-void flm_remove(const std::string& checkpoint, ModelManager* manager, const std::string& model) {
+void flm_remove(const std::string& checkpoint, ModelManager* manager, const std::string& model,
+                const std::string& bound_executable, ModelManager::FlmHelperPublication publication) {
     if (!manager) throw AdmissionError("operation_unqualified", "FLM removal requires its native management owner", 503);
     if (checkpoint.empty()) throw std::runtime_error("FLM model has empty checkpoint field, cannot delete");
-    const auto executable = find_flm_binary();
+    const auto executable = bound_executable.empty() ? find_flm_binary() : bound_executable;
     if (executable.empty()) throw std::runtime_error("FLM executable not found");
-    const int result = manager->run_flm_helper(model.empty() ? checkpoint : model, "remove", executable, {"remove", checkpoint}, {}, 60);
+    const int result = manager->run_flm_helper(model.empty() ? checkpoint : model, "remove", executable,
+        {"remove", checkpoint}, {}, 60, {}, std::move(publication));
     if (result != 0) throw std::runtime_error("FLM remove failed or timed out (exit code " + std::to_string(result) + ")");
 }
 

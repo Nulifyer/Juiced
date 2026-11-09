@@ -40,12 +40,16 @@ json read_journal() {
     const auto& fingerprint = record.at("fingerprint").get_ref<const std::string&>();
     if (fingerprint.size() != 64 || !std::all_of(fingerprint.begin(), fingerprint.end(), [](char c) {
         return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'); })) invalid();
+    const bool publication = record.contains("publication");
+    if (publication && (!bounded_text("publication", 64) || record.at("operation") != "remove")) invalid();
     if (record.at("pending").get<bool>()) {
-        if (record.size() != 5 || record.at("state") != "dispatching") invalid();
+        if (record.size() != size_t(publication ? 6 : 5) || record.at("state") != "dispatching") invalid();
     } else {
-        if (record.size() != 7 || !record.contains("exit_code") || !record.at("exit_code").is_number_integer() ||
+        if (record.size() != size_t(publication ? 9 : 7) || !record.contains("exit_code") || !record.at("exit_code").is_number_integer() ||
             !record.contains("interrupted") || !record.at("interrupted").is_boolean()) invalid();
         if (record.at("state") != (record.at("exit_code") == 0 ? "completed" : "failed")) invalid();
+        if (publication && (!record.contains("publication_pending") || !record.at("publication_pending").is_boolean() ||
+            (record.at("publication_pending") == true && record.at("exit_code") != 0))) invalid();
     }
     return value;
 }
@@ -67,9 +71,10 @@ void ModelManager::set_resource_admission(const ResourceAdmission& admission) {
     if (flm_helper_) throw std::runtime_error("Cannot rebind native helper ownership to another ledger");
     resource_admission_ = admission;
     const auto previous = read_journal().value("flm", json::object());
-    if (!previous.value("pending", false)) return;
+    if (!previous.value("pending", false) && !previous.value("publication_pending", false)) return;
     auto recovered = std::make_unique<FlmHelper>();
     recovered->intent = previous;
+    if (previous.value("publication_pending", false)) recovered->result = 0;
     recovered->admission = resource_admission_->acquire_management("flm:npu", "runtime-reference");
     recovered->admission.started();
     flm_helper_ = std::move(recovered);
@@ -81,13 +86,13 @@ void ModelManager::guard_native_helper_mutation(const std::string& model) {
     if (active && bare(*active) == bare(model))
         throw AdmissionError("helper_cleanup_pending", "Finish native helper cleanup before changing this model", 409);
     const auto previous = read_journal().value("flm", json::object());
-    if (previous.value("pending", false) && bare(previous.value("model", "")) == bare(model))
+    if ((previous.value("pending", false) || previous.value("publication_pending", false)) && bare(previous.value("model", "")) == bare(model))
         throw AdmissionError("helper_recovery_required", "Previous native helper ownership requires recovery", 409);
 }
 
-int ModelManager::finish_flm_helper_locked(bool interrupted) {
+int ModelManager::finish_flm_helper_locked(bool interrupted, const std::function<void()>& publish_success) {
     auto& helper = *flm_helper_;
-    if (!helper.process) throw AdmissionError("helper_recovery_required", "Previous FLM helper termination requires recovery", 409);
+    if (!helper.process && !helper.result) throw AdmissionError("helper_recovery_required", "Previous FLM helper termination requires recovery", 409);
     helper.finish_attempted = true;
     helper.interrupted |= interrupted;
     if (!helper.result) {
@@ -104,8 +109,17 @@ int ModelManager::finish_flm_helper_locked(bool interrupted) {
     terminal["state"] = *helper.result == 0 ? "completed" : "failed";
     terminal["exit_code"] = *helper.result;
     terminal["interrupted"] = helper.interrupted;
-    auto journal = read_journal(); journal["flm"] = std::move(terminal);
+    const bool publication = terminal.contains("publication");
+    if (publication) terminal["publication_pending"] = *helper.result == 0;
+    auto journal = read_journal(); journal["flm"] = terminal;
     utils::JsonUtils::save_to_file(journal, journal_path());
+    if (publication && *helper.result == 0) {
+        if (!publish_success)
+            throw AdmissionError("helper_publication_pending", "Finish the owning model deletion publication before another command", 409);
+        publish_success();
+        journal["flm"]["publication_pending"] = false;
+        utils::JsonUtils::save_to_file(journal, journal_path());
+    }
     helper.admission.completed();
     helper.admission = {};
     std::atomic_store(&flm_helper_model_, std::shared_ptr<const std::string>{});
@@ -114,10 +128,13 @@ int ModelManager::finish_flm_helper_locked(bool interrupted) {
 
 int ModelManager::run_flm_helper(const std::string& model, const std::string& operation,
     const std::string& executable, const std::vector<std::string>& args,
-    utils::OutputLineCallback on_line, int timeout_seconds, std::function<bool()> cancelled) {
+    utils::OutputLineCallback on_line, int timeout_seconds, std::function<bool()> cancelled, FlmHelperPublication publication) {
     if (!resource_admission_) throw AdmissionError("operation_unqualified", "Native helper requires a bound management owner", 503);
     if (model.empty() || model.size() > maximum_model_bytes || operation.empty() || operation.size() > maximum_operation_bytes)
         throw AdmissionError("helper_identity_invalid", "Native helper model and operation must fit their journal bounds", 400);
+    if (publication.id.size() > 64 || (publication.id.empty() != !bool(publication.commit)) ||
+        (!publication.id.empty() && operation != "remove"))
+        throw AdmissionError("helper_identity_invalid", "Native deletion publication requires a bounded identity and owning callback", 400);
     auto mutation = model_mutation(model, false);
     if (!mutation.owns_lock()) throw AdmissionError("model_mutation_busy", "Wait for the current model mutation", 409);
     std::unique_lock<std::mutex> owner(flm_helper_mutex_, std::try_to_lock);
@@ -128,14 +145,17 @@ int ModelManager::run_flm_helper(const std::string& model, const std::string& op
     const auto fingerprint = command_identity(executable, args);
     if (flm_helper_) {
         const bool matching = flm_helper_->intent.value("fingerprint", "") == fingerprint &&
-            bare(flm_helper_->intent.value("model", "")) == bare(model);
-        finish_flm_helper_locked(false);
+            bare(flm_helper_->intent.value("model", "")) == bare(model) &&
+            flm_helper_->intent.value("operation", "") == operation &&
+            flm_helper_->intent.value("publication", "") == publication.id;
+        finish_flm_helper_locked(false, matching ? publication.commit : std::function<void()>{});
         const bool already_succeeded = matching && flm_helper_->result && *flm_helper_->result == 0;
         flm_helper_.reset();
         if (already_succeeded) return 0;
     }
     auto journal = read_journal();
-    if (journal.value("flm", json::object()).value("pending", false))
+    const auto previous = journal.value("flm", json::object());
+    if (previous.value("pending", false) || previous.value("publication_pending", false))
         throw AdmissionError("helper_recovery_required", "Previous FLM helper termination requires recovery before another command", 409);
     if (!accepted) accepted = resource_admission_->acquire_management("flm:npu", "runtime-reference");
     auto helper = std::make_unique<FlmHelper>();
@@ -143,6 +163,7 @@ int ModelManager::run_flm_helper(const std::string& model, const std::string& op
     helper->process = std::make_unique<AdoptedHelperProcess>();
     helper->intent = {{"model", model}, {"operation", operation}, {"fingerprint", fingerprint},
         {"pending", true}, {"state", "dispatching"}};
+    if (!publication.id.empty()) helper->intent["publication"] = publication.id;
     journal["flm"] = helper->intent;
     if (journal.dump().size() > 65536) throw AdmissionError("helper_identity_too_large", "Native helper identity exceeds its journal bound", 413);
     // Failed publication is proven to precede dispatch and releases the unstarted ticket.
@@ -155,7 +176,7 @@ int ModelManager::run_flm_helper(const std::string& model, const std::string& op
         flm_helper_->dispatched = true;
         flm_helper_->admission.started();
     };
-    lifecycle.finish = [&](bool interrupted) { return finish_flm_helper_locked(interrupted); };
+    lifecycle.finish = [&](bool interrupted) { return finish_flm_helper_locked(interrupted, publication.commit); };
     lifecycle.cancelled = std::move(cancelled);
     try {
         const int result = utils::ProcessManager::run_process_with_output(executable, args,
@@ -166,7 +187,7 @@ int ModelManager::run_flm_helper(const std::string& model, const std::string& op
         const auto failure = std::current_exception();
         // Spawn errors also need terminal intent publication, but a failed finish
         // keeps its original process and ticket for a later explicit retry.
-        if (!flm_helper_->finish_attempted) finish_flm_helper_locked(true);
+        if (!flm_helper_->finish_attempted) finish_flm_helper_locked(true, publication.commit);
         if (!flm_helper_->admission) flm_helper_.reset();
         std::rethrow_exception(failure);
     }
@@ -176,7 +197,10 @@ bool ModelManager::cleanup_native_helpers() noexcept {
     try {
         std::unique_lock<std::mutex> owner(flm_helper_mutex_, std::try_to_lock);
         if (!owner.owns_lock()) return false;
-        if (!flm_helper_) return !read_journal().value("flm", json::object()).value("pending", false);
+        if (!flm_helper_) {
+            const auto previous = read_journal().value("flm", json::object());
+            return !previous.value("pending", false) && !previous.value("publication_pending", false);
+        }
         finish_flm_helper_locked(true);
         flm_helper_.reset();
         return true;

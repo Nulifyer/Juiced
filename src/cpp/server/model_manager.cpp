@@ -31,6 +31,7 @@
 #include <thread>
 #include <chrono>
 #include <set>
+#include <random>
 #include <tuple>
 #include <unordered_map>
 #include <unordered_set>
@@ -2256,6 +2257,7 @@ json ModelManager::get_architecture_defaults(const std::string& architecture) co
 }
 
 void ModelManager::save_user_models(const json& user_models) {
+    if (user_models_save_override_) { user_models_save_override_(user_models); return; }
     JsonUtils::save_to_file(user_models, get_user_models_file());
 }
 
@@ -6864,7 +6866,12 @@ void ModelManager::validate_registration_artifacts(const json& definition, const
     for (const auto& [role, path] : definition_checkpoints(definition)) {
         if (path.empty()) continue;
         for (const auto& [name, other] : registrations.items()) {
-            if (other.contains("juiced_removal") && same_artifact(path, other.at("juiced_removal").at("file").get<std::string>()))
+            if (!other.contains("juiced_removal")) continue;
+            const auto& removal = other.at("juiced_removal");
+            if (removal.value("provider", "") == "flm") {
+                if (definition.value("recipe", "") == "flm" && path == removal.at("checkpoint").get<std::string>())
+                    throw ModelRegistrationConflict("FLM checkpoint deletion is pending; finish it before acquiring another reference");
+            } else if (same_artifact(path, removal.at("file").get<std::string>()))
                 throw ModelRegistrationConflict("Artifact cleanup is pending; finish removal before referencing this file");
         }
         // Local appliance files must still exist when the reference commits.
@@ -7024,10 +7031,118 @@ void ModelManager::remove_uploaded_model(const std::string& model, const json& e
     }
 }
 
+bool ModelManager::flm_checkpoint_referenced_locked(const std::string& model, const std::string& checkpoint, const json& registrations) {
+    const auto matches = [&](const json& definition) {
+        return definition.value("recipe", "") == "flm" && definition_checkpoints(definition).at("main") == checkpoint;
+    };
+    for (const auto& [name, definition] : registrations.items())
+        if ("user." + name != model && matches(definition)) return true;
+    for (const auto& [name, definition] : server_models_.items())
+        if (name != model && matches(definition)) return true;
+    // Provider discovery observes this storage; it does not acquire another
+    // authored reference to its own checkpoint.
+    return false;
+}
+
+bool ModelManager::flm_checkpoint_referenced(const std::string& model, const std::string& checkpoint) {
+    std::lock_guard<std::recursive_mutex> references(model_references_mutex_);
+    std::lock_guard<std::mutex> cache(models_cache_mutex_);
+    return flm_checkpoint_referenced_locked(model, checkpoint, read_user_models());
+}
+
+void ModelManager::remove_flm_model(const std::string& model, json expected_definition) {
+    auto mutation = model_mutation(model);
+    if (removal_publication_barrier_) removal_publication_barrier_("flm-planned");
+    std::unique_lock<std::recursive_mutex> references(model_references_mutex_);
+    if (model_removal_guard_) model_removal_guard_(model);
+    const auto clean = is_user_model_name(model) ? strip_user_model_prefix(model) : model;
+    const auto canonical = "user." + clean;
+    const auto expected_marker = expected_definition.value("juiced_removal", json());
+    expected_definition.erase("juiced_removal");
+    json marker;
+    std::string checkpoint;
+    {
+        std::lock_guard<std::mutex> cache(models_cache_mutex_);
+        auto registrations = read_user_models();
+        if (!registrations.contains(clean)) throw AdmissionError("model_definition_changed", "Review the changed model before deleting it", 409);
+        auto current = registrations.at(clean);
+        marker = current.value("juiced_removal", json()); current.erase("juiced_removal");
+        if (current != expected_definition || current.value("recipe", "") != "flm" ||
+            (!expected_marker.is_null() && marker.value("publication", "") != expected_marker.value("publication", "")))
+            throw AdmissionError("model_definition_changed", "Review the changed model before deleting it", 409);
+        checkpoint = definition_checkpoints(current).at("main");
+        if (checkpoint.empty()) throw std::runtime_error("FLM checkpoint is empty");
+        if (marker.is_null()) {
+            if (flm_checkpoint_referenced_locked(canonical, checkpoint, registrations)) {
+                registrations.erase(clean);
+                save_user_models(registrations); user_models_ = std::move(registrations); invalidate_models_cache_locked();
+                notify_after_mutation(mutation);
+                return;
+            }
+        }
+    }
+    if (marker.is_null()) {
+        const auto program = backends::fastflowlm::find_flm_binary();
+        if (program.empty()) throw std::runtime_error("FLM executable not found");
+        const auto id = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + "-" + std::to_string(std::random_device{}());
+        marker = {{"provider", "flm"}, {"checkpoint", checkpoint}, {"program", program}, {"publication", id}, {"state", "dispatching"}};
+        std::lock_guard<std::mutex> cache(models_cache_mutex_);
+        auto registrations = read_user_models();
+        if (!registrations.contains(clean) || registrations.at(clean) != expected_definition)
+            throw AdmissionError("model_definition_changed", "Review the changed model before deleting it", 409);
+        registrations[clean]["juiced_removal"] = marker;
+        save_user_models(registrations); user_models_ = std::move(registrations); invalidate_models_cache_locked();
+        notify_after_mutation(mutation);
+    }
+    if (!marker.is_object() || marker.size() != 5 || marker.value("provider", "") != "flm" ||
+        marker.value("checkpoint", "") != checkpoint || !marker.contains("program") || !marker.at("program").is_string() ||
+        marker.at("program").get_ref<const std::string&>().empty() || marker.at("program").get_ref<const std::string&>().size() > 4096 ||
+        !marker.contains("publication") || !marker.at("publication").is_string() || marker.at("publication").get_ref<const std::string&>().empty() ||
+        marker.at("publication").get_ref<const std::string&>().size() > 64 || (marker.value("state", "") != "dispatching" && marker.value("state", "") != "completed"))
+        throw AdmissionError("artifact_recovery_required", "The FLM deletion intent is incomplete or changed; preserve it for recovery", 409);
+    // The durable marker now excludes conflicting reference acquisition. The
+    // process exchange need not block unrelated registrations on this mutex.
+    references.unlock();
+    if (removal_publication_barrier_) removal_publication_barrier_("flm-intent");
+    const auto publication = marker.at("publication").get<std::string>();
+    const auto publish_result = [&] {
+        if (removal_publication_barrier_) removal_publication_barrier_("flm-result");
+        std::lock_guard<std::recursive_mutex> publication_owner(model_references_mutex_);
+        std::lock_guard<std::mutex> cache(models_cache_mutex_);
+        auto registrations = read_user_models();
+        auto current = registrations.at(clean); const auto owned = current.at("juiced_removal"); current.erase("juiced_removal");
+        auto bound = owned; bound["state"] = marker.at("state");
+        if (current != expected_definition || bound != marker || (owned.at("state") != "dispatching" && owned.at("state") != "completed"))
+            throw AdmissionError("model_definition_changed", "The native deletion result no longer owns this registration", 409);
+        registrations[clean]["juiced_removal"]["state"] = "completed";
+        save_user_models(registrations); user_models_ = std::move(registrations); invalidate_models_cache_locked();
+    };
+    const auto helper = native_helper_status().value("flm", json::object());
+    if (marker.at("state") != "completed" || (helper.value("publication", "") == publication && helper.value("publication_pending", false)))
+        backends::fastflowlm::flm_remove(checkpoint, this, canonical, marker.at("program"), {publication, publish_result});
+    if (removal_publication_barrier_) removal_publication_barrier_("flm-completed");
+    {
+        std::lock_guard<std::recursive_mutex> publication_owner(model_references_mutex_);
+        std::lock_guard<std::mutex> cache(models_cache_mutex_);
+        auto registrations = read_user_models();
+        auto current = registrations.at(clean); const auto owned = current.at("juiced_removal"); current.erase("juiced_removal");
+        auto completed_marker = marker; completed_marker["state"] = "completed";
+        if (current != expected_definition || owned != completed_marker)
+            throw AdmissionError("model_definition_changed", "The completed deletion no longer owns this registration", 409);
+        registrations.erase(clean);
+        save_user_models(registrations); user_models_ = std::move(registrations); invalidate_models_cache_locked();
+        notify_after_mutation(mutation);
+    }
+}
+
 void ModelManager::delete_model(const std::string& model_name) {
     auto admission = admit_acquisition(model_name);
     auto definition = user_model_definition(model_name);
     if (definition.is_object() && definition.contains("juiced_removal")) {
+        if (definition.at("juiced_removal").value("provider", "") == "flm") {
+            remove_flm_model(model_name, definition);
+            return;
+        }
         definition.erase("juiced_removal");
         remove_uploaded_model(model_name, definition);
         return;
@@ -7035,6 +7150,10 @@ void ModelManager::delete_model(const std::string& model_name) {
     auto info = get_model_info(model_name);
     auto mutation = model_mutation(info.model_name);
     info = get_model_info(model_name);
+    if (info.recipe == "flm" && info.source != "local_path" && is_user_model_name(info.model_name)) {
+        remove_flm_model(info.model_name, user_model_definition(info.model_name));
+        return;
+    }
     std::lock_guard<std::recursive_mutex> references(model_references_mutex_);
     if (model_removal_guard_) model_removal_guard_(info.model_name);
     std::string canonical_model_name = info.model_name;
@@ -7135,27 +7254,15 @@ void ModelManager::delete_model(const std::string& model_name) {
                                  "External files are user-managed; remove them manually.");
     }
 
-    // FLM models have no local HF cache; deletion is the backend's `flm remove`.
+    // Built-in definitions remain downloadable; never remove a shared provider checkpoint.
     if (info.recipe == "flm") {
-        backends::fastflowlm::flm_remove(info.checkpoint(), this, canonical_model_name);
-
-        // Remove from user models if it's a user model
-        if (is_user_model_name(canonical_model_name)) {
-            std::lock_guard<std::mutex> lock(models_cache_mutex_);
-            json updated_user_models = read_user_models();
-            if (!updated_user_models.is_object()) {
-                updated_user_models = json::object();
-            }
-            updated_user_models.erase(strip_user_model_prefix(canonical_model_name));
-            save_user_models(updated_user_models);
-            user_models_ = std::move(updated_user_models);
-            invalidate_models_cache_locked();
-            LOG(INFO, "ModelManager") << "✓ Removed from user_models.json" << std::endl;
+        {
+            std::lock_guard<std::mutex> cache(models_cache_mutex_);
+            if (flm_checkpoint_referenced_locked(canonical_model_name, info.checkpoint(), read_user_models()))
+                throw AdmissionError("artifact_reference_changed", "Another model references this FLM checkpoint", 409);
         }
-
-        // Remove from cache after successful deletion
+        backends::fastflowlm::flm_remove(info.checkpoint(), this, canonical_model_name);
         remove_model_from_cache(canonical_model_name);
-
         return;
     }
 

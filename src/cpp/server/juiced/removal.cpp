@@ -58,6 +58,7 @@ JuicedService::json JuicedService::removal_plan(const std::string &requested) {
   json plan;
   auto definition = server_.model_manager_->user_model_definition(requested);
   const bool cleanup_pending = definition.is_object() && definition.contains("juiced_removal");
+  const bool flm_cleanup = cleanup_pending && definition.at("juiced_removal").value("provider", "") == "flm";
   if (cleanup_pending) definition.erase("juiced_removal");
   json stored = json::object();
   auto requested_clean = requested.rfind("user.", 0) == 0 ? requested.substr(5) : requested;
@@ -76,6 +77,9 @@ JuicedService::json JuicedService::removal_plan(const std::string &requested) {
         canonical.rfind("user.", 0) == 0 ? canonical.substr(5) : canonical;
     if (stored.contains(clean) &&
         stored[clean].value("juiced_existing_artifact", false))
+      plan["action"] = "unregister";
+    if (info.recipe == "flm" && canonical.rfind("user.", 0) == 0 &&
+        server_.model_manager_->flm_checkpoint_referenced(canonical, info.checkpoint()))
       plan["action"] = "unregister";
     if (info.source == "local_path") {
       const auto file = std::filesystem::path(info.checkpoint());
@@ -98,7 +102,7 @@ JuicedService::json JuicedService::removal_plan(const std::string &requested) {
     plan = {{"model", name},
             {"canonical", canonical},
             {"checkpoints", stored[clean].value("checkpoints", json::object())},
-            {"action", cleanup_pending ? "upload" : "unregister"}};
+            {"action", cleanup_pending ? (flm_cleanup ? "cache" : "upload") : "unregister"}};
   }
   if (cleanup_pending && !plan["checkpoints"].contains("main") && definition.contains("checkpoint"))
     plan["checkpoints"]["main"] = definition.at("checkpoint");

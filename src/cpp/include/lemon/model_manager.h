@@ -204,10 +204,14 @@ public:
     // Bind before serving/background work. The view shares Router's ledger.
     void set_resource_admission(const ResourceAdmission& admission);
     ResourceAdmission::Lease admit_acquisition(const std::string& model);
+    struct FlmHelperPublication {
+        std::string id;
+        std::function<void()> commit;
+    };
     int run_flm_helper(const std::string& model, const std::string& operation,
                        const std::string& executable, const std::vector<std::string>& args,
                        utils::OutputLineCallback on_line = {}, int timeout_seconds = 300,
-                       std::function<bool()> cancelled = {});
+                       std::function<bool()> cancelled = {}, FlmHelperPublication publication = {});
     bool cleanup_native_helpers() noexcept;
     json native_helper_status();
 
@@ -314,6 +318,7 @@ public:
     void remove_uploaded_model(const std::string& model_name, const json& expected_definition);
     json prepared_artifacts();
     void remove_prepared_artifact(const std::string& id);
+    bool flm_checkpoint_referenced(const std::string& model, const std::string& checkpoint);
     // Installed before serving; the durable import owner can veto deletion.
     void set_model_removal_guard(std::function<void(const std::string&)> guard, std::filesystem::path artifact_directory = {}, std::filesystem::path prepared_directory = {}) {
         model_removal_guard_ = std::move(guard);
@@ -697,13 +702,14 @@ private:
     std::unique_ptr<FlmHelper> flm_helper_;
     std::shared_ptr<const std::string> flm_helper_model_;
     std::function<void()> flm_helper_stop_barrier_;
-    int finish_flm_helper_locked(bool interrupted);
+    int finish_flm_helper_locked(bool interrupted, const std::function<void()>& publish_success = {});
     void guard_native_helper_mutation(const std::string& model);
     std::mutex model_mutations_mutex_;
     std::map<std::string, std::shared_ptr<ModelMutationState>> model_mutations_;
     std::filesystem::path uploaded_artifact_directory_, prepared_artifact_directory_;
     std::recursive_mutex model_references_mutex_;
     std::function<void(const std::string&)> removal_publication_barrier_;
+    std::function<void(const json&)> user_models_save_override_;
     std::function<void(const std::string&)> model_removal_guard_;
     // Orders recipe_options.json rewrites without holding models_cache_mutex_
     // (which every request thread contends on) across disk I/O.
@@ -765,6 +771,8 @@ private:
     void validate_registration_artifacts(const json& definition, const json& registrations);
     bool artifact_referenced_locked(const std::string& model, const std::filesystem::path& file, const json& registrations);
     std::map<std::string, std::vector<std::string>> prepared_artifact_checkpoints_locked(const json& registrations);
+    bool flm_checkpoint_referenced_locked(const std::string& model, const std::string& checkpoint, const json& registrations);
+    void remove_flm_model(const std::string& model, json expected_definition);
     void rebuild_public_model_aliases_locked();
 };
 
