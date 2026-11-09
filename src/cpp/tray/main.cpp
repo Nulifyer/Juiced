@@ -17,7 +17,10 @@
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
+#include <functional>
+#include <future>
 #include <iostream>
+#include <memory>
 #include <string>
 #include <thread>
 #include <CLI/CLI.hpp>
@@ -73,7 +76,8 @@ enum class ServerProbeMode {
     allow_starting  // 200, 401, 403, 503 (returns true immediately if starting or ready)
 };
 
-static bool wait_for_server(const std::string& clean_host, int clean_port, bool is_ssl, int timeout_seconds, ServerProbeMode mode = ServerProbeMode::ready_only) {
+static bool wait_for_server(const std::string& clean_host, int clean_port, bool is_ssl, int timeout_seconds, ServerProbeMode mode = ServerProbeMode::ready_only,
+                            std::function<bool()> stop_waiting = {}) {
     std::string connect_host;
     if (is_ssl) {
         connect_host = (clean_host.empty() || clean_host == "0.0.0.0")
@@ -93,6 +97,7 @@ static bool wait_for_server(const std::string& clean_host, int clean_port, bool 
 
     int max_attempts = std::max(1, timeout_seconds * 2);
     for (int i = 0; i < max_attempts; ++i) {
+        if (stop_waiting && stop_waiting()) return false;
         try {
 #ifndef LEMONADE_HTTPLIB_HAS_TLS
             if (is_ssl) {
@@ -141,6 +146,72 @@ static bool wait_for_server(const std::string& clean_host, int clean_port, bool 
 // ---------------------------------------------------------------------------
 
 #ifdef _WIN32
+
+static int run_embedded_server(std::shared_ptr<lemon::RuntimeConfig> config,
+                               const std::string& cache_dir, const std::string& config_dir,
+                               bool silent) {
+    lemon::Server server(config, cache_dir, config_dir);
+    // The UI must be destroyed on its creating thread, after RunGuard joins.
+    std::unique_ptr<lemon_tray::TrayUI> tray;
+    std::atomic<lemon_tray::TrayUI*> active_tray{nullptr};
+    const auto stop_tray = [&]() {
+        if (auto* current = active_tray.load()) current->stop();
+    };
+    auto worker = std::async(std::launch::async, [&]() {
+        try { server.run(); }
+        catch (...) { stop_tray(); throw; }
+        stop_tray();
+    });
+    struct RunGuard {
+        lemon::Server& server;
+        std::future<void>& worker;
+        ~RunGuard() {
+            server.set_shutdown_requested(true);
+            if (worker.valid()) worker.wait();
+        }
+    } guard{server, worker};
+    const auto finished = [&]() {
+        return worker.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
+    };
+    if (!wait_for_server(config->host(), config->port(), false, 15,
+                         ServerProbeMode::ready_only, finished)) {
+        LOG(ERROR, "Tray") << "Embedded server did not become ready" << std::endl;
+        server.set_shutdown_requested(true);
+        worker.get();
+        return 1;
+    }
+
+    bool headless = false;
+    try {
+        lemon_tray::TrayUIOptions options;
+        options.port = config->port();
+        options.host = config->host();
+        options.is_ssl = false;
+        options.silent = silent;
+        options.server_initially_connected = true;
+        tray = std::make_unique<lemon_tray::TrayUI>(options);
+        if (tray->initialize()) {
+            active_tray = tray.get();
+            if (!finished()) {
+                LOG(INFO, "Tray") << "Embedded tray event loop starting" << std::endl;
+                tray->run();
+            }
+        } else {
+            LOG(WARNING, "Tray") << "Tray UI initialization failed — running headless" << std::endl;
+            headless = true;
+        }
+    } catch (const std::exception& error) {
+        LOG(WARNING, "Tray") << "Tray UI error: " << error.what() << " — running headless" << std::endl;
+        headless = true;
+    } catch (...) {
+        LOG(WARNING, "Tray") << "Tray UI error — running headless" << std::endl;
+        headless = true;
+    }
+    active_tray = nullptr;
+    if (!headless) server.set_shutdown_requested(true);
+    worker.get();
+    return server.startup_failed() ? 1 : 0;
+}
 
 int WINAPI wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
     // Create a job object so that all child processes (llama-server, etc.)
@@ -227,83 +298,25 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
 
     // Initialize Winsock (required by httplib)
     WSADATA wsa;
-    WSAStartup(MAKEWORD(2, 2), &wsa);
-
-    // Start server on background thread
-    std::string cache_dir = cli_config.cache_dir;
-    std::string config_dir = cli_config.config_dir;
-    std::thread server_thread([runtime_config, cache_dir, config_dir]() {
-        try {
-            lemon::Server server(runtime_config, cache_dir, config_dir);
-            server.run();
-        } catch (const std::exception& e) {
-            MessageBoxA(NULL, e.what(), "Lemonade Server Error", MB_OK | MB_ICONERROR);
-        }
-    });
-    server_thread.detach();
-
-    // Wait for server to be ready
-    if (!wait_for_server(runtime_config->host(), runtime_config->port(), false, 15)) {
-        MessageBoxA(NULL,
-            "Lemonade Server failed to start within 15 seconds.",
-            "Lemonade Server Error", MB_OK | MB_ICONERROR);
-        WSACleanup();
+    if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
+        LOG(ERROR, "Tray") << "Could not initialize Winsock" << std::endl;
+        lemon::RuntimeConfig::set_global(nullptr);
         return 1;
     }
 
-    // Create and run tray UI.  If initialization fails (e.g. no display
-    // server in CI, headless VM, or RDP session), fall back to running
-    // headless — the server is already handling requests on the background
-    // thread; we just need to block until shutdown.
-    bool headless = false;
+    int result = 1;
     try {
-        lemon_tray::TrayUIOptions options;
-        options.port = runtime_config->port();
-        options.host = runtime_config->host();
-        options.is_ssl = false;
-        options.silent = silent;
-        options.server_initially_connected = true;  // Embedded server is always up
-        lemon_tray::TrayUI tray(options);
-        if (tray.initialize()) {
-            tray.run();  // Blocks until quit
-        } else {
-            LOG(WARNING, "Tray") << "Tray UI initialization failed — running headless" << std::endl;
-            headless = true;
-        }
-    } catch (const std::exception& e) {
-        LOG(WARNING, "Tray") << "Tray UI error: " << e.what() << " — running headless" << std::endl;
-        headless = true;
+        result = run_embedded_server(runtime_config, cli_config.cache_dir, cli_config.config_dir, silent);
+    } catch (const std::exception& error) {
+        LOG(ERROR, "Tray") << "Embedded server failed: " << error.what() << std::endl;
+        if (!silent) MessageBoxA(nullptr, error.what(), "Lemonade Server Error", MB_OK | MB_ICONERROR);
     } catch (...) {
-        LOG(WARNING, "Tray") << "Tray UI error — running headless" << std::endl;
-        headless = true;
+        LOG(ERROR, "Tray") << "Embedded server failed with an unknown exception" << std::endl;
+        if (!silent) MessageBoxA(nullptr, "Embedded server failed", "Lemonade Server Error", MB_OK | MB_ICONERROR);
     }
-
-    if (headless) {
-        // Server is running on the background thread.
-        // Block until /internal/shutdown calls std::exit(0).
-        while (true) {
-            std::this_thread::sleep_for(std::chrono::hours(24));
-        }
-    }
-
-    // Shutdown the embedded server.
-    // /internal/shutdown unloads all models synchronously (kills child
-    // processes like llama-server) before sending the response, then
-    // stops the HTTP listener and exits on a detached thread.
-    {
-        std::string connect_host = (runtime_config->host().empty() || runtime_config->host() == "0.0.0.0" || runtime_config->host() == "localhost")
-            ? "127.0.0.1" : runtime_config->host();
-        httplib::Client cli(connect_host, runtime_config->port());
-        cli.set_connection_timeout(2);
-        cli.set_read_timeout(30);  // Allow time for model unload (up to 5s per model)
-        cli.Post("/internal/shutdown", "", "application/json");
-    }
-
-    // Give server a moment to stop the HTTP listener and exit
-    std::this_thread::sleep_for(std::chrono::seconds(2));
-
+    lemon::RuntimeConfig::set_global(nullptr);
     WSACleanup();
-    return 0;
+    return result;
 }
 
 // ---------------------------------------------------------------------------

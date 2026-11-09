@@ -397,3 +397,13 @@ metadata and shutdown remain outside input-memory reservation.
 These contracts do not complete absolute input deadlines, measured parsing and
 response peaks, multipart qualification or HTTP worker fairness. Those remain P1
 gates.
+
+The Windows embedded entry point owns its background server run. Tray exit asks
+that run to stop; HTTP shutdown also stops the tray event loop. Headless fallback
+waits for run completion. Every return or exception joins the worker and destroys
+Server before Winsock cleanup. The UI stays on its creating thread. Silent startup
+failures log and return a failure status without an error dialog.
+
+Windows qualification requires `EmbeddedServerShutdownTest`, which builds the
+actual embedded executable and checks HTTP shutdown and occupied-port cleanup.
+Linux terminal-shutdown checks do not establish Windows execution evidence.
