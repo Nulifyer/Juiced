@@ -530,6 +530,17 @@ int main() {
         check(legacy.snapshot()["active"] == 0,
               "exact native generation stop releases unestimated logical ownership");
     }
+    {
+        ResourceAdmission management;
+        { auto writer = management.acquire_management("preparation", "helper"); writer.started(); }
+        check(management.snapshot()["uncertain"] == 1 && management.snapshot()["active"] == 1,
+              "dispatched zero-cost management work retains uncertainty after owner destruction");
+        management.reconcile_idle_requests(0);
+        check(management.snapshot()["uncertain"] == 1,
+              "idle inference cannot certify an unresolved helper writer stopped");
+        check(error([&] { management.configure({{"mode", "protected"}}); }, "admission_configuration_busy"),
+              "unresolved helper ownership blocks configuration promotion");
+    }
     std::printf("Resource admission: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

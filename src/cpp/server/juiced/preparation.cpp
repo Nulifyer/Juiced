@@ -254,6 +254,7 @@ void JuicedService::preparation_api(const httplib::Request &req,
                     {"text_only", plan.value("text_only", false)},
                     {"changes", plan["changes"]},
                     {"pending", true},
+                    {"writer_state", "queued"},
                     {"phase", "queued"}};
         std::lock_guard<std::mutex> lock(mutex_);
         if (preparation_pending_.size() >= 8)
@@ -284,8 +285,11 @@ void JuicedService::preparation_api(const httplib::Request &req,
 }
 void JuicedService::preparation_run() {
   while (!stopping_) {
-    json job;
-    ResourceAdmission::Lease accepted;
+    if (preparation_active_) {
+      if (!finish_preparation_cleanup())
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+      continue;
+    }
     {
       std::unique_lock<std::mutex> lock(mutex_);
       wake_.wait_for(lock, std::chrono::milliseconds(250), [this] {
@@ -295,21 +299,21 @@ void JuicedService::preparation_run() {
         break;
       if (preparation_pending_.empty())
         continue;
-      job = std::move(preparation_pending_.front().job);
-      accepted = std::move(preparation_pending_.front().admission);
+      preparation_active_ = std::make_unique<PreparationTask>(std::move(preparation_pending_.front()));
       preparation_pending_.pop_front();
     }
+    auto& task = *preparation_active_;
+    const auto& job = task.job;
     const auto id = job.at("id").get<std::string>();
     const auto dir = directory_ / "preparations" / id;
     const auto cache = directory_ / "prepared";
-    ResourceAdmission::Lease admission;
     try {
       if (preparation_admission_barrier_) preparation_admission_barrier_();
-      admission = server_.router_->admit_management(id, "preparation");
+      task.operation = server_.router_->admit_management(id, "preparation");
       {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (preparation_cancelled_.count(id))
-          throw std::runtime_error("Cancelled");
+        if (stopping_ || preparation_cancelled_.count(id))
+          throw std::runtime_error(stopping_ ? "Interrupted" : "Cancelled");
       }
       auto info = server_.model_manager_->get_model_info(job.at("model"));
       json companions = json::object();
@@ -329,20 +333,28 @@ void JuicedService::preparation_run() {
            {"converter", tools + "/source/convert_hf_to_gguf.py"},
            {"threads", 4}});
       save(dir / "job.json", command);
-      NativeProcess process({false, false});
-      process.start({tools + "/bin/python3",
+      task.process = preparation_process_factory_ ? preparation_process_factory_()
+          : std::make_unique<NativeProcess>(ProcessOutput{false, false});
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (stopping_ || preparation_cancelled_.count(id)) throw std::runtime_error(stopping_ ? "Interrupted" : "Cancelled");
+        state_["preparations"][id].update({{"writer_state", "dispatching"}, {"writer_manager", cache_run_id_}});
+        persist_locked();
+      }
+      task.admission.started();
+      task.operation.started();
+      task.process->start({tools + "/bin/python3",
                      {tools + "/prepare.py", (dir / "job.json").string()},
                      {},
                      0,
                      ""});
       bool cancelled = false;
-      while (process.running()) {
+      while (task.process->running()) {
         {
           std::lock_guard<std::mutex> lock(mutex_);
           cancelled = preparation_cancelled_.count(id);
         }
         if (stopping_ || cancelled) {
-          process.stop();
           break;
         }
         const auto progress = read(dir / "progress.json");
@@ -354,6 +366,8 @@ void JuicedService::preparation_run() {
       }
       if (stopping_ || cancelled)
         throw std::runtime_error(cancelled ? "Cancelled" : "Interrupted");
+      task.process->stop();
+      if (!task.process->exited()) throw std::runtime_error("Preparation writer exit is unconfirmed");
       const auto result = read(dir / "result.json");
       if (!result.is_object() || !result.contains("path")) {
         const auto progress = read(dir / "progress.json");
@@ -389,35 +403,54 @@ void JuicedService::preparation_run() {
            {{"source", job["model"]}, {"cache_key", result["cache_key"]}}}};
       server_.model_manager_->register_user_model(job.at("name"), definition,
                                                   "local_path", false);
-      {
-        std::lock_guard<std::mutex> lock(mutex_);
-        auto &stored = state_["preparations"][id];
-        stored.update({{"pending", false},
+      task.outcome = {{"pending", false},
                        {"phase", "complete"},
                        {"cached", result.value("cached", false)},
                        {"cache_key", result["cache_key"]},
-                       {"inference_tested", false}});
-        persist_locked();
-      }
+                       {"inference_tested", false}};
     } catch (const std::exception &error) {
       std::lock_guard<std::mutex> lock(mutex_);
-      state_["preparations"][id].update(
-          {{"pending", false},
+      task.outcome = {{"pending", false},
            {"phase", preparation_cancelled_.count(id) ? "cancelled"
                      : stopping_                      ? "interrupted"
                                                       : "failed"},
-           {"error", error.what()}});
-      try {
-        persist_locked();
-      } catch (...) {
-      }
+           {"error", error.what()}};
     }
-    std::error_code ec;
-    std::filesystem::remove_all(cache / (".partial-" + id), ec);
+    finish_preparation_cleanup();
+  }
+}
+
+bool JuicedService::finish_preparation_cleanup() {
+  if (!preparation_active_) return true;
+  auto& task = *preparation_active_;
+  const auto id = task.job.at("id").get<std::string>();
+  try {
+    if (task.process) {
+      task.process->stop();
+      if (!task.process->exited()) throw std::runtime_error("Preparation writer exit is unconfirmed");
+    }
+    std::filesystem::remove_all(directory_ / "prepared" / (".partial-" + id));
     {
       std::lock_guard<std::mutex> lock(mutex_);
+      state_["preparations"][id].update(task.outcome);
+      state_["preparations"][id].update({{"writer_state", "stopped"}, {"cleanup_pending", false}});
+      persist_locked();
       preparation_cancelled_.erase(id);
     }
+    task.admission.completed();
+    task.operation.completed();
+    preparation_active_.reset();
+    return true;
+  } catch (const std::exception& error) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto candidate = state_["preparations"][id];
+    candidate.update({{"pending", true}, {"phase", "cleanup-pending"},
+        {"cleanup_pending", true}, {"error", error.what()}});
+    if (candidate != state_["preparations"][id]) {
+      state_["preparations"][id] = std::move(candidate);
+      try { persist_locked(); } catch (...) {}
+    }
+    return false;
   }
 }
 } // namespace lemon

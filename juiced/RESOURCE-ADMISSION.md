@@ -533,6 +533,20 @@ promotion and reclamation. Pending reloads survive an application retry in this
 manager process. Complete bundle manifests, references and restart recovery
 remain P3 requirements. These controls do not qualify arbitrary package writers.
 
+Preparation retains its process, accepted management tickets and staging reference
+through cancellation or shutdown until cleanup confirms direct-child exit. A
+failed stop leaves `cleanup_pending:true` and a pending job. The owning worker
+retries cleanup, and terminal status commits before its tickets release. Dispatched
+zero-cost management tickets retain uncertainty if their owner is destroyed.
+Idle inference cannot release those tickets.
+
+A persisted dispatch intent precedes helper startup. On restart, an unresolved
+writer remains pending and blocks Juiced's source-removal plan. Only a
+proven queued job becomes Interrupted without writer reconciliation. Prior-manager
+writer recovery and full descendant termination remain P1 prerequisites. The
+retained native fixture controls helper startup and stop outcomes, with no model
+conversion, installation or accelerator claim.
+
 Local acceptance includes real direct children, non-consuming exit observation,
 unowned PID rejection, controlled failed stop/replacement, exact-generation
 reconciliation and actual neutral CPU serving/cache. This does not establish

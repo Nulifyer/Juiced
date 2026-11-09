@@ -3515,6 +3515,8 @@ if(BUILD_TESTING)
 
     add_executable(test_management_admission test/cpp/test_management_admission.cpp)
     target_link_libraries(test_management_admission PRIVATE lemonade-server-core)
+    add_cpp_ci_test(PreparationCleanupTest CI ON COMMAND test_management_admission --preparation-cleanup)
+    set_tests_properties(PreparationCleanupTest PROPERTIES TIMEOUT 90)
     add_cpp_ci_test(ManagementAdmissionTest CI ON COMMAND test_management_admission)
     set_tests_properties(ManagementAdmissionTest PROPERTIES TIMEOUT 90)
 

@@ -71,8 +71,16 @@ private:
   unsigned long long request_sequence_ = 0;
   std::atomic<bool> stopping_{false};
   std::thread worker_, preparation_worker_;
-  struct PreparationTask { json job; ResourceAdmission::Lease admission; };
+  struct PreparationTask {
+    json job;
+    ResourceAdmission::Lease admission;
+    ResourceAdmission::Lease operation;
+    std::unique_ptr<ServerProcess> process;
+    json outcome = json::object();
+  };
   std::deque<PreparationTask> preparation_pending_;
+  std::unique_ptr<PreparationTask> preparation_active_;
+  std::function<std::unique_ptr<ServerProcess>()> preparation_process_factory_;
   std::function<void()> preparation_admission_barrier_;
   std::set<std::string> preparation_cancelled_;
   std::unique_ptr<NativeProcess> voice_process_;
@@ -120,6 +128,7 @@ private:
   json preparation_plan(const std::string& model);
   void preparation_api(const httplib::Request &, httplib::Response &);
   void preparation_run();
+  bool finish_preparation_cleanup();
   json execution_plan(const std::string& model);
   void execution_api(const httplib::Request &, httplib::Response &);
   void execution_devices(const httplib::Request &, httplib::Response &);

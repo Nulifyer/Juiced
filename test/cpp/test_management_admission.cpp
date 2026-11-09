@@ -37,6 +37,32 @@ public:
     bool is_backend_alive() const override { return get_state() != ModelState::UNLOADED; }
     json chat_completion(const json&) override { return json::object(); }
 };
+struct PreparationProcessControl {
+    std::atomic<bool> started{false}, running{false}, fail_stop{true};
+    std::atomic<int> stops{0};
+};
+class ControlledPreparationProcess : public ServerProcess {
+public:
+    explicit ControlledPreparationProcess(std::shared_ptr<PreparationProcessControl> control)
+        : ServerProcess(ProcessOutput{}), control_(std::move(control)) {}
+    std::string start(const ServerCommand& command) override {
+        json job; std::ifstream input(command.args.at(1)); input >> job;
+        const auto staging = fs::path(job.at("cache").get<std::string>()) / (".partial-" + job.at("id").get<std::string>());
+        fs::create_directories(staging); std::ofstream(staging / "owned") << "writer dependency";
+        control_->running = true; control_->started = true;
+        return "127.0.0.1";
+    }
+    void stop() override {
+        if (!control_->running) return;
+        ++control_->stops;
+        if (control_->fail_stop) throw std::runtime_error("injected unconfirmed preparation stop");
+        control_->running = false;
+    }
+    bool running() const override { return control_->running; }
+    bool exited() const override { return !control_->running; }
+private:
+    std::shared_ptr<PreparationProcessControl> control_;
+};
 namespace lemon {
 struct ModelPublicationTestHook {
     static size_t history(ModelManager& models) {
@@ -84,7 +110,7 @@ struct StatePublicationTestHook {
         if (accepted) admission = server.router_->admit_management("queued-fixture", "preparation-entry");
         std::lock_guard<std::mutex> lock(server.juiced_->mutex_);
         server.juiced_->preparation_admission_barrier_ = std::move(barrier);
-        json job = {{"id", "queued-fixture"}, {"model", "Missing-Preparation-Fixture"}, {"pending", true}, {"phase", "queued"}};
+        json job = {{"id", "queued-fixture"}, {"model", "Missing-Preparation-Fixture"}, {"pending", true}, {"writer_state", "queued"}, {"phase", "queued"}};
         server.juiced_->state_["preparations"]["queued-fixture"] = job;
         server.juiced_->preparation_pending_.push_back({job, std::move(admission)}); server.juiced_->wake_.notify_all();
     }
@@ -92,6 +118,22 @@ struct StatePublicationTestHook {
         std::lock_guard<std::mutex> lock(server.juiced_->mutex_);
         return server.juiced_->state_["preparations"].value("queued-fixture", json::object());
     }
+    static void queue_writer(Server& server, const std::string& model, const fs::path& source,
+                             const std::shared_ptr<PreparationProcessControl>& control) {
+        auto accepted = server.router_->admit_management(model, "preparation-entry");
+        server.juiced_->preparation_process_factory_ = [control] { return std::make_unique<ControlledPreparationProcess>(control); };
+        json job = {{"id", "writer-fixture"}, {"model", model}, {"name", "Prepared-Fixture"}, {"source", source.string()},
+            {"quant", "Q8_0"}, {"pending", true}, {"phase", "queued"}, {"writer_state", "queued"}};
+        std::lock_guard<std::mutex> lock(server.juiced_->mutex_);
+        server.juiced_->state_["preparations"]["writer-fixture"] = job; server.juiced_->persist_locked();
+        server.juiced_->preparation_pending_.push_back({job, std::move(accepted)}); server.juiced_->wake_.notify_all();
+    }
+    static json writer(Server& server) {
+        std::lock_guard<std::mutex> lock(server.juiced_->mutex_);
+        return server.juiced_->state_["preparations"].at("writer-fixture");
+    }
+    static void stop_preparation(Server& server) { server.juiced_->stop(); }
+    static json removal(Server& server, const std::string& name) { return server.juiced_->removal_plan(name); }
 };
 }
 
@@ -368,8 +410,70 @@ static void worker_start_boundaries() {
     RuntimeConfig::set_global(nullptr);
 }
 
-int main() {
-    try { native_owners(); entry_boundaries(); worker_start_boundaries(); }
+static void preparation_cleanup() {
+    using Hook = StatePublicationTestHook;
+    for (int boundary : {0, 1, 2}) {
+        const auto root = test::make_scratch_dir("preparation-cleanup");
+        auto defaults = ConfigFile::base_defaults(); defaults["offline"] = true; defaults["broadcast"] = false;
+        defaults["auto_evict"] = false; defaults["auto_check_model_updates"] = false;
+        auto config = std::make_shared<RuntimeConfig>(defaults); RuntimeConfig::set_global(config.get());
+        const auto source = root / "source.gguf";
+        { char header[24] = {'G', 'G', 'U', 'F', 3}; std::ofstream file(source, std::ios::binary); file.write(header, sizeof(header)); }
+        const auto partial = root / "juiced/prepared/.partial-writer-fixture/owned";
+        auto control = std::make_shared<PreparationProcessControl>();
+        const auto wait = [](auto ready) {
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+            while (!ready() && std::chrono::steady_clock::now() < deadline) std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            return ready();
+        };
+        {
+            Server server(config, root.string(), root.string());
+            Hook::models(server).register_user_model("Preparation-Source", {{"recipe", "llamacpp"}, {"source", "local_path"},
+                {"checkpoints", {{"main", source.string()}}}});
+            Hook::queue_writer(server, "Preparation-Source", source, control);
+            check(wait([&] { return control->started.load(); }), "accepted preparation reaches its native process owner");
+            check(Hook::writer(server)["writer_state"] == "dispatching" && fs::exists(partial),
+                  "durable writer intent precedes preparation dispatch and staging ownership");
+            if (boundary == 0) {
+                const auto cancel = Hook::invoke(server, "/v1/juiced/preparation", {{"action", "cancel"}, {"id", "writer-fixture"}});
+                check(cancel.status == 200, "native preparation cancellation acknowledges the request");
+            } else Hook::stop_preparation(server);
+            check(wait([&] { return Hook::writer(server).value("cleanup_pending", false); }),
+                  "unconfirmed cancellation or shutdown retains a pending cleanup outcome");
+            check(control->running && control->stops > 0 && fs::exists(partial) &&
+                  Hook::writer(server)["pending"] == true && Hook::admission(server)["active"].get<int>() >= 2,
+                  "failed stop retains the process, staging and accepted operation claims");
+            bool guarded = false;
+            try { Hook::configure(server, {{"mode", "protected"}}); }
+            catch (const AdmissionError& error) { guarded = error.code == "admission_configuration_busy"; }
+            check(guarded, "configuration cannot discard an unresolved preparation writer");
+            if (boundary != 2) {
+                control->fail_stop = false;
+                if (boundary == 1) Hook::stop_preparation(server);
+                check(wait([&] { return !Hook::writer(server).value("pending", true) && Hook::admission(server)["active"] == 0; }),
+                      "confirmed cleanup retry commits terminal status before releasing operation ownership");
+                check(!fs::exists(partial) && !control->running && Hook::writer(server)["writer_state"] == "stopped" &&
+                      Hook::writer(server)["phase"] == (boundary == 0 ? "cancelled" : "interrupted"),
+                      "only confirmed cleanup removes staging and publishes the requested terminal outcome");
+            }
+        }
+        if (boundary == 2) {
+            Server restarted(config, root.string(), root.string());
+            const auto recovered = Hook::writer(restarted);
+            check(recovered["pending"] == true && recovered["cleanup_pending"] == true && fs::exists(partial),
+                  "restart retains unknown prior-manager staging ownership without certifying termination");
+            check(!Hook::removal(restarted, "Preparation-Source")["allowed"].get<bool>(),
+                  "unknown prior preparation continues to protect its source from ordinary removal");
+        }
+        RuntimeConfig::set_global(nullptr);
+    }
+}
+
+int main(int argc, char** argv) {
+    try {
+        if (argc > 1 && std::string(argv[1]) == "--preparation-cleanup") preparation_cleanup();
+        else { native_owners(); entry_boundaries(); worker_start_boundaries(); }
+    }
     catch (const std::exception& error) { ++failures; std::fprintf(stderr, "Unexpected fixture failure: %s\n", error.what()); }
     std::fprintf(stderr, "Management admission: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

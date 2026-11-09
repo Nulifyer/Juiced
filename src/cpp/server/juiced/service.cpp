@@ -152,8 +152,14 @@ JuicedService::JuicedService(Server &server)
   if (!state_.contains("preparations")) state_["preparations"] = json::object();
   for (auto &[id, job] : state_["preparations"].items())
     if (job.value("pending", false)) {
-      job["pending"] = false;
-      job["phase"] = "interrupted";
+      if (job.value("writer_state", "") == "queued") {
+        job["pending"] = false;
+        job["phase"] = "interrupted";
+      } else {
+        job["phase"] = "cleanup-pending";
+        job["cleanup_pending"] = true;
+        job["error"] = "Previous preparation writer termination is unconfirmed";
+      }
     }
   if (!state_.contains("execution_trials")) state_["execution_trials"] = json::object();
   committed_state_ = state_;
@@ -197,6 +203,7 @@ void JuicedService::stop() {
   if (worker_.joinable())
     worker_.join();
   if (preparation_worker_.joinable()) preparation_worker_.join();
+  finish_preparation_cleanup();
   std::deque<PreparationTask> unused;
   { std::lock_guard<std::mutex> lock(mutex_); unused.swap(preparation_pending_); }
   voice_process_.reset();
