@@ -986,6 +986,7 @@ void JuicedService::handle(const httplib::Request &req, httplib::Response &res,
   }
 }
 void JuicedService::publish_import(const std::string& id) {
+  auto admission = server_.router_->admit_management(id, "import-publication");
   json job;
   { std::lock_guard<std::mutex> lock(mutex_); job = state_["imports"].at(id); }
   const auto intent = job.at("publication");
@@ -1049,6 +1050,8 @@ void JuicedService::import_file(const httplib::Request &req,
     reply(res, {{"model", name}, {"policy", policy}, {"loaded", server_.router_->is_model_loaded(name)}, {"path", path}}, 201);
   };
   try {
+    ResourceAdmission::Lease admission;
+    if (op != "cancel") admission = server_.router_->admit_management("import", "import-" + op);
     if (op == "chunk") {
       const auto id = req.get_param_value("id");
       if (!safe_name(id)) throw std::invalid_argument("Invalid upload identity");

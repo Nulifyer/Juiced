@@ -289,3 +289,33 @@ This containment does not finish ingress/import memory bounds, metadata/discover
 I/O qualification, durable-writer maintenance, full execution identity or provider
 termination. Standalone helpers outside a live Router and external writers retain
 their separate reference, promotion and recovery gates.
+
+HTTP body admission runs after authentication and before buffering, including
+`Expect: 100-continue`. Both native listeners and fixed protocol paths use it.
+All modes now enforce an 8 MiB decompressed HTTP body ceiling. Existing import
+chunks remain 1 byte to 8 MiB. Larger files use the existing chunk protocol.
+The optional `admission.ingress` object accepts `request_bytes`, `total_bytes`
+and `active_limit`. Defaults are 8 MiB per body, 32 MiB aggregate and four active
+body exchanges. The per-body setting cannot exceed the transport ceiling.
+
+Known uncompressed lengths reserve their declared bytes. Compressed, chunked and
+multipart exchanges reserve the full transport ceiling before reading. The HTTP
+response owns the reservation through body reads, handler execution and deferred
+response completion. Disconnects and rejected reads release local body ownership.
+Ingress does not consume model execution slots. The admission snapshot reports
+its active count and reserved body bytes separately. Byte exhaustion returns 429
+with retry metadata. A body above its configured ceiling returns 413.
+
+Bounded operator bodies remain available while execution is paused. Configuration
+publication preserves existing ingress charges and rejects lower bounds that do
+not contain them. Other native work still prevents admission changes. This does
+not establish reversible all-writer maintenance or a total heap bound. Parsing,
+protocol structures, response storage and provider execution retain their own
+qualification obligations. Slow-client fairness and essential-service acceptance
+remain open.
+
+Import start, chunks, server-file registration and publication now use native
+management admission. Unqualified protected work rejects before mutation. Pending
+publication recovery also rechecks admission. Cleanup cancellation remains
+available. The import journal, registration provenance and removal ownership
+continue to define retry and recovery behavior.

@@ -1139,7 +1139,43 @@ httplib::Server::Handler Server::contextual_handler(httplib::Server::Handler han
     });
 }
 
+httplib::Server::HandlerResponse Server::admit_http_body(const httplib::Request& req, httplib::Response& res) {
+    if (res.user_data.get<std::shared_ptr<ResourceAdmission::Lease>>("ingress"))
+        return httplib::Server::HandlerResponse::Unhandled;
+    try {
+        const auto length = req.get_header_value("Content-Length");
+        uint64_t bytes = 0;
+        if (!length.empty()) {
+            if (length.size() > 20 || !std::all_of(length.begin(), length.end(), [](char c) { return c >= '0' && c <= '9'; }))
+                throw std::invalid_argument("Invalid request body length");
+            bytes = std::stoull(length);
+        }
+        if (bytes > ResourceAdmission::maximum_ingress_bytes)
+            throw AdmissionError("ingress_limit_exceeded", "Request body exceeds the HTTP byte limit", 413);
+        if (req.has_header("Transfer-Encoding") ||
+            (req.has_header("Content-Encoding") && req.get_header_value("Content-Encoding") != "identity") ||
+            req.is_multipart_form_data())
+            bytes = ResourceAdmission::maximum_ingress_bytes;
+        if (bytes) res.user_data.set("ingress", std::make_shared<ResourceAdmission::Lease>(router_->admit_ingress(bytes)));
+        return httplib::Server::HandlerResponse::Unhandled;
+    } catch (const AdmissionError& error) {
+        set_model_error_response(error.to_json(), res);
+    } catch (const std::exception&) {
+        res.status = 400;
+        res.set_content(R"({"error":{"code":"invalid_body_length","message":"Invalid request body length"}})", "application/json");
+    }
+    res.set_header("Connection", "close");
+    return httplib::Server::HandlerResponse::Handled;
+}
+
 void Server::setup_routes(httplib::Server &web_server) {
+    web_server.set_payload_max_length(ResourceAdmission::maximum_ingress_bytes);
+    web_server.set_pre_request_handler([this](const auto& req, auto& res) { return admit_http_body(req, res); });
+    web_server.set_expect_100_continue_handler([this](const auto& req, auto& res) {
+        if (authenticate_request(req, res) == httplib::Server::HandlerResponse::Handled ||
+            admit_http_body(req, res) == httplib::Server::HandlerResponse::Handled) return res.status;
+        return 100;
+    });
     if (juiced_) juiced_->routes(web_server);
     // Add pre-routing handler to log ALL incoming requests (except health checks)
     web_server.set_pre_routing_handler([this](const httplib::Request& req, httplib::Response& res) {

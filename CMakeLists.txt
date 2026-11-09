@@ -3465,6 +3465,10 @@ if(BUILD_TESTING)
         ${CMAKE_CURRENT_SOURCE_DIR}/juiced/tests/test_model_shutdown.py --binary $<TARGET_FILE:${EXECUTABLE_NAME}>
         --out ${CMAKE_CURRENT_BINARY_DIR}/model-shutdown-proof.json DEPENDS ${EXECUTABLE_NAME})
     set_tests_properties(ServerShutdownEntrypointsTest PROPERTIES TIMEOUT 150)
+    add_cpp_ci_test(IngressAdmissionTest CI ON COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/juiced/tests/test_ingress_admission.py --binary $<TARGET_FILE:${EXECUTABLE_NAME}>
+        --out ${CMAKE_CURRENT_BINARY_DIR}/ingress-admission-proof.json DEPENDS ${EXECUTABLE_NAME})
+    set_tests_properties(IngressAdmissionTest PROPERTIES TIMEOUT 90)
     set_tests_properties(CloudRuntimeTest PROPERTIES TIMEOUT 90)
 
     add_executable(test_persistence_boundaries test/cpp/test_persistence_boundaries.cpp)

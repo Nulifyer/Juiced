@@ -32,7 +32,7 @@ public:
 class ResourceAdmission {
     struct State;
 public:
-    enum class Operation { Load, Request, State, Realtime, Management };
+    enum class Operation { Load, Request, State, Realtime, Management, Ingress };
     struct Work {
         std::string model;
         std::string service;
@@ -80,6 +80,8 @@ public:
     Lease acquire(Work work);
     // Copies share this ledger's state. Native management owners keep a view so
     // shutdown and configuration transitions remain authoritative after binding.
+    static constexpr uint64_t maximum_ingress_bytes = 8ULL * 1024 * 1024;
+    Lease acquire_ingress(uint64_t bytes);
     Lease acquire_management(const std::string& target, const std::string& service);
     void pause(bool paused);
     void shutdown();

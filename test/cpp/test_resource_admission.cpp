@@ -278,6 +278,35 @@ int main() {
         check(thrown && failing.snapshot()["pending"] == 0 && failing.snapshot()["active"] == 0,
               "sampling exceptions clean pending entries without partial claims");
     }
+    {
+        ResourceAdmission ingress;
+        json bounds = {{"ingress", {{"request_bytes", 100}, {"total_bytes", 150}, {"active_limit", 2}}}};
+        ingress.configure(bounds);
+        auto first = ingress.acquire_ingress(80);
+        check(ingress.snapshot()["ingress"]["reserved_body_bytes"] == 80 && ingress.snapshot()["active"] == 0,
+              "body reservations are visible without consuming inference slots");
+        check(error([&] { ingress.acquire_ingress(101); }, "ingress_limit_exceeded"), "oversized bodies reject before buffering");
+        check(error([&] { ingress.acquire_ingress(71); }, "ingress_capacity_exceeded"), "aggregate body bytes cannot exceed the configured bound");
+        auto second = ingress.acquire_ingress(1);
+        check(error([&] { ingress.acquire_ingress(1); }, "ingress_capacity_exceeded"), "body count is independently bounded");
+        auto smaller = bounds; smaller["ingress"]["request_bytes"] = 70;
+        check(error([&] { ingress.configure(smaller); }, "admission_configuration_busy"), "configuration cannot discard a live body's byte bound");
+        auto protected_bounds = bounds; protected_bounds["mode"] = "protected";
+        ingress.configure(protected_bounds);
+        check(ingress.snapshot()["ingress"]["reserved_body_bytes"] == 81, "compatible configuration retains existing body charges");
+        first = {}; second = {};
+        ingress.pause(true);
+        auto control = ingress.acquire_ingress(100);
+        check(bool(control), "paused execution still accepts bounded operator request bodies");
+        control = {};
+        check(ingress.snapshot()["ingress"]["active"] == 0, "HTTP ownership releases body credit without worker termination");
+        ingress.shutdown();
+        check(error([&] { ingress.acquire_ingress(1); }, "admission_paused"), "shutdown closes ingress admission");
+        bool invalid = false;
+        try { ResourceAdmission::validate_config({{"ingress", {{"request_bytes", ResourceAdmission::maximum_ingress_bytes + 1}}}}); }
+        catch (const std::invalid_argument&) { invalid = true; }
+        check(invalid, "configuration cannot exceed the transport decompression ceiling");
+    }
     controller.shutdown();
     check(error([&] { controller.acquire(work()); }, "admission_paused"), "shutdown rejects new requests");
     {

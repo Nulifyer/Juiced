@@ -85,6 +85,7 @@ public:
 private:
     std::string resolve_host_to_ip(int ai_family, const std::string& host);
     void setup_routes(httplib::Server &web_server);
+    httplib::Server::HandlerResponse admit_http_body(const httplib::Request&, httplib::Response&);
     httplib::Server::Handler contextual_handler(httplib::Server::Handler handler);
     void setup_static_files(httplib::Server &web_server);
     void setup_cors(httplib::Server &web_server);
