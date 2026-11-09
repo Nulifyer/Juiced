@@ -375,6 +375,7 @@ private:
     };
     std::vector<SyncTaskThread> background_sync_threads_;
     std::mutex background_sync_mutex_;
+    std::function<void(const std::string&)> background_start_barrier_;
 
 
     // Routed servers (all routes/handlers; never listen) and the main-port

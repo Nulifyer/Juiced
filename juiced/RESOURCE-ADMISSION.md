@@ -468,3 +468,19 @@ The source contracts are documented in
 [Windows nested jobs](https://learn.microsoft.com/en-us/windows/win32/procthread/nested-jobs),
 and Apple's [Mach page counters](https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/mach/vm_statistics.h).
 These references do not establish local platform execution or latency qualification.
+
+
+Background sync/download dispatch handles worker-start failure before reporting
+successful acquisition. Sync target resolution finishes before publishing its new
+generation. Server reserves thread-owner storage before starting a joinable sync
+thread. Failed dispatch completes only that queued generation with a retained
+failure result and returns500 `worker_start_failed`. It releases its accepted
+management ticket. A late failure for an older generation cannot terminate a
+newer queue.
+
+Download start failure retains an error row with `running:false`, releases the
+accepted operation capture and permits retry under the same ID. Accepted workers
+remain owned until joined. Controlled native fixtures inject a failure immediately
+before thread construction, then execute successful retries through actual threads.
+These checks do not exhaust OS thread quotas or establish all-writer quiescence.
+The complete native writer/termination audit remains a P1 prerequisite.

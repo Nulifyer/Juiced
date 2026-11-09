@@ -3061,6 +3061,9 @@ ModelManager::SyncEnqueueResult ModelManager::enqueue_sync(const std::vector<std
         return SyncEnqueueResult{/*already_running=*/true, /*sync_id=*/sync_state_.current_generation};
     }
 
+    std::set<std::string> initial_targets;
+    for (const auto& target : target_models)
+        initial_targets.insert(get_public_model_name(resolve_model_name(target)));
     sync_state_.current_generation++;
     sync_state_.is_sync_running = true;
     sync_state_.is_full_sync = target_models.empty();
@@ -3072,12 +3075,21 @@ ModelManager::SyncEnqueueResult ModelManager::enqueue_sync(const std::vector<std
     sync_state_.failed_models.clear();
     sync_state_.terminal_error.clear();
     sync_state_.checked_count = 0;
-    for (const auto& t : target_models) {
-        std::string canonical = resolve_model_name(t);
-        std::string pub = get_public_model_name(canonical);
-        sync_state_.pending_targets.insert(pub);
-    }
+    sync_state_.pending_targets.swap(initial_targets);
     return SyncEnqueueResult{/*already_running=*/false, /*sync_id=*/sync_state_.current_generation};
+}
+
+void ModelManager::fail_sync_start(uint64_t sync_id, const std::string& message) {
+    std::lock_guard<std::mutex> lock(sync_state_.mutex);
+    if (!sync_state_.is_sync_running || sync_state_.current_generation != sync_id) return;
+    sync_state_.terminal_error = message;
+    sync_state_.is_sync_running = false;
+    sync_state_.is_full_sync = false;
+    sync_state_.active_targets.clear();
+    sync_state_.pending_targets.clear();
+    sync_state_.completed_generation = sync_id;
+    sync_state_.completed_generation_results[sync_id] = get_sync_status_locked();
+    sync_state_.cv.notify_all();
 }
 
 json ModelManager::execute_sync() {

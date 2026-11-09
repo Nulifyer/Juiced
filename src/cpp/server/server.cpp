@@ -3026,31 +3026,43 @@ void Server::handle_models_sync(const httplib::Request& req, httplib::Response& 
             return;
         }
 
-        std::lock_guard<std::mutex> lock(background_sync_mutex_);
+        try {
+            std::lock_guard<std::mutex> lock(background_sync_mutex_);
 
-        for (auto it = background_sync_threads_.begin(); it != background_sync_threads_.end(); ) {
-            if (it->finished->load() && it->thread.joinable()) {
-                it->thread.join();
-                it = background_sync_threads_.erase(it);
-            } else {
-                ++it;
+            for (auto it = background_sync_threads_.begin(); it != background_sync_threads_.end(); ) {
+                if (it->finished->load() && it->thread.joinable()) {
+                    it->thread.join();
+                    it = background_sync_threads_.erase(it);
+                } else {
+                    ++it;
+                }
             }
+
+            // Reserve ownership before starting a joinable thread.
+            background_sync_threads_.reserve(background_sync_threads_.size() + 1);
+            auto finished_flag = std::make_shared<std::atomic<bool>>(false);
+            if (background_start_barrier_) background_start_barrier_("model-sync");
+            std::thread worker([this, finished_flag, admission]() {
+                (void)admission; // Keep accepted sync admission until its worker finishes.
+                try {
+                    LOG(INFO, "Server") << "Background model sync thread started" << std::endl;
+                    const auto result = model_manager_->execute_sync();
+                    LOG(INFO, "Server") << "Background model sync ended with status: " << result.value("status", "unknown") << std::endl;
+                } catch (const std::exception& e) {
+                    LOG(WARNING, "Server") << "Background model sync failed: " << e.what() << std::endl;
+                }
+                finished_flag->store(true);
+            });
+
+            background_sync_threads_.push_back({std::move(worker), finished_flag});
+        } catch (const std::exception& error) {
+            model_manager_->fail_sync_start(enqueue_res.sync_id, "Model synchronization worker could not start");
+            LOG(WARNING, "Server") << "Could not start model sync worker: " << error.what() << std::endl;
+            res.status = 500;
+            res.set_content(nlohmann::json{{"error", {{"code", "worker_start_failed"},
+                {"message", "Model synchronization worker could not start"}}}}.dump(), "application/json");
+            return;
         }
-
-        auto finished_flag = std::make_shared<std::atomic<bool>>(false);
-        std::thread worker([this, finished_flag, admission]() {
-            (void)admission; // Keep accepted sync admission until its worker finishes.
-            try {
-                LOG(INFO, "Server") << "Background model sync thread started" << std::endl;
-                const auto result = model_manager_->execute_sync();
-                LOG(INFO, "Server") << "Background model sync ended with status: " << result.value("status", "unknown") << std::endl;
-            } catch (const std::exception& e) {
-                LOG(WARNING, "Server") << "Background model sync failed: " << e.what() << std::endl;
-            }
-            finished_flag->store(true);
-        });
-
-        background_sync_threads_.push_back({std::move(worker), finished_flag});
 
         nlohmann::json dispatched_result = model_manager_->get_sync_status(enqueue_res.sync_id);
         dispatched_result["message"] = "Model synchronization dispatched in background";
@@ -7899,9 +7911,7 @@ std::shared_ptr<Server::DownloadJob> Server::start_download_job(
         download_jobs_[download_id] = job;
     }
 
-    join_download_job(old_job);
-
-    job->worker = std::thread([this, job, operation = std::move(operation)]() mutable {
+    auto run = [this, job, operation = std::move(operation)]() mutable {
         try {
             DownloadProgressCallback progress_cb = [this, job](const DownloadProgress& p) -> bool {
                 std::lock_guard<std::mutex> lock(downloads_mutex_);
@@ -8009,7 +8019,22 @@ std::shared_ptr<Server::DownloadJob> Server::start_download_job(
                 job->terminal_since = std::chrono::steady_clock::now();
             }
         }
-    });
+    };
+    try {
+        join_download_job(old_job);
+        if (background_start_barrier_) background_start_barrier_("download");
+        job->worker = std::thread(std::move(run));
+    } catch (const std::exception& error) {
+        std::lock_guard<std::mutex> lock(downloads_mutex_);
+        job->running = false;
+        job->status = "error";
+        job->error = "Download worker could not start";
+        job->progress["error"] = job->error;
+        job->progress["complete"] = false;
+        LOG(WARNING, "DownloadManager") << "Could not start worker: " << error.what() << std::endl;
+        throw;
+    }
+
     worker_lock.unlock();
 
     return job;

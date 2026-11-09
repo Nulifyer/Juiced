@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <fstream>
 #include <future>
+#include <system_error>
 #include <thread>
 
 using namespace lemon;
@@ -38,6 +39,20 @@ public:
 };
 namespace lemon {
 struct StatePublicationTestHook {
+    static void start_barrier(Server& server, std::function<void(const std::string&)> hook) {
+        server.background_start_barrier_ = std::move(hook);
+    }
+    static void download(Server& server, std::function<void(DownloadProgressCallback)> operation) {
+        auto admission = std::make_shared<ResourceAdmission::Lease>(server.router_->admit_management("start-fixture", "download-entry"));
+        auto job = server.start_download_job("start-fixture", "model", "start-fixture",
+            [admission, operation = std::move(operation)](auto callback) { operation(std::move(callback)); });
+        server.join_download_job(job);
+    }
+    static json download_status(Server& server) {
+        std::lock_guard<std::mutex> lock(server.downloads_mutex_);
+        const auto job = server.download_jobs_.at("start-fixture");
+        return {{"running", job->running}, {"status", job->status}, {"error", job->error}};
+    }
     static httplib::Response invoke(Server& server, const std::string& path, const json& body) {
         httplib::Request request; request.method = "POST"; request.path = path; request.body = body.dump();
         httplib::Response response; response.status = 200;
@@ -248,8 +263,65 @@ static void entry_boundaries() {
     RuntimeConfig::set_global(nullptr);
 }
 
+static void worker_start_boundaries() {
+    const auto root = test::make_scratch_dir("worker-start");
+    auto defaults = ConfigFile::base_defaults();
+    defaults["offline"] = true; defaults["broadcast"] = false; defaults["auto_check_model_updates"] = false;
+    defaults["disable_model_filtering"] = true;
+    auto config = std::make_shared<RuntimeConfig>(defaults); RuntimeConfig::set_global(config.get());
+    {
+        Server server(config, root.string(), root.string());
+        auto& models = StatePublicationTestHook::models(server);
+        std::atomic<int> downloads{0}, syncs{0}, attempted_starts{0};
+        models.set_update_check_override_for_test([&](const auto&) { ++syncs; return ModelManager::UpdateCheckResult{}; });
+        config->set({{"offline", false}});
+        StatePublicationTestHook::start_barrier(server, [&](const std::string&) {
+            ++attempted_starts;
+            throw std::system_error(std::make_error_code(std::errc::resource_unavailable_try_again), "injected worker start failure");
+        });
+        const auto response = StatePublicationTestHook::invoke(server, "/v1/models/sync", {{"async", true}});
+        check(response.status == 500 && json::parse(response.body)["error"]["code"] == "worker_start_failed",
+              "failed sync dispatch returns a machine-readable start failure");
+        const auto failed = models.get_sync_status();
+        check(failed["status"] == "failed" && !failed["already_in_progress"].get<bool>() &&
+              failed["completed_sync_id"] == failed["sync_id"] && failed["pending_targets"].empty() && syncs == 0,
+              "failed worker construction finalizes its sync generation without executing it");
+        check(StatePublicationTestHook::admission(server)["active"] == 0,
+              "failed sync start releases its accepted management ownership");
+        bool rejected_start = false;
+        try { StatePublicationTestHook::download(server, [&](auto) { ++downloads; }); }
+        catch (const std::system_error&) { rejected_start = true; }
+        const auto failed_download = StatePublicationTestHook::download_status(server);
+        check(rejected_start && failed_download["running"] == false && failed_download["status"] == "error" && downloads == 0,
+              "failed download construction leaves a terminal retryable row without execution");
+        check(StatePublicationTestHook::admission(server)["active"] == 0 && attempted_starts == 2,
+              "failed download start releases admission and preserves the live manager");
+        StatePublicationTestHook::start_barrier(server, {});
+        StatePublicationTestHook::download(server, [&](auto) { ++downloads; });
+        check(StatePublicationTestHook::download_status(server)["status"] == "completed" && downloads == 1,
+              "the same download identifier can retry through a real owned worker");
+        const auto retried = StatePublicationTestHook::invoke(server, "/v1/models/sync", {{"async", true}});
+        check(retried.status == 202, "sync accepts a fresh generation after failed construction");
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while ((models.get_sync_status()["already_in_progress"].get<bool>() || StatePublicationTestHook::admission(server)["active"] != 0) &&
+               std::chrono::steady_clock::now() < deadline) std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        check(!models.get_sync_status()["already_in_progress"].get<bool>() && syncs > 0 && StatePublicationTestHook::admission(server)["active"] == 0,
+              "successful sync retry completes and releases its accepted ownership");
+        check(models.get_sync_status(failed["sync_id"].get<uint64_t>())["status"] == "failed",
+              "a later successful generation retains the original failed outcome");
+        const auto queued = models.enqueue_sync();
+        models.fail_sync_start(failed["sync_id"].get<uint64_t>(), "obsolete failure");
+        check(models.get_sync_status()["already_in_progress"] == true && models.get_sync_status()["sync_id"] == queued.sync_id,
+              "an obsolete start failure cannot terminate a newer queued generation");
+        models.fail_sync_start(queued.sync_id, "controlled undispatched cleanup");
+        check(models.get_sync_status(queued.sync_id)["status"] == "failed",
+              "undispatched queue cleanup retains a terminal generation outcome");
+    }
+    RuntimeConfig::set_global(nullptr);
+}
+
 int main() {
-    try { native_owners(); entry_boundaries(); }
+    try { native_owners(); entry_boundaries(); worker_start_boundaries(); }
     catch (const std::exception& error) { ++failures; std::fprintf(stderr, "Unexpected fixture failure: %s\n", error.what()); }
     std::fprintf(stderr, "Management admission: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

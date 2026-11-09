@@ -452,6 +452,9 @@ struct UpdateCheckResult {
     // Synchronously queue targets for sync. Returns dispatch result with sync_id and whether sync was already in progress.
     SyncEnqueueResult enqueue_sync(const std::vector<std::string>& target_models = {}, bool attach_if_running = false);
 
+    // Called only when dispatch fails before a worker starts for this generation.
+    void fail_sync_start(uint64_t sync_id, const std::string& message);
+
     // Execute background queue processing until empty.
     json execute_sync();
 
