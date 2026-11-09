@@ -4,6 +4,39 @@ This native source batch adds admission under Router ownership. It is not yet a
 qualified essential-service protection release. The default `legacy` mode retains
 existing operator-approved profiles and reports `latency_qualified: false`.
 
+## Discovery context observations
+
+Native model list/detail and catalog entries include `context.schema_version: 1`.
+Router derives this projection from one ModelInfo and one worker-generation
+snapshot. It separates declared model/provider context, resolved configured
+context, the applied launch setting and observed per-request context/slot count.
+Unknown values are null. Automatic settings remain automatic, rather than
+advertising the `-1` sentinel as a capacity. Speech/image services do not inherit
+a generic text-context claim.
+
+llama.cpp reads its bounded, read-only `/props` response once during owned startup,
+outside Router's lifecycle mutex. The probe has a two-second timeout and a 1-MiB
+response bound. Its allowlisted observation includes source, timestamp and build
+when available. Discovery performs no network I/O. Missing or invalid properties
+leave observed capacity unknown. Reload/replacement binds a new observation to
+the new worker; failed cleanup never advertises a usable serving context.
+
+`context_length` prefers observed per-request capacity, then applied/configured
+settings, then declared model/provider metadata. `context.advertised_source`
+identifies that choice. A requested total budget can differ from the engine's
+actual per-request limit. The UI uses observed context directly and never divides
+launch settings to manufacture a serving limit. Native capabilities retain unknown
+qualified concurrency even when a physical slot count is observed.
+
+OpenAI-compatible discovery, Ollama show and MCP available-model discovery share
+this native projection. Ollama omits unknown context/parameter/file-type values
+instead of fabricating zero metadata. The rich context object is a Juiced
+extension. It does not establish model fit, successful concurrent serving,
+useful cache reuse or device/quality qualification. Other backends retain explicit
+unknown observations until their native reporting contracts are implemented.
+
+## Admission controls
+
 `GET /v1/juiced/admission` reports pending work, active reservations, resident worker
 allocations, uncertain termination, and each declared physical pool. The same route
 exists under `/v0/`, `/api/v0/`, and `/api/v1/`. `POST` accepts only

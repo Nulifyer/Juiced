@@ -100,6 +100,7 @@ struct ImageDefaults {
 
 struct ModelInfo {
     std::string model_name;
+    std::string registry_key;
     std::map<std::string, std::string> checkpoints;
     std::map<std::string, std::string> resolved_paths; // Absolute path to model file/directory on disk
     std::string recipe;

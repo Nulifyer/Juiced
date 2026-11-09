@@ -319,6 +319,27 @@ class ApiContract(unittest.TestCase):
    saved=json.loads((self.root/'config/config.json').read_text());self.assertEqual(saved['admission'],{'principal_pending_limit':limit})
   self.assertEqual(self.request('/internal/set',{'admission':{}})[0],200)
   saved=json.loads((self.root/'config/config.json').read_text());self.assertEqual(saved['admission'],{})
+ def test_context_metadata_sources(self):
+  model='ZZExecution-F16'
+  original=self.request('models/'+model+'/options')[1]['saved'].get('ctx_size')
+  self.assertEqual(self.request('juiced/policy',{'model':model,'policy':'on-demand'})[0],200)
+  try:
+   self.assertEqual(self.request('models/'+model+'/options',{'ctx_size':-1})[0],200)
+   for prefix in ['/api/v0/','/api/v1/','/v0/','/v1/']:
+    status,data=self.request(prefix+'models/'+model);self.assertEqual(status,200,data)
+    self.assertTrue(data['context']['configured_automatic']);self.assertIsNone(data['context']['configured_tokens'])
+    self.assertIsNone(data['context']['observed_per_request_tokens']);self.assertNotIn('context_length',data)
+   status,shown=self.request('/api/show',{'model':model});self.assertEqual(status,200,shown)
+   self.assertEqual(shown['parameters'],'');self.assertNotIn('llama.context_length',shown['model_info'])
+   self.assertNotIn('general.parameter_count',shown['model_info'])
+   self.assertEqual(self.request('models/'+model+'/options',{'ctx_size':1234})[0],200)
+   for prefix in ['/api/v0/','/api/v1/','/v0/','/v1/']:
+    status,data=self.request(prefix+'models/'+model);self.assertEqual(status,200,data)
+    self.assertEqual(data['context_length'],1234);self.assertEqual(data['context']['advertised_source'],'configured_options')
+    self.assertIsNone(data['context']['observed_per_request_tokens'])
+  finally:
+   self.request('models/'+model+'/options',{'ctx_size':original})
+   self.request('juiced/policy',{'model':model,'policy':'disabled'})
  def test_resource_memory_snapshot(self):
   for prefix in ['/api/v0/','/api/v1/','/v0/','/v1/']:
    status,stats=self.request(prefix+'stats');self.assertEqual(status,200,stats)

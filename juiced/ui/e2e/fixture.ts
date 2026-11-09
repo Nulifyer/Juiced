@@ -42,7 +42,7 @@ export const test = base.extend<{ runtime: any }>({
         { id: 'ollama', base_path: '', features: ['Chat', 'Generate', 'Tags'], limits: ['Model installation uses the Juiced catalog.'] },
         { id: 'wyoming', features: ['STT', 'TTS'], limits: ['Private TCP listener.'], listener: { enabled: true, process_running: true, uri: 'tcp://0.0.0.0:10300' } },
       ] });
-      if (path === 'health') return reply({ all_models_loaded: [{ model_name: modelId, recipe_options: state.running, launch_command: ['/runtime/llama-server', '--model', '/library/Ornith-Q6_K.gguf', '--ctx-size', '4096', '--parallel', '2'] }] });
+      if (path === 'health') return reply({ all_models_loaded: [{ model_name: modelId, recipe_options: state.running, context_observation: { source: 'llamacpp:/props', per_request_tokens: 2048, slots: 2 }, launch_command: ['/runtime/llama-server', '--model', '/library/Ornith-Q6_K.gguf', '--ctx-size', '4096', '--parallel', '2'] }] });
       if (path === 'juiced/operation') return reply({ status: 'queued' });
       if (path === 'juiced/policy') { const model = state.models.find(m => m.id === body.model); if (model) model.policy = body.policy; return reply({}); }
       if (path === 'registry/search') return reply({ results: [{ repository_id: 'Example/Ornith-GGUF', downloads: 5000 }] });

@@ -176,6 +176,7 @@ public:
     // resolved inside load_model, once eviction has freed memory.
     RecipeOptions resolve_effective_options(const ModelInfo& model_info,
                                             const RecipeOptions& request_options) const;
+    json model_discovery_snapshot(const ModelInfo& model_info) const;
 
     // Apply request intent to an already-live process without reloading it.
     // Returns false when the requested model is not currently live.

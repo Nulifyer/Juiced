@@ -44,6 +44,10 @@ public:
         return {{"choices", json::array({{{"message", {{"role", "assistant"}, {"content", "fixture"}}}}})}};
     }
     bool observed = true;
+    void context(json observation) {
+        std::lock_guard<std::mutex> state(state_mutex_);
+        context_observation_ = std::move(observation);
+    }
     std::atomic<int> calls{0};
     std::atomic<bool> hold{false}, running{false};
     std::atomic<int> unload_outcome{0}, unload_calls{0};
@@ -124,6 +128,42 @@ int main() {
             return pool == "host" ? std::optional<uint64_t>(16 * 1024 * 1024) : std::nullopt;
         });
         RoutingHelperTestHook::add(router, worker);
+        ModelInfo discovery_info;
+        discovery_info.model_name = worker->get_model_name(); discovery_info.recipe = "llamacpp";
+        discovery_info.recipe_options = worker->get_recipe_options(); discovery_info.max_context_window = 128;
+        auto metadata = router.model_discovery_snapshot(discovery_info);
+        check(metadata["context"]["configured_tokens"] == 2048 && metadata["context"]["declared_tokens"] == 128 &&
+              metadata["context"]["observed_per_request_tokens"].is_null() && metadata["context"]["advertised_source"] == "applied_options",
+              "discovery distinguishes declared, configured and applied context without inventing a runtime observation");
+        worker->context({{"per_request_tokens", 128}, {"slots", 2}, {"source", "llamacpp:/props"}});
+        metadata = router.model_discovery_snapshot(discovery_info);
+        check(metadata["context"]["advertised_tokens"] == 128 && metadata["context"]["advertised_source"] == "runtime_observation" &&
+              metadata["context"]["applied_tokens"] == 2048 && metadata["context"]["observed_slots"] == 2 && metadata["loaded"] == true &&
+              metadata["context"]["worker_generation"] == metadata["runtime"]["worker_generation"],
+              "observed serving context and slot count bind to the same live worker generation as runtime state");
+        discovery_info.recipe_options.set_option("ctx_size", 4096);
+        metadata = router.model_discovery_snapshot(discovery_info);
+        check(metadata["context"]["configured_tokens"] == 4096 && metadata["context"]["advertised_tokens"] == 128 &&
+              metadata["runtime"]["settings_pending"] == true && metadata["context"]["settings_pending"] == true,
+              "pending context settings cannot overwrite the old worker's actual serving limit");
+        worker->set_cleanup_pending(true);
+        metadata = router.model_discovery_snapshot(discovery_info);
+        check(metadata["loaded"] == false && metadata["state"] == "cleanup_pending" &&
+              metadata["context"]["observed_per_request_tokens"].is_null() && metadata["context"]["worker_generation"].is_null(),
+              "cleanup-pending workers retain diagnostic ownership without advertising a usable context");
+        worker->set_cleanup_pending(false);
+        discovery_info.type = ModelType::TRANSCRIPTION;
+        metadata = router.model_discovery_snapshot(discovery_info);
+        check(!metadata["context"]["configured_automatic"].get<bool>() && metadata["context"]["advertised_tokens"].is_null(),
+              "a speech deployment does not advertise a generic text-context option as its capacity");
+        discovery_info.type = ModelType::LLM;
+        for (const auto value : {json(-1), json(0), json(1.5), json("128"), json(uint64_t(INT64_MAX) + 1)}) {
+            worker->context({{"per_request_tokens", value}, {"slots", value}});
+            metadata = router.model_discovery_snapshot(discovery_info);
+            check(metadata["context"]["observed_per_request_tokens"].is_null() && metadata["context"]["observed_slots"].is_null(),
+                  "invalid runtime observations never become advertised positive serving limits");
+        }
+        worker->context(json::object());
         std::atomic<bool> allowed{true};
         router.set_model_access_policy([&](const std::string&) { return allowed.load(); });
         json request = {{"model", worker->get_model_name()}, {"messages", json::array()}, {"max_tokens", 32}, {"priority", "essential"}};

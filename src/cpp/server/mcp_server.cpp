@@ -1088,6 +1088,10 @@ json McpServer::tool_list_models(const json& arguments) {
                 {"suggested", info.suggested},
                 {"labels", info.labels},
             };
+            const auto discovery = router_->model_discovery_snapshot(info);
+            entry["context"] = discovery.at("context");
+            if (!entry["context"].at("advertised_tokens").is_null()) entry["context_length"] = entry["context"].at("advertised_tokens");
+            if (info.max_context_window > 0) entry["max_context_window"] = info.max_context_window;
             if (info.size > 0.0) entry["size_gb"] = info.size;
             available.push_back(std::move(entry));
         }

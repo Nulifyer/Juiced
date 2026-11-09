@@ -1,4 +1,5 @@
-import { readArg, runtimeFields, withExtraArgs, type OptionResponse, type Options } from "./modelSettings";
+import { withExtraArgs, type OptionResponse, type Options } from "./modelSettings";
+import type { ContextObservation, Model } from "../api";
 
 export function effectiveRows(options: OptionResponse, draft: Options, running?: Options, extra?: string) {
   const desired: Options = { ...options.effective };
@@ -12,13 +13,19 @@ export function effectiveRows(options: OptionResponse, draft: Options, running?:
       changed: JSON.stringify(options.effective[key]) !== JSON.stringify(desired[key]) }));
 }
 
-export function slotCapacity(options?: Options): { total: number; slots: number; perSlot: number } | null {
-  if (!options || typeof options.ctx_size !== "number" || !Number.isSafeInteger(options.ctx_size) || options.ctx_size <= 0) return null;
-  let slots = 1;
-  try { slots = Number(readArg(String(options.llamacpp_args || ""), runtimeFields[0]) || 1); }
-  catch { return null; }
-  if (!Number.isSafeInteger(slots) || slots < 1) return null;
-  return { total: options.ctx_size, slots, perSlot: Math.floor(options.ctx_size / slots) };
+export function observedCapacity(observation?: ContextObservation) {
+  const positive = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+  if (!observation || !positive(observation.per_request_tokens)) return null;
+  return { perSlot: observation.per_request_tokens, slots: positive(observation.slots) ? observation.slots : null };
+}
+
+export function discoveryContextLabel(model: Pick<Model, "context" | "context_length">): string | null {
+  const value = model.context?.advertised_tokens ?? model.context_length;
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) return null;
+  const source = model.context?.advertised_source;
+  const label = source === "runtime_observation" ? "tokens per chat" : source === "configured_options" ? "configured context tokens"
+    : source === "applied_options" ? "context tokens requested at load" : source === "model_metadata" || source === "provider_metadata" ? "declared context tokens" : "reported context tokens";
+  return value.toLocaleString() + " " + label;
 }
 
 export function settingValue(value: unknown): string {

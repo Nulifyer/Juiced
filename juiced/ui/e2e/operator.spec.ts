@@ -13,6 +13,31 @@ test('effective settings distinguish saved, running and local edits without muta
   expect(runtime.writes).toEqual([]);
 });
 
+test('effective context uses engine observation when it differs from requested settings', async ({ page, runtime }) => {
+  await page.route('**/v1/health', route => route.fulfill({ json: { all_models_loaded: [{ model_name: modelId, recipe_options: { ctx_size: 4096, llamacpp_args: '--parallel 2' }, context_observation: { source: 'llamacpp:/props', per_request_tokens: 128, slots: 2 } }] } }));
+  await openModel(page);
+  await page.getByRole('button', { name: 'Effective', exact: true }).click();
+  await expect(page.getByText('128 tokens per chat', { exact: true })).toBeVisible();
+  await expect(page.getByText('2,048 tokens per chat', { exact: true })).toHaveCount(0);
+  await expect(page.getByText(/2 slots reported. Observed from the engine at load/)).toBeVisible();
+  if (process.env.JUICED_DESIGN_CAPTURES) {
+    const { mkdir } = await import('node:fs/promises');
+    await mkdir(process.env.JUICED_DESIGN_CAPTURES, { recursive: true });
+    for (const viewport of [{ width: 1440, height: 1000 }, { width: 390, height: 844 }]) {
+      await page.setViewportSize(viewport);
+      await page.screenshot({ path: `${process.env.JUICED_DESIGN_CAPTURES}/observed-context-${viewport.width}.png`, fullPage: true });
+    }
+  }
+});
+
+test('requested worker settings do not manufacture an unreported serving capacity', async ({ page, runtime }) => {
+  await page.route('**/v1/health', route => route.fulfill({ json: { all_models_loaded: [{ model_name: modelId, recipe_options: { ctx_size: 4096, llamacpp_args: '--parallel 2' } }] } }));
+  await openModel(page);
+  await page.getByRole('button', { name: 'Effective', exact: true }).click();
+  await expect(page.getByText('Serving context not reported', { exact: true })).toBeVisible();
+  await expect(page.getByText('2,048 tokens per chat', { exact: true })).toHaveCount(0);
+});
+
 test('draft guard supports keep editing and discard using keyboard', async ({ page, runtime }) => {
   await openModel(page);
   await page.getByLabel('Total context tokens', { exact: true }).fill('16384');
