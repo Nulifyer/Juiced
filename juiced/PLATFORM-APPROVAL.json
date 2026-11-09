@@ -1,6 +1,6 @@
 {
   "plan_revision": 3,
-  "status": "pending_review",
+  "status": "approved",
   "plan_sha256": "2443f4a5d089b633c18cbf2b2b91df7905f26a38a84486b332ef53703beda5dd",
   "annex_sha256": "7e35d19f19f8fb7950c22ce119999f48229a8ddc79eaf331611c4913951313d0",
   "projection_sha256": "2c438ca7250e6fc5a14180795e2be6ec59f6d0c9aa13edfda091c5b5882b37da",
@@ -10,7 +10,29 @@
     "model": "gpt-6.1-sol",
     "reasoningEffort": "high"
   },
-  "reviewers": [],
+  "reviewers": [
+    {
+      "seat": "A",
+      "model": "gpt-6.1-sol",
+      "reasoningEffort": "high",
+      "verdict": "APPROVE",
+      "taskId": "node:delegated-task:command%3Amcp%3A0fc276b9-3579-495b-a4ac-7f1ef0d58427%3Adelegate-task%3Ajuiced-revision3-a-8405000a"
+    },
+    {
+      "seat": "B",
+      "model": "gpt-6.1-sol",
+      "reasoningEffort": "high",
+      "verdict": "APPROVE",
+      "taskId": "node:delegated-task:command%3Amcp%3A0fc276b9-3579-495b-a4ac-7f1ef0d58427%3Adelegate-task%3Ajuiced-revision3-b-8405000a"
+    },
+    {
+      "seat": "C",
+      "model": "gpt-6.1-sol",
+      "reasoningEffort": "high",
+      "verdict": "APPROVE",
+      "taskId": "node:delegated-task:command%3Amcp%3A0fc276b9-3579-495b-a4ac-7f1ef0d58427%3Adelegate-task%3Ajuiced-revision3-c-8405000a"
+    }
+  ],
   "previous_approved": {
     "plan_revision": 2,
     "plan_sha256": "987a9cd9dbf23edcdb4efc83d26a05ad9cfb0fa8e4a30c2a7546b102694d532b",
@@ -38,5 +60,7 @@
     ],
     "scope": "Staged plan approval only; implementation, hardware, performance and deployment require separate acceptance."
   },
-  "scope": "Revision 3 adds the user-authorized Barista exception, resource-driven session defaults and sidebar service version. Revision 2 approval does not qualify this new bundle or implementation."
+  "scope": "Unanimous whole-plan revision3 approval only. Barista, resource-driven sessions, implementation, hardware, performance, image and candidate recovery require their separate acceptance.",
+  "reviewed_at": "2026-11-09T17:52:14.054634+00:00",
+  "reviewed_source": "8405000a868a827c369e55f07c11a7535b485e34"
 }
