@@ -243,3 +243,22 @@ directory changes publish with cache invalidation under that lock.
 This lock boundary does not establish request-wide lookup deadlines, pre-body or
 aggregate ingress admission, all-writer maintenance or essential-service protection.
 Those remain P1 gates, alongside exact execution identities and terminal accounting.
+
+Server lifetime teardown closes ModelManager notification admission and joins its
+directory watcher and drains accepted callbacks before provider/backend dependencies are
+released. Directory changes cannot restart the watcher after terminal stop. Cache
+reads remain available during drain. Server construction failure uses the same
+cleanup path because its destructor body does not run. Native member order retains
+model/provider owners through Router teardown. The retained-job worker joins before
+its Server dependencies disappear. BackendManager clears its process accessor only
+when it still names that instance.
+
+This terminal drain does not establish a reversible all-writer maintenance barrier.
+Downloads, preparation, ingress and every other mutating path still require their
+P1 bounds, pause, termination and recovery acceptance.
+
+HTTP shutdown returns its response and signals Server's existing owner loop. It
+uses normal teardown instead of a detached thread and process exit. POSIX signal
+handlers publish atomic intent; an owned worker applies shutdown/reload operations
+outside signal handlers and joins before Server destruction. Startup bind failure
+also returns through teardown. Parent-watchdog signaling remains separate.

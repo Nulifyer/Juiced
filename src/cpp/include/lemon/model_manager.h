@@ -195,6 +195,11 @@ public:
     // so freed first by reverse-order destruction.
     ~ModelManager();
 
+    // Terminal shutdown: reject later notifications, join the watcher and drain
+    // callbacks before the owning Server destroys their dependencies.
+    // Call from the owner thread, never from a model-change callback.
+    void stop_model_notifications();
+
     std::map<std::string, ModelInfo> discover_extra_models_for_test() const {
         return discover_extra_models();
     }
@@ -629,11 +634,15 @@ private:
     std::function<std::string()> default_model_source_provider_;
     std::unique_ptr<DirectoryWatcher> directory_watcher_;
     std::mutex directory_watcher_mutex_;
+    bool directory_watcher_stopped_ = false;
 
     // Fired after the model registry changes (add/edit/remove). Guarded by its
     // own mutex; invoked outside all other ModelManager locks.
     std::mutex models_changed_callback_mutex_;
     std::function<void(uint64_t)> models_changed_callback_;
+    std::condition_variable models_changed_drained_;
+    bool models_changed_stopped_ = false;
+    size_t models_changed_active_ = 0;
     // Monotonic counter identifying each registry change. The callback may read
     // the live registry to compute a snapshot and publish it downstream;
     // concurrent runs can publish an older snapshot after a newer one, so the

@@ -2,6 +2,7 @@
 #include "lemon/config_file.h"
 #include "lemon/error_types.h"
 #include "lemon/router.h"
+#include "lemon/server.h"
 #include "support/test_state_isolation.h"
 #include "lemon/utils/path_utils.h"
 #include <fstream>
@@ -21,10 +22,26 @@ static void check(bool ok, const char* label) {
 
 namespace lemon {
 struct ModelPublicationTestHook {
+    static bool notifications_stopped(ModelManager& models) {
+        std::lock_guard<std::mutex> lock(models.models_changed_callback_mutex_);
+        return models.models_changed_stopped_;
+    }
+    static bool watcher_stopped(ModelManager& models) {
+        std::lock_guard<std::mutex> lock(models.directory_watcher_mutex_);
+        return models.directory_watcher_stopped_ && !models.directory_watcher_;
+    }
+    static void notify(ModelManager& models) { models.notify_models_changed(); }
     static void options_barrier(ModelManager& models, std::function<void()> barrier) { models.options_persistence_barrier_ = std::move(barrier); }
     static bool writer_available(ModelManager& models) {
         std::unique_lock<std::mutex> lock(models.recipe_options_write_mutex_, std::try_to_lock);
         return lock.owns_lock();
+    }
+};
+struct StatePublicationTestHook {
+    static ModelManager& models(Server& server) { return *server.model_manager_; }
+    static bool dependencies_alive(Server& server) {
+        return server.cloud_registry_ && server.backend_manager_ && server.router_ &&
+               server.router_->admission_snapshot().is_object();
     }
 };
 struct RoutingHelperTestHook {
@@ -195,7 +212,93 @@ static void mutation_publication_boundaries() {
     RuntimeConfig::set_global(nullptr);
 }
 
+static bool wait_until(const std::function<bool()>& predicate) {
+    const auto end = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (std::chrono::steady_clock::now() < end) {
+        if (predicate()) return true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return predicate();
+}
+
+static void notification_shutdown() {
+    auto defaults = ConfigFile::base_defaults(); defaults["offline"] = true; defaults["broadcast"] = false;
+    auto config = std::make_shared<RuntimeConfig>(defaults); RuntimeConfig::set_global(config.get());
+    const auto root = lemon::test::make_scratch_dir("notification-shutdown");
+    const auto watched = root / "watched"; std::filesystem::create_directories(watched);
+    // Exercise the actual native watcher while Server owns its dependencies.
+    config->set({{"extra_models_dir", watched.string()}});
+    for (bool destroy_server : {false, true}) {
+        auto server = std::make_unique<Server>(config, root.string(), root.string());
+        auto& models = StatePublicationTestHook::models(*server);
+        std::promise<void> release; auto released = release.get_future().share();
+        std::atomic<bool> entered{false}, dependencies_alive{false}; std::atomic<int> calls{0};
+        Server* instance = server.get();
+        models.set_models_changed_callback([&](uint64_t) {
+            if (entered.exchange(true)) return;
+            ++calls;
+            released.wait();
+            models.get_supported_models();
+            dependencies_alive = StatePublicationTestHook::dependencies_alive(*instance);
+        });
+        // Watcher startup differs by OS. Wait for an observed callback rather
+        // than assuming a scheduler delay establishes readiness.
+        const auto end = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        int sequence = 0;
+        while (!entered && std::chrono::steady_clock::now() < end) {
+            std::ofstream(watched / (std::to_string(destroy_server) + "-" + std::to_string(++sequence) + ".txt")) << "metadata";
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+        check(entered, "a real ModelManager directory notification reaches the controlled callback");
+        if (!entered) { release.set_value(); continue; }
+        auto shutdown = std::async(std::launch::async, [&] {
+            if (destroy_server) server.reset(); else models.stop_model_notifications();
+        });
+        const bool closed = wait_until([&] { return ModelPublicationTestHook::notifications_stopped(models); });
+        const bool pending = shutdown.wait_for(std::chrono::milliseconds(50)) != std::future_status::ready;
+        auto read = std::async(std::launch::async, [&] { return models.get_supported_models().size(); });
+        const bool readable = read.wait_for(std::chrono::seconds(3)) == std::future_status::ready;
+        // All readers finish while the paused callback still owns its lifetime.
+        read.get();
+        std::future<void> directory;
+        if (!destroy_server) directory = std::async(std::launch::async, [&] { models.set_extra_models_dir((root / "late").string()); });
+        models.set_models_changed_callback([&](uint64_t) { ++calls; });
+        ModelPublicationTestHook::notify(models);
+        check(closed && pending && readable && calls == 1,
+              "shutdown rejects new callbacks while draining without holding the model cache lock");
+        release.set_value();
+        if (directory.valid()) directory.get();
+        shutdown.get();
+        check(dependencies_alive && calls == 1,
+              "a delayed watcher finishes with provider/backend/Router dependencies alive");
+        if (destroy_server) check(BackendManager::global() == nullptr,
+                                  "Server teardown clears the process backend accessor after its consumers stop");
+        if (!destroy_server) {
+            models.stop_model_notifications();
+            models.set_extra_models_dir((root / "late-again").string());
+            models.set_models_changed_callback([&](uint64_t) { ++calls; });
+            ModelPublicationTestHook::notify(models);
+            check(ModelPublicationTestHook::watcher_stopped(models) && calls == 1,
+                  "terminal stop is idempotent and concurrent/later configuration cannot restart watcher or callbacks");
+        }
+    }
+
+    const auto failed = root / "failed-construction";
+    std::filesystem::create_directories(failed / "juiced/state.json.tmp");
+    bool rejected = false;
+    try { Server invalid(config, failed.string(), failed.string()); }
+    catch (const std::exception&) { rejected = true; }
+    check(rejected && BackendManager::global() == nullptr,
+          "failed Server construction drains model activity and clears its backend accessor before returning failure");
+    RuntimeConfig::set_global(nullptr);
+}
+
 int main(int argc, char** argv) {
+    if (argc > 1 && std::string(argv[1]) == "--shutdown") {
+        notification_shutdown();
+        std::fprintf(stderr, "Model shutdown: %d checks, %d failures\n", checks, failures);
+        return failures ? 1 : 0;
+    }
     if (argc > 1 && std::string(argv[1]) == "--discovery") {
         discovery_boundaries(); mutation_publication_boundaries();
         std::fprintf(stderr, "Discovery boundaries: %d checks, %d failures\n", checks, failures);

@@ -3459,6 +3459,12 @@ if(BUILD_TESTING)
     add_cpp_ci_test(CloudRuntimeTest CI ON COMMAND test_cloud_runtime)
     add_cpp_ci_test(ModelDiscoveryConcurrencyTest CI ON COMMAND test_cloud_runtime --discovery)
     set_tests_properties(ModelDiscoveryConcurrencyTest PROPERTIES TIMEOUT 90)
+    add_cpp_ci_test(ModelShutdownTest CI ON COMMAND test_cloud_runtime --shutdown)
+    set_tests_properties(ModelShutdownTest PROPERTIES TIMEOUT 90)
+    add_cpp_ci_test(ServerShutdownEntrypointsTest CI ON COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/juiced/tests/test_model_shutdown.py --binary $<TARGET_FILE:${EXECUTABLE_NAME}>
+        --out ${CMAKE_CURRENT_BINARY_DIR}/model-shutdown-proof.json DEPENDS ${EXECUTABLE_NAME})
+    set_tests_properties(ServerShutdownEntrypointsTest PROPERTIES TIMEOUT 150)
     set_tests_properties(CloudRuntimeTest PROPERTIES TIMEOUT 90)
 
     add_executable(test_persistence_boundaries test/cpp/test_persistence_boundaries.cpp)

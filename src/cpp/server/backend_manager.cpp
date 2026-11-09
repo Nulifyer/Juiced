@@ -353,6 +353,11 @@ BackendManager::BackendManager() {
 // constructor; null when invoked from CLI tools that don't run a server.
 static std::atomic<BackendManager*> s_global_backend_manager{nullptr};
 
+BackendManager::~BackendManager() {
+    auto* expected = this;
+    s_global_backend_manager.compare_exchange_strong(expected, nullptr, std::memory_order_acq_rel);
+}
+
 void BackendManager::set_global(BackendManager* instance) {
     s_global_backend_manager.store(instance, std::memory_order_release);
 }

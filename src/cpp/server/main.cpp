@@ -94,7 +94,7 @@ bool configure_glibc_mmap_threshold() noexcept {
 
 // Global flags for signal handling
 static std::atomic<bool> g_reload_requested(false);
-static Server* g_server_instance = nullptr;
+static std::atomic<bool> g_shutdown_requested(false);
 
 // Signal handler for Ctrl+C, SIGTERM, and SIGHUP
 void signal_handler(int signal) {
@@ -113,18 +113,8 @@ void signal_handler(int signal) {
         // progress callback checks this flag and aborts the transfer.
         utils::g_download_cancelled.store(true);
 
-        // Signal shutdown via the Server instance. The main loop will detect
-        // this flag and call server->stop() for graceful cleanup (unloading
-        // models, stopping backend child processes like llama-server).
-        // This ensures child processes are properly terminated instead of
-        // being orphaned when the service is stopped via systemd.
-        if (g_server_instance) {
-            g_server_instance->set_shutdown_requested(true);
-        }
-
-        // Return normally instead of calling _exit(). The main loop will
-        // detect the flag, call stop() to clean up child processes, and
-        // then exit. This prevents orphaned backend processes.
+        // The owned signal worker forwards this to Server outside the handler.
+        g_shutdown_requested.store(true);
         return;
 #ifdef SIGHUP
     } else if (signal == SIGHUP) {
@@ -239,36 +229,40 @@ int main(int argc, char** argv) {
 
         Server server(config, cli_config.cache_dir, cli_config.config_dir);
 
-        g_server_instance = &server;
         std::signal(SIGINT, signal_handler);
         std::signal(SIGTERM, signal_handler);
 #ifdef SIGHUP
         std::signal(SIGHUP, signal_handler);
-
-        // Background thread: watches g_reload_requested and calls invalidate_recipes().
-        // Mutex-based code (like invalidate_recipes) must not be called directly from
-        // a signal handler, so we use this thread to do the actual work safely.
-        std::thread([]() {
-            while (!g_server_instance || !g_server_instance->should_shutdown()) {
+#endif
+        // Signal handlers only publish atomic flags. This owned worker may touch
+        // Server/hardware state and is always joined before Server destruction.
+        std::atomic<bool> signals_stopping{false};
+        std::thread signal_worker([&]() {
+            while (!signals_stopping.load()) {
+                if (g_shutdown_requested.exchange(false)) server.set_shutdown_requested(true);
+#ifdef SIGHUP
                 if (g_reload_requested.exchange(false)) {
                     LOG(INFO) << "SIGHUP received - rescanning hardware and recipes..." << std::endl;
                     SystemInfoCache::invalidate_recipes();
                     LOG(INFO) << "Hardware rescan complete" << std::endl;
                 }
-                std::this_thread::sleep_for(std::chrono::milliseconds(500));
-            }
-        }).detach();
 #endif
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+        });
+        struct SignalWorkerGuard {
+            std::atomic<bool>& stopping;
+            std::thread& worker;
+            ~SignalWorkerGuard() { stopping = true; if (worker.joinable()) worker.join(); }
+        } signal_guard{signals_stopping, signal_worker};
 
         server.run();
-        g_server_instance = nullptr;
 
-        // Startup aborted (e.g. port already in use): exit non-zero now and skip
-        // destructors, whose teardown logging would bury the error message.
+        // Startup failure still follows owned cleanup before returning nonzero.
         if (server.startup_failed()) {
             std::cout.flush();
             std::cerr.flush();
-            std::_Exit(1);
+            return 1;
         }
 
         return 0;

@@ -460,7 +460,7 @@ Server::Server(std::shared_ptr<RuntimeConfig> config,
       config_dir_(config_dir),
       port_(config->port()), running_(false), udp_beacon_(),
       metrics_platform_(create_metrics_platform()) {
-
+    try {
     // Set global HttpClient timeout
     utils::HttpClient::set_default_timeout(config->global_timeout());
 
@@ -776,6 +776,12 @@ Server::Server(std::shared_ptr<RuntimeConfig> config,
         config_->websocket_port());
 
     start_model_cache_warmup();
+    } catch (...) {
+        // The destructor body is not run when construction fails. Drain owned
+        // producers before reverse member destruction can release dependencies.
+        shutdown_background_activity();
+        throw;
+    }
 }
 
 void Server::start_model_cache_warmup() {
@@ -924,24 +930,19 @@ void Server::stop_http_listeners() {
 }
 
 Server::~Server() {
+    shutdown_background_activity();
+}
+
+void Server::shutdown_background_activity() {
     if (juiced_) juiced_->stop();
     cancel_download_jobs();
+    stop();  // Cancels/joins metadata warmup and background sync producers too.
+    job_manager_.reset();  // Join its worker while provider/model state is alive.
     if (model_manager_) {
-        model_manager_->cancel_sync();
+        model_manager_->stop_model_notifications();
+        model_manager_->set_model_removal_guard({});
     }
-    stop();
-    if (model_cache_warmup_thread_.joinable()) {
-        model_cache_warmup_thread_.join();
-    }
-
-    std::lock_guard<std::mutex> lock(background_sync_mutex_);
-    for (auto& entry : background_sync_threads_) {
-        if (entry.thread.joinable()) {
-            entry.thread.join();
-        }
-    }
-    background_sync_threads_.clear();
-    if (model_manager_) model_manager_->set_model_removal_guard({});
+    LOG(INFO, "Server") << "Background model activity stopped" << std::endl;
 }
 
 
@@ -7405,13 +7406,9 @@ void Server::handle_shutdown(const httplib::Request& req, httplib::Response& res
     nlohmann::json response = {{"status", "shutting down"}};
     res.set_content(response.dump(), "application/json");
 
-    // Stop the HTTP listener and exit asynchronously (allows response to be sent first)
-    std::thread([this]() {
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        cancel_download_jobs();
-        stop();
-        std::exit(0);
-    }).detach();
+    // Let run() stop listeners and join their workers after this response.
+    // Terminal cleanup then runs on the owning thread through normal destruction.
+    set_shutdown_requested(true);
 }
 
 void Server::handle_config_set(const httplib::Request& req, httplib::Response& res) {

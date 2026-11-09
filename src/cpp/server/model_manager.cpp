@@ -1480,7 +1480,7 @@ void ModelManager::invalidate_models_cache() {
 
 void ModelManager::set_models_changed_callback(std::function<void(uint64_t)> cb) {
     std::lock_guard<std::mutex> lock(models_changed_callback_mutex_);
-    models_changed_callback_ = std::move(cb);
+    if (!models_changed_stopped_) models_changed_callback_ = std::move(cb);
 }
 
 uint64_t ModelManager::next_notify_generation() {
@@ -1497,11 +1497,17 @@ void ModelManager::notify_models_changed() {
     std::function<void(uint64_t)> cb;
     {
         std::lock_guard<std::mutex> lock(models_changed_callback_mutex_);
+        if (models_changed_stopped_ || !models_changed_callback_) return;
         cb = models_changed_callback_;
+        ++models_changed_active_;
     }
-    if (!cb) {
-        return;
-    }
+    struct ActiveGuard {
+        ModelManager* owner;
+        ~ActiveGuard() {
+            std::lock_guard<std::mutex> lock(owner->models_changed_callback_mutex_);
+            if (--owner->models_changed_active_ == 0) owner->models_changed_drained_.notify_all();
+        }
+    } active{this};
     in_notify = true;
     struct ResetGuard {
         ~ResetGuard() { in_notify = false; }
@@ -1528,6 +1534,7 @@ void ModelManager::set_extra_models_dir(const std::string& dir) {
     {
         // Joining the old watcher must not hold the cache lock its callback uses.
         std::lock_guard<std::mutex> watcher(directory_watcher_mutex_);
+        if (directory_watcher_stopped_) return;
         directory_watcher_.reset();
         {
             std::lock_guard<std::mutex> lock(models_cache_mutex_);
@@ -1543,7 +1550,23 @@ void ModelManager::set_extra_models_dir(const std::string& dir) {
 }
 
 ModelManager::~ModelManager() {
-    directory_watcher_.reset();
+    stop_model_notifications();
+}
+
+void ModelManager::stop_model_notifications() {
+    {
+        std::lock_guard<std::mutex> lock(models_changed_callback_mutex_);
+        models_changed_stopped_ = true;
+        models_changed_callback_ = {};
+    }
+    {
+        // Active callbacks need the cache/provider owners while this join waits.
+        std::lock_guard<std::mutex> watcher(directory_watcher_mutex_);
+        directory_watcher_stopped_ = true;
+        directory_watcher_.reset();
+    }
+    std::unique_lock<std::mutex> lock(models_changed_callback_mutex_);
+    models_changed_drained_.wait(lock, [this] { return models_changed_active_ == 0; });
 }
 
 void ModelManager::start_directory_watcher() {

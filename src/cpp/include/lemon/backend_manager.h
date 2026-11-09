@@ -14,6 +14,7 @@ using json = nlohmann::json;
 class BackendManager {
 public:
     BackendManager();
+    ~BackendManager();
 
     // Core operations
     void install_backend(const std::string& recipe, const std::string& backend,

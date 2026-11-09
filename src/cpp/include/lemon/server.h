@@ -350,6 +350,7 @@ private:
 
     // Warm model list cache in the background after startup dependencies are initialized
     void start_model_cache_warmup();
+    void shutdown_background_activity();
 
     // Helper function to generate detailed model error responses (not found, not supported, load failure)
     nlohmann::json create_model_error(const std::string& requested_model, const std::string& exception_msg);
@@ -381,12 +382,14 @@ private:
     std::unique_ptr<UpgradableFrontServer> http_front_;
     std::unique_ptr<UpgradableFrontServer> http_front_v6_;
 
-    std::unique_ptr<JuicedService> juiced_;
-    std::unique_ptr<Router> router_;
+    // Dependencies precede consumers so partial construction and normal member
+    // destruction retain model/provider owners through Router teardown.
+    std::unique_ptr<CloudProviderRegistry> cloud_registry_;
+    std::unique_ptr<BackendManager> backend_manager_;
     std::unique_ptr<AliasManager> alias_manager_;
     std::unique_ptr<ModelManager> model_manager_;
-    std::unique_ptr<BackendManager> backend_manager_;
-    std::unique_ptr<CloudProviderRegistry> cloud_registry_;
+    std::unique_ptr<JuicedService> juiced_;
+    std::unique_ptr<Router> router_;
     std::mutex cloud_update_mutex_;
     std::unique_ptr<WebSocketServer> websocket_server_;
     std::unique_ptr<lemon::jobs::JobManager> job_manager_;
