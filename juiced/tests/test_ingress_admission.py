@@ -350,6 +350,64 @@ def run(binary, output):
                 "gzip either decodes the bounded RPC or rejects the unsupported encoding",
             )
             check(wait_empty(), "codec capability probe releases its ingress ownership")
+            for prefix in PREFIXES:
+                for encoding in ("x-juiced-fixture", "UTF-8", "gzip, identity"):
+                    code, rejected = request(
+                        prefix + "chat/completions",
+                        b"x" * 65536,
+                        {"Content-Encoding": encoding},
+                        raw=True,
+                    )
+                    check(
+                        code == 415
+                        and rejected.get("error", {}).get("code")
+                        == "unsupported_content_encoding",
+                        "unknown or layered codings return a complete typed415 across every native prefix",
+                    )
+                    check(
+                        wait_empty(),
+                        "unsupported large-body rejection retains no input allocation",
+                    )
+            for repetition in range(3):
+                started = time.monotonic()
+                connection, received = pending(
+                    "/mcp",
+                    65536,
+                    extra="Content-Encoding: x-juiced-fixture\r\n",
+                    expect=False,
+                )
+                check(
+                    b" 415 " in received.split(b"\r\n", 1)[0],
+                    "an unsupported coding rejects without waiting for its declared body",
+                )
+                while True:
+                    fragment = connection.recv(4096)
+                    if not fragment:
+                        break
+                    received += fragment
+                elapsed = time.monotonic() - started
+                check(
+                    elapsed < 1.0 and wait_empty(),
+                    "a peer withholding its rejected body cannot hold close or input ownership indefinitely",
+                )
+                observations.setdefault("withheld_rejected_body", []).append(
+                    {
+                        "repetition": repetition,
+                        "elapsed_ms": elapsed * 1000,
+                        "status": 415,
+                    }
+                )
+                connection.close()
+            connection, duplicate = pending(
+                "/mcp",
+                2,
+                extra="Content-Encoding: identity\r\nContent-Encoding: gzip\r\n",
+            )
+            check(
+                b" 415 " in duplicate.split(b"\r\n", 1)[0],
+                "ambiguous repeated coding headers reject before100continue or dispatch",
+            )
+            connection.close()
             code, _ = request(
                 "/mcp",
                 b"{}",

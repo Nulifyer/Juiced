@@ -24,6 +24,9 @@ class ApiContract(unittest.TestCase):
   cls.hf_fixture=cls.root/'hf-text-fixture';cls.hf_fixture.mkdir();(cls.hf_fixture/'config.json').write_text(json.dumps({'model_type':'qwen3_5','text_config':{'model_type':'qwen3_5'},'vision_config':{}}));(cls.hf_fixture/'model.safetensors').write_bytes(b'planning fixture only')
   definitions=json.loads((cls.root/'config/user_models.json').read_text());definitions['Qwen3.5-Fixture-BF16']={'recipe':'vllm','source':'local_path','checkpoints':{'main':str(cls.hf_fixture)},'labels':['chat','vision']};(cls.root/'config/user_models.json').write_text(json.dumps(definitions))
   definitions=json.loads((cls.root/'config/user_models.json').read_text());definitions['ZZImage-Variant']={'recipe':'sd-cpp','source':'local_path','checkpoints':{'main':str(cls.execution_file)},'labels':['image'],'recipe_options':{'steps':7}};(cls.root/'config/user_models.json').write_text(json.dumps(definitions))
+  cls.long_models=['ZZLong-'+('A'*300), 'ZZOwner/'+('B'*300)];definitions=json.loads((cls.root/'config/user_models.json').read_text())
+  for name in cls.long_models:definitions[name]=dict(definitions['ZZExecution-F16'])
+  (cls.root/'config/user_models.json').write_text(json.dumps(definitions))
   cls.legacy_jobs=cls.root/'config/jobs.json';cls.legacy_jobs.write_text(json.dumps({'jobs':[{'id':'legacy-fixture','name':'preserved graph','status':'queued','steps':[{'id':'first','op':'invalid-fixture-operation','when':'true','branch':[{'when':'true','goto':'first'}]}]}]}));cls.legacy_jobs_bytes=cls.legacy_jobs.read_bytes()
   cls.log=open(cls.root/'server.log','w');cls.process=subprocess.Popen([BINARY,str(cls.root/'cache'),str(cls.root/'config'),'--host','127.0.0.1','--port',str(cls.port)],stdout=cls.log,stderr=cls.log,env={**os.environ,'HOME':str(cls.root),'XDG_RUNTIME_DIR':str(cls.root/'run'),'HF_HUB_CACHE':str(cls.root/'hf')})
   for _ in range(150):
@@ -48,6 +51,15 @@ class ApiContract(unittest.TestCase):
    with urllib.request.urlopen(q,timeout=15) as r:return r.status,json.load(r)
   except urllib.error.HTTPError as r:
    with r:return r.code,json.load(r)
+ def test_long_model_ids_keep_native_routes(self):
+  for prefix in ['/v1/','/v0/','/api/v1/','/api/v0/']:
+   for model in self.long_models:
+    path=prefix+'models/'+urllib.parse.quote(model,safe='')
+    self.assertEqual(self.request(path)[0],200)
+    self.assertEqual(self.request(path+'/files')[0],200)
+    self.assertEqual(self.request(path+'/options')[0],200)
+    status,result=self.request(path+'/options',{'ctx_size':321});self.assertEqual(status,200,result);self.assertEqual(result['saved']['ctx_size'],321)
+    status,result=self.request(path+'/options',method='DELETE');self.assertEqual(status,200,result);self.assertNotIn('ctx_size',result['saved'])
  def test_execution_profiles_and_preparation_contract(self):
   model='ZZExecution-F16'
   for prefix in ['/v1/','/v0/','/api/v1/','/api/v0/']:
