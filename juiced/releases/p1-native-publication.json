@@ -18,7 +18,8 @@
     "native cloud/FLM discovery admission and explicit metadata deferral",
     "atomic ModelManager JSON byte persistence across migration and repository metadata",
     "separate ingress read/body lifetimes, compact control reserve and JSON structure bounds",
-    "exclusive native cache/config directory ownership"
+    "exclusive native cache/config directory ownership",
+    "direct native host memory and explicit containment uncertainty"
   ],
   "scope": [
     "Juiced state writes retain a private last-committed checkpoint; failed writes restore rejected policy/cache controls and revision. Policy is the sole authority for Hot residency.",
@@ -61,7 +62,8 @@
     "Native provider-driven discovery rejects protected/paused work before network/CLI dispatch. ModelManager keeps local inventory and timestamped last-attempt observations. Cloud install/auth results distinguish committed metadata from deferred discovery. Cloud model-list responses have a 1 MiB receive ceiling. This does not qualify all filesystem/hardware metadata paths.",
     "All nine ModelManager JSON save sites share JsonUtils atomic byte persistence. Candidate/transaction/repository authority remains native. Serialization precedes staging, flush/close precede replacement, POSIX modes are preserved and failed cleanup reports retained staging. This does not establish multi-file promotion or all-writer quiescence.",
     "Completed body reads release ordinary read slots while retaining byte charges through response completion. Compact native controls have separate read/headroom capacity. Native/gateway handler wrappers cap JSON depth64 and32768 key/value events. Raw import bytes remain unchanged; protected multipart input is contained. Full HTTP worker fairness, absolute input deadlines and physical-pool parse estimates remain open.",
-    "lemond and the Windows embedded server acquire nonblocking canonical-directory OS leases before configuration migration. The lease spans owned Server teardown, retains its control file, and protects legacy cache sources before migration. Participating processes sharing cache or configuration roots cannot serve concurrently. External model/snapshot roots, uncooperative binaries, network filesystems and backend termination remain unqualified."
+    "lemond and the Windows embedded server acquire nonblocking canonical-directory OS leases before configuration migration. The lease spans owned Server teardown, retains its control file, and protects legacy cache sources before migration. Participating processes sharing cache or configuration roots cannot serve concurrently. External model/snapshot roots, uncooperative binaries, network filesystems and backend termination remain unqualified.",
+    "Router and CPU/NPU automatic sizing use SystemMetricsPlatform available-byte budgets rather than GPU-derived CPU proxies. Windows reads physical/commit/address headroom and contains unqualified job hierarchies. macOS reads raw free pages and contains finite/unreadable process limits. Unknown live input memory returns503 ingress_memory_unknown before configuration publication. HTTP proof distinguishes positive admission from explicit containment and tests unknown configured capacity on every platform."
   ],
   "verification": {
     "status": "Local32-contract regression passed; final extension passes116 management assertions,53 ledger checks,API43 and actual CPU/cache acceptance. The Linux watcher fixture passes with a debounce quiet window. Fresh exact-source platform/image results remain pending.",
@@ -89,10 +91,10 @@
     "model_shutdown_assertions": 9,
     "shutdown_entrypoint_cases": 4,
     "management_assertions": 118,
-    "ledger_assertions": 84,
+    "ledger_assertions": 86,
     "management_scope": "Controlled native manager/handler/queued work and actual neutral Stories15M CPU/cache. Metadata/discovery, ingress/import bounds and reversible all-writer maintenance remain incomplete.",
     "ingress_scope": "45 real HTTP assertions,63 ledger checks including standalone ASan/UBSan,10 selected native contracts,43 API cases and complete neutral Stories15M CPU/cache/authentication acceptance pass locally. Buffered body bounds do not qualify total heap, slow-client fairness or full P1 protection.",
-    "ingress_assertions": 80,
+    "ingress_assertions": 101,
     "ingress_native_contracts": 10,
     "discovery_admission_scope": "Four selected native contracts and final118 management assertions pass locally.43 API cases,8 cloud failure/restart plus4 protected-prefix cases and actual neutral Stories15M CPU/cache/authentication acceptance pass. Metadata filesystem/hardware paths and full P1 remain unqualified.",
     "model_metadata_assertions_local_linux": 33,
@@ -104,7 +106,9 @@
     "alias_publication_scope": "Six selected local contracts pass:alias publication/HTTP,retained persistence,metadata,ordering and ingress diagnostics.74 alias assertions,20 HTTP publication checks,80 ingress checks,43 API cases and actual neutral CPU/cache/authenticated restart isolation pass. File I/O stays outside the alias read lock. Windows/native image gates remain open; parent Windows ingress activation failed and its response was not retained. New diagnostics preserve the activation response and available HTTP server logs.",
     "managed_directory_lease_assertions_local_linux": 11,
     "store_ownership_process_assertions": 17,
-    "managed_directory_scope": "Four selected local contracts pass, including configuration merging, four Linux shutdown cases, eleven native lease checks and seventeen process checks. Final crash-restart retry refinement passes separately.43 API cases and complete actual neutral Stories15M CPU/cache/authenticated restart isolation pass. POSIX tray source syntax passes. Windows native execution and whole-store maintenance remain open."
+    "managed_directory_scope": "Four selected local contracts pass, including configuration merging, four Linux shutdown cases, eleven native lease checks and seventeen process checks. Final crash-restart retry refinement passes separately.43 API cases and complete actual neutral Stories15M CPU/cache/authenticated restart isolation pass. POSIX tray source syntax passes. Windows native execution and whole-store maintenance remain open.",
+    "native_host_scope": "Seven selected local contracts pass, including direct native memory,ledger,AutoTune,Router,HTTP and retained directory ownership.43 API cases pass. Local HTTP covers both positive headroom and explicit unknown configured capacity. Windows/macOS source branches await exact-source native execution; job/finite-limit containment does not qualify successful protection. Final HTTP extension passes101 assertions, including unknown-memory rejection before body/100 Continue. Standalone ledger86 passes ASan/UBSan. Complete actual neutral Stories15M CPU/cache/authentication passes.",
+    "native_host_memory_assertions_local_linux": 37
   },
   "remaining": [
     "Full P1 fourteen-family path coverage, complete ingress/parsing/background/acquisition/preparation/install bounds, all-writer maintenance, exact execution identities, Realtime context/quiescence, termination reconciliation, early streaming status, shared observations and frozen service-protection gates.",

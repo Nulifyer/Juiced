@@ -1,10 +1,12 @@
 #include <lemon/system_metrics_platform.h>
 #include <sys/types.h>
 #include <sys/sysctl.h>
+#include <sys/resource.h>
 #include <mach/mach.h>
 #include <mach/mach_host.h>
 #include <mach/vm_statistics.h>
 #include <cmath>
+#include <limits>
 
 namespace lemon {
 
@@ -51,6 +53,44 @@ public:
         double used_gb = (used_pages * static_cast<double>(page_size)) /
                          (1024.0 * 1024.0 * 1024.0);
         return std::round(used_gb * 10.0) / 10.0;
+    }
+
+    double get_memory_total_gb() override {
+        uint64_t total = 0;
+        size_t length = sizeof(total);
+        return sysctlbyname("hw.memsize", &total, &length, nullptr, 0) == 0 && length == sizeof(total)
+            ? total / BYTES_PER_GIB : 0.0;
+    }
+
+    MemoryBudget get_memory_budget() override {
+        MemoryBudget result;
+        result.source = "Mach-free-pages";
+        uint64_t total = 0;
+        size_t length = sizeof(total);
+        if (sysctlbyname("hw.memsize", &total, &length, nullptr, 0) != 0 || length != sizeof(total))
+            return result;
+        result.host_total_bytes = total;
+        const auto host = mach_host_self();
+        vm_size_t page_size = 0;
+        vm_statistics64_data_t sample{};
+        mach_msg_type_number_t count = HOST_VM_INFO64_COUNT;
+        const bool valid = host_page_size(host, &page_size) == KERN_SUCCESS && page_size != 0 &&
+            host_statistics64(host, HOST_VM_INFO64, reinterpret_cast<host_info64_t>(&sample), &count) == KERN_SUCCESS;
+        mach_port_deallocate(mach_task_self(), host);
+        if (!valid || count < HOST_VM_INFO64_COUNT ||
+            sample.free_count > std::numeric_limits<uint64_t>::max() / page_size) return result;
+        result.host_available_bytes = static_cast<uint64_t>(sample.free_count) * page_size;
+        for (const int resource : {RLIMIT_AS, RLIMIT_DATA}) {
+            struct rlimit limit{};
+            if (getrlimit(resource, &limit) != 0) return result;
+            if (limit.rlim_cur != RLIM_INFINITY) {
+                result.containment = "macos-process-limit-unqualified";
+                return result;
+            }
+        }
+        result.containment = "macos-process-limits-unlimited";
+        result.constraints_complete = true;
+        return result;
     }
 
     double get_gpu_usage() override {

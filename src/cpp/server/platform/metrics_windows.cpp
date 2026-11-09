@@ -72,6 +72,29 @@ public:
         return 0.0;
     }
 
+    MemoryBudget get_memory_budget() override {
+        MemoryBudget result;
+        result.source = "GlobalMemoryStatusEx";
+        MEMORYSTATUSEX sample{};
+        sample.dwLength = sizeof(sample);
+        if (!GlobalMemoryStatusEx(&sample)) return result;
+        result.host_total_bytes = sample.ullTotalPhys;
+        result.host_available_bytes = sample.ullAvailPhys;
+        if (sample.ullTotalPageFile == 0 || sample.ullAvailPageFile > sample.ullTotalPageFile ||
+            sample.ullTotalVirtual == 0 || sample.ullAvailVirtual > sample.ullTotalVirtual)
+            return result;
+        result.constraints.push_back({sample.ullTotalPageFile,
+            sample.ullTotalPageFile - sample.ullAvailPageFile, "process-commit"});
+        result.constraints.push_back({sample.ullTotalVirtual,
+            sample.ullTotalVirtual - sample.ullAvailVirtual, "process-address-space"});
+        BOOL in_job = FALSE;
+        if (!IsProcessInJob(GetCurrentProcess(), nullptr, &in_job)) return result;
+        // The immediate job does not establish every ancestor's memory limits.
+        result.containment = in_job ? "windows-job-unqualified" : "windows-no-job";
+        result.constraints_complete = !in_job;
+        return result;
+    }
+
     double get_gpu_usage() override {
         return get_system_gpu_metrics().gpu_percent;
     }

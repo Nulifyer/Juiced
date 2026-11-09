@@ -1,8 +1,14 @@
 #include "lemon/memory_budget.h"
+#include "lemon/system_metrics_platform.h"
 #include <chrono>
 #include <cstdio>
 #include <fstream>
 #include <limits>
+#ifdef _WIN32
+#include <windows.h>
+#elif defined(__APPLE__)
+#include <sys/resource.h>
+#endif
 
 namespace fs = std::filesystem;
 
@@ -148,6 +154,48 @@ int main() {
         check(f.read().available_bytes() == 5000, "v1 hierarchical ancestor limit applies");
         f.write("sys/fs/cgroup/parent/memory.use_hierarchy", "0\n");
         check(f.read().available_bytes() == 200000, "v1 nonhierarchical parent is not falsely charged");
+    }
+    {
+        auto platform = lemon::create_metrics_platform();
+        const auto native = platform->get_memory_budget();
+        check(native.source != "platform-host-estimate" && native.source != "unavailable",
+              "native host budget has a direct platform source without GPU metadata");
+        if (const auto bytes = native.available_bytes())
+            check(native.host_available_bytes && *bytes <= *native.host_available_bytes,
+                  "native effective memory never exceeds the measured host sample");
+#ifdef _WIN32
+        BOOL in_job = FALSE;
+        check(IsProcessInJob(GetCurrentProcess(), nullptr, &in_job) != FALSE,
+              "Windows job containment can be observed");
+        if (in_job) {
+            check(native.containment == "windows-job-unqualified" && !native.available_bytes(),
+                  "job membership never assumes unknown ancestor limits are unlimited");
+        } else {
+            check(native.containment == "windows-no-job" && native.available_bytes().has_value(),
+                  "jobless Windows uses physical, commit and address-space headroom");
+            const auto job = CreateJobObjectW(nullptr, nullptr);
+            check(job && AssignProcessToJobObject(job, GetCurrentProcess()),
+                  "contained native sampler fixture enters a job");
+            const auto contained = platform->get_memory_budget();
+            check(contained.containment == "windows-job-unqualified" && !contained.available_bytes(),
+                  "a later job transition invalidates previously known headroom");
+            if (job) CloseHandle(job);
+        }
+#elif defined(__APPLE__)
+        struct rlimit original{};
+        const bool sampled = getrlimit(RLIMIT_DATA, &original) == 0;
+        check(sampled, "macOS process data limit can be observed");
+        if (sampled) {
+            auto finite = original;
+            finite.rlim_cur = original.rlim_cur == RLIM_INFINITY
+                ? static_cast<rlim_t>(64ULL * 1024 * 1024 * 1024) : original.rlim_cur;
+            check(setrlimit(RLIMIT_DATA, &finite) == 0, "macOS finite-limit fixture activates");
+            const auto contained = platform->get_memory_budget();
+            check(!contained.available_bytes() && contained.containment == "macos-process-limit-unqualified",
+                  "finite process limits never become unlimited host capacity");
+            check(setrlimit(RLIMIT_DATA, &original) == 0, "macOS process data limit is restored");
+        }
+#endif
     }
     std::printf("Memory budget checks: %d checks, %d failures\n", checks, failed);
     return failed ? 1 : 0;

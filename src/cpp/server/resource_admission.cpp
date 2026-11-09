@@ -279,7 +279,10 @@ void ResourceAdmission::configure(const json& config, std::function<void()> publ
         aggregate.work.operation = Operation::Ingress;
         aggregate.priority = "essential";
         aggregate.costs = state_->reserved();
-        if (state_->capacity(aggregate, pools, false) != State::Capacity::Available)
+        const auto capacity = state_->capacity(aggregate, pools, false);
+        if (capacity == State::Capacity::Unknown)
+            throw AdmissionError("ingress_memory_unknown", "Current input memory headroom cannot be measured", 503);
+        if (capacity != State::Capacity::Available)
             throw AdmissionError("admission_configuration_busy", "Active input memory does not fit the proposed host pool", 409);
         aggregate.priority = "interactive";
         aggregate.costs.clear();

@@ -437,3 +437,34 @@ Production startup remains nonblocking. These checks do not establish network
 filesystem locking, whole-store backup consistency or host-crash durability.
 External model/snapshot directories, older nonparticipating binaries, and backend,
 helper, device or remote writes still require their P1 maintenance/termination gates.
+
+
+Router host admission and CPU/NPU automatic sizing consume the native
+SystemMetricsPlatform memory budget. GPU discovery metadata no longer supplies
+CPU capacity. Linux retains the existing MemAvailable and visible cgroup hierarchy
+reader. Windows samples physical, current-process commit and address-space
+headroom through GlobalMemoryStatusEx. A failed sample or job-membership query
+keeps headroom unknown. Windows job membership is explicitly unqualified because
+an immediate-job query does not establish all ancestor limits. The sampler does
+not infer unlimited jobs from host capacity.
+
+macOS samples raw Mach free pages with the native page size and physical total.
+It conservatively excludes inactive and compressed memory from admission headroom.
+Finite or unreadable process address/data limits keep headroom unknown. Display
+memory totals and usage remain separate from this available-byte contract.
+
+A protected configuration update with unknown live input headroom returns503
+`ingress_memory_unknown` and preserves its committed mode and revision. Known
+exhaustion retains its capacity/conflict errors. A configured ceiling cannot
+replace an unknown native sample. HTTP acceptance records the native sample and
+whether positive protected cases ran. Unqualified native containment requires
+actual unknown-memory rejection across native and gateway body routes. All hosts
+also test an explicitly unknown configured pool after restart. This is containment,
+not successful Windows-job or finite-limit service qualification.
+
+The source contracts are documented in
+[MEMORYSTATUSEX](https://learn.microsoft.com/en-us/windows/win32/api/sysinfoapi/ns-sysinfoapi-memorystatusex),
+[IsProcessInJob](https://learn.microsoft.com/en-us/windows/win32/api/jobapi/nf-jobapi-isprocessinjob),
+[Windows nested jobs](https://learn.microsoft.com/en-us/windows/win32/procthread/nested-jobs),
+and Apple's [Mach page counters](https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/mach/vm_statistics.h).
+These references do not establish local platform execution or latency qualification.

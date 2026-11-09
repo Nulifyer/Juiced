@@ -109,13 +109,8 @@ Router::Router(RuntimeConfig* config, ModelManager* model_manager, BackendManage
     : config_(config), model_manager_(model_manager), backend_manager_(backend_manager),
       admission_(headroom ? std::move(headroom) : [](const std::string& pool) -> std::optional<uint64_t> {
           if (pool != "host") return std::nullopt;
-#ifdef __linux__
-          return read_linux_memory_budget().available_bytes();
-#else
-          bool known = false;
-          const auto available = get_available_memory_gb(DEVICE_CPU, GpuMemoryVendor::Any, "", nullptr, &known);
-          return known ? std::optional<uint64_t>(static_cast<uint64_t>(std::max(0.0, available) * 1073741824.0)) : std::nullopt;
-#endif
+          auto metrics = create_metrics_platform();
+          return metrics ? metrics->get_memory_budget().available_bytes() : std::nullopt;
       }) {
     admission_.configure(config_->snapshot().value("admission", json::object()));
     if (model_manager_) model_manager_->set_resource_admission(admission_);

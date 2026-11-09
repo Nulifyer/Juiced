@@ -358,6 +358,15 @@ int main() {
         available.reset();
         check(error([&] { inputs.acquire_ingress(1); }, "ingress_memory_unknown"),
               "unknown sampled memory never becomes free input capacity");
+        inputs.configure(json::object());
+        auto legacy_body = inputs.acquire_ingress(1, true);
+        const auto old_revision = inputs.snapshot()["configuration_revision"];
+        check(error([&] { inputs.configure(bounds); }, "ingress_memory_unknown"),
+              "configuration activation distinguishes unknown input headroom from known exhaustion");
+        check(inputs.snapshot()["mode"] == "legacy" &&
+              inputs.snapshot()["configuration_revision"] == old_revision,
+              "unknown memory activation preserves the committed mode and revision");
+        legacy_body = {};
         available = 400000;
         auto unknown = bounds; unknown["pools"]["host"]["capacity_bytes"] = nullptr;
         inputs.configure(unknown);

@@ -95,10 +95,9 @@ inline double get_available_memory_gb(DeviceType device_type,
                                       bool* memory_known_out = nullptr) {
     if (unified_gpu_out) *unified_gpu_out = false;
     if (memory_known_out) *memory_known_out = false;
-    auto si = create_system_info();
-
     // GPU recipes: use VRAM
     if (device_type & DEVICE_GPU) {
+        auto si = create_system_info();
         auto amd_igpu = si->get_amd_igpu_device();
         auto amd_dgpus = si->get_amd_dgpu_devices();
         auto nvidia_gpus = si->get_nvidia_gpu_devices();
@@ -158,57 +157,11 @@ inline double get_available_memory_gb(DeviceType device_type,
 
     }
 
-    // CPU / NPU: use system RAM
-#ifdef __linux__
-    const auto memory = read_linux_memory_budget().available_bytes();
+    auto metrics = create_metrics_platform();
+    const auto memory = metrics ? metrics->get_memory_budget().available_bytes() : std::nullopt;
     if (!memory) return 0.0;
     if (memory_known_out) *memory_known_out = true;
     return *memory / BYTES_PER_GIB;
-#else
-    const double used_gb = get_used_memory_gb(device_type);
-    // Apple Silicon: the full unified-memory pool (total physical RAM) is reported
-    // as virtual_gb on the Apple Silicon device.
-    auto apple = si->get_apple_silicon_device();
-    if (apple.available && apple.virtual_gb > 0) {
-        if (memory_known_out) *memory_known_out = true;
-        double available = (std::max)(0.0, apple.virtual_gb - used_gb);
-        LOG(DEBUG, "AutoTune") << "get_available_memory_gb: CPU/NPU (Apple Silicon unified) total="
-                               << std::fixed << std::setprecision(2) << apple.virtual_gb
-                               << " GB, used=" << used_gb
-                               << " GB → " << available << " GB available"  << " ";
-        return available;
-    }
-
-    // On unified-memory systems (APU), the iGPU vram_gb + virtual_gb approximates system RAM
-    auto amd_igpu = si->get_amd_igpu_device();
-    if (amd_igpu.available && amd_igpu.vram_gb > 0) {
-        if (memory_known_out) *memory_known_out = true;
-        double total_gb = amd_igpu.vram_gb + amd_igpu.virtual_gb;
-        double available = (std::max)(0.0, total_gb - used_gb);
-        LOG(DEBUG, "AutoTune") << "get_available_memory_gb: CPU/NPU (AMD iGPU proxy) total="
-                               << std::fixed << std::setprecision(2) << total_gb
-                               << " GB, used=" << used_gb
-                               << " GB → " << available << " GB available"  << " ";
-        return available;
-    }
-
-    // Try to get system RAM from dGPU virtual memory (GTT) as a proxy
-    auto amd_dgpus = si->get_amd_dgpu_devices();
-    for (const auto& gpu : amd_dgpus) {
-        if (gpu.available && gpu.virtual_gb > 0) {
-            if (memory_known_out) *memory_known_out = true;
-            double available = (std::max)(0.0, gpu.virtual_gb - used_gb);
-            LOG(DEBUG, "AutoTune") << "get_available_memory_gb: CPU/NPU (AMD dGPU GTT proxy) total="
-                                   << std::fixed << std::setprecision(2) << gpu.virtual_gb
-                                   << " GB, used=" << used_gb
-                                   << " GB → " << available << " GB available"  << " ";
-            return available;
-        }
-    }
-
-    LOG(DEBUG, "AutoTune") << "get_available_memory_gb: could not determine memory, returning 0.0";
-    return 0.0;  // Could not determine
-#endif
 }
 inline int64_t compute_auto_context_size(const ModelInfo& model_info,
                                           double available_memory_gb,

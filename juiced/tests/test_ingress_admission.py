@@ -20,6 +20,7 @@ PREFIXES = ("/api/v0/", "/api/v1/", "/v0/", "/v1/")
 def run(binary, output):
     assertions = []
     observations = {}
+    completed = False
 
     def check(condition, label):
         assertions.append({"check": label, "passed": bool(condition)})
@@ -228,6 +229,17 @@ def run(binary, output):
                 "exact 8 MiB import chunk remains supported",
             )
             check(wait_empty(), "completed maximum chunk releases ingress charge")
+            native_memory = request("/v1/system-stats")[1]["memory_budget"]
+            observations["native_memory"] = native_memory
+            host_qualified = native_memory["available_bytes"] is not None
+            if not host_qualified:
+                check(
+                    native_memory["containment"]
+                    in ("windows-job-unqualified", "macos-process-limit-unqualified")
+                    and native_memory["visible_constraints_complete"] is False,
+                    "unqualified host has an explicit native containment reason",
+                )
+            observations["protected_positive_qualified"] = host_qualified
             observations["before_protected_activation"] = request(
                 "/v1/juiced/admission"
             )[1]
@@ -244,29 +256,48 @@ def run(binary, output):
                 "status": code,
                 "response": activation,
             }
-            check(
-                code == 200,
-                "bounded settings request can publish compatible admission configuration",
-            )
-            for prefix in PREFIXES:
-                for operation, body in (
-                    ("start", {"filename": "denied.gguf", "size": 24}),
-                    ("finish", {"id": job["id"]}),
-                    ("server", {"path": "/library/denied.gguf"}),
-                ):
-                    code, result = request(prefix + "juiced/import/" + operation, body)
-                    check(
-                        code == 503
-                        and result["error"]["code"] == "operation_unqualified",
-                        prefix + "import " + operation + " rejects before mutation",
-                    )
-            code, result = request(
-                "/v1/juiced/import/chunk?id=" + job["id"] + "&offset=0", b"x", raw=True
-            )
-            check(
-                code == 503 and result["error"]["code"] == "operation_unqualified",
-                "protected chunk rejection preserves upload",
-            )
+            if host_qualified:
+                check(
+                    code == 200,
+                    "bounded settings request can publish compatible admission configuration",
+                )
+                for prefix in PREFIXES:
+                    for operation, body in (
+                        ("start", {"filename": "denied.gguf", "size": 24}),
+                        ("finish", {"id": job["id"]}),
+                        ("server", {"path": "/library/denied.gguf"}),
+                    ):
+                        code, result = request(
+                            prefix + "juiced/import/" + operation, body
+                        )
+                        check(
+                            code == 503
+                            and result["error"]["code"] == "operation_unqualified",
+                            prefix + "import " + operation + " rejects before mutation",
+                        )
+                code, result = request(
+                    "/v1/juiced/import/chunk?id=" + job["id"] + "&offset=0",
+                    b"x",
+                    raw=True,
+                )
+                check(
+                    code == 503 and result["error"]["code"] == "operation_unqualified",
+                    "protected chunk rejection preserves upload",
+                )
+            else:
+                check(
+                    code == 503
+                    and activation["error"]["details"]["code"]
+                    == "ingress_memory_unknown",
+                    "unknown host rejects activation with its typed memory error",
+                )
+                check(
+                    json.loads((root / "config/config.json").read_text())[
+                        "admission"
+                    ].get("mode", "legacy")
+                    == "legacy",
+                    "failed memory qualification preserves committed legacy configuration",
+                )
             request(
                 "/internal/set",
                 {"admission": {"ingress": config["admission"]["ingress"]}},
@@ -286,14 +317,15 @@ def run(binary, output):
                 "/internal/set",
                 {
                     "admission": {
-                        "mode": "protected",
+                        "mode": "protected" if host_qualified else "legacy",
                         "ingress": config["admission"]["ingress"],
                     }
                 },
             )
             code, _ = request("/v1/juiced/import/cancel", {"id": job["id"]})
             check(
-                code == 200, "cleanup cancellation remains available in protected mode"
+                code == 200,
+                "cleanup cancellation remains available in the accepted mode",
             )
             check(
                 not (root / "config/juiced/imports" / (job["id"] + ".part")).exists(),
@@ -366,66 +398,142 @@ def run(binary, output):
                 wait_empty(),
                 "structural rejection and raw chunk completion release byte ownership",
             )
-            memory_settings = {
-                "mode": "protected",
-                "pools": {
+            if host_qualified:
+                memory_settings = {
+                    "mode": "protected",
+                    "pools": {
+                        "host": {
+                            "capacity_bytes": 4 * 1024 * 1024,
+                            "essential_headroom_bytes": 1024 * 1024,
+                            "source": "controlled HTTP input-memory fixture",
+                        }
+                    },
+                }
+                code, _ = request("/internal/set", {"admission": memory_settings})
+                check(
+                    code == 200,
+                    "protected host ceiling activates with compatible input ownership",
+                )
+                connection, response = pending("/v1/chat/completions", 10000)
+                check(
+                    b"429" in response.split(b"\r\n")[0],
+                    "physical host exhaustion rejects before body transmission",
+                )
+                connection.close()
+                check(wait_empty(), "physical rejection leaves no partial claim")
+                connection, response = pending("/v1/chat/completions", 2000)
+                check(
+                    response.startswith(b"HTTP/1.1 100"),
+                    "smaller input fits the host pool",
+                )
+                observed = request("/v1/juiced/admission")[1]
+                check(
+                    observed["pools"]["host"]["reserved_bytes"]
+                    == observed["ingress"]["reserved_host_bytes"]
+                    and observed["ingress"]["reserved_host_bytes"] > 2000,
+                    "HTTP input and model accounting expose one shared host charge",
+                )
+                code, result = request(
+                    "/internal/set",
+                    {
+                        "admission": {
+                            **memory_settings,
+                            "pools": {
+                                "host": {
+                                    "capacity_bytes": 500000,
+                                    "source": "too small for the live request",
+                                }
+                            },
+                        }
+                    },
+                )
+                check(
+                    code == 409
+                    and result["error"]["details"]["code"]
+                    == "admission_configuration_busy",
+                    "configuration cannot drop a live physical input charge",
+                )
+                check(
+                    request("/v1/juiced/admission", {"paused": True})[0] == 200,
+                    "bounded controls remain usable beside a charged ordinary input",
+                )
+                connection.close()
+                check(wait_empty(), "failed local read releases physical host memory")
+                request("/v1/juiced/admission", {"paused": False})
+            request("/internal/shutdown", {})
+            check(
+                process.wait(timeout=20) == 0,
+                "manager drains before unknown-memory containment test",
+            )
+            config["admission"]["mode"] = "protected"
+            if host_qualified:
+                config["admission"]["pools"] = {
                     "host": {
-                        "capacity_bytes": 4 * 1024 * 1024,
-                        "essential_headroom_bytes": 1024 * 1024,
-                        "source": "controlled HTTP input-memory fixture",
+                        "capacity_bytes": None,
+                        "source": "explicit unknown HTTP fixture",
                     }
-                },
-            }
-            code, _ = request("/internal/set", {"admission": memory_settings})
-            check(
-                code == 200,
-                "protected host ceiling activates with compatible input ownership",
+                }
+            observations["unknown_memory_cause"] = (
+                "configured-host-capacity" if host_qualified else "native-containment"
             )
-            connection, response = pending("/v1/chat/completions", 10000)
-            check(
-                b"429" in response.split(b"\r\n")[0],
-                "physical host exhaustion rejects before body transmission",
+            (root / "config/config.json").write_text(json.dumps(config))
+            process = subprocess.Popen(
+                [
+                    str(binary),
+                    str(root / "cache"),
+                    str(root / "config"),
+                    "--host",
+                    "127.0.0.1",
+                    "--port",
+                    str(port),
+                ],
+                stdout=log,
+                stderr=log,
+                env=env,
             )
-            connection.close()
-            check(wait_empty(), "physical rejection leaves no partial claim")
-            connection, response = pending("/v1/chat/completions", 2000)
-            check(
-                response.startswith(b"HTTP/1.1 100"), "smaller input fits the host pool"
-            )
-            observed = request("/v1/juiced/admission")[1]
-            check(
-                observed["pools"]["host"]["reserved_bytes"]
-                == observed["ingress"]["reserved_host_bytes"]
-                and observed["ingress"]["reserved_host_bytes"] > 2000,
-                "HTTP input and model accounting expose one shared host charge",
-            )
-            code, result = request(
+            until = time.monotonic() + 15
+            while True:
+                try:
+                    if request("/v1/health")[0] == 200:
+                        break
+                except OSError:
+                    pass
+                if process.poll() is not None or time.monotonic() >= until:
+                    raise AssertionError(
+                        "protected unknown-memory manager did not start"
+                    )
+                time.sleep(0.05)
+            for path in [prefix + "chat/completions" for prefix in PREFIXES] + [
+                "/api/chat",
+                "/v1/messages",
+                "/mcp",
+                "/sdapi/v1/txt2img",
                 "/internal/set",
-                {
-                    "admission": {
-                        **memory_settings,
-                        "pools": {
-                            "host": {
-                                "capacity_bytes": 500000,
-                                "source": "too small for the live request",
-                            }
-                        },
-                    }
-                },
+            ]:
+                connection, response = pending(path, 2)
+                check(
+                    b"503" in response.split(b"\r\n")[0],
+                    path + "rejects unknown memory before body or100 continue",
+                )
+                connection.close()
+                code, result = request(path, {})
+                check(
+                    code == 503 and result["error"]["code"] == "ingress_memory_unknown",
+                    path
+                    + "rejects body dispatch when native host constraints are unqualified",
+                )
+            check(
+                state()["active"] == 0,
+                "unknown-memory rejection retains no input claims",
             )
             check(
-                code == 409
-                and result["error"]["details"]["code"]
-                == "admission_configuration_busy",
-                "configuration cannot drop a live physical input charge",
+                json.loads((root / "config/config.json").read_text())["admission"][
+                    "mode"
+                ]
+                == "protected",
+                "rejected settings body cannot bypass protected unknown-memory policy",
             )
-            check(
-                request("/v1/juiced/admission", {"paused": True})[0] == 200,
-                "bounded controls remain usable beside a charged ordinary input",
-            )
-            connection.close()
-            check(wait_empty(), "failed local read releases physical host memory")
-            request("/v1/juiced/admission", {"paused": False})
+            completed = True
 
         finally:
             for connection in connections:
@@ -442,6 +550,7 @@ def run(binary, output):
                     {
                         "checks": assertions,
                         "observations": observations,
+                        "completed": completed,
                         "scope": "Model-free local HTTP body/import acceptance",
                         "server_exit": process.returncode,
                     },
@@ -449,7 +558,7 @@ def run(binary, output):
                 )
                 + "\n"
             )
-            if not all(item["passed"] for item in assertions):
+            if not completed:
                 output.with_suffix(".server.log").write_text(
                     (root / "server.log").read_text()
                 )
