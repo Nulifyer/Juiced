@@ -8,7 +8,7 @@ export const test = base.extend<{ runtime: any }>({
     const state = {
       stats: { tokens_per_second: 35, time_to_first_token: .25, input_tokens: 12, output_tokens: 32, cache_tokens: 2, request_count_total: 2, live: { active_requests: 0, generating_requests: 0, estimated_tokens_per_second: 0 } },
       preparedArtifacts: [{id: 'a'.repeat(64), bytes: 4096, quant: 'Q5_K_M', models: [modelId], removable: false}, {id: 'b'.repeat(64), bytes: 2048, quant: 'Q4_K_M', models: [], removable: true}],
-      existingPrepared: false, executionSelected: 'registered', preparationJobs: {} as Record<string, any>,
+      executionSelected: 'registered', preparationJobs: {} as Record<string, any>,
       saved: { ctx_size: 8192, llamacpp_args: '--parallel 2', llamacpp_backend: 'cpu' } as Record<string, any>,
       running: { ctx_size: 4096, llamacpp_args: '--parallel 2', llamacpp_backend: 'cpu' },
       defaults: { ctx_size: 4096, llamacpp_args: '', llamacpp_backend: 'cpu' },
@@ -62,11 +62,10 @@ export const test = base.extend<{ runtime: any }>({
         if (body) {
           if (body.action === 'delete_cache') { state.preparedArtifacts = state.preparedArtifacts.filter(a => a.id !== body.id); return reply({removed: true}); }
           if (body.action === 'cancel') { state.preparationJobs[body.id].pending = false; state.preparationJobs[body.id].phase = 'cancelled'; return reply({ accepted: true }); }
-          const job = { id: 'prepare-1', model: modelId, name: 'Ornith-1.5-35B-A3B-GGUF-' + body.quant, phase: 'quantizing', pending: true };
-          state.preparationJobs[job.id] = job; return reply(job, 202);
+          return reply({error:{code:'feature_retired',message:'Find an existing published variant in Library'}},410);
         }
         if (new URL(request.url()).searchParams.has('cache')) return reply({artifacts: state.preparedArtifacts});
-        if (new URL(request.url()).searchParams.has('model')) return reply({ compatible: true, tools_ready: true, changes: ['Requantizing adds numerical error. Higher bit counts cannot restore lost precision.'], targets: ['Q4_K_M', 'Q5_K_M', 'Q6_K', 'Q8_0'].map(quant => ({ quant, name: 'Ornith-1.5-35B-A3B-GGUF-' + quant, exists: state.existingPrepared && quant === 'Q4_K_M' })) });
+        if (new URL(request.url()).searchParams.has('model')) return reply({error:{code:'feature_retired'}},410);
         return reply({ jobs: state.preparationJobs });
       }
       if (path === 'juiced/devices') return reply({ devices: [{ id: 'Vulkan0', name: 'AMD Radeon 890M Graphics' }] });

@@ -17,7 +17,7 @@ comparing controls with a tagged release.
 - [Choose a runtime and hardware](guide/runtimes.md)
 - [Set loading policies](guide/loading-policy.md)
 - [Change model settings](guide/settings.md)
-- [Prepare another quant](guide/preparation.md)
+- [Choose a published variant](guide/variants.md)
 - [Manage prompt cache and storage](guide/cache.md)
 
 ## Use and check services

@@ -41,13 +41,6 @@ type Plan = {
   };
   activity_error?: string;
 };
-type Preparation = {
-  compatible: boolean;
-  reason: string;
-  tools_ready: boolean;
-  changes: string[];
-  targets: { quant: string; name: string; exists?: boolean }[];
-};
 type Job = {
   id: string;
   model: string;
@@ -62,18 +55,15 @@ export function ExecutionProfiles({
   dirty,
   refresh,
   onChanged,
-  onFindPrepared,
-  onVariant,
+  onFindVariant,
 }: {
   model: Model;
   dirty: boolean;
   refresh: () => Promise<void>;
   onChanged: () => void;
-  onFindPrepared: (runtime: string) => void;
-  onVariant: (name: string) => void;
+  onFindVariant: (runtime: string) => void;
 }) {
-  const [plan, setPlan] = useState<Plan>(),
-    [preparation, setPreparation] = useState<Preparation>();
+  const [plan, setPlan] = useState<Plan>();
   const [targetId, setTargetId] = useState(""),
     [acknowledge, setAcknowledge] = useState(false);
   const [hybridMemory, setHybridMemory] = useState(2048),
@@ -82,8 +72,6 @@ export function ExecutionProfiles({
     [device, setDevice] = useState("");
   const [devices, setDevices] = useState<{ id: string; name: string }[]>([]),
     [deviceError, setDeviceError] = useState("");
-  const [quant, setQuant] = useState("Q6_K"),
-    [prepareAcknowledged, setPrepareAcknowledged] = useState(false);
   const [output, setOutput] = useState<string | null>(null);
   const [jobs, setJobs] = useState<Job[]>([]),
     [error, setError] = useState("");
@@ -94,23 +82,14 @@ export function ExecutionProfiles({
   useEffect(() => {
     const controller = new AbortController();
     setPlan(undefined);
-    setPreparation(undefined);
     setError("");
-    void Promise.all([
-      api<Plan>(
-        `juiced/execution?model=${encodeURIComponent(model.id)}`,
-        undefined,
-        controller.signal,
-      ),
-      api<Preparation>(
-        `juiced/preparation?model=${encodeURIComponent(model.id)}`,
-        undefined,
-        controller.signal,
-      ),
-    ])
-      .then(([execution, conversion]) => {
+    void api<Plan>(
+      `juiced/execution?model=${encodeURIComponent(model.id)}`,
+      undefined,
+      controller.signal,
+    ).then((execution) => {
+        if (controller.signal.aborted) return;
         setPlan(execution);
-        setPreparation(conversion);
         setTargetId(execution.selected);
         setAcknowledge(false);
         setError("");
@@ -230,36 +209,16 @@ export function ExecutionProfiles({
       setBusy(false);
     }
   }
-  async function prepare() {
-    setBusy(true);
-    setError("");
-    setMessage("");
-    try {
-      const job = await api<Job>("juiced/preparation", {
-        model: model.id,
-        quant,
-        acknowledge: prepareAcknowledged,
-      });
-      setJobs((current) => [job, ...current]);
-      setPrepareAcknowledged(false);
-      setMessage("Preparation queued. The new variant will start Disabled.");
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  }
   async function showOutput(id: string) {
     try {
       const result = await api<{ output?: string }>(
         `juiced/preparation?id=${encodeURIComponent(id)}`,
       );
-      setOutput(result.output || "No converter output yet.");
+      setOutput(result.output || "No retained output.");
     } catch (e) {
       setError((e as Error).message);
     }
   }
-  const preparedTarget = preparation?.targets.find((t) => t.quant === quant);
   const risks = !!target && (target.experimental || target.changes.length > 0);
   return (
     <div className="execution-profiles">
@@ -477,9 +436,9 @@ export function ExecutionProfiles({
                   </Button>
                   <Button
                     variant="ghost"
-                    onClick={() => onFindPrepared(target.recipe)}
+                    onClick={() => onFindVariant(target.recipe)}
                   >
-                    Find a prepared version
+                    Find a published variant
                   </Button>
                 </div>
                 {plan.activity && (
@@ -517,88 +476,10 @@ export function ExecutionProfiles({
           </>
         )}
       </section>
-      <section className="profile-section" aria-label="Prepare a variant">
-        <div className="profile-title">
-          <h3>Prepare a variant</h3>
-          <HelpTip label="Local preparation">
-            Source weights remain unchanged. Cached copies use source, companion
-            and tool hashes. Tensor structure is checked before registration;
-            inference still needs testing. Higher-bit output cannot restore
-            precision already lost.
-          </HelpTip>
+      {jobs.length > 0 && <section className="profile-section" aria-label="Previous conversion jobs">
+        <div className="profile-title"><h3>Previous conversion jobs</h3>
+          <HelpTip label="Previous conversion jobs">Juiced no longer creates converted or quantized copies. Existing records and unresolved cleanup remain available. Cancellation is a request, not proof that a writer stopped.</HelpTip>
         </div>
-        {preparation &&
-          (preparation.compatible ? (
-            <>
-              <div className="preparation-target">
-                <label>
-                  <span className="field-label">Quantization</span>
-                  <SelectField
-                    label="Preparation quantization"
-                    value={quant}
-                    options={preparation.targets.map((t) => ({
-                      value: t.quant,
-                      label: t.quant,
-                      description: t.exists ? "Available" : undefined,
-                    }))}
-                    onValueChange={(value) => {
-                      setQuant(value);
-                      setPrepareAcknowledged(false);
-                    }}
-                  />
-                </label>
-                <span>
-                  {preparation.targets.find((t) => t.quant === quant)?.name}
-                </span>
-              </div>
-              {!preparedTarget?.exists && (
-                <>
-                  <div className="profile-warning">
-                    {preparation.changes.map((change) => (
-                      <p key={change}>{change}</p>
-                    ))}
-                    <label className="check">
-                      <input
-                        type="checkbox"
-                        checked={prepareAcknowledged}
-                        onChange={(e) =>
-                          setPrepareAcknowledged(e.target.checked)
-                        }
-                      />
-                      I accept the precision changes and separate disk use
-                    </label>
-                  </div>
-                </>
-              )}
-              {!preparation.tools_ready && (
-                <p className="inline-error">
-                  Preparation tools are not installed in this server image.
-                </p>
-              )}
-              {preparedTarget?.exists ? (
-                <Button
-                  variant="outline"
-                  onClick={() => onVariant(preparedTarget.name)}
-                >
-                  Open existing variant
-                </Button>
-              ) : (
-                <>
-                  <Button
-                    variant="outline"
-                    disabled={
-                      busy || !preparation.tools_ready || !prepareAcknowledged
-                    }
-                    onClick={() => void prepare()}
-                  >
-                    Prepare GGUF
-                  </Button>
-                </>
-              )}
-            </>
-          ) : (
-            <p className="profile-reason">{preparation.reason}</p>
-          ))}
         {jobs.length > 0 && (
           <div className="preparation-jobs" aria-label="Preparation jobs">
             {jobs.slice(0, 12).map((job) => (
@@ -608,9 +489,7 @@ export function ExecutionProfiles({
                   <small role="status">
                     {job.phase}
                     {job.cached ? " · reused cached output" : ""}
-                    {job.phase === "complete"
-                      ? " · Disabled · ready for your test"
-                      : ""}
+                    {job.phase === "complete" ? " · historical completion" : ""}
                   </small>
                   {job.error && (
                     <small className="inline-error">{job.error}</small>
@@ -641,7 +520,7 @@ export function ExecutionProfiles({
             ))}
           </div>
         )}
-      </section>
+      </section>}
       <Dialog.Root
         open={output !== null}
         onOpenChange={(open) => {
@@ -651,7 +530,7 @@ export function ExecutionProfiles({
         <Dialog.Portal>
           <Dialog.Backdrop className="modal-backdrop" />
           <Dialog.Popup className="modal preparation-output">
-            <Dialog.Title>Preparation output</Dialog.Title>
+            <Dialog.Title>Previous conversion output</Dialog.Title>
             <pre>{output}</pre>
             <Dialog.Close render={<Button variant="outline" />}>
               Close

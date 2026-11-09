@@ -430,7 +430,7 @@ export default function App() {
             setRemovalRequested(false);
             setInspected(m);
           }}
-          onFindPrepared={(model, runtime) => {
+          onFindVariant={(model, runtime) => {
             setInspected(null);
             setAcquireRepo({ query: model.id.replace(/[-_](?:IQ[0-9][A-Z0-9_]*|Q[0-9][A-Z0-9_]*|GGUF)$/ig, ""), runtime });
             setLibraryTab("discover"); setScreen("library");

@@ -146,7 +146,7 @@ export function CacheWorkspace({
         </Button>
       </header>
       <nav className="workspace-tabs" aria-label="Cache views">
-        {[["snapshots", "Snapshots"], ["settings", "Storage policy"], ["overrides", "Model overrides"], ["prepared", "Prepared copies"]].map(([id, label]) => <button key={id} className={tab === id ? "active" : ""} aria-current={tab === id ? "page" : undefined} onClick={() => setTab(id)}>{label}{dirty && id !== "snapshots" ? " *" : ""}</button>)}
+        {[["snapshots", "Snapshots"], ["settings", "Storage policy"], ["overrides", "Model overrides"], ["prepared", "Retained weights"]].map(([id, label]) => <button key={id} className={tab === id ? "active" : ""} aria-current={tab === id ? "page" : undefined} onClick={() => setTab(id)}>{label}{dirty && id !== "snapshots" ? " *" : ""}</button>)}
       </nav>
       {tab === "prepared" && <PreparedCopies />}
       <div className="cache-layout" hidden={tab === "prepared"}>

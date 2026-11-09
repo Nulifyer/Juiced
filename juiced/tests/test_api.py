@@ -55,10 +55,12 @@ class ApiContract(unittest.TestCase):
    targets={t['id']:t for t in plan['profiles']};self.assertTrue(targets['llamacpp:cpu']['compatible']);self.assertTrue(targets['llamacpp:cpu']['reuse'])
    self.assertIn('llamacpp:hybrid-rocm',targets);self.assertTrue(targets['llamacpp:hybrid-rocm']['changes'])
    self.assertTrue(any(t['recipe']=='vllm' for t in plan['profiles']))
-   status,prepare=self.request(prefix+'juiced/preparation?model='+model);self.assertEqual(status,200);self.assertTrue(prepare['compatible']);self.assertEqual(prepare['source_format'],'gguf')
-   self.assertEqual([t['name'] for t in prepare['targets']],['ZZExecution-Q4_K_M','ZZExecution-Q5_K_M','ZZExecution-Q6_K','ZZExecution-Q8_0'])
+   status,prepare=self.request(prefix+'juiced/preparation?model='+model);self.assertEqual(status,410);self.assertEqual(prepare['error']['code'],'feature_retired')
+   for action in ['', 'plan', 'start', 'resume', 'convert', 'quantize']:
+    status,error=self.request(prefix+'juiced/preparation',{'action':action,'model':model,'quant':'Q4_K_M','acknowledge':True});self.assertEqual(status,410,error);self.assertEqual(error['error']['code'],'feature_retired')
+   status,legacy=self.request(prefix+'juiced/preparation');self.assertEqual(status,200);self.assertTrue(legacy['retired']);self.assertEqual(legacy['jobs'],{})
   self.assertEqual(self.request('juiced/execution',{'model':model,'profile':'missing'})[0],400)
-  self.assertEqual(self.request('juiced/preparation',{'model':model,'quant':'Q4_K_M','acknowledge':False})[0],400)
+  self.assertEqual(self.request('juiced/preparation',{'model':model,'quant':'Q4_K_M','acknowledge':False})[0],410)
   self.assertEqual(self.request('juiced/preparation',{'action':'cancel','id':'../../outside'})[0],400)
   status,_=self.request('juiced/execution',{'model':model,'profile':'llamacpp:cpu'});self.assertEqual(status,202)
   for _ in range(100):
@@ -94,11 +96,9 @@ class ApiContract(unittest.TestCase):
   _,options=self.request('models/'+model+'/options');self.assertEqual(options['effective']['ctx_size'],321)
   status,options=self.request('models/'+model+'/options',{'ctx_size':None});self.assertEqual(status,200)
   self.assertNotIn('ctx_size',options['saved']);self.assertNotEqual(options['effective']['ctx_size'],321)
- def test_multimodal_hf_plan_discloses_text_only_variants(self):
-  status,plan=self.request('juiced/preparation?model=Qwen3.5-Fixture-BF16');self.assertEqual(status,200)
-  self.assertTrue(plan['text_only']);self.assertEqual(plan['source_format'],'safetensors')
-  self.assertTrue(any('vision/audio tensors are omitted' in change for change in plan['changes']))
-  self.assertEqual(next(t['name'] for t in plan['targets'] if t['quant']=='Q6_K'),'Qwen3.5-Fixture-Text-Q6_K')
+ def test_conversion_retirement_includes_hf_and_unknown_models(self):
+  for model in ['Qwen3.5-Fixture-BF16','Missing-Fixture']:
+   status,error=self.request('juiced/preparation?model='+model);self.assertEqual(status,410);self.assertEqual(error['error']['code'],'feature_retired')
  def test_provider_uses_its_declared_backend_option(self):
   model='ZZImage-Variant';status,plan=self.request('juiced/execution?model='+model);self.assertEqual(status,200)
   self.assertTrue(any(t['id']=='sd-cpp:cpu' for t in plan['profiles']))

@@ -78,10 +78,7 @@ private:
     std::unique_ptr<ServerProcess> process;
     json outcome = json::object();
   };
-  std::deque<PreparationTask> preparation_pending_;
   std::unique_ptr<PreparationTask> preparation_active_;
-  std::function<std::unique_ptr<ServerProcess>()> preparation_process_factory_;
-  std::function<void()> preparation_admission_barrier_;
   std::set<std::string> preparation_cancelled_, prepared_cleanup_active_;
   std::unique_ptr<ServerProcess> voice_process_;
   ResourceAdmission::Lease voice_admission_;
@@ -129,7 +126,6 @@ private:
   void reconcile();
   void reconcile_voice();
   void compatibility_routes(httplib::Server &http);
-  json preparation_plan(const std::string& model);
   void preparation_api(const httplib::Request &, httplib::Response &);
   void preparation_run();
   bool finish_preparation_cleanup();

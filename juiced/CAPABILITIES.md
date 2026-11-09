@@ -63,7 +63,7 @@ It does not auto-enable/download a default in response to a model-service reques
 Generic native job creation and legacy graph resume return 501 in Juiced. Existing
 job records remain inspectable by an operator, deletable through the existing
 lifecycle and interrupted after restart. Nested `definition.steps`, top-level `steps`
-and alternative graph payloads do not run. The download and preparation controllers
+and alternative graph payloads do not run. The downloader and retained legacy cleanup owner
 remain separate fixed runtime operations. Additional fixed media jobs require a
 future qualified operation contract; this release does not supply a generic runner.
 

@@ -151,19 +151,40 @@ JuicedService::JuicedService(Server &server)
   if (!state_.contains("qualified_profiles"))
     state_["qualified_profiles"] = json::object();
   if (!state_.contains("preparations")) state_["preparations"] = json::object();
-  for (auto &[id, job] : state_["preparations"].items())
-    if (job.value("pending", false)) {
-      if (job.value("writer_state", "") == "queued") {
+  if (!state_["preparations"].is_object()) throw std::runtime_error("Malformed retained preparation inventory requires recovery");
+  const auto previous_preparations = state_["preparations"];
+  for (auto &[id, job] : state_["preparations"].items()) {
+    if (!job.is_object()) throw std::runtime_error("Malformed retained preparation record requires recovery");
+    const auto pending = job.find("pending");
+    const auto writer = job.find("writer_state");
+    const auto phase = job.find("phase");
+    const auto model = job.find("model");
+    const bool ambiguous = model == job.end() || !model->is_string() || model->get_ref<const std::string&>().empty() ||
+        pending == job.end() || !pending->is_boolean() ||
+        (writer != job.end() && (!writer->is_string() ||
+          (*writer != "queued" && *writer != "stopped" && *writer != "dispatching"))) ||
+        (*pending == false && ((writer != job.end() && *writer == "dispatching") ||
+          phase == job.end() || !phase->is_string() ||
+          (*phase != "complete" && *phase != "cancelled" && *phase != "failed" && *phase != "interrupted")));
+    if (ambiguous && !job.contains("recovery_record")) {
+      const auto original = job;
+      job["recovery_record"] = original;
+    }
+    if (ambiguous || job.value("pending", false)) {
+      if (!ambiguous && job.value("writer_state", "") == "queued" && !job.value("cleanup_pending", false)) {
         job["pending"] = false;
         job["phase"] = "interrupted";
       } else {
+        job["pending"] = true;
         job["phase"] = "cleanup-pending";
         job["cleanup_pending"] = true;
-        job["error"] = "Previous preparation writer termination is unconfirmed";
+        job["error"] = "Previous preparation writer termination is unconfirmed; recovery is required";
       }
     }
+  }
   if (!state_.contains("execution_trials")) state_["execution_trials"] = json::object();
   committed_state_ = state_;
+  if (state_["preparations"] != previous_preparations) persist_locked();
   std::vector<std::string> recovered;
   for (const auto &[name, trial] : state_["execution_trials"].items()) {
     try {
@@ -204,8 +225,6 @@ void JuicedService::stop() {
     worker_.join();
   if (preparation_worker_.joinable()) preparation_worker_.join();
   finish_preparation_cleanup();
-  std::deque<PreparationTask> unused;
-  { std::lock_guard<std::mutex> lock(mutex_); unused.swap(preparation_pending_); }
   finish_voice_cleanup();
 }
 JuicedService::json JuicedService::save_state_locked(json candidate) {

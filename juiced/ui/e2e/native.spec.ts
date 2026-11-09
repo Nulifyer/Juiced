@@ -46,10 +46,10 @@ test('actual container: save, reload, infer, inspect request metadata and restor
   }
 });
 
-test('actual container: runtime selection reloads and UI preparation creates a Disabled variant', async ({ page, request, baseURL }) => {
+test('actual container: runtime selection reloads while local conversion stays retired', async ({ page, request, baseURL }) => {
   test.setTimeout(180_000);
   expect(baseURL).toBe('http://127.0.0.1:18080');
-  const model = 'Stories15M-Q4_0', variant = 'Stories15M-Q6_K';
+  const model = 'Stories15M-Q4_0';
   const get = async (path: string) => { const response = await request.get('/v1/' + path); expect(response.ok()).toBeTruthy(); return response.json(); };
   const current = async () => (await get('juiced/catalog')).data.find((entry: any) => entry.id === model);
   await expect.poll(async () => { const value = await current(); return value.loaded && !value.operation?.pending; }).toBe(true);
@@ -62,12 +62,10 @@ test('actual container: runtime selection reloads and UI preparation creates a D
     await page.getByRole('option', { name: 'CPU', exact: true }).click();
     await page.getByRole('button', { name: 'Apply & reload' }).click();
     await expect.poll(async () => { const value = await current(); return value.execution_profile === 'llamacpp:cpu' && value.loaded && !value.operation?.pending; }, { timeout: 60_000 }).toBe(true);
-    await page.getByRole('checkbox', { name: 'I accept the precision changes and separate disk use' }).check();
-    await page.getByRole('button', { name: 'Prepare GGUF' }).click();
-    await expect.poll(async () => (await get('juiced/catalog')).data.some((entry: any) => entry.id === variant && entry.downloaded && !entry.loaded && entry.policy === 'disabled'), { timeout: 60_000 }).toBe(true);
-    await expect(page.getByRole('region', { name: 'Prepare a variant' })).toContainText('complete', { timeout: 10_000 });
-    expect((await get('models')).data.some((entry: any) => entry.id === variant)).toBe(false);
-    await page.screenshot({ path: 'test-results/native-runtime-preparation.png', fullPage: true });
+    await expect(page.getByRole('button', { name: 'Prepare GGUF' })).toHaveCount(0);
+    const rejected = await request.post('/v1/juiced/preparation', {data:{model,quant:'Q6_K',acknowledge:true}});
+    expect(rejected.status()).toBe(410); expect((await rejected.json()).error.code).toBe('feature_retired');
+    await page.screenshot({ path: 'test-results/native-runtime-variants.png', fullPage: true });
   } finally {
     const response = await request.post('/v1/juiced/execution', { data: { model, profile: original.selected, reload: true, acknowledge: true } });
     expect(response.ok()).toBeTruthy();

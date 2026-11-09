@@ -1,4 +1,4 @@
-# Model runtime profiles and preparation
+# Model runtime profiles and published variants
 
 Open a downloaded model and select **Runtime**. Choose a runtime provider, then
 its hardware variant. The server distinguishes file compatibility from package
@@ -21,44 +21,26 @@ GGUF. GPU availability still depends on the actual host, container permissions
 and installed runtime. A working GPU profile is not a promise that another
 runtime implements the same architecture, tokenizer or optional features.
 
-## Local preparation
+## Published variants
 
-**Prepare a variant** creates a separate model with its proper target quant name.
-New variants start Disabled. Enable them explicitly through loading policy.
-Supported initial routes are:
+Juiced acquires and serves already published model variants. It does not convert,
+quantize, requantize, repack, calibrate or export model weights. Select a compatible
+published artifact instead of creating one locally. Runtime arithmetic and KV
+cache precision are separate execution settings.
 
-| Input | Output | Conditions |
-| --- | --- | --- |
-| Llama/Qwen original floating-point HF snapshot | F16 intermediate → Q4_K_M/Q5_K_M/Q6_K/Q8_0 GGUF | Complete local safetensors, config and tokenizer; reviewed architecture adapter |
-| Compatible language/embedding/reranking GGUF | Q4_K_M/Q5_K_M/Q6_K/Q8_0 GGUF | Tensor names/shapes must remain identical |
-| Existing GGUF | Another llama.cpp hardware profile | Reuse directly; no preparation needed |
+Open **Library** to find the desired model family and inspect repository, revision,
+format, quant and required companion files. Keep the original registration when
+acquiring another quant. A higher-bit filename does not prove its source or quality,
+and a smaller download does not establish host fit. Check consuming-engine support,
+whole weight allocation, context/state/workspace cost and current resource use.
+See [choosing a published variant](../docs/guide/variants.md).
 
-Preparation never rewrites the source. Reducing bit depth adds quantization
-error; requantizing an already quantized source adds another approximation.
-Increasing the output bit count cannot recover discarded source precision.
-Floating-point input passes through F16. Changes are presented before starting.
-The worker refuses unhandled tensor omissions rather than quietly dropping them.
-Multimodal HF snapshots offer an explicit text-only conversion: the plan lists
-vision/audio loss and the derived name contains Text. A publisher GGUF with its
-companion projector retains those capabilities. Source MTP tensors must produce
-MTP metadata in the output, or preparation fails.
-
-The native manager supervises an offline CPU conversion subprocess. Its pinned
-Python environment, converter and CPU quantizer are built separately from the
-runtime image. No serving request runs in that Python process. No compiler, Git,
-package installer or GPU-enabled PyTorch is needed in the running container.
-
-Jobs expose hashing, converting, quantizing, validating and terminal phases,
-bounded converter output, errors and cancellation. Cancelling terminates the
-converter process group and removes staging files. Restarted active jobs become
-Interrupted. A source model cannot be removed while its preparation is pending.
-
-Cache keys include source/companion content hashes, recipe, target quant and tool
-identity. A cached artifact must pass its output checksum and tensor/data-range
-checks before reuse. Staged files are published atomically; structural validation
-does not claim inference correctness or output quality. The first real request
-remains a separate test. **Cache → Prepared copies** shows storage and references;
-only unreferenced copies can be reclaimed. Registered copies remain protected.
+Existing copies created by earlier Juiced versions remain registered and usable.
+**Cache > Retained weights** lists those artifacts and their references. Reclaim
+only unreferenced copies through the native reference owner. Previous conversion
+job records and bounded output remain inspectable, with cancellation/cleanup status.
+An unconfirmed previous writer remains quarantined and blocks unsafe deletion;
+requesting cancellation does not prove it stopped. No previous job is resumed.
 
 ## Runtime limits
 
@@ -69,20 +51,15 @@ GGUF. The pinned vLLM package does not support Ornith's qwen35moe GGUF importer;
 installing an unrelated newer plugin is not a valid engine/plugin qualification.
 That choice explains its restriction rather than pretending conversion solves it.
 
-Generic AWQ/GPTQ/ONNX/MLX/Q4NX round trips are not offered. Their tensor layouts,
-quantizers, calibration and model adapters differ. In particular, producing a
-Q4NX file is separate from registering a custom model with a compatible FLM
-engine. The upstream converter's geometry limits and possible MTP omissions need
-an explicit adapter and a matched custom-model loading contract before that
-route can become a usable execution profile. Original source weights remain the
-best input for future target-specific preparation.
+AWQ/GPTQ/ONNX/MLX/Q4NX and other published formats require a compatible consuming
+provider and exact architecture contract. Similar names or an available package
+are not proof of support. Juiced does not generate another format to work around
+an importer limitation.
 
-**Find a prepared version** opens model search with the model name and intended
-runtime. GGUF search can filter on that format; other runtime candidates require
-file inspection on the publisher site; the GGUF picker does not pretend to
-import arbitrary runtime packages. HF conversion needs an already complete,
-registered local snapshot. A repository name is not proof of backend compatibility or
-publisher equivalence. Juiced does not maintain an exhaustive equivalence map.
+**Find a published variant** opens Library search with the source model and
+requested runtime. File inspection is still required. The current GGUF acquisition
+picker does not claim to import arbitrary runtime packages. The complete unified
+Library suitability/acquisition flow remains P1 work.
 
 ## XDNA2 + ROCm
 
@@ -121,11 +98,12 @@ inventory and persists profiles; the UI does not invent support from filenames.
 `BackendSupport::requires_all_devices` declares hybrid device conjunctions.
 Variant-specific `effective_device` and `effective_slot_policy` participate in
 router admission before loading. Native backend installation owns pinned assets,
-checksums and process startup. Preparation recipes own offline transformations;
-the native model registry remains the sole model/weight identity owner.
+checksums and process startup. The native model registry remains the sole
+model/weight identity owner; Juiced has no model-weight producer.
 
-Execution/preparation management APIs use all four standard URL prefixes and the
+Execution and retained-artifact management APIs use all four standard URL prefixes and the
 server's existing authentication. `GET/POST juiced/execution` plans/selects;
-`GET/POST juiced/preparation` plans, queues, inspects/cancels jobs and manages
-prepared-copy cache. Downstream OpenAI/Ollama/Anthropic/Wyoming connections retain
+`GET juiced/preparation` inspects retained jobs; `?id=` reads bounded output and
+`?cache=1` lists retained artifacts. POST accepts only `cancel` and `delete_cache`.
+Producer planning/creation/resume returns HTTP410 `feature_retired`. Downstream OpenAI/Ollama/Anthropic/Wyoming connections retain
 their existing endpoints and model names.

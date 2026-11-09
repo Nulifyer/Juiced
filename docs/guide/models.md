@@ -1,7 +1,7 @@
 # Download or import models
 
 Add weights through **Library**, then enable the model when you are ready to use it.
-New downloads, imports, and prepared variants start **Disabled**.
+New downloads and imports start **Disabled**.
 
 ## Download from the catalog
 
@@ -64,8 +64,8 @@ separate registrations and can have different runtime settings and loading polic
 4. Check that the operation completes before reclaiming related storage.
 
 Do not manually remove shared weights or files mounted from an existing library.
-Other model registrations can use them. Preparation and runtime operations can
+Other model registrations can use them. Unresolved legacy writers and runtime operations can
 also hold references that block removal.
 
-See [prepare another quant](preparation.md) to create a separate variant while
-preserving the source.
+See [choose a published variant](variants.md) to acquire another compatible quant
+while preserving the original model.

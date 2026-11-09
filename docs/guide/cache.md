@@ -1,6 +1,6 @@
 # Manage cache and storage
 
-Use **Cache** to control saved prompt computation and prepared copies.
+Use **Cache** to control saved prompt computation and retained weights.
 Juiced does not store your client's conversation history.
 
 ## Choose a cache mode
@@ -58,9 +58,9 @@ Retained snapshots can prevent automatic reclamation. If the budget cannot
 accommodate protected state, inspect retention and free space rather than
 assuming that the configured budget guarantees every write will fit.
 
-## Reclaim prepared copies
+## Reclaim retained weights
 
-Open **Cache → Prepared copies**. Inspect references before reclaiming an unused
+Open **Cache > Retained weights**. Inspect references before reclaiming an unused
 copy. Registered or active artifacts can block reclamation. This inventory is
 separate from downloaded source weights and prompt snapshots.
 

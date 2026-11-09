@@ -55,7 +55,7 @@ jobs:
         if: runner.os == 'Windows'
         run: cmake --build build --config Release --target LemonadeServer
       - name: Verify native contracts
-        run: ctest --test-dir build -C Release --output-on-failure -R "^(LaunchCommandTest|ProcessExitObservationTest|NativeHelperOwnershipTest|ModelAliasTest|AliasPublicationHTTPTest|ConfigMergingTest|PersistenceBoundariesTest|ModelMetadataPersistenceTest|ConfigurationEffectsTest|PublicationOrderingTest|RuntimeLifecyclePublicationTest|SnapshotPublicationTest|CacheTerminalRecoveryTest|ImportPublicationTest|ImportOwnershipTest|ArtifactRemovalOwnershipTest|CacheSaveDispatchTest|CloudRuntimeTest|ModelDiscoveryConcurrencyTest|ModelShutdownTest|ServerShutdownEntrypointsTest|ManagedDirectoryLeaseTest|StoreOwnershipEntrypointsTest|EmbeddedServerShutdownTest|IngressAdmissionTest|GatewayAdmissionTest|CloudProviderRegistryConfigTest|AnthropicErrorTest|AutoTuneTest|RequestCancellationTest|ProviderRequestObservationTest|VoiceHelperOwnershipTest|VoiceIntentRecoveryTest|PreparationCleanupTest|ManagementAdmissionTest|ResourceAdmissionTest|RouterAdmissionTest|ProviderRequestBoundsTest|RequestIdentityTest|BackendModeContractTest|MemoryBudgetTest|InferenceLeaseTest|RealtimeWorkerLeaseTest|RoutingHelperReconcileTest|LiveThroughputTest)$"
+        run: ctest --test-dir build -C Release --output-on-failure -R "^(LaunchCommandTest|ProcessExitObservationTest|NativeHelperOwnershipTest|ModelAliasTest|AliasPublicationHTTPTest|ConfigMergingTest|PersistenceBoundariesTest|ModelMetadataPersistenceTest|ConfigurationEffectsTest|PublicationOrderingTest|RuntimeLifecyclePublicationTest|SnapshotPublicationTest|CacheTerminalRecoveryTest|ImportPublicationTest|ImportOwnershipTest|ArtifactRemovalOwnershipTest|CacheSaveDispatchTest|CloudRuntimeTest|ModelDiscoveryConcurrencyTest|ModelShutdownTest|ServerShutdownEntrypointsTest|ManagedDirectoryLeaseTest|StoreOwnershipEntrypointsTest|EmbeddedServerShutdownTest|IngressAdmissionTest|GatewayAdmissionTest|CloudProviderRegistryConfigTest|AnthropicErrorTest|AutoTuneTest|RequestCancellationTest|ProviderRequestObservationTest|VoiceHelperOwnershipTest|VoiceIntentRecoveryTest|PreparationCleanupTest|PreparationRetirementTest|PreparationLegacyStateTest|ManagementAdmissionTest|ResourceAdmissionTest|RouterAdmissionTest|ProviderRequestBoundsTest|RequestIdentityTest|BackendModeContractTest|MemoryBudgetTest|InferenceLeaseTest|RealtimeWorkerLeaseTest|RoutingHelperReconcileTest|LiveThroughputTest)$"
       - name: Preserve initial native acceptance details
         if: always()
         run: python -c "from pathlib import Path; import shutil; source = Path('build/Testing/Temporary/LastTest.log'); shutil.copyfile(source, 'build/native-contracts.log') if source.is_file() else None"
@@ -143,12 +143,9 @@ jobs:
           docker cp juiced/tests/test_cache_inspection.py juiced-smoke:/tmp/test_cache_inspection.py
           docker exec juiced-smoke python3 /tmp/test_cache_inspection.py --binary /opt/lemonade/lemond --engine /opt/juiced/llama/llama-server --model-file /library/stories15M-q4_0.gguf --out /tmp/cache-inspection-proof.json
           docker cp juiced-smoke:/tmp/cache-inspection-proof.json cache-inspection-proof.json
-          python3 juiced/tests/test_preparation.py --url http://127.0.0.1:18080 --out preparation-proof.json
-          docker cp juiced/tests/test_preparation_worker.py juiced-smoke:/tmp/test_preparation_worker.py
-          docker exec juiced-smoke python3 /tmp/test_preparation_worker.py --python /opt/juiced/preparation/bin/python3 --script /opt/juiced/preparation/prepare.py --source /library/stories15M-q4_0.gguf
-          docker cp juiced/tests/test_preparation_hf.py juiced-smoke:/tmp/test_preparation_hf.py
-          docker exec juiced-smoke /opt/juiced/preparation/bin/python3 /tmp/test_preparation_hf.py --script /opt/juiced/preparation/prepare.py --converter /opt/juiced/preparation/source/convert_hf_to_gguf.py --quantizer /opt/juiced/preparation/llama-quantize --out /tmp/hf-preparation-proof.json
-          docker cp juiced-smoke:/tmp/hf-preparation-proof.json hf-preparation-proof.json
+          docker cp juiced/tests/test_preparation.py juiced-smoke:/tmp/test_preparation.py
+          docker exec juiced-smoke python3 /tmp/test_preparation.py --url http://127.0.0.1:8080 --runtime-root /opt/juiced --out /tmp/preparation-retirement-proof.json
+          docker cp juiced-smoke:/tmp/preparation-retirement-proof.json preparation-retirement-proof.json
           python3 juiced/tests/test_execution_switch.py --url http://127.0.0.1:18080 --out execution-switch-proof.json
           python3 juiced/tests/test_model_tuning.py --url http://127.0.0.1:18080 --out model-tuning-proof.json
           python3 -m venv /tmp/juiced-clients
@@ -196,8 +193,7 @@ jobs:
             cloud-publication-proof.json
             cloud-lifecycle-proof.json
             cache-inspection-proof.json
-            preparation-proof.json
-            hf-preparation-proof.json
+            preparation-retirement-proof.json
             execution-switch-proof.json
             model-tuning-proof.json
             client-proof.json

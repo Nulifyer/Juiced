@@ -162,28 +162,29 @@ struct StatePublicationTestHook {
         std::lock_guard<std::mutex> lock(server.router_->load_mutex_);
         server.router_->loaded_servers_.push_back(worker);
     }
-    static void queue_preparation(Server& server, std::function<void()> barrier, bool accepted) {
-        ResourceAdmission::Lease admission;
-        if (accepted) admission = server.router_->admit_management("queued-fixture", "preparation-entry");
-        std::lock_guard<std::mutex> lock(server.juiced_->mutex_);
-        server.juiced_->preparation_admission_barrier_ = std::move(barrier);
-        json job = {{"id", "queued-fixture"}, {"model", "Missing-Preparation-Fixture"}, {"pending", true}, {"writer_state", "queued"}, {"phase", "queued"}};
-        server.juiced_->state_["preparations"]["queued-fixture"] = job;
-        server.juiced_->preparation_pending_.push_back({job, std::move(admission)}); server.juiced_->wake_.notify_all();
-    }
-    static json preparation(Server& server) {
-        std::lock_guard<std::mutex> lock(server.juiced_->mutex_);
-        return server.juiced_->state_["preparations"].value("queued-fixture", json::object());
-    }
-    static void queue_writer(Server& server, const std::string& model, const fs::path& source,
-                             const std::shared_ptr<PreparationProcessControl>& control) {
-        auto accepted = server.router_->admit_management(model, "preparation-entry");
-        server.juiced_->preparation_process_factory_ = [control] { return std::make_unique<ControlledPreparationProcess>(control); };
+    static void retain_writer(Server& server, const std::string& model, const fs::path& source,
+                              const std::shared_ptr<PreparationProcessControl>& control) {
+        auto accepted = server.router_->admit_management(model, "legacy-writer");
+        auto operation = server.router_->admit_management(model, "legacy-cleanup");
         json job = {{"id", "writer-fixture"}, {"model", model}, {"name", "Prepared-Fixture"}, {"source", source.string()},
-            {"quant", "Q8_0"}, {"pending", true}, {"phase", "queued"}, {"writer_state", "queued"}};
+            {"pending", true}, {"phase", "cleanup-pending"}, {"writer_state", "dispatching"}};
+        const auto dir = server.juiced_->directory_ / "preparations/writer-fixture";
+        fs::create_directories(dir);
+        auto command = job; command["cache"] = (server.juiced_->directory_ / "prepared").string();
+        std::ofstream(dir / "job.json") << command;
+        auto process = std::make_unique<ControlledPreparationProcess>(control);
+        {
+            std::lock_guard<std::mutex> lock(server.juiced_->mutex_);
+            server.juiced_->state_["preparations"]["writer-fixture"] = job; server.juiced_->persist_locked();
+        }
+        accepted.started(); operation.started();
+        process->start({"controlled-old-writer", {"ignored", (dir / "job.json").string()}, {}, 0, ""});
         std::lock_guard<std::mutex> lock(server.juiced_->mutex_);
-        server.juiced_->state_["preparations"]["writer-fixture"] = job; server.juiced_->persist_locked();
-        server.juiced_->preparation_pending_.push_back({job, std::move(accepted)}); server.juiced_->wake_.notify_all();
+        auto task = std::make_unique<JuicedService::PreparationTask>();
+        task->job = job; task->admission = std::move(accepted); task->operation = std::move(operation);
+        task->process = std::move(process);
+        task->outcome = {{"pending", false}, {"phase", "interrupted"}, {"error", "Model conversion is retired"}};
+        server.juiced_->preparation_active_ = std::move(task); server.juiced_->wake_.notify_all();
     }
     static json writer(Server& server) {
         std::lock_guard<std::mutex> lock(server.juiced_->mutex_);
@@ -299,7 +300,8 @@ static void entry_boundaries() {
                                      {"stream", mode != 0}, {"subscribe", mode != 2}, {"quant", "Q4_K_M"}, {"acknowledge", true}};
                         const auto response = StatePublicationTestHook::invoke(server, prefix + operation, body);
                         const auto error = json::parse(response.body).at("error");
-                        check(response.status == 503 && error.at("code") == code && response.get_header_value("Retry-After") == "1" && !response.content_provider_,
+                        check((operation == "juiced/preparation" ? response.status == 410 && error.at("code") == "feature_retired" :
+                              response.status == 503 && error.at("code") == code && response.get_header_value("Retry-After") == "1") && !response.content_provider_,
                               "native JSON/SSE/async entry rejects with typed metadata before dispatch");
                     }
                 }
@@ -342,26 +344,15 @@ static void entry_boundaries() {
         check(StatePublicationTestHook::admission(server)["active"] == 0,
               "discarding a proven undispatched stream releases its transition ticket after other native work drains");
         config->set({{"offline", true}});
-        for (bool accepted : {true, false}) {
-            StatePublicationTestHook::configure(server, {{"mode", "legacy"}});
-            std::promise<void> entered, release; auto released = release.get_future().share();
-            StatePublicationTestHook::queue_preparation(server, [&] { entered.set_value(); released.wait(); }, accepted);
-            const bool queued = entered.get_future().wait_for(std::chrono::seconds(5)) == std::future_status::ready;
-            bool conflict = false;
-            try { StatePublicationTestHook::configure(server, {{"mode", "protected"}}); }
-            catch (const AdmissionError& error) { conflict = error.code == "admission_configuration_busy"; }
-            release.set_value();
-            const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-            json job;
-            do {
-                job = StatePublicationTestHook::preparation(server);
-                if (!job.value("pending", true) && StatePublicationTestHook::admission(server)["active"] == 0) break;
-                std::this_thread::sleep_for(std::chrono::milliseconds(10));
-            } while (std::chrono::steady_clock::now() < until);
-            check(queued && conflict == accepted && job.value("phase", "") == "failed" &&
-                  !fs::exists(root / "juiced/preparations/queued-fixture") && StatePublicationTestHook::admission(server)["active"] == 0,
-                  accepted ? "accepted queued preparation retains admission through native dispatch and terminal status" :
-                             "unadmitted queued preparation rechecks committed policy before filesystem/process dispatch");
+        StatePublicationTestHook::configure(server, {{"mode", "legacy"}});
+        for (const std::string action : {"", "start", "plan", "resume", "convert", "quantize"}) {
+            for (const std::string prefix : {"/v1/", "/v0/", "/api/v1/", "/api/v0/"}) {
+                const auto response = StatePublicationTestHook::invoke(server, prefix + "juiced/preparation",
+                    {{"model", "Management-Fixture"}, {"action", action}, {"quant", "Q4_K_M"}, {"acknowledge", true}});
+                check(response.status == 410 && json::parse(response.body)["error"]["code"] == "feature_retired" &&
+                      dispatched == 0 && !fs::exists(root / "juiced/preparations"),
+                      "retired producer actions never dispatch or create scratch, including legacy mode");
+            }
         }
 
     }
@@ -487,10 +478,10 @@ static void preparation_cleanup() {
             Server server(config, root.string(), root.string());
             Hook::models(server).register_user_model("Preparation-Source", {{"recipe", "llamacpp"}, {"source", "local_path"},
                 {"checkpoints", {{"main", source.string()}}}});
-            Hook::queue_writer(server, "Preparation-Source", source, control);
-            check(wait([&] { return control->started.load(); }), "accepted preparation reaches its native process owner");
+            Hook::retain_writer(server, "Preparation-Source", source, control);
+            check(wait([&] { return control->started.load(); }), "a controlled retained legacy writer has an owned process");
             check(Hook::writer(server)["writer_state"] == "dispatching" && fs::exists(partial),
-                  "durable writer intent precedes preparation dispatch and staging ownership");
+                  "legacy cleanup retains its recorded writer and staging ownership");
             if (boundary == 0) {
                 const auto cancel = Hook::invoke(server, "/v1/juiced/preparation", {{"action", "cancel"}, {"id", "writer-fixture"}});
                 check(cancel.status == 200, "native preparation cancellation acknowledges the request");
@@ -535,6 +526,80 @@ static void preparation_cleanup() {
         }
         RuntimeConfig::set_global(nullptr);
     }
+}
+
+static void seed_preparation_snapshot(const fs::path& root, const fs::path& source, const json& record) {
+    ModelManager previous;
+    previous.register_user_model("Preparation-Source", {{"recipe", "llamacpp"}, {"source", "local_path"},
+        {"checkpoints", {{"main", source.string()}}}});
+    fs::create_directories(root / "juiced");
+    const json state = {{"version", 1}, {"revision", 0}, {"policies", json::object()}, {"imports", json::object()},
+        {"cache", {{"mode", "memory"}, {"retention_days", 7}, {"disk_budget_gib", 8}}},
+        {"preparations", {{"writer-fixture", record}}}};
+    std::ofstream(root / "juiced/state.json") << state;
+}
+
+static void preparation_retirement() {
+    using Hook = StatePublicationTestHook;
+    const json base = {{"model", "Preparation-Source"}, {"phase", "dispatching"}, {"writer_state", "dispatching"}};
+    auto missing = base;
+    auto invalid_pending = base; invalid_pending["pending"] = "true";
+    auto inconsistent = base; inconsistent["pending"] = false;
+    auto unsupported = base; unsupported["pending"] = true; unsupported["writer_state"] = "future-writer-state";
+    auto wrong_writer_type = base; wrong_writer_type["pending"] = true; wrong_writer_type["writer_state"] = 7;
+    auto missing_source = base; missing_source["pending"] = true; missing_source.erase("model");
+    for (const auto& original : {missing, invalid_pending, inconsistent, unsupported, wrong_writer_type, missing_source}) {
+        const auto root = test::make_scratch_dir("preparation-quarantine");
+        auto defaults = ConfigFile::base_defaults(); defaults["offline"] = true; defaults["broadcast"] = false;
+        auto config = std::make_shared<RuntimeConfig>(defaults); RuntimeConfig::set_global(config.get());
+        const auto source = root / "source.gguf";
+        { char header[24] = {'G', 'G', 'U', 'F', 3}; std::ofstream file(source, std::ios::binary); file.write(header, sizeof(header)); }
+        const auto partial = root / "juiced/prepared/.partial-writer-fixture/owned";
+        fs::create_directories(partial.parent_path()); std::ofstream(partial) << "unconfirmed writer dependency";
+        seed_preparation_snapshot(root, source, original);
+        for (int restart = 0; restart < 2; ++restart) {
+            Server recovered(config, root.string(), root.string());
+            const auto record = Hook::writer(recovered);
+            check(record["pending"] == true && record["cleanup_pending"] == true && record["recovery_record"] == original,
+                  "ambiguous retained writer records remain quarantined with their original record across restart");
+            const auto cancel = Hook::invoke(recovered, "/v1/juiced/preparation", {{"action", "cancel"}, {"id", "writer-fixture"}});
+            check(cancel.status == 200 && json::parse(cancel.body)["recovery_required"] == true &&
+                  Hook::writer(recovered)["pending"] == true && fs::exists(partial),
+                  "cancelling an unknown prior writer never certifies cleanup or removes staging");
+            bool guarded = false;
+            try { Hook::models(recovered).delete_model("Preparation-Source"); }
+            catch (const AdmissionError& error) { guarded = error.code == "preparation_cleanup_pending"; }
+            check(guarded && fs::exists(source), "quarantined writer intent continues to protect source registration and weights");
+        }
+        RuntimeConfig::set_global(nullptr);
+    }
+
+}
+
+static void preparation_legacy_state() {
+    using Hook = StatePublicationTestHook;
+    for (bool queued : {false, true}) {
+        const auto root = test::make_scratch_dir("preparation-retained");
+        auto defaults = ConfigFile::base_defaults(); defaults["offline"] = true; defaults["broadcast"] = false;
+        auto config = std::make_shared<RuntimeConfig>(defaults); RuntimeConfig::set_global(config.get());
+        const auto source = root / "source.gguf";
+        { char header[24] = {'G', 'G', 'U', 'F', 3}; std::ofstream file(source, std::ios::binary); file.write(header, sizeof(header)); }
+        const json record = {{"model", "Preparation-Source"}, {"pending", queued},
+            {"phase", queued ? "queued" : "complete"}, {"writer_state", queued ? "queued" : "stopped"}};
+        seed_preparation_snapshot(root, source, record);
+        {
+            Server recovered(config, root.string(), root.string());
+            const auto current = Hook::writer(recovered);
+            check(current["pending"] == false && current["phase"] == (queued ? "interrupted" : "complete") &&
+                  !current.contains("recovery_record") && !fs::exists(root / "juiced/preparations"),
+                  "a proven queued job is interrupted without dispatch while valid completed history remains intact");
+            check(Hook::models(recovered).model_exists("Preparation-Source") && fs::exists(source) &&
+                  Hook::removal(recovered, "Preparation-Source")["allowed"] == true,
+                  "valid retained records preserve weights and normal reference-safe removal");
+        }
+        RuntimeConfig::set_global(nullptr);
+    }
+
 }
 
 static void voice_intent_recovery() {
@@ -683,6 +748,8 @@ int main(int argc, char** argv) {
         if (argc > 1 && std::string(argv[1]) == "--voice-cleanup") voice_helper_ownership();
         else if (argc > 1 && std::string(argv[1]) == "--voice-intent") voice_intent_recovery();
         else if (argc > 1 && std::string(argv[1]) == "--preparation-cleanup") preparation_cleanup();
+        else if (argc > 1 && std::string(argv[1]) == "--preparation-retirement") preparation_retirement();
+        else if (argc > 1 && std::string(argv[1]) == "--preparation-legacy-state") preparation_legacy_state();
         else { native_owners(); entry_boundaries(); worker_start_boundaries(); }
     }
     catch (const std::exception& error) { ++failures; std::fprintf(stderr, "Unexpected fixture failure: %s\n", error.what()); }

@@ -40,7 +40,7 @@ browser on your desktop, laptop, or phone.
 | Test before connecting | Temporary chat, transcription, speech, image, and side-by-side model tests |
 | Reuse computation | Memory caching and qualified persistent prompt snapshots, with storage and retention controls |
 | See what is happening | Hardware metrics, token throughput, worker activity, and searchable logs |
-| Prepare another quant | Supported local HF-to-GGUF and GGUF requantization jobs that preserve the source weights |
+| Choose a published variant | Find compatible existing formats and quants while preserving original weights |
 
 Juiced hosts models and manages their runtime. Your connected clients own saved
 conversations, coding sessions, documents, and creative projects.

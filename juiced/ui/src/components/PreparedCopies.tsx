@@ -41,11 +41,11 @@ export function PreparedCopies() {
     }
   }
   return (
-    <section className="prepared-copies" aria-label="Prepared copies">
+    <section className="prepared-copies" aria-label="Retained weights">
       <div className="profile-title">
-        <h3>Prepared copies</h3>
-        <HelpTip label="Prepared copies">
-          Converted weights are separate from computation snapshots and original
+        <h3>Retained weights</h3>
+        <HelpTip label="Retained weights">
+          Previously created weights are separate from computation snapshots and original
           downloads. Copies in use by a model registration are protected. Remove
           the registration from Models before reclaiming its cached copy.
         </HelpTip>
@@ -59,7 +59,7 @@ export function PreparedCopies() {
         </p>
       )}
       {!items.length && !error && (
-        <p className="page-note">No locally prepared weights.</p>
+        <p className="page-note">No retained copies from earlier conversion jobs.</p>
       )}
       {items.map((item) => (
         <article className="prepared-copy" key={item.id}>

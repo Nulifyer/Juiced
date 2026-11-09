@@ -41,9 +41,13 @@ void JuicedService::guard_model_removal_locked(const std::string& model) const {
   if (import_owns_model_locked(model))
     throw AdmissionError("import_publication_pending", "Finish import publication before removing this model", 409);
   const auto bare = [](const std::string& value) { return value.rfind("user.", 0) == 0 ? value.substr(5) : value; };
-  for (const auto& [id, job] : state_.at("preparations").items())
-    if (job.value("pending", false) && bare(job.value("model", "")) == bare(model))
-      throw AdmissionError("preparation_cleanup_pending", "Finish preparation cleanup before removing its source model", 409);
+  for (const auto& [id, job] : state_.at("preparations").items()) {
+    if (!job.value("pending", false)) continue;
+    const auto source = job.find("model");
+    if (source == job.end() || !source->is_string() || source->get_ref<const std::string&>().empty() ||
+        bare(source->get<std::string>()) == bare(model))
+      throw AdmissionError("preparation_cleanup_pending", "Resolve retained writer ownership before removing its source model", 409);
+  }
 }
 void JuicedService::with_model_removal(const std::string& model, const std::function<void()>& remove) {
   auto mutation = server_.model_manager_->model_mutation(model, false);

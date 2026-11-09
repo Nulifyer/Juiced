@@ -27,7 +27,7 @@ limits. Unknown or unrecorded qualification is not a successful test.
 | --- | --- |
 | `GET /v1/juiced/devices?recipe=llamacpp&backend=cpu` | Devices for the selected recipe/backend; choose an installed variant for accelerator enumeration |
 | `GET /v1/juiced/execution?model=MODEL_ID` | Selected profile, available profiles, and compatibility |
-| `GET /v1/juiced/preparation?model=MODEL_ID` | Supported preparation plan |
+| `GET /v1/juiced/preparation` | Retained legacy job records; `?id=` reads bounded output and `?cache=1` lists retained weights. Producer planning/creation/resume is retired with HTTP410 `feature_retired` |
 | `GET /v1/juiced/transfers` | Acquisition jobs and their state |
 | `GET /v1/juiced/cache` | Cache settings, snapshots, and operational state |
 | `GET /v1/juiced/admission` | Pending work, reservations, allocations, and uncertain termination |
@@ -49,7 +49,7 @@ This operator control rejects new and pending work. It does not interrupt active
 inference or change model policies. Wait for active work to settle and unload
 idle workers before changing resource topology. Resume with `{"paused":false}`.
 
-Execution and preparation mutations share the native manager's model identities
+Execution and retained-artifact cleanup share the native manager's model identities
 and publication rules. See [runtime profiles](https://github.com/Nulifyer/Juiced/blob/main/juiced/RUNTIME-PROFILES.md)
 and [resource admission](https://github.com/Nulifyer/Juiced/blob/main/juiced/RESOURCE-ADMISSION.md) for the detailed
 source contracts. Raw `/internal/*` configuration operations are operator controls.
