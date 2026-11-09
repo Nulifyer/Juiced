@@ -100,3 +100,46 @@ test('selecting the current destination closes mobile navigation', async ({ page
   await expect(page.getByRole('button', { name: 'Toggle navigation' })).toHaveAttribute('aria-expanded', 'false');
   expect(runtime.writes).toEqual([]);
 });
+
+for (const width of [1440, 1024, 390]) test(`runtime details float above the footer without changing its layout at ${width}px`, async ({ page, runtime }) => {
+  await page.setViewportSize({ width, height: 960 });
+  await page.goto('/');
+  const footer = page.getByLabel('Runtime hardware and inference metrics');
+  await expect(footer).toContainText('35.0 tok/s');
+  const before = await footer.boundingBox();
+  const trigger = page.getByRole('button', { name: 'Runtime details', exact: true });
+  await trigger.focus();
+  await page.keyboard.press('Enter');
+  const popup = page.getByRole('dialog', { name: 'Last request', exact: true });
+  await expect(popup).toBeVisible();
+  await expect(popup.locator('dd')).toHaveText(['12', '32', '0.3 s', '2']);
+  await expect(footer).not.toContainText('Input tokens');
+  const bounds = await popup.boundingBox();
+  const after = await footer.boundingBox();
+  expect(after!.height).toBeCloseTo(before!.height, 1);
+  expect(bounds!.x).toBeGreaterThanOrEqual(0);
+  expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width);
+  expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(after!.y);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  if (captures) await page.screenshot({ path: `${captures}/runtime-details-${width}.png` });
+  await page.keyboard.press('Escape');
+  await expect(popup).not.toBeVisible();
+  await expect(trigger).toBeFocused();
+  await trigger.click();
+  await page.getByRole('button', { name: 'Close runtime details' }).click();
+  await expect(popup).not.toBeVisible();
+  await trigger.click();
+  await page.locator('main').click({ position: { x: 5, y: 5 } });
+  await expect(popup).not.toBeVisible();
+  expect(runtime.writes).toEqual([]);
+});
+
+test('runtime details keep unavailable telemetry explicit', async ({ page, runtime }) => {
+  await page.route('**/v1/stats', route => route.abort());
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Runtime details', exact: true }).click();
+  const popup = page.getByRole('dialog', { name: 'Last request', exact: true });
+  await expect(popup).toContainText('Telemetry unavailable. Reconnecting');
+  await expect(popup.locator('dd')).toHaveText(['—', '—', '—', '—']);
+  expect(runtime.writes).toEqual([]);
+});

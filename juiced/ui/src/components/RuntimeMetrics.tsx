@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
-import { Activity, Cpu, MemoryStick, Gauge } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Activity, ChevronUp, Cpu, MemoryStick, Gauge, X } from "lucide-react";
+import { Popover } from "@base-ui/react/popover";
 import { api } from "../api";
 import "./RuntimeMetrics.css";
 export type RuntimeTelemetry = {
@@ -46,6 +47,7 @@ const number = (value: unknown, suffix = "") =>
     ? value.toFixed(1) + suffix
     : "—";
 export function RuntimeMetrics({ data }: { data: RuntimeTelemetry }) {
+  const footerRef = useRef<HTMLElement>(null);
   const system = data.stale ? undefined : data.system;
   const stats = data.stale ? undefined : data.inference;
   const gpu = system?.gpus?.find((g: any) => g.id === system.primary_gpu_id);
@@ -53,6 +55,7 @@ export function RuntimeMetrics({ data }: { data: RuntimeTelemetry }) {
   const generating = stats?.live?.generating_requests ?? active;
   return (
     <footer
+      ref={footerRef}
       className="runtime-metrics"
       aria-label="Runtime hardware and inference metrics"
     >
@@ -93,36 +96,32 @@ export function RuntimeMetrics({ data }: { data: RuntimeTelemetry }) {
       <span title="Native model calls in progress, including prefill, speech and images">
         Active <strong>{active ?? "—"}</strong>
       </span>
-      <details>
-        <summary>Details</summary>
-        <div>
-          <span>
-            Last request input{" "}
-            <strong>
-              {stats?.input_tokens?.toLocaleString() ?? "—"} tokens
-            </strong>
-          </span>
-          <span>
-            Last request output{" "}
-            <strong>
-              {stats?.output_tokens?.toLocaleString() ?? "—"} tokens
-            </strong>
-          </span>
-          <span>
-            First token{" "}
-            <strong>{number(stats?.time_to_first_token, " s")}</strong>
-          </span>
-          <span>
-            Cached tokens{" "}
-            <strong>{stats?.cache_tokens?.toLocaleString() ?? "—"}</strong>
-          </span>
-          <span>
-            {data.stale
-              ? "Telemetry unavailable. Reconnecting…"
-              : "Updates every 2 seconds. Host RAM and shared GPU allocation overlap."}
-          </span>
-        </div>
-      </details>
+      <Popover.Root>
+        <Popover.Trigger className="metrics-details-trigger" aria-label="Runtime details">
+          Details <ChevronUp size={12} aria-hidden="true" />
+        </Popover.Trigger>
+        <Popover.Portal>
+          <Popover.Positioner anchor={footerRef} className="metrics-details-positioner" side="top" align="end" sideOffset={8} collisionPadding={12}>
+            <Popover.Popup className="metrics-details-popup">
+              <div className="metrics-details-heading">
+                <Popover.Title>Last request</Popover.Title>
+                <Popover.Close aria-label="Close runtime details"><X size={14} aria-hidden="true" /></Popover.Close>
+              </div>
+              <dl>
+                <div><dt>Input tokens</dt><dd>{stats?.input_tokens?.toLocaleString() ?? "—"}</dd></div>
+                <div><dt>Output tokens</dt><dd>{stats?.output_tokens?.toLocaleString() ?? "—"}</dd></div>
+                <div><dt>First token</dt><dd>{number(stats?.time_to_first_token, " s")}</dd></div>
+                <div><dt>Cached tokens</dt><dd>{stats?.cache_tokens?.toLocaleString() ?? "—"}</dd></div>
+              </dl>
+              <p className="metrics-details-note">
+                {data.stale
+                  ? "Telemetry unavailable. Reconnecting…"
+                  : "Updates every 2 seconds. Host RAM and shared GPU allocation overlap."}
+              </p>
+            </Popover.Popup>
+          </Popover.Positioner>
+        </Popover.Portal>
+      </Popover.Root>
     </footer>
   );
 }

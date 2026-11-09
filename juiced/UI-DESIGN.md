@@ -102,6 +102,12 @@ is unavailable rather than zero. Request history is bounded server memory and
 contains timing/status/model metadata only, never prompts, output, headers,
 credentials, query strings or private session identifiers.
 
+The global footer keeps hardware, text-output rate and active-call indicators
+visible. Details opens a compact click/tap popover above the entire footer,
+including when its metrics wrap on a phone. Token counts, first-token timing and
+refresh/memory notes belong there. Opening it does not resize the footer or main
+pane. Support keyboard activation, Escape, close and outside-click dismissal.
+
 ## Acceptance
 
 Exercise model/quant selection, draft edits, save/reload, conflict recovery,
