@@ -19,8 +19,21 @@ and does not survive manager restart.
 
 Settings include `mode`, `active_limit`, `pending_limit`, `service_pending_limit`,
 `principal_pending_limit`, `essential_wait_ms`, `interactive_wait_ms`, `batch_wait_ms`,
-`pools`, and `models`. Pending defaults are 64 globally, 16 per service and 8 per
-principal. Queue wait defaults are 2, 10 and 30 seconds respectively. These bound queue
+`pools`, and `models`. Pending defaults are 64 globally and 16 per service. There
+is no default per-principal pending quota or per-model concurrency quota.
+`principal_pending_limit` and each model's `concurrency` accept a positive integer
+for an explicit operator cap. Omit the field or set it to `null` to leave that cap
+unset. Explicit existing caps remain enforced; there is no migration that removes
+them. Zero, negative, fractional and oversized values reject.
+
+The admission snapshot advertises `optional_limits.schema_version: 1` with the
+effective optional caps. Clients must inspect this support before sending null
+to an older server. Global active/pending bounds, per-service pending bounds,
+physical reservations, deadlines and fairness still apply when quotas are unset.
+This does not yet qualify actual backend/cache-slot scheduling or five concurrent
+served chat requests; those require the separate slot and resource acceptance.
+
+Queue wait defaults are 2, 10 and 30 seconds respectively. These bound queue
 waiting; model profiles declare a separate completion deadline. FIFO applies within
 a class among eligible work. After eight essential grants, the oldest eligible
 ordinary waiter gets an opportunity while essential headroom remains reserved.

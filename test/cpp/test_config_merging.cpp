@@ -731,6 +731,30 @@ static void test_durable_publication() {
     RuntimeConfig restarted(ConfigFile::load(temp.string(), temp.string()));
     check(restarted.snapshot().at("admission") == runtime->snapshot().at("admission"),
           "replacement failure followed by success has consistent restart readback");
+    for (int mode = 0; mode < 3; ++mode) {
+        json settings = {{"mode", "legacy"}, {"principal_pending_limit", 3},
+            {"models", {{"quota-fixture", {{"checkpoint", "fixture"}, {"options", json::object()},
+                {"source", "configuration fixture"}, {"concurrency", 2}}}}}};
+        if (mode == 1) {
+            settings["principal_pending_limit"] = nullptr;
+            settings["models"]["quota-fixture"]["concurrency"] = nullptr;
+        } else if (mode == 2) {
+            settings.erase("principal_pending_limit");
+            settings["models"]["quota-fixture"].erase("concurrency");
+        }
+        request.body = json{{"admission", settings}}.dump();
+        httplib::Response updated; server.handle_config_set(request, updated);
+        check(updated.status == 200 || updated.status == -1,
+              "native config publication accepts explicit, cleared and omitted optional quotas");
+        RuntimeConfig readback(ConfigFile::load(temp.string(), temp.string()));
+        lemon::ResourceAdmission recovered;
+        recovered.configure(readback.snapshot().at("admission"));
+        const auto limits = recovered.snapshot().at("optional_limits");
+        check(readback.snapshot().at("admission") == settings &&
+              limits.at("principal_pending_limit") == (mode == 0 ? json(3) : json(nullptr)) &&
+              limits.at("model_concurrency").at("quota-fixture") == (mode == 0 ? json(2) : json(nullptr)),
+              "restart readback preserves explicit operator caps and both unset forms without restoring defaults");
+    }
     RuntimeConfig::set_global(nullptr);
 }
 

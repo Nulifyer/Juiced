@@ -304,6 +304,7 @@ class ApiContract(unittest.TestCase):
  def test_native_admission_controls(self):
   for prefix in ['/v1/','/v0/','/api/v1/','/api/v0/']:
    status,state=self.request(prefix+'juiced/admission');self.assertEqual(status,200);self.assertEqual(state['mode'],'legacy');self.assertFalse(state['latency_qualified'])
+   self.assertEqual(state['optional_limits']['schema_version'],1);self.assertIsNone(state['optional_limits']['principal_pending_limit'])
    self.assertEqual(self.request(prefix+'juiced/admission',{'paused':'false'})[0],400)
    status,state=self.request(prefix+'juiced/admission',{'paused':True});self.assertEqual(status,200);self.assertTrue(state['paused'])
    status,state=self.request(prefix+'juiced/admission',{'paused':False});self.assertEqual(status,200);self.assertFalse(state['paused'])
@@ -311,6 +312,11 @@ class ApiContract(unittest.TestCase):
    self.assertEqual(self.request('/internal/set',{'admission':config})[0],400)
   self.assertEqual(self.request('/internal/set',{'admission':{},'port':1234})[0],400)
   status,_=self.request('/internal/set',{'admission':{'mode':'protected'}});self.assertEqual(status,200)
+  for limit in [3,None]:
+   self.assertEqual(self.request('/internal/set',{'admission':{'principal_pending_limit':limit}})[0],200)
+   for prefix in ['/v1/','/v0/','/api/v1/','/api/v0/']:
+    status,state=self.request(prefix+'juiced/admission');self.assertEqual(status,200);self.assertEqual(state['optional_limits']['principal_pending_limit'],limit)
+   saved=json.loads((self.root/'config/config.json').read_text());self.assertEqual(saved['admission'],{'principal_pending_limit':limit})
   self.assertEqual(self.request('/internal/set',{'admission':{}})[0],200)
   saved=json.loads((self.root/'config/config.json').read_text());self.assertEqual(saved['admission'],{})
  def test_resource_memory_snapshot(self):
