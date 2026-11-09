@@ -605,6 +605,27 @@ callback failure and failed terminal publication keep unresolved handles, ticket
 and mutation exclusion. A matching retry can publish a previously collected success
 without executing the command again. Native health exposes pending helper state.
 
+FLM deletion treats the provider checkpoint ID as shared storage. ModelManager
+serializes its decision, then retains a durable checkpoint reservation through
+command dispatch without holding shared reference/cache locks over the process
+exchange. Provider discovery is a storage observation, not another authored
+registration retaining its own checkpoint. A
+shared user registration is removed without invoking `flm remove`; a built-in
+checkpoint with other references rejects destructive deletion.
+
+A `juiced_removal` provider intent binds the expected registration, checkpoint,
+program and unique publication ID before dispatch. Native discovery hides that
+registration and reference acquisition rejects the reserved checkpoint. The
+helper journal seals its collected success with `publication_pending` before the
+caller records completion. Failed caller publication retains that result and
+its ticket. Matching retry/reconstruction seals the caller result without another
+remove command; generic helper cleanup cannot acknowledge it. A durably completed
+caller marker survives later unrelated helper commands until final unregistration.
+Unknown prior-manager uncollected processes remain quarantined, not replayed.
+These fields change persisted state and require candidate-specific consistent
+backup/restore acceptance before deployment. Manager reconstruction and synchronous
+fault fixtures do not establish host-crash or power-loss durability.
+
 Helper tickets hold a `flm:npu` runtime reference in the existing ledger. Participating
 BackendManager install/uninstall operations exclude that reference, including
 uncertainty reconstructed from a prior-manager journal. A new helper cannot acquire

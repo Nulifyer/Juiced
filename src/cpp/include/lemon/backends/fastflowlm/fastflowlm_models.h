@@ -56,7 +56,8 @@ void flm_download(const std::string& checkpoint, bool do_not_upgrade,
                   ModelManager* manager = nullptr, const std::string& model = "");
 
 // Remove an installed FLM model by checkpoint via `flm remove`; throws on failure.
-void flm_remove(const std::string& checkpoint, ModelManager* manager = nullptr, const std::string& model = "");
+void flm_remove(const std::string& checkpoint, ModelManager* manager = nullptr, const std::string& model = "",
+                const std::string& bound_executable = "", ModelManager::FlmHelperPublication publication = {});
 
 } // namespace fastflowlm
 } // namespace backends
