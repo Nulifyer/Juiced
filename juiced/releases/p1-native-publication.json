@@ -87,15 +87,16 @@
     "model_shutdown_assertions": 9,
     "shutdown_entrypoint_cases": 4,
     "management_assertions": 118,
-    "ledger_assertions": 70,
+    "ledger_assertions": 84,
     "management_scope": "Controlled native manager/handler/queued work and actual neutral Stories15M CPU/cache. Metadata/discovery, ingress/import bounds and reversible all-writer maintenance remain incomplete.",
     "ingress_scope": "45 real HTTP assertions,63 ledger checks including standalone ASan/UBSan,10 selected native contracts,43 API cases and complete neutral Stories15M CPU/cache/authentication acceptance pass locally. Buffered body bounds do not qualify total heap, slow-client fairness or full P1 protection.",
-    "ingress_assertions": 71,
+    "ingress_assertions": 80,
     "ingress_native_contracts": 10,
     "discovery_admission_scope": "Four selected native contracts and final118 management assertions pass locally.43 API cases,8 cloud failure/restart plus4 protected-prefix cases and actual neutral Stories15M CPU/cache/authentication acceptance pass. Metadata filesystem/hardware paths and full P1 remain unqualified.",
     "model_metadata_assertions_local_linux": 33,
     "model_metadata_scope": "Four local native contracts pass, including33 metadata assertions,90 persistence checks and34 ordering checks.43 API cases and complete neutral Stories15M CPU/cache/authentication pass. Windows omits five POSIX-mode assertions. Full P1 is incomplete.",
-    "ingress_read_structure_scope": "Three local contracts pass:71 actual HTTP,118 management and70 ledger checks. Standalone ledger70 also passes ASan/UBSan.43 API cases,8 cloud failure/restart cases,4 protected prefixes and actual neutral CPU/cache/authentication pass. No full P1 qualification."
+    "ingress_read_structure_scope": "Three local contracts pass:71 actual HTTP,118 management and70 ledger checks. Standalone ledger70 also passes ASan/UBSan.43 API cases,8 cloud failure/restart cases,4 protected prefixes and actual neutral CPU/cache/authentication pass. No full P1 qualification.",
+    "ingress_host_memory_scope": "Five focused local native contracts pass after correcting the HTTP fixture error-detail lookup:80 HTTP and84 ledger assertions, including standalone ledger ASan/UBSan.43 API cases and actual Stories15M protected CPU admission pass. Input/model reservations share host accounting. The native-http-input-v1 estimate remains peak_qualified:false; full P1 is incomplete. Complete neutral CPU/cache/authenticated restart isolation also passes. The protected CPU fixture uses the accepted single-slot controls. Runtime publication/Realtime/retry fixtures pass, including48 ordinary and24 gateway automatic-load error cases. Concurrent configuration tests accept only typed pre-body retry rejections and retain commit agreement."
   },
   "remaining": [
     "Full P1 fourteen-family path coverage, complete ingress/parsing/background/acquisition/preparation/install bounds, all-writer maintenance, exact execution identities, Realtime context/quiescence, termination reconciliation, early streaming status, shared observations and frozen service-protection gates.",

@@ -373,5 +373,27 @@ retain native handler formatting. Native and fixed-protocol handlers share the
 wrapper. Import chunk bytes bypass JSON interpretation. Fresh protected multipart
 input rejects before parsing until its envelope qualifies.
 
-These contracts do not complete absolute input deadlines, physical-pool parsing
-estimates, multipart qualification or HTTP worker fairness. Those remain P1 gates.
+Input ownership also charges `host`, using the same ledger and sampled available
+bytes as model work. The current planning estimate is `65536 + 8 * body_bytes +
+512 * min(body_bytes, 32768)`. It allows for buffering, JSON values and temporary
+copies. It is reported as `native-http-input-v1` with `peak_qualified: false`.
+This estimate is not a measured upper bound on every handler, provider converter
+or response. Those peak measurements remain P1 acceptance work.
+
+Protected input admission requires a known host-memory sample. A configured host
+ceiling and essential reserve also apply. Without a configured host pool, input
+uses sampled headroom only. Its observation explicitly reports
+`limit_kind: sampled-headroom` and `configured: false`. An explicitly null host
+capacity remains unknown. Unknown memory returns 503 `ingress_memory_unknown`;
+known exhaustion returns 429 `ingress_capacity_exceeded` before body buffering.
+Legacy mode records input estimates without enforcing physical input admission.
+
+Input and model reservations constrain each other. Completed reads retain their
+host charges through response completion. Compatible protected configuration
+changes must preserve all live input estimates. Compact recovery controls can
+use essential reserve but still require known physical capacity. Body-free
+metadata and shutdown remain outside input-memory reservation.
+
+These contracts do not complete absolute input deadlines, measured parsing and
+response peaks, multipart qualification or HTTP worker fairness. Those remain P1
+gates.

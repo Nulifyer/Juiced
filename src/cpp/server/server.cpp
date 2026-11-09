@@ -1153,8 +1153,8 @@ bool Server::request_body_ready(const httplib::Request& req, httplib::Response& 
     struct Shape final : nlohmann::json_sax<nlohmann::json> {
         size_t depth = 0, values = 0;
         bool limited = false;
-        bool value() { limited = limited || ++values > 32768; return !limited; }
-        bool begin() { if (!value()) return false; limited = ++depth > 64; return !limited; }
+        bool value() { limited = limited || ++values > ResourceAdmission::maximum_json_values; return !limited; }
+        bool begin() { if (!value()) return false; limited = ++depth > ResourceAdmission::maximum_json_depth; return !limited; }
         bool null() override { return value(); }
         bool boolean(bool) override { return value(); }
         bool number_integer(number_integer_t) override { return value(); }

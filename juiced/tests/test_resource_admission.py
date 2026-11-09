@@ -24,7 +24,7 @@ def acceptance(args):
                 {
                     "llamacpp_backend": "cpu",
                     "ctx_size": 128,
-                    "llamacpp_args": "-t 2 --parallel 1 --chat-template chatml",
+                    "llamacpp_args": "--parallel 1",
                 },
             )
             fixture.ok("/v1/juiced/policy", {"model": MODEL, "policy": "on-demand"})

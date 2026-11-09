@@ -170,6 +170,12 @@ def run(binary, output):
                 state()["reserved_body_bytes"] == LIMIT - 1,
                 "incomplete body retains aggregate credit",
             )
+            check(
+                state()["reserved_host_bytes"] > LIMIT - 1
+                and state()["physical_pool"] == "host"
+                and state()["memory_estimate"]["peak_qualified"] is False,
+                "input memory estimate is physical, visible and explicitly unqualified",
+            )
             second, response = pending("/v1/chat/completions", 2)
             check(
                 b"429" in response.split(b"\r\n")[0],
@@ -352,6 +358,66 @@ def run(binary, output):
                 wait_empty(),
                 "structural rejection and raw chunk completion release byte ownership",
             )
+            memory_settings = {
+                "mode": "protected",
+                "pools": {
+                    "host": {
+                        "capacity_bytes": 4 * 1024 * 1024,
+                        "essential_headroom_bytes": 1024 * 1024,
+                        "source": "controlled HTTP input-memory fixture",
+                    }
+                },
+            }
+            code, _ = request("/internal/set", {"admission": memory_settings})
+            check(
+                code == 200,
+                "protected host ceiling activates with compatible input ownership",
+            )
+            connection, response = pending("/v1/chat/completions", 10000)
+            check(
+                b"429" in response.split(b"\r\n")[0],
+                "physical host exhaustion rejects before body transmission",
+            )
+            connection.close()
+            check(wait_empty(), "physical rejection leaves no partial claim")
+            connection, response = pending("/v1/chat/completions", 2000)
+            check(
+                response.startswith(b"HTTP/1.1 100"), "smaller input fits the host pool"
+            )
+            observed = request("/v1/juiced/admission")[1]
+            check(
+                observed["pools"]["host"]["reserved_bytes"]
+                == observed["ingress"]["reserved_host_bytes"]
+                and observed["ingress"]["reserved_host_bytes"] > 2000,
+                "HTTP input and model accounting expose one shared host charge",
+            )
+            code, result = request(
+                "/internal/set",
+                {
+                    "admission": {
+                        **memory_settings,
+                        "pools": {
+                            "host": {
+                                "capacity_bytes": 500000,
+                                "source": "too small for the live request",
+                            }
+                        },
+                    }
+                },
+            )
+            check(
+                code == 409
+                and result["error"]["details"]["code"]
+                == "admission_configuration_busy",
+                "configuration cannot drop a live physical input charge",
+            )
+            check(
+                request("/v1/juiced/admission", {"paused": True})[0] == 200,
+                "bounded controls remain usable beside a charged ordinary input",
+            )
+            connection.close()
+            check(wait_empty(), "failed local read releases physical host memory")
+            request("/v1/juiced/admission", {"paused": False})
 
         finally:
             for connection in connections:

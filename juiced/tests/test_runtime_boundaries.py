@@ -83,6 +83,20 @@ def acceptance(args):
     proof = {
         "scope": "isolated CPU lifecycle and loopback WebSocket; no accelerator, speech quality or latency qualification"
     }
+
+    def publication_status(response):
+        status, headers, body = response
+        assert status in (200, 409, 429, 503), response
+        if status in (429, 503):
+            expected = (
+                "ingress_capacity_exceeded"
+                if status == 429
+                else "admission_configuration_pending"
+            )
+            assert body["error"]["code"] == expected, body
+            assert headers.get("Retry-After") == "1", headers
+        return status
+
     with tempfile.TemporaryDirectory(prefix="juiced-runtime-boundaries-") as directory:
         root = Path(directory)
         fixture = Fixture(args, root)
@@ -109,11 +123,10 @@ def acceptance(args):
                         )
                         for value in settings
                     ]
-                    statuses = [future.result()[0] for future in futures]
-                    assert (
-                        all(status in (200, 409) for status in statuses)
-                        and 200 in statuses
-                    ), statuses
+                    statuses = [
+                        publication_status(future.result()) for future in futures
+                    ]
+                    assert 200 in statuses, statuses
                     runtime = fixture.ok("/internal/config")["admission"]
                     disk = json.loads((root / "config/config.json").read_text())[
                         "admission"
@@ -140,17 +153,20 @@ def acceptance(args):
                     updated = executor.submit(
                         fixture.call, "/internal/set", {"admission": admission}
                     )
-                    installed = executor.submit(
-                        fixture.call,
-                        "/v1/install",
-                        {
-                            "backend": "cloud",
-                            "provider": "fixture-cloud-" + str(index),
-                            "base_url": "https://127.0.0.1:9/v1",
-                        },
-                    )
-                    statuses = [updated.result()[0], installed.result()[0]]
-                    assert statuses[0] in (200, 409) and statuses[1] == 200, statuses
+                    provider = {
+                        "backend": "cloud",
+                        "provider": "fixture-cloud-" + str(index),
+                        "base_url": "https://127.0.0.1:9/v1",
+                    }
+                    installed = executor.submit(fixture.call, "/v1/install", provider)
+                    statuses = [
+                        publication_status(updated.result()),
+                        publication_status(installed.result()),
+                    ]
+                    if statuses[1] in (429, 503):
+                        assert fixture.call("/v1/install", provider)[0] == 200
+                    else:
+                        assert statuses[1] == 200, statuses
                     runtime = fixture.ok("/internal/config")
                     persisted = json.loads((root / "config/config.json").read_text())
                     ledger = fixture.ok("/v1/juiced/admission")

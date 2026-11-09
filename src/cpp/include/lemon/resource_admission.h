@@ -80,6 +80,8 @@ public:
     Lease acquire(Work work);
     static constexpr uint64_t maximum_ingress_bytes = 8ULL * 1024 * 1024;
     static constexpr uint64_t maximum_control_body_bytes = 64ULL * 1024;
+    static constexpr unsigned maximum_json_depth = 64;
+    static constexpr uint64_t maximum_json_values = 32768;
     Lease acquire_ingress(uint64_t bytes, bool control = false);
     // Copies share this ledger's state. Native management owners keep a view so
     // shutdown and configuration transitions remain authoritative after binding.

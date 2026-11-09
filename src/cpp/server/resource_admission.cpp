@@ -14,6 +14,7 @@ namespace {
 using json = nlohmann::json;
 using Clock = std::chrono::steady_clock;
 using Charges = std::map<std::string, uint64_t>;
+constexpr uint64_t input_fixed_bytes = 65536, input_body_factor = 8, input_value_bytes = 512;
 
 uint64_t natural(const json& object, const char* key, uint64_t fallback,
                  uint64_t maximum = std::numeric_limits<int64_t>::max()) {
@@ -50,6 +51,11 @@ uint64_t ingress_control_reserve(const json& ingress) {
     const auto request = natural(ingress, "request_bytes", ResourceAdmission::maximum_ingress_bytes);
     const auto total = natural(ingress, "total_bytes", 4 * ResourceAdmission::maximum_ingress_bytes);
     return std::min(ResourceAdmission::maximum_control_body_bytes, total - request);
+}
+
+uint64_t ingress_host_estimate(uint64_t bytes) {
+    return input_fixed_bytes + input_body_factor * bytes +
+        input_value_bytes * std::min(bytes, ResourceAdmission::maximum_json_values);
 }
 
 std::string operation_name(ResourceAdmission::Operation operation) {
@@ -100,6 +106,41 @@ struct ResourceAdmission::State {
         for (const auto& item : active) for (const auto& cost : item.second->costs) result[cost.first] += cost.second;
         return result;
     }
+    enum class Capacity { Available, Unknown, Exhausted };
+    Capacity capacity(const Entry& entry, const std::map<std::string, Pool>& limits,
+                      bool include_active = true) const {
+        const bool ingress = entry.work.operation == Operation::Ingress;
+        const auto used = include_active ? reserved() : Charges{};
+        for (const auto& cost : entry.costs) {
+            const auto pool = limits.find(cost.first);
+            uint64_t reserve = 0;
+            if (pool == limits.end()) {
+                if (!ingress || cost.first != "host") return Capacity::Unknown;
+            } else {
+                if (!pool->second.capacity) return Capacity::Unknown;
+                reserve = entry.priority == "essential" ? 0 : pool->second.essential_headroom;
+                const auto cap = *pool->second.capacity - std::min(*pool->second.capacity, reserve);
+                const auto taken = used.find(cost.first);
+                const auto occupied = taken == used.end() ? 0 : taken->second;
+                if (occupied > cap || cost.second > cap - occupied) return Capacity::Exhausted;
+            }
+            if (!headroom) {
+                if (ingress) return Capacity::Unknown;
+                continue;
+            }
+            const auto available = headroom(cost.first);
+            if (!available) return Capacity::Unknown;
+            uint64_t outstanding = 0;
+            if (include_active) for (const auto& active_entry : active) {
+                if (active_entry.second->resident) continue;
+                const auto claim = active_entry.second->costs.find(cost.first);
+                if (claim != active_entry.second->costs.end()) outstanding += claim->second;
+            }
+            const auto usable = *available - std::min(*available, reserve);
+            if (outstanding > usable || cost.second > usable - outstanding) return Capacity::Exhausted;
+        }
+        return Capacity::Available;
+    }
     bool eligible(const Entry& entry) const {
         size_t running = 0, state_running = 0, generation_running = 0;
         for (const auto& item : active) {
@@ -114,31 +155,7 @@ struct ResourceAdmission::State {
         if (entry.work.operation == Operation::State) {
             if (state_running >= natural(config, "active_limit", 64, 4096)) return false;
         } else if (running >= natural(config, "active_limit", 64, 4096) || generation_running >= entry.concurrency) return false;
-        const auto used = reserved();
-        for (const auto& cost : entry.costs) {
-            const auto pool = pools.find(cost.first);
-            if (pool == pools.end() || !pool->second.capacity) return false;
-            uint64_t cap = *pool->second.capacity;
-            if (entry.priority != "essential") cap -= std::min(cap, pool->second.essential_headroom);
-            const auto taken = used.find(cost.first);
-            const uint64_t occupied = taken == used.end() ? 0 : taken->second;
-            if (occupied > cap || cost.second > cap - occupied) return false;
-            if (headroom) {
-                auto available = headroom(cost.first);
-                uint64_t outstanding = 0;
-                for (const auto& active_entry : active) {
-                    if (active_entry.second->resident) continue;
-                    const auto claim = active_entry.second->costs.find(cost.first);
-                    if (claim != active_entry.second->costs.end()) outstanding += claim->second;
-                }
-                if (!available) return false;
-                uint64_t available_for_class = *available;
-                if (entry.priority != "essential")
-                    available_for_class -= std::min(available_for_class, pool->second.essential_headroom);
-                if (outstanding > available_for_class || cost.second > available_for_class - outstanding) return false;
-            }
-        }
-        return true;
+        return capacity(entry, pools) == Capacity::Available;
     }
     std::shared_ptr<Entry> selected() const {
         std::shared_ptr<Entry> essential, ordinary;
@@ -257,6 +274,20 @@ void ResourceAdmission::configure(const json& config, std::function<void()> publ
     if (!state_->pending.empty() || body_bytes > total || regular_bytes > total - ingress_control_reserve(ingress) ||
         readers > natural(ingress, "active_limit", 4) || control_readers > 1)
         throw AdmissionError("admission_configuration_busy", "Drain work before lowering admission bounds", 409);
+    if (config.value("mode", std::string("legacy")) == "protected" && !state_->active.empty()) {
+        State::Entry aggregate;
+        aggregate.work.operation = Operation::Ingress;
+        aggregate.priority = "essential";
+        aggregate.costs = state_->reserved();
+        if (state_->capacity(aggregate, pools, false) != State::Capacity::Available)
+            throw AdmissionError("admission_configuration_busy", "Active input memory does not fit the proposed host pool", 409);
+        aggregate.priority = "interactive";
+        aggregate.costs.clear();
+        for (const auto& item : state_->active) if (item.second->work.service != "http-control")
+            for (const auto& cost : item.second->costs) aggregate.costs[cost.first] += cost.second;
+        if (state_->capacity(aggregate, pools, false) != State::Capacity::Available)
+            throw AdmissionError("admission_configuration_busy", "Active input memory would consume essential host reserve", 409);
+    }
     state_->configuration_pending = true;
     lock.unlock();
     try { if (publish) publish(); }
@@ -322,6 +353,15 @@ ResourceAdmission::Lease ResourceAdmission::acquire(Work work) {
             (!control && (bytes > regular_limit || regular_used > regular_limit - bytes || readers >= natural(ingress, "active_limit", 4))) ||
             (control && controls >= 1))
             reject("ingress_capacity_exceeded", "Request body read or buffer capacity is in use; retry", 429);
+        entry->costs["host"] = ingress_host_estimate(bytes);
+        entry->priority = control ? "essential" : "interactive";
+        if (entry->protected_mode) {
+            const auto capacity = state_->capacity(*entry, state_->pools);
+            if (capacity == State::Capacity::Unknown)
+                reject("ingress_memory_unknown", "Host input-memory capacity is unknown", 503);
+            if (capacity == State::Capacity::Exhausted)
+                reject("ingress_capacity_exceeded", "Host input-memory capacity is in use; retry", 429);
+        }
         entry->id = ++state_->next_id;
         entry->completion_deadline = Clock::now() + entry->completion_limit;
         state_->active.emplace(entry->id, entry);
@@ -528,11 +568,16 @@ json ResourceAdmission::snapshot() const {
             {"reserved_bytes", found == used.end() ? 0 : found->second}, {"source", pool.second.source},
             {"essential_headroom_bytes", pool.second.essential_headroom}};
     }
+    if (!pools.contains("host") && used.count("host"))
+        pools["host"] = {{"capacity_bytes", nullptr}, {"reserved_bytes", used.at("host")},
+            {"source", "native available-byte sampler"}, {"configured", false},
+            {"limit_kind", "sampled-headroom"}, {"essential_headroom_bytes", 0}};
     size_t running = 0, resident = 0, uncertain = 0, bodies = 0, readers = 0, control_readers = 0;
-    uint64_t body_bytes = 0;
+    uint64_t body_bytes = 0, host_bytes = 0;
     for (const auto& item : state_->active) {
         if (item.second->work.operation == Operation::Ingress) {
             ++bodies; body_bytes += item.second->work.workload.at("body_bytes");
+            host_bytes += item.second->costs.at("host");
             if (!item.second->complete) {
                 if (item.second->work.service == "http-control") ++control_readers; else ++readers;
             }
@@ -544,6 +589,10 @@ json ResourceAdmission::snapshot() const {
     const auto ingress = state_->config.value("ingress", json::object());
     return {{"ingress", {{"active", bodies}, {"reading", readers}, {"control_reading", control_readers},
                         {"control_reserved_bytes", ingress_control_reserve(ingress)}, {"reserved_body_bytes", body_bytes},
+                        {"reserved_host_bytes", host_bytes}, {"physical_pool", "host"},
+                        {"memory_estimate", {{"source", "native-http-input-v1"}, {"fixed_bytes", input_fixed_bytes},
+                            {"bytes_per_body_byte", input_body_factor}, {"bytes_per_json_value", input_value_bytes},
+                            {"maximum_json_values", maximum_json_values}, {"peak_qualified", false}}},
                         {"request_limit_bytes", natural(ingress, "request_bytes", maximum_ingress_bytes)},
                         {"total_limit_bytes", natural(ingress, "total_bytes", 4 * maximum_ingress_bytes)},
                         {"active_limit", natural(ingress, "active_limit", 4)}}},

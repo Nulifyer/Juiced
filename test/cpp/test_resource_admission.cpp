@@ -279,7 +279,7 @@ int main() {
               "sampling exceptions clean pending entries without partial claims");
     }
     {
-        ResourceAdmission ingress;
+        ResourceAdmission ingress([](const std::string&) { return std::optional<uint64_t>(1ULL << 30); });
         json bounds = {{"ingress", {{"request_bytes", 100}, {"total_bytes", 150}, {"active_limit", 2}}}};
         ingress.configure(bounds);
         auto first = ingress.acquire_ingress(80);
@@ -326,6 +326,77 @@ int main() {
         check(bodies.snapshot()["ingress"]["reserved_body_bytes"] == 100, "retained body bytes remain charged alongside the next read");
         large = {}; long_request = {};
         check(bodies.snapshot()["ingress"]["active"] == 0, "all body charges release after their HTTP owners finish");
+    }
+    {
+        std::optional<uint64_t> available = 400000;
+        ResourceAdmission inputs([&](const std::string& pool) {
+            return pool == "host" ? available : std::nullopt;
+        });
+        json bounds = {{"mode", "protected"}, {"pools", {{"host", {{"capacity_bytes", 400000},
+            {"essential_headroom_bytes", 100000}, {"source", "controlled shared host pool"}}}}}};
+        inputs.configure(bounds);
+        auto first = inputs.acquire_ingress(100);
+        auto second = inputs.acquire_ingress(100);
+        check(inputs.snapshot()["pools"]["host"]["reserved_bytes"] ==
+              inputs.snapshot()["ingress"]["reserved_host_bytes"] &&
+              inputs.snapshot()["ingress"]["reserved_host_bytes"].get<uint64_t>() > 200,
+              "input parsing and model work charge one physical host pool");
+        check(error([&] { inputs.acquire_ingress(100); }, "ingress_capacity_exceeded"),
+              "ordinary inputs cannot consume essential host headroom");
+        first.completed();
+        check(error([&] { inputs.acquire_ingress(100); }, "ingress_capacity_exceeded"),
+              "completed reads retain their physical memory estimate");
+        auto control = inputs.acquire_ingress(100, true);
+        check(bool(control), "bounded recovery controls can use essential host headroom");
+        auto smaller = bounds; smaller["pools"]["host"]["capacity_bytes"] = 200000;
+        check(error([&] { inputs.configure(smaller); }, "admission_configuration_busy"),
+              "configuration cannot publish a host pool smaller than live input estimates");
+        first = {}; second = {}; control = {};
+        available = 0;
+        check(error([&] { inputs.acquire_ingress(1); }, "ingress_capacity_exceeded"),
+              "known zero sampled memory is exhaustion");
+        available.reset();
+        check(error([&] { inputs.acquire_ingress(1); }, "ingress_memory_unknown"),
+              "unknown sampled memory never becomes free input capacity");
+        available = 400000;
+        auto unknown = bounds; unknown["pools"]["host"]["capacity_bytes"] = nullptr;
+        inputs.configure(unknown);
+        check(error([&] { inputs.acquire_ingress(1); }, "ingress_memory_unknown"),
+              "an explicitly unknown host ceiling remains unknown with a known sample");
+        inputs.configure({{"mode", "protected"}});
+        first = inputs.acquire_ingress(100);
+        second = inputs.acquire_ingress(100);
+        auto third = inputs.acquire_ingress(100);
+        check(error([&] { inputs.acquire_ingress(100); }, "ingress_capacity_exceeded"),
+              "sampler-only input admission subtracts all outstanding physical estimates");
+        first = {}; second = {}; third = {};
+        check(inputs.snapshot()["ingress"]["reserved_host_bytes"] == 0,
+              "local response completion releases physical input ownership");
+        ResourceAdmission unobserved;
+        unobserved.configure({{"mode", "protected"}});
+        check(error([&] { unobserved.acquire_ingress(1); }, "ingress_memory_unknown"),
+              "protected input requires a known physical memory sampler");
+    }
+    {
+        std::optional<uint64_t> available = 400000;
+        ResourceAdmission shared([&](const std::string&) { return available; });
+        auto host_profile = profile;
+        host_profile["request_bytes"] = {{"host", 240000}};
+        host_profile["load_bytes"] = {{"host", 250000}};
+        host_profile["resident_bytes"] = {{"host", 200000}};
+        shared.configure({{"mode", "protected"}, {"interactive_wait_ms", 30},
+            {"pools", {{"host", {{"capacity_bytes", 400000}, {"source", "shared physical sample"}}}}},
+            {"models", {{"model", host_profile}}}});
+        auto body = shared.acquire_ingress(100);
+        auto request = shared.acquire(work());
+        check(shared.snapshot()["pools"]["host"]["reserved_bytes"].get<uint64_t>() > 240000,
+              "a model request and its input estimate coexist in one pool");
+        check(error([&] { shared.acquire_ingress(100); }, "ingress_capacity_exceeded"),
+              "outstanding model work constrains subsequent input admission");
+        request = {}; body = {};
+        auto large = shared.acquire_ingress(400);
+        check(error([&] { shared.acquire(work()); }, "queue_deadline_exceeded"),
+              "outstanding input estimates constrain subsequent model admission");
     }
     controller.shutdown();
     check(error([&] { controller.acquire(work()); }, "admission_paused"), "shutdown rejects new requests");
