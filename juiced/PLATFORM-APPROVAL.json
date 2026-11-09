@@ -1,6 +1,6 @@
 {
   "plan_revision": 4,
-  "status": "pending_review",
+  "status": "approved",
   "plan_sha256": "a912826159800f7350fd4482503a2bb22d99c007c487fee9175993fa6bf19847",
   "annex_sha256": "b369ba1c3f3c8478eb3706fbafa8b226a9fb712ed51ec3ef150c620f4b01b29d",
   "projection_sha256": "7230e46088fa9aacfd4204fc673dbdbcc5250c99830baac422c8ab13da179023",
@@ -10,7 +10,29 @@
     "model": "gpt-6.1-sol",
     "reasoningEffort": "high"
   },
-  "reviewers": [],
+  "reviewers": [
+    {
+      "seat": "A",
+      "model": "gpt-6.1-sol",
+      "reasoningEffort": "high",
+      "verdict": "APPROVE",
+      "taskId": "node:delegated-task:command%3Amcp%3A0fc276b9-3579-495b-a4ac-7f1ef0d58427%3Adelegate-task%3Ajuiced-revision4-a-1ea94f6f"
+    },
+    {
+      "seat": "B",
+      "model": "gpt-6.1-sol",
+      "reasoningEffort": "high",
+      "verdict": "APPROVE",
+      "taskId": "node:delegated-task:command%3Amcp%3A0fc276b9-3579-495b-a4ac-7f1ef0d58427%3Adelegate-task%3Ajuiced-revision4-b-1ea94f6f"
+    },
+    {
+      "seat": "C",
+      "model": "gpt-6.1-sol",
+      "reasoningEffort": "high",
+      "verdict": "APPROVE",
+      "taskId": "node:delegated-task:command%3Amcp%3A0fc276b9-3579-495b-a4ac-7f1ef0d58427%3Adelegate-task%3Ajuiced-revision4-c-1ea94f6f"
+    }
+  ],
   "historical_revision_3": {
     "plan_revision": 3,
     "status": "approved",
@@ -77,5 +99,7 @@
     "reviewed_at": "2026-11-09T17:52:14.054634+00:00",
     "reviewed_source": "8405000a868a827c369e55f07c11a7535b485e34"
   },
-  "scope": "Revision4 proposed whole-plan contract for user-directed no-conversion/quantization and discovery-to-running scope. No implementation or whole-plan acceptance until all three fresh reviews approve."
+  "scope": "Unanimous whole-plan revision4 approval only. Producer retirement, unified Library, Barista, P1-P7 implementation, hardware, performance, exact OS/image and candidate recovery require separate acceptance.",
+  "reviewed_at": "2026-11-09T19:47:07.311728+00:00",
+  "reviewed_source": "1ea94f6fc59cfef943f74cda1f0535634eeb618c"
 }
