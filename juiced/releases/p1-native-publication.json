@@ -67,10 +67,11 @@
     "lemond and the Windows embedded server acquire nonblocking canonical-directory OS leases before configuration migration. The lease spans owned Server teardown, retains its control file, and protects legacy cache sources before migration. Participating processes sharing cache or configuration roots cannot serve concurrently. External model/snapshot roots, uncooperative binaries, network filesystems and backend termination remain unqualified.",
     "Router and CPU/NPU automatic sizing use SystemMetricsPlatform available-byte budgets rather than GPU-derived CPU proxies. Windows reads physical/commit/address headroom and contains unqualified job hierarchies. macOS reads raw free pages and contains finite/unreadable process limits. Unknown live input memory returns503 ingress_memory_unknown before configuration publication. HTTP proof distinguishes positive admission from explicit containment and tests unknown configured capacity on every platform.",
     "Sync resolves initial targets before publishing a running generation. Native thread-owner storage is reserved before sync dispatch. Failed worker construction publishes a terminal sync/download error, releases accepted management captures and permits retry. Sync start errors validate generation identity; stale errors cannot terminate a newer queue. Private fault fixtures run before construction and successful retries use actual owned threads.",
-    "Native stop returns confirmed direct-child cleanup. Positive exit observation is separate from boolean liveness. POSIX shares bounded owned-child TERM/KILL observation; Windows retains handles after failed waits. ServerProcess rejects unconfirmed explicit stop. WrappedServer retains failed current/previous process owners for retry and only completes residency after all captured owners finish with stable membership. Unknown destruction retains logical/resource uncertainty. These contracts do not qualify descendant,device or remote termination."
+    "Native stop returns confirmed direct-child cleanup. Positive exit observation is separate from boolean liveness. POSIX shares bounded owned-child TERM/KILL observation; Windows retains handles after failed waits. ServerProcess rejects unconfirmed explicit stop. WrappedServer retains failed current/previous process owners for retry and only completes residency after all captured owners finish with stable membership. Unknown destruction retains logical/resource uncertainty. These contracts do not qualify descendant,device or remote termination.",
+    "Startup failures retain direct stderr diagnostics independent of logger display. HTTP gzip acceptance first probes compiled codec support; oversized decoded bodies require413 when supported,unavailable codecs require415,and unknown encodings always reject415. Both paths release ingress ownership."
   ],
   "verification": {
-    "status": "Local32-contract regression passed; final extension passes116 management assertions,53 ledger checks,API43 and actual CPU/cache acceptance. The Linux watcher fixture passes with a debounce quiet window. Fresh exact-source platform/image results remain pending.",
+    "status": "Local results remain scoped to their retained receipts. Latest ingress/process-lifetime batches pass; exact-source platform,image,recovery and full P1 gates remain open.",
     "native_contracts": 32,
     "persistence_checks": 90,
     "gateway_assertions": 34,
@@ -98,7 +99,7 @@
     "ledger_assertions": 89,
     "management_scope": "Controlled native manager/handler/queued work and actual neutral Stories15M CPU/cache. Metadata/discovery, ingress/import bounds and reversible all-writer maintenance remain incomplete.",
     "ingress_scope": "45 real HTTP assertions,63 ledger checks including standalone ASan/UBSan,10 selected native contracts,43 API cases and complete neutral Stories15M CPU/cache/authentication acceptance pass locally. Buffered body bounds do not qualify total heap, slow-client fairness or full P1 protection.",
-    "ingress_assertions": 101,
+    "ingress_assertions": 105,
     "ingress_native_contracts": 10,
     "discovery_admission_scope": "Four selected native contracts and final118 management assertions pass locally.43 API cases,8 cloud failure/restart plus4 protected-prefix cases and actual neutral Stories15M CPU/cache/authentication acceptance pass. Metadata filesystem/hardware paths and full P1 remain unqualified.",
     "model_metadata_assertions_local_linux": 33,
@@ -116,7 +117,8 @@
     "worker_start_scope": "Four distinct local contracts pass:Management129 controlled assertions,four actual Linux shutdown cases,rebuilt ModelShutdown and ModelSyncAndAutoUpdate regressions.43 actual API cases pass. No OS thread-quota exhaustion or whole-store quiescence qualification.",
     "direct_process_scope": "Nine rebuilt local contracts pass,including89 ledger assertions,19 launch ownership/overlap checks and7 real Linux process-exit checks.43 API cases and complete actual neutral CPU/cache/authentication pass on the final runtime. Standalone ledger89 passes ASan/UBSan. Windows/macOS direct-process branches require exact-source CI. No descendant,device,remote or whole-store quiescence qualification.",
     "process_exit_assertions_local_linux": 7,
-    "process_ownership_assertions": 19
+    "process_ownership_assertions": 19,
+    "portable_rejection_scope": "Two selected local process/HTTP contracts pass:17 store-ownership and105 ingress assertions. gzip is supported locally,decodes a bounded RPC and rejects oversize413; unknown codecs reject415 and release input ownership. Windows follow-up remains unexecuted locally. The prior Windows proof failed contention diagnostics and its fixed413 decompression expectation; raw artifacts remain retained."
   },
   "remaining": [
     "Full P1 fourteen-family path coverage, complete ingress/parsing/background/acquisition/preparation/install bounds, all-writer maintenance, exact execution identities, Realtime context/quiescence, termination reconciliation, early streaming status, shared observations and frozen service-protection gates.",

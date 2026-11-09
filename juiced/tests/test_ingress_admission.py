@@ -331,16 +331,45 @@ def run(binary, output):
                 not (root / "config/juiced/imports" / (job["id"] + ".part")).exists(),
                 "cancellation reclaims the owned upload",
             )
-            compressed = gzip.compress(b"x" * (LIMIT + 1))
+            code, codec = request(
+                "/mcp",
+                gzip.compress(
+                    json.dumps({"jsonrpc": "2.0", "method": "ping", "id": 33}).encode()
+                ),
+                {"Content-Encoding": "gzip"},
+                raw=True,
+            )
+            observations["gzip_capability"] = {"status": code, "response": codec}
+            gzip_supported = code == 200
+            check(
+                (gzip_supported and codec.get("id") == 33) or code == 415,
+                "gzip either decodes the bounded RPC or rejects the unsupported encoding",
+            )
+            check(wait_empty(), "codec capability probe releases its ingress ownership")
             code, _ = request(
+                "/mcp",
+                b"{}",
+                {"Content-Encoding": "x-juiced-fixture"},
+                raw=True,
+            )
+            check(
+                code == 415,
+                "unknown content encoding rejects before native body dispatch",
+            )
+            check(
+                wait_empty(), "unsupported codec rejection releases ingress ownership"
+            )
+            compressed = gzip.compress(b"x" * (LIMIT + 1))
+            code, result = request(
                 "/v1/chat/completions",
                 compressed,
                 {"Content-Encoding": "gzip"},
                 raw=True,
             )
+            observations["oversized_gzip"] = {"status": code, "response": result}
             check(
-                code == 413,
-                "decompression cannot exceed the reserved transport ceiling",
+                code == (413 if gzip_supported else 415),
+                "oversized gzip remains bounded or rejects its unavailable codec",
             )
             check(wait_empty(), "decompression failure releases ingress charge")
             deep = ("[" * 65 + "0" + "]" * 65).encode()

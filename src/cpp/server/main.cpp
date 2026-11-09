@@ -272,6 +272,7 @@ int main(int argc, char** argv) {
         return 0;
 
     } catch (const std::exception& e) {
+        std::cerr << "Error: " << e.what() << std::endl;
         LOG(ERROR) << "Error: " << e.what() << std::endl;
         return 1;
     }

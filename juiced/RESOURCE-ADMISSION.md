@@ -514,3 +514,11 @@ The native contracts follow
 [Windows termination](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-terminateprocess),
 [process-object waiting](https://learn.microsoft.com/en-us/windows/win32/api/synchapi/nf-synchapi-waitforsingleobject),
 and [owned-child wait observation](https://man7.org/linux/man-pages/man2/waitpid.2.html).
+
+
+Startup failures also write a direct stderr diagnostic before returning nonzero.
+Directory contention remains fail-closed when the logging sink cannot display the
+failure. HTTP acceptance probes compiled gzip support with a bounded RPC. Supported
+codecs must reject oversized decoded input with413. Unavailable and unknown codecs
+must reject with415. Both paths must release ingress ownership. Unsupported codec
+rejection does not qualify successful decompression on that package.
