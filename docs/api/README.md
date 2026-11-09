@@ -1,22 +1,44 @@
-# Lemonade Endpoints Spec
+# Use Juiced's APIs
 
-The Lemonade HTTP service provides a wide array of standards-compliant and custom endpoints.
+Send inference requests through the protocol your client supports. All interfaces
+use the same managed model library, loading policies, and backend workers.
 
-Our design philosophy is:
+## Discover models and support
 
-1. Ensure that Lemonade works out-of-box with all popular local AI apps.
-2. Prioritize using a pre-existing standard for functionality whenever possible.
-3. Add sufficient custom functionality to enable developers to build highly polished experiences.
+```bash
+curl --fail-with-body http://localhost:8080/v1/models
+curl --fail-with-body http://localhost:8080/v1/juiced/capabilities
+curl --fail-with-body http://localhost:8080/v1/juiced/protocols
+```
 
-This spec details all supported endpoints. It is organized into pages that correspond to  which organization (OpenAI, Ollama, Lemonade, etc.) defined the endpoints.
+`/v1/models` lists consumer-visible models. Native capability discovery describes
+declared operations and unknowns. Protocol discovery lists implemented subsets.
+Neither declaration establishes model quality or hardware qualification.
 
-| API | Description |
-|-----|-------------|
-| [OpenAI-Compatible API](./openai.md) | Start here for the main API surface used by most SDKs and clients. |
-| [Ollama-Compatible API](./ollama.md) | Use this if your client expects Ollama-style behavior and routes. |
-| [Anthropic-Compatible API](./anthropic.md) | Use this for clients built around Anthropic's message format. |
-| [MCP Gateway](./mcp.md) | Use this to expose Lemonade as a Model Context Protocol server (POST /mcp). |
-| [llama.cpp-Specific API](./llamacpp.md) | Reference for llama.cpp-specific compatibility and conventions. |
-| [Lemonade-Specific API](./lemonade.md) | Local-first API for managing lifecycle, configuration, backends, etc. |
+## Choose an interface
 
-A running server also serves these pages itself: [`GET /v1/docs`](./lemonade.md#get-v1docs) lists what it has and [`GET /v1/docs/{page}`](./lemonade.md#get-v1docspage) returns one, so the reference always matches the installed version and stays available offline.
+| Interface | Guide | Connection |
+| --- | --- | --- |
+| OpenAI-compatible | [Chat, embeddings, audio, and images](openai.md) | `/v1` |
+| Ollama-compatible | [Chat, generation, and embeddings](ollama.md) | Server root, using `/api/*` |
+| Anthropic-compatible | [Messages and token counting](anthropic.md) | Server root, using `/v1/messages` |
+| AUTOMATIC1111-compatible | [Text-to-image subset](automatic1111.md) | Server root, using `/sdapi/v1/*` |
+| MCP | [Model-service tools](mcp.md) | `/mcp` |
+| llama.cpp-specific | [Reranking and native operations](llamacpp.md) | `/v1` |
+| Juiced management | [Discovery, profiles, and lifecycle](juiced.md) | `/v1/juiced/*` |
+
+Use the exact enabled model ID from discovery. Add the configured
+[API credential](../guide/access.md) to the examples when authentication is enabled.
+
+## Handle limits
+
+Model and engine support determine which operations, request fields, streaming
+modes, and context sizes work. Explicit supported request parameters override
+model defaults. Invalid requests and admission limits still apply.
+
+Tools returned by a model execute in the client. Provider-hosted tools and stored
+consumer conversations are outside the model service. Generic user-authored job
+graphs and legacy Omni agent loops are unavailable in Juiced.
+
+Qualified persistent cache reuse is limited to supported Chat Completions profiles.
+Use [Memory mode](../guide/cache.md) for incompatible protocol paths.

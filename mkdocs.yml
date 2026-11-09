@@ -1,160 +1,70 @@
-# Configuration for the Lemonade Server documentation site.
-#
-# The site is built with Zensical (the successor to MkDocs Material). Zensical
-# reads mkdocs.yml natively, so the filename and most of the Material schema
-# carry over from the previous MkDocs Material setup. See zensical.org for
-# documentation and upgrades.
-#
-# To install dependencies:
-#   pip install -r docs/assets/docs_requirements.txt
-#
-# To build (and stage to docs/docs/, the lemonade-server.ai layout):
-#   python docs/publish_website_docs.py
-#
-# To serve locally during authoring:
-#   zensical serve
-
-site_name: Lemonade Server Documentation
-site_url: https://lemonade-server.ai/docs/
-site_description: Lemonade Server is a lightweight, open-source local LLM server that allows you to run and manage multiple AI applications on your local machine. It provides a simple CLI for managing applications and supports various LLMs, making it easy to deploy and use AI models locally.
-
-edit_uri: README.md
-
-repo_name: lemonade-sdk/lemonade
-repo_url: https://github.com/lemonade-sdk/lemonade
+site_name: Juiced user guides
+site_description: Install Juiced, manage local models, and connect your applications.
+repo_name: Nulifyer/Juiced
+repo_url: https://github.com/Nulifyer/Juiced
+edit_uri: edit/main/docs/
 
 plugins:
   - search
 
 theme:
   name: material
-  custom_dir: docs/overrides
-  # Match the homepage's brand mark: small favicon glyph + "Lemonade" wordmark
-  # (the wordmark is injected via .md-logo::after in zest-theme.css).
-  logo: assets/favicon.ico
-  favicon: assets/favicon.ico
+  logo: assets/juiced-icon.svg
+  favicon: assets/juiced-icon.svg
   features:
     - navigation.footer
     - navigation.tracking
     - navigation.top
-    - content.code.annotate
     - content.code.copy
-  # Fonts are loaded by docs/overrides/main.html's `fonts` block (Plus Jakarta
-  # Sans + Manrope + Material Symbols), not via theme.font, to avoid double
-  # @import requests and keep parity with the homepage's font setup.
   palette:
-    - scheme: zest-light
+    - scheme: default
+      primary: teal
+      accent: orange
       toggle:
         icon: material/weather-night
         name: Switch to dark mode
-    - scheme: zest-dark
+    - scheme: slate
+      primary: teal
+      accent: orange
       toggle:
         icon: material/weather-sunny
         name: Switch to light mode
 
-# Sidebar / nav structure
 nav:
-  - Welcome: index.md
-  - User Guide:
-    - Getting Started: guide/README.md
-    - Install:
-      - Overview: guide/install/README.md
-      - Windows: guide/install/windows.md
-      - Linux: guide/install/linux.md
-      - Ubuntu: guide/install/ubuntu.md
-      - Arch: guide/install/arch.md
-      - Fedora: guide/install/fedora.md
-      - Debian: guide/install/debian.md
-      - Docker: guide/install/docker.md
-      - macOS: guide/install/macos.md
-    - Local Server Concepts: guide/concepts.md
-    - CLI: guide/cli.md
-    - Chat in your terminal: guide/cli-chat.md
-    - Configuration:
-      - Service: guide/configuration/README.md
-      - Custom Models: guide/configuration/custom-models.md
-      - Running Many Models: guide/configuration/multi-model.md
-      - llama.cpp: guide/configuration/llamacpp.md
-      - vLLM: guide/configuration/vllm.md
-      - Moonshine: guide/configuration/moonshine.md
-      - Cloud Offload: guide/configuration/cloud.md
-    - Telemetry: guide/telemetry.md
-    - FAQ: guide/faq.md
-  - Development:
-    - Overview: dev/README.md
-    - Philosophy: dev/philosophy.md
-    - AI Content Policy: dev/ai-content-policy.md
-    - Spec Driven Development Policy: dev/spec-driven-dev.md
-    - Specs:
-      - Writing Guide: dev/specs/spec-writing-guide.md
-      - Container Backends: dev/specs/container-backends.md
-    - Working Groups: dev/working-groups/README.md
-    - Contribute: dev/contribute.md
-    - Documentation Guide: dev/documentation.md
-    - Testing: dev/testing.md
-    - C++: dev/getting-started.md
-    - Adding a Backend: dev/adding-a-backend.md
-    - Backends Reference: dev/backends-reference.md
-    - Desktop App: dev/app.md
-    - Web UI: dev/web-ui.md
-    - Lemonade Omni Models: dev/lemonade-omni.md
-    - Router Policies: dev/router-policy.md
-    - Infrastructure: dev/self-hosted-runners.md
-    - Release Process: dev/release.md
-  - App Integrations:
-    - Overview: integrations/README.md
-    - AI Toolkit: integrations/ai-toolkit.md
-    - AnythingLLM: integrations/anythingLLM.md
-    - Claude Code: integrations/claude-code.md
-    - CodeGPT: integrations/codeGPT.md
-    - Continue: integrations/continue.md
-    - Interviewer: integrations/interviewer.md
-    - Junie: integrations/junie.md
-    - LangChain: integrations/langchain.md
-    - Lemon Zest: integrations/lemon-zest.md
-    - Mindcraft: integrations/mindcraft.md
-    - Open Hands: integrations/open-hands.md
-    - Open WebUI: integrations/open-webui.md
-    - Wut: integrations/wut.md
-  - API Spec:
-      - Overview: api/README.md
-      - OpenAI Compatible: api/openai.md
-      - Ollama Compatible: api/ollama.md
-      - Anthropic Compatible: api/anthropic.md
-      - MCP Gateway: api/mcp.md
-      - llama.cpp Specific: api/llamacpp.md
-      - Lemonade Specific: api/lemonade.md
-  - Embeddable Lemonade:
-      - Overview: embeddable/README.md
-      - Runtime: embeddable/runtime.md
-      - Backends: embeddable/backends.md
-      - Models: embeddable/models.md
-      - Building from Source: embeddable/building.md
-
-# Footer social links
-extra:
-  homepage: https://lemonade-server.ai
-  social:
-    - icon: simple/youtube
-      link: https://www.youtube.com/@AMDDevCentral
-    - icon: simple/github
-      link: https://github.com/lemonade-sdk/lemonade
-    - icon: simple/discord
-      link: https://discord.gg/5xXzkMu8Zk
-
-copyright: "© 2026 AMD. Licensed under Apache 2.0."
-
-# website-styles.css owns design tokens; zest-theme.css maps them to Zensical.
-extra_css:
-  - assets/website-styles.css
-  - assets/zest-theme.css
-
-# carousel.js handles YouTube embeds inside docs pages.
-extra_javascript:
-  - assets/carousel.js
+  - User guides: README.md
+  - Get started:
+      - Your first model: guide/README.md
+      - Install Juiced: guide/install/README.md
+      - Access and API keys: guide/access.md
+  - Manage models:
+      - Download or import: guide/models.md
+      - Runtimes and hardware: guide/runtimes.md
+      - Loading policies: guide/loading-policy.md
+      - Model settings: guide/settings.md
+      - Prepare another quant: guide/preparation.md
+      - Cache and storage: guide/cache.md
+  - Use services:
+      - Test services: guide/testing.md
+      - Command-line client: guide/cli.md
+      - Connect an application: integrations/README.md
+      - Coding clients and Pi: integrations/pi.md
+      - Home Assistant speech: integrations/home-assistant.md
+  - API examples:
+      - Choose an interface: api/README.md
+      - OpenAI: api/openai.md
+      - Ollama: api/ollama.md
+      - Anthropic: api/anthropic.md
+      - AUTOMATIC1111: api/automatic1111.md
+      - MCP: api/mcp.md
+      - llama.cpp operations: api/llamacpp.md
+      - Juiced management: api/juiced.md
+      - Native compatibility: api/lemonade.md
+  - Operate your server:
+      - Diagnostics: guide/diagnostics.md
+      - Update and recovery: guide/maintenance.md
+      - Troubleshooting: guide/troubleshooting.md
+  - Credits: credits.md
 
 markdown_extensions:
   - admonition
-  - pymdownx.superfences  # Better code blocks
-  - pymdownx.tabbed:      # Tabbed code blocks
-      alternate_style: true
+  - pymdownx.superfences

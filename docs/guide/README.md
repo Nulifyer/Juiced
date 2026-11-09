@@ -1,41 +1,52 @@
-# Lemonade User Guide
+# Run your first model
 
-### Installation
+Use Juiced's browser console to download a chat model and send a test prompt.
+You need a [running Juiced server](install/README.md), disk space for the weights,
+and enough memory for the model and its context.
 
-Use the [install](./install/README.md) guide to get set up.
+## Download a model
 
-Follow the AMD [Lemonade getting started guide](https://developer.amd.com/playbooks/lemonade-getting-started/) for a guided walkthrough.
+1. Open `http://localhost:8080`, or your server's configured address.
+2. Select **Library → Discover models**.
+3. Choose **Model catalog** and filter the service to **Chat**.
+4. Choose a small GGUF model and select **Download**.
+5. Open **Library → Downloads** and wait for the download to finish.
 
-### Service
+Download size describes the weights on disk. Runtime memory also includes
+context, engine buffers, and any companion components.
 
-Lemonade runs as a [lightweight local service](./concepts.md) on your computer at all times. It makes models available to your apps over an [HTTP API](../api/README.md).
+## Choose where it runs
 
-### GUI
+1. Open the downloaded model's details.
+2. Select **Runtime**.
+3. Choose **llama.cpp** and a compatible hardware variant under **Run on**.
+4. Select **Use this profile** for an unloaded model.
 
-The simplest way to experience Lemonade is to explore the built-in GUI, which helps you manage models and try them out.
+Use CPU for a first test if accelerator access is not configured. An unavailable
+choice explains which package, hardware, or model requirement is missing.
+See [runtimes and hardware](runtimes.md) before selecting an experimental profile.
 
-=== "Windows"
+## Enable and test it
 
-    Click the 🍋 tray icon and select Open Lemonade App.
+New downloads start **Disabled**.
 
-=== "macOS"
+1. Set the model's **Loading policy** to **Hot** to keep it ready.
+2. Wait for its worker to load.
+3. Select **Test this variant**, or open **Test services → Chat**.
+4. Choose the loaded model and send a short prompt.
+5. Check that the model returns a complete answer.
 
-    Run the Lemonade App from your apps folder.
+A loaded worker confirms startup. A completed request checks that the selected
+model can serve this operation.
 
-=== "Linux"
+The test page is temporary. Leaving the page, changing models, or reloading
+clears chat results. Use a connected client for conversations you want to keep.
 
-    Open http://localhost:13305 in your browser.
+## Connect an app
 
+Open **Service APIs** and choose your client's protocol. For an OpenAI-compatible
+client on the same machine, use `http://localhost:8080/v1` and the exact model ID
+shown by Juiced. Follow [connect an application](../integrations/README.md) for
+remote addresses, API keys, and compatibility limits.
 
-
-### CLI
-
-The `lemonade` CLI provides full control over the Lemonade service from your terminal. [Learn more](./cli.md).
-
-### Configuration
-
-Almost every aspect of Lemonade can be customized. Learn more in the [configuration](./configuration/README.md) guide.
-
-### Need Help?
-
-Check out the [Frequently Asked Questions](./faq.md) and join the [Discord](https://discord.gg/5xXzkMu8Zk). The Lemonade community is excited to help you get started!
+Choose [On-demand](loading-policy.md) if the model should load only when requested.

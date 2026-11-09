@@ -1,20 +1,20 @@
-name: "📖 Documentation Issue"
+name: Documentation issue
 description: Report missing, incorrect, or unclear documentation
 labels: ["documentation"]
 body:
   - type: markdown
     attributes:
       value: |
-        Help us improve the Lemonade documentation! Let us know what's missing or could be better.
+        Help us improve the Juiced documentation! Let us know what's missing or could be better.
 
-        Please write this issue in your own words, per the [AI content policy](https://github.com/lemonade-sdk/lemonade/blob/main/docs/dev/ai-content-policy.md).
+        Include enough detail to reproduce or assess the change. See [contributing](https://github.com/Nulifyer/Juiced/blob/main/CONTRIBUTING.md).
 
   - type: input
     id: page
     attributes:
       label: Documentation Page / Section
       description: "Which page or section of the docs is this about? Provide a URL or path if possible."
-      placeholder: "e.g. https://lemonade-server.ai/docs/server/concepts/ or docs/server/README.md"
+      placeholder: "e.g. docs/guide/models.md"
     validations:
       required: false
 

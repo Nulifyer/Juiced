@@ -12,7 +12,7 @@ hand-maintained:
     ``/internal/config/defaults`` (its per-recipe blocks come from each
     descriptor's ``config_defaults()``).
 
-A CI step runs it with ``--check`` and fails if any committed artifact drifts.
+Run it with ``--check`` to fail if a committed artifact drifts.
 
 Usage:
     python docs/tools/gen_backend_boilerplate.py [--lemond PATH] [--check]
@@ -39,7 +39,7 @@ import urllib.request
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-TARGET_DOC = REPO_ROOT / "docs" / "dev" / "backends-reference.md"
+TARGET_DOC = REPO_ROOT / "juiced" / "BACKENDS.md"
 
 
 def free_port() -> int:
@@ -73,8 +73,27 @@ class Lemond:
         self._proc: subprocess.Popen | None = None
 
     def __enter__(self):
+        config_dir = Path(self._cache.name) / "config"
+        config_dir.mkdir()
+        (config_dir / "config.json").write_text(
+            json.dumps(
+                {
+                    "broadcast": False,
+                    "no_fetch_executables": True,
+                    "auto_check_model_updates": False,
+                }
+            )
+        )
         self._proc = subprocess.Popen(
-            [str(self.binary), self._cache.name, "--port", str(self.port)],
+            [
+                str(self.binary.resolve()),
+                self._cache.name,
+                str(config_dir),
+                "--host",
+                "127.0.0.1",
+                "--port",
+                str(self.port),
+            ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
@@ -117,9 +136,6 @@ class Lemond:
     def system_info(self) -> dict:
         return json.loads(self._get("/api/v1/system-info", timeout=30))
 
-    def config(self) -> dict:
-        return json.loads(self._get("/internal/config", timeout=10))
-
     def config_defaults_text(self) -> str:
         # Verbatim text of the canonical default config (the server's own
         # serialization) so the committed resources/defaults.json is byte-stable.
@@ -129,243 +145,6 @@ class Lemond:
 
 def md_escape(text: str) -> str:
     return str(text).replace("|", "\\|")
-
-
-# Preferred README ordering, not an allow-list. Modalities not listed here are
-# appended deterministically so future backends cannot be silently omitted.
-MODALITY_ORDER = [
-    "Text generation",
-    "Speech-to-text",
-    "Text-to-speech",
-    "Audio generation",
-    "Image generation",
-    "3D generation",
-]
-OS_LABEL = {"windows": "Windows", "linux": "Linux", "macos": "macOS"}
-OS_ORDER = ["windows", "linux", "macos"]
-
-
-def _fmt_os(os_set) -> str:
-    return ", ".join(OS_LABEL.get(o, o) for o in OS_ORDER if o in os_set)
-
-
-def _code_devices(summary: str) -> str:
-    # Light formatting: render bare arch tokens as <code>, matching the README style.
-    summary = re.sub(r"\bx86_64\b", "<code>x86_64</code>", summary)
-    summary = re.sub(r"\barm64\b", "<code>arm64</code>", summary)
-    return summary
-
-
-def _ordered(recipes: dict) -> list:
-    # Recipes in descriptor registry order (stable, deterministic doc rendering).
-    return sorted(recipes.items(), key=lambda kv: kv[1].get("order", 999))
-
-
-def _ordered_modalities(by_mod: dict[str, list]) -> list[str]:
-    """Return known modalities first, then future modalities deterministically."""
-    preferred = [mod for mod in MODALITY_ORDER if mod in by_mod]
-    additional = sorted(set(by_mod) - set(MODALITY_ORDER))
-    return preferred + additional
-
-
-TIER_MARKS = {"experimental": "†", "guest": "‡"}
-
-
-def render_readme_matrix(recipes: dict) -> str:
-    # Group descriptor-backed recipes by modality, in descriptor registry order.
-    # MODALITY_ORDER controls presentation only; it must never filter recipes.
-    by_mod: dict[str, list] = {}
-    for recipe, info in _ordered(recipes):
-        support_rows = info.get("support", [])
-        if not support_rows:
-            continue
-        mod = info.get("modality")
-        if not mod:
-            sys.exit(
-                f"Backend '{recipe}' has support rows but no documentation modality"
-            )
-
-        # Merge support rows sharing a (backend, tier, device summary); union their OS.
-        merged: list[dict] = []
-        seen: dict[tuple, dict] = {}
-        for row in support_rows:
-            key = (row["backend"], row.get("tier", ""), row.get("device_summary", ""))
-            if key in seen:
-                seen[key]["os"] |= set(row.get("os", []))
-            else:
-                d = {
-                    "backend": row["backend"],
-                    "tier": row.get("tier", ""),
-                    "summary": row.get("device_summary", ""),
-                    "os": set(row.get("os", [])),
-                }
-                seen[key] = d
-                merged.append(d)
-        if merged:
-            by_mod.setdefault(mod, []).append((recipe, info, merged))
-
-    out = [
-        "<table>",
-        "  <thead>",
-        "    <tr>",
-        "      <th>Modality</th>",
-        "      <th>Engine</th>",
-        "      <th>Backend</th>",
-        "      <th>Device</th>",
-        "      <th>OS</th>",
-        "    </tr>",
-        "  </thead>",
-        "  <tbody>",
-    ]
-    for mod in _ordered_modalities(by_mod):
-        recipes_in = by_mod[mod]
-        mod_span = sum(len(merged) for _, _, merged in recipes_in)
-        first_mod = True
-        for recipe, info, merged in recipes_in:
-            engine = f"<code>{recipe}</code>"
-            first_recipe = True
-            for d in merged:
-                out.append("    <tr>")
-                if first_mod:
-                    out.append(
-                        f'      <td rowspan="{mod_span}"><strong>{mod}</strong></td>'
-                    )
-                    first_mod = False
-                if first_recipe:
-                    out.append(f'      <td rowspan="{len(merged)}">{engine}</td>')
-                    first_recipe = False
-                out.append(
-                    f'      <td><code>{d["backend"]}</code>{TIER_MARKS.get(d["tier"], "")}</td>'
-                )
-                out.append(f"      <td>{_code_devices(d['summary'])}</td>")
-                out.append(f"      <td>{_fmt_os(d['os'])}</td>")
-                out.append("    </tr>")
-    out += [
-        "  </tbody>",
-        "</table>",
-        "",
-        "† experimental backend, ‡ guest backend. See "
-        "[Backend Tiers and Formats](./docs/api/lemonade.md#backend-tiers-and-formats).",
-    ]
-    return "\n".join(out)
-
-
-def _cli_default(opt: dict) -> str:
-    d = opt.get("default")
-    if opt.get("type_name") == "BACKEND" and d == "":
-        return "Auto-detected"
-    if isinstance(d, str):
-        return '`""`' if d == "" else f"`{d}`"
-    if isinstance(d, bool):
-        return f"`{str(d).lower()}`"
-    if d == -1:
-        return "auto"
-    return f"`{d}`"
-
-
-def render_cli_recipe_options(recipes: dict) -> str:
-    # Per-recipe load options, exactly as the CLI registers them from descriptors.
-    # Recipes with no CLI options (kokoro, cloud) are omitted.
-    blocks: list[str] = []
-    for recipe, info in _ordered(recipes):
-        cli_opts = [o for o in info.get("options", []) if o.get("cli_flag")]
-        if not info.get("uses_ctx_size") and not cli_opts:
-            continue
-        blocks.append(f"#### {info.get('display_name', recipe)} (`{recipe}` recipe)\n")
-        blocks.append("| Option | Description | Default |")
-        blocks.append("|--------|-------------|---------|")
-        if info.get("uses_ctx_size"):
-            blocks.append("| `--ctx-size SIZE` | Context size for the model | auto |")
-        for o in cli_opts:
-            blocks.append(
-                "| `{flag} {t}` | {h} | {d} |".format(
-                    flag=o["cli_flag"],
-                    t=o.get("type_name", ""),
-                    h=md_escape(o.get("help", "")),
-                    d=_cli_default(o),
-                )
-            )
-        blocks.append("")
-    return "\n".join(blocks).rstrip()
-
-
-def _oxford(items: list) -> str:
-    items = [f"`{i}`" for i in items]
-    if len(items) <= 1:
-        return "".join(items)
-    if len(items) == 2:
-        return f"{items[0]} and {items[1]}"
-    return ", ".join(items[:-1]) + f", and {items[-1]}"
-
-
-def _js_to_title(recipe: str) -> str:
-    # Mirror models.js toTitle(): the website's fallback for unlisted display names.
-    return re.sub(
-        r"\b\w",
-        lambda m: m.group(0).upper(),
-        recipe.replace("_", " ").replace("-", " "),
-    )
-
-
-def _js_key(recipe: str) -> str:
-    # Bare identifier if it's a valid JS key, else quoted (matches models.js style).
-    return recipe if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", recipe) else f"'{recipe}'"
-
-
-def _web_display_name(info: dict, recipe: str) -> str:
-    return info.get("web_display_name") or info.get("display_name", recipe)
-
-
-def render_models_js(recipes: dict) -> str:
-    # RECIPE_PRIORITY: every descriptor-backed recipe, ordered alphabetically by
-    # display name. Listing all of them (rather than an opt-in subset) means a new
-    # backend can never be silently dropped from the website.
-    prioritized = sorted(
-        recipes, key=lambda r: _web_display_name(recipes[r], r).lower()
-    )
-    pri_lines = ",\n".join(f"  '{r}'" for r in prioritized)
-
-    # RECIPE_DISPLAY_NAMES: only recipes whose name differs from the JS toTitle()
-    # fallback (matching the curated map, which omits redundant entries).
-    name_lines = []
-    for r, info in _ordered(recipes):
-        name = _web_display_name(info, r)
-        if name and name != _js_to_title(r):
-            name_lines.append(f"  {_js_key(r)}: '{name}'")
-    names = ",\n".join(name_lines)
-
-    return (
-        f"const RECIPE_PRIORITY = [\n{pri_lines}\n];\n\n"
-        f"const RECIPE_DISPLAY_NAMES = {{\n{names}\n}};"
-    )
-
-
-def render_config_example(config: dict) -> str:
-    # The canonical config.json, straight from a fresh lemond's /internal/config.
-    # `port` is the only environment-dependent field (it reflects the launch port);
-    # normalize it to the documented default.
-    cfg = dict(config)
-    cfg["port"] = 13305
-    return "```json\n" + json.dumps(cfg, indent=2) + "\n```"
-
-
-def render_recipe_values(recipes: dict) -> str:
-    # Inline list of recipe values for `--recipe`, plus the collection orchestrator.
-    rs = [r for r, _ in _ordered(recipes)] + ["collection.omni"]
-    return ", ".join(f"`{r}`" for r in rs)
-
-
-def render_npu_exclusivity(recipes: dict) -> str:
-    npu = [
-        r
-        for r, info in _ordered(recipes)
-        if any(
-            row.get("backend") == "npu"
-            or any(d.get("device") == "amd_npu" for d in row.get("devices", []))
-            for row in info.get("support", [])
-        )
-    ]
-    return f"- **NPU Exclusivity:** {_oxford(npu)} are mutually exclusive on the NPU."
 
 
 def render_overview(recipes: dict) -> str:
@@ -474,23 +253,9 @@ the generator instead. Prose outside the markers is preserved. -->
 
 def apply_sections(text: str, sections: dict[str, str]) -> str:
     for marker_id, body in sections.items():
-        # Accept HTML (`<!-- ... -->`) markers for Markdown and block (`/* ... */`)
-        # markers for code files like .js, so the same generator drives both.
         mid = re.escape(marker_id)
-        begin = (
-            r"(<!-- BEGIN GENERATED: "
-            + mid
-            + r" -->|/\* BEGIN GENERATED: "
-            + mid
-            + r" \*/)"
-        )
-        end = (
-            r"(<!-- END GENERATED: "
-            + mid
-            + r" -->|/\* END GENERATED: "
-            + mid
-            + r" \*/)"
-        )
+        begin = r"(<!-- BEGIN GENERATED: " + mid + r" -->)"
+        end = r"(<!-- END GENERATED: " + mid + r" -->)"
         pattern = re.compile(begin + r".*?" + end, re.DOTALL)
         m = pattern.search(text)
         if not m:
@@ -520,17 +285,12 @@ def main() -> int:
     binary = find_lemond(args.lemond)
     with Lemond(binary) as server:
         info = server.system_info()
-        config = server.config()
         defaults_text = server.config_defaults_text()
     recipes = info.get("recipes", {})
     if not recipes:
         sys.exit("/system-info returned no recipes")
-    if not config:
-        sys.exit("/internal/config returned nothing")
 
-    # Each target doc maps marker IDs -> generated content. backends-reference.md
-    # is created from a template if missing; the others must already contain their
-    # markers (the regions were added to the curated docs by hand once).
+    # Native descriptor metadata belongs with the implementation contracts.
     targets: dict = {
         TARGET_DOC: {
             "sections": {
@@ -539,43 +299,6 @@ def main() -> int:
                 "backend-options": render_options(recipes),
             },
             "template": DEFAULT_TEMPLATE,
-        },
-        REPO_ROOT
-        / "README.md": {
-            "sections": {"backends-matrix": render_readme_matrix(recipes)},
-        },
-        REPO_ROOT
-        / "docs"
-        / "guide"
-        / "configuration"
-        / "multi-model.md": {
-            "sections": {"npu-exclusivity": render_npu_exclusivity(recipes)},
-        },
-        REPO_ROOT
-        / "docs"
-        / "guide"
-        / "cli.md": {
-            "sections": {"cli-recipe-options": render_cli_recipe_options(recipes)},
-        },
-        REPO_ROOT
-        / "docs"
-        / "guide"
-        / "configuration"
-        / "custom-models.md": {
-            "sections": {"recipe-values": render_recipe_values(recipes)},
-        },
-        REPO_ROOT
-        / "docs"
-        / "guide"
-        / "configuration"
-        / "README.md": {
-            "sections": {"config-example": render_config_example(config)},
-        },
-        REPO_ROOT
-        / "docs"
-        / "assets"
-        / "models.js": {
-            "sections": {"models-js-recipes": render_models_js(recipes)},
         },
     }
 

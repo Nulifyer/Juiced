@@ -1,0 +1,36 @@
+name: Juiced documentation
+on:
+  pull_request:
+    paths:
+      - 'README.md'
+      - 'CONTRIBUTING.md'
+      - 'docs/**'
+      - 'mkdocs.yml'
+      - 'juiced/*.md'
+      - '.github/workflows/juiced-docs.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'README.md'
+      - 'CONTRIBUTING.md'
+      - 'docs/**'
+      - 'mkdocs.yml'
+      - 'juiced/*.md'
+      - '.github/workflows/juiced-docs.yml'
+permissions:
+  contents: read
+jobs:
+  documentation:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install documentation dependencies
+        run: pip install -r docs/assets/docs_requirements.txt
+      - name: Check repository links and example syntax
+        run: python docs/tools/check_docs.py
+      - name: Build the user guides
+        run: zensical build --strict

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate MCP tool reference boilerplate from a live Lemonade server.
+"""Generate MCP tool reference boilerplate from an isolated Juiced server.
 
 This deliberately follows docs/tools/gen_backend_boilerplate.py:
 
@@ -23,7 +23,7 @@ from pathlib import Path
 from gen_backend_boilerplate import Lemond, find_lemond
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-TARGET_DOC = REPO_ROOT / "docs" / "api" / "mcp.md"
+TARGET_DOC = REPO_ROOT / "juiced" / "MCP-TOOLS.md"
 BEGIN = "<!-- BEGIN GENERATED: mcp-tools -->"
 END = "<!-- END GENERATED: mcp-tools -->"
 

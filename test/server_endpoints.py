@@ -3924,9 +3924,8 @@ class EndpointTests(ServerTestBase):
     def test_021j_register_user_collection_with_system_prompt(self):
         """A registered user collection round-trips an optional system_prompt.
 
-        Verifies the per-collection override path documented in
-        docs/dev/lemonade-omni.md: a custom omni model can ship its own
-        system_prompt template; the global default in toolDefinitions.json is
+        A custom omni model can ship its own system_prompt template;
+        the global default in toolDefinitions.json is
         the fallback. The wire surface must echo the field on GET /models/{id}
         and on /models?show_all=true so the desktop app can read it back when
         re-opening the Omni Model editor.

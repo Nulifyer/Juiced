@@ -2010,13 +2010,6 @@ if(UNIX AND NOT APPLE)
         DESTINATION share/lemonade
     )
 
-    # Install example scripts
-    install(DIRECTORY ${CMAKE_SOURCE_DIR}/examples/
-        DESTINATION share/lemonade-server/examples
-        USE_SOURCE_PERMISSIONS
-        PATTERN "*.sh" PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE
-    )
-
     # Helper: create a systemd unit symlink with fatal-error-on-failure semantics
     function(lemonade_install_systemd_symlink link_path target_path)
         get_filename_component(_link_dir "${link_path}" DIRECTORY)

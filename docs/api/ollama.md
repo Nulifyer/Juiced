@@ -1,21 +1,44 @@
-# Ollama-Compatible API
+# Use the Ollama-compatible API
 
-Lemonade supports the [Ollama API](https://github.com/ollama/ollama/blob/main/docs/api.md), allowing applications built for Ollama to work with Lemonade without modification.
+Configure the client's Ollama host as `http://localhost:8080`.
+Keep `/v1` out of the base address. The protocol uses `/api/*` paths.
 
-To enable auto-detection by Ollama-integrated apps, configure the server to use the Ollama default port `11434`. See [Server Configuration](../guide/configuration/README.md#settings-reference) for how to change the port.
+## Discover models
 
-| Endpoint | Status | Notes |
-|----------|--------|-------|
-| `POST /api/chat` | Supported | Streaming and non-streaming |
-| `POST /api/generate` | Supported | Text completion + image generation |
-| `GET /api/tags` | Supported | Lists downloaded models |
-| `POST /api/show` | Supported | Model details |
-| `DELETE /api/delete` | Supported | |
-| `POST /api/pull` | Supported | Download with progress |
-| `POST /api/embed` | Supported | New embeddings format |
-| `POST /api/embeddings` | Supported | Legacy embeddings |
-| `GET /api/ps` | Supported | Running models |
-| `GET /api/version` | Supported | |
-| `POST /api/create` | Not supported | Returns 501 |
-| `POST /api/copy` | Not supported | Returns 501 |
-| `POST /api/push` | Not supported | Returns 501 |
+```bash
+curl --fail-with-body http://localhost:8080/api/tags
+curl --fail-with-body http://localhost:8080/api/ps
+```
+
+Tags list enabled models. The process list reports loaded workers.
+Use the exact model name returned by discovery.
+
+## Send a request
+
+```bash
+curl --fail-with-body http://localhost:8080/api/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"your-enabled-chat-model-id","messages":[{"role":"user","content":"Say hello."}],"stream":false}'
+```
+
+Replace the example model ID with one from `/api/tags`. Add your configured
+inference credential when needed.
+
+## Supported subset
+
+| Endpoint | Operation |
+| --- | --- |
+| `GET /api/tags` | Enabled model discovery |
+| `POST /api/show` | Read named-model metadata |
+| `GET /api/ps` | Loaded model information |
+| `POST /api/chat` | Chat and supported tool calls |
+| `POST /api/generate` | Prompt completion |
+| `POST /api/embed` | Embeddings |
+| `POST /api/embeddings` | Legacy single-prompt embeddings |
+
+`POST /api/show` is a metadata read. Model creation, copy, push, and blob upload
+are not implemented. Use Juiced's Library and model management controls for
+acquisition and removal.
+
+Select **Memory** cache mode for models used through this interface when
+persistent mode rejects the request. Tool-call execution belongs to the client.

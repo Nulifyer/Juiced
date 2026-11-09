@@ -1,13 +1,13 @@
-name: "Feature Request"
-description: Suggest a new feature or improvement for Lemonade
+name: Feature request
+description: Suggest a new feature or improvement for Juiced
 labels: ["enhancement"]
 body:
   - type: markdown
     attributes:
       value: |
-        Have an idea for how to make Lemonade better? We'd love to hear it!
+        Have an idea for how to make Juiced better? We'd love to hear it!
 
-        Please write this request in your own words, per the [AI content policy](https://github.com/lemonade-sdk/lemonade/blob/main/docs/dev/ai-content-policy.md).
+        Include enough detail to reproduce or assess the change. See [contributing](https://github.com/Nulifyer/Juiced/blob/main/CONTRIBUTING.md).
 
   - type: textarea
     id: description

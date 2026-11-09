@@ -39,7 +39,7 @@ RELEASE_BRANCH_PATTERN = re.compile(r"^release-v(\d{4})\.(\d{1,2})$")
 RELEASE_TAG_PATTERN = re.compile(r"^v(\d{4})\.(\d{1,2})\.(\d+)$")
 
 # The moment (UTC) the weekly release branch is cut from main, in datetime.weekday()
-# numbering. The cron in .github/workflows/create-release-branch.yml must agree.
+# numbering.
 CUTOFF_WEEKDAY = 2
 CUTOFF_HOUR = 16
 

@@ -80,6 +80,7 @@ COPY --chown=10001:10001 --from=preparation /opt/juiced/preparation/ /opt/juiced
 COPY --chown=10001:10001 --from=voice /opt/juiced/voice/ /opt/juiced/voice/
 COPY --chown=10001:10001 juiced/runtime/voice.py /opt/juiced/voice/launcher.py
 COPY --chown=10001:10001 LICENSE /opt/juiced/licenses/lemonade-Apache-2.0.txt
+COPY --chown=10001:10001 LICENSES/ /opt/juiced/licenses/inherited/
 COPY --chown=10001:10001 juiced/ui/LICENSE.t3code juiced/ui/T3-SOURCES.json /opt/juiced/licenses/
 RUN mkdir -p /data/config /data/cache /data/huggingface /data/prompt-state /library /run/lemonade && chown 10001:10001 /data /data/config /data/cache /data/huggingface /data/prompt-state /opt/lemonade /run/lemonade && chmod 700 /data/config /data/prompt-state /run/lemonade
 COPY --chown=10001:10001 juiced/runtime/defaults.json /opt/juiced/defaults.json

@@ -22,9 +22,8 @@ mkdocs.yml
 README.md
 LICENSE
 
-# Tests and Examples
+# Tests
 test
-examples
 
 # Python packaging (not used in image)
 pyproject.toml

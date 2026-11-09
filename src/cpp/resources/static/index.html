@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Lemonade Server</title>
+    <title>Juiced</title>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@400;500;600&display=swap');
 
@@ -204,8 +204,8 @@
 </head>
 <body>
     <div class="container">
-        <div class="logo">🍋</div>
-        <h1>Lemonade Server</h1>
+        <div class="logo">J</div>
+        <h1>Juiced</h1>
         <div class="status">
             <span class="status-dot"></span>
             Running on port {{SERVER_PORT}}
@@ -229,16 +229,15 @@ curl -X POST http://localhost:{{SERVER_PORT}}/api/v1/chat/completions \
             </div>
         </div>
 
-        <!-- Desktop App Hint -->
         <div class="card">
-            <h2><span class="icon">💻</span> Want a GUI?</h2>
-            This build of Lemonade has been built without a desktop app or a web app.
-            Get the full version from <a href="https://github.com/lemonade-sdk/lemonade">github.com/lemonade-sdk/lemonade</a> for a built-in chat interface and model manager.
+            <h2>Operator console</h2>
+            This native build does not include the Juiced console.
+            Follow the <a href="https://github.com/Nulifyer/Juiced/blob/main/docs/guide/install/README.md">Juiced installation guide</a> to run the release container with its model manager and service tests.
         </div>
 
         <div class="footer">
-            <a href="https://github.com/lemonade-sdk/lemonade" target="_blank">GitHub</a> ·
-            <a href="https://lemonade-server.ai/docs/" target="_blank">Documentation</a>
+            <a href="https://github.com/Nulifyer/Juiced" target="_blank" rel="noreferrer">GitHub</a> ·
+            <a href="https://github.com/Nulifyer/Juiced/blob/main/docs/README.md" target="_blank" rel="noreferrer">Documentation</a>
         </div>
     </div>
 

@@ -1,5 +1,4 @@
 import datetime
-import re
 import subprocess
 import tempfile
 import unittest
@@ -9,21 +8,6 @@ from unittest import mock
 from tools import version
 
 UTC = datetime.timezone.utc
-
-
-class CutoffTests(unittest.TestCase):
-    def test_workflow_cron_matches_the_cutoff(self):
-        workflow = Path(__file__).resolve().parents[1] / (
-            ".github/workflows/create-release-branch.yml"
-        )
-        match = re.search(
-            r'cron:\s*"(\d+) (\d+) \* \* (\d+)"', workflow.read_text(encoding="utf-8")
-        )
-        self.assertIsNotNone(match)
-        minute, hour, cron_weekday = (int(field) for field in match.groups())
-        self.assertEqual(minute, 0)
-        self.assertEqual(hour, version.CUTOFF_HOUR)
-        self.assertEqual(cron_weekday, (version.CUTOFF_WEEKDAY + 1) % 7)
 
 
 class ReleaseWeekTests(unittest.TestCase):

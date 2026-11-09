@@ -1,20 +1,34 @@
-# Lemonade Documentation
+# Juiced user guides
 
-Lemonade exists to make the world of local AI simple and enjoyable for users and builders.
+Install Juiced, run your models, and connect your applications.
+Start with [your first model](guide/README.md) if you are new here.
+These guides follow the current source. Check the sidebar's server version when
+comparing controls with a tagged release.
 
-### User Guide
+## Set up your server
 
-Start with the [guide](./guide/README.md) to learn the CLI and customization options.
+- [Install with Docker or Compose](guide/install/README.md)
+- [Configure access and API keys](guide/access.md)
+- [Update, back up, or restore Juiced](guide/maintenance.md)
 
-### Contributors
+## Manage models
 
-Learn to build from source and contribute in [dev](./dev/README.md).
+- [Download or import weights](guide/models.md)
+- [Choose a runtime and hardware](guide/runtimes.md)
+- [Set loading policies](guide/loading-policy.md)
+- [Change model settings](guide/settings.md)
+- [Prepare another quant](guide/preparation.md)
+- [Manage prompt cache and storage](guide/cache.md)
 
-### Builders
+## Use and check services
 
-Learn how to serve Lemonade models into your app with the [api](./api/README.md).
+- [Test chat, speech, and images](guide/testing.md)
+- [Connect an application](integrations/README.md)
+- [Connect Home Assistant speech](integrations/home-assistant.md)
+- [Use the HTTP and MCP APIs](api/README.md)
+- [Inspect runtime activity](guide/diagnostics.md)
+- [Use the command-line client](guide/cli.md)
+- [Solve problems](guide/troubleshooting.md)
 
-Then, [embed](./embeddable/README.md) the Lemonade portable binary into your app.
-
-<!--This file was originally licensed under Apache 2.0. It has been modified.
-Modifications Copyright (c) 2025 AMD-->
+[Credits](credits.md) explains source provenance and licenses.
+Contributor instructions live in [CONTRIBUTING.md](https://github.com/Nulifyer/Juiced/blob/main/CONTRIBUTING.md).

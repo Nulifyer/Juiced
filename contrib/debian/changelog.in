@@ -1,5 +1,0 @@
-lemonade (@@DEB_VERSION@@) @@DEB_CODENAME@@; urgency=medium
-
-  * Automated build
-
- -- Launchpad robot <lemonade@amd.com>  @@DEB_DATE@@

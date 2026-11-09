@@ -1,5 +1,5 @@
-name: "🐛 Bug Report"
-description: Report a bug or unexpected behavior in Lemonade
+name: Bug report
+description: Report a bug or unexpected behavior in Juiced
 labels: ["bug"]
 body:
   - type: markdown
@@ -7,7 +7,7 @@ body:
       value: |
         Thanks for taking the time to report a bug! Please fill out the details below so we can investigate.
 
-        Please write this report in your own words, per the [AI content policy](https://github.com/lemonade-sdk/lemonade/blob/main/docs/dev/ai-content-policy.md).
+        Include enough detail to reproduce or assess the change. See [contributing](https://github.com/Nulifyer/Juiced/blob/main/CONTRIBUTING.md).
 
   - type: dropdown
     id: platform
@@ -27,9 +27,9 @@ body:
   - type: input
     id: version
     attributes:
-      label: Lemonade Version
-      description: "Run `lemonade --version` or check the About dialog in the app."
-      placeholder: "e.g. 9.4.2"
+      label: Juiced Version
+      description: "Check the Juiced server version in the console sidebar."
+      placeholder: "e.g. v0.9.2"
     validations:
       required: true
 

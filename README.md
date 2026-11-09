@@ -1,571 +1,102 @@
-# Juiced model appliance
+<div align="center">
 
-Juiced is a Lemonade-derived local model service with a T3-derived model library
-and direct chat/audio/image playground. It keeps model serving separate from
-agent tools and workspaces.
+<img src="juiced/ui/public/juiced-icon.svg" alt="Juiced" width="112" height="112">
 
-See [Juiced development and release documentation](juiced/README.md) for current
-scope, source/license provenance and build instructions. Runtime weights and
-state persist outside the image. The original upstream documentation follows.
+# Juiced
 
----
+### Your models. Your hardware. One place to run them.
 
-## 🍋 Lemonade: Refreshingly fast local AI
+A self-hosted model server with a browser console for managing local AI.
+Chat, speech, and image generation through the APIs your apps already use.
 
-<p align="center">
-  <a href="https://discord.gg/5xXzkMu8Zk">
-    <img src="https://img.shields.io/badge/Discord-7289DA?logo=discord&logoColor=white" alt="Discord" /></a>
-  <a href="https://github.com/lemonade-sdk/lemonade/blob/main/docs/dev/contribute.md" title="Contribution Guide">
-    <img src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg" alt="PRs Welcome" /></a>
-  <a href="https://github.com/lemonade-sdk/lemonade/releases/latest" title="Download the latest release">
-    <img src="https://img.shields.io/github/v/release/lemonade-sdk/lemonade?include_prereleases" alt="Latest Release" /></a>
-  <a href="https://tooomm.github.io/github-release-stats/?username=lemonade-sdk&repository=lemonade">
-    <img src="https://img.shields.io/github/downloads/lemonade-sdk/lemonade/total.svg" alt="GitHub downloads" /></a>
-  <a href="https://github.com/lemonade-sdk/lemonade/issues">
-    <img src="https://img.shields.io/github/issues/lemonade-sdk/lemonade" alt="GitHub issues" /></a>
-  <a href="https://github.com/lemonade-sdk/lemonade/blob/main/LICENSE">
-    <img src="https://img.shields.io/badge/License-Apache-yellow.svg" alt="License: Apache" /></a>
-  <a href="https://star-history.com/#lemonade-sdk/lemonade">
-    <img src="https://img.shields.io/badge/Star%20History-View-brightgreen" alt="Star History Chart" /></a>
-</p>
-<p align="center">
-  <img src="https://github.com/lemonade-sdk/assets/blob/main/docs/banner_02.png?raw=true" alt="Lemonade Banner" />
-</p>
-<h3 align="center">
-  <a href="./docs/guide/install/README.md">Download</a> |
-  <a href="./docs/README.md">Documentation</a> |
-  <a href="https://discord.gg/5xXzkMu8Zk">Discord</a>
-</h3>
+[![Container](https://img.shields.io/badge/container-ghcr.io%2Fnulifyer%2Fjuiced-blue?logo=docker)](https://github.com/Nulifyer/Juiced/pkgs/container/juiced)
+[![License](https://img.shields.io/badge/license-Apache--2.0-green)](LICENSE)
 
-Lemonade is the local AI server that gives you the same capabilities as cloud APIs, except 100% free and private. Use the latest models for chat, coding, speech, and image generation on your own NPU and GPU.
+[Get started](docs/guide/README.md) · [User guides](docs/README.md) · [Releases](https://github.com/Nulifyer/Juiced/releases) · [Source](https://github.com/Nulifyer/Juiced)
 
-Lemonade comes in two flavors:
+</div>
 
-* **Lemonade Server** installs a service you can connect to hundreds of great apps using standard OpenAI, Anthropic, and Ollama APIs.
-* **Embeddable Lemonade** is a portable binary you can package into your own application to give it multi-modal local AI that auto-optimizes for your user’s PC.
+## Meet Juiced
 
-*This project is built by the community for every PC, with optimizations by AMD engineers to get the most from Ryzen AI, Radeon, and Strix Halo PCs.*
+Downloading a model is the easy part. Choosing an engine, fitting it into memory,
+keeping it ready, and connecting your apps takes more work.
 
-## Getting Started
+Juiced puts those controls in one console. Browse models and quants, choose a
+runtime, set loading policies, inspect effective settings, and test the result.
+Your apps connect to the same server for inference.
 
-1. **Install**: [Windows](./docs/guide/install/windows.md) · [Linux](./docs/guide/install/linux.md) · [macOS](./docs/guide/install/macos.md) · [Docker](./docs/guide/install/docker.md) · [Source](./docs/dev/getting-started.md)
-2. **Get Models**: Browse and download with the [Model Manager](#model-library)
-3. **Generate**: Try models with the built-in interfaces for chat, image gen, speech gen, and more
-4. **Mobile**: Take your lemonade to go: [iOS](https://apps.apple.com/us/app/lemonade-mobile/id6757372210) · [Android](https://play.google.com/store/apps/details?id=com.lemonade.mobile.chat.ai&pli=1) · [Source](https://github.com/lemonade-sdk/lemonade-mobile)
-5. **Connect**: Use Lemonade with your [favorite apps](https://lemonade-server.ai/marketplace):
+Run Juiced on the machine with your models and accelerators. Manage it from a
+browser on your desktop, laptop, or phone.
 
-<!-- MARKETPLACE_START -->
-<p align="center">
-  <a href="./docs/integrations/claude-code.md" title="Claude Code"><img src="https://raw.githubusercontent.com/lemonade-sdk/marketplace/main/apps/claude-code/logo.png" alt="Claude Code" width="60" /></a>&nbsp;&nbsp;<a href="https://quickthoughts.ca/posts/firefox-chatback-lemonade-sdk/" title="Firefox Chatbot"><img src="https://raw.githubusercontent.com/lemonade-sdk/marketplace/main/apps/fx-chatbot/logo.png" alt="Firefox Chatbot" width="60" /></a>&nbsp;&nbsp;<a href="./docs/integrations/anythingLLM.md" title="AnythingLLM"><img src="https://raw.githubusercontent.com/lemonade-sdk/marketplace/main/apps/anythingllm/logo.png" alt="AnythingLLM" width="60" /></a>&nbsp;&nbsp;<a href="https://marketplace.dify.ai/plugins/langgenius/lemonade" title="Dify"><img src="https://raw.githubusercontent.com/lemonade-sdk/marketplace/main/apps/dify/logo.png" alt="Dify" width="60" /></a>&nbsp;&nbsp;<a href="https://github.com/amd/gaia" title="GAIA"><img src="https://raw.githubusercontent.com/lemonade-sdk/marketplace/main/apps/gaia/logo.png" alt="GAIA" width="60" /></a>&nbsp;&nbsp;<a href="https://admcpr.com/local-github-copilot-with-lemonade-server-on-windows" title="GitHub Copilot"><img src="https://raw.githubusercontent.com/lemonade-sdk/marketplace/main/apps/github-copilot/logo.png" alt="GitHub Copilot" width="60" /></a>&nbsp;&nbsp;<a href="https://github.com/lemonade-sdk/infinity-arcade" title="Infinity Arcade"><img src="https://raw.githubusercontent.com/lemonade-sdk/marketplace/main/apps/infinity-arcade/logo.png" alt="Infinity Arcade" width="60" /></a>&nbsp;&nbsp;<a href="https://n8n.io/integrations/lemonade-model/" title="n8n"><img src="https://raw.githubusercontent.com/lemonade-sdk/marketplace/main/apps/n8n/logo.png" alt="n8n" width="60" /></a>&nbsp;&nbsp;<a href="./docs/integrations/open-webui.md" title="Open WebUI"><img src="https://raw.githubusercontent.com/lemonade-sdk/marketplace/main/apps/open-webui/logo.png" alt="Open WebUI" width="60" /></a>&nbsp;&nbsp;<a href="./docs/integrations/open-hands.md" title="OpenHands"><img src="https://raw.githubusercontent.com/lemonade-sdk/marketplace/main/apps/openhands/logo.png" alt="OpenHands" width="60" /></a>
-</p>
+## What you can do
 
-<p align="center"><em>Want your app featured here? <a href="https://github.com/lemonade-sdk/marketplace">Just submit a marketplace PR!</a></em></p>
-<!-- MARKETPLACE_END -->
+| Task | What Juiced gives you |
+| --- | --- |
+| Build a model library | Bundled catalog, Hugging Face search, quant selection, downloads, and local GGUF import |
+| Choose how models run | Per-model runtime profiles with package, hardware, and file compatibility information |
+| Keep services ready | Hot, On-demand, and Disabled policies, with worker status and load/unload controls |
+| Tune without guessing | Model settings, profile-specific overrides, and an Effective view showing where values come from |
+| Connect your apps | OpenAI, Ollama, Anthropic, and AUTOMATIC1111 compatibility subsets, MCP, and optional Wyoming speech |
+| Test before connecting | Temporary chat, transcription, speech, image, and side-by-side model tests |
+| Reuse computation | Memory caching and qualified persistent prompt snapshots, with storage and retention controls |
+| See what is happening | Hardware metrics, token throughput, worker activity, and searchable logs |
+| Prepare another quant | Supported local HF-to-GGUF and GGUF requantization jobs that preserve the source weights |
 
-## Supported Platforms
+Juiced hosts models and manages their runtime. Your connected clients own saved
+conversations, coding sessions, documents, and creative projects.
 
-| Platform | Build |
-|----------|-------|
-| [![Arch Linux](https://img.shields.io/badge/Arch%20Linux-supported-1793D1?logo=arch-linux&logoColor=white)](./docs/guide/install/arch.md) | [![Arch package](https://img.shields.io/archlinux/v/extra/x86_64/lemonade-server?label=Arch%20package)](https://archlinux.org/packages/extra/x86_64/lemonade-server) |
-| [![Debian Trixie+](https://img.shields.io/badge/Debian-Trixie%2B-A81D33?logo=debian&logoColor=white)](./docs/guide/install/debian.md) | [![Build .deb](https://img.shields.io/github/actions/workflow/status/lemonade-sdk/lemonade/cpp_server_build_test_release.yml?branch=main&label=Build%20.deb)](https://github.com/lemonade-sdk/lemonade/actions/workflows/cpp_server_build_test_release.yml) |
-| [![Docker](https://img.shields.io/badge/Docker-supported-2496ED?logo=docker&logoColor=white)](./docs/guide/install/docker.md) | [![Build Container Image](https://img.shields.io/github/actions/workflow/status/lemonade-sdk/lemonade/build-and-push-container.yml?branch=main&label=Build%20Container%20Image)](https://github.com/lemonade-sdk/lemonade/actions/workflows/build-and-push-container.yml) |
-| [![Fedora 43+](https://img.shields.io/badge/Fedora-43%2B-294172?logo=fedora&logoColor=white)](./docs/guide/install/fedora.md) | [![Build .rpm](https://img.shields.io/github/actions/workflow/status/lemonade-sdk/lemonade/cpp_server_build_test_release.yml?branch=main&label=Build%20.rpm)](https://github.com/lemonade-sdk/lemonade/actions/workflows/cpp_server_build_test_release.yml) |
-| [![macOS](https://img.shields.io/badge/macOS-supported-999999?logo=apple&logoColor=white)](./docs/guide/install/macos.md) | [![Build .pkg](https://img.shields.io/github/actions/workflow/status/lemonade-sdk/lemonade/cpp_server_build_test_release.yml?branch=main&label=Build%20.pkg)](https://github.com/lemonade-sdk/lemonade/actions/workflows/cpp_server_build_test_release.yml) |
-| [![Snap](https://img.shields.io/badge/Snap-supported-82BEA0?logo=snapcraft&logoColor=white)](https://snapcraft.io/lemonade-server) | [![Build Snap](https://img.shields.io/github/actions/workflow/status/lemonade-sdk/lemonade-server-snap/snap-build.yaml?branch=main&label=Build%20Snap)](https://github.com/lemonade-sdk/lemonade-server-snap/actions/workflows/snap-build.yaml) |
-| [![Ubuntu 24.04+](https://img.shields.io/badge/Ubuntu-24.04%2B-E95420?logo=ubuntu&logoColor=white)](./docs/guide/install/ubuntu.md) | [![Build Launchpad PPA](https://img.shields.io/github/actions/workflow/status/lemonade-sdk/lemonade/launchpad-ppa.yml?branch=main&label=Build%20Launchpad%20PPA)](https://github.com/lemonade-sdk/lemonade/actions/workflows/launchpad-ppa.yml) |
-| [![Windows 11](https://img.shields.io/badge/Windows-11-0078D6?logo=windows&logoColor=white)](./docs/guide/install/windows.md) | [![Build .msi](https://img.shields.io/github/actions/workflow/status/lemonade-sdk/lemonade/cpp_server_build_test_release.yml?branch=main&label=Build%20.msi)](https://github.com/lemonade-sdk/lemonade/actions/workflows/cpp_server_build_test_release.yml) |
+## Start with Docker
 
-## Using the CLI
+The release image targets Linux x86-64. Start a local instance with persistent
+storage:
 
-To run and chat with Gemma:
-
-```
-lemonade run Gemma-4-E2B-it-GGUF
+```bash
+docker run -d --name juiced \
+  -p 127.0.0.1:8080:8080 \
+  -v juiced-data:/data \
+  --restart unless-stopped \
+  ghcr.io/nulifyer/juiced:v0.9.2
 ```
 
-To code with Lemonade models:
+Open **http://localhost:8080**. Download a small chat model under **Library**,
+choose a compatible runtime, and enable it under **Loading policy**.
+Use **Test services** to send your first prompt.
 
-```
-lemonade launch claude
-```
+The [installation guide](docs/guide/install/README.md) covers Compose, GPU access,
+permissions, and release selection. For remote access, follow the
+[access guide](docs/guide/access.md).
 
-Multi-modality:
+## Use your hardware
 
-```
-# image gen
-lemonade run SDXL-Turbo
+Choose CPU or a compatible GPU profile for each model. llama.cpp profiles can
+reuse the same compatible GGUF across CPU, Vulkan, ROCm, CUDA, or native Apple
+Metal. Other engines have their own model-format and hardware requirements.
 
-# speech gen
-lemonade run kokoro-v1
+The Linux container includes a Vulkan llama.cpp runtime and CPU speech workers.
+Additional backends depend on their packages and the host. Native core builds
+are checked on Linux, Windows, and macOS; that does not establish packaged
+Juiced desktop support or qualify every accelerator.
 
-# transcription
-lemonade run Whisper-Large-v3-Turbo
-```
+The experimental XDNA2 + ROCm profile accelerates eligible prefill operations on
+specific AMD hardware. It requires a matched runtime bundle and does not promise
+a speed gain. See [runtimes and hardware](docs/guide/runtimes.md).
 
-To see available models and download them:
+## Find your next step
 
-```
-lemonade list
+- [Download or import a model](docs/guide/models.md)
+- [Choose loading policies](docs/guide/loading-policy.md)
+- [Tune a model](docs/guide/settings.md)
+- [Connect an application](docs/integrations/README.md)
+- [Manage cache and storage](docs/guide/cache.md)
+- [Diagnose a problem](docs/guide/troubleshooting.md)
 
-lemonade pull Gemma-4-E2B-it-GGUF
-```
+## Development and credits
 
-To manage model aliases for environment-independent naming and active-standby failover:
+Juiced is an independent project derived from Lemonade. Its console includes
+T3 Code-derived presentation components. We retain the upstream licenses and
+notices. See [credits](docs/credits.md) and the
+[contributor guide](CONTRIBUTING.md).
 
-```
-lemonade alias add production-llm Gemma-4-E2B-it-GGUF
-lemonade alias list
-
-# Instant active-standby failover to a different model target
-lemonade alias add production-llm Qwen3-0.6B-GGUF
-lemonade alias remove production-llm
-```
-
-To see the backends available on your PC:
-
-```
-lemonade backends
-```
-
-For hybrid setups, Lemonade can also route to any OpenAI-compatible cloud provider (Fireworks, OpenAI, OpenRouter, Together, …) alongside local models — see [Cloud Offload](./docs/guide/configuration/cloud.md). *(Experimental.)*
-
-
-## Model Library
-
-<img align="right" src="https://github.com/lemonade-sdk/assets/blob/main/docs/model_manager_02.png?raw=true" alt="Model Manager" width="280" />
-
-Lemonade supports a wide variety of LLMs (**GGUF**, **FLM**, and **ONNX**), whisper, stable diffusion, etc. models across CPU, GPU, and NPU.
-
-Use `lemonade pull` or the built-in **Model Manager** to download models. Custom GGUF/ONNX models can be pulled from Hugging Face or ModelScope, with their source retained for future updates.
-
-**[Browse the included model catalog →](https://lemonade-server.ai/models.html)**
-
-<br clear="right"/>
-
-## Supported Configurations
-
-Lemonade supports multiple inference engines for LLM, speech, TTS, and image generation, and each has its own backend and hardware requirements.
-
-<!-- BEGIN GENERATED: backends-matrix -->
-<table>
-  <thead>
-    <tr>
-      <th>Modality</th>
-      <th>Engine</th>
-      <th>Backend</th>
-      <th>Device</th>
-      <th>OS</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td rowspan="12"><strong>Text generation</strong></td>
-      <td rowspan="7"><code>llamacpp</code></td>
-      <td><code>system</code></td>
-      <td><code>x86_64</code>/ARM64 CPU, GPU</td>
-      <td>Linux</td>
-    </tr>
-    <tr>
-      <td><code>metal</code></td>
-      <td>Apple Silicon GPU</td>
-      <td>macOS</td>
-    </tr>
-    <tr>
-      <td><code>cuda</code></td>
-      <td>NVIDIA GPUs (Turing or newer)**</td>
-      <td>Windows, Linux</td>
-    </tr>
-    <tr>
-      <td><code>vulkan</code></td>
-      <td><code>x86_64</code> CPU, AMD iGPU, AMD dGPU; ARM64 CPU/GPU (Linux)</td>
-      <td>Windows, Linux</td>
-    </tr>
-    <tr>
-      <td><code>rocm</code></td>
-      <td>AMD GPUs supported by ROCm</td>
-      <td>Windows, Linux</td>
-    </tr>
-    <tr>
-      <td><code>hybrid-rocm</code>†</td>
-      <td>XDNA2 prefill + Radeon gfx1150 ROCm GPU (experimental)</td>
-      <td>Linux</td>
-    </tr>
-    <tr>
-      <td><code>cpu</code></td>
-      <td><code>x86_64</code> CPU; ARM64 CPU (Linux)</td>
-      <td>Windows, Linux</td>
-    </tr>
-    <tr>
-      <td rowspan="1"><code>llamacpp-hrx</code></td>
-      <td><code>hrx</code>†</td>
-      <td>AMD GPUs (gfx1100, gfx1151)</td>
-      <td>Linux</td>
-    </tr>
-    <tr>
-      <td rowspan="1"><code>flm</code></td>
-      <td><code>npu</code></td>
-      <td>XDNA2 NPU</td>
-      <td>Windows, Linux</td>
-    </tr>
-    <tr>
-      <td rowspan="1"><code>ryzenai-llm</code></td>
-      <td><code>npu</code></td>
-      <td>XDNA2 NPU</td>
-      <td>Windows</td>
-    </tr>
-    <tr>
-      <td rowspan="1"><code>vllm</code></td>
-      <td><code>rocm</code>†</td>
-      <td>Strix Halo iGPU (gfx1151)</td>
-      <td>Linux</td>
-    </tr>
-    <tr>
-      <td rowspan="1"><code>ds4</code></td>
-      <td><code>rocm</code>‡</td>
-      <td>Prebuilt ds4 for AMD Strix Halo</td>
-      <td>Linux</td>
-    </tr>
-    <tr>
-      <td rowspan="8"><strong>Speech-to-text</strong></td>
-      <td rowspan="5"><code>whispercpp</code></td>
-      <td><code>npu</code></td>
-      <td>XDNA2 NPU</td>
-      <td>Windows</td>
-    </tr>
-    <tr>
-      <td><code>metal</code></td>
-      <td>Apple Silicon GPU</td>
-      <td>macOS</td>
-    </tr>
-    <tr>
-      <td><code>vulkan</code></td>
-      <td><code>x86_64</code> CPU</td>
-      <td>Windows, Linux</td>
-    </tr>
-    <tr>
-      <td><code>rocm</code></td>
-      <td>Supported AMD ROCm iGPU/dGPU families*</td>
-      <td>Windows, Linux</td>
-    </tr>
-    <tr>
-      <td><code>cpu</code></td>
-      <td><code>x86_64</code> CPU</td>
-      <td>Windows, Linux</td>
-    </tr>
-    <tr>
-      <td rowspan="1"><code>asr4all</code></td>
-      <td><code>cpu</code>†</td>
-      <td><code>x86_64</code> CPU</td>
-      <td>Linux</td>
-    </tr>
-    <tr>
-      <td rowspan="1"><code>parakeet</code></td>
-      <td><code>cpu</code>†</td>
-      <td><code>x86_64</code> CPU</td>
-      <td>Linux</td>
-    </tr>
-    <tr>
-      <td rowspan="1"><code>moonshine</code></td>
-      <td><code>cpu</code></td>
-      <td><code>x86_64</code>/<code>arm64</code> CPU</td>
-      <td>Windows, Linux, macOS</td>
-    </tr>
-    <tr>
-      <td rowspan="4"><strong>Text-to-speech</strong></td>
-      <td rowspan="2"><code>kokoro</code></td>
-      <td><code>metal</code></td>
-      <td>Apple Silicon GPU</td>
-      <td>macOS</td>
-    </tr>
-    <tr>
-      <td><code>cpu</code></td>
-      <td><code>x86_64</code> CPU</td>
-      <td>Windows, Linux</td>
-    </tr>
-    <tr>
-      <td rowspan="2"><code>openmoss</code></td>
-      <td><code>cuda</code>†</td>
-      <td>NVIDIA GPUs</td>
-      <td>Windows, Linux</td>
-    </tr>
-    <tr>
-      <td><code>vulkan</code>†</td>
-      <td>Vulkan-capable GPUs</td>
-      <td>Windows, Linux</td>
-    </tr>
-    <tr>
-      <td rowspan="6"><strong>Audio generation</strong></td>
-      <td rowspan="3"><code>thinksound</code></td>
-      <td><code>cuda</code>†</td>
-      <td>NVIDIA GPUs</td>
-      <td>Windows, Linux</td>
-    </tr>
-    <tr>
-      <td><code>vulkan</code>†</td>
-      <td>Vulkan-capable GPUs</td>
-      <td>Windows, Linux</td>
-    </tr>
-    <tr>
-      <td><code>rocm</code>†</td>
-      <td>Supported AMD ROCm iGPU/dGPU families (ROCm via TheRock)</td>
-      <td>Windows, Linux</td>
-    </tr>
-    <tr>
-      <td rowspan="3"><code>acestep</code></td>
-      <td><code>cuda</code>†</td>
-      <td>NVIDIA GPUs</td>
-      <td>Windows, Linux</td>
-    </tr>
-    <tr>
-      <td><code>vulkan</code>†</td>
-      <td>Vulkan-capable GPUs</td>
-      <td>Windows, Linux</td>
-    </tr>
-    <tr>
-      <td><code>rocm</code>†</td>
-      <td>Supported AMD ROCm iGPU/dGPU families (ROCm via TheRock)</td>
-      <td>Windows, Linux</td>
-    </tr>
-    <tr>
-      <td rowspan="6"><strong>Image generation</strong></td>
-      <td rowspan="5"><code>sd-cpp</code></td>
-      <td><code>metal</code></td>
-      <td>Apple Silicon GPU</td>
-      <td>macOS</td>
-    </tr>
-    <tr>
-      <td><code>cuda</code></td>
-      <td>NVIDIA GPUs (Turing or newer)**</td>
-      <td>Windows, Linux</td>
-    </tr>
-    <tr>
-      <td><code>vulkan</code></td>
-      <td>Vulkan-capable GPUs</td>
-      <td>Windows, Linux</td>
-    </tr>
-    <tr>
-      <td><code>rocm</code></td>
-      <td>Supported AMD ROCm iGPU/dGPU families*</td>
-      <td>Windows, Linux</td>
-    </tr>
-    <tr>
-      <td><code>cpu</code></td>
-      <td><code>x86_64</code> CPU</td>
-      <td>Windows, Linux</td>
-    </tr>
-    <tr>
-      <td rowspan="1"><code>thenoise</code></td>
-      <td><code>rocm</code></td>
-      <td>Supported AMD ROCm families</td>
-      <td>Windows, Linux</td>
-    </tr>
-    <tr>
-      <td rowspan="3"><strong>3D generation</strong></td>
-      <td rowspan="3"><code>trellis</code></td>
-      <td><code>cuda</code>†</td>
-      <td>NVIDIA GPUs</td>
-      <td>Windows, Linux</td>
-    </tr>
-    <tr>
-      <td><code>vulkan</code>†</td>
-      <td>Vulkan-capable GPUs</td>
-      <td>Windows, Linux</td>
-    </tr>
-    <tr>
-      <td><code>rocm</code>†</td>
-      <td>Supported AMD ROCm iGPU/dGPU families (ROCm via TheRock)</td>
-      <td>Windows, Linux</td>
-    </tr>
-    <tr>
-      <td rowspan="3"><strong>Text classification</strong></td>
-      <td rowspan="3"><code>onnxruntime</code></td>
-      <td><code>cpu</code>†</td>
-      <td><code>x86_64</code> CPU</td>
-      <td>Windows</td>
-    </tr>
-    <tr>
-      <td><code>cpu</code>†</td>
-      <td><code>x86_64</code>/<code>arm64</code> CPU</td>
-      <td>Linux</td>
-    </tr>
-    <tr>
-      <td><code>cpu</code>†</td>
-      <td><code>arm64</code> CPU</td>
-      <td>macOS</td>
-    </tr>
-  </tbody>
-</table>
-
-† experimental backend, ‡ guest backend. See [Backend Tiers and Formats](./docs/api/lemonade.md#backend-tiers-and-formats).
-<!-- END GENERATED: backends-matrix -->
-
-To check exactly which recipes/backends are supported on your own machine, run:
-
-```
-lemonade backends
-```
-
-<details>
-<summary><small><i>* See supported AMD ROCm platforms</i></small></summary>
-
-<br>
-
-<table>
-  <thead>
-    <tr>
-      <th>Architecture</th>
-      <th>Platform Support</th>
-      <th>GPU Models</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td><b>gfx1151</b> (STX Halo)</td>
-      <td>Windows, Ubuntu</td>
-      <td>Ryzen AI MAX+ Pro 395</td>
-    </tr>
-    <tr>
-      <td><b>gfx120X</b> (RDNA4)</td>
-      <td>Windows, Ubuntu</td>
-      <td>Radeon AI PRO R9700, RX 9070 XT/GRE/9070, RX 9060 XT</td>
-    </tr>
-    <tr>
-      <td><b>gfx110X</b> (RDNA3)</td>
-      <td>Windows, Ubuntu</td>
-      <td>Radeon PRO W7900/W7800/W7700/V710, RX 7900 XTX/XT/GRE, RX 7800 XT, RX 7700 XT</td>
-    </tr>
-  </tbody>
-</table>
-</details>
-
-<details>
-<summary><small><i>** See supported NVIDIA CUDA platforms</i></small></summary>
-
-<br>
-
-<table>
-  <thead>
-    <tr>
-      <th>Compute Capability</th>
-      <th>Architecture</th>
-      <th>GPU Models</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td><b>sm_75</b></td>
-      <td>Turing</td>
-      <td>RTX 20-series, GTX 16-series, T4</td>
-    </tr>
-    <tr>
-      <td><b>sm_80</b> / <b>sm_86</b></td>
-      <td>Ampere</td>
-      <td>RTX 30-series, A100, A40</td>
-    </tr>
-    <tr>
-      <td><b>sm_89</b></td>
-      <td>Ada Lovelace</td>
-      <td>RTX 40-series, L40, L4</td>
-    </tr>
-    <tr>
-      <td><b>sm_90</b></td>
-      <td>Hopper</td>
-      <td>H100, H200</td>
-    </tr>
-    <tr>
-      <td><b>sm_100</b> / <b>sm_120</b></td>
-      <td>Blackwell</td>
-      <td>RTX 50-series, B100, B200</td>
-    </tr>
-  </tbody>
-</table>
-</details>
-
-## Project Roadmap
-
-Lemonade's roadmap is defined by a set of working groups. Visit the landing page [here](./docs/dev/working-groups/README.md) to learn each group's goal and roadmap.
-
-## Integrate Embeddable Lemonade in Your Application
-
-Embeddable Lemonade is a binary version of Lemonade that you can bundle into your own app to give it a portable, auto-optimizing, multi-modal local AI stack. This lets users focus on your app, with zero Lemonade installers, branding, or telemetry.
-
-Check out the [Embeddable Lemonade guide](docs/embeddable/README.md).
-
-
-## Connect Lemonade Server to Your Application
-
-You can use any OpenAI-compatible client library by configuring it to use `http://localhost:13305/v1` as the base URL. A table containing official and popular OpenAI clients on different languages is shown below.
-
-Feel free to pick and choose your preferred language.
-
-
-| Python | C++ | Java | C# | Node.js | Go | Ruby | Rust | PHP |
-|--------|-----|------|----|---------|----|-------|------|-----|
-| [openai-python](https://github.com/openai/openai-python) | [openai-cpp](https://github.com/olrea/openai-cpp) | [openai-java](https://github.com/openai/openai-java) | [openai-dotnet](https://github.com/openai/openai-dotnet) | [openai-node](https://github.com/openai/openai-node) | [go-openai](https://github.com/sashabaranov/go-openai) | [ruby-openai](https://github.com/alexrudall/ruby-openai) | [async-openai](https://github.com/64bit/async-openai) | [openai-php](https://github.com/openai-php/client) |
-
-
-### Python Client Example
-```python
-from openai import OpenAI
-
-# Initialize the client to use Lemonade Server
-client = OpenAI(
-    base_url="http://localhost:13305/api/v1",
-    api_key="lemonade"  # required but unused
-)
-
-# Create a chat completion
-completion = client.chat.completions.create(
-    model="Gemma-4-E2B-it-GGUF",  # or any other available model
-    messages=[
-        {"role": "user", "content": "What is the capital of France?"}
-    ]
-)
-
-# Print the response
-print(completion.choices[0].message.content)
-```
-
-Click to learn more about the [available APIs](./docs/api/README.md) and how to [embed Lemonade](./docs/embeddable/README.md) in your own application.
-
-## FAQ
-
-To read our frequently asked questions, see our [FAQ Guide](./docs/guide/faq.md)
-
-## Contributing
-
-Lemonade is built by the local AI community! If you would like to contribute to this project, please check out our [contribution guide](./docs/dev/contribute.md).
-
-## Maintainers
-
-This is a community project with many maintainers, please see the [maintainers list here](./docs/dev/contribute.md#maintainers) to see their subject areas. You can reach us by filing an [issue](https://github.com/lemonade-sdk/lemonade/issues) or joining our [Discord](https://discord.gg/5xXzkMu8Zk). This project is sponsored by [AMD](mailto:lemonade@amd.com).
-
-## Code Signing Policy
-
-Free code signing provided by [SignPath.io](https://signpath.io), certificate by [SignPath Foundation](https://signpath.org).
-
-- **Committers and reviewers**: [Maintainers](#maintainers) of this repo
-- **Approvers**: [Owners](https://github.com/orgs/lemonade-sdk/people?query=role%3Aowner)
-
-**Privacy policy**: This program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it. When the user requests a model download or registry lookup, Lemonade may contact [Hugging Face Hub](https://huggingface.co/) (see their [privacy policy](https://huggingface.co/privacy)) or [ModelScope](https://modelscope.cn/), according to the model source selected by the user or packager.
-
-## License and Attribution
-
-This project is:
-- Built with C++ (server) and React (app) with ❤️ for the open source community,
-- Standing on the shoulders of great tools from:
-  - [ggml/llama.cpp](https://github.com/ggml-org/llama.cpp)
-  - [ggml/whisper.cpp](https://github.com/ggerganov/whisper.cpp)
-  - [ggml/stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp)
-  - [kokoros](https://github.com/lucasjinreal/Kokoros)
-  - [OnnxRuntime GenAI](https://github.com/microsoft/onnxruntime-genai)
-  - [Hugging Face Hub](https://github.com/huggingface/huggingface_hub)
-  - [ModelScope](https://github.com/modelscope/modelscope)
-  - [OpenAI API](https://github.com/openai/openai-python)
-  - [IRON/MLIR-AIE](https://github.com/Xilinx/mlir-aie)
-  - and more...
-- Licensed under the [Apache 2.0 License](https://github.com/lemonade-sdk/lemonade/blob/main/LICENSE).
-  - Portions of the project are licensed as described in [LICENSE](./LICENSE).
-
-<!--This file was originally licensed under Apache 2.0. It has been modified.
-Modifications Copyright (c) 2025 AMD-->
+Product plans and native contracts live under [juiced/](juiced/README.md).
+Planned work, including the optional Barista operator assistant, is separate
+from the capabilities described above.

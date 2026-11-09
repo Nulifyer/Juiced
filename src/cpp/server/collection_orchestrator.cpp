@@ -22,9 +22,7 @@ namespace lemon {
 
 namespace {
 
-// Omni tools the server executes internally. v1 scope: image gen/edit + TTS.
-// (transcribe_audio and analyze_image stay client-path tools — see
-// docs/dev/lemonade-omni.md.)
+// transcribe_audio and analyze_image remain client-path tools.
 const std::set<std::string>& supported_omni_tools() {
     static const std::set<std::string> tools = {
         "generate_image", "edit_image", "text_to_speech",

@@ -1,3 +1,4 @@
-# Contributing to Lemonade
+# Contribute to Juiced
 
-The contribution guide lives at [docs/dev/contribute.md](../docs/dev/contribute.md).
+Read the [contributor guide](../CONTRIBUTING.md) for source ownership, builds,
+verification, and documentation conventions.
