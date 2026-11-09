@@ -728,6 +728,7 @@ private:
     mutable bool cache_valid_ = false;
 
     json get_sync_status_locked() const;
+    json publish_sync_result_locked();
     void rebuild_public_model_aliases_locked();
 };
 

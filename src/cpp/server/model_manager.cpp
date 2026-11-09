@@ -2994,6 +2994,27 @@ json ModelManager::get_sync_status_locked() const {
     return j;
 }
 
+json ModelManager::publish_sync_result_locked() {
+    sync_state_.is_sync_running = false;
+    sync_state_.is_full_sync = false;
+    sync_state_.active_targets.clear();
+    sync_state_.pending_targets.clear();
+    sync_state_.current_model.clear();
+    sync_state_.current_file.clear();
+    sync_state_.file_index = 0;
+    sync_state_.total_files = 0;
+    sync_state_.bytes_downloaded = 0;
+    sync_state_.bytes_total = 0;
+    sync_state_.percent = 0;
+    sync_state_.completed_generation = sync_state_.current_generation;
+    auto result = get_sync_status_locked();
+    sync_state_.completed_generation_results[sync_state_.current_generation] = result;
+    while (sync_state_.completed_generation_results.size() > 32)
+        sync_state_.completed_generation_results.erase(sync_state_.completed_generation_results.begin());
+    sync_state_.cv.notify_all();
+    return result;
+}
+
 json ModelManager::get_sync_status(uint64_t sync_id) const {
     std::lock_guard<std::mutex> lock(sync_state_.mutex);
     if (sync_id > 0) {
@@ -3083,43 +3104,21 @@ void ModelManager::fail_sync_start(uint64_t sync_id, const std::string& message)
     std::lock_guard<std::mutex> lock(sync_state_.mutex);
     if (!sync_state_.is_sync_running || sync_state_.current_generation != sync_id) return;
     sync_state_.terminal_error = message;
-    sync_state_.is_sync_running = false;
-    sync_state_.is_full_sync = false;
-    sync_state_.active_targets.clear();
-    sync_state_.pending_targets.clear();
-    sync_state_.completed_generation = sync_id;
-    sync_state_.completed_generation_results[sync_id] = get_sync_status_locked();
-    sync_state_.cv.notify_all();
+    publish_sync_result_locked();
 }
 
 json ModelManager::execute_sync() {
     struct SyncStateGuard {
-        ModelSyncState& state;
+        ModelManager& manager;
         bool active = true;
         ~SyncStateGuard() {
             if (active) {
-                std::lock_guard<std::mutex> lock(state.mutex);
-                state.is_sync_running = false;
-                state.active_targets.clear();
-                state.current_model.clear();
-                state.current_file.clear();
-                state.file_index = 0;
-                state.total_files = 0;
-                state.bytes_downloaded = 0;
-                state.bytes_total = 0;
-                state.percent = 0;
-                state.completed_generation = state.current_generation;
-                state.completed_generation_results[state.current_generation] = json{
-                    {"status", "failed"},
-                    {"sync_id", state.current_generation},
-                    {"completed_sync_id", state.current_generation},
-                    {"already_in_progress", false},
-                    {"terminal_error", "Sync worker terminated unexpectedly"}
-                };
-                state.cv.notify_all();
+                std::lock_guard<std::mutex> lock(manager.sync_state_.mutex);
+                manager.sync_state_.terminal_error = "Sync worker terminated unexpectedly";
+                manager.publish_sync_result_locked();
             }
         }
-    } guard{sync_state_};
+    } guard{*this};
 
     enum class ModelCheckOutcome {
         UpToDate,
@@ -3289,23 +3288,8 @@ json ModelManager::execute_sync() {
                     if (sync_state_.is_full_sync || !sync_state_.pending_targets.empty()) {
                         continue;
                     }
-                    sync_state_.is_sync_running = false;
-                    sync_state_.active_targets.clear();
-                    sync_state_.current_model.clear();
-                    sync_state_.current_file.clear();
-                    sync_state_.file_index = 0;
-                    sync_state_.total_files = 0;
-                    sync_state_.bytes_downloaded = 0;
-                    sync_state_.bytes_total = 0;
-                    sync_state_.percent = 0;
-                    sync_state_.completed_generation = sync_state_.current_generation;
-                    json res = get_sync_status_locked();
-                    sync_state_.completed_generation_results[sync_state_.current_generation] = res;
-                    if (sync_state_.completed_generation_results.size() > 32) {
-                        sync_state_.completed_generation_results.erase(sync_state_.completed_generation_results.begin());
-                    }
+                    auto res = publish_sync_result_locked();
                     guard.active = false;
-                    sync_state_.cv.notify_all();
                     return res;
                 }
             }
@@ -3350,23 +3334,8 @@ json ModelManager::execute_sync() {
         LOG(ERROR, "ModelManager") << "Terminal error in model synchronization: " << e.what() << std::endl;
         std::lock_guard<std::mutex> lock(sync_state_.mutex);
         sync_state_.terminal_error = e.what();
-        sync_state_.is_sync_running = false;
-        sync_state_.active_targets.clear();
-        sync_state_.current_model.clear();
-        sync_state_.current_file.clear();
-        sync_state_.file_index = 0;
-        sync_state_.total_files = 0;
-        sync_state_.bytes_downloaded = 0;
-        sync_state_.bytes_total = 0;
-        sync_state_.percent = 0;
-        sync_state_.completed_generation = sync_state_.current_generation;
-        json res = get_sync_status_locked();
-        sync_state_.completed_generation_results[sync_state_.current_generation] = res;
-        if (sync_state_.completed_generation_results.size() > 32) {
-            sync_state_.completed_generation_results.erase(sync_state_.completed_generation_results.begin());
-        }
+        auto res = publish_sync_result_locked();
         guard.active = false;
-        sync_state_.cv.notify_all();
         return res;
     }
 
@@ -3438,11 +3407,8 @@ json ModelManager::sync_models(const std::vector<std::string>& target_models, bo
         sync_state_.cv.wait(lock, [this, target_gen]() {
             return sync_state_.completed_generation >= target_gen && (!sync_state_.is_sync_running || sync_state_.current_generation > target_gen);
         });
-        auto it = sync_state_.completed_generation_results.find(target_gen);
-        if (it != sync_state_.completed_generation_results.end()) {
-            return it->second;
-        }
-        return get_sync_status_locked();
+        lock.unlock();
+        return get_sync_status(target_gen);
     }
 
     return execute_sync();

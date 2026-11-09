@@ -487,6 +487,11 @@ before thread construction, then execute successful retries through actual threa
 These checks do not exhaust OS thread quotas or establish all-writer quiescence.
 The complete native writer/termination audit remains a P1 prerequisite.
 
+Sync terminal results share one publication owner for completion, start failure,
+terminal error and exception unwinding. It retains the latest 32 generation
+outcomes. Queries for evicted results return `not_found` for the requested
+generation, rather than another generation's current state.
+
 
 Native direct-process stop now requires observed exit and owned handle cleanup.
 `ProcessManager::has_exited()` is a positive, non-mutating observation. A failed

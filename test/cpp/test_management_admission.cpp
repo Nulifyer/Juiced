@@ -38,6 +38,12 @@ public:
     json chat_completion(const json&) override { return json::object(); }
 };
 namespace lemon {
+struct ModelPublicationTestHook {
+    static size_t history(ModelManager& models) {
+        std::lock_guard<std::mutex> lock(models.sync_state_.mutex);
+        return models.sync_state_.completed_generation_results.size();
+    }
+};
 struct StatePublicationTestHook {
     static void start_barrier(Server& server, std::function<void(const std::string&)> hook) {
         server.background_start_barrier_ = std::move(hook);
@@ -316,6 +322,48 @@ static void worker_start_boundaries() {
         models.fail_sync_start(queued.sync_id, "controlled undispatched cleanup");
         check(models.get_sync_status(queued.sync_id)["status"] == "failed",
               "undispatched queue cleanup retains a terminal generation outcome");
+        StatePublicationTestHook::start_barrier(server, [](const std::string&) {
+            throw std::system_error(std::make_error_code(std::errc::resource_unavailable_try_again), "bounded failed dispatch");
+        });
+        std::vector<uint64_t> generations;
+        bool failed_starts = true;
+        for (int i = 0; i < 40; ++i) {
+            const auto response = StatePublicationTestHook::invoke(server, "/v1/models/sync", {{"async", true}});
+            failed_starts = failed_starts && response.status == 500 &&
+                json::parse(response.body)["error"]["code"] == "worker_start_failed";
+            generations.push_back(models.get_sync_status()["sync_id"].get<uint64_t>());
+        }
+        check(failed_starts && ModelPublicationTestHook::history(models) == 32,
+              "forty actual failed dispatches retain at most32 completed generation results");
+        bool exact_results = true;
+        for (size_t i = 0; i < generations.size(); ++i) {
+            const auto outcome = models.get_sync_status(generations[i]);
+            exact_results = exact_results && outcome["sync_id"] == generations[i] &&
+                outcome["status"] == (i < 8 ? "not_found" : "failed");
+        }
+        check(exact_results, "bounded history evicts oldest outcomes while retaining generation-specific failures");
+        StatePublicationTestHook::start_barrier(server, {});
+        const auto successful = StatePublicationTestHook::invoke(server, "/v1/models/sync", {{"async", true}});
+        const auto retry_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while ((models.get_sync_status()["already_in_progress"].get<bool>() || StatePublicationTestHook::admission(server)["active"] != 0) &&
+               std::chrono::steady_clock::now() < retry_deadline) std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        check(successful.status == 202 && !models.get_sync_status()["already_in_progress"].get<bool>() &&
+              models.get_sync_status()["terminal_error"] == "" && ModelPublicationTestHook::history(models) == 32,
+              "a real successful retry uses the same bounded terminal publication");
+        models.set_update_check_override_for_test([](const auto&) -> ModelManager::UpdateCheckResult { throw std::runtime_error("controlled sync failure"); });
+        const auto terminal = models.enqueue_sync();
+        const auto terminal_result = models.execute_sync();
+        check(terminal_result["status"] == "failed" && terminal_result["sync_id"] == terminal.sync_id &&
+              terminal_result["terminal_error"] == "controlled sync failure" && ModelPublicationTestHook::history(models) == 32,
+              "ordinary terminal exceptions publish through the bounded result owner");
+        models.set_update_check_override_for_test([](const auto&) -> ModelManager::UpdateCheckResult { throw 7; });
+        const auto unwinding = models.enqueue_sync();
+        bool escaped = false;
+        try { models.execute_sync(); } catch (int) { escaped = true; }
+        const auto interrupted = models.get_sync_status(unwinding.sync_id);
+        check(escaped && interrupted["status"] == "failed" &&
+              interrupted["terminal_error"] == "Sync worker terminated unexpectedly" && ModelPublicationTestHook::history(models) == 32,
+              "exception unwinding retains the correct bounded generation outcome");
     }
     RuntimeConfig::set_global(nullptr);
 }
