@@ -1,6 +1,7 @@
 #include "lemon/memory_budget.h"
 #include "lemon/system_metrics_platform.h"
 #include <chrono>
+#include <cerrno>
 #include <cstdio>
 #include <fstream>
 #include <limits>
@@ -187,12 +188,20 @@ int main() {
         check(sampled, "macOS process data limit can be observed");
         if (sampled) {
             auto finite = original;
+            // Exercise finiteness without a ceiling below existing VM reservations.
             finite.rlim_cur = original.rlim_cur == RLIM_INFINITY
-                ? static_cast<rlim_t>(64ULL * 1024 * 1024 * 1024) : original.rlim_cur;
-            check(setrlimit(RLIMIT_DATA, &finite) == 0, "macOS finite-limit fixture activates");
-            const auto contained = platform->get_memory_budget();
-            check(!contained.available_bytes() && contained.containment == "macos-process-limit-unqualified",
-                  "finite process limits never become unlimited host capacity");
+                ? RLIM_INFINITY - 1 : original.rlim_cur;
+            const bool applied = setrlimit(RLIMIT_DATA, &finite) == 0;
+            const auto limit_error = errno;
+            if (!applied) std::fprintf(stderr, "macOS limit setup errno=%d soft=%llu hard=%llu proposed=%llu\n",
+                limit_error, static_cast<unsigned long long>(original.rlim_cur),
+                static_cast<unsigned long long>(original.rlim_max), static_cast<unsigned long long>(finite.rlim_cur));
+            check(applied, "macOS finite-limit fixture activates");
+            if (applied) {
+                const auto contained = platform->get_memory_budget();
+                check(!contained.available_bytes() && contained.containment == "macos-process-limit-unqualified",
+                      "finite process limits never become unlimited host capacity");
+            }
             check(setrlimit(RLIMIT_DATA, &original) == 0, "macOS process data limit is restored");
         }
 #endif
