@@ -1,0 +1,4 @@
+services:
+  juiced:
+    devices:
+      - nvidia.com/gpu=all

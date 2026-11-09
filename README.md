@@ -65,6 +65,8 @@ Use **Test services** to send your first prompt.
 The [installation guide](docs/guide/install/README.md) covers Compose, GPU access,
 permissions, and release selection. For remote access, follow the
 [access guide](docs/guide/access.md).
+Ready-to-run [Compose setups](docs/guide/install/compose.md) cover CPU,
+NVIDIA CUDA, AMD ROCm, and AMD or Intel Vulkan.
 
 ## Use your hardware
 

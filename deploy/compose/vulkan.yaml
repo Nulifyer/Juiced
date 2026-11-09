@@ -1,0 +1,7 @@
+services:
+  juiced:
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      - "${RENDER_GID:?Set RENDER_GID to the host render device group ID}"
+      - "${VIDEO_GID:?Set VIDEO_GID to the host video device group ID}"

@@ -27,25 +27,13 @@ packages, and saved computation. The container runs as UID/GID `10001:10001`.
 
 ## Use Compose
 
-Save this as `compose.yaml`:
-
-```yaml
-services:
-  juiced:
-    image: ghcr.io/nulifyer/juiced:v0.9.2
-    ports:
-      - "127.0.0.1:8080:8080"
-    volumes:
-      - juiced-data:/data
-    restart: unless-stopped
-
-volumes:
-  juiced-data:
-```
+Ready-to-run [platform Compose files](compose.md) cover CPU, NVIDIA CUDA,
+AMD or Intel Vulkan, and AMD ROCm. NVIDIA also has a Podman CDI override.
+For example, from a repository checkout on a configured NVIDIA Docker host:
 
 ```bash
-docker compose up -d
-docker compose logs --tail 100 juiced
+cd deploy/compose
+docker compose -f compose.yaml -f nvidia.yaml up -d
 ```
 
 Compose gives its volume a project-specific name. Preserve that volume identity
@@ -56,31 +44,9 @@ writable directory owned by `10001:10001` before starting the container.
 
 Configure the host driver first. Then add only the devices and groups required
 by your chosen runtime. The default image includes a Vulkan llama.cpp runtime.
-CUDA and ROCm profiles require additional backend packages.
-
-For AMD Vulkan, expose `/dev/dri`. For AMD ROCm, expose `/dev/dri` and `/dev/kfd`:
-
-```yaml
-    devices:
-      - /dev/dri:/dev/dri
-      - /dev/kfd:/dev/kfd
-    group_add:
-      - "${RENDER_GID}"
-      - "${VIDEO_GID}"
-```
-
-Set `RENDER_GID` and `VIDEO_GID` to the device groups on your Docker host.
-For hosts with those group names, inspect them with:
-
-```bash
-getent group render
-getent group video
-ls -ln /dev/dri /dev/kfd
-```
-
-Remove the `/dev/kfd` mapping for a Vulkan-only host without that device.
-An NVIDIA deployment also needs the host's NVIDIA container runtime configuration
-and a compatible CUDA backend package. Apple Metal requires a native macOS process.
+CUDA and ROCm profiles require additional backend packages. Follow the
+[platform Compose guide](compose.md) for device mappings and host prerequisites.
+Apple Metal requires a native macOS process.
 
 After startup, check **Backends & hardware**, select the model's runtime, and
 complete a test request. Device detection alone does not establish inference.

@@ -35,6 +35,7 @@ nav:
   - Get started:
       - Your first model: guide/README.md
       - Install Juiced: guide/install/README.md
+      - Platform Compose files: guide/install/compose.md
       - Access and API keys: guide/access.md
   - Manage models:
       - Download or import: guide/models.md
