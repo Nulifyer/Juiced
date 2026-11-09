@@ -11,7 +11,7 @@ namespace backends {
 ParakeetServer::ParakeetServer(const std::string &log_level, ModelManager *mm,
                                BackendManager *bm)
     : WrappedServer("parakeet-server", log_level, mm, bm) {}
-ParakeetServer::~ParakeetServer() { unload(); }
+ParakeetServer::~ParakeetServer() = default;
 void ParakeetServer::load(const std::string &model_name, const ModelInfo &info,
                           const RecipeOptions &options, bool do_not_upgrade) {
   (void)model_name;

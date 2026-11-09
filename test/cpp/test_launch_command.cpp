@@ -6,11 +6,17 @@
 // backends before it builds the response.
 
 #include "lemon/wrapped_server.h"
+#include "lemon/backends/openmoss/openmoss_server.h"
+#include "lemon/backends/parakeet/parakeet_server.h"
+#include "lemon/backends/vllm/vllm_server.h"
+#include "lemon/backends/whispercpp/whispercpp_server.h"
 
 #include <httplib.h>
 
 #include <cstdio>
 #include <future>
+#include <filesystem>
+#include <fstream>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -71,6 +77,59 @@ public:
     using WrappedServer::start_server;
     using WrappedServer::stop_server;
 };
+
+template<class T> class DerivedWorker : public T {
+public:
+    DerivedWorker() : T("error", nullptr, nullptr) {}
+    using WrappedServer::start_server;
+};
+
+namespace backends {
+struct StopFailureTestHook {
+    static std::filesystem::path dependency(WhisperServer& worker) { return worker.temp_dir_; }
+    static std::filesystem::path dependency(VLLMServer& worker) {
+        worker.rocm_shim_dir_ = std::filesystem::temp_directory_path() /
+            ("juiced-vllm-shim-" + std::to_string(worker.get_instance_id()));
+        std::filesystem::create_directories(worker.rocm_shim_dir_);
+        return worker.rocm_shim_dir_;
+    }
+    template<class T> static std::filesystem::path dependency(T&) { return {}; }
+};
+}
+
+template<class T> void destruction_boundary(const ServerCommand& ready, const char* name) {
+    for (bool failed_load : {false, true}) {
+        ResourceAdmission ledger;
+        bool fail_stop = true;
+        std::filesystem::path dependency;
+        uint64_t generation = 0;
+        {
+            DerivedWorker<T> worker;
+            dependency = backends::StopFailureTestHook::dependency(static_cast<T&>(worker));
+            if (!dependency.empty()) std::ofstream(dependency / "retained") << "owned";
+            generation = worker.get_instance_id();
+            ResourceAdmission::Work work;
+            work.model = name; work.operation = ResourceAdmission::Operation::Load; work.generation = generation;
+            auto load = ledger.acquire(work); load.started(); load.retain_residency();
+            worker.retain_resource_residency(std::move(load));
+            auto command = ready;
+            if (failed_load) command.ready_endpoint = "/never-ready";
+            bool rejected = false;
+            try { worker.start_server(std::make_unique<FakeProcess>(808, &fail_stop), command, failed_load ? 1 : 5); }
+            catch (const std::runtime_error&) { rejected = true; }
+            check(std::string(name) + " startup outcome reaches the actual derived destructor",
+                  rejected == failed_load);
+        }
+        check(std::string(name) + " destruction survives unconfirmed stop without releasing its generation",
+              ledger.snapshot()["uncertain"] == 1 && ledger.snapshot()["resident"] == 1);
+        if (!dependency.empty()) {
+            check(std::string(name) + " dependency stays while termination is unconfirmed",
+                  std::filesystem::exists(dependency / "retained"));
+            std::filesystem::remove_all(dependency);
+        }
+        ledger.reconcile_stopped_generation(generation);
+    }
+}
 
 }  // namespace lemon
 
@@ -206,6 +265,11 @@ int main() {
         check("the original stop confirms exit before its in-flight ownership disappears",
               server.get_backend_health_state() == "stopped");
     }
+
+    lemon::destruction_boundary<lemon::backends::WhisperServer>(command, "whispercpp");
+    lemon::destruction_boundary<lemon::backends::ParakeetServer>(command, "parakeet");
+    lemon::destruction_boundary<lemon::backends::VLLMServer>(command, "vllm");
+    lemon::destruction_boundary<lemon::backends::OpenMossServer>(command, "openmoss");
 
     health.stop();
     health_thread.join();

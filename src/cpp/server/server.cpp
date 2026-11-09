@@ -6657,7 +6657,7 @@ void Server::handle_unload(const httplib::Request& req, httplib::Response& res) 
 
         // Check if error is "Model not loaded" for 404
         std::string error_msg = e.what();
-        if (error_msg.find("not loaded") != std::string::npos) {
+        if (dynamic_cast<const ModelNotLoadedException*>(&e) || error_msg.find("not loaded") != std::string::npos) {
             res.status = 404;
         } else {
             res.status = 500;

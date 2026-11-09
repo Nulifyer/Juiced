@@ -192,10 +192,19 @@ json create_backend_error_response(const std::string& server_name, int status_co
 } // namespace
 
 WrappedServer::~WrappedServer() {
+    stop_for_destruction();
+}
+
+bool WrappedServer::stop_for_destruction() noexcept {
     try { stop_server(); }
     catch (const std::exception& error) {
         LOG(ERROR, "WrappedServer") << "Worker destruction retains unconfirmed termination: " << error.what() << std::endl;
+        return false;
+    } catch (...) {
+        LOG(ERROR, "WrappedServer") << "Worker destruction retains unconfirmed termination" << std::endl;
+        return false;
     }
+    return true;
 }
 
 WrappedServer::InferenceLease::InferenceLease(WrappedServer* server, bool state_operation)

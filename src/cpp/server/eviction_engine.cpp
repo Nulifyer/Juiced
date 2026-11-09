@@ -18,6 +18,7 @@ EvictionEngine::EvictionEngine(Router* router, GlobalVramMonitor* vram_monitor)
 }
 
 EvictionEngine::~EvictionEngine() {
+    if (vram_monitor_) vram_monitor_->set_pressure_callback(nullptr);
     stop();
 }
 
@@ -36,28 +37,36 @@ void EvictionEngine::stop() {
 }
 
 void EvictionEngine::on_vram_pressure(double pct) {
-    if (pct == -1.0) {
-        evaluate_servers(-1.0);
-        return;
-    }
+    try {
+        if (pct == -1.0) {
+            evaluate_servers(-1.0);
+            return;
+        }
 
-    double threshold = RuntimeConfig::global()->auto_evict_threshold_pct();
-    if (pct >= threshold) {
-        LOG(INFO) << "VRAM pressure critical (" << (pct * 100.0) << "% >= " << (threshold * 100.0) << "%). Evaluating eviction." << std::endl;
-        evaluate_servers(pct);
+        double threshold = RuntimeConfig::global()->auto_evict_threshold_pct();
+        if (pct >= threshold) {
+            LOG(INFO) << "VRAM pressure critical (" << (pct * 100.0) << "% >= " << (threshold * 100.0) << "%). Evaluating eviction." << std::endl;
+            evaluate_servers(pct);
+        }
+    } catch (const std::exception& error) {
+        LOG(WARNING, "EvictionEngine") << "Eviction remains retryable: " << error.what() << std::endl;
+    } catch (...) {
+        LOG(WARNING, "EvictionEngine") << "Eviction remains retryable after an unknown failure" << std::endl;
     }
 }
 
 void EvictionEngine::evaluation_loop() {
     while (running_) {
         // Also perform regular time-based idle checks
-        evaluate_servers(-1.0);
+        on_vram_pressure(-1.0);
         std::this_thread::sleep_for(std::chrono::milliseconds(interval_ms_));
     }
 }
 
 void EvictionEngine::evaluate_servers(double current_vram_pct) {
     std::string model_to_evict;
+    uint64_t eviction_generation = 0;
+    std::vector<std::shared_ptr<WrappedServer>> cleanup;
     std::vector<std::shared_ptr<WrappedServer>> models_to_downsize;
 
     {
@@ -77,6 +86,7 @@ void EvictionEngine::evaluate_servers(double current_vram_pct) {
         for (auto& server_ptr : router_->loaded_servers_) {
             WrappedServer* server = server_ptr.get();
             if (!server) continue;
+            if (server->cleanup_pending()) { cleanup.push_back(server_ptr); continue; }
 
             // Pinned models must never be auto-evicted or downsized
             if (server->is_pinned()) continue;
@@ -147,10 +157,18 @@ void EvictionEngine::evaluate_servers(double current_vram_pct) {
 
         if (pressure_evict && best_candidate_for_eviction) {
             model_to_evict = best_candidate_for_eviction->get_model_name();
+            eviction_generation = best_candidate_for_eviction->get_instance_id();
             best_candidate_for_eviction->set_state(ModelState::EVICTING);
             LOG(INFO) << "Eviction Engine unloading model: " << model_to_evict << " due to score/pressure/idle." << std::endl;
         }
     } // release lock
+
+    for (const auto& worker : cleanup) {
+        try { router_->evict_if_committed(worker->get_model_name(), worker->get_instance_id()); }
+        catch (const std::exception& error) {
+            LOG(WARNING, "EvictionEngine") << "Worker cleanup remains pending: " << error.what() << std::endl;
+        }
+    }
 
     // A deferred candidate retains its generation; selection alone grants no maintenance ownership.
     if (downsize_selection_barrier_) downsize_selection_barrier_();
@@ -183,7 +201,7 @@ void EvictionEngine::evaluate_servers(double current_vram_pct) {
     if (!model_to_evict.empty()) {
         // Race-safe: only unloads if the model hasn't been rescued by an
         // in-flight request since we marked it EVICTING above.
-        router_->evict_if_committed(model_to_evict);
+        router_->evict_if_committed(model_to_evict, eviction_generation);
     }
 }
 

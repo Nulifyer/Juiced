@@ -48,6 +48,7 @@ public:
     std::function<std::map<std::string, nlohmann::json>(const std::string&)> get_additional_telemetry_parser() const override;
 
 private:
+    friend struct StopFailureTestHook;
     std::filesystem::path rocm_shim_dir_;
 
     json prepare_openai_request(const json& request);

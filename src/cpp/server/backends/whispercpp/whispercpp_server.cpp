@@ -66,7 +66,7 @@ WhisperServer::WhisperServer(const std::string& log_level, ModelManager* model_m
 }
 
 WhisperServer::~WhisperServer() {
-    stop_server();
+    if (!stop_for_destruction()) return;
 
     try {
         if (fs::exists(temp_dir_)) {

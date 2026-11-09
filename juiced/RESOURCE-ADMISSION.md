@@ -506,6 +506,14 @@ cleanup failures retain ownership and report failure without escaping their thre
 A failed worker destructor retains uncertain residency in the live admission ledger.
 Dispatched loads retain logical uncertainty even when their legacy estimate is zero.
 
+Derived worker destruction contains stop failures. Whisper temporary audio and
+vLLM startup shims remain on disk while exit is unconfirmed. Automatic eviction
+retains the failed generation as `cleanup_pending`, preserves its reservation and
+retries cleanup before releasing ownership. Both the idle evaluator and pressure
+monitor contain failures at their thread boundaries. Ollama unload reports a
+retryable `unload_incomplete` error for busy or unconfirmed cleanup. An absent
+worker still satisfies that protocol's unload convention.
+
 Local acceptance includes real direct children, non-consuming exit observation,
 unowned PID rejection, controlled failed stop/replacement, exact-generation
 reconciliation and actual neutral CPU serving/cache. This does not establish

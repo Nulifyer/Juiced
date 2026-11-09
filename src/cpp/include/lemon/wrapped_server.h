@@ -160,6 +160,8 @@ public:
           instance_id_(next_instance_id()) {}
 
     uint64_t get_instance_id() const { return instance_id_; }
+    bool cleanup_pending() const { return cleanup_pending_.load(); }
+    void set_cleanup_pending(bool pending) { cleanup_pending_.store(pending); }
     void retain_resource_residency(ResourceAdmission::Lease lease) { residency_resources_ = std::move(lease); }
     void release_resource_residency() { residency_resources_ = {}; }
 
@@ -720,6 +722,7 @@ protected:
                       long timeout_seconds = 600);
     // Stops the watchdog and the server. Safe to call when nothing is running.
     void stop_server();
+    bool stop_for_destruction() noexcept;
 
     bool load_cancelled() const { return load_cancel_ && load_cancel_->load(); }
 
@@ -804,6 +807,7 @@ private:
         return ++counter;
     }
     ResourceAdmission::Lease residency_resources_;
+    std::atomic<bool> cleanup_pending_{false};
     uint64_t instance_id_;
 
     void begin_backend_request(BackendRequestKind kind);

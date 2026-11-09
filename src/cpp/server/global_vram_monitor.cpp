@@ -33,6 +33,7 @@ void GlobalVramMonitor::set_pressure_callback(VramPressureCallback callback) {
 }
 
 double GlobalVramMonitor::poll_vram_usage() const {
+    if (sample_override_) return sample_override_();
     // Delegate to the shared cross-vendor detection in SystemInfo so we don't
     // duplicate (or drift from) the platform VRAM logic.
     return SystemInfo::get_global_vram_usage_pct();
@@ -45,13 +46,19 @@ void GlobalVramMonitor::monitor_loop() {
         // handling from the EvictionEngine loop; VRAM-pressure eviction is a
         // global concern and requires the global opt-in.
         RuntimeConfig* cfg = RuntimeConfig::global();
-        if (cfg && cfg->auto_evict()) {
-            double pct = poll_vram_usage();
+        try {
+            if (cfg && cfg->auto_evict()) {
+                double pct = poll_vram_usage();
 
-            std::lock_guard<std::mutex> lock(callback_mutex_);
-            if (pressure_callback_ && pct >= 0.0) {
-                pressure_callback_(pct);
+                std::lock_guard<std::mutex> lock(callback_mutex_);
+                if (pressure_callback_ && pct >= 0.0) {
+                    pressure_callback_(pct);
+                }
             }
+        } catch (const std::exception& error) {
+            LOG(WARNING, "GlobalVramMonitor") << "Pressure evaluation failed: " << error.what() << std::endl;
+        } catch (...) {
+            LOG(WARNING, "GlobalVramMonitor") << "Pressure evaluation failed with an unknown error" << std::endl;
         }
 
         std::this_thread::sleep_for(std::chrono::milliseconds(poll_interval_ms_));

@@ -748,8 +748,9 @@ void OllamaApi::handle_chat(const httplib::Request& req, httplib::Response& res)
             LOG(INFO, "OllamaApi") << "POST /api/chat - Unloading model: " << model << std::endl;
             try {
                 router_->unload_model(model);
-            } catch (...) {
-                // Model may not be loaded, that's fine
+            } catch (const ModelNotLoadedException&) {
+            } catch (const std::exception& error) {
+                throw AdmissionError("unload_incomplete", error.what(), 503);
             }
             json ollama_res = {
                 {"model", model},
@@ -890,8 +891,9 @@ void OllamaApi::handle_generate(const httplib::Request& req, httplib::Response& 
             LOG(INFO, "OllamaApi") << "POST /api/generate - Unloading model: " << model << std::endl;
             try {
                 router_->unload_model(model);
-            } catch (...) {
-                // Model may not be loaded, that's fine
+            } catch (const ModelNotLoadedException&) {
+            } catch (const std::exception& error) {
+                throw AdmissionError("unload_incomplete", error.what(), 503);
             }
             json ollama_res = {
                 {"model", model},

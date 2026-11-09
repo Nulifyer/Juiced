@@ -787,7 +787,9 @@ void Router::evict_server(WrappedServer* server) {
     if (!server->try_evict_if_idle())
         throw RouterResidencyConflictException(model_name, model_name, "the worker has active operations or transitions");
 
-    server->unload();
+    try { server->unload(); }
+    catch (...) { server->set_cleanup_pending(true); throw; }
+    server->set_cleanup_pending(false);
     admission_.reconcile_stopped_generation(server->get_instance_id());
     server->release_resource_residency();
 
@@ -1488,7 +1490,7 @@ void Router::unload_model(const std::string& model_name) {
     for (const auto& server : loaded_servers_)
         if (canonical.empty() || server->get_model_name() == canonical) targets.push_back(server);
     if (!canonical.empty() && targets.empty())
-        throw std::runtime_error("Model not loaded: " + model_name);
+        throw ModelNotLoadedException(model_name);
     lock.unlock();
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(EVICTION_TIMEOUT);
     for (const auto& server : targets) {
@@ -1541,12 +1543,17 @@ json Router::uninstall_cloud_provider(const std::string& provider, const std::fu
     }
 }
 
-void Router::evict_if_committed(const std::string& model_name) {
+void Router::evict_if_committed(const std::string& model_name, uint64_t expected_generation) {
     std::lock_guard<std::mutex> lock(load_mutex_);
 
     WrappedServer* server = find_server_by_model_name(model_name);
-    if (!server) {
+    if (!server || (expected_generation && server->get_instance_id() != expected_generation)) {
         return;  // Already gone
+    }
+
+    if (server->cleanup_pending()) {
+        evict_server(server);
+        return;
     }
 
     // An exclusive session may have started (and re-pinned this model via the
@@ -1622,7 +1629,7 @@ json Router::get_all_loaded_models() const {
 
     for (const auto& server : loaded_servers_) {
         const bool backend_alive = server->is_backend_alive();
-        if (!backend_alive) {
+        if (!backend_alive && !server->cleanup_pending()) {
             continue;
         }
 
@@ -1630,6 +1637,7 @@ json Router::get_all_loaded_models() const {
         model_info["model_name"] = model_manager_->get_public_model_name(server->get_model_name());
         model_info["checkpoint"] = server->get_checkpoint();
         model_info["worker_generation"] = server->get_instance_id();
+        model_info["cleanup_pending"] = server->cleanup_pending();
         if (!server->cloud_provider().empty()) model_info["cloud_provider"] = server->cloud_provider();
         model_info["type"] = model_type_to_string(server->get_model_type());
         model_info["residency_class"] = residency_class_to_string(server->get_residency_class());

@@ -1,6 +1,10 @@
 #include "lemon/backends/backend_registry.h"
 #include "lemon/backends/llamacpp/llamacpp_server.h"
 #include "lemon/config_file.h"
+#include "lemon/error_types.h"
+#include "lemon/eviction_engine.h"
+#include "lemon/global_vram_monitor.h"
+#include "lemon/ollama_api.h"
 #include "lemon/request_identity.h"
 #include "lemon/router.h"
 #include "lemon/utils/path_utils.h"
@@ -22,7 +26,12 @@ public:
     }
     bool observes_inference_completion() const override { return observed; }
     void load(const std::string&, const ModelInfo&, const RecipeOptions&, bool) override {}
-    void unload() override { set_state(ModelState::UNLOADED); }
+    void unload() override {
+        ++unload_calls;
+        if (unload_outcome == 1) throw std::runtime_error("injected unconfirmed stop");
+        if (unload_outcome == 2) throw RouterResidencyConflictException(get_model_name(), get_model_name(), "injected busy drain");
+        set_state(ModelState::UNLOADED);
+    }
     bool is_backend_alive() const override { return get_state() != ModelState::UNLOADED; }
     json chat_completion(const json&) override {
         note_request_started();
@@ -37,8 +46,21 @@ public:
     bool observed = true;
     std::atomic<int> calls{0};
     std::atomic<bool> hold{false}, running{false};
+    std::atomic<int> unload_outcome{0}, unload_calls{0};
 };
 struct RoutingHelperTestHook {
+    static ResourceAdmission::Lease residency(Router& router, ResourceAdmission::Work work) { return router.admission_.acquire(std::move(work)); }
+    static void stop(Router& router) { router.eviction_engine_->stop(); router.vram_monitor_->stop(); }
+    static void start(Router& router, bool pressure, std::function<double()> sample = {}) {
+        if (pressure) {
+            router.vram_monitor_->sample_override_ = std::move(sample);
+            router.vram_monitor_->start(5);
+        } else router.eviction_engine_->start(5);
+    }
+    static bool contains(Router& router, const std::shared_ptr<AdmissionWorker>& worker) {
+        std::lock_guard<std::mutex> lock(router.load_mutex_);
+        return std::find(router.loaded_servers_.begin(), router.loaded_servers_.end(), worker) != router.loaded_servers_.end();
+    }
     static void retire(Router& router, const std::shared_ptr<AdmissionWorker>& worker) {
         std::lock_guard<std::mutex> lock(router.load_mutex_);
         router.evict_server(worker.get());
@@ -217,6 +239,75 @@ int main() {
         check(rejected && current->get_state() == ModelState::IN_USE,
               "native retirement cannot interrupt an acquisition that won the race");
         acquired.release();
+    }
+    RuntimeConfig::set_global(nullptr);
+    {
+        auto defaults = ConfigFile::base_defaults();
+        defaults["offline"] = true; defaults["auto_evict"] = false; defaults["auto_check_model_updates"] = false;
+        RuntimeConfig config(defaults); RuntimeConfig::set_global(&config);
+        ModelManager models;
+        Router router(&config, &models, nullptr);
+        RoutingHelperTestHook::stop(router);
+        auto independent = std::make_shared<AdmissionWorker>();
+        independent->set_model_metadata("independent", "fixture", ModelType::LLM, DEVICE_CPU, RecipeOptions("llamacpp", json::object()));
+        independent->set_pinned(true);
+        RoutingHelperTestHook::add(router, independent);
+        for (bool pressure : {false, true}) {
+            auto worker = std::make_shared<AdmissionWorker>(); worker->unload_outcome = 1;
+            worker->set_model_metadata("admission-model", "fixture", ModelType::LLM, DEVICE_CPU,
+                RecipeOptions("llamacpp", {{"auto_evict", true}, {"evict_idle_timeout", 0}, {"downsize_idle_timeout", 3600}}));
+            ResourceAdmission::Work work;
+            work.model = worker->get_model_name(); work.generation = worker->get_instance_id(); work.operation = ResourceAdmission::Operation::Load;
+            auto residency = RoutingHelperTestHook::residency(router, work); residency.started(); residency.retain_residency();
+            worker->retain_resource_residency(std::move(residency));
+            RoutingHelperTestHook::add(router, worker);
+            config.set({{"auto_evict", pressure}});
+            std::atomic<int> samples{0};
+            RoutingHelperTestHook::start(router, pressure, [&]() -> double {
+                if (++samples == 1) throw std::runtime_error("injected sampler failure");
+                return 1.0;
+            });
+            check(until([&] { return worker->cleanup_pending() && worker->unload_calls >= 2; }),
+                  "background eviction survives stop failure and retries its retained generation");
+            check(RoutingHelperTestHook::contains(router, worker) && router.admission_snapshot()["resident"] == 1 &&
+                  router.get_all_loaded_models().size() == 2,
+                  "failed eviction remains visible and keeps its residency charge");
+            auto request = independent->try_acquire_inference();
+            check(bool(request), "unrelated service remains acquirable after background failure"); request.release();
+            worker->unload_outcome = 0;
+            check(until([&] { return !RoutingHelperTestHook::contains(router, worker); }),
+                  "confirmed background retry removes only the failed generation");
+            check(router.admission_snapshot()["resident"] == 0 && RoutingHelperTestHook::contains(router, independent),
+                  "confirmed retry reconciles its own charge and preserves another service");
+            RoutingHelperTestHook::stop(router);
+        }
+        config.set({{"auto_evict", false}});
+        httplib::Server http;
+        auto api = std::make_shared<OllamaApi>(&router, &models); api->register_routes(http);
+        const auto port = http.bind_to_any_port("127.0.0.1");
+        check(port > 0, "Ollama unload fixture binds loopback");
+        std::thread listener([&] { http.listen_after_bind(); }); http.wait_until_ready();
+        httplib::Client client("127.0.0.1", port);
+        for (const auto* path : {"/api/chat", "/api/generate"}) {
+            const json body = {{"model", "admission-model"}, {"keep_alive", 0}};
+            auto absent = client.Post(path, body.dump(), "application/json");
+            check(absent && absent->status == 200 && json::parse(absent->body)["done_reason"] == "unload",
+                  "Ollama unload succeeds for a genuinely absent worker");
+            auto worker = std::make_shared<AdmissionWorker>(); RoutingHelperTestHook::add(router, worker);
+            for (int failure : {2, 1}) {
+                worker->unload_outcome = failure;
+                auto response = client.Post(path, body.dump(), "application/json");
+                check(response && response->status == 503 && json::parse(response->body)["code"] == "unload_incomplete" &&
+                      response->get_header_value("Retry-After") == "1",
+                      "Ollama reports retryable failure instead of successful busy or unconfirmed unload");
+                check(RoutingHelperTestHook::contains(router, worker), "failed protocol unload keeps its worker owner");
+            }
+            worker->unload_outcome = 0;
+            auto retry = client.Post(path, body.dump(), "application/json");
+            check(retry && retry->status == 200 && json::parse(retry->body)["done_reason"] == "unload" &&
+                  !RoutingHelperTestHook::contains(router, worker), "Ollama confirmed retry publishes successful unload");
+        }
+        http.stop(); listener.join();
     }
     RuntimeConfig::set_global(nullptr);
     std::filesystem::remove_all(root);

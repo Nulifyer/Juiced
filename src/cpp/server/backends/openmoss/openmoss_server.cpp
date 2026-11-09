@@ -92,9 +92,7 @@ OpenMossServer::OpenMossServer(const std::string& log_level,
                                BackendManager* backend_manager)
     : WrappedServer("openmoss-server", log_level, model_manager, backend_manager) {}
 
-OpenMossServer::~OpenMossServer() {
-    unload();
-}
+OpenMossServer::~OpenMossServer() = default;
 
 
 bool OpenMossServer::is_backend_alive() const {

@@ -37,6 +37,7 @@ public:
     json audio_transcriptions(const json& request) override;
 
 private:
+    friend struct StopFailureTestHook;
     // NPU compiled cache handling
     void download_npu_compiled_cache(const std::string& model_path,
                                       const ModelInfo& model_info,

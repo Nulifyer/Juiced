@@ -350,7 +350,7 @@ VLLMServer::VLLMServer(const std::string& log_level, ModelManager* model_manager
 }
 
 VLLMServer::~VLLMServer() {
-    unload();
+    if (stop_for_destruction()) cleanup_vllm_rocm_shim_dir(rocm_shim_dir_);
 }
 
 void VLLMServer::load(const std::string& model_name,

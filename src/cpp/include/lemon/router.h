@@ -446,7 +446,7 @@ private:
     // Eviction-engine entry point: physically unload a model previously marked
     // EVICTING, but only if it has not been rescued by an in-flight request
     // (see WrappedServer::try_commit_eviction). Safe against request races.
-    void evict_if_committed(const std::string& model_name);
+    void evict_if_committed(const std::string& model_name, uint64_t expected_generation = 0);
     std::function<std::unique_ptr<WrappedServer>(const ModelInfo&)> backend_factory_override_;
     std::function<void()> load_entry_barrier_;
     std::unique_ptr<WrappedServer> create_backend_server(const ModelInfo& model_info);

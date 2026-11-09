@@ -36,6 +36,8 @@ public:
     }
 
 private:
+    friend struct RoutingHelperTestHook;
+    std::function<double()> sample_override_;
     void monitor_loop();
     double poll_vram_usage() const;
 
