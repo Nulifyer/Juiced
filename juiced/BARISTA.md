@@ -1,6 +1,6 @@
 # Barista: the Juiced operator assistant
 
-Revision 1, 2026-11-09. Planned product contract for platform plan revision 3.
+Revision 2, 2026-11-09. Planned product contract for platform plan revision 4.
 Not implemented or model-qualified by this document. This is the sole authorized
 agent exception; inherited Omni and arbitrary workflow execution remain excluded.
 
@@ -69,8 +69,8 @@ data. Operators may narrow permissions to read-only or selected operation groups
 and may optionally require confirmation for chosen changes. Do not impose a
 second approval prompt on every ordinary action in the default permissive mode.
 Full control covers model acquisition/import/removal, settings/profiles/policies,
-load/unload/reload, backend packages, preparation, cache, comparisons, diagnostics
-and server configuration wherever their native operation is supported.
+load/unload/reload, backend packages, cache, comparisons, diagnostics and server
+configuration wherever their native operation is supported.
 
 The native operator permission gate is mandatory in the first assistant release,
 not deferred to P5 multi-client UI. An inference-only credential cannot use the
@@ -81,7 +81,7 @@ Revocation stops later dispatch. Barista cannot grant itself permission, change
 its own authorization or silently substitute a cloud model.
 
 Give the assistant typed tools backed by existing ModelManager, BackendOps,
-RuntimeConfig, Router/EvictionEngine, cache, preparation and job APIs. Publish
+RuntimeConfig, Router/EvictionEngine, cache, artifact recovery and job APIs. Publish
 bounded schemas and structured observations from those owners; do not scrape UI
 text, generate shell commands or maintain another catalog/scheduler. Tool output
 includes source/revision, applicability, changed/applied state, job handle and
@@ -92,7 +92,7 @@ reference, policy and generation checks even with full permissions.
 | --- | --- |
 | Inspect | Catalog, exact artifacts/profiles/options, resources/headroom, versions, pending settings/jobs, diagnostics and current support |
 | Configure | Preview effective options, resource impact and apply/reload through normal owners; inspect postconditions and recovery |
-| Acquire | Search official/publisher metadata, compare compatible variants, download/import/prepare through bounded native jobs, preserve originals |
+| Acquire | Search official/publisher metadata, compare compatible variants, download/import existing variants through bounded native jobs, preserve originals |
 | Maintain | Native policy/residency, cache inspection/repair, package/configuration changes and supported cleanup/recovery |
 | Compare | Run the fixed versioned P2 speed/quality suite, obtain receipts and restore prior settings; no model-written evaluation code |
 | Explain | Retrieve shipped version-matched help/skills and bounded primary-source documentation, with provenance |
@@ -114,6 +114,14 @@ No host shell, arbitrary filesystem/browser automation, Docker socket, driver,
 firewall or unrelated-service administration is implied by control of Juiced.
 Missing native management operations are explicit implementation requirements,
 not a reason to add a general shell escape hatch or claim full control early.
+
+Barista cannot create a numerical/format variant through local conversion,
+quantization, re-quantization, calibration or export. These features are excluded
+from Juiced, including optional integrations. Find existing published variants,
+check provenance/companions/compatibility and fit, then compare them through the
+fixed native suite. Explain an unsupported combination instead of generating a
+conversion command. Legacy producer records are recovery data, never permission
+to resume or create work. Preserve their artifacts and unresolved ownership.
 
 ## Prompt and skill contract
 

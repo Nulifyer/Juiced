@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "plan_revision": 3,
+  "plan_revision": 4,
   "baseline": "Juiced v0.8.6 / 9cd79d01",
   "scope_rules": {
     "core": "Required staged product behavior within selected supported families; no claim of every provider combination",
     "conditional": "Only with a named target/workload and a separately approved selected-family contract; not a required dependency",
     "retained": "Preserve delivered behavior and regression-check affected paths",
-    "excluded": "Do not expand core into this behavior; disable inherited conflicting execution paths without deleting records"
+    "excluded": "Do not expose or execute this behavior in Juiced; safely retire conflicting inherited paths while preserving data and unresolved ownership. Weight conversion/quantization has no optional phase exception."
   },
   "entries": [
     {
@@ -36,8 +36,8 @@
       "id": "F003",
       "feature": "Search filtered by target runtime or format",
       "baseline_status": "partial",
-      "phase": "P3",
-      "disposition": "implement-or-complete",
+      "phase": "P1",
+      "disposition": "Complete unified runtime/format-aware discovery in P1 alongside hardware suitability; P3 retains complete artifact lifecycle",
       "baseline_evidence": [
         "discover",
         "contract"
@@ -228,33 +228,33 @@
       "id": "F019",
       "feature": "Local supported HF-to-GGUF conversion",
       "baseline_status": "delivered",
-      "phase": "retain",
-      "disposition": "preserve and regression-check only where affected",
+      "phase": "excluded",
+      "disposition": "Retire Juiced-owned HF-to-GGUF conversion under November9 user direction; preserve existing artifacts and unresolved writer ownership",
       "baseline_evidence": [
         "prepare",
         "prepare-worker",
         "contract"
       ],
-      "scope": "retained"
+      "scope": "excluded"
     },
     {
       "id": "F020",
       "feature": "Local GGUF requantization",
       "baseline_status": "delivered",
-      "phase": "retain",
-      "disposition": "preserve and regression-check only where affected",
+      "phase": "excluded",
+      "disposition": "Retire Juiced-owned GGUF quantization/requantization; discover and compare already published numerical variants instead",
       "baseline_evidence": [
         "prepare",
         "contract"
       ],
-      "scope": "retained"
+      "scope": "excluded"
     },
     {
       "id": "F021",
       "feature": "Precision-loss and modality-loss disclosure",
       "baseline_status": "delivered",
       "phase": "retain",
-      "disposition": "preserve and regression-check only where affected",
+      "disposition": "Explain precision/modality/provenance differences between externally produced variants; no Juiced-generated transformations",
       "baseline_evidence": [
         "prepare",
         "contract"
@@ -265,80 +265,80 @@
       "id": "F022",
       "feature": "Lossless repack versus quantization distinction",
       "baseline_status": "partial",
-      "phase": "P3",
-      "disposition": "implement-or-complete",
+      "phase": "excluded",
+      "disposition": "No Juiced model-weight repacking/conversion/quantization pipeline; preserve immutable external artifact provenance and direct compatible reuse",
       "baseline_evidence": [
         "contract",
         "prepare"
       ],
-      "scope": "core"
+      "scope": "excluded"
     },
     {
       "id": "F023",
       "feature": "Calibration dataset and importance-matrix workflows",
       "baseline_status": "missing",
-      "phase": "P3",
-      "disposition": "implement-or-complete",
+      "phase": "excluded",
+      "disposition": "No calibration/imatrix generation workflow for model quantization; fixed neutral comparison datasets remain P2 evidence",
       "baseline_evidence": [
         "prepare-worker",
         "contract"
       ],
-      "scope": "core"
+      "scope": "excluded"
     },
     {
       "id": "F024",
       "feature": "AWQ/GPTQ/compressed-tensors preparation",
       "baseline_status": "missing",
-      "phase": "P7",
-      "disposition": "conditional target quantizer; only with matched consuming provider, original source and concrete quality/resource gates",
+      "phase": "excluded",
+      "disposition": "No local AWQ/GPTQ/compressed-tensors producer; existing published artifacts may be acquired when a consuming provider is independently qualified",
       "baseline_evidence": [
         "prepare-worker",
         "contract"
       ],
-      "scope": "conditional"
+      "scope": "excluded"
     },
     {
       "id": "F025",
       "feature": "EXL2/EXL3 preparation",
       "baseline_status": "missing",
-      "phase": "P7",
-      "disposition": "conditional EXL preparation; only with a matched provider/model family and source/quality gates",
+      "phase": "excluded",
+      "disposition": "No local EXL2/EXL3 preparation; discovery/acquisition of published variants follows selected-provider compatibility and evidence gates",
       "baseline_evidence": [
         "prepare-worker",
         "contract"
       ],
-      "scope": "conditional"
+      "scope": "excluded"
     },
     {
       "id": "F026",
       "feature": "OpenVINO IR/ONNX provider-specific export",
       "baseline_status": "missing",
-      "phase": "P7",
-      "disposition": "conditional ONNX/OpenVINO export alongside a matched consuming provider and target hardware",
+      "phase": "excluded",
+      "disposition": "No Juiced-owned ONNX/OpenVINO export; consume compatible externally produced artifacts under qualified native providers",
       "baseline_evidence": [
         "prepare-worker",
         "contract"
       ],
-      "scope": "conditional"
+      "scope": "excluded"
     },
     {
       "id": "F027",
       "feature": "MLX/UQFF/LiteRT target preparation",
       "baseline_status": "missing",
-      "phase": "P7",
-      "disposition": "conditional integration; require real target and qualification; target availability is a qualification prerequisite",
+      "phase": "excluded",
+      "disposition": "No local MLX/UQFF/LiteRT preparation; supported externally produced variants remain selected-provider discovery/acquisition work",
       "baseline_evidence": [
         "prepare-worker",
         "contract"
       ],
-      "scope": "conditional"
+      "scope": "excluded"
     },
     {
       "id": "F028",
       "feature": "FLM Q4NX custom-model preparation and registration",
       "baseline_status": "missing",
       "phase": "P7",
-      "disposition": "conditional Q4NX route; converter geometry/head preservation and custom-loader contract must both qualify",
+      "disposition": "Juiced Q4NX conversion is excluded; only acquire/register already produced checkpoints after the native custom-loader/geometry contract qualifies",
       "baseline_evidence": [
         "prepare-worker",
         "contract"
@@ -350,7 +350,7 @@
       "feature": "Device-specific compiled engine cache",
       "baseline_status": "partial",
       "phase": "P7",
-      "disposition": "conditional compiled-engine target; P3 provides retained-bundle/cache identity foundation",
+      "disposition": "Provider-owned runtime graph/shader/compile cache only, with identity/reference/resource gates; no Juiced-owned model export/conversion producer",
       "baseline_evidence": [
         "prepare",
         "backend"
@@ -362,7 +362,7 @@
       "feature": "Structural validation and atomic publish",
       "baseline_status": "delivered",
       "phase": "retain",
-      "disposition": "preserve and regression-check only where affected",
+      "disposition": "Retain structural validation and atomic publication for existing downloads/imports and complete external variants; P3 completes model/runtime promotion separately",
       "baseline_evidence": [
         "prepare",
         "prepare-worker"
@@ -373,43 +373,43 @@
       "id": "F031",
       "feature": "Preparation cancellation and restart recovery",
       "baseline_status": "delivered",
-      "phase": "retain",
-      "disposition": "preserve and regression-check only where affected",
+      "phase": "P1",
+      "disposition": "Drain/quarantine unresolved legacy preparation writers safely during retirement; reject new conversion work and retain cancellation/restart ownership until confirmed cleanup",
       "baseline_evidence": [
         "prepare",
         "prepare-worker"
       ],
-      "scope": "retained"
+      "scope": "core"
     },
     {
       "id": "F032",
       "feature": "Reference-aware prepared artifact cache",
       "baseline_status": "delivered",
-      "phase": "retain",
-      "disposition": "preserve and regression-check only where affected",
+      "phase": "P1",
+      "disposition": "Preserve/reference-protect existing prepared artifacts and registrations as retained storage; retire production controls without deleting weights or inventing stopped-writer proof",
       "baseline_evidence": [
         "prepare"
       ],
-      "scope": "retained"
+      "scope": "core"
     },
     {
       "id": "F033",
       "feature": "Built-in post-conversion quality qualification",
       "baseline_status": "missing",
-      "phase": "P2",
-      "disposition": "implement-or-complete",
+      "phase": "excluded",
+      "disposition": "No post-conversion producer workflow; P2 still requires matched performance/quality qualification of externally produced model variants",
       "baseline_evidence": [
         "prepare",
         "playground"
       ],
-      "scope": "core"
+      "scope": "excluded"
     },
     {
       "id": "F034",
       "feature": "Preparation resource estimates and queue limits",
       "baseline_status": "partial",
       "phase": "P1",
-      "disposition": "bound preparation queue/RAM/disk concurrency in P1; detailed transform estimates and new recipes in P3",
+      "disposition": "No new preparation execution; bound acquisition/import/metadata work and retain unresolved legacy producer charges through safe retirement",
       "baseline_evidence": [
         "prepare",
         "contract"
@@ -2467,13 +2467,13 @@
       "id": "F204",
       "feature": "On-load layerwise quantization",
       "baseline_status": "missing",
-      "phase": "P7",
-      "disposition": "conditional provider-specific on-load quantization with source, memory and quality contract",
+      "phase": "excluded",
+      "disposition": "No Juiced-provided on-load model-weight quantization; select already quantized variants. Ordinary execution arithmetic and KV precision remain distinct native settings",
       "baseline_evidence": [
         "prepare",
         "profiles"
       ],
-      "scope": "conditional"
+      "scope": "excluded"
     },
     {
       "id": "F205",
@@ -2584,6 +2584,30 @@
       "phase": "P0",
       "scope": "core",
       "disposition": "Display native Juiced service version, with development/unknown states; never infer it from UI package or inherited manager version",
+      "request_date": "2026-11-09"
+    },
+    {
+      "id": "J004",
+      "feature": "Accurate model discovery metadata and effective context",
+      "phase": "P1",
+      "scope": "core",
+      "disposition": "Separate declared/configured/active per-request context with provenance, pending settings and unknowns across UI/native/OpenAI/Ollama/MCP discovery; verify exact identities and reload/profile/restart behavior",
+      "request_date": "2026-11-09"
+    },
+    {
+      "id": "J005",
+      "feature": "Unified model discovery-to-running Library flow",
+      "phase": "P1",
+      "scope": "core",
+      "disposition": "One coherent search/selection/acquisition flow with understandable repos/quants, hardware suitability, integrated progress/downloaded state, working enabled controls and actual service verification; no fragmented Downloads/Downloaded tasks",
+      "request_date": "2026-11-09"
+    },
+    {
+      "id": "J006",
+      "feature": "Published variant discovery instead of Juiced-owned conversion and quantization",
+      "phase": "P1",
+      "scope": "core",
+      "disposition": "P1 safely retires producer controls/APIs/tools and strengthens existing-variant selection; P2 compares external variants; P3 protects complete acquired revisions. Preserve artifacts and unresolved writers; no local converter/quantizer/exporter in any phase",
       "request_date": "2026-11-09"
     }
   ]

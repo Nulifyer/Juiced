@@ -1,7 +1,7 @@
 # Juiced platform plan
 
-Revision: 3, 2026-11-09
-State: proposed for renewed independent council review; revision 2 approval remains historical, not revision 3 or implementation acceptance
+Revision: 4, 2026-11-09
+State: proposed for renewed independent council review; revisions 2 and 3 remain historical approvals, not revision 4 or implementation acceptance
 Baseline: v0.8.6, source 9cd79d01b32dfcd8b3a1a351afc68dc99c0a5266
 Owner: primary Juiced maintainer agent; three independent plan reviewers
 
@@ -12,6 +12,16 @@ weights, inspects their identity and capabilities, chooses an execution profile
 or a measured recommendation, and serves standard APIs directly to other tools.
 The product manages artifacts, runtimes, resources, lifecycle, compatibility and
 bounded operational evidence. Its UI tests services temporarily.
+
+The latest November 9 direction excludes all Juiced-owned model-weight conversion,
+quantization, re-quantization, calibration/export and repacking pipelines. Find
+existing model variations and quants instead. Provide strong source/variant
+search, complete-file review, runtime/host suitability and measured comparisons
+so users can select and run the model they need. Preserve already acquired or
+historically generated artifacts and unresolved ownership during feature retirement.
+This exclusion applies to Barista and every optional phase too. Direct compatible
+reuse, ordinary protocol encoding, execution arithmetic and KV-cache precision
+remain separate serving behavior; they do not authorize a model-file producer.
 
 The user's November 9 direction adds one agent exception: Barista, an optional
 Juiced operator assistant whose hosted model role is `juiced-assistant`. It is off
@@ -48,17 +58,19 @@ The 77-tool survey and 211-family comparison live in the adjacent Homelab reposi
 `docs/juiced-tool-survey.md`, `docs/juiced-feature-catalog.md`,
 `docs/juiced-feature-gaps.md`, and `docs/evidence/juiced-capability-survey/`.
 The authoritative disposition is `juiced/PLATFORM-FEATURES.json`, schema 1,
-plan revision 3, SHA256 `7e35d19f19f8fb7950c22ce119999f48229a8ddc79eaf331611c4913951313d0`. It maps every catalogue ID to a phase, retained
+plan revision 4, SHA256 `b369ba1c3f3c8478eb3706fbafa8b226a9fb712ed51ec3ef150c620f4b01b29d`. It maps every catalogue ID to a phase, retained
 behavior, conditional integration or explicit exclusion. The Homelab Markdown
-projection has SHA256 `2c438ca7250e6fc5a14180795e2be6ec59f6d0c9aa13edfda091c5b5882b37da`. Council approval binds this plan and both annex
+projection has SHA256 `7230e46088fa9aacfd4204fc673dbdbcc5250c99830baac422c8ab13da179023`. Council approval binds this plan and both annex
 hashes as one review bundle; the JSON owns phase assignments. It is a traceability aid, not
 211 independent implementation tickets or a commitment to emulate every product.
-J001-J003 in the annex separately trace the November 9 assistant, default-session
-and sidebar-version requests without altering the survey's original IDs/statuses.
+J001-J006 separately trace the assistant, default-session, sidebar-version,
+discovery/context, unified acquisition and no-conversion requests. Preserve the
+survey's original IDs, names, baseline statuses and evidence references.
 The normative Barista contract is `juiced/BARISTA.md`, SHA256
-`d9e0d232bf14f8278699921cb0d522821e73a9f3a0fc4934fc611a6f2ca04ae6`. Approval binds that contract too.
-Revision 2's approved bundle is retained in Git and the coordinating evidence
-archive; its approvals cannot be carried forward to this material scope change.
+`e348076d7eeb6cfbe41d68bd4a6db6eac6d7e240037283be3f4062920c94e0f6`. Approval binds that contract too.
+Revisions 2 and 3 are archived unchanged with their approvals. Their approvals
+cannot be carried forward to this material scope change. Historical delivered
+conversion behavior remains in baseline evidence without remaining product scope.
 
 Current delivery owners are `juiced/RUNTIME-PROFILES.md`, `juiced/UI-DESIGN.md`,
 native `src/cpp/server/juiced/`, backend descriptors, ModelManager, Router,
@@ -74,13 +86,14 @@ Documentation and source presence are distinct from proven runtime behavior.
 - Backends remain supervised subprocesses with private dependency environments.
   The native host stays independent of desktop UI and agent clients. No required
   host Docker socket, nested daemon, Kubernetes, external database or gateway.
-- Reuse weights unchanged when supported. Derived artifacts never overwrite their
-  source. Explain lossy quantization, F16 intermediates, missing modalities/heads,
-  changed tokenizer/geometry and extra storage before preparation.
+- Acquire complete existing variants and reuse weights unchanged when supported.
+  Preserve numerical/format identity, source/revision, companions and licensing.
+  Explain precision, modality and provenance differences between published variants.
+  Never offer local weight conversion/quantization as a fallback for incompatibility.
 - Distinguish unsupported, unknown, compatible, package-ready, smoke-qualified and
   performance-qualified. Unknown does not become true, false or zero. Supported
   installation is not proof of inference correctness.
-- Explicit operator choices survive updates/reboots. New downloads/derived models
+- Explicit operator choices survive updates/reboots. New downloads/imported variants
   start Disabled and cannot be invoked until enabled. Experimental profiles remain
   opt-in, inspectable and reversible; benchmark absence alone does not prohibit a
   structurally compatible controlled trial.
@@ -88,7 +101,7 @@ Documentation and source presence are distinct from proven runtime behavior.
   versioned. Every native endpoint follows the existing four-prefix rule. Existing
   fixed-protocol exceptions and authentication rules remain enforced.
 - Disconnection/cancellation does not reacquire Router locks or trigger broad
-  model reloads. Slow network/probe/install/conversion work occurs outside shared
+  model reloads. Slow network/probe/install/recovery work occurs outside shared
   lifecycle locks. Reconcile effects against generation/revision IDs before apply.
 - API intent and active worker state remain separate. Failures are scoped to the
   affected job/profile/worker; no unrelated-worker unload as fallback.
@@ -107,8 +120,8 @@ fills the right owner rather than adding pages for every engine feature.
 | --- | --- | --- |
 | Models | See actual readiness and respond to failures | Fit/health, active device/profile, effective limits, pending changes; clear load/unload/reload actions |
 | Loading policy | Set availability/residency | Whole-row drag and menus; optional idle/coexistence controls; protected service policy and overload behavior |
-| Library | Acquire and inspect weights/variants | Curated recommendations, composed filters, proper names, grouped quants, full-source/companion review, provenance and safe delete |
-| Model inspector | Configure one deployment | Typed settings, effective values, runtime/device selection, prepare/draft/adapter links, apply/reload/rollback |
+| Library | Find, acquire and run an existing variant | One search/selection/acquisition flow, clear repositories/quants, truthful host suitability, integrated transfer/downloaded state, working controls, full-source/companion review and safe delete |
+| Model inspector | Configure one deployment | Typed settings, effective values, runtime/device selection, existing variant/draft/adapter links, apply/reload/rollback |
 | Backends & hardware | Enable an execution path | Provider groups and variants, host prerequisites, package versions/update/rollback, exact restrictions |
 | Cache | Control operational reuse and storage | Qualified modes, identity/miss reasons, retention/reclaim, references and budgets; no conversation browser |
 | Service APIs | Connect external clients directly | Exact endpoint/auth/model discovery, operation support, versions, short copyable client configuration and connection probe |
@@ -155,6 +168,14 @@ selection, router validation and client setup read that same view. Protocol-spec
 model lists remain task-eligible and policy-aware. Publish JSON/OpenAPI schemas
 where appropriate; do not describe a Juiced extension as an industry standard.
 
+Discovery/context acceptance separates declared model/provider limits, configured
+settings, applied launch settings and observed active-worker per-request limits.
+Label total KV/context budgets separately from per-request limits and physical
+slots. Preserve unknowns, provenance, selected profile and pending settings across
+native/OpenAI/Ollama/MCP and UI views. Check aliases, concurrent publication,
+reload and restart against exact artifact/runtime identities. A training limit,
+auto sentinel or launch option is not proof of an engine's serving capacity.
+
 Hard incompatibility has a concrete code/reason. A controlled unknown-profile
 trial may be offered only if the backend can accept the artifact structurally and
 startup/resource constraints are enforceable. Profile changes invalidate relevant
@@ -181,9 +202,10 @@ on failure and explain an interrupted update on restart. A failed promotion cann
 leave the active pointer on a partial bundle.
 
 Do not install compilers or general package managers in the serving image to make
-an unsupported target appear supported. Build/preparation environments remain
-separate. Native engines use private libraries; Python engines use isolated pinned
-bundles. An external backend protocol is added only for a concrete provider needing
+an unsupported target appear supported. Build environments remain separate.
+Juiced does not bundle or expose a model converter/quantizer to manufacture
+compatibility. Native engines use private libraries; Python engines use isolated
+pinned bundles. An external backend protocol is added only for a concrete provider needing
 it, with discovery, readiness, cancellation, metrics and failure conformance tests.
 Remote generic OpenAI endpoints are a separate integration from local packages.
 
@@ -225,7 +247,8 @@ Admission uses atomic incremental reservations owned by a scoped lease. Reserve
 load-time weights/workspaces once per worker generation, then each request's
 incremental KV/recurrent/output/workspace ceiling without counting shared weights
 again. Concurrency races update the same pool ledger under Router authority.
-Conversion/install jobs reserve their separate scratch limits before starting.
+Acquisition/import/install jobs reserve separate scratch limits before starting.
+Unresolved legacy producer writes keep their original charges until confirmed cleanup.
 Release/reconcile reservations on rejection, timeout, exception, cancellation,
 disconnect, worker crash, unload and restart. Lease destructors/final callbacks
 cannot perform blocking network calls while holding Router locks. If a backend
@@ -285,12 +308,12 @@ background class before subsequent execution. This is not hard realtime.
 Respect busy leases, bounded draining and cached-state references. Cold load,
 weights-only sleep/downsize and hard eviction are different transitions. Resume
 support is engine-specific. Maintenance drain/pause rejects new work and resumes
-without changing saved policies. Background download/preparation/benchmark work
+without changing saved policies. Background acquisition/import/benchmark work
 has independent RAM/disk/concurrency limits and cannot silently evict Hot services.
 
-### D. Acquisition, preparation and component library
+### D. Acquisition, published variants and component library
 
-Extend the native downloader, model registry and preparation/cache owners. Add
+Extend the native downloader, model registry and artifact/reference owners. Add
 revision-pinned complete HF source snapshots, optional credentials, explicit gated
 license handling, resumption and disk-space checks. Treat download size separately
 from load memory. Reject incomplete shards/companions before claiming ready.
@@ -300,6 +323,24 @@ file becoming a top-level model row. Preserve actual public model names and expl
 variant identity. Discover supports service, architecture, format, runtime, quant,
 size and installed/downloaded filters as data becomes available. Do not assert
 publisher equivalence from names; offer publisher search and inspected matches.
+
+Library is one discovery-to-running task. Keep one query, source/service/runtime
+facets, selected repository/variant and acquisition state. Integrate transfer
+progress and downloaded readiness with results; avoid fragmented source searches
+or separate Downloads/Downloaded tasks. Explain model versus repository versus
+quant/companion identity, and keep that context through review, error and back
+navigation. Curated picks are not hardware qualification. Expose known structural
+runtime support, measured or conservatively estimated host fit and unresolved
+requirements separately. Weight size alone is not a fit estimate; account for
+whole MoE weights, context/KV/recurrent state, workspace and shared physical pools.
+
+Every enabled action must produce an accepted native operation, a visible state
+change or an actionable failure. Show the next step for missing runtime, unknown
+fit, incompatible artifact, active/paused transfer, Disabled policy, readiness and
+cleanup failure. Guide explicit On demand/Hot enablement after acquisition without
+silently changing the Disabled default. End the flow with a temporary useful
+service test and client endpoint. Retain first-use desktop/phone/keyboard/touch
+acceptance against actual native jobs, including cancellation, retry and restart.
 
 Model revisions have a ModelManager-owned immutable manifest binding weights,
 config, tokenizer, chat-template source, projectors/encoders and every required
@@ -315,29 +356,39 @@ atomic active-manifest change. A quant/family change retains a distinct proper
 variant ID; this is not an alias for silently changing the model behind a quant
 name. Failed validation/load/promotion restores the previous complete manifest and
 worker, not a mixture of old/new companions. Preserve prior revisions, binaries
-and snapshots while current workers, preparation jobs, rollback manifests or
+and snapshots while current workers, unresolved legacy producer jobs, rollback manifests or
 saved profiles reference them. Promotion invalidates incompatible cache and
 qualification identities. A restart reconciles a recorded promotion intent to
 the last committed complete revision before startup preload. P3 tests include
 failed promotion, crash between staging/commit/reload, previous-companion restore,
 policy/public-ID preservation and reference-protected reclamation.
 
-Supported transforms follow reviewed recipes. A plan declares source and target
-hashes/precision/layout, required files/calibration, losses, RAM/disk/runtime cost,
-tool identity and validator. Jobs are cancelable, bounded, restart-recoverable and
-atomically publish a separate Disabled artifact. Lossless repacking and lossy
-requantization are distinct. Higher bit depth cannot restore lost source data.
+Discover externally produced GGUF, Safetensors, AWQ/GPTQ/compressed-tensors,
+EXL, OpenVINO/ONNX, MLX/UQFF/LiteRT, Q4NX and other variants only alongside a
+qualified consuming provider/importer and explicit selected-family contract.
+Search publisher/community provenance and revisions, format/architecture, quant,
+required components, licensing and known compatibility. Do not infer equivalence
+from similar names or claim a higher-bit derivative restores lost source data.
+Compare selected compatible variants under P2's matched quality/resource gates.
+Register existing components/adapters against a compatible base identity and
+file references. Quarantine incomplete artifacts and remote-code requirements.
 
-Keep current GGUF recipes. Add AWQ/GPTQ/EXL/OpenVINO/MLX/ONNX/Q4NX or compiled-engine
-preparation only alongside a matched consuming provider and architecture adapter.
-Require original/high-precision sources when a target quantizer needs them; no
-blanket quantized-GGUF round trips. Register components and adapters with compatible
-base identity and file references. Quarantine incomplete artifacts and executable
-remote-code requirements rather than execute arbitrary publisher code implicitly.
+Retire conversion/quantization creation UI, CLI/API dispatch, recipes, bundled
+producer tools and serving-image dependencies. Reject new jobs before teardown.
+Keep read-only legacy records and only the native cancellation/cleanup/recovery
+operations needed to protect existing data and unresolved writers. Drain accepted
+operations through confirmed terminal effects before removing their executable
+or staging references. Ambiguous prior-manager processes remain quarantined with
+retained charges. Removing a feature or persisting a tombstone is not stop proof.
+Existing prepared artifacts remain ordinary retained weights with registrations,
+provenance and reference-safe cleanup. Never delete them merely because the
+producer is retired. Recovery/restore acceptance covers their retained state.
 
-Global dedup/OCI sources are optional distribution improvements after identity and
-reference accounting are reliable. Content-addressed preparation cache already
-exists and must not become a second general model store.
+Runtime-owned transient shader/graph/compile caches may remain with exact runtime,
+artifact, device, resource and reference contracts. They are consumption details,
+not a Juiced converter/exporter or another general model store. Global dedup/OCI
+sources remain optional distribution improvements after identity/reference
+accounting is reliable. No optional phase reintroduces a weight producer.
 
 ### E. Execution options, cache and comparisons
 
@@ -353,8 +404,8 @@ NUMA/affinity, load mode, KV precision, context/RoPE and kernel choices remain
 provider-specific advanced controls. Approximate attention/token pruning is labelled
 separately from target-verified speculation; quality effects need evidence.
 
-Keep operational prefix/KV snapshots distinct from model/compiled/preparation cache
-and answer caching. Qualification and identity must cover weights/components,
+Keep operational prefix/KV snapshots distinct from model weights, retained legacy
+derivatives, runtime-owned compiled caches and answer caching. Qualification and identity must cover weights/components,
 tokenizer/template, engine/build/device where required, effective options and state
 layout, including recurrent/MoE state. Restore tests compare real continuation after
 slot replacement, unload/reload and process restart. Unsupported combinations show
@@ -413,7 +464,7 @@ baseline p95, 100ms). No new OOM, mandatory schema/tool/continuation assertion
 failure, lost Hot worker, or configured resource/headroom breach is allowed.
 Profiles declare absolute bounded deadlines too. A failing/unusable baseline is
 not a license to match failure: repair or classify inconclusive. Exact structural
-assertions and numerical/quality tolerances are fixture/model/transform-specific,
+assertions and numerical/quality tolerances are fixture/model/variant-specific,
 concrete and versioned before testing; stochastic output is not judged by byte
 identity unless deterministic equivalence is the declared contract.
 
@@ -448,7 +499,7 @@ records for restricted operational inspection/deletion/export; never auto-resume
 them. Bounded interruption of currently active legacy work is a separate cleanup
 operation. Fixed server-defined allowlisted runtime/media/test job kinds accept
 only typed bounded parameters and cannot execute model-chosen tools or user graph
-expressions. Keep existing download/preparation jobs distinct. Negative tests
+expressions. Keep fixed download/import jobs and retained legacy producer recovery distinct. Negative tests
 cover alternate/nested payloads, discovery, aliases, resume, restart and protocol
 entry paths without deleting historical records or creating a new generic runner.
 
@@ -512,7 +563,7 @@ reference protection and explicit rollback compatibility. Publish backup/export/
 procedures that are tested with runtime/model state, not merely a running container.
 A state-changing release must define and snapshot a consistent durable set:
 config/model registrations, saved recipe options, execution_profiles.json, Juiced
-state.json/policies/trials/preparation references, package active manifests,
+state.json/policies/trials/legacy producer references, package active manifests,
 cache manifests/referenced snapshots, import/download manifests and retained
 legacy jobs. Inventory external env secrets without printing/committing them;
 ephemeral cloud keys remain nonpersistent. Immutable weights/bundles may be
@@ -545,7 +596,7 @@ rolling out unrelated UI/metadata work; use controlled maintenance for native re
 
 `BARISTA.md` defines the sole agent exception. Extend the native Juiced operator
 service with one bounded assistant owner; its tools call existing ModelManager,
-BackendOps, RuntimeConfig, Router, cache, preparation, comparison and job owners.
+BackendOps, RuntimeConfig, Router, cache, artifact recovery, comparison and job owners.
 No parallel model registry, scheduler, helper executor or required agent sidecar.
 The stable `juiced-assistant` role selects a normal hosted Chat model and shares
 its settings/worker. Operator-only dispatch rechecks enabled state, current
@@ -607,13 +658,13 @@ because its plan or code is approved.
 | Phase | Deliverable and existing owners | Exit evidence |
 | --- | --- | --- |
 | P0 Foundation | Reconcile docs; capabilities/qualification from ModelManager/BackendOps; native principal/session/operation context; exclude inherited Omni/arbitrary jobs; sidebar service version; Barista B0 contract; state-restore gate | Schema/unknown/policy discovery tests; negative graph/Omni/MCP fixtures; auth-header/session-isolation cases; backup/restore prerequisite for any changed durable state; no weight/profile change; existing HA/Pi checks |
-| P1 Resources | Shared-pool estimates and scoped atomic reservations, bounded queues/aging/deadlines, Hot protection, adaptive session/slot acquisition with no default user quota, idle/maintenance controls in Router/EvictionEngine | UMA/device accounting, five concurrent/over-slot thread cases with unchanged context and optional caps; races/drain/cancel/failure tests; frozen acceptance profiles pass long-prefill/image interference and HA-like timing/resource gates; no hard realtime promise |
+| P1 Resources | Shared-pool estimates and scoped atomic reservations, bounded queues/aging/deadlines, Hot protection, adaptive session/slot acquisition with no default user quota, idle/maintenance controls in Router/EvictionEngine; discovery/context and unified Library flow; safe legacy producer retirement | UMA/device accounting, five concurrent/over-slot thread cases with unchanged context and optional caps; races/drain/cancel/failure tests; frozen acceptance profiles pass long-prefill/image interference and HA-like timing/resource gates; no hard realtime promise |
 | P2 Evidence and tuning | Versioned comparison runner, receipt invalidation, request phases/redacted bundle, evidence-backed recommendations; Barista B1 actual-model/tool qualification and B2 optional operator assistant | Frozen acceptance profiles pass matched quant/runtime cold/warm/concurrency/quality gates; cleanup/restoration and recommendation significance; deterministic report; UI task/error states; BARISTA.md quality/authority/cancellation suite and off-by-default onboarding |
-| P3 Packages and artifacts | Full-source/companion acquisition; separate complete model-revision and runtime-bundle promotion/rollback; components/adapters/drafts; matched optional preparation; Barista B3 lifecycle tools as their owners qualify | Interrupted download/install/convert/promotion/restart and hash/disk failures; restore complete prior model plus companions/package; reference safety; concrete quality/resource gates; loss disclosure |
+| P3 Packages and artifacts | Full-source/companion acquisition; separate complete model-revision and runtime-bundle promotion/rollback; components/adapters/drafts and existing published variants; Barista B3 lifecycle tools as their owners qualify | Interrupted download/install/import/promotion/restart and hash/disk failures; restore complete prior model plus companions/package; reference safety; concrete quality/resource gates; loss disclosure |
 | P4 Direct services | Complete selected image/speech/specialist contracts and client fixtures; broaden cache qualification by exact engine/protocol; Barista B3 selected tool/parser conformance | Real native client success, failures, cancel and partial-stream checks; supported cache continuation after replacement/restart; policy/auth/admission parity |
 | P5 Auto service and access | Existing router integration, capability/affinity/fallback, optional per-client/model controls and quotas (unset by default); Barista B4 multi-operator restrictions | Route replay/overhead/quality versus explicit models; no silent cloud; cross-protocol allowlist/admin/cancel tests; existing anonymous mode preserved |
 | P6 Portable distribution | Linux multiarch/Windows/native Mac packaging, host diagnostics and tested deployment guides; qualified additional providers and Barista B4 | Core build/package CI per OS/arch; real-host support receipts separately named; clean install/upgrade/recovery and consumer smoke on qualified targets |
-| P7 Optional scale and formats | Remote native workers, replicas, OCI/dedup, advanced quant/compiled targets, answer cache/Batch/additional protocols, tiered cache and specialty providers when justified | Named consumer/workload, matched importer/engine and hardware evidence; no mandatory new infrastructure; no additional agent features beyond Barista |
+| P7 Optional scale and formats | Remote native workers, replicas, OCI/dedup, externally produced format/quant targets and runtime-owned caches, answer cache/Batch/additional protocols, tiered cache and specialty providers when justified | Named consumer/workload, matched importer/engine and hardware evidence; no mandatory new infrastructure; no additional agent features beyond Barista |
 
 Every P3/P4/P6/P7 release has a selected-family manifest naming exact providers,
 models/artifact families, operations, platforms and acceptance profiles. Unselected

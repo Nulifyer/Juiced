@@ -1,66 +1,81 @@
 {
-  "plan_revision": 3,
-  "status": "approved",
-  "plan_sha256": "2443f4a5d089b633c18cbf2b2b91df7905f26a38a84486b332ef53703beda5dd",
-  "annex_sha256": "7e35d19f19f8fb7950c22ce119999f48229a8ddc79eaf331611c4913951313d0",
-  "projection_sha256": "2c438ca7250e6fc5a14180795e2be6ec59f6d0c9aa13edfda091c5b5882b37da",
-  "barista_contract_sha256": "d9e0d232bf14f8278699921cb0d522821e73a9f3a0fc4934fc611a6f2ca04ae6",
+  "plan_revision": 4,
+  "status": "pending_review",
+  "plan_sha256": "a912826159800f7350fd4482503a2bb22d99c007c487fee9175993fa6bf19847",
+  "annex_sha256": "b369ba1c3f3c8478eb3706fbafa8b226a9fb712ed51ec3ef150c620f4b01b29d",
+  "projection_sha256": "7230e46088fa9aacfd4204fc673dbdbcc5250c99830baac422c8ab13da179023",
+  "barista_contract_sha256": "e348076d7eeb6cfbe41d68bd4a6db6eac6d7e240037283be3f4062920c94e0f6",
   "requested_review": {
     "seats": 3,
     "model": "gpt-6.1-sol",
     "reasoningEffort": "high"
   },
-  "reviewers": [
-    {
-      "seat": "A",
+  "reviewers": [],
+  "historical_revision_3": {
+    "plan_revision": 3,
+    "status": "approved",
+    "plan_sha256": "2443f4a5d089b633c18cbf2b2b91df7905f26a38a84486b332ef53703beda5dd",
+    "annex_sha256": "7e35d19f19f8fb7950c22ce119999f48229a8ddc79eaf331611c4913951313d0",
+    "projection_sha256": "2c438ca7250e6fc5a14180795e2be6ec59f6d0c9aa13edfda091c5b5882b37da",
+    "barista_contract_sha256": "d9e0d232bf14f8278699921cb0d522821e73a9f3a0fc4934fc611a6f2ca04ae6",
+    "requested_review": {
+      "seats": 3,
       "model": "gpt-6.1-sol",
-      "reasoningEffort": "high",
-      "verdict": "APPROVE",
-      "taskId": "node:delegated-task:command%3Amcp%3A0fc276b9-3579-495b-a4ac-7f1ef0d58427%3Adelegate-task%3Ajuiced-revision3-a-8405000a"
+      "reasoningEffort": "high"
     },
-    {
-      "seat": "B",
-      "model": "gpt-6.1-sol",
-      "reasoningEffort": "high",
-      "verdict": "APPROVE",
-      "taskId": "node:delegated-task:command%3Amcp%3A0fc276b9-3579-495b-a4ac-7f1ef0d58427%3Adelegate-task%3Ajuiced-revision3-b-8405000a"
-    },
-    {
-      "seat": "C",
-      "model": "gpt-6.1-sol",
-      "reasoningEffort": "high",
-      "verdict": "APPROVE",
-      "taskId": "node:delegated-task:command%3Amcp%3A0fc276b9-3579-495b-a4ac-7f1ef0d58427%3Adelegate-task%3Ajuiced-revision3-c-8405000a"
-    }
-  ],
-  "previous_approved": {
-    "plan_revision": 2,
-    "plan_sha256": "987a9cd9dbf23edcdb4efc83d26a05ad9cfb0fa8e4a30c2a7546b102694d532b",
-    "annex_sha256": "88611238af5f856a6780a1fdb68289c17203fa5b348d5d49c5f639a4d54a9840",
-    "reviewed_at": "2026-11-07",
     "reviewers": [
       {
         "seat": "A",
         "model": "gpt-6.1-sol",
         "reasoningEffort": "high",
-        "verdict": "APPROVE"
+        "verdict": "APPROVE",
+        "taskId": "node:delegated-task:command%3Amcp%3A0fc276b9-3579-495b-a4ac-7f1ef0d58427%3Adelegate-task%3Ajuiced-revision3-a-8405000a"
       },
       {
         "seat": "B",
         "model": "gpt-6.1-sol",
         "reasoningEffort": "high",
-        "verdict": "APPROVE"
+        "verdict": "APPROVE",
+        "taskId": "node:delegated-task:command%3Amcp%3A0fc276b9-3579-495b-a4ac-7f1ef0d58427%3Adelegate-task%3Ajuiced-revision3-b-8405000a"
       },
       {
         "seat": "C",
         "model": "gpt-6.1-sol",
         "reasoningEffort": "high",
-        "verdict": "APPROVE"
+        "verdict": "APPROVE",
+        "taskId": "node:delegated-task:command%3Amcp%3A0fc276b9-3579-495b-a4ac-7f1ef0d58427%3Adelegate-task%3Ajuiced-revision3-c-8405000a"
       }
     ],
-    "scope": "Staged plan approval only; implementation, hardware, performance and deployment require separate acceptance."
+    "previous_approved": {
+      "plan_revision": 2,
+      "plan_sha256": "987a9cd9dbf23edcdb4efc83d26a05ad9cfb0fa8e4a30c2a7546b102694d532b",
+      "annex_sha256": "88611238af5f856a6780a1fdb68289c17203fa5b348d5d49c5f639a4d54a9840",
+      "reviewed_at": "2026-11-07",
+      "reviewers": [
+        {
+          "seat": "A",
+          "model": "gpt-6.1-sol",
+          "reasoningEffort": "high",
+          "verdict": "APPROVE"
+        },
+        {
+          "seat": "B",
+          "model": "gpt-6.1-sol",
+          "reasoningEffort": "high",
+          "verdict": "APPROVE"
+        },
+        {
+          "seat": "C",
+          "model": "gpt-6.1-sol",
+          "reasoningEffort": "high",
+          "verdict": "APPROVE"
+        }
+      ],
+      "scope": "Staged plan approval only; implementation, hardware, performance and deployment require separate acceptance."
+    },
+    "scope": "Unanimous whole-plan revision3 approval only. Barista, resource-driven sessions, implementation, hardware, performance, image and candidate recovery require their separate acceptance.",
+    "reviewed_at": "2026-11-09T17:52:14.054634+00:00",
+    "reviewed_source": "8405000a868a827c369e55f07c11a7535b485e34"
   },
-  "scope": "Unanimous whole-plan revision3 approval only. Barista, resource-driven sessions, implementation, hardware, performance, image and candidate recovery require their separate acceptance.",
-  "reviewed_at": "2026-11-09T17:52:14.054634+00:00",
-  "reviewed_source": "8405000a868a827c369e55f07c11a7535b485e34"
+  "scope": "Revision4 proposed whole-plan contract for user-directed no-conversion/quantization and discovery-to-running scope. No implementation or whole-plan acceptance until all three fresh reviews approve."
 }
