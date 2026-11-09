@@ -1193,8 +1193,21 @@ httplib::Server::HandlerResponse Server::admit_http_body(const httplib::Request&
         }
         if (bytes > ResourceAdmission::maximum_ingress_bytes)
             throw AdmissionError("ingress_limit_exceeded", "Request body exceeds the HTTP byte limit", 413);
+        const auto encoding = req.get_header_value("Content-Encoding");
+        bool supported_encoding = encoding.empty();
+#ifdef CPPHTTPLIB_ZLIB_SUPPORT
+        supported_encoding = supported_encoding || encoding == "gzip" || encoding == "deflate";
+#endif
+#ifdef CPPHTTPLIB_BROTLI_SUPPORT
+        supported_encoding = supported_encoding || encoding == "br";
+#endif
+#ifdef CPPHTTPLIB_ZSTD_SUPPORT
+        supported_encoding = supported_encoding || encoding == "zstd";
+#endif
+        if (!supported_encoding || req.get_header_value_count("Content-Encoding") > 1)
+            throw AdmissionError("unsupported_content_encoding", "This server does not support the request content encoding", 415);
         if (req.has_header("Transfer-Encoding") ||
-            (req.has_header("Content-Encoding") && req.get_header_value("Content-Encoding") != "identity") ||
+            (!encoding.empty() && encoding != "identity") ||
             req.is_multipart_form_data())
             bytes = ResourceAdmission::maximum_ingress_bytes;
         bool control = req.path == "/internal/set" || req.path == "/internal/shutdown";

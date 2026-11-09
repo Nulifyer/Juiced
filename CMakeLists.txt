@@ -258,13 +258,13 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Try system packages first, fall back to FetchContent if not available
-# Define minimum version requirements based on FetchContent git tags
+# Bundled dependencies may carry reviewed backports of system-version requirements.
 set(MIN_NLOHMANN_JSON_VERSION "3.11.3")
 set(MIN_CLI11_VERSION "2.4.2")
 set(MIN_CURL_VERSION "8.5.0")
 set(MIN_ZSTD_VERSION "1.5.5")
 set(DOWNLOAD_ZSTD_VERSION "1.5.7")
-set(MIN_HTTPLIB_VERSION "0.26.0")
+set(MIN_HTTPLIB_VERSION "0.53.0")
 set(MIN_LWS_VERSION "4.3.3")
 
 find_package(PkgConfig QUIET)
@@ -497,6 +497,8 @@ if(NOT USE_SYSTEM_HTTPLIB)
         GIT_REPOSITORY https://github.com/yhirose/cpp-httplib.git
         GIT_TAG d66d9a95997d51a8ba9822a611d1267757741535  # v0.51.0
         GIT_SHALLOW TRUE
+        PATCH_COMMAND ${CMAKE_COMMAND} -DHTTPLIB_SOURCE_DIR=<SOURCE_DIR>
+            -P ${CMAKE_SOURCE_DIR}/cmake/PatchHttplibGracefulClose.cmake
     )
     # Header-only mode compiles httplib's whole server, client and TLS code into
     # every file that includes httplib.h. Compiled mode builds it once.
@@ -508,6 +510,14 @@ if(NOT USE_SYSTEM_HTTPLIB)
     set(HTTPLIB_IS_USING_ZSTD ON CACHE INTERNAL "")
     set(HTTPLIB_INSTALL OFF CACHE INTERNAL "")
     FetchContent_MakeAvailable(httplib)
+    execute_process(
+        COMMAND ${CMAKE_COMMAND} -DHTTPLIB_SOURCE_DIR=${httplib_SOURCE_DIR}
+            -DHTTPLIB_VERIFY_ONLY=ON -P ${CMAKE_SOURCE_DIR}/cmake/PatchHttplibGracefulClose.cmake
+        RESULT_VARIABLE HTTPLIB_BACKPORT_RESULT
+    )
+    if(NOT HTTPLIB_BACKPORT_RESULT EQUAL 0)
+        message(FATAL_ERROR "The pinned cpp-httplib graceful-close backport is required")
+    endif()
     if(MSVC)
         # httplib parses network input, so it keeps the Control Flow Guard our code is built with.
         target_compile_options(httplib PRIVATE /guard:cf)
