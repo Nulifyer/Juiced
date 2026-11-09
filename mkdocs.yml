@@ -42,7 +42,7 @@ nav:
       - Runtimes and hardware: guide/runtimes.md
       - Loading policies: guide/loading-policy.md
       - Model settings: guide/settings.md
-      - Prepare another quant: guide/preparation.md
+      - Choose a published variant: guide/variants.md
       - Cache and storage: guide/cache.md
   - Use services:
       - Test services: guide/testing.md

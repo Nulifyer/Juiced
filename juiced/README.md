@@ -9,7 +9,7 @@ Use the [project README](../README.md) for the product introduction,
 
 ## Native contracts
 
-- [Runtime profiles and preparation](RUNTIME-PROFILES.md)
+- [Runtime profiles and published variants](RUNTIME-PROFILES.md)
 - [Capability discovery and identity](CAPABILITIES.md)
 - [Resource admission](RESOURCE-ADMISSION.md)
 - [Resource accounting](RESOURCE-ACCOUNTING.md)

@@ -73,7 +73,7 @@ export function ModelWorkspace({
   onInspect,
   onBrowse,
   onTest,
-  onFindPrepared,
+  onFindVariant,
   refresh,
   notify,
 }: {
@@ -85,7 +85,7 @@ export function ModelWorkspace({
   onInspect: (model: Model) => void;
   onBrowse: (repo: string) => void;
   onTest: (model: Model) => void;
-  onFindPrepared: (model: Model, runtime: string) => void;
+  onFindVariant: (model: Model, runtime: string) => void;
   refresh: () => Promise<void>;
   notify: (message: string) => void;
 }) {
@@ -665,7 +665,7 @@ export function ModelWorkspace({
                   </>}
                 </>
               ))}
-            {tab === "runtime" && <ExecutionProfiles model={model} dirty={dirty} refresh={refresh} onChanged={() => setRevision(v => v + 1)} onFindPrepared={runtime => leave(() => onFindPrepared(model, runtime))} onVariant={name => { const variant=models.find(m=>m.id===name); if(variant)leave(()=>onInspect(variant)); }} />}
+            {tab === "runtime" && <ExecutionProfiles model={model} dirty={dirty} refresh={refresh} onChanged={() => setRevision(v => v + 1)} onFindVariant={runtime => leave(() => onFindVariant(model, runtime))} />}
             {tab === "effective" && response && <ModelEffective model={model} options={response} draft={draft} extra={extraEdited ? extra : undefined} />}
             {tab === "readme" && <ModelReadme repository={repo} />}
             {tab === "weights" && (

@@ -40,7 +40,7 @@ The bundled vLLM GGUF importer has restricted architecture support and needs the
 original tokenizer/config source. An unavailable profile explains its restriction.
 
 Use **Find a prepared version** to search for another publisher artifact.
-Use [Prepare a variant](preparation.md) only when Juiced offers a supported route.
+Use [published variants](variants.md) when another format or quant is needed.
 
 ## Try experimental XDNA2 + ROCm
 

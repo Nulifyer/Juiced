@@ -70,17 +70,6 @@
   flex-wrap: wrap;
   gap: 8px;
 }
-.preparation-target {
-  display: grid;
-  grid-template-columns: minmax(100px, 150px) minmax(0, 1fr);
-  align-items: end;
-  gap: 12px;
-}
-.preparation-target > span {
-  padding-bottom: 8px;
-  overflow-wrap: anywhere;
-  font-size: 12px;
-}
 .preparation-jobs article {
   display: flex;
   align-items: center;
@@ -103,8 +92,7 @@
   color: var(--muted-foreground);
 }
 @container model-inspector (max-width: 450px) {
-  .execution-profiles .settings-grid,
-  .preparation-target {
+  .execution-profiles .settings-grid {
     grid-template-columns: minmax(0, 1fr);
   }
 }

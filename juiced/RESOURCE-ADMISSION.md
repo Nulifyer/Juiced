@@ -4,6 +4,24 @@ This native source batch adds admission under Router ownership. It is not yet a
 qualified essential-service protection release. The default `legacy` mode retains
 existing operator-approved profiles and reports `latency_qualified: false`.
 
+## Retired model producers
+
+Juiced no longer creates converted, quantized, repacked or exported model weights.
+Producer planning/creation/resume rejects HTTP410 `feature_retired` before resource
+admission or filesystem/process dispatch. The image excludes the producer Python
+environment, conversion scripts and quantizer executable. Library finds existing
+published variants; normal runtime arithmetic/KV precision remains supported.
+
+Existing preparations are retained recovery records. Their bounded inspection,
+cancellation and reference-safe artifact cleanup remain available. Unconfirmed
+writers retain process/ticket/staging ownership and block unsafe source deletion.
+Prior-manager uncertainty remains quarantined, never auto-resumed or called stopped.
+Historical preparation assertions below describe those retained ownership paths;
+they do not authorize new model production. Complete operator recovery and all-writer
+maintenance remain separate unfinished P1 requirements. The cleanup-only completion
+owner and its stop-failure fixture remain until legacy retirement/recovery closes.
+No public API or worker queue can dispatch a model producer through that owner.
+
 ## Discovery context observations
 
 Native model list/detail and catalog entries include `context.schema_version: 1`.

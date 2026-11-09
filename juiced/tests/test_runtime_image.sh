@@ -34,7 +34,10 @@ test -x /opt/juiced/parakeet/parakeet-server
 test -x /opt/juiced/llama/llama-server
 /opt/juiced/voice/bin/python3 -c 'import wyoming_openai, wyoming; import importlib.util; assert importlib.util.find_spec("pip") is None; assert importlib.util.find_spec("setuptools") is None'
 test -f /opt/juiced/voice/launcher.py
-check_links /opt/juiced/preparation/native/llama-quantize /opt/juiced/preparation/native
-/opt/juiced/preparation/bin/python3 -c 'import torch, gguf, transformers; import importlib.util; assert not torch.cuda.is_available(); assert importlib.util.find_spec("pip") is None'
-test -f /opt/juiced/preparation/prepare.py
+test ! -e /opt/juiced/preparation
+test ! -e /opt/juiced/llama/bin/llama
+if find /opt/juiced/llama -name '*quantize*' -o -name 'convert_hf_to_gguf*' | grep -q .; then
+    echo 'FAIL: model producer tooling remains in the serving image' >&2
+    exit 1
+fi
 echo 'PASS: runtime excludes build tools and resolves native binary dependencies'
