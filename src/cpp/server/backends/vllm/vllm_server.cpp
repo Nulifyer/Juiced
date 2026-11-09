@@ -358,6 +358,7 @@ void VLLMServer::load(const std::string& model_name,
                      const RecipeOptions& options,
                      bool do_not_upgrade) {
     LOG(INFO, "vLLM") << "Loading model: " << model_name << std::endl;
+    stop_server();
 
     std::string vllm_backend = options.get_option("vllm_backend");
     std::string vllm_args = options.get_option("vllm_args");
@@ -538,10 +539,9 @@ void VLLMServer::load(const std::string& model_name,
     bool inherit_output = (log_level_ == "info") || is_debug();
     try {
         // vLLM can take longer to start (loading model, compiling kernels)
-        start_server(std::make_unique<NativeProcess>(ProcessOutput{inherit_output, true}), command,
+        start_server(make_native_process(ProcessOutput{inherit_output, true}), command,
                      HttpClient::get_default_timeout());
     } catch (const std::runtime_error& e) {
-        cleanup_vllm_rocm_shim_dir(rocm_shim_dir_);
         max_model_len_ = 0;
         if (load_cancelled()) throw;
         std::string err = e.what();

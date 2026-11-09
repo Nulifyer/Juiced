@@ -475,23 +475,27 @@ bool WrappedServer::has_backend_process_exited() const {
     return process_ && process_->exited() && unconfirmed_processes_.empty() && process_stops_in_progress_ == 0;
 }
 
+std::unique_ptr<ServerProcess> WrappedServer::make_native_process(ProcessOutput output) const {
+    return std::make_unique<NativeProcess>(output);
+}
+
+void WrappedServer::start_owned_process(std::unique_ptr<ServerProcess> process, const ServerCommand& command) {
+    if (load_cancelled()) throw std::runtime_error("load cancelled before process startup");
+    if (!process) throw std::invalid_argument("Process startup requires an owner");
+    stop_server();
+    std::lock_guard<std::mutex> lock(process_mutex_);
+    if (process_ || !unconfirmed_processes_.empty() || process_stops_in_progress_ != 0)
+        throw std::runtime_error("Worker process ownership changed before startup");
+    if (load_cancelled()) throw std::runtime_error("load cancelled after process retirement");
+    residency_resources_.started();
+    process_ = std::move(process);
+    port_ = command.port;
+    host_ = process_->start(command);
+}
+
 void WrappedServer::start_server(std::unique_ptr<ServerProcess> process,
                                  const ServerCommand& command, long timeout_seconds) {
-    if (load_cancelled()) throw std::runtime_error("load cancelled before process startup");
-    const std::string host = process->start(command);
-    std::unique_ptr<ServerProcess> previous;
-    {
-        std::lock_guard<std::mutex> lock(process_mutex_);
-        previous = std::move(process_);
-        if (previous) ++process_stops_in_progress_;
-        process_ = std::move(process);
-        port_ = command.port;
-        host_ = host;
-    }
-    if (previous) {
-        stop_owned_process(std::move(previous));
-    }
-
+    start_owned_process(std::move(process), command);
     if (!wait_for_ready(command.ready_endpoint, timeout_seconds)) {
         stop_server();
         throw std::runtime_error(server_name_ + " failed to start");

@@ -211,8 +211,10 @@ ServerCommand OpenMossServer::server_command(const std::string& model_path) cons
 }
 
 void OpenMossServer::start_speech_process(long timeout_seconds) {
-    start_server(std::make_unique<NativeProcess>(ProcessOutput{is_debug(), false}),
+    start_server(make_native_process(ProcessOutput{is_debug(), false}),
                  server_command(model_path_), timeout_seconds);
+    set_state(ModelState::READY);
+    set_cleanup_pending(false);
 }
 
 void OpenMossServer::unload() {
@@ -221,20 +223,18 @@ void OpenMossServer::unload() {
 }
 
 std::string OpenMossServer::design_reference_sample(
-    const std::string& voice_description, httplib::DataSink& sink) {
+    const std::string& voice_description, httplib::DataSink& sink,
+    std::chrono::steady_clock::time_point deadline) {
     auto cached = reference_cache_.find(voice_description);
     if (cached != reference_cache_.end()) {
         return cached->second;
     }
 
-    const auto deadline = std::chrono::steady_clock::now()
-        + std::chrono::seconds(kVoiceDesignDeadlineSeconds);
     ProcessSwapGuard swap_guard(process_swap_in_progress_);
     LOG(INFO, "openmoss-server") << "Designing reference voice for: " << voice_description << std::endl;
-    stop_server();
-
     std::string sample;
     try {
+        stop_server();
         sample = render_reference_sample(voice_description, sink, deadline);
         const long restart_timeout = remaining_seconds(deadline);
         if (restart_timeout <= 0) {
@@ -242,6 +242,8 @@ std::string OpenMossServer::design_reference_sample(
         }
         start_speech_process(restart_timeout);
     } catch (...) {
+        set_cleanup_pending(true);
+        set_state(ModelState::UNLOADED);
         try {
             start_speech_process(kVoiceDesignRecoverySeconds);
         } catch (const std::exception& e) {
@@ -260,15 +262,14 @@ std::string OpenMossServer::render_reference_sample(
     const std::string& voice_description, httplib::DataSink& sink,
     std::chrono::steady_clock::time_point deadline) {
     const ServerCommand command = server_command(voicegen_path_);
-    NativeProcess designer(ProcessOutput{is_debug(), false});
-    const std::string base = "http://" + utils::bracket_host_if_ipv6(designer.start(command)) + ":"
-                             + std::to_string(command.port);
+    start_owned_process(make_native_process(ProcessOutput{is_debug(), false}), command);
+    const std::string base = get_base_url();
     bool ready = false;
     while (!ready && std::chrono::steady_clock::now() < deadline) {
         if (client_cancelled(sink)) {
             throw std::runtime_error("voice design cancelled by client");
         }
-        if (!designer.running()) {
+        if (!WrappedServer::is_backend_alive()) {
             throw std::runtime_error("voice-design backend exited during startup");
         }
         try {
@@ -328,7 +329,7 @@ std::string OpenMossServer::render_reference_sample(
     if (status != 200 || response_body.empty()) {
         throw std::runtime_error("voice design failed: HTTP " + std::to_string(status));
     }
-    designer.stop();
+    stop_server();
     LOG(INFO, "openmoss-server") << "Voice-design subprocess released" << std::endl;
     return utils::JsonUtils::base64_encode(response_body);
 }
@@ -345,7 +346,8 @@ json OpenMossServer::apply_voice_design(const json& request, httplib::DataSink& 
         throw std::runtime_error(
             "This model has no voice-design component; attach reference audio instead.");
     }
-    forwarded["reference_wav_b64"] = design_reference_sample(description, sink);
+    forwarded["reference_wav_b64"] = design_reference_sample(description, sink,
+        std::chrono::steady_clock::now() + std::chrono::seconds(kVoiceDesignDeadlineSeconds));
     return forwarded;
 }
 
@@ -353,6 +355,8 @@ void OpenMossServer::audio_speech(const json& request, httplib::DataSink& sink) 
     const std::string description = string_field(request, kVoiceDesignField);
     const bool needs_voice_design = !description.empty() && !request.contains("reference_wav_b64");
     auto forward = [&]() {
+        if (cleanup_pending())
+            throw AdmissionError("worker_cleanup_pending", "Confirm voice-design cleanup before another request", 503);
         json forwarded = apply_voice_design(request, sink);
         if (forwarded.contains("stream_format")) {
             forwarded["stream"] = true;
@@ -375,6 +379,8 @@ void OpenMossServer::audio_speech(const json& request, httplib::DataSink& sink) 
 
 void OpenMossServer::audio_generations(const json& request, httplib::DataSink& sink) {
     std::shared_lock<std::shared_mutex> lock(request_mutex_);
+    if (cleanup_pending())
+        throw AdmissionError("worker_cleanup_pending", "Confirm voice-design cleanup before another request", 503);
     json body;
     body["prompt"] = string_field(request, "prompt");
     for (const char* key : {"seconds", "steps", "cfg_scale", "sigma_shift",

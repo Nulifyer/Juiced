@@ -323,6 +323,9 @@ public:
 
     // Get FLM status from cached system-info (single source of truth)
     static FlmStatus get_flm_status();
+private:
+    friend struct SystemInfoCacheTestHook;
+    static void replace_snapshot_for_test(json snapshot);
 };
 
 } // namespace lemon

@@ -127,7 +127,7 @@ public:
 
     InferenceLease try_acquire_ready_inference() {
         std::lock_guard<std::mutex> lock(state_mutex_);
-        if (retirement_pending_ || maintenance_in_progress_ || (state_ != ModelState::READY &&
+        if (cleanup_pending() || retirement_pending_ || maintenance_in_progress_ || (state_ != ModelState::READY &&
             state_ != ModelState::IN_USE && state_ != ModelState::EVICTING)) return {};
         ++active_request_count_;
         state_ = ModelState::IN_USE;
@@ -137,7 +137,7 @@ public:
 
     InferenceLease try_acquire_ready_state_operation() {
         std::lock_guard<std::mutex> lock(state_mutex_);
-        if (retirement_pending_ || maintenance_in_progress_ || (state_ != ModelState::READY &&
+        if (cleanup_pending() || retirement_pending_ || maintenance_in_progress_ || (state_ != ModelState::READY &&
             state_ != ModelState::IN_USE && state_ != ModelState::EVICTING)) return {};
         ++active_request_count_;
         ++active_state_operations_;
@@ -240,7 +240,7 @@ public:
             state_cv_.wait_for(lock, std::chrono::milliseconds(20));
         }
 
-        if (state_ == ModelState::UNLOADED) {
+        if (state_ == ModelState::UNLOADED || cleanup_pending()) {
             return false;
         }
 
@@ -345,7 +345,7 @@ public:
             // Note: is_streaming_ is managed by end_backend_request() which correctly
             // clears the flag only when the last streaming request completes.
             if (--active_request_count_ == 0) {
-                state_ = ModelState::READY;
+                if (state_ != ModelState::UNLOADED && !cleanup_pending()) state_ = ModelState::READY;
                 state_cv_.notify_all();
                 on_idle = take_pending_reclaim_if_idle_locked();
             }
@@ -715,9 +715,9 @@ protected:
         }}};
     }
 
-    // Starts `command` in `process` and blocks until its ready endpoint answers,
-    // then starts the watchdog. Throws, with the server stopped, when it exits,
-    // the load is cancelled or `timeout_seconds` passes first.
+    // Failed retirement or startup retains its process owner for cleanup retry.
+    virtual std::unique_ptr<ServerProcess> make_native_process(ProcessOutput output) const;
+    void start_owned_process(std::unique_ptr<ServerProcess> process, const ServerCommand& command);
     void start_server(std::unique_ptr<ServerProcess> process, const ServerCommand& command,
                       long timeout_seconds = 600);
     // Stops the watchdog and the server. Safe to call when nothing is running.

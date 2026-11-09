@@ -584,6 +584,19 @@ with HTTP 503 while retirement remains unresolved. A live child retained after
 failed unload is unavailable for successful reuse. Confirmed exact-generation
 cleanup must precede a replacement.
 
+WrappedServer retains a process before invoking its startup and retires the prior
+owner before dispatching a replacement. Startup exceptions can therefore leave
+an owned process for cleanup retry. vLLM retains its ROCm shim after failed load;
+confirmed unload or destruction precedes shim reclamation.
+
+OpenMoss voice design uses the same worker process owner as speech. Failed designer
+cleanup blocks speech restart and marks the worker unavailable. Ending an active
+request does not restore readiness while cleanup is pending. New inference/state
+leases and already accepted speech/audio calls reject that state. Successful
+cleanup and speech readiness are required before serving resumes. Controlled
+process/capability fixtures establish these caller boundaries, not actual speech,
+ROCm execution, descendants or device-kernel termination.
+
 FLM load-time pull, explicit download and removal now share ModelManager's native
 command owner. `native_helpers.json` records dispatch intent and an opaque command
 identity before spawn. The process layer attaches its handle before output callbacks

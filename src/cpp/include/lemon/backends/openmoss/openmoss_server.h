@@ -46,13 +46,15 @@ public:
     AudioFormatMetadata audio_format_metadata(const std::string& response_format) const override;
 
 private:
+    friend struct StopFailureTestHook;
     std::string resolve_binary_path(const std::string& backend);
     ServerCommand server_command(const std::string& model_path) const;
 
     void start_speech_process(long timeout_seconds = 600);
 
     std::string design_reference_sample(const std::string& voice_description,
-                                        httplib::DataSink& sink);
+                                        httplib::DataSink& sink,
+                                        std::chrono::steady_clock::time_point deadline);
     std::string render_reference_sample(
         const std::string& voice_description, httplib::DataSink& sink,
         std::chrono::steady_clock::time_point deadline);

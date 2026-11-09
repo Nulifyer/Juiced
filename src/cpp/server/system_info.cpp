@@ -3969,6 +3969,13 @@ json SystemInfoCache::get_system_info_with_cache() {
     return s_cached_system_info;
 }
 
+void SystemInfoCache::replace_snapshot_for_test(json snapshot) {
+    std::lock_guard<std::mutex> lock(s_system_info_mutex);
+    s_cached_system_info = std::move(snapshot);
+    s_hardware_computed = true;
+    s_recipes_computed = true;
+}
+
 void SystemInfoCache::invalidate_recipes() {
     std::lock_guard<std::mutex> lock(s_system_info_mutex);
     s_recipes_computed = false;
