@@ -1134,9 +1134,46 @@ httplib::Server::HandlerResponse Server::authenticate_request(const httplib::Req
 
 
 httplib::Server::Handler Server::contextual_handler(httplib::Server::Handler handler) {
-    return bind_request_context(std::move(handler), [this](const httplib::Request& request) {
+    auto bounded = [this, handler = std::move(handler)](const auto& request, auto& response) {
+        if (request_body_ready(request, response)) return;
+        handler(request, response);
+    };
+    return bind_request_context(std::move(bounded), [this](const httplib::Request& request) {
         return make_request_context(request, api_key_, admin_api_key_, authentication_epoch_);
     });
+}
+
+bool Server::request_body_ready(const httplib::Request& req, httplib::Response& res) {
+    if (res.user_data.get<bool>("body-checked")) return false;
+    res.user_data.set("body-checked", true);
+    if (const auto lease = res.user_data.get<std::shared_ptr<ResourceAdmission::Lease>>("ingress")) (*lease)->completed();
+    if (req.body.empty()) return false;
+    for (const std::string prefix : {"/api/v0/", "/api/v1/", "/v0/", "/v1/"})
+        if (req.path == prefix + "juiced/import/chunk") return false;
+    struct Shape final : nlohmann::json_sax<nlohmann::json> {
+        size_t depth = 0, values = 0;
+        bool limited = false;
+        bool value() { limited = limited || ++values > 32768; return !limited; }
+        bool begin() { if (!value()) return false; limited = ++depth > 64; return !limited; }
+        bool null() override { return value(); }
+        bool boolean(bool) override { return value(); }
+        bool number_integer(number_integer_t) override { return value(); }
+        bool number_unsigned(number_unsigned_t) override { return value(); }
+        bool number_float(number_float_t, const string_t&) override { return value(); }
+        bool string(string_t&) override { return value(); }
+        bool binary(binary_t&) override { return value(); }
+        bool key(string_t&) override { return value(); }
+        bool start_object(std::size_t) override { return begin(); }
+        bool start_array(std::size_t) override { return begin(); }
+        bool end_object() override { --depth; return true; }
+        bool end_array() override { --depth; return true; }
+        bool parse_error(std::size_t, const std::string&, const nlohmann::detail::exception&) override { return false; }
+    } shape;
+    nlohmann::json::sax_parse(req.body, &shape);
+    if (!shape.limited) return false;
+    const AdmissionError error("ingress_structure_limit_exceeded", "JSON exceeds the depth or value-count limit", 413);
+    set_model_error_response(error.to_json(), res);
+    return true;
 }
 
 httplib::Server::HandlerResponse Server::admit_http_body(const httplib::Request& req, httplib::Response& res) {
@@ -1156,7 +1193,16 @@ httplib::Server::HandlerResponse Server::admit_http_body(const httplib::Request&
             (req.has_header("Content-Encoding") && req.get_header_value("Content-Encoding") != "identity") ||
             req.is_multipart_form_data())
             bytes = ResourceAdmission::maximum_ingress_bytes;
-        if (bytes) res.user_data.set("ingress", std::make_shared<ResourceAdmission::Lease>(router_->admit_ingress(bytes)));
+        bool control = req.path == "/internal/set" || req.path == "/internal/shutdown";
+        for (const std::string prefix : {"/api/v0/", "/api/v1/", "/v0/", "/v1/"})
+            control = control || req.path == prefix + "juiced/admission";
+        control = control && bytes <= ResourceAdmission::maximum_control_body_bytes;
+        if (bytes) {
+            auto lease = std::make_shared<ResourceAdmission::Lease>(router_->admit_ingress(bytes, control));
+            if (req.is_multipart_form_data() && lease->protected_mode())
+                throw AdmissionError("operation_unqualified", "Multipart input envelopes are not qualified for protected admission", 503);
+            res.user_data.set("ingress", std::move(lease));
+        }
         return httplib::Server::HandlerResponse::Unhandled;
     } catch (const AdmissionError& error) {
         set_model_error_response(error.to_json(), res);
@@ -1169,6 +1215,12 @@ httplib::Server::HandlerResponse Server::admit_http_body(const httplib::Request&
 }
 
 void Server::setup_routes(httplib::Server &web_server) {
+    const auto post = [this, &web_server](const std::string& path, httplib::Server::Handler handler) {
+        web_server.Post(path, contextual_handler(std::move(handler)));
+    };
+    const auto remove = [this, &web_server](const std::string& path, httplib::Server::Handler handler) {
+        web_server.Delete(path, contextual_handler(std::move(handler)));
+    };
     web_server.set_payload_max_length(ResourceAdmission::maximum_ingress_bytes);
     web_server.set_pre_request_handler([this](const auto& req, auto& res) { return admit_http_body(req, res); });
     web_server.set_expect_100_continue_handler([this](const auto& req, auto& res) {
@@ -1243,18 +1295,17 @@ void Server::setup_routes(httplib::Server &web_server) {
         web_server.Get("/v1/" + endpoint, handler);
     };
 
-    auto register_post = [this, &web_server](const std::string& endpoint,
+    auto register_post = [this, &web_server, &post](const std::string& endpoint,
                                 std::function<void(const httplib::Request&, httplib::Response&)> handler) {
         auto actual = std::move(handler);
         handler = [this, actual](const httplib::Request& req, httplib::Response& res) {
             if (juiced_ && juiced_->inference_guard(req, res)) return;
             actual(req, res);
         };
-        handler = contextual_handler(std::move(handler));
-        web_server.Post("/api/v0/" + endpoint, handler);
-        web_server.Post("/api/v1/" + endpoint, handler);
-        web_server.Post("/v0/" + endpoint, handler);
-        web_server.Post("/v1/" + endpoint, handler);
+        post("/api/v0/" + endpoint, handler);
+        post("/api/v1/" + endpoint, handler);
+        post("/v0/" + endpoint, handler);
+        post("/v1/" + endpoint, handler);
         if (endpoint != "jobs") {
             web_server.Get("/api/v0/" + endpoint, [](const httplib::Request&, httplib::Response& res) {
                 res.status = 405;
@@ -1324,10 +1375,10 @@ void Server::setup_routes(httplib::Server &web_server) {
         web_server.Get(route, [this](const httplib::Request& req, httplib::Response& res) {
             handle_model_options_get(req, res);
         });
-        web_server.Post(route, [this](const httplib::Request& req, httplib::Response& res) {
+        post(route, [this](const httplib::Request& req, httplib::Response& res) {
             handle_model_options_post(req, res);
         });
-        web_server.Delete(route, [this](const httplib::Request& req, httplib::Response& res) {
+        remove(route, [this](const httplib::Request& req, httplib::Response& res) {
             handle_model_options_delete(req, res);
         });
     }
@@ -1382,11 +1433,11 @@ void Server::setup_routes(httplib::Server &web_server) {
         handle_slots(req, res);
     });
 
-    const auto slot_action = contextual_handler([this](const httplib::Request& req, httplib::Response& res) {
+    const httplib::Server::Handler slot_action = [this](const httplib::Request& req, httplib::Response& res) {
         handle_slots_by_id(req, res);
-    });
+    };
     for (const std::string prefix : {"/api/v0/", "/api/v1/", "/v0/", "/v1/"})
-        web_server.Post(prefix + R"(slots/(\d+))", slot_action);
+        post(prefix + R"(slots/(\d+))", slot_action);
 
     // Tokenize endpoint (llama.cpp specific)
     register_post("tokenize", [this](const httplib::Request& req, httplib::Response& res) {
@@ -1468,15 +1519,15 @@ void Server::setup_routes(httplib::Server &web_server) {
         handle_jobs_list(req, res);
     });
     for (const char* prefix : {"/api/v0", "/api/v1", "/v0", "/v1"}) {
-        web_server.Post(std::string(prefix) + R"(/jobs/([^/]+)/pause)",
+        post(std::string(prefix) + R"(/jobs/([^/]+)/pause)",
                         [this](const httplib::Request& req, httplib::Response& res) {
                             handle_jobs_pause(req, res);
                         });
-        web_server.Post(std::string(prefix) + R"(/jobs/([^/]+)/interrupt)",
+        post(std::string(prefix) + R"(/jobs/([^/]+)/interrupt)",
                         [this](const httplib::Request& req, httplib::Response& res) {
                             handle_jobs_interrupt(req, res);
                         });
-        web_server.Post(std::string(prefix) + R"(/jobs/([^/]+)/resume)",
+        post(std::string(prefix) + R"(/jobs/([^/]+)/resume)",
                         [this](const httplib::Request& req, httplib::Response& res) {
                             handle_jobs_resume(req, res);
                         });
@@ -1484,7 +1535,7 @@ void Server::setup_routes(httplib::Server &web_server) {
                        [this](const httplib::Request& req, httplib::Response& res) {
                            handle_jobs_get(req, res);
                        });
-        web_server.Delete(std::string(prefix) + R"(/jobs/([^/]+))",
+        remove(std::string(prefix) + R"(/jobs/([^/]+))",
                           [this](const httplib::Request& req, httplib::Response& res) {
                               handle_jobs_delete(req, res);
                           });
@@ -1534,22 +1585,22 @@ void Server::setup_routes(httplib::Server &web_server) {
     // The stop command now sends termination signal directly to the process
 
     // Internal shutdown endpoint (not part of public API)
-    web_server.Post("/internal/shutdown", [this](const httplib::Request& req, httplib::Response& res) {
+    post("/internal/shutdown", [this](const httplib::Request& req, httplib::Response& res) {
         handle_shutdown(req, res);
     });
 
-    web_server.Post("/internal/telemetry/flush", [](const httplib::Request& req, httplib::Response& res) {
+    post("/internal/telemetry/flush", [](const httplib::Request& req, httplib::Response& res) {
         lemon::telemetry::flush();
         res.status = 200;
         res.set_content(nlohmann::json{{"status", "flushed"}}.dump(), "application/json");
     });
 
-    web_server.Post("/internal/pin", [this](const httplib::Request& req, httplib::Response& res) {
+    post("/internal/pin", [this](const httplib::Request& req, httplib::Response& res) {
         handle_pin(req, res);
     });
 
     // Unified config endpoints (not part of public API)
-    web_server.Post("/internal/set", [this](const httplib::Request& req, httplib::Response& res) {
+    post("/internal/set", [this](const httplib::Request& req, httplib::Response& res) {
         handle_config_set(req, res);
     });
     web_server.Get("/internal/config", [this](const httplib::Request& req, httplib::Response& res) {
@@ -1558,13 +1609,13 @@ void Server::setup_routes(httplib::Server &web_server) {
     web_server.Get("/internal/config/defaults", [this](const httplib::Request& req, httplib::Response& res) {
         handle_config_defaults_get(req, res);
     });
-    web_server.Post("/internal/cleanup-cache", [this](const httplib::Request& req, httplib::Response& res) {
+    post("/internal/cleanup-cache", [this](const httplib::Request& req, httplib::Response& res) {
         handle_cleanup_cache(req, res);
     });
-    web_server.Post("/internal/simulate-vram-pressure", [this](const httplib::Request& req, httplib::Response& res) {
+    post("/internal/simulate-vram-pressure", [this](const httplib::Request& req, httplib::Response& res) {
         handle_simulate_vram_pressure(req, res);
     });
-    web_server.Post("/internal/models/sync", [this](const httplib::Request& req, httplib::Response& res) {
+    post("/internal/models/sync", [this](const httplib::Request& req, httplib::Response& res) {
         handle_models_sync(req, res);
     });
     web_server.Get("/internal/models/sync/status", [this](const httplib::Request& req, httplib::Response& res) {
@@ -1574,10 +1625,10 @@ void Server::setup_routes(httplib::Server &web_server) {
     web_server.Get("/internal/aliases", [this](const httplib::Request& req, httplib::Response& res) {
         handle_aliases_get(req, res);
     });
-    web_server.Post("/internal/aliases", [this](const httplib::Request& req, httplib::Response& res) {
+    post("/internal/aliases", [this](const httplib::Request& req, httplib::Response& res) {
         handle_aliases_add(req, res);
     });
-    web_server.Delete(R"(/internal/aliases/(.+))", [this](const httplib::Request& req, httplib::Response& res) {
+    remove(R"(/internal/aliases/(.+))", [this](const httplib::Request& req, httplib::Response& res) {
         handle_aliases_remove(req, res);
     });
 
@@ -1591,16 +1642,16 @@ void Server::setup_routes(httplib::Server &web_server) {
     register_post("cloud/auth", [this](const httplib::Request& req, httplib::Response& res) {
         handle_cloud_auth_set(req, res);
     });
-    web_server.Delete(R"(/api/v0/cloud/auth/(.+))", [this](const httplib::Request& req, httplib::Response& res) {
+    remove(R"(/api/v0/cloud/auth/(.+))", [this](const httplib::Request& req, httplib::Response& res) {
         handle_cloud_auth_clear(req, res);
     });
-    web_server.Delete(R"(/api/v1/cloud/auth/(.+))", [this](const httplib::Request& req, httplib::Response& res) {
+    remove(R"(/api/v1/cloud/auth/(.+))", [this](const httplib::Request& req, httplib::Response& res) {
         handle_cloud_auth_clear(req, res);
     });
-    web_server.Delete(R"(/v0/cloud/auth/(.+))", [this](const httplib::Request& req, httplib::Response& res) {
+    remove(R"(/v0/cloud/auth/(.+))", [this](const httplib::Request& req, httplib::Response& res) {
         handle_cloud_auth_clear(req, res);
     });
-    web_server.Delete(R"(/v1/cloud/auth/(.+))", [this](const httplib::Request& req, httplib::Response& res) {
+    remove(R"(/v1/cloud/auth/(.+))", [this](const httplib::Request& req, httplib::Response& res) {
         handle_cloud_auth_clear(req, res);
     });
 

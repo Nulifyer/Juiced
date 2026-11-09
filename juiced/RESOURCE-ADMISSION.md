@@ -295,18 +295,18 @@ HTTP body admission runs after authentication and before buffering, including
 All modes now enforce an 8 MiB decompressed HTTP body ceiling. Existing import
 chunks remain 1 byte to 8 MiB. Larger files use the existing chunk protocol.
 The optional `admission.ingress` object accepts `request_bytes`, `total_bytes`
-and `active_limit`. Defaults are 8 MiB per body, 32 MiB aggregate and four active
-body exchanges. The per-body setting cannot exceed the transport ceiling.
+and `active_limit`. Defaults are 8 MiB per body, 32 MiB aggregate and four incomplete ordinary
+body reads. The per-body setting cannot exceed the transport ceiling.
 
 Known uncompressed lengths reserve their declared bytes. Compressed, chunked and
 multipart exchanges reserve the full transport ceiling before reading. The HTTP
-response owns the reservation through body reads, handler execution and deferred
+response owns the byte reservation through body reads, handler execution and deferred
 response completion. Disconnects and rejected reads release local body ownership.
 Ingress does not consume model execution slots. The admission snapshot reports
 its active count and reserved body bytes separately. Byte exhaustion returns 429
 with retry metadata. A body above its configured ceiling returns 413.
 
-Bounded operator bodies remain available while execution is paused. Configuration
+Compact admission, settings and shutdown bodies use the control reserve while execution is paused. Configuration
 publication preserves existing ingress charges and rejects lower bounds that do
 not contain them. Other native work still prevents admission changes. This does
 not establish reversible all-writer maintenance or a total heap bound. Parsing,
@@ -353,3 +353,25 @@ fails, the error identifies the retained uncommitted path. Such files do not
 become registered models or committed options. Complete staging-file recovery,
 cross-writer maintenance, multi-file promotion and host-crash durability remain
 separate gates.
+
+Ingress read slots finish when a registered handler receives its buffered
+body. The response still owns its byte charge through completion. Long inference
+therefore retains bytes without occupying a read slot. Admission observations
+report ordinary `reading`, `control_reading` and retained `active` bodies separately.
+The existing `ingress.active_limit` applies to incomplete ordinary reads.
+
+Compact settings, shutdown and admission controls have one independent read slot.
+Up to 64 KiB of aggregate headroom beyond the configured per-request limit is
+reserved for them. Larger settings bodies use ordinary admission. The total body
+byte bound still applies. This protects compact control body capacity, not every
+HTTP worker or socket queue.
+
+The shared native handler wrapper checks JSON structure through SAX before
+handlers build trees. Limits are depth 64 and 32,768 key/value events. Structural
+excess returns 413 with `ingress_structure_limit_exceeded`. Ordinary syntax errors
+retain native handler formatting. Native and fixed-protocol handlers share the
+wrapper. Import chunk bytes bypass JSON interpretation. Fresh protected multipart
+input rejects before parsing until its envelope qualifies.
+
+These contracts do not complete absolute input deadlines, physical-pool parsing
+estimates, multipart qualification or HTTP worker fairness. Those remain P1 gates.

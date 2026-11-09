@@ -16,7 +16,8 @@
     "server-mediated acquisition and preparation containment",
     "pre-body HTTP buffering limits and native import admission",
     "native cloud/FLM discovery admission and explicit metadata deferral",
-    "atomic ModelManager JSON byte persistence across migration and repository metadata"
+    "atomic ModelManager JSON byte persistence across migration and repository metadata",
+    "separate ingress read/body lifetimes, compact control reserve and JSON structure bounds"
   ],
   "scope": [
     "Juiced state writes retain a private last-committed checkpoint; failed writes restore rejected policy/cache controls and revision. Policy is the sole authority for Hot residency.",
@@ -57,7 +58,8 @@
     "All HTTP modes enforce an 8 MiB decompressed body ceiling. Shared ingress reservations bound accepted body bytes/count across native listeners and fixed protocols. Exact maximum import chunks remain supported. Compressed/chunked/multipart requests reserve the transport ceiling. This is a buffered-body bound, not total heap or essential-service qualification.",
     "Import start/chunk/server/publication paths use management admission. Protected unqualified work rejects before mutation. Cleanup cancellation remains available. Reversible all-writer maintenance remains open.",
     "Native provider-driven discovery rejects protected/paused work before network/CLI dispatch. ModelManager keeps local inventory and timestamped last-attempt observations. Cloud install/auth results distinguish committed metadata from deferred discovery. Cloud model-list responses have a 1 MiB receive ceiling. This does not qualify all filesystem/hardware metadata paths.",
-    "All nine ModelManager JSON save sites share JsonUtils atomic byte persistence. Candidate/transaction/repository authority remains native. Serialization precedes staging, flush/close precede replacement, POSIX modes are preserved and failed cleanup reports retained staging. This does not establish multi-file promotion or all-writer quiescence."
+    "All nine ModelManager JSON save sites share JsonUtils atomic byte persistence. Candidate/transaction/repository authority remains native. Serialization precedes staging, flush/close precede replacement, POSIX modes are preserved and failed cleanup reports retained staging. This does not establish multi-file promotion or all-writer quiescence.",
+    "Completed body reads release ordinary read slots while retaining byte charges through response completion. Compact native controls have separate read/headroom capacity. Native/gateway handler wrappers cap JSON depth64 and32768 key/value events. Raw import bytes remain unchanged; protected multipart input is contained. Full HTTP worker fairness, absolute input deadlines and physical-pool parse estimates remain open."
   ],
   "verification": {
     "status": "Local32-contract regression passed; final extension passes116 management assertions,53 ledger checks,API43 and actual CPU/cache acceptance. The Linux watcher fixture passes with a debounce quiet window. Fresh exact-source platform/image results remain pending.",
@@ -85,14 +87,15 @@
     "model_shutdown_assertions": 9,
     "shutdown_entrypoint_cases": 4,
     "management_assertions": 118,
-    "ledger_assertions": 63,
+    "ledger_assertions": 70,
     "management_scope": "Controlled native manager/handler/queued work and actual neutral Stories15M CPU/cache. Metadata/discovery, ingress/import bounds and reversible all-writer maintenance remain incomplete.",
     "ingress_scope": "45 real HTTP assertions,63 ledger checks including standalone ASan/UBSan,10 selected native contracts,43 API cases and complete neutral Stories15M CPU/cache/authentication acceptance pass locally. Buffered body bounds do not qualify total heap, slow-client fairness or full P1 protection.",
-    "ingress_assertions": 45,
+    "ingress_assertions": 71,
     "ingress_native_contracts": 10,
     "discovery_admission_scope": "Four selected native contracts and final118 management assertions pass locally.43 API cases,8 cloud failure/restart plus4 protected-prefix cases and actual neutral Stories15M CPU/cache/authentication acceptance pass. Metadata filesystem/hardware paths and full P1 remain unqualified.",
     "model_metadata_assertions_local_linux": 33,
-    "model_metadata_scope": "Four local native contracts pass, including33 metadata assertions,90 persistence checks and34 ordering checks.43 API cases and complete neutral Stories15M CPU/cache/authentication pass. Windows omits five POSIX-mode assertions. Full P1 is incomplete."
+    "model_metadata_scope": "Four local native contracts pass, including33 metadata assertions,90 persistence checks and34 ordering checks.43 API cases and complete neutral Stories15M CPU/cache/authentication pass. Windows omits five POSIX-mode assertions. Full P1 is incomplete.",
+    "ingress_read_structure_scope": "Three local contracts pass:71 actual HTTP,118 management and70 ledger checks. Standalone ledger70 also passes ASan/UBSan.43 API cases,8 cloud failure/restart cases,4 protected prefixes and actual neutral CPU/cache/authentication pass. No full P1 qualification."
   },
   "remaining": [
     "Full P1 fourteen-family path coverage, complete ingress/parsing/background/acquisition/preparation/install bounds, all-writer maintenance, exact execution identities, Realtime context/quiescence, termination reconciliation, early streaming status, shared observations and frozen service-protection gates.",

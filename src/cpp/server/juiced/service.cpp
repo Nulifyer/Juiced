@@ -726,6 +726,9 @@ void JuicedService::request_finished(const httplib::Request &req,
 }
 
 void JuicedService::routes(httplib::Server &http) {
+  const auto post = [this, &http](const std::string& path, httplib::Server::Handler handler) {
+    http.Post(path, server_.contextual_handler(std::move(handler)));
+  };
   compatibility_routes(http);
   const std::string ui = utils::get_resource_path("resources/juiced");
   if (std::filesystem::is_regular_file(std::filesystem::path(ui) /
@@ -743,7 +746,7 @@ void JuicedService::routes(httplib::Server &http) {
     http.Get(prefix + "juiced/admission", [this](const auto&, auto& res) {
       reply(res, server_.router_->admission_snapshot());
     });
-    http.Post(prefix + "juiced/admission", [this](const auto& req, auto& res) {
+    post(prefix + "juiced/admission", [this](const auto& req, auto& res) {
       try {
         auto body = json::parse(req.body);
         if (!body.is_object() || body.size() != 1 || !body.contains("paused") || !body.at("paused").is_boolean())
@@ -754,9 +757,9 @@ void JuicedService::routes(httplib::Server &http) {
     });
     http.Get(prefix + "juiced/capabilities", [this](const auto &q, auto &r) { capabilities_api(q, r); });
     http.Get(prefix + "juiced/preparation", [this](const auto &q, auto &r) { preparation_api(q, r); });
-    http.Post(prefix + "juiced/preparation", [this](const auto &q, auto &r) { preparation_api(q, r); });
+    post(prefix + "juiced/preparation", [this](const auto &q, auto &r) { preparation_api(q, r); });
     http.Get(prefix + "juiced/execution", [this](const auto &q, auto &r) { execution_api(q, r); });
-    http.Post(prefix + "juiced/execution", [this](const auto &q, auto &r) { execution_api(q, r); });
+    post(prefix + "juiced/execution", [this](const auto &q, auto &r) { execution_api(q, r); });
     http.Get(prefix + "juiced/devices",
              [this](const auto &q, auto &r) { execution_devices(q, r); });
     http.Get(prefix + "audio/voices",
@@ -771,13 +774,13 @@ void JuicedService::routes(httplib::Server &http) {
     for (const std::string operation :
          {"operation", "policy", "thread", "cache", "cache/forget",
           "cache/profile", "cache/qualify", "cache/retain", "cache/recover", "removal"})
-      http.Post(prefix + "juiced/" + operation,
+      post(prefix + "juiced/" + operation,
                 [this, operation](const auto &q, auto &r) {
                   handle(q, r, operation);
                 });
     for (const std::string operation :
          {"start", "chunk", "finish", "cancel", "server"})
-      http.Post(prefix + "juiced/import/" + operation,
+      post(prefix + "juiced/import/" + operation,
                 [this, operation](const auto &q, auto &r) {
                   import_file(q, r, operation);
                 });

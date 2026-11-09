@@ -37,7 +37,7 @@ def run(binary, output):
             "admission": {
                 "ingress": {
                     "request_bytes": LIMIT,
-                    "total_bytes": LIMIT,
+                    "total_bytes": LIMIT + 65536,
                     "active_limit": 2,
                 }
             },
@@ -161,7 +161,7 @@ def run(binary, output):
                 "authentication precedes body admission and 100 continue",
             )
             connection.close()
-            first, response = pending("/v1/juiced/admission", LIMIT - 1)
+            first, response = pending("/v1/chat/completions", LIMIT - 1)
             check(
                 response.startswith(b"HTTP/1.1 100"),
                 "accepted header reserves before body transmission",
@@ -170,17 +170,28 @@ def run(binary, output):
                 state()["reserved_body_bytes"] == LIMIT - 1,
                 "incomplete body retains aggregate credit",
             )
-            second, response = pending("/v1/juiced/admission", 2)
+            second, response = pending("/v1/chat/completions", 2)
             check(
                 b"429" in response.split(b"\r\n")[0],
                 "aggregate exhaustion rejects without reading a second body",
             )
             second.close()
+            code, observed = request("/v1/juiced/admission", {"paused": False})
+            check(
+                code == 200
+                and observed["ingress"]["reading"] == 1
+                and observed["ingress"]["control_reading"] == 0,
+                "operator control completes while ordinary body capacity is exhausted",
+            )
+            check(
+                observed["ingress"]["reserved_body_bytes"] > LIMIT - 1,
+                "completed control reads retain byte ownership through their handler",
+            )
             first.close()
             check(wait_empty(), "disconnect releases proven local body ownership")
-            first, _ = pending("/v1/juiced/admission", 1)
-            second, _ = pending("/v1/juiced/admission", 1)
-            third, response = pending("/v1/juiced/admission", 1)
+            first, _ = pending("/v1/chat/completions", 1)
+            second, _ = pending("/v1/chat/completions", 1)
+            third, response = pending("/v1/chat/completions", 1)
             check(
                 b"429" in response.split(b"\r\n")[0],
                 "small incomplete bodies obey concurrency bound",
@@ -276,7 +287,7 @@ def run(binary, output):
             )
             compressed = gzip.compress(b"x" * (LIMIT + 1))
             code, _ = request(
-                "/v1/juiced/admission",
+                "/v1/chat/completions",
                 compressed,
                 {"Content-Encoding": "gzip"},
                 raw=True,
@@ -286,6 +297,62 @@ def run(binary, output):
                 "decompression cannot exceed the reserved transport ceiling",
             )
             check(wait_empty(), "decompression failure releases ingress charge")
+            deep = ("[" * 65 + "0" + "]" * 65).encode()
+            wide = json.dumps({"items": [0] * 32769}).encode()
+            for prefix in PREFIXES:
+                for endpoint in (
+                    "chat/completions",
+                    "juiced/admission",
+                    "juiced/import/start",
+                    "models/Missing/options",
+                ):
+                    code, result = request(prefix + endpoint, deep, raw=True)
+                    check(
+                        code == 413
+                        and result["error"]["code"]
+                        == "ingress_structure_limit_exceeded",
+                        prefix
+                        + endpoint
+                        + "rejects deep JSON before native allocation",
+                    )
+            for endpoint in ("/api/chat", "/v1/messages", "/mcp", "/sdapi/v1/txt2img"):
+                code, result = request(endpoint, wide, raw=True)
+                check(
+                    code == 413
+                    and result["error"]["code"] == "ingress_structure_limit_exceeded",
+                    endpoint
+                    + "rejects excessive JSON values through the shared handler",
+                )
+            code, result = request(
+                "/mcp", {"jsonrpc": "2.0", "method": "ping", "id": 1}
+            )
+            check(
+                code == 200 and result.get("id") == 1,
+                "bounded ordinary gateway JSON remains accepted",
+            )
+            request(
+                "/internal/set",
+                {"admission": {"ingress": config["admission"]["ingress"]}},
+            )
+            code, upload = request(
+                "/v1/juiced/import/start", {"filename": "raw.gguf", "size": len(deep)}
+            )
+            check(code == 201, "raw chunk structural fixture can create an upload")
+            code, result = request(
+                "/v1/juiced/import/chunk?id=" + upload["id"] + "&offset=0",
+                deep,
+                raw=True,
+            )
+            check(
+                code == 200 and result["received"] == len(deep),
+                "raw import bytes bypass JSON structure interpretation",
+            )
+            request("/v1/juiced/import/cancel", {"id": upload["id"]})
+            check(
+                wait_empty(),
+                "structural rejection and raw chunk completion release byte ownership",
+            )
+
         finally:
             for connection in connections:
                 connection.close()

@@ -146,7 +146,7 @@ public:
     json uninstall_cloud_provider(const std::string& provider, const std::function<bool()>& publish);
     void set_model_access_policy(std::function<bool(const std::string&)> policy);
     json admission_snapshot() const;
-    ResourceAdmission::Lease admit_ingress(uint64_t bytes);
+    ResourceAdmission::Lease admit_ingress(uint64_t bytes, bool control = false);
     ResourceAdmission::Lease admit_management(const std::string& target, const std::string& service);
     bool generation_was_stopped(uint64_t generation) const;
     void pause_admission(bool paused);

@@ -307,6 +307,26 @@ int main() {
         catch (const std::invalid_argument&) { invalid = true; }
         check(invalid, "configuration cannot exceed the transport decompression ceiling");
     }
+    {
+        ResourceAdmission bodies;
+        bodies.configure({{"ingress", {{"request_bytes", 100}, {"total_bytes", 200}, {"active_limit", 1}}}});
+        auto long_request = bodies.acquire_ingress(10);
+        check(error([&] { bodies.acquire_ingress(1); }, "ingress_capacity_exceeded"), "incomplete bodies consume a read slot");
+        long_request.completed();
+        auto next = bodies.acquire_ingress(20);
+        check(bodies.snapshot()["ingress"]["reading"] == 1 && bodies.snapshot()["ingress"]["reserved_body_bytes"] == 30,
+              "completed reads free slots while retaining their byte charges through execution");
+        auto control = bodies.acquire_ingress(100, true);
+        check(bool(control) && bodies.snapshot()["ingress"]["control_reading"] == 1,
+              "compact controls use reserved bytes and an independent read slot");
+        check(error([&] { bodies.acquire_ingress(1, true); }, "ingress_capacity_exceeded"), "reserved control reading is bounded");
+        next = {}; control = {};
+        auto large = bodies.acquire_ingress(90);
+        check(error([&] { bodies.acquire_ingress(1); }, "ingress_capacity_exceeded"), "retained bytes cannot spend the control reserve");
+        check(bodies.snapshot()["ingress"]["reserved_body_bytes"] == 100, "retained body bytes remain charged alongside the next read");
+        large = {}; long_request = {};
+        check(bodies.snapshot()["ingress"]["active"] == 0, "all body charges release after their HTTP owners finish");
+    }
     controller.shutdown();
     check(error([&] { controller.acquire(work()); }, "admission_paused"), "shutdown rejects new requests");
     {

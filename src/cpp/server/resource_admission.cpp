@@ -46,6 +46,12 @@ Charges charges(const json& object, const char* key) {
     }
     return result;
 }
+uint64_t ingress_control_reserve(const json& ingress) {
+    const auto request = natural(ingress, "request_bytes", ResourceAdmission::maximum_ingress_bytes);
+    const auto total = natural(ingress, "total_bytes", 4 * ResourceAdmission::maximum_ingress_bytes);
+    return std::min(ResourceAdmission::maximum_control_body_bytes, total - request);
+}
+
 std::string operation_name(ResourceAdmission::Operation operation) {
     switch (operation) {
         case ResourceAdmission::Operation::Load: return "load";
@@ -235,17 +241,21 @@ void ResourceAdmission::configure(const json& config, std::function<void()> publ
         throw AdmissionError("admission_configuration_busy", "Admission configuration is already changing", 409);
     if (state_->config == config && !publish) return;
     const auto ingress = config.value("ingress", json::object());
-    uint64_t body_bytes = 0, bodies = 0;
+    uint64_t body_bytes = 0, regular_bytes = 0, readers = 0, control_readers = 0;
     for (const auto& item : state_->active) {
         if (item.second->work.operation != Operation::Ingress)
             throw AdmissionError("admission_configuration_busy", "Drain work and unload models before changing admission settings", 409);
         const auto bytes = item.second->work.workload.at("body_bytes");
         if (bytes > natural(ingress, "request_bytes", maximum_ingress_bytes))
             throw AdmissionError("admission_configuration_busy", "Drain request bodies before lowering ingress bounds", 409);
-        body_bytes += bytes; ++bodies;
+        body_bytes += bytes;
+        const bool control = item.second->work.service == "http-control";
+        if (!control) regular_bytes += bytes;
+        if (!item.second->complete) { if (control) ++control_readers; else ++readers; }
     }
-    if (!state_->pending.empty() || body_bytes > natural(ingress, "total_bytes", 4 * maximum_ingress_bytes) ||
-        bodies > natural(ingress, "active_limit", 4))
+    const auto total = natural(ingress, "total_bytes", 4 * maximum_ingress_bytes);
+    if (!state_->pending.empty() || body_bytes > total || regular_bytes > total - ingress_control_reserve(ingress) ||
+        readers > natural(ingress, "active_limit", 4) || control_readers > 1)
         throw AdmissionError("admission_configuration_busy", "Drain work before lowering admission bounds", 409);
     state_->configuration_pending = true;
     lock.unlock();
@@ -267,8 +277,8 @@ ResourceAdmission::Policy ResourceAdmission::policy() const {
             state_->paused || state_->stopped || state_->configuration_pending};
 }
 
-ResourceAdmission::Lease ResourceAdmission::acquire_ingress(uint64_t bytes) {
-    Work work; work.service = "http-body"; work.operation = Operation::Ingress;
+ResourceAdmission::Lease ResourceAdmission::acquire_ingress(uint64_t bytes, bool control) {
+    Work work; work.service = control ? "http-control" : "http-body"; work.operation = Operation::Ingress;
     work.workload["body_bytes"] = bytes;
     return acquire(std::move(work));
 }
@@ -294,15 +304,24 @@ ResourceAdmission::Lease ResourceAdmission::acquire(Work work) {
         if (state_->stopped) reject("admission_paused", "Runtime admission is stopped", 503);
         const auto ingress = state_->config.value("ingress", json::object());
         const auto bytes = entry->work.workload.at("body_bytes");
-        if (bytes > natural(ingress, "request_bytes", maximum_ingress_bytes))
+        const bool control = entry->work.service == "http-control";
+        if (bytes > natural(ingress, "request_bytes", maximum_ingress_bytes) ||
+            (control && bytes > maximum_control_body_bytes))
             reject("ingress_limit_exceeded", "Request body exceeds the configured byte limit", 413);
-        uint64_t used = 0, count = 0;
+        uint64_t used = 0, regular_used = 0, readers = 0, controls = 0;
         for (const auto& item : state_->active) if (item.second->work.operation == Operation::Ingress) {
-            used += item.second->work.workload.at("body_bytes"); ++count;
+            const bool other_control = item.second->work.service == "http-control";
+            const auto other_bytes = item.second->work.workload.at("body_bytes");
+            used += other_bytes;
+            if (!other_control) regular_used += other_bytes;
+            if (!item.second->complete) { if (other_control) ++controls; else ++readers; }
         }
         const auto total = natural(ingress, "total_bytes", 4 * maximum_ingress_bytes);
-        if (bytes > total || used > total - bytes || count >= natural(ingress, "active_limit", 4))
-            reject("ingress_capacity_exceeded", "Request body capacity is in use; retry", 429);
+        const auto regular_limit = total - ingress_control_reserve(ingress);
+        if (bytes > total || used > total - bytes ||
+            (!control && (bytes > regular_limit || regular_used > regular_limit - bytes || readers >= natural(ingress, "active_limit", 4))) ||
+            (control && controls >= 1))
+            reject("ingress_capacity_exceeded", "Request body read or buffer capacity is in use; retry", 429);
         entry->id = ++state_->next_id;
         entry->completion_deadline = Clock::now() + entry->completion_limit;
         state_->active.emplace(entry->id, entry);
@@ -509,17 +528,22 @@ json ResourceAdmission::snapshot() const {
             {"reserved_bytes", found == used.end() ? 0 : found->second}, {"source", pool.second.source},
             {"essential_headroom_bytes", pool.second.essential_headroom}};
     }
-    size_t running = 0, resident = 0, uncertain = 0, bodies = 0;
+    size_t running = 0, resident = 0, uncertain = 0, bodies = 0, readers = 0, control_readers = 0;
     uint64_t body_bytes = 0;
     for (const auto& item : state_->active) {
         if (item.second->work.operation == Operation::Ingress) {
-            ++bodies; body_bytes += item.second->work.workload.at("body_bytes"); continue;
+            ++bodies; body_bytes += item.second->work.workload.at("body_bytes");
+            if (!item.second->complete) {
+                if (item.second->work.service == "http-control") ++control_readers; else ++readers;
+            }
+            continue;
         }
         if (item.second->resident) ++resident; else ++running;
         if (item.second->uncertain) ++uncertain;
     }
     const auto ingress = state_->config.value("ingress", json::object());
-    return {{"ingress", {{"active", bodies}, {"reserved_body_bytes", body_bytes},
+    return {{"ingress", {{"active", bodies}, {"reading", readers}, {"control_reading", control_readers},
+                        {"control_reserved_bytes", ingress_control_reserve(ingress)}, {"reserved_body_bytes", body_bytes},
                         {"request_limit_bytes", natural(ingress, "request_bytes", maximum_ingress_bytes)},
                         {"total_limit_bytes", natural(ingress, "total_bytes", 4 * maximum_ingress_bytes)},
                         {"active_limit", natural(ingress, "active_limit", 4)}}},

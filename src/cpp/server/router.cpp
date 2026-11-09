@@ -180,7 +180,7 @@ bool Router::model_access_allowed(const std::string& model) const {
 }
 
 json Router::admission_snapshot() const { return admission_.snapshot(); }
-ResourceAdmission::Lease Router::admit_ingress(uint64_t bytes) { return admission_.acquire_ingress(bytes); }
+ResourceAdmission::Lease Router::admit_ingress(uint64_t bytes, bool control) { return admission_.acquire_ingress(bytes, control); }
 ResourceAdmission::Lease Router::admit_management(const std::string& target, const std::string& service) {
     return admission_.acquire_management(target, service);
 }
