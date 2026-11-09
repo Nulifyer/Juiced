@@ -441,8 +441,10 @@ helper, device or remote writes still require their P1 maintenance/termination g
 
 Router host admission and CPU/NPU automatic sizing consume the native
 SystemMetricsPlatform memory budget. GPU discovery metadata no longer supplies
-CPU capacity. Linux retains the existing MemAvailable and visible cgroup hierarchy
-reader. Windows samples physical, current-process commit and address-space
+CPU capacity. Linux samples MemAvailable, the visible cgroup hierarchy and
+`/proc/self/limits`. Finite or unreadable address-space/data limits leave process
+allocation headroom unqualified and return unknown capacity. These limits do not
+add another memory pool. Windows samples physical, current-process commit and address-space
 headroom through GlobalMemoryStatusEx. A failed sample or job-membership query
 keeps headroom unknown. Windows job membership is explicitly unqualified because
 an immediate-job query does not establish all ancestor limits. The sampler does

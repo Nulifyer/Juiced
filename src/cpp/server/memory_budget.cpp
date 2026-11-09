@@ -130,6 +130,35 @@ void read_constraints(MemoryBudget& budget, const std::filesystem::path& mount,
     }
 }
 
+void read_process_constraints(MemoryBudget& budget, const std::filesystem::path& proc_root) {
+    std::ifstream limits(proc_root / "self/limits");
+    bool address = false, data = false, qualified = true;
+    std::string line;
+    while (std::getline(limits, line)) {
+        for (const auto* name : {"Max address space", "Max data size"}) {
+            if (line.rfind(name, 0) != 0) continue;
+            auto& seen = std::string(name) == "Max address space" ? address : data;
+            if (seen) qualified = false;
+            seen = true;
+            std::istringstream fields(line.substr(std::char_traits<char>::length(name)));
+            std::string soft, hard, unit, extra;
+            if (!(fields >> soft >> hard >> unit) || fields >> extra || unit != "bytes" ||
+                soft != "unlimited" || hard != "unlimited") {
+                qualified = false;
+                MemoryConstraint constraint;
+                constraint.source = std::string(name) == "Max address space"
+                    ? "linux-process-address" : "linux-process-data";
+                constraint.limit_bytes = number(soft);
+                budget.constraints.push_back(std::move(constraint));
+            }
+        }
+    }
+    if (!address || !data || !qualified || limits.bad()) {
+        budget.constraints_complete = false;
+        budget.containment = "linux-process-limit-unqualified";
+    }
+}
+
 } // namespace
 
 std::optional<uint64_t> MemoryBudget::available_bytes() const {
@@ -193,6 +222,7 @@ MemoryBudget read_linux_memory_budget(const std::filesystem::path& proc_root,
         const auto leaf = relative->empty() || *relative == "."
             ? physical_mount : physical_mount / *relative;
         read_constraints(budget, physical_mount, leaf, v2, unescape_mount(root) == "/");
+        read_process_constraints(budget, proc_root);
         return budget;
     }
     // An absent/unreadable mount or membership is not an unlimited container.

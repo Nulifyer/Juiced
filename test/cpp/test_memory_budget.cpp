@@ -7,7 +7,7 @@
 #include <limits>
 #ifdef _WIN32
 #include <windows.h>
-#elif defined(__APPLE__)
+#elif defined(__APPLE__) || defined(__linux__)
 #include <sys/resource.h>
 #endif
 
@@ -18,6 +18,7 @@ struct Fixture {
         ("juiced-memory-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     Fixture() {
         write("proc/meminfo", "MemTotal: 1000 kB\nMemAvailable: 400 kB\n");
+        write("proc/self/limits", "Max address space unlimited unlimited bytes\nMax data size unlimited unlimited bytes\n");
     }
     ~Fixture() { std::error_code ec; fs::remove_all(root, ec); }
     void write(const fs::path& name, const std::string& text) {
@@ -130,6 +131,24 @@ int main() {
         check(!f.read().available_bytes(), "missing membership never implies unlimited containment");
     }
     {
+        Fixture f; f.v2(); f.scope("", "max", "0");
+        for (const auto* name : {"Max address space", "Max data size"}) {
+            f.write("proc/self/limits", std::string(name) + " 100000 unlimited bytes\n" +
+                (std::string(name) == "Max address space" ? "Max data size" : "Max address space") +
+                " unlimited unlimited bytes\n");
+            const auto constrained = f.read();
+            check(!constrained.available_bytes() && constrained.containment == "linux-process-limit-unqualified",
+                  "finite process allocation limits preserve unknown containment");
+        }
+        for (const auto& invalid : {"", "Max address space unlimited unlimited bytes\n",
+                "Max address space invalid unlimited bytes\nMax data size unlimited unlimited bytes\n"}) {
+            f.write("proc/self/limits", invalid);
+            check(!f.read().available_bytes(), "incomplete or malformed process limits cannot qualify host headroom");
+        }
+        fs::remove(f.root / "proc/self/limits");
+        check(!f.read().available_bytes(), "unreadable process limits cannot qualify host headroom");
+    }
+    {
         Fixture f;
         f.write("proc/self/cgroup", "4:cpu,cpuacct:/box\n6:memory:/box\n");
         f.write("proc/self/mountinfo", "31 24 0:28 /box /sys/fs/cgroup/memory rw - cgroup cgroup rw,memory\n");
@@ -182,10 +201,10 @@ int main() {
                   "a later job transition invalidates previously known headroom");
             if (job) CloseHandle(job);
         }
-#elif defined(__APPLE__)
+#elif defined(__APPLE__) || defined(__linux__)
         struct rlimit original{};
         const bool sampled = getrlimit(RLIMIT_DATA, &original) == 0;
-        check(sampled, "macOS process data limit can be observed");
+        check(sampled, "native process data limit can be observed");
         if (sampled) {
             auto finite = original;
             // Exercise finiteness without a ceiling below existing VM reservations.
@@ -196,13 +215,18 @@ int main() {
             if (!applied) std::fprintf(stderr, "macOS limit setup errno=%d soft=%llu hard=%llu proposed=%llu\n",
                 limit_error, static_cast<unsigned long long>(original.rlim_cur),
                 static_cast<unsigned long long>(original.rlim_max), static_cast<unsigned long long>(finite.rlim_cur));
-            check(applied, "macOS finite-limit fixture activates");
+            check(applied, "native finite-limit fixture activates");
             if (applied) {
                 const auto contained = platform->get_memory_budget();
-                check(!contained.available_bytes() && contained.containment == "macos-process-limit-unqualified",
+                check(!contained.available_bytes() && contained.containment ==
+#ifdef __APPLE__
+                      "macos-process-limit-unqualified",
+#else
+                      "linux-process-limit-unqualified",
+#endif
                       "finite process limits never become unlimited host capacity");
             }
-            check(setrlimit(RLIMIT_DATA, &original) == 0, "macOS process data limit is restored");
+            check(setrlimit(RLIMIT_DATA, &original) == 0, "native process data limit is restored");
         }
 #endif
     }

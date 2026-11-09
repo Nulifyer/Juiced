@@ -28,6 +28,12 @@ when both memory files are genuinely absent and the memory controller is visible
 An empty, malformed or unreadable interface is never treated as root-file absence.
 No shell command, host repair or driver installation occurs.
 
+The same reader requires unlimited address-space and data limits from
+`/proc/self/limits`. Finite, missing or malformed limits make process allocation
+headroom unknown until their remaining capacity is qualified. Their ceilings are
+never added to host memory. Native HTTP rejection is checked before body buffering
+and `100 Continue`. Legacy mode retains its existing behavior.
+
 `visible_constraints_complete` covers the mounted hierarchy only. A container
 namespace can hide ancestor limits. `hidden_ancestor_limits` remains `unobserved`.
 Non-Linux platforms currently expose their available host estimate, with container

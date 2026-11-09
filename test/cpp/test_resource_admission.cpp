@@ -367,6 +367,24 @@ int main() {
               inputs.snapshot()["configuration_revision"] == old_revision,
               "unknown memory activation preserves the committed mode and revision");
         legacy_body = {};
+        unsigned samples = 0;
+        bool published = false;
+        ResourceAdmission changing([&](const std::string&) -> std::optional<uint64_t> {
+            return ++samples == 1 ? std::optional<uint64_t>(400000) : std::nullopt;
+        });
+        auto ordinary = changing.acquire_ingress(1);
+        const auto before = changing.snapshot()["configuration_revision"];
+        bool unknown_status = false;
+        try { changing.configure(bounds, [&] { published = true; }); }
+        catch (const lemon::AdmissionError& e) {
+            unknown_status = e.code == "ingress_memory_unknown" && e.status == 503;
+        }
+        check(unknown_status && samples == 2 && !published,
+              "unknown second activation sample returns503 without publishing");
+        check(changing.snapshot()["mode"] == "legacy" &&
+              changing.snapshot()["configuration_revision"] == before &&
+              changing.snapshot()["ingress"]["active"] == 1,
+              "failed activation preserves revision and ordinary body ownership");
         available = 400000;
         auto unknown = bounds; unknown["pools"]["host"]["capacity_bytes"] = nullptr;
         inputs.configure(unknown);

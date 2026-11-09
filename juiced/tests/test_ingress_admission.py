@@ -8,10 +8,14 @@ import os
 from pathlib import Path
 import socket
 import subprocess
+import sys
 import tempfile
 import time
 import urllib.error
 import urllib.request
+
+if sys.platform == "linux":
+    import resource
 
 LIMIT = 8 * 1024 * 1024
 PREFIXES = ("/api/v0/", "/api/v1/", "/v0/", "/v1/")
@@ -489,6 +493,87 @@ def run(binary, output):
                 connection.close()
                 check(wait_empty(), "failed local read releases physical host memory")
                 request("/v1/juiced/admission", {"paused": False})
+            if sys.platform == "linux" and host_qualified:
+                for allocation_limit in (resource.RLIMIT_AS, resource.RLIMIT_DATA):
+                    check(
+                        request("/internal/set", {"admission": {"mode": "legacy"}})[0]
+                        == 200,
+                        "legacy mode activates before isolated process-limit transition",
+                    )
+                    before = request("/v1/juiced/admission")[1]
+                    original = resource.prlimit(process.pid, allocation_limit)
+                    finite = (
+                        (1 << 62)
+                        if original[1] == resource.RLIM_INFINITY
+                        else original[1]
+                    )
+                    try:
+                        resource.prlimit(
+                            process.pid, allocation_limit, (finite, original[1])
+                        )
+                        check(
+                            request(
+                                "/mcp", {"jsonrpc": "2.0", "method": "ping", "id": 91}
+                            )[0]
+                            == 200,
+                            "finite process limit preserves legacy request behavior",
+                        )
+                        code, result = request(
+                            "/internal/set", {"admission": {"mode": "protected"}}
+                        )
+                        check(
+                            code == 503
+                            and result["error"]["details"]["code"]
+                            == "ingress_memory_unknown",
+                            "finite process limit rejects protected activation with typed unknown capacity",
+                        )
+                        after = request("/v1/juiced/admission")[1]
+                        check(
+                            after["mode"] == "legacy"
+                            and after["configuration_revision"]
+                            == before["configuration_revision"]
+                            and json.loads((root / "config/config.json").read_text())[
+                                "admission"
+                            ]["mode"]
+                            == "legacy",
+                            "failed process-limit activation preserves committed mode and revision",
+                        )
+                    finally:
+                        resource.prlimit(process.pid, allocation_limit, original)
+                    check(
+                        request("/internal/set", {"admission": {"mode": "protected"}})[
+                            0
+                        ]
+                        == 200,
+                        "restored unlimited process constraints permit protected activation",
+                    )
+                    try:
+                        resource.prlimit(
+                            process.pid, allocation_limit, (finite, original[1])
+                        )
+                        for path in [
+                            prefix + "chat/completions" for prefix in PREFIXES
+                        ] + ["/api/chat", "/v1/messages", "/mcp", "/sdapi/v1/txt2img"]:
+                            connection, response = pending(path, 2)
+                            check(
+                                response.startswith(b"HTTP/1.1 503"),
+                                path
+                                + " rejects finite process capacity before body or100 continue",
+                            )
+                            connection.close()
+                            code, result = request(path, {})
+                            check(
+                                code == 503
+                                and result["error"]["code"] == "ingress_memory_unknown",
+                                path
+                                + " rejects finite process capacity before handler dispatch",
+                            )
+                        check(
+                            wait_empty(),
+                            "finite process-limit rejection retains no input claims",
+                        )
+                    finally:
+                        resource.prlimit(process.pid, allocation_limit, original)
             request("/internal/shutdown", {})
             check(
                 process.wait(timeout=20) == 0,

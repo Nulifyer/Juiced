@@ -288,7 +288,10 @@ void ResourceAdmission::configure(const json& config, std::function<void()> publ
         aggregate.costs.clear();
         for (const auto& item : state_->active) if (item.second->work.service != "http-control")
             for (const auto& cost : item.second->costs) aggregate.costs[cost.first] += cost.second;
-        if (state_->capacity(aggregate, pools, false) != State::Capacity::Available)
+        const auto ordinary_capacity = state_->capacity(aggregate, pools, false);
+        if (ordinary_capacity == State::Capacity::Unknown)
+            throw AdmissionError("ingress_memory_unknown", "Current input memory headroom cannot be measured", 503);
+        if (ordinary_capacity != State::Capacity::Available)
             throw AdmissionError("admission_configuration_busy", "Active input memory would consume essential host reserve", 409);
     }
     state_->configuration_pending = true;
