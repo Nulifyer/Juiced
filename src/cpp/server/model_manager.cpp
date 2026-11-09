@@ -3824,8 +3824,17 @@ std::vector<ModelInfo> ModelManager::discover_dynamic_models() {
     context.cloud_registry = cloud_registry_;
     for (const auto* descriptor : backends::all_descriptors()) {
         if (!descriptor->dynamic_models || (offline && descriptor->recipe == "cloud")) continue;
-        for (auto& model : backends::ops_for(descriptor->recipe)->discover_models(context))
-            models.push_back(std::move(model));
+        json observation = {{"status", "completed"}};
+        try {
+            for (auto& model : backends::ops_for(descriptor->recipe)->discover_models(context))
+                models.push_back(std::move(model));
+        } catch (const AdmissionError& error) {
+            observation = {{"status", "deferred"}, {"code", error.code}};
+        }
+        observation["observed_at_ms"] = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        std::lock_guard<std::mutex> lock(models_cache_mutex_);
+        discovery_observations_[descriptor->recipe] = std::move(observation);
     }
     return models;
 }
@@ -4761,21 +4770,31 @@ void ModelManager::set_cloud_registry(CloudProviderRegistry* registry) {
     cloud_registry_ = registry;
 }
 
-size_t ModelManager::refresh_cloud_models(const std::string& provider) {
+json ModelManager::discovery_snapshot() const {
+    std::lock_guard<std::mutex> lock(models_cache_mutex_);
+    return {{"scope", "last-attempt"}, {"operations", discovery_observations_}};
+}
+
+ModelManager::CloudDiscoveryResult ModelManager::refresh_cloud_models(const std::string& provider) {
     if (provider.empty() || cloud_registry_ == nullptr) {
-        return 0;
+        return {0, "unavailable", {}};
     }
 
     const auto snapshot = cloud_registry_->snapshot(provider);
-    if (!snapshot) return 0;
+    if (!snapshot) return {0, "unavailable", {}};
     const auto& record = snapshot->record;
     std::vector<ModelInfo> models;
+    CloudDiscoveryResult result;
+    ResourceAdmission::Lease admission;
     if (!snapshot->api_key.empty() && !record.base_url.empty() &&
         (!CloudProviderRegistry::is_http_base_url(record.base_url) || record.allow_insecure_http)) {
         try {
+            admission = admit_acquisition("cloud-discovery:" + provider);
             models = backends::CloudServer::discover_models(provider, snapshot->api_key,
                 record.base_url, record.allow_insecure_http,
                 {record.auth_header_name, record.auth_header_prefix}, record.wire_format);
+        } catch (const AdmissionError& error) {
+            result.status = "deferred"; result.code = error.code;
         } catch (const std::exception& error) {
             LOG(WARNING, "ModelManager") << "Cloud discovery failed for '" << provider << "': " << error.what() << std::endl;
         }
@@ -4784,7 +4803,7 @@ size_t ModelManager::refresh_cloud_models(const std::string& provider) {
     std::lock_guard<std::mutex> lock(models_cache_mutex_);
 
     size_t added = 0;
-    cloud_registry_->with_revision(provider, snapshot->revision, [&] {
+    const bool current = cloud_registry_->with_revision(provider, snapshot->revision, [&] {
         // Reseed: drop this provider's previously-registered entries before
         // inserting the fresh list, so a model the provider stopped exposing
         // disappears. Other providers' entries are untouched.
@@ -4827,7 +4846,12 @@ size_t ModelManager::refresh_cloud_models(const std::string& provider) {
                                    << provider << "': " << added << " model(s)"
                                    << std::endl;
     });
-    return added;
+    if (!current) { result.status = "superseded"; result.code = "provider_revision_changed"; }
+    result.models = added;
+    discovery_observations_["cloud:" + provider] = {{"status", result.status}, {"code", result.code},
+        {"provider_revision", snapshot->revision}, {"observed_at_ms", std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count()}};
+    return result;
 }
 
 size_t ModelManager::evict_cloud_models(const std::string& provider) {

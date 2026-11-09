@@ -1015,7 +1015,7 @@ std::vector<ModelInfo> CloudServer::discover_models(const std::string& provider,
         // configured provider. The 300 s default would block model listing
         // for minutes if a provider's API is unreachable. 15 s is plenty for
         // a /v1/models response under normal conditions.
-        response = utils::HttpClient::get(url, headers, /*timeout_seconds=*/15, policy);
+        response = utils::HttpClient::get(url, headers, /*timeout_seconds=*/15, policy, {}, 1024 * 1024);
     } catch (const std::exception& e) {
         LOG(WARNING, "Cloud") << "Model discovery failed for provider '" << provider
                               << "': " << e.what() << std::endl;
@@ -1126,14 +1126,17 @@ public:
                         const BackendOpsContext&) const override {}
 
     // Discover models from each installed cloud provider with a resolvable
-    // credential. Failures are logged, never propagated, so one offline
-    // provider can't block discovery.
+    // credential. Provider failures are best effort. Admission rejection reaches
+    // the inventory owner so it can report deferred discovery.
     std::vector<ModelInfo> discover_models(const BackendOpsContext& ctx) const override {
         std::vector<ModelInfo> out;
         if (ctx.cloud_registry == nullptr) {
             return out;
         }
-        for (const auto& snapshot : ctx.cloud_registry->snapshots()) {
+        const auto snapshots = ctx.cloud_registry->snapshots();
+        if (snapshots.empty()) return out;
+        auto admission = ctx.model_manager ? ctx.model_manager->admit_acquisition("cloud-discovery") : ResourceAdmission::Lease{};
+        for (const auto& snapshot : snapshots) {
             const auto& rec = snapshot.record;
             const auto& api_key = snapshot.api_key;
             if (api_key.empty() || rec.base_url.empty()) {

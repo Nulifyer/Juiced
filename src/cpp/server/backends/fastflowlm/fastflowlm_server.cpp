@@ -420,11 +420,15 @@ public:
         return ctx.checkpoint;
     }
 
-    std::vector<ModelInfo> discover_models(const BackendOpsContext&) const override {
+    std::vector<ModelInfo> discover_models(const BackendOpsContext& ctx) const override {
+        auto admission = ctx.model_manager ? ctx.model_manager->admit_acquisition("flm-discovery") : ResourceAdmission::Lease{};
         return flm_discover_models();
     }
 
-    bool is_downloaded(const ModelInfo& info, const BackendOpsContext&) const override {
+    bool is_downloaded(const ModelInfo& info, const BackendOpsContext& ctx) const override {
+        ResourceAdmission::Lease admission;
+        try { if (ctx.model_manager) admission = ctx.model_manager->admit_acquisition("flm-installed-discovery"); }
+        catch (const AdmissionError&) { return false; }
         const auto installed = flm_installed_checkpoints();
         return std::find(installed.begin(), installed.end(), info.checkpoint()) != installed.end();
     }

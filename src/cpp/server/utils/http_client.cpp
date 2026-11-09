@@ -272,6 +272,23 @@ static size_t write_callback(void* contents, size_t size, size_t nmemb, void* us
     return total_size;
 }
 
+struct LimitedResponseBuffer {
+    std::string& body;
+    size_t limit;
+    bool exceeded = false;
+};
+static size_t limited_write_callback(void* contents, size_t size, size_t count, void* userp) {
+    auto& buffer = *static_cast<LimitedResponseBuffer*>(userp);
+    if (size && count > (buffer.limit - buffer.body.size()) / size) {
+        buffer.exceeded = true;
+        return 0;
+    }
+    const auto bytes = size * count;
+    try { buffer.body.append(static_cast<char*>(contents), bytes); }
+    catch (...) { return 0; }
+    return bytes;
+}
+
 // Collects response headers into HttpResponse::headers, lowercasing names so
 // lookups do not depend on the casing a given provider happens to send.
 static size_t response_header_callback(char* buffer, size_t size, size_t nitems,
@@ -529,7 +546,8 @@ HttpResponse HttpClient::get(const std::string& url,
                              const std::map<std::string, std::string>& headers,
                              long timeout_seconds,
                              HttpSecurityPolicy policy,
-                             const RequestCancelToken& cancel) {
+                             const RequestCancelToken& cancel,
+                             size_t max_response_bytes) {
     CURL* curl = curl_easy_init();
     if (!curl) {
         throw std::runtime_error("Failed to initialize CURL");
@@ -539,8 +557,14 @@ HttpResponse HttpClient::get(const std::string& url,
     std::string response_body;
 
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response_body);
+    LimitedResponseBuffer buffer{response_body, max_response_bytes};
+    if (max_response_bytes) {
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, limited_write_callback);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buffer);
+    } else {
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response_body);
+    }
     if (!apply_http_security_policy(curl, policy, true)) {
         curl_easy_cleanup(curl);
         throw std::runtime_error("Failed to apply HTTP security policy");
@@ -568,7 +592,7 @@ HttpResponse HttpClient::get(const std::string& url,
     CURLcode res = curl_easy_perform(curl);
 
     if (res != CURLE_OK) {
-        std::string error = "CURL error: " + std::string(curl_easy_strerror(res));
+        std::string error = buffer.exceeded ? "HTTP response exceeded its byte limit" : "CURL error: " + std::string(curl_easy_strerror(res));
         curl_slist_free_all(header_list);
         curl_easy_cleanup(curl);
         if (res == CURLE_ABORTED_BY_CALLBACK) throw HttpClientCancellationException(res, error);

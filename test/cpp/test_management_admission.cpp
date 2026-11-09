@@ -146,7 +146,13 @@ static void native_owners() {
         backends::BackendOpsContext context; context.model_manager = &models;
         check(rejected([&] { backends::ops_for("llamacpp")->download_model(info, true, {}, context); }),
               "the shared registry engine rejects direct native provider acquisition");
+        check(rejected([&] { backends::ops_for("flm")->discover_models(context); }),
+              "protected native FLM discovery rejects before hardware/CLI probing");
         info.recipe = "flm";
+        const auto denied = router.admission_snapshot().at("rejected_total").get<uint64_t>();
+        check(!backends::ops_for("flm")->is_downloaded(info, context) &&
+              router.admission_snapshot().at("rejected_total").get<uint64_t>() == denied + 1,
+              "protected installed-model lookup conservatively reports unavailable after admission rejection");
         check(rejected([&] { backends::ops_for("flm")->download_model(info, true, {}, context); }),
               "self-managed FLM acquisition rejects before starting its CLI");
     }
@@ -210,8 +216,11 @@ static void entry_boundaries() {
             check(response.status == 200 && response.content_provider_ && dispatched == 0 && conflict,
                   "an accepted deferred stream retains admission before its download provider starts");
         }
+        const auto idle_until = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (StatePublicationTestHook::admission(server)["active"] != 0 && std::chrono::steady_clock::now() < idle_until)
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
         check(StatePublicationTestHook::admission(server)["active"] == 0,
-              "discarding a proven undispatched stream releases its transition ticket");
+              "discarding a proven undispatched stream releases its transition ticket after other native work drains");
         config->set({{"offline", true}});
         for (bool accepted : {true, false}) {
             StatePublicationTestHook::configure(server, {{"mode", "legacy"}});

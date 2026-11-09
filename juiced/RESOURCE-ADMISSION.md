@@ -319,3 +319,23 @@ management admission. Unqualified protected work rejects before mutation. Pendin
 publication recovery also rechecks admission. Cleanup cancellation remains
 available. The import journal, registration provenance and removal ownership
 continue to define retry and recovery behavior.
+
+Provider-driven cloud and FLM discovery now use the same native management
+admission as acquisition. Protected or paused discovery defers before network or
+CLI dispatch. ModelManager keeps local inventory usable and records timestamped
+last-attempt observations. Model-list responses expose those observations with
+`scope: last-attempt`. They describe attempted operations, not provider health or
+an atomic snapshot of the whole catalog.
+
+Cloud install/auth metadata still commits through its publication owner. Its
+response separately reports discovery status and code. A deferred refresh does
+not turn a committed metadata update into an HTTP failure. Explicit refreshes
+retain provider-revision validation, so late results cannot replace current
+models. Legacy discovery holds its transition ticket through publication.
+
+Cloud model-list GET responses stop at 1 MiB before JSON parsing. Their existing
+15-second timeout remains. FLM installed-model checks also use native admission
+and conservatively report unavailable after rejection. This contains those
+provider-driven paths. Filesystem catalog scans, hardware probes, legacy CLI
+output/termination, parsing peaks and full metadata resource qualification remain
+part of the P1 audit.

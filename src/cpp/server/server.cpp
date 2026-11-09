@@ -3118,6 +3118,7 @@ void Server::handle_models(const httplib::Request& req, httplib::Response& res) 
             data.push_back({{"id", model["id"]}, {"type", "model"}, {"display_name", model["id"]}});
         response = {{"data", data}, {"has_more", false}, {"first_id", data.empty() ? json(nullptr) : data.front()["id"]}, {"last_id", data.empty() ? json(nullptr) : data.back()["id"]}};
     }
+    response["discovery"] = model_manager_->discovery_snapshot();
     res.set_content(response.dump(), "application/json");
 }
 
@@ -7016,7 +7017,7 @@ void Server::handle_cloud_auth_set(const httplib::Request& req, httplib::Respons
         // Refresh the provider's discovered model list with the new key.
         // Best-effort — refresh logs failures and returns 0. Either way the
         // key is stored and the response reflects the auth state.
-        size_t models_after = model_manager_->refresh_cloud_models(provider);
+        const auto discovery = model_manager_->refresh_cloud_models(provider);
 
         const auto state = cloud_registry_->auth_state(provider);
         nlohmann::json response = {
@@ -7026,7 +7027,8 @@ void Server::handle_cloud_auth_set(const httplib::Request& req, httplib::Respons
                 {"env_var_set", state.env_var_set},
                 {"runtime_key_set", state.runtime_key_set}
             }},
-            {"models_discovered", models_after}
+            {"models_discovered", discovery.models},
+            {"discovery", {{"status", discovery.status}, {"code", discovery.code}}}
         };
         attach_warnings(
             response,
@@ -8304,7 +8306,7 @@ void Server::handle_install(const httplib::Request& req, httplib::Response& res)
             // Best-effort discovery. Empty result is fine — install means
             // "registered", not "verified-and-non-empty". The client can
             // call /v1/system-info later to see how many models showed up.
-            size_t models_after = model_manager_->refresh_cloud_models(provider);
+            const auto discovery = model_manager_->refresh_cloud_models(provider);
             const auto state = cloud_registry_->auth_state(provider);
             const auto auth_header = cloud_registry_->auth_header_for(provider);
 
@@ -8317,7 +8319,8 @@ void Server::handle_install(const httplib::Request& req, httplib::Response& res)
                 {"auth_header_name", auth_header.name},
                 {"auth_header_prefix", auth_header.prefix},
                 {"wire_format", cloud_registry_->wire_format_for(provider)},
-                {"models_discovered", models_after},
+                {"models_discovered", discovery.models},
+                {"discovery", {{"status", discovery.status}, {"code", discovery.code}}},
                 {"auth_state", {
                     {"env_var_set", state.env_var_set},
                     {"runtime_key_set", state.runtime_key_set}

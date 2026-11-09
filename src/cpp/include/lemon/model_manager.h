@@ -227,10 +227,15 @@ public:
 
     // Refresh discovered models for one provider. Looks up creds via the
     // registry, calls CloudServer::discover_models, and re-seeds the
-    // provider's entries (drop-then-add semantics). No-op + warning if the
-    // provider has no resolvable key. Returns the number of models present
-    // after refresh. Throws never — errors logged, empty result returned.
-    size_t refresh_cloud_models(const std::string& provider);
+    // provider's entries against the captured revision. Deferred discovery does
+    // not send a request; superseded results cannot replace current metadata.
+    struct CloudDiscoveryResult {
+        size_t models = 0;
+        std::string status = "completed";
+        std::string code;
+    };
+    CloudDiscoveryResult refresh_cloud_models(const std::string& provider);
+    json discovery_snapshot() const;
 
     // Drop every cached model for one provider (used by uninstall). Returns
     // the count removed. Doesn't touch the registry — caller already did.
@@ -592,6 +597,7 @@ private:
     void notify_after_mutation(ModelMutation& mutation) noexcept;
     OptionsWriteSnapshot begin_options_write(const std::string& model_name);
     std::vector<ModelInfo> discover_dynamic_models();
+    json discovery_observations_ = json::object();
     void rebuild_models_cache_locked(std::vector<ModelInfo> dynamic_models);
     void invalidate_models_cache_locked();
 

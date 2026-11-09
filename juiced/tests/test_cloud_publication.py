@@ -14,10 +14,15 @@ from test_cache_admission import Fixture, PREFIXES
 
 def acceptance(args):
     class Discovery(BaseHTTPRequestHandler):
+        calls = 0
+        lock = threading.Lock()
+
         def log_message(self, *_):
             pass
 
         def do_GET(self):
+            with Discovery.lock:
+                Discovery.calls += 1
             body = json.dumps({"data": [{"id": "fixture-discovered"}]}).encode()
             self.send_response(200)
             self.send_header("Content-Length", str(len(body)))
@@ -28,6 +33,7 @@ def acceptance(args):
     worker = threading.Thread(target=discovery.serve_forever)
     worker.start()
     matrix = []
+    protected_discovery = []
     try:
         for failure in ("staging", "replacement"):
             for index, operation in enumerate(
@@ -166,6 +172,66 @@ def acceptance(args):
                     finally:
                         fixture.stop()
                         fixture.log.close()
+        with tempfile.TemporaryDirectory(
+            prefix="juiced-deferred-discovery-"
+        ) as directory:
+            fixture = Fixture(args, Path(directory))
+            try:
+                fixture.start("fixture-inference", "fixture-admin")
+                fixture.ok("/v1/juiced/admission", {"paused": True})
+                fixture.ok("/internal/set", {"admission": {"mode": "protected"}})
+                fixture.ok("/v1/juiced/admission", {"paused": False})
+                with Discovery.lock:
+                    before_calls = Discovery.calls
+                base = f"http://127.0.0.1:{discovery.server_port}/v1"
+                for index, prefix in enumerate(PREFIXES):
+                    provider = "deferred" + str(index)
+                    installed = fixture.ok(
+                        prefix + "install",
+                        {
+                            "backend": "cloud",
+                            "provider": provider,
+                            "base_url": base,
+                            "allow_insecure_http": True,
+                            "api_key": "process-only-fixture-key",
+                        },
+                    )
+                    authenticated = fixture.ok(
+                        prefix + "cloud/auth",
+                        {
+                            "provider": provider,
+                            "api_key": "rotated-process-only-fixture-key",
+                        },
+                    )
+                    for result in (installed, authenticated):
+                        assert result["models_discovered"] == 0 and result[
+                            "discovery"
+                        ] == {
+                            "status": "deferred",
+                            "code": "operation_unqualified",
+                        }, result
+                    protected_discovery.append(
+                        {"prefix": prefix, "install_auth_deferred": True}
+                    )
+                catalog = fixture.ok("/v1/models?show_all=true")
+                assert catalog["data"], "Protected local inventory disappeared"
+                assert catalog["discovery"]["scope"] == "last-attempt"
+                for index in range(len(PREFIXES)):
+                    observation = catalog["discovery"]["operations"][
+                        "cloud:deferred" + str(index)
+                    ]
+                    assert observation["status"] == "deferred", observation
+                with Discovery.lock:
+                    assert (
+                        Discovery.calls == before_calls
+                    ), "Protected metadata mutation dispatched discovery"
+                committed = fixture.ok("/internal/config")["cloud_providers"]
+                fixture.stop()
+                fixture.start("fixture-inference", "fixture-admin")
+                assert fixture.ok("/internal/config")["cloud_providers"] == committed
+            finally:
+                fixture.stop()
+                fixture.log.close()
     finally:
         discovery.shutdown()
         worker.join()
@@ -173,6 +239,7 @@ def acceptance(args):
     return {
         "scope": "isolated metadata and loopback discovery; no external services or inference",
         "matrix": matrix,
+        "protected_discovery": protected_discovery,
     }
 
 

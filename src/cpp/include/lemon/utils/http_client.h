@@ -149,12 +149,14 @@ public:
         return download_rate_limit_bytes_per_second_.load();
     }
 
-    // Simple GET request. timeout_seconds=0 (default) uses default_timeout_seconds_.
+    // Simple GET request. timeout_seconds=0 uses default_timeout_seconds_.
+    // A positive max_response_bytes aborts before appending bytes above the limit.
     static HttpResponse get(const std::string& url,
                            const std::map<std::string, std::string>& headers = {},
                            long timeout_seconds = 0,
                            HttpSecurityPolicy policy = HttpSecurityPolicy::ExternalHttpsOnly,
-                           const RequestCancelToken& cancel = {});
+                           const RequestCancelToken& cancel = {},
+                           size_t max_response_bytes = 0);
 
     // Simple POST request. Redirects are never followed.
     // timeout_seconds=0 uses default_timeout_seconds_, as in get(); pass

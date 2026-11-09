@@ -14,7 +14,8 @@
     "recoverable chunked GGUF import publication",
     "native model discovery and coherent options publication",
     "server-mediated acquisition and preparation containment",
-    "pre-body HTTP buffering limits and native import admission"
+    "pre-body HTTP buffering limits and native import admission",
+    "native cloud/FLM discovery admission and explicit metadata deferral"
   ],
   "scope": [
     "Juiced state writes retain a private last-committed checkpoint; failed writes restore rejected policy/cache controls and revision. Policy is the sole authority for Hot residency.",
@@ -53,14 +54,15 @@
     "Legacy transition tickets follow native calls, accepted deferred streams/server-owned jobs and preparation queues. They do not consume inference capacity. Rejected unadmitted sync/preparation reaches terminal state; proven unused work releases tickets.",
     "The llama.cpp owner rejects opaque load controls under protected admission. Native single-slot/snapshot-directory controls remain supported in the tested CPU subset. Runtime path lookup is read-only.",
     "All HTTP modes enforce an 8 MiB decompressed body ceiling. Shared ingress reservations bound accepted body bytes/count across native listeners and fixed protocols. Exact maximum import chunks remain supported. Compressed/chunked/multipart requests reserve the transport ceiling. This is a buffered-body bound, not total heap or essential-service qualification.",
-    "Import start/chunk/server/publication paths use management admission. Protected unqualified work rejects before mutation. Cleanup cancellation remains available. Reversible all-writer maintenance remains open."
+    "Import start/chunk/server/publication paths use management admission. Protected unqualified work rejects before mutation. Cleanup cancellation remains available. Reversible all-writer maintenance remains open.",
+    "Native provider-driven discovery rejects protected/paused work before network/CLI dispatch. ModelManager keeps local inventory and timestamped last-attempt observations. Cloud install/auth results distinguish committed metadata from deferred discovery. Cloud model-list responses have a 1 MiB receive ceiling. This does not qualify all filesystem/hardware metadata paths."
   ],
   "verification": {
     "status": "Local32-contract regression passed; final extension passes116 management assertions,53 ledger checks,API43 and actual CPU/cache acceptance. The Linux watcher fixture passes with a debounce quiet window. Fresh exact-source platform/image results remain pending.",
     "native_contracts": 32,
     "persistence_checks": 90,
     "gateway_assertions": 34,
-    "cloud_runtime_assertions": 12,
+    "cloud_runtime_assertions": 16,
     "api_cases": 43,
     "ledger_repetitions": 20,
     "scope": "Synthetic CPU/native/loopback and actual neutral Stories15M serving/cache. No accelerator, real speech, model quality or essential-service protection qualification.",
@@ -80,12 +82,13 @@
     "model_discovery_assertions": 20,
     "model_shutdown_assertions": 9,
     "shutdown_entrypoint_cases": 4,
-    "management_assertions": 116,
+    "management_assertions": 118,
     "ledger_assertions": 63,
     "management_scope": "Controlled native manager/handler/queued work and actual neutral Stories15M CPU/cache. Metadata/discovery, ingress/import bounds and reversible all-writer maintenance remain incomplete.",
     "ingress_scope": "45 real HTTP assertions,63 ledger checks including standalone ASan/UBSan,10 selected native contracts,43 API cases and complete neutral Stories15M CPU/cache/authentication acceptance pass locally. Buffered body bounds do not qualify total heap, slow-client fairness or full P1 protection.",
     "ingress_assertions": 45,
-    "ingress_native_contracts": 10
+    "ingress_native_contracts": 10,
+    "discovery_admission_scope": "Four selected native contracts and final118 management assertions pass locally.43 API cases,8 cloud failure/restart plus4 protected-prefix cases and actual neutral Stories15M CPU/cache/authentication acceptance pass. Metadata filesystem/hardware paths and full P1 remain unqualified."
   },
   "remaining": [
     "Full P1 fourteen-family path coverage, complete ingress/parsing/background/acquisition/preparation/install bounds, all-writer maintenance, exact execution identities, Realtime context/quiescence, termination reconciliation, early streaming status, shared observations and frozen service-protection gates.",
