@@ -1,6 +1,7 @@
 #pragma once
 
 #include <filesystem>
+#include <functional>
 #include <string>
 
 namespace lemon {
@@ -105,7 +106,8 @@ void migrate_legacy_json_files_to_config_dir(const std::string& cache_dir,
  * new cache/config/model directories. No-op when nothing was relocated.
  */
 void migrate_legacy_paths(const std::string& cache_dir,
-                          const std::string& config_dir);
+                          const std::string& config_dir,
+                          const std::function<void(const std::filesystem::path&)>& protect_source = {});
 
 /**
  * Set the models directory for HuggingFace model cache.

@@ -17,7 +17,8 @@
     "pre-body HTTP buffering limits and native import admission",
     "native cloud/FLM discovery admission and explicit metadata deferral",
     "atomic ModelManager JSON byte persistence across migration and repository metadata",
-    "separate ingress read/body lifetimes, compact control reserve and JSON structure bounds"
+    "separate ingress read/body lifetimes, compact control reserve and JSON structure bounds",
+    "exclusive native cache/config directory ownership"
   ],
   "scope": [
     "Juiced state writes retain a private last-committed checkpoint; failed writes restore rejected policy/cache controls and revision. Policy is the sole authority for Hot residency.",
@@ -59,7 +60,8 @@
     "Import start/chunk/server/publication paths use management admission. Protected unqualified work rejects before mutation. Cleanup cancellation remains available. Reversible all-writer maintenance remains open.",
     "Native provider-driven discovery rejects protected/paused work before network/CLI dispatch. ModelManager keeps local inventory and timestamped last-attempt observations. Cloud install/auth results distinguish committed metadata from deferred discovery. Cloud model-list responses have a 1 MiB receive ceiling. This does not qualify all filesystem/hardware metadata paths.",
     "All nine ModelManager JSON save sites share JsonUtils atomic byte persistence. Candidate/transaction/repository authority remains native. Serialization precedes staging, flush/close precede replacement, POSIX modes are preserved and failed cleanup reports retained staging. This does not establish multi-file promotion or all-writer quiescence.",
-    "Completed body reads release ordinary read slots while retaining byte charges through response completion. Compact native controls have separate read/headroom capacity. Native/gateway handler wrappers cap JSON depth64 and32768 key/value events. Raw import bytes remain unchanged; protected multipart input is contained. Full HTTP worker fairness, absolute input deadlines and physical-pool parse estimates remain open."
+    "Completed body reads release ordinary read slots while retaining byte charges through response completion. Compact native controls have separate read/headroom capacity. Native/gateway handler wrappers cap JSON depth64 and32768 key/value events. Raw import bytes remain unchanged; protected multipart input is contained. Full HTTP worker fairness, absolute input deadlines and physical-pool parse estimates remain open.",
+    "lemond and the Windows embedded server acquire nonblocking canonical-directory OS leases before configuration migration. The lease spans owned Server teardown, retains its control file, and protects legacy cache sources before migration. Participating processes sharing cache or configuration roots cannot serve concurrently. External model/snapshot roots, uncooperative binaries, network filesystems and backend termination remain unqualified."
   ],
   "verification": {
     "status": "Local32-contract regression passed; final extension passes116 management assertions,53 ledger checks,API43 and actual CPU/cache acceptance. The Linux watcher fixture passes with a debounce quiet window. Fresh exact-source platform/image results remain pending.",
@@ -99,7 +101,10 @@
     "ingress_host_memory_scope": "Five focused local native contracts pass after correcting the HTTP fixture error-detail lookup:80 HTTP and84 ledger assertions, including standalone ledger ASan/UBSan.43 API cases and actual Stories15M protected CPU admission pass. Input/model reservations share host accounting. The native-http-input-v1 estimate remains peak_qualified:false; full P1 is incomplete. Complete neutral CPU/cache/authenticated restart isolation also passes. The protected CPU fixture uses the accepted single-slot controls. Runtime publication/Realtime/retry fixtures pass, including48 ordinary and24 gateway automatic-load error cases. Concurrent configuration tests accept only typed pre-body retry rejections and retain commit agreement.",
     "alias_assertions_local_linux": 74,
     "alias_http_assertions": 20,
-    "alias_publication_scope": "Six selected local contracts pass:alias publication/HTTP,retained persistence,metadata,ordering and ingress diagnostics.74 alias assertions,20 HTTP publication checks,80 ingress checks,43 API cases and actual neutral CPU/cache/authenticated restart isolation pass. File I/O stays outside the alias read lock. Windows/native image gates remain open; parent Windows ingress activation failed and its response was not retained. New diagnostics preserve the activation response and available HTTP server logs."
+    "alias_publication_scope": "Six selected local contracts pass:alias publication/HTTP,retained persistence,metadata,ordering and ingress diagnostics.74 alias assertions,20 HTTP publication checks,80 ingress checks,43 API cases and actual neutral CPU/cache/authenticated restart isolation pass. File I/O stays outside the alias read lock. Windows/native image gates remain open; parent Windows ingress activation failed and its response was not retained. New diagnostics preserve the activation response and available HTTP server logs.",
+    "managed_directory_lease_assertions_local_linux": 11,
+    "store_ownership_process_assertions": 17,
+    "managed_directory_scope": "Four selected local contracts pass, including configuration merging, four Linux shutdown cases, eleven native lease checks and seventeen process checks. Final crash-restart retry refinement passes separately.43 API cases and complete actual neutral Stories15M CPU/cache/authenticated restart isolation pass. POSIX tray source syntax passes. Windows native execution and whole-store maintenance remain open."
   },
   "remaining": [
     "Full P1 fourteen-family path coverage, complete ingress/parsing/background/acquisition/preparation/install bounds, all-writer maintenance, exact execution identities, Realtime context/quiescence, termination reconciliation, early streaming status, shared observations and frozen service-protection gates.",

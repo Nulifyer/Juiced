@@ -419,3 +419,21 @@ and field types remain HTTP400; validation conflicts remain HTTP409. Retry and
 restart consume only committed changes. Corrupt-file recovery retains separate
 backups. These are per-owner publication contracts, not cross-process exclusion
 or whole-store maintenance.
+
+
+`lemond` and the Windows embedded server acquire an exclusive OS lease for each
+canonical cache/config directory before configuration loading or migration.
+Startup fails immediately if another participating process owns either root.
+Normal teardown retains ownership until the Server and its owned work have drained.
+The OS releases ownership when the process exits. The empty `.juiced-store.lock`
+control file remains in place and must not be removed while a manager is running.
+Directory aliases share ownership. Legacy-cache migration protects its source
+before mutation and leaves the held control file at that source.
+
+Local process acceptance covers competing roots, independent model-free managers,
+normal restart and recovery after terminating a model-free manager. Windows test
+recovery allows bounded retries because OS lock release can lag process exit.
+Production startup remains nonblocking. These checks do not establish network
+filesystem locking, whole-store backup consistency or host-crash durability.
+External model/snapshot directories, older nonparticipating binaries, and backend,
+helper, device or remote writes still require their P1 maintenance/termination gates.

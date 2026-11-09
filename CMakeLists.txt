@@ -1069,6 +1069,7 @@ set(SOURCES_CORE
     src/cpp/server/prometheus_metrics.cpp
     src/cpp/server/utils/http_client.cpp
     src/cpp/server/utils/json_utils.cpp
+    src/cpp/server/utils/managed_directory_lease.cpp
     src/cpp/server/utils/process_manager.cpp
     src/cpp/server/utils/path_utils.cpp
     src/cpp/server/utils/rate_limit_utils.cpp
@@ -3469,6 +3470,14 @@ if(BUILD_TESTING)
         ${CMAKE_CURRENT_SOURCE_DIR}/juiced/tests/test_model_shutdown.py --binary $<TARGET_FILE:${EXECUTABLE_NAME}>
         --out ${CMAKE_CURRENT_BINARY_DIR}/model-shutdown-proof.json DEPENDS ${EXECUTABLE_NAME})
     set_tests_properties(ServerShutdownEntrypointsTest PROPERTIES TIMEOUT 150)
+    add_executable(test_managed_directory_lease test/cpp/test_managed_directory_lease.cpp)
+    target_link_libraries(test_managed_directory_lease PRIVATE lemonade-server-core)
+    add_cpp_ci_test(ManagedDirectoryLeaseTest CI ON COMMAND test_managed_directory_lease)
+    set_tests_properties(ManagedDirectoryLeaseTest PROPERTIES TIMEOUT 30)
+    add_cpp_ci_test(StoreOwnershipEntrypointsTest CI ON COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/juiced/tests/test_store_ownership.py --binary $<TARGET_FILE:${EXECUTABLE_NAME}>
+        --out ${CMAKE_CURRENT_BINARY_DIR}/store-ownership-proof.json DEPENDS ${EXECUTABLE_NAME})
+    set_tests_properties(StoreOwnershipEntrypointsTest PROPERTIES TIMEOUT 150)
     if(WIN32 AND TARGET LemonadeServer)
         add_cpp_ci_test(EmbeddedServerShutdownTest CI ON COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/juiced/tests/test_model_shutdown.py --binary $<TARGET_FILE:LemonadeServer>

@@ -1,4 +1,5 @@
 #include <lemon/utils/path_utils.h>
+#include <lemon/utils/managed_directory_lease.h>
 #include <lemon/utils/path_platform.h>
 #include <lemon/utils/aixlog.hpp>
 #include <algorithm>
@@ -350,7 +351,8 @@ static bool move_tree_into(const fs::path& src, const fs::path& dst,
 }
 
 void migrate_legacy_paths(const std::string& cache_dir,
-                          const std::string& config_dir) {
+                          const std::string& config_dir,
+                          const std::function<void(const fs::path&)>& protect_source) {
     // Config JSON still sitting in the active cache dir (plain-user upgrade).
     migrate_legacy_json_files_to_config_dir(cache_dir, config_dir);
 
@@ -374,12 +376,13 @@ void migrate_legacy_paths(const std::string& cache_dir,
         std::error_code exists_ec;
         if (legacy_cache_path != new_cache_path &&
             fs::exists(legacy_cache_path, exists_ec)) {
+            if (protect_source) protect_source(legacy_cache_path);
             LOG(INFO) << "Migrating legacy cache " << legacy_cache << " -> " << cache_dir;
             migrate_legacy_json_files_to_config_dir(legacy_cache, config_dir);
-            static const std::vector<std::string> kJsonFiles = {
+            static const std::vector<std::string> retained_files = {
                 "config.json", "jobs.json",
-                "recipe_options.json", "user_models.json"};
-            if (move_tree_into(legacy_cache_path, new_cache_path, kJsonFiles)) {
+                "recipe_options.json", "user_models.json", ManagedDirectoryLease::file_name};
+            if (move_tree_into(legacy_cache_path, new_cache_path, retained_files)) {
                 std::error_code rm_ec;
                 fs::remove(legacy_cache_path, rm_ec);
             }
