@@ -33,6 +33,7 @@ export const test = base.extend<{ runtime: any }>({
         if (body) Object.assign(state.saved, body);
         return reply({ recipe: 'llamacpp', saved: state.saved, defaults: state.defaults, effective: { ...state.defaults, ...state.saved } });
       }
+      if (path === 'juiced/state') return reply({ version: 'v0.9.2', catalog_ready: true });
       if (path === 'juiced/catalog') return reply({ data: state.empty ? [] : state.models });
       if (path === 'juiced/transfers' || path === 'downloads') return reply({ data: state.jobs });
       if (path === 'juiced/cache') { if (body) state.cache.settings = { ...state.cache.settings, ...body }; return reply(state.cache); }

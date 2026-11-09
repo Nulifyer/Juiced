@@ -246,7 +246,8 @@ summary:focus-visible {
   padding: 12px 4px 2px;
   border-top: 1px solid var(--border);
 }
-.sidebar-footer > span { flex: 1; min-width: 0; white-space: nowrap; }
+.sidebar-footer-summary { display: grid; gap: 3px; flex: 1; min-width: 0; }
+.sidebar-footer-summary > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sidebar-footer button, .sidebar-footer a {
   display: inline-flex;
   align-items: center;

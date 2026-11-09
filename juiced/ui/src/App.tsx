@@ -71,6 +71,7 @@ export default function App() {
     [jobs, setJobs] = useState<any[]>([]),
     [notice, setNotice] = useState(""),
     [online, setOnline] = useState(false),
+    [serviceVersion, setServiceVersion] = useState<string>(),
     [ready, setReady] = useState(false),
     [mobile, setMobile] = useState(false),
     [libraryTab, setLibraryTab] = useState("discover"),
@@ -92,10 +93,12 @@ export default function App() {
   }, [notice]);
   const notify = useCallback((s: string) => setNotice(s), []);
   const refresh = useCallback(async () => {
-    const [catalog, transfers] = await Promise.all([
+    const [catalog, transfers, state] = await Promise.all([
       api("juiced/catalog"),
       api("juiced/transfers").catch(() => api("downloads")),
+      api("juiced/state").catch(() => undefined),
     ]);
+    setServiceVersion(typeof state?.version === "string" && state.version.trim() ? state.version : undefined);
     setModels(catalog.data || []);
     setJobs(Array.isArray(transfers) ? transfers : transfers.data || []);
     setOnline(true);
@@ -307,10 +310,15 @@ export default function App() {
           </SidebarGroup>
         )}
         <footer className="sidebar-footer">
-          <span title="Currently loaded models / downloaded models">
-            {models.filter((m) => m.loaded).length} loaded ·{" "}
-            {models.filter((m) => m.downloaded).length} downloaded
-          </span>
+          <div className="sidebar-footer-summary">
+            <span aria-label="Juiced server version" title={serviceVersion ? `Juiced ${serviceVersion}` : "Juiced version unavailable"}>
+              Juiced {serviceVersion || "—"}
+            </span>
+            <span title="Currently loaded models / downloaded models">
+              {models.filter((m) => m.loaded).length} loaded ·{" "}
+              {models.filter((m) => m.downloaded).length} downloaded
+            </span>
+          </div>
           <button
             aria-label="Refresh catalog"
             title="Refresh catalog"

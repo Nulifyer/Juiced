@@ -202,3 +202,24 @@ test('failed cache override save keeps the draft for retry', async ({ page, runt
   await page.getByRole('button', { name: 'Save changes', exact: true }).click();
   await expect.poll(() => runtime.cache.settings.model_modes).toEqual({ [runtime.models[0].id]: 'memory' });
 });
+
+for (const width of [1440, 390]) test(`sidebar displays the Juiced service version at ${width}px`, async ({ page, runtime }) => {
+  await page.setViewportSize({ width, height: 960 });
+  await page.goto('/');
+  if (width < 700) await page.getByRole('button', { name: 'Toggle navigation' }).click();
+  const footer = page.locator('.sidebar-footer');
+  await expect(footer.getByLabel('Juiced server version')).toHaveText('Juiced v0.9.2');
+  await expect(footer).toContainText('1 loaded · 2 downloaded');
+  expect(await footer.evaluate(node => node.scrollWidth <= node.clientWidth)).toBe(true);
+  if (captures) await page.screenshot({ path: `${captures}/sidebar-version-${width}.png` });
+  expect(runtime.writes).toEqual([]);
+});
+
+test('sidebar does not substitute the upstream version when Juiced version is unavailable', async ({ page, runtime }) => {
+  await page.route('**/v1/juiced/state', route => route.fulfill({ status: 503, json: { error: 'Fixture state unavailable' } }));
+  await page.goto('/');
+  await expect(page.getByLabel('Juiced server version')).toHaveText('Juiced —');
+  await expect(page.getByLabel('Juiced server version')).toHaveAttribute('title', 'Juiced version unavailable');
+  await expect(page.getByRole('heading', { name: 'Runtime dashboard', exact: true })).toBeVisible();
+  expect(runtime.writes).toEqual([]);
+});
