@@ -770,7 +770,7 @@ Server::Server(std::shared_ptr<RuntimeConfig> config,
     setup_http_servers();
 
     // Initialize WebSocket server for realtime API and log streaming
-    websocket_server_ = std::make_unique<WebSocketServer>(
+    websocket_server_ = std::make_shared<WebSocketServer>(
         router_.get(),
         config_->host(),
         config_->websocket_port());
@@ -857,8 +857,9 @@ void Server::setup_http_servers() {
     // processed by the routed servers above. The dedicated websocket_port
     // listener keeps running unchanged.
     auto upgrade_handler = [this](socket_t sock) -> bool {
-        if (websocket_server_ && websocket_server_->is_running()) {
-            return websocket_server_->adopt_socket(static_cast<intptr_t>(sock));
+        auto listener = std::atomic_load(&websocket_server_);
+        if (listener && listener->is_running()) {
+            return listener->adopt_socket(static_cast<intptr_t>(sock));
         }
         return false;
     };
@@ -2262,10 +2263,12 @@ void Server::run() {
     running_ = true;
 
     // Start WebSocket server for realtime API and log streaming
-    if (websocket_server_) {
-        if (websocket_server_->start()) {
+    {
+        std::lock_guard<std::mutex> lifecycle(websocket_lifecycle_mutex_);
+        auto listener = std::atomic_load(&websocket_server_);
+        if (listener && listener->start()) {
             LOG(INFO, "Server") << "WebSocket server started on port "
-                                << websocket_server_->get_port() << std::endl;
+                                << listener->get_port() << std::endl;
         } else {
             LOG(WARNING, "Server") << "Failed to start WebSocket server" << std::endl;
         }
@@ -2451,16 +2454,17 @@ bool Server::startup_failed() const {
 }
 
 void Server::stop() {
-    if (running_) {
+    if (running_.exchange(false)) {
         LOG(INFO, "Server") << "Stopping HTTP server..." << std::endl;
         udp_beacon_.stopBroadcasting();
         stop_http_listeners();
-        running_ = false;
         shutdown_requested_ = false;  // Reset for potential future use
 
-        if (websocket_server_) {
+        {
+            std::lock_guard<std::mutex> lifecycle(websocket_lifecycle_mutex_);
+            auto listener = std::atomic_load(&websocket_server_);
             LOG(INFO, "Server") << "Stopping WebSocket server..." << std::endl;
-            websocket_server_->stop();
+            if (listener) listener->stop();
         }
 
         if (router_) {
@@ -2814,8 +2818,9 @@ void Server::handle_health(const httplib::Request& req, httplib::Response& res) 
     response["pinned_helper_models"] = router_->get_pinned_helper_counts();
 
     // Add WebSocket server port for realtime API and log streaming
-    if (websocket_server_ && websocket_server_->is_running()) {
-        response["websocket_port"] = websocket_server_->get_port();
+    auto listener = std::atomic_load(&websocket_server_);
+    if (listener && listener->is_running()) {
+        response["websocket_port"] = listener->get_port();
     }
 
     // Add update check status
@@ -6982,18 +6987,43 @@ void Server::normalize_and_resolve_request_model(nlohmann::json& request_json) c
     }
 }
 
+namespace {
+class ConfigurationApplicationFailure : public std::runtime_error {
+public:
+    ConfigurationApplicationFailure(const std::string& message, json changes)
+        : std::runtime_error(message), updated(std::move(changes)) {}
+    json updated;
+};
+}
+
 json Server::publish_config(std::function<json()> read_changes) {
-    return config_->update_persisted(std::move(read_changes), [this](const json& updated) {
+    const auto changes = read_changes();
+    const bool has_effects = !changes.contains("admission") && !changes.contains("cloud_providers");
+    std::unique_lock<std::mutex> effects(config_effect_mutex_, std::defer_lock);
+    // Cloud publication holds the registry owner. Its no-op callback must not
+    // wait on effects that can read that registry while loading a backend.
+    if (has_effects) effects.lock();
+    auto result = config_->update_persisted([&] { return changes; }, [this](const json& updated) {
         if (config_dir_.empty()) return;
         json user_cfg = ConfigFile::load_raw(config_dir_);
         user_cfg = utils::JsonUtils::merge(user_cfg, updated);
         if (updated.contains("admission")) user_cfg["admission"] = updated["admission"];
         utils::JsonUtils::prune_matching(user_cfg, ConfigFile::get_defaults());
         ConfigFile::save(config_dir_, user_cfg);
-    }, [this](const json& applied) {
-        if (applied.contains("admission") || applied.contains("cloud_providers")) return;
-        apply_config_side_effects(applied);
+    }, [this, has_effects](const json& applied) {
+        if (!has_effects) return;
+        pending_config_effects_ = utils::JsonUtils::merge(pending_config_effects_, applied);
     });
+    if (has_effects && !pending_config_effects_.empty()) {
+        try {
+            if (config_effect_barrier_) config_effect_barrier_();
+            apply_config_side_effects(pending_config_effects_);
+        } catch (const std::exception& error) {
+            throw ConfigurationApplicationFailure(error.what(), changes);
+        }
+        pending_config_effects_ = json::object();
+    }
+    return result;
 }
 
 void Server::persist_cloud_providers(const json& metadata) {
@@ -7543,6 +7573,11 @@ void Server::handle_config_set(const httplib::Request& req, httplib::Response& r
         else publish();
 
         res.set_content(result.dump(), "application/json");
+    } catch (const ConfigurationApplicationFailure& error) {
+        res.status = 503;
+        res.set_header("Retry-After", "1");
+        res.set_content(json{{"error", {{"code", "configuration_application_failed"}, {"message", error.what()}}},
+            {"saved", true}, {"applied", false}, {"updated", error.updated}}.dump(), "application/json");
     } catch (const AdmissionError& error) {
         res.status = error.status;
         res.set_content(ErrorResponse::create(error.what(), ErrorType::CONFIGURATION_ERROR,
@@ -7611,68 +7646,60 @@ void Server::handle_bin_change(const std::string& section,
                         << " = '" << new_value << "' — hot-swapping "
                         << recipe << ":" << backend << std::endl;
 
-    // Snapshot loaded models on this (recipe, backend). A model whose options
-    // do not pin a backend (mb empty) is treated as potentially affected since
-    // it could resolve to the changed backend on next load.
-    struct Saved {
-        std::string name;
-        RecipeOptions opts;
+    auto& reloads = pending_backend_reloads_[{recipe, backend}];
+    const auto affected = [&](const json& worker) {
+        if (worker.value("recipe", "") != recipe) return false;
+        const auto options = worker.value("recipe_options", json::object());
+        const auto selected = options.value(recipe + "_backend", std::string{});
+        return selected.empty() || selected == backend;
     };
-    std::vector<Saved> previously_loaded;
-    auto loaded = router_->get_all_loaded_models();
-    std::string backend_option_key = recipe + "_backend";
-    for (const auto& m : loaded) {
-        if (m.value("recipe", "") != recipe) continue;
-        std::string mb;
-        if (m.contains("recipe_options") && m["recipe_options"].contains(backend_option_key)) {
-            mb = m["recipe_options"].value(backend_option_key, "");
+    router_->update_backend(recipe, [&] {
+        const auto loaded = router_->get_all_loaded_models();
+        for (const auto& worker : loaded) {
+            if (!affected(worker)) continue;
+            const auto name = worker.at("model_name").get<std::string>();
+            if (std::none_of(reloads.begin(), reloads.end(), [&](const auto& saved) { return saved.first == name; }))
+                reloads.emplace_back(name, router_->get_model_recipe_options(name));
         }
-        if (!mb.empty() && mb != backend) continue;
-        std::string name = m.value("model_name", "");
-        if (name.empty()) continue;
-        previously_loaded.push_back({name, router_->get_model_recipe_options(name)});
-    }
+        for (const auto& worker : loaded)
+            if (affected(worker)) router_->unload_model(worker.at("model_name"));
+        if (backend_install_override_) backend_install_override_(recipe, backend);
+        else backend_manager_->install_backend(recipe, backend);
+    });
 
-    for (const auto& s : previously_loaded) {
-        LOG(INFO, "Server") << "Unloading " << s.name
-                            << " before installing new " << recipe << ":" << backend
-                            << " binary" << std::endl;
+    std::exception_ptr failure;
+    for (auto it = reloads.begin(); it != reloads.end();) {
         try {
-            router_->unload_model(s.name);
-        } catch (const std::exception& e) {
-            LOG(WARNING, "Server") << "Failed to unload " << s.name << ": " << e.what() << std::endl;
+            if (!juiced_ || juiced_->allows(it->first)) {
+                auto info = model_manager_->get_model_info(it->first);
+                router_->load_model(it->first, info, it->second, true);
+                LOG(INFO, "Server") << "Reloaded " << it->first << " on updated " << recipe << ":" << backend << std::endl;
+            }
+            it = reloads.erase(it);
+        } catch (...) {
+            if (!failure) failure = std::current_exception();
+            ++it;
         }
     }
-
-    // Install the new binary. install_from_github bails early when the user's
-    // value resolves to a path (find_external_backend_binary returns it). When
-    // version.txt mismatches the resolved version, the install dir is wiped
-    // and re-downloaded.
-    try {
-        backend_manager_->install_backend(recipe, backend);
-    } catch (const std::exception& e) {
-        LOG(WARNING, "Server") << "install_backend(" << recipe << ":" << backend
-                               << ") failed after *_bin change: " << e.what() << std::endl;
-    }
-
-    // Best-effort reload of previously-loaded models on the new binary.
-    for (const auto& s : previously_loaded) {
-        try {
-            auto info = model_manager_->get_model_info(s.name);
-            router_->load_model(s.name, info, s.opts, true);
-            LOG(INFO, "Server") << "Reloaded " << s.name << " on new "
-                                << recipe << ":" << backend << " binary" << std::endl;
-        } catch (const std::exception& e) {
-            LOG(WARNING, "Server") << "Failed to reload " << s.name
-                                   << " after *_bin hot-swap: " << e.what() << std::endl;
-        }
-    }
+    if (failure) std::rethrow_exception(failure);
+    pending_backend_reloads_.erase({recipe, backend});
 
     SystemInfoCache::invalidate_recipes();
     model_manager_->invalidate_models_cache();
 }
 
+void Server::restart_websocket_listener() {
+    std::lock_guard<std::mutex> lifecycle(websocket_lifecycle_mutex_);
+    auto previous = std::atomic_load(&websocket_server_);
+    if (previous) previous->stop();
+    auto candidate = std::make_shared<WebSocketServer>(router_.get(), config_->host(), config_->websocket_port());
+    std::atomic_store(&websocket_server_, candidate);
+    if (running_ && !candidate->start())
+        throw std::runtime_error("Saved WebSocket listener settings could not be applied");
+}
+
 void Server::apply_config_side_effects(const json& applied_changes) {
+    bool restart_websocket = false;
     for (auto& [key, value] : applied_changes.items()) {
         if (key == "port") {
             int new_port = config_->port();
@@ -7687,34 +7714,14 @@ void Server::apply_config_side_effects(const json& applied_changes) {
                 }
             }
         } else if (key == "host") {
-            LOG(INFO, "Server") << "Host change requested to: " << config_->host() << std::endl;
             if (running_) {
                 rebind_requested_ = true;
                 udp_beacon_.stopBroadcasting();
                 stop_http_listeners();
             }
-            // Restart websocket server with new host
-            if (websocket_server_ && running_) {
-                websocket_server_->stop();
-                websocket_server_ = std::make_unique<WebSocketServer>(
-                    router_.get(),
-                    config_->host(),
-                    config_->websocket_port());
-                websocket_server_->start();
-            }
+            restart_websocket = true;
         } else if (key == "websocket_port") {
-            if (websocket_server_) {
-                LOG(INFO, "Server") << "Restarting WebSocket server on requested port "
-                                    << config_->websocket_port() << std::endl;
-                websocket_server_->stop();
-                websocket_server_ = std::make_unique<WebSocketServer>(
-                    router_.get(),
-                    config_->host(),
-                    config_->websocket_port());
-                if (running_) {
-                    websocket_server_->start();
-                }
-            }
+            restart_websocket = true;
         } else if (key == "log_level" || key == "log_file" || key == "log_max_file_size_mb" || key == "log_max_files") {
             LogRotationConfig rot_cfg;
             rot_cfg.file_mode = config_->log_file();
@@ -7784,6 +7791,7 @@ void Server::apply_config_side_effects(const json& applied_changes) {
             }
         }
     }
+    if (restart_websocket) restart_websocket_listener();
 }
 
 

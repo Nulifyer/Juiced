@@ -104,10 +104,7 @@ private:
     // mirroring the input shape, containing only entries that actually changed.
     void apply_config_side_effects(const json& applied_changes);
 
-    // Hot-swap a backend binary when its *_bin config value changes. Unloads
-    // affected loaded models, runs install_backend (which downloads/replaces
-    // when version.txt mismatches), then best-effort reloads them. Errors are
-    // logged and never propagated — the config change has already been applied.
+    void restart_websocket_listener();
     void handle_bin_change(const std::string& section,
                            const std::string& bin_key,
                            const std::string& new_value);
@@ -394,13 +391,18 @@ private:
     std::unique_ptr<JuicedService> juiced_;
     std::unique_ptr<Router> router_;
     std::mutex cloud_update_mutex_;
-    std::unique_ptr<WebSocketServer> websocket_server_;
+    std::shared_ptr<WebSocketServer> websocket_server_;
+    std::mutex websocket_lifecycle_mutex_, config_effect_mutex_;
+    json pending_config_effects_ = json::object();
+    std::map<std::pair<std::string, std::string>, std::vector<std::pair<std::string, RecipeOptions>>> pending_backend_reloads_;
+    std::function<void()> config_effect_barrier_;
+    std::function<void(const std::string&, const std::string&)> backend_install_override_;
     std::unique_ptr<lemon::jobs::JobManager> job_manager_;
 
     std::mutex downloads_mutex_;
     std::map<std::string, std::shared_ptr<DownloadJob>> download_jobs_;
 
-    bool running_;
+    std::atomic<bool> running_;
     bool startup_failed_ = false;
     std::atomic<bool> shutdown_requested_{false};
     std::atomic<bool> rebind_requested_{false};

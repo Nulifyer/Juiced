@@ -1,6 +1,7 @@
 #include "lemon/cloud_provider_registry.h"
 #include "lemon/config_file.h"
 #include "lemon/eviction_engine.h"
+#include "lemon/error_types.h"
 #include "lemon/jobs/job_manager.h"
 #include "lemon/juiced/service.h"
 #include "lemon/model_manager.h"
@@ -88,7 +89,42 @@ public:
 private:
     std::function<void()> on_load_;
 };
+class RuntimeStopWorker : public PolicyWorker {
+public:
+    RuntimeStopWorker(const std::string& name, int failure) : PolicyWorker(name), failure(failure) {
+        set_model_metadata(name, "fixture", ModelType::LLM, DEVICE_CPU,
+            RecipeOptions("llamacpp", {{"ctx_size", 2048}, {"llamacpp_backend", "cpu"}}));
+    }
+    void unload() override {
+        if (failure == 1) throw std::runtime_error("injected unconfirmed runtime stop");
+        if (failure == 2) throw RouterResidencyConflictException(get_model_name(), get_model_name(), "injected busy drain");
+        PolicyWorker::unload();
+    }
+    int failure;
+};
 struct StatePublicationTestHook {
+    static httplib::Response configure(Server& server, const json& changes) {
+        httplib::Request request; request.method = "POST"; request.path = "/internal/set"; request.body = changes.dump();
+        httplib::Response response; response.status = 200; server.handle_config_set(request, response); return response;
+    }
+    static void config_effect(Server& server, std::function<void()> barrier) { server.config_effect_barrier_ = std::move(barrier); }
+    static std::shared_ptr<WebSocketServer> listener(Server& server) { return std::atomic_load(&server.websocket_server_); }
+    static void start_listener(Server& server) { server.running_ = true; server.restart_websocket_listener(); }
+    static void cloud_publish(Server& server) {
+        server.cloud_registry_->install("config-fixture", "https://fixture.invalid/v1", {},
+            [&](const json& metadata) { server.persist_cloud_providers(metadata); });
+    }
+    static void install(Server& server, std::function<void(const std::string&, const std::string&)> callback) {
+        server.backend_install_override_ = std::move(callback);
+    }
+    static std::shared_ptr<RuntimeStopWorker> failed_runtime(Server& server, const std::string& name, int failure) {
+        auto worker = std::make_shared<RuntimeStopWorker>(name, failure);
+        ResourceAdmission::Work work; work.model = name; work.generation = worker->get_instance_id(); work.operation = ResourceAdmission::Operation::Load;
+        auto residency = server.router_->admission_.acquire(work); residency.started(); residency.retain_residency();
+        worker->retain_resource_residency(std::move(residency));
+        std::lock_guard<std::mutex> lock(server.router_->load_mutex_); server.router_->loaded_servers_.push_back(worker);
+        return worker;
+    }
     static void cache_worker(Server& server, const std::string& name, int port) {
         std::lock_guard<std::mutex> lock(server.router_->load_mutex_);
         server.router_->loaded_servers_.push_back(std::make_shared<CacheBoundaryWorker>(name, port, server.juiced_->snapshot_directory_));
@@ -811,6 +847,122 @@ struct TestGate {
     void open() { if (!opened.exchange(true)) released.set_value(); }
     ~TestGate() { open(); }
 };
+
+struct ListenerPortFixture {
+    httplib::Server http;
+    int port = http.bind_to_any_port("127.0.0.1");
+    std::thread worker;
+    ListenerPortFixture() {
+        if (port <= 0) throw std::runtime_error("Cannot bind listener port fixture");
+        worker = std::thread([this] { http.listen_after_bind(); });
+        http.wait_until_ready();
+    }
+    void release() { http.stop(); if (worker.joinable()) worker.join(); }
+    ~ListenerPortFixture() { release(); }
+};
+
+static void configuration_effects() {
+    using Hook = lemon::StatePublicationTestHook;
+    const auto root = lemon::test::make_scratch_dir("configuration-effects");
+    auto defaults = lemon::ConfigFile::base_defaults(); defaults["offline"] = true; defaults["broadcast"] = false;
+    defaults["auto_evict"] = false; defaults["auto_check_model_updates"] = false; defaults["host"] = "127.0.0.1";
+    ListenerPortFixture initial_port, next_port;
+    const auto initial = initial_port.port, next = next_port.port;
+    initial_port.release(); next_port.release(); defaults["websocket_port"] = initial;
+    auto runtime = std::make_shared<lemon::RuntimeConfig>(defaults); lemon::RuntimeConfig::set_global(runtime.get());
+    {
+        lemon::Server server(runtime, root.string(), root.string()); Hook::stop(server); Hook::stop_eviction(server);
+        Hook::start_listener(server); const auto original = Hook::listener(server);
+        check(original && original->is_running(), "native configuration fixture starts one loopback listener");
+        TestGate first; std::atomic<int> calls{0};
+        Hook::config_effect(server, [&] { if (++calls == 1) first.pause(); });
+        auto host = std::async(std::launch::async, [&] { return Hook::configure(server, {{"host", "localhost"}}); });
+        const auto entered = first.await();
+        std::promise<void> queued;
+        auto port = std::async(std::launch::async, [&] { queued.set_value(); return Hook::configure(server, {{"websocket_port", next}}); });
+        queued.get_future().wait();
+        check(entered && port.wait_for(std::chrono::milliseconds(30)) == std::future_status::timeout &&
+              runtime->host() == "localhost" && runtime->websocket_port() == initial,
+              "later settings wait until the earlier committed listener effect finishes");
+        auto cloud = std::async(std::launch::async, [&] { Hook::cloud_publish(server); });
+        const bool independent = cloud.wait_for(std::chrono::seconds(5)) == std::future_status::ready;
+        first.open(); cloud.get();
+        check(independent, "registry publication does not acquire the listener effects owner");
+        check(host.get().status == 200 && port.get().status == 200,
+              "overlapping host and port changes complete through the native settings handler");
+        Hook::config_effect(server, {});
+        const auto current = Hook::listener(server);
+        check(current != original && !original->is_running() && current->is_running() && current->get_port() == next &&
+              runtime->host() == "localhost" && runtime->websocket_port() == next,
+              "one active listener matches the latest committed host and port");
+        ListenerPortFixture occupied; const auto blocked = occupied.port;
+        const auto failed = Hook::configure(server, {{"websocket_port", blocked}});
+        const auto failure = json::parse(failed.body);
+        check(failed.status == 503 && failure["saved"] == true && failure["applied"] == false &&
+              failure["error"]["code"] == "configuration_application_failed" && runtime->websocket_port() == blocked,
+              "listener bind failure reports saved intent separately from failed application");
+        check(!current->is_running() && !Hook::listener(server)->is_running(),
+              "failed replacement cannot advertise its stopped previous listener as active");
+        occupied.release();
+        const auto retry = Hook::configure(server, {{"websocket_port", blocked}});
+        check(retry.status == 200 && Hook::listener(server)->is_running() && Hook::listener(server)->get_port() == blocked,
+              "identical settings retry reapplies a previously failed committed effect");
+        TestGate shutdown;
+        Hook::config_effect(server, [&] { shutdown.pause(); });
+        auto changing = std::async(std::launch::async, [&] { return Hook::configure(server, {{"host", "127.0.0.1"}}); });
+        check(shutdown.await(), "shutdown overlap reaches the committed effect boundary");
+        server.stop(); shutdown.open();
+        check(changing.get().status == 200 && !Hook::listener(server)->is_running(),
+              "shutdown prevents a delayed effect from restarting its listener");
+        Hook::config_effect(server, {});
+    }
+    lemon::RuntimeConfig::set_global(nullptr);
+}
+
+static void runtime_swap_failures() {
+    using Hook = lemon::StatePublicationTestHook;
+    for (int failure : {1, 2}) {
+        const auto root = lemon::test::make_scratch_dir("runtime-swap");
+        auto defaults = lemon::ConfigFile::base_defaults(); defaults["offline"] = true; defaults["broadcast"] = false;
+        defaults["auto_evict"] = false; defaults["auto_check_model_updates"] = false;
+        auto runtime = std::make_shared<lemon::RuntimeConfig>(defaults); lemon::RuntimeConfig::set_global(runtime.get());
+        {
+            lemon::Server server(runtime, root.string(), root.string()); Hook::stop(server); Hook::stop_eviction(server);
+            const std::string name = "user.Swap", other = "user.BlockedSwap";
+            Hook::register_local_model(server, name); Hook::register_local_model(server, other);
+            Hook::mutate(server, {{"model", name}, {"policy", "on-demand"}});
+            Hook::mutate(server, {{"model", other}, {"policy", "on-demand"}});
+            auto worker = Hook::failed_runtime(server, name, failure);
+            const auto generation = worker->get_instance_id();
+            const auto directory = root / "runtime"; fs::create_directories(directory);
+            { std::ofstream file(directory / "referenced"); file << "original"; }
+            std::atomic<int> installs{0}, starts{0};
+            Hook::install(server, [&](const std::string&, const std::string&) { ++installs; fs::remove_all(directory); });
+            Hook::factory(server, [&] { ++starts; });
+            const json change = {{"llamacpp", {{"cpu_bin", "fixture-version"}}}};
+            const auto rejected = Hook::configure(server, change);
+            check(rejected.status == 503 && json::parse(rejected.body)["saved"] == true &&
+                  json::parse(rejected.body)["applied"] == false,
+                  "busy or unconfirmed runtime retirement reports saved but unapplied configuration");
+            check(installs == 0 && starts == 0 && fs::exists(directory / "referenced") &&
+                  Hook::generation(server, name) == generation && Hook::admission(server)["resident"] == 1,
+                  "unresolved worker ownership prevents runtime promotion, reclamation and reload");
+            bool blocked = false;
+            try { Hook::auto_load(server, other); }
+            catch (const lemon::AdmissionError& error) { blocked = error.code == "backend_update_pending"; }
+            check(blocked && installs == 0 && starts == 0,
+                  "another load cannot bypass a pending runtime update for the same recipe");
+            worker->failure = 0;
+            const auto retried = Hook::configure(server, change);
+            check(retried.status == 200 && installs == 1 && starts == 1 && Hook::generation(server, name) != generation &&
+                  Hook::admission(server)["resident"] == 1 && Hook::admission(server)["uncertain"] == 0,
+                  "identical configuration retry confirms the old stop before installing and restoring its service");
+            const auto loaded = Hook::native_load(server, other);
+            check(loaded.status == 200 && starts == 2, "successful runtime application reopens native loading");
+        }
+        lemon::RuntimeConfig::set_global(nullptr);
+    }
+}
 
 static void native_load_publication() {
     using Hook = lemon::StatePublicationTestHook;
@@ -1537,7 +1689,9 @@ static void policy_failures() {
 }
 
 int main(int argc, char** argv) {
-    if (argc > 1 && std::string(argv[1]) == "--metadata-files") {
+    if (argc > 1 && std::string(argv[1]) == "--config-effects") {
+        configuration_effects(); runtime_swap_failures();
+    } else if (argc > 1 && std::string(argv[1]) == "--metadata-files") {
         metadata_json_files();
     } else if (argc > 1 && std::string(argv[1]) == "--import-ownership") {
         import_removal_ownership(); import_deletion_overlap(); import_definition_replays();

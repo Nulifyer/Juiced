@@ -514,6 +514,20 @@ monitor contain failures at their thread boundaries. Ollama unload reports a
 retryable `unload_incomplete` error for busy or unconfirmed cleanup. An absent
 worker still satisfies that protocol's unload convention.
 
+Ordinary configuration publication and its effects serialize through Server.
+Listener readers retain a shared lifetime while one lifecycle owner replaces or
+stops the listener. Shared RuntimeConfig and Router locks are released before
+listener stop/start. Cloud metadata publication retains its separate registry
+ordering and does not wait on listener effects.
+
+A failed effect returns503 `configuration_application_failed`, with `saved:true`
+and `applied:false`. An identical settings request retries pending effects. A
+runtime binary change blocks new loads for its recipe until affected workers
+confirm cleanup and installation succeeds. Failed drain or stop prevents install,
+promotion and reclamation. Pending reloads survive an application retry in this
+manager process. Complete bundle manifests, references and restart recovery
+remain P3 requirements. These controls do not qualify arbitrary package writers.
+
 Local acceptance includes real direct children, non-consuming exit observation,
 unowned PID rejection, controlled failed stop/replacement, exact-generation
 reconciliation and actual neutral CPU serving/cache. This does not establish

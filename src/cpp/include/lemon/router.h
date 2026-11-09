@@ -138,6 +138,7 @@ public:
            ResourceAdmission::Headroom headroom = {});
 
     ~Router();
+    void update_backend(const std::string& recipe, const std::function<void()>& apply);
 
     // Wires the cloud provider registry so the Router can construct
     // CloudServer instances with a credential source. Pointer (not
@@ -371,6 +372,8 @@ private:
     void wait_for_slot_clearance(std::unique_lock<std::mutex>& lock);
 
     std::unique_ptr<GlobalVramMonitor> vram_monitor_;
+    std::mutex backend_update_mutex_;
+    std::set<std::string> pending_backend_updates_;
     std::unique_ptr<EvictionEngine> eviction_engine_;
     std::unique_ptr<SuspendInhibitor> suspend_inhibitor_;
     // Runs release-triggered routing-helper reclaims off the request/maintenance

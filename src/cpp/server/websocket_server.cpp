@@ -275,13 +275,17 @@ void WebSocketServer::stop() {
         if (context_) {
             lws_cancel_service(context_);
             ctx_to_destroy = context_;
-            context_ = nullptr;
-            vhost_ = nullptr;
         }
     }
 
     if (service_thread_.joinable()) {
         service_thread_.join();
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(context_mutex_);
+        context_ = nullptr;
+        vhost_ = nullptr;
     }
 
     if (ctx_to_destroy) {
@@ -331,23 +335,10 @@ void WebSocketServer::stop() {
 }
 
 bool WebSocketServer::adopt_socket(intptr_t fd) {
-    {
-        std::lock_guard<std::mutex> lock(context_mutex_);
-        if (!running_.load() || !context_) {
-            return false;
-        }
-    }
-    {
-        std::lock_guard<std::mutex> lock(adoption_mutex_);
-        pending_adoptions_.push(fd);
-    }
-    // Wake the service thread; adoption happens there (lws is not thread-safe)
-    {
-        std::lock_guard<std::mutex> lock(context_mutex_);
-        if (context_) {
-            lws_cancel_service(context_);
-        }
-    }
+    std::scoped_lock lock(context_mutex_, adoption_mutex_);
+    if (!running_.load() || !context_) return false;
+    pending_adoptions_.push(fd);
+    lws_cancel_service(context_);
     return true;
 }
 

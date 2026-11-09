@@ -319,7 +319,7 @@ WrappedServer* Router::get_most_recent_server() const {
 void Router::prune_unavailable_servers_locked() {
     std::vector<WrappedServer*> unavailable;
     for (const auto& server : loaded_servers_) {
-        if (!server->is_backend_alive()) {
+        if (!server->is_backend_alive() && !server->cleanup_pending()) {
             unavailable.push_back(server.get());
         }
     }
@@ -979,6 +979,9 @@ void Router::load_model(const std::string& model_name,
                && (!exclusive_active_ || exclusive_owner_ == std::this_thread::get_id());
     });
 
+    if (pending_backend_updates_.count(model_info.recipe))
+        throw AdmissionError("backend_update_pending", "Finish applying the saved runtime change before loading this recipe", 503);
+
     std::shared_ptr<std::atomic<uint64_t>> intent_token;
     if (policy_revision) {
         const auto policy = residency_policies_.find(canonical_model_name);
@@ -1482,6 +1485,21 @@ void Router::load_model(const std::string& model_name,
     }
 }
 
+void Router::update_backend(const std::string& recipe, const std::function<void()>& apply) {
+    std::lock_guard<std::mutex> update(backend_update_mutex_);
+    {
+        std::lock_guard<std::mutex> lock(load_mutex_);
+        pending_backend_updates_.insert(recipe);
+        if (is_loading_) throw AdmissionError("backend_update_pending", "Wait for startup to finish before applying runtime changes", 503);
+    }
+    apply();
+    {
+        std::lock_guard<std::mutex> lock(load_mutex_);
+        pending_backend_updates_.erase(recipe);
+    }
+    load_cv_.notify_all();
+}
+
 void Router::unload_model(const std::string& model_name) {
     std::unique_lock<std::mutex> lock(load_mutex_);
     wait_for_slot_clearance(lock);
@@ -1717,7 +1735,7 @@ json Router::get_max_model_limits() const {
 bool Router::is_model_loaded() const {
     std::lock_guard<std::mutex> lock(load_mutex_);
     for (const auto& server : loaded_servers_) {
-        if (server->is_backend_alive()) {
+        if (server->is_backend_alive() && !server->cleanup_pending()) {
             return true;
         }
     }
@@ -1727,7 +1745,7 @@ bool Router::is_model_loaded() const {
 bool Router::is_model_loaded(const std::string& model_name) const {
     std::lock_guard<std::mutex> lock(load_mutex_);
     auto* server = find_server_by_model_name(resolve_model_name(model_name));
-    return server != nullptr && server->is_backend_alive();
+    return server != nullptr && server->is_backend_alive() && !server->cleanup_pending();
 }
 
 RecipeOptions Router::resolve_effective_options(const ModelInfo& model_info,
