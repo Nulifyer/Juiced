@@ -190,7 +190,7 @@ JuicedService::JuicedService(Server &server)
   server_.model_manager_->set_model_removal_guard([this](const std::string& name) {
     std::lock_guard<std::mutex> lock(mutex_);
     guard_model_removal_locked(name);
-  }, directory_ / "artifacts");
+  }, directory_ / "artifacts", directory_ / "prepared");
   for (const auto& [model, policy] : state_["policies"].items())
     server_.router_->publish_residency_policy(model, policy_revision_locked(model), policy == "hot");
   worker_ = std::thread([this] { run(); });

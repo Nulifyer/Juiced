@@ -82,7 +82,7 @@ private:
   std::unique_ptr<PreparationTask> preparation_active_;
   std::function<std::unique_ptr<ServerProcess>()> preparation_process_factory_;
   std::function<void()> preparation_admission_barrier_;
-  std::set<std::string> preparation_cancelled_;
+  std::set<std::string> preparation_cancelled_, prepared_cleanup_active_;
   std::unique_ptr<ServerProcess> voice_process_;
   ResourceAdmission::Lease voice_admission_;
   std::function<std::unique_ptr<ServerProcess>()> voice_process_factory_;
@@ -129,7 +129,6 @@ private:
   void reconcile();
   void reconcile_voice();
   void compatibility_routes(httplib::Server &http);
-  json prepared_artifacts();
   json preparation_plan(const std::string& model);
   void preparation_api(const httplib::Request &, httplib::Response &);
   void preparation_run();

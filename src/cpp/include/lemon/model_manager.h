@@ -312,10 +312,13 @@ public:
     json user_model_definition(const std::string& model_name);
     bool artifact_referenced(const std::string& model_name, const std::filesystem::path& file);
     void remove_uploaded_model(const std::string& model_name, const json& expected_definition);
+    json prepared_artifacts();
+    void remove_prepared_artifact(const std::string& id);
     // Installed before serving; the durable import owner can veto deletion.
-    void set_model_removal_guard(std::function<void(const std::string&)> guard, std::filesystem::path artifact_directory = {}) {
+    void set_model_removal_guard(std::function<void(const std::string&)> guard, std::filesystem::path artifact_directory = {}, std::filesystem::path prepared_directory = {}) {
         model_removal_guard_ = std::move(guard);
         if (!artifact_directory.empty()) uploaded_artifact_directory_ = std::move(artifact_directory);
+        if (!prepared_directory.empty()) prepared_artifact_directory_ = std::move(prepared_directory);
     }
 
     // Register or validate a model definition without downloading its files.
@@ -698,7 +701,7 @@ private:
     void guard_native_helper_mutation(const std::string& model);
     std::mutex model_mutations_mutex_;
     std::map<std::string, std::shared_ptr<ModelMutationState>> model_mutations_;
-    std::filesystem::path uploaded_artifact_directory_;
+    std::filesystem::path uploaded_artifact_directory_, prepared_artifact_directory_;
     std::recursive_mutex model_references_mutex_;
     std::function<void(const std::string&)> removal_publication_barrier_;
     std::function<void(const std::string&)> model_removal_guard_;
@@ -761,6 +764,7 @@ private:
     json read_user_models();
     void validate_registration_artifacts(const json& definition, const json& registrations);
     bool artifact_referenced_locked(const std::string& model, const std::filesystem::path& file, const json& registrations);
+    std::map<std::string, std::vector<std::string>> prepared_artifact_checkpoints_locked(const json& registrations);
     void rebuild_public_model_aliases_locked();
 };
 

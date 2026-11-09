@@ -40,42 +40,6 @@ std::string prepared_name(const std::string &source, const std::string &quant) {
   return std::regex_replace(source, suffix, "") + "-" + quant;
 }
 } // namespace
-JuicedService::json JuicedService::prepared_artifacts() {
-  json result = json::array(),
-       definitions = read(std::filesystem::path(server_.config_dir_) /
-                          "user_models.json");
-  const auto cache = directory_ / "prepared";
-  if (!std::filesystem::exists(cache))
-    return result;
-  for (const auto &entry : std::filesystem::directory_iterator(cache)) {
-    const auto id = entry.path().filename().string();
-    if (entry.is_symlink() || !entry.is_directory() ||
-        !std::regex_match(id, std::regex("[a-f0-9]{64}")))
-      continue;
-    const auto file = entry.path() / "model.gguf";
-    const auto manifest = read(entry.path() / "manifest.json");
-    if (!std::filesystem::is_regular_file(file) || !manifest.is_object())
-      continue;
-    json references = json::array();
-    if (definitions.is_object())
-      for (const auto &[name, definition] : definitions.items()) {
-        for (const auto &[role, checkpoint] :
-             definition.value("checkpoints", json::object()).items())
-          if (checkpoint.is_string() &&
-              std::filesystem::weakly_canonical(
-                  checkpoint.get<std::string>()) ==
-                  std::filesystem::weakly_canonical(file))
-            references.push_back(name);
-      }
-    result.push_back(
-        {{"id", id},
-         {"bytes", std::filesystem::file_size(file)},
-         {"quant", manifest.value("recipe", json::object()).value("quant", "")},
-         {"models", references},
-         {"removable", references.empty()}});
-  }
-  return result;
-}
 JuicedService::json
 JuicedService::preparation_plan(const std::string &requested) {
   const auto info = server_.model_manager_->get_model_info(requested);
@@ -163,7 +127,7 @@ void JuicedService::preparation_api(const httplib::Request &req,
     json result;
     if (req.method == "GET") {
       if (req.has_param("cache"))
-        result = {{"artifacts", prepared_artifacts()}};
+        result = {{"artifacts", server_.model_manager_->prepared_artifacts()}};
       else if (req.has_param("id")) {
         const auto id = req.get_param_value("id");
         {
@@ -197,21 +161,16 @@ void JuicedService::preparation_api(const httplib::Request &req,
         const auto id = body.at("id").get<std::string>();
         if (!std::regex_match(id, std::regex("[a-f0-9]{64}")))
           throw std::invalid_argument("Invalid prepared artifact identifier");
-        const auto artifacts = prepared_artifacts();
-        bool removable = false;
-        for (const auto &artifact : artifacts)
-          if (artifact["id"] == id)
-            removable = artifact.value("removable", false);
-        if (!removable)
-          throw std::invalid_argument(
-              "Remove registrations using this artifact before deleting its "
-              "cached weights");
-        std::lock_guard<std::mutex> lock(mutex_);
-        for (const auto &[key, job] : state_["preparations"].items())
-          if (job.value("pending", false))
-            throw std::invalid_argument("Wait for active preparations before "
-                                        "deleting cached artifacts");
-        std::filesystem::remove_all(directory_ / "prepared" / id);
+        MutationClaim cleanup(mutex_, prepared_cleanup_active_);
+        if (!cleanup.acquire(id))
+          throw AdmissionError("artifact_cleanup_busy", "Wait for this prepared copy cleanup", 409);
+        {
+          std::lock_guard<std::mutex> lock(mutex_);
+          for (const auto &[key, job] : state_["preparations"].items())
+            if (job.value("pending", false))
+              throw std::invalid_argument("Wait for active preparations before deleting cached artifacts");
+        }
+        server_.model_manager_->remove_prepared_artifact(id);
         result = {{"removed", true}};
       } else if (body.value("action", "") == "cancel") {
         const auto id = body.at("id").get<std::string>();
@@ -257,6 +216,8 @@ void JuicedService::preparation_api(const httplib::Request &req,
                     {"writer_state", "queued"},
                     {"phase", "queued"}};
         std::lock_guard<std::mutex> lock(mutex_);
+        if (!prepared_cleanup_active_.empty())
+          throw AdmissionError("artifact_cleanup_busy", "Wait for prepared copy cleanup before preparing another model", 409);
         if (preparation_pending_.size() >= 8)
           throw std::invalid_argument("Preparation queue is full");
         for (const auto &[key, existing] : state_["preparations"].items())

@@ -367,6 +367,11 @@ struct StatePublicationTestHook {
         httplib::Request req; req.method = "POST"; req.path = "/v1/juiced/cache"; req.body = body.dump();
         httplib::Response response; server.juiced_->handle(req, response, operation); return response;
     }
+    static httplib::Response prepared_remove(Server& server, const std::string& id) {
+        httplib::Request req; req.method = "POST"; req.path = "/v1/juiced/preparation";
+        req.body = json{{"action", "delete_cache"}, {"id", id}}.dump();
+        httplib::Response response; response.status = 200; server.juiced_->preparation_api(req, response); return response;
+    }
     static httplib::Response mutate(Server& server, const json& body, bool pin = false) {
         httplib::Request req; req.method = "POST"; req.path = pin ? "/internal/pin" : "/v1/juiced/policy"; req.body = body.dump();
         httplib::Response response;
@@ -1657,6 +1662,111 @@ static void import_definition_replays() {
     lemon::RuntimeConfig::set_global(nullptr);
 }
 
+static void prepared_reference_ownership() {
+    using Hook = lemon::StatePublicationTestHook;
+    using ModelHook = lemon::ModelPublicationTestHook;
+    const auto root = lemon::test::make_scratch_dir("prepared-reference-ownership");
+    auto defaults = lemon::ConfigFile::base_defaults(); defaults["offline"] = true; defaults["broadcast"] = false;
+    auto runtime = std::make_shared<lemon::RuntimeConfig>(defaults); lemon::RuntimeConfig::set_global(runtime.get());
+    const auto id = std::string(64, 'a'), failed_id = std::string(64, 'b'), partial_id = std::string(64, 'c');
+    const auto file = root / "juiced/prepared" / id / "model.gguf";
+    auto create = [&](const std::string& key) {
+        const auto dir = root / "juiced/prepared" / key; fs::create_directories(dir);
+        char header[24] = {'G', 'G', 'U', 'F', 3};
+        { std::ofstream output(dir / "model.gguf", std::ios::binary); output.write(header, sizeof(header)); }
+        write(dir / "manifest.json", {{"recipe", {{"quant", "Q4_K_M"}}}});
+    };
+    json definition = {{"recipe", "llamacpp"}, {"source", "local_path"}, {"checkpoint", file.string()}};
+    auto alternate_case = file.string();
+    for (auto& c : alternate_case) if (c >= 'a' && c <= 'z') c = char(c - 'a' + 'A');
+    bool case_alias = false;
+    {
+        lemon::Server server(runtime, root.string(), root.string()); Hook::stop(server);
+        create(id);
+        auto& models = Hook::models(server);
+        for (bool plural : {false, true}) {
+            const auto name = plural ? "Prepared-Plural" : "Prepared-Singular";
+            auto registration = definition;
+            if (plural) { registration.erase("checkpoint"); registration["checkpoints"] = {{"main", file.string()}}; }
+            models.register_user_model(name, registration);
+            const auto artifacts = models.prepared_artifacts();
+            check(artifacts.size() == 1 && artifacts[0]["models"] == json::array({name}) && artifacts[0]["removable"] == false,
+                  "prepared inventory resolves singular and plural checkpoint references through ModelManager");
+            check(Hook::prepared_remove(server, id).status == 409 && fs::is_regular_file(file),
+                  "prepared cleanup preserves weights referenced by either supported checkpoint representation");
+            models.unregister_user_model(name);
+        }
+        std::error_code case_error;
+        case_alias = fs::equivalent(file, fs::path(alternate_case), case_error) && !case_error;
+        if (case_alias) {
+            auto alias = definition; alias["checkpoint"] = alternate_case;
+            models.register_user_model("Prepared-Case-Reference", alias);
+            check(Hook::prepared_remove(server, id).status == 409 && fs::is_regular_file(file),
+                  "filesystem-equivalent path casing still protects a prepared reference");
+            models.unregister_user_model("Prepared-Case-Reference");
+        }
+        const auto unused = models.prepared_artifacts();
+        models.register_user_model("Prepared-New-Reference", definition);
+        check(unused[0]["removable"] == true && Hook::prepared_remove(server, id).status == 409 && fs::is_regular_file(file),
+              "a reference committed after inventory inspection invalidates the prepared deletion decision");
+        models.unregister_user_model("Prepared-New-Reference");
+        TestGate deleting;
+        ModelHook::removal_barrier(models, [&](const std::string& phase) { if (phase == "prepared") deleting.pause(); });
+        auto removal = std::async(std::launch::async, [&] { return Hook::prepared_remove(server, id); });
+        const bool reached = deleting.await();
+        std::promise<void> attempted;
+        auto reference = std::async(std::launch::async, [&] {
+            attempted.set_value();
+            try { models.register_user_model("Prepared-Late-Reference", definition); }
+            catch (const lemon::ModelRegistrationConflict&) { return true; }
+            return false;
+        });
+        attempted.get_future().wait();
+        const bool serialized = reference.wait_for(std::chrono::milliseconds(100)) == std::future_status::timeout;
+        auto state = std::async(std::launch::async, [&] { return Hook::state(server); });
+        const bool state_available = state.wait_for(std::chrono::seconds(1)) == std::future_status::ready;
+        const auto duplicate = Hook::prepared_remove(server, id);
+        deleting.open(); const auto removed = removal.get(); const bool rejected = reference.get(); state.get();
+        ModelHook::removal_barrier(models, {});
+        check(reached && serialized && state_available && duplicate.status == 409,
+              "prepared deletion serializes reference acquisition and duplicate cleanup without holding the Juiced state mutex");
+        check(removed.status == 200 && rejected && !fs::exists(file) && models.user_model_definition("Prepared-Late-Reference").is_null(),
+              "registration overlapping prepared deletion rejects the missing managed file after cleanup");
+        create(failed_id);
+        const auto failed_file = root / "juiced/prepared" / failed_id / "model.gguf";
+        std::unique_ptr<BlockReplacement> blocked;
+        ModelHook::removal_barrier(models, [&](const std::string& phase) { if (phase == "prepared") blocked = std::make_unique<BlockReplacement>(failed_file); });
+        const auto failure = Hook::prepared_remove(server, failed_id);
+        blocked.reset(); ModelHook::removal_barrier(models, {});
+        check(failure.status == 400 && fs::is_regular_file(failed_file) && !models.prepared_artifacts().empty(),
+              "synchronous prepared cleanup failure preserves the remaining file and visible retry path");
+        check(Hook::prepared_remove(server, failed_id).status == 200 && !fs::exists(failed_file),
+              "prepared cleanup retry revalidates references and reclaims the owned directory");
+        fs::create_directories(root / "juiced/prepared" / partial_id);
+        { std::ofstream output(root / "juiced/prepared" / partial_id / "remaining-output"); output << "incomplete copy"; }
+        const auto partial = models.prepared_artifacts();
+        check(partial.size() == 1 && partial[0]["incomplete"] == true && partial[0]["removable"] == true &&
+              Hook::prepared_remove(server, partial_id).status == 200,
+              "incomplete prepared directories remain visible and reclaimable after partial cleanup");
+    }
+    {
+        lemon::Server restarted(runtime, root.string(), root.string()); Hook::stop(restarted);
+        bool rejected = false;
+        try { Hook::models(restarted).register_user_model("Prepared-After-Restart", definition); }
+        catch (const lemon::ModelRegistrationConflict&) { rejected = true; }
+        check(rejected && Hook::models(restarted).prepared_artifacts().empty(),
+              "restart preserves managed prepared-root validation and cannot register deleted weights");
+        if (case_alias) {
+            auto alias = definition; alias["checkpoint"] = alternate_case;
+            rejected = false;
+            try { Hook::models(restarted).register_user_model("Prepared-Deleted-Case-Reference", alias); }
+            catch (const lemon::ModelRegistrationConflict&) { rejected = true; }
+            check(rejected, "different accepted path casing cannot register a deleted managed prepared artifact");
+        }
+    }
+    lemon::RuntimeConfig::set_global(nullptr);
+}
+
 static void artifact_removal_ownership() {
     using Hook = lemon::StatePublicationTestHook;
     using ModelHook = lemon::ModelPublicationTestHook;
@@ -1816,7 +1926,7 @@ static void policy_failures() {
 
 int main(int argc, char** argv) {
     if (argc > 1 && std::string(argv[1]) == "--removal-ownership") {
-        artifact_removal_ownership();
+        artifact_removal_ownership(); prepared_reference_ownership();
     } else if (argc > 1 && std::string(argv[1]) == "--config-effects") {
         configuration_effects(); runtime_swap_failures();
     } else if (argc > 1 && std::string(argv[1]) == "--metadata-files") {

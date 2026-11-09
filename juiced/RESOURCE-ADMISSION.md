@@ -638,3 +638,14 @@ failure. HTTP acceptance probes compiled gzip support with a bounded RPC. Suppor
 codecs must reject oversized decoded input with413. Unavailable and unknown codecs
 must reject with415. Both paths must release ingress ownership. Unsupported codec
 rejection does not qualify successful decompression on that package.
+
+Prepared-copy inventory and reclamation use ModelManager's registration/reference
+owner. Both `checkpoint` and `checkpoints` definitions protect the directory.
+Cleanup retains that owner through filesystem effects, while shared model-cache
+and Juiced state locks remain released. Registration after cleanup rejects a
+missing file under the managed prepared root, including filesystem-equivalent
+path casing. Juiced excludes new preparation work while cleanup is active and
+rejects cleanup while accepted preparation jobs remain pending. Failed or partial
+cleanup stays visible for a reference-checked retry. These rules cover retained
+prepared files and synchronous failure, not complete P3 artifact/worker references,
+conversion quality, hard filesystem quotas or host-crash durability.

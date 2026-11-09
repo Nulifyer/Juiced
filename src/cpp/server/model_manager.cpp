@@ -6830,7 +6830,14 @@ static bool path_inside(const fs::path& path, const fs::path& root) {
     const fs::path base = fs::weakly_canonical(root, ec);
     if (ec) return false;
     const fs::path relative = actual.lexically_relative(base);
-    return !relative.empty() && *relative.begin() != fs::path("..");
+    if (!relative.empty() && *relative.begin() != fs::path("..")) return true;
+    // A filesystem may accept different casing even when lexical comparison
+    // differs. Compare the existing root prefix through filesystem identity.
+    auto prefix = actual;
+    auto depth = std::distance(actual.begin(), actual.end());
+    const auto root_depth = std::distance(base.begin(), base.end());
+    while (depth > root_depth) { prefix = prefix.parent_path(); --depth; }
+    return depth == root_depth && fs::equivalent(prefix, base, ec) && !ec;
 }
 
 // Reference acquisition and destructive removal share this owner. Filesystem
@@ -6862,8 +6869,8 @@ void ModelManager::validate_registration_artifacts(const json& definition, const
         }
         // Local appliance files must still exist when the reference commits.
         // Missing external paths retain their existing registration semantics.
-        if (path_inside(path, root) && !fs::is_regular_file(path))
-            throw ModelRegistrationConflict("The uploaded artifact no longer exists");
+        if ((path_inside(path, root) || path_inside(path, prepared_artifact_directory_)) && !fs::is_regular_file(path))
+            throw ModelRegistrationConflict("The managed artifact no longer exists");
     }
 }
 bool ModelManager::artifact_referenced_locked(const std::string& model, const fs::path& file, const json& registrations) {
@@ -6885,6 +6892,89 @@ bool ModelManager::artifact_referenced(const std::string& model, const fs::path&
     std::lock_guard<std::mutex> lock(models_cache_mutex_);
     return artifact_referenced_locked(model, file, read_user_models());
 }
+std::map<std::string, std::vector<std::string>> ModelManager::prepared_artifact_checkpoints_locked(const json& registrations) {
+    std::map<std::string, std::vector<std::string>> references;
+    const auto record = [&](const std::string& name, const auto& checkpoints) {
+        for (const auto& [role, path] : checkpoints) if (!path.empty()) references[name].push_back(path);
+    };
+    for (const auto& [name, definition] : registrations.items()) record(name, definition_checkpoints(definition));
+    for (const auto& [name, info] : models_cache_) {
+        if (is_user_model_name(name) && registrations.contains(strip_user_model_prefix(name))) continue;
+        const auto public_name = canonical_public_names_.find(name);
+        const auto label = public_name == canonical_public_names_.end() ? name : public_name->second;
+        record(label, info.checkpoints);
+        record(label, info.resolved_paths);
+    }
+    return references;
+}
+static std::set<std::string> prepared_references(const fs::path& directory,
+    const std::map<std::string, std::vector<std::string>>& checkpoints) {
+    std::set<std::string> references;
+    for (const auto& [name, paths] : checkpoints)
+        for (const auto& path : paths) if (path_inside(path, directory)) { references.insert(name); break; }
+    return references;
+}
+
+json ModelManager::prepared_artifacts() {
+    if (prepared_artifact_directory_.empty()) return json::array();
+    for (;;) {
+        build_cache();
+        std::unique_lock<std::recursive_mutex> references(model_references_mutex_);
+        std::unique_lock<std::mutex> cache(models_cache_mutex_);
+        if (!cache_valid_) continue;
+        const auto checkpoints = prepared_artifact_checkpoints_locked(read_user_models());
+        cache.unlock();
+        std::vector<std::pair<fs::path, std::set<std::string>>> entries;
+        if (fs::exists(prepared_artifact_directory_))
+            for (const auto& entry : fs::directory_iterator(prepared_artifact_directory_)) {
+                const auto id = entry.path().filename().string();
+                if (entry.is_symlink() || !entry.is_directory() || !std::regex_match(id, std::regex("[a-f0-9]{64}"))) continue;
+                entries.emplace_back(entry.path(), prepared_references(entry.path(), checkpoints));
+            }
+        json result = json::array();
+        for (const auto& [directory, models] : entries) {
+            const auto file = directory / "model.gguf";
+            std::ifstream input(directory / "manifest.json");
+            const auto manifest = input ? json::parse(input, nullptr, false) : json();
+            const auto recipe = manifest.is_object() ? manifest.value("recipe", json::object()) : json::object();
+            const bool complete = fs::is_regular_file(file) && manifest.is_object() && manifest.contains("recipe") && recipe.is_object();
+            result.push_back({{"id", directory.filename().string()}, {"bytes", fs::is_regular_file(file) ? fs::file_size(file) : 0},
+                {"quant", complete ? recipe.value("quant", std::string("Incomplete copy")) : "Incomplete copy"},
+                {"models", models}, {"removable", models.empty()}, {"incomplete", !complete}});
+        }
+        return result;
+    }
+}
+
+void ModelManager::remove_prepared_artifact(const std::string& id) {
+    if (prepared_artifact_directory_.empty() || !std::regex_match(id, std::regex("[a-f0-9]{64}")))
+        throw std::invalid_argument("Invalid prepared artifact identifier");
+    auto admission = admit_acquisition(id);
+    const auto directory = prepared_artifact_directory_ / id;
+    for (;;) {
+        build_cache();
+        std::unique_lock<std::recursive_mutex> references(model_references_mutex_);
+        std::map<std::string, std::vector<std::string>> checkpoints;
+        {
+            std::lock_guard<std::mutex> cache(models_cache_mutex_);
+            if (!cache_valid_) continue;
+            checkpoints = prepared_artifact_checkpoints_locked(read_user_models());
+        }
+        if (fs::is_symlink(directory)) throw std::invalid_argument("Prepared artifact cleanup cannot follow a symbolic link");
+        if (!prepared_references(directory, checkpoints).empty())
+            throw AdmissionError("artifact_reference_changed", "Remove registrations using this prepared copy before deleting its weights", 409);
+        if (removal_publication_barrier_) removal_publication_barrier_("prepared");
+        std::error_code error;
+        fs::remove_all(directory, error);
+        {
+            std::lock_guard<std::mutex> cache(models_cache_mutex_);
+            invalidate_models_cache_locked();
+        }
+        if (error) throw std::runtime_error("Prepared copy cleanup remains pending: " + error.message());
+        return;
+    }
+}
+
 void ModelManager::remove_uploaded_model(const std::string& model, const json& expected) {
     auto admission = admit_acquisition(model);
     auto mutation = model_mutation(model);
