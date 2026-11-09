@@ -25,6 +25,12 @@ uint64_t natural(const json& object, const char* key, uint64_t fallback,
         throw std::invalid_argument(std::string("Invalid admission ") + key);
     return value.get<uint64_t>();
 }
+uint64_t optional_limit(const json& object, const char* key) {
+    if (!object.contains(key) || object.at(key).is_null()) return 0;
+    const auto value = natural(object, key, 0, 4096);
+    if (!value) throw std::invalid_argument(std::string("Admission ") + key + " must be positive or unset");
+    return value;
+}
 void known_keys(const json& object, std::initializer_list<const char*> keys) {
     if (!object.is_object()) throw std::invalid_argument("Admission settings must be objects");
     for (const auto& entry : object.items()) {
@@ -78,7 +84,7 @@ struct ResourceAdmission::State {
         Charges costs;
         Charges resident_costs;
         std::string priority = "interactive";
-        size_t concurrency = 64;
+        size_t concurrency = 0;
         Clock::time_point queue_deadline;
         Clock::time_point completion_deadline;
         std::chrono::milliseconds completion_limit{300000};
@@ -154,7 +160,8 @@ struct ResourceAdmission::State {
         }
         if (entry.work.operation == Operation::State) {
             if (state_running >= natural(config, "active_limit", 64, 4096)) return false;
-        } else if (running >= natural(config, "active_limit", 64, 4096) || generation_running >= entry.concurrency) return false;
+        } else if (running >= natural(config, "active_limit", 64, 4096) ||
+                   (entry.concurrency && generation_running >= entry.concurrency)) return false;
         return capacity(entry, pools) == Capacity::Available;
     }
     std::shared_ptr<Entry> selected() const {
@@ -179,8 +186,9 @@ void ResourceAdmission::validate_config(const json& config) {
                         "essential_wait_ms", "interactive_wait_ms", "batch_wait_ms", "pools", "models", "ingress"});
     const auto mode = text(config, "mode", "legacy");
     if (mode != "legacy" && mode != "protected") throw std::invalid_argument("Admission mode must be legacy or protected");
-    for (const auto* key : {"pending_limit", "service_pending_limit", "principal_pending_limit", "active_limit"})
+    for (const auto* key : {"pending_limit", "service_pending_limit", "active_limit"})
         if (!natural(config, key, 1, 4096)) throw std::invalid_argument("Admission queue limits must be positive");
+    optional_limit(config, "principal_pending_limit");
     for (const auto* key : {"essential_wait_ms", "interactive_wait_ms", "batch_wait_ms"})
         if (!natural(config, key, 1, 300000)) throw std::invalid_argument("Admission wait bounds must be positive");
     const auto ingress = config.value("ingress", json::object());
@@ -221,7 +229,8 @@ void ResourceAdmission::validate_config(const json& config) {
         const auto priority = text(model, "priority", "interactive");
         if (priority != "essential" && priority != "interactive" && priority != "batch")
             throw std::invalid_argument("Invalid admission priority");
-        if (!natural(model, "concurrency", 1, 4096) || !natural(model, "completion_ms", 300000, 86400000))
+        optional_limit(model, "concurrency");
+        if (!natural(model, "completion_ms", 300000, 86400000))
             throw std::invalid_argument("Admission execution limits must be positive");
         if (!model.contains("options") || !model.at("options").is_object() ||
             text(model, "checkpoint").empty() || text(model, "source").empty())
@@ -406,7 +415,7 @@ ResourceAdmission::Lease ResourceAdmission::acquire(Work work) {
         if (profile->at("checkpoint") != entry->work.checkpoint || profile->at("options") != entry->work.options)
             reject("admission_profile_mismatch", "Execution settings differ from the declared resource profile", 409);
         entry->priority = profile->value("priority", std::string("interactive"));
-        entry->concurrency = natural(*profile, "concurrency", 1, 4096);
+        entry->concurrency = optional_limit(*profile, "concurrency");
         entry->completion_limit = std::chrono::milliseconds(natural(*profile, "completion_ms", 300000, 86400000));
         const auto key = operation_name(entry->work.operation) + "_bytes";
         entry->costs = charges(*profile, key.c_str());
@@ -459,9 +468,10 @@ ResourceAdmission::Lease ResourceAdmission::acquire(Work work) {
         if (waiter->work.service == entry->work.service) ++service_pending;
         if (waiter->work.principal == entry->work.principal) ++principal_pending;
     }
+    const auto principal_limit = optional_limit(config, "principal_pending_limit");
     if (state_->pending.size() >= natural(config, "pending_limit", 64, 4096) ||
         service_pending >= natural(config, "service_pending_limit", 16, 4096) ||
-        principal_pending >= natural(config, "principal_pending_limit", 8, 4096))
+        (principal_limit && principal_pending >= principal_limit))
         reject("queue_full", "Runtime request queue is full", 429);
     state_->pending.push_back(entry);
     auto erase = [&] { state_->pending.erase(std::find(state_->pending.begin(), state_->pending.end(), entry)); state_->changed.notify_all(); };
@@ -605,6 +615,13 @@ json ResourceAdmission::snapshot() const {
         if (item.second->uncertain) ++uncertain;
     }
     const auto ingress = state_->config.value("ingress", json::object());
+    const auto principal_limit = optional_limit(state_->config, "principal_pending_limit");
+    const auto models = state_->config.value("models", json::object());
+    json model_limits = json::object();
+    for (const auto& [name, profile] : models.items()) {
+        const auto limit = optional_limit(profile, "concurrency");
+        model_limits[name] = limit ? json(limit) : json(nullptr);
+    }
     return {{"ingress", {{"active", bodies}, {"reading", readers}, {"control_reading", control_readers},
                         {"control_reserved_bytes", ingress_control_reserve(ingress)}, {"reserved_body_bytes", body_bytes},
                         {"reserved_host_bytes", host_bytes}, {"physical_pool", "host"},
@@ -616,6 +633,9 @@ json ResourceAdmission::snapshot() const {
                         {"active_limit", natural(ingress, "active_limit", 4)}}},
         {"mode", state_->config.value("mode", std::string("legacy"))}, {"paused", state_->paused},
         {"stopped", state_->stopped}, {"configuration_revision", state_->revision},
+        {"optional_limits", {{"schema_version", 1},
+            {"principal_pending_limit", principal_limit ? json(principal_limit) : json(nullptr)},
+            {"model_concurrency", model_limits}}},
         {"configuration_pending", state_->configuration_pending}, {"pending", state_->pending.size()}, {"active", running},
         {"resident", resident}, {"uncertain", uncertain}, {"pools", pools}, {"latency_qualified", false},
         {"admitted_total", state_->admitted}, {"rejected_total", state_->rejected}};

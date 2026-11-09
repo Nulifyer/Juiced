@@ -203,6 +203,62 @@ int main() {
         check(bool(lease) && compatibility.snapshot()["mode"] == "legacy", "legacy profiles remain explicitly unprotected");
     }
     {
+        for (const bool explicit_unset : {false, true}) {
+            auto automatic = config;
+            automatic["models"]["model"].erase("concurrency");
+            automatic["models"]["model"]["request_bytes"] = {{"uma", 100}};
+            automatic["interactive_wait_ms"] = 10000;
+            if (explicit_unset) {
+                automatic["principal_pending_limit"] = nullptr;
+                automatic["models"]["model"]["concurrency"] = nullptr;
+            }
+            ResourceAdmission no_quotas; no_quotas.configure(automatic);
+            const auto optional = no_quotas.snapshot()["optional_limits"];
+            check(optional["schema_version"] == 1 && optional["principal_pending_limit"].is_null() &&
+                  optional["model_concurrency"]["model"].is_null(),
+                  "missing and explicitly unset optional quotas are advertised without inventing identity or model caps");
+            std::vector<ResourceAdmission::Lease> concurrent;
+            for (int i = 0; i < 5; ++i) concurrent.push_back(no_quotas.acquire(work()));
+            check(no_quotas.snapshot()["active"] == 5 && no_quotas.snapshot()["pools"]["uma"]["reserved_bytes"] == 500,
+                  "five same-principal requests reserve incremental physical costs without a default model concurrency quota");
+            concurrent.clear();
+            check(no_quotas.snapshot()["active"] == 0, "unset optional quotas preserve terminal reservation cleanup");
+
+            automatic["active_limit"] = 1;
+            no_quotas.configure(automatic);
+            auto held = no_quotas.acquire(work());
+            std::vector<ThreadTask<bool>> pending;
+            for (int i = 0; i < 12; ++i) pending.push_back(run_thread([&] {
+                return error([&] { no_quotas.acquire(work()); }, "admission_paused");
+            }));
+            const auto deadline = std::chrono::steady_clock::now() + 5s;
+            while (no_quotas.snapshot()["pending"] != 12 && std::chrono::steady_clock::now() < deadline)
+                std::this_thread::sleep_for(1ms);
+            const bool queued = no_quotas.snapshot()["pending"] == 12;
+            no_quotas.pause(true);
+            bool cancelled = true;
+            for (auto& caller : pending) cancelled &= caller.get();
+            check(queued && cancelled && no_quotas.snapshot()["pending"] == 0,
+                  "more than eight same-principal requests use the shared bounded queue when its optional quota is unset");
+        }
+        auto capped = config;
+        capped["principal_pending_limit"] = 3;
+        ResourceAdmission explicit_caps; explicit_caps.configure(capped);
+        const auto optional = explicit_caps.snapshot()["optional_limits"];
+        check(optional["principal_pending_limit"] == 3 && optional["model_concurrency"]["model"] == 1,
+              "explicit existing operator caps survive configuration and observation");
+        for (const auto value : {json(0), json(-1), json(1.5), json(4097), json("auto")}) {
+            for (const bool model : {false, true}) {
+                auto invalid = config;
+                if (model) invalid["models"]["model"]["concurrency"] = value;
+                else invalid["principal_pending_limit"] = value;
+                bool rejected = false;
+                try { ResourceAdmission::validate_config(invalid); } catch (const std::invalid_argument&) { rejected = true; }
+                check(rejected, "optional quota rejects an invalid explicit value rather than silently unsetting it");
+            }
+        }
+    }
+    {
         auto state_config = config;
         state_config["models"]["model"]["state_bytes"] = {{"uma", 50}};
         ResourceAdmission state_operations; state_operations.configure(state_config);
