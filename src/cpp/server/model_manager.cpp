@@ -2464,6 +2464,7 @@ json ModelManager::write_saved_model_options(const std::string& model_name,
 }
 
 ModelInfo ModelManager::apply_execution_profile_locked(const std::string& cache_key, ModelInfo info) const {
+    info.registry_key = cache_key;
     const auto id = cache_key_to_canonical_id(cache_key);
     if (!execution_profiles_.contains(id)) return info;
     const auto& state = execution_profiles_.at(id);

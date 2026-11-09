@@ -90,7 +90,7 @@ def acceptance(args):
                 for path in ("/props", "/slots")
                 for mode in ("deadline", "disconnect")
             ):
-                delayed.write_text(path)
+                delayed.write_text("")
                 completion_ms = 2000 if mode == "deadline" else 7000
                 profile = {
                     "checkpoint": loaded["checkpoint"],
@@ -128,6 +128,7 @@ def acceptance(args):
                     time.sleep(0.01)
                 assert not model.get("operation", {}).get("pending", False), model
                 calls.write_text("")
+                delayed.write_text(path)
                 started = time.monotonic()
                 if mode == "deadline":
                     status, _, data = fixture.ask("delayed-profile")

@@ -121,6 +121,10 @@ jobs:
           docker cp juiced/tests/test_cache_admission.py juiced-smoke:/tmp/test_cache_admission.py
           docker exec juiced-smoke python3 /tmp/test_cache_admission.py --binary /opt/lemonade/lemond --engine /opt/juiced/llama/llama-server --model-file /library/stories15M-q4_0.gguf --out /tmp/cache-admission-proof.json
           docker cp juiced-smoke:/tmp/cache-admission-proof.json cache-admission-proof.json
+          docker cp juiced/tests/test_model_context.py juiced-smoke:/tmp/test_model_context.py
+          docker exec juiced-smoke python3 /tmp/test_model_context.py --binary /opt/lemonade/lemond --engine /opt/juiced/llama/llama-server --model-file /library/stories15M-q4_0.gguf --out /tmp/model-context-proof.json
+          docker cp juiced-smoke:/tmp/model-context-proof.json model-context-proof.json
+          docker cp juiced-smoke:/tmp/model-context-proof.server.log model-context-proof.server.log
           docker cp juiced/tests/test_cache_disk_budget.py juiced-smoke:/tmp/test_cache_disk_budget.py
           docker exec juiced-smoke python3 /tmp/test_cache_disk_budget.py --binary /opt/lemonade/lemond --engine /opt/juiced/llama/llama-server --model-file /library/stories15M-q4_0.gguf --out /tmp/cache-disk-proof.json
           docker cp juiced-smoke:/tmp/cache-disk-proof.json cache-disk-proof.json
@@ -184,6 +188,8 @@ jobs:
             catalog.json
             engine-cache-proof.json
             cache-admission-proof.json
+            model-context-proof.json
+            model-context-proof.server.log
             cache-disk-proof.json
             resource-admission-proof.json
             runtime-boundaries-proof.json

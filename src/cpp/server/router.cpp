@@ -1689,6 +1689,7 @@ json Router::get_all_loaded_models() const {
         RecipeOptions recipe_options =  server->get_recipe_options();
         model_info["recipe"] = recipe_options.get_recipe();
         model_info["recipe_options"] = recipe_options.to_json();
+        model_info["context_observation"] = server->execution_snapshot().at("context");
         model_info["is_busy"] = server->is_busy();
         model_info["is_streaming"] = server->is_streaming();
 
@@ -1817,6 +1818,73 @@ RecipeOptions Router::resolve_effective_options(const ModelInfo& model_info,
         ops->resolve_runtime_options(model_info, effective);
     }
     return effective;
+}
+
+json Router::model_discovery_snapshot(const ModelInfo& info) const {
+    const auto& key = info.registry_key.empty() ? info.model_name : info.registry_key;
+    const bool text_context = info.type == ModelType::LLM || info.type == ModelType::EMBEDDING || info.type == ModelType::RERANKING;
+    const auto desired = resolve_effective_options(info, RecipeOptions(info.recipe, json::object())).to_resolved_json();
+    const auto positive = [](const json& value) -> json {
+        if (!value.is_number_integer() || (value.is_number_integer() && !value.is_number_unsigned() && value.get<int64_t>() <= 0) ||
+            value.get<uint64_t>() == 0 || value.get<uint64_t>() > uint64_t(INT64_MAX)) return nullptr;
+        return value;
+    };
+    const auto configured = text_context ? positive(desired.value("ctx_size", json())) : json(nullptr);
+    const auto declared = text_context && info.max_context_window > 0 ? json(info.max_context_window) : json(nullptr);
+    json result = {{"schema_version", 1},
+        {"declared_tokens", declared},
+        {"declared_source", !declared.is_null() ? json(info.cloud_provider.empty() ? "model_metadata" : "provider_metadata") : json(nullptr)},
+        {"configured_tokens", configured}, {"configured_automatic", text_context && desired.value("ctx_size", json()) == -1},
+        {"applied_tokens", nullptr}, {"observed_per_request_tokens", nullptr}, {"observed_slots", nullptr},
+        {"observed_source", nullptr}, {"worker_generation", nullptr}, {"settings_pending", false},
+        {"advertised_tokens", configured}, {"advertised_source", configured.is_null() ? "unknown" : "configured_options"}};
+    if (configured.is_null() && !declared.is_null()) {
+        result["advertised_tokens"] = declared;
+        result["advertised_source"] = result.at("declared_source");
+    }
+    json discovery = {{"context", result}, {"loaded", false}, {"state", "unloaded"}};
+    std::lock_guard<std::mutex> owner(load_mutex_);
+    for (const auto& worker : loaded_servers_) {
+        if (worker->get_model_name() != key || (!worker->cleanup_pending() && !worker->is_backend_alive())) continue;
+        const auto snapshot = worker->execution_snapshot();
+        discovery["state"] = worker->cleanup_pending() ? json("cleanup_pending") : snapshot.at("state");
+        discovery["runtime"] = {{"pid", worker->get_process_info().pid}, {"worker_generation", snapshot.at("worker_generation")},
+            {"backend_url", worker->get_address()}, {"is_busy", worker->is_busy()}, {"pinned", worker->is_pinned()},
+            {"recipe", worker->get_recipe_options().get_recipe()}, {"checkpoint", worker->get_checkpoint()},
+            {"cleanup_pending", worker->cleanup_pending()}, {"settings_pending", false}};
+        const bool usable = !worker->cleanup_pending() && (snapshot.at("state") == "ready" || snapshot.at("state") == "in_use" || snapshot.at("state") == "evicting");
+        discovery["loaded"] = usable;
+        if (usable) discovery["state"] = worker->is_busy() ? "busy" : "ready";
+        const auto& applied = snapshot.at("options");
+        auto expected = desired, running = applied;
+        expected.erase("pinned"); running.erase("pinned");
+        if (result["configured_automatic"] == true && snapshot.at("context_automatic") == true) {
+            expected.erase("ctx_size"); running.erase("ctx_size");
+        }
+        result["settings_pending"] = expected != running || worker->get_checkpoint() != info.checkpoint() ||
+            worker->get_recipe_options().get_recipe() != info.recipe;
+        discovery["runtime"]["settings_pending"] = result.at("settings_pending");
+        if (!usable || !text_context) break;
+        const auto& observation = snapshot.at("context");
+        const auto applied_tokens = positive(applied.value("ctx_size", json()));
+        const auto observed = positive(observation.value("per_request_tokens", json()));
+        result["applied_tokens"] = applied_tokens;
+        result["observed_per_request_tokens"] = observed;
+        result["observed_slots"] = positive(observation.value("slots", json()));
+        result["observed_source"] = observation.value("source", json());
+        result["worker_generation"] = snapshot.at("worker_generation");
+        result["observation"] = observation;
+        if (!observed.is_null()) {
+            result["advertised_tokens"] = observed;
+            result["advertised_source"] = "runtime_observation";
+        } else if (!applied_tokens.is_null()) {
+            result["advertised_tokens"] = applied_tokens;
+            result["advertised_source"] = "applied_options";
+        }
+        break;
+    }
+    discovery["context"] = std::move(result);
+    return discovery;
 }
 
 RecipeOptions Router::get_model_recipe_options(const std::string& model_name) const {

@@ -356,7 +356,6 @@ void JuicedService::enqueue(const json &command) {
 }
 void JuicedService::refresh() {
   auto all = server_.model_manager_->get_supported_models();
-  auto loaded = server_.router_->get_all_loaded_models();
   json result = json::array();
   for (const auto &[id, info] : all) {
     auto m = server_.model_info_to_json(id, info);
@@ -366,32 +365,6 @@ void JuicedService::refresh() {
       m["unavailable_reason"] = "Agent collections are outside Juiced model services";
     }
     m["execution_profile"] = info.extras.count("execution_profile") ? info.extras.at("execution_profile").get<std::string>() : "registered";
-    m["loaded"] = false;
-    m["state"] = "unloaded";
-    for (const auto &l : loaded)
-      if (l.value("model_name", "") == m.value("id", "")) {
-        m["loaded"] = true;
-        m["state"] = l.value("is_busy", false) ? "busy" : "ready";
-        m["runtime"] = {{"pid", l.value("pid", 0LL)},
-                        {"worker_generation", l.value("worker_generation", uint64_t(0))},
-                        {"backend_url", l.value("backend_url", "")},
-                        {"is_busy", l.value("is_busy", false)},
-                        {"pinned", l.value("pinned", false)}};
-        auto applied = server_.router_->get_model_recipe_options(m["id"])
-                           .to_resolved_json();
-        auto desired = server_.router_
-                           ->resolve_effective_options(
-                               info, RecipeOptions(info.recipe, json::object()))
-                           .to_resolved_json();
-        applied.erase("pinned");
-        desired.erase("pinned");
-        if (desired.value("ctx_size", json(nullptr)) == -1) {
-          applied.erase("ctx_size");
-          desired.erase("ctx_size");
-        }
-        m["runtime"]["settings_pending"] = applied != desired;
-        break;
-      }
     m["capability_contract"] = model_capabilities(info, m);
     result.push_back(std::move(m));
   }

@@ -39,6 +39,7 @@ import { Button } from "./t3/button";
 import { api, bytes, type Model } from "../api";
 import "./ModelLibrary.css";
 import { modelQuant } from "./modelDiscovery";
+import { discoveryContextLabel } from "./effectiveSettings";
 export const policyNames = {
   hot: "Hot",
   "on-demand": "On demand",
@@ -273,9 +274,9 @@ function ModelRow({
                 </span>
               ) : (
                 <>
-                  {m.service === "Chat" && m.context_length ? (
+                  {m.service === "Chat" && discoveryContextLabel(m) ? (
                     <span>
-                      {m.context_length.toLocaleString()} total context budget
+                      {discoveryContextLabel(m)}
                     </span>
                   ) : null}
                   {m.size ? <span>{bytes(m.size * 1e9)}</span> : null}

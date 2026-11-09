@@ -1,3 +1,13 @@
+export type ContextObservation = { source?: string; per_request_tokens?: number | null; slots?: number | null };
+export type ModelContext = {
+  declared_tokens: number | null;
+  configured_tokens: number | null;
+  applied_tokens: number | null;
+  observed_per_request_tokens: number | null;
+  observed_slots: number | null;
+  advertised_tokens: number | null;
+  advertised_source: string;
+};
 export type Model = {
   id: string;
   recipe: string;
@@ -11,6 +21,7 @@ export type Model = {
   policy: "hot" | "on-demand" | "disabled";
   size?: number;
   context_length?: number;
+  context?: ModelContext;
   capability_contract?: {
     schema_version: number;
     runtime_service: boolean;
@@ -22,7 +33,7 @@ export type Model = {
   checkpoint?: string;
   recipe_options?: Record<string, unknown>;
   operation?: { state: string; error?: string; pending: boolean };
-  runtime?: { pid: number; is_busy: boolean; settings_pending?: boolean };
+  runtime?: { pid: number; worker_generation?: number; is_busy: boolean; settings_pending?: boolean };
 };
 export type Message = {
   role: "user" | "assistant" | "system";

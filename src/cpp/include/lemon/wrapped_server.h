@@ -502,6 +502,12 @@ public:
         std::lock_guard<std::mutex> lock(state_mutex_);
         return recipe_options_;
     }
+    json execution_snapshot() const {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        return {{"options", recipe_options_.to_resolved_json()}, {"context", context_observation_},
+                {"context_automatic", ctx_size_auto_}, {"state", model_state_to_string(state_)},
+                {"worker_generation", get_instance_id()}};
+    }
 
     // recipe_options_ holds the ctx_size the backend was started with, so the
     // -1 that asked for it is gone by the time anyone reads it back. Keep that
@@ -775,6 +781,7 @@ protected:
     DeviceType device_type_ = DEVICE_NONE;
     std::chrono::steady_clock::time_point last_access_time_;
     RecipeOptions recipe_options_;
+    json context_observation_ = json::object();
     bool ctx_size_auto_ = false;
 
     // Busy state tracking (for safe eviction)

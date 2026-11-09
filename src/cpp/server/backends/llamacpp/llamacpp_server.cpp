@@ -136,7 +136,8 @@ static std::string resolve_llamacpp_runtime_args(const ModelInfo& model_info,
 
     // An auto slot count also enables the unified KV buffer, which advertises the
     // full ctx_size to every slot instead of dividing it. Pinning the count keeps
-    // ctx_size the context a request actually gets.
+    // requests from implicitly sharing a divided context budget. Engine limits
+    // can still cap the actual per-request context below the requested value.
     defaults.push_back({"--parallel 1", "--parallel", {"-np"}});
 
     return append_runtime_arg_defaults(custom_args, defaults);
@@ -280,6 +281,10 @@ void LlamaCppServer::load(const std::string& model_name,
                          const ModelInfo& model_info,
                          const RecipeOptions& options,
                          bool do_not_upgrade) {
+    {
+        std::lock_guard<std::mutex> state(state_mutex_);
+        context_observation_ = json::object();
+    }
     ResourceAdmission::Lease acquisition;
     if (model_manager_ && model_info.extra<bool>("hf_load", false))
         acquisition = model_manager_->admit_acquisition(model_name);
@@ -578,6 +583,33 @@ void LlamaCppServer::load(const std::string& model_name,
     start_server(
         std::make_unique<NativeProcess>(ProcessOutput{inherit_llama_output, true}, working_dir),
         command);
+    // Inspect once while startup still owns this generation. Discovery reads the
+    // resulting snapshot and never sends per-model network probes under Router locks.
+    try {
+        const auto response = utils::HttpClient::get("http://127.0.0.1:" + std::to_string(port_) + "/props", {}, 2,
+            utils::HttpSecurityPolicy::TrustedLoopback, current_request_cancel_context(), 1024 * 1024);
+        if (response.status_code == 200) {
+            const auto props = json::parse(response.body);
+            const auto positive = [](const json& value, uint64_t maximum) -> json {
+                if (!value.is_number_integer() || (value.is_number_integer() && !value.is_number_unsigned() && value.get<int64_t>() <= 0) ||
+                    value.get<uint64_t>() == 0 || value.get<uint64_t>() > maximum) return nullptr;
+                return value;
+            };
+            const auto settings = props.value("default_generation_settings", json::object());
+            const auto per_request = positive(settings.value("n_ctx", json()), uint64_t(INT64_MAX));
+            const auto slots = positive(props.value("total_slots", json()), 4096);
+            json observation = {{"source", "llamacpp:/props"}, {"per_request_tokens", per_request}, {"slots", slots},
+                {"observed_at_ms", std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count()}};
+            const auto build = props.value("build_info", json());
+            if (build.is_string() && build.get_ref<const std::string&>().size() <= 256) observation["engine_build"] = build;
+            std::lock_guard<std::mutex> state(state_mutex_);
+            context_observation_ = std::move(observation);
+        }
+    } catch (const std::exception&) {
+        if (current_request_cancel_context().cancelled())
+            throw AdmissionError("request_cancelled", "Model load was cancelled during context inspection", 499);
+        LOG(WARNING, "LlamaCpp") << "Runtime context observation is unavailable; discovery will label configured values" << std::endl;
+    }
 }
 
 json LlamaCppServer::normalize_response_model(json response, const json& request) const {

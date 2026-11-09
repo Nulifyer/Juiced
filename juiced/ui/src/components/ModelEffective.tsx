@@ -1,13 +1,13 @@
 import { useEffect, useState } from "react";
 import { RefreshCw } from "lucide-react";
-import { api, type Model } from "../api";
+import { api, type Model, type ContextObservation } from "../api";
 import type { OptionResponse, Options } from "./modelSettings";
-import { effectiveRows, settingValue, slotCapacity } from "./effectiveSettings";
+import { effectiveRows, settingValue, observedCapacity } from "./effectiveSettings";
 import { Button } from "./t3/button";
 import { HelpTip } from "./HelpTip";
 import "./ModelEffective.css";
 
-type Worker = { model_name: string; recipe_options?: Options; launch_command?: string[] };
+type Worker = { model_name: string; recipe_options?: Options; launch_command?: string[]; context_observation?: ContextObservation; cleanup_pending?: boolean };
 export function ModelEffective({ model, options, draft, extra }: { model: Model; options: OptionResponse; draft: Options; extra?: string }) {
   const [worker, setWorker] = useState<Worker>();
   const [error, setError] = useState("");
@@ -18,12 +18,12 @@ export function ModelEffective({ model, options, draft, extra }: { model: Model;
     setLoading(true);
     setError("");
     void api<{ all_models_loaded: Worker[] }>("health", undefined, controller.signal)
-      .then((result) => setWorker(result.all_models_loaded?.find((item) => item.model_name === model.id)))
+      .then((result) => { if (!controller.signal.aborted) setWorker(result.all_models_loaded?.find((item) => item.model_name === model.id)); })
       .catch((error) => { if (!controller.signal.aborted) { setWorker(undefined); setError(error.message); } })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
-  }, [model.id, model.runtime?.pid, revision]);
-  const capacity = model.recipe === "llamacpp" ? slotCapacity(worker?.recipe_options) : null;
+  }, [model.id, model.runtime?.pid, model.runtime?.worker_generation, revision]);
+  const capacity = model.recipe === "llamacpp" && !worker?.cleanup_pending ? observedCapacity(worker?.context_observation) : null;
   let draftError = "";
   let rows;
   try { rows = effectiveRows(options, draft, worker?.recipe_options, extra); }
@@ -46,9 +46,9 @@ export function ModelEffective({ model, options, draft, extra }: { model: Model;
         <p>Inspect Runtime for compatible profiles. Qualification remains unknown until a matching test is recorded.</p>
       </HelpTip>
     </div>}
-    {capacity && <div className="capacity-summary"><strong>{capacity.perSlot.toLocaleString()} tokens per chat</strong><span>{capacity.total.toLocaleString()} total context across {capacity.slots} slot{capacity.slots === 1 ? "" : "s"}. Includes input, reasoning and output.</span></div>}
+    {worker && <div className="capacity-summary"><strong>{capacity ? `${capacity.perSlot.toLocaleString()} tokens per chat` : "Serving context not reported"}</strong><span>{capacity ? `${capacity.slots ? `${capacity.slots} slot${capacity.slots === 1 ? "" : "s"} reported. ` : ""}Observed from the engine at load. Includes input, reasoning and output.` : "The worker settings below are requested configuration; actual serving limits are unknown."}</span></div>}
     <div className="effective-table-scroll" tabIndex={0} aria-label="Settings comparison table">
-      <table><thead><tr><th>Setting / source</th><th>Saved</th><th>Running</th><th>Draft</th></tr></thead>
+      <table><thead><tr><th>Setting / source</th><th>Saved</th><th>Running<HelpTip label="Running setting source">These are the settings passed to the worker. The engine may cap the context; its observed serving limit is shown separately above.</HelpTip></th><th>Draft</th></tr></thead>
         <tbody>{rows.map((row) => <tr key={row.key} className={row.changed ? "changed-setting" : ""}>
           <th scope="row">{row.key.replaceAll("_", " ")}<small>{row.source}</small></th>
           <td>{settingValue(row.saved)}</td><td>{loading ? "Reading…" : settingValue(row.running)}</td><td>{settingValue(row.draft)}{row.changed && <small>Edited</small>}</td>
