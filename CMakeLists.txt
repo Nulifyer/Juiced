@@ -1047,6 +1047,7 @@ set(SOURCES_CORE
     src/cpp/server/directory_watcher.cpp
     src/cpp/server/alias_manager.cpp
     src/cpp/server/model_manager.cpp
+    src/cpp/server/model_helpers.cpp
     src/cpp/server/model_registry.cpp
     src/cpp/server/hf_variants.cpp
     src/cpp/server/wrapped_server.cpp
@@ -3667,6 +3668,11 @@ if(BUILD_TESTING AND EXISTS "${_LAUNCH_COMMAND_TEST_SRC}")
     add_executable(test_launch_command test/cpp/test_launch_command.cpp)
     target_link_libraries(test_launch_command PRIVATE lemonade-server-core)
     add_cpp_ci_test(LaunchCommandTest CI ON COMMAND test_launch_command)
+    add_executable(test_native_helpers test/cpp/test_native_helpers.cpp)
+    target_link_libraries(test_native_helpers PRIVATE lemonade-server-core)
+    add_cpp_ci_test(NativeHelperOwnershipTest CI ON COMMAND test_native_helpers)
+    set_tests_properties(NativeHelperOwnershipTest PROPERTIES TIMEOUT 90)
+
     add_executable(test_process_exit test/cpp/test_process_exit.cpp)
     target_link_libraries(test_process_exit PRIVATE lemonade-server-core)
     add_cpp_ci_test(ProcessExitObservationTest CI ON COMMAND test_process_exit)

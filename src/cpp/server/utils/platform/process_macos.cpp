@@ -3,6 +3,7 @@
 #include <lemon/utils/aixlog.hpp>
 
 #include <stdexcept>
+#include <exception>
 #include <cstdlib>
 
 #include <unistd.h>
@@ -79,7 +80,8 @@ public:
         const std::string& working_dir,
         int timeout_seconds,
         bool capture_stderr = true,
-        const std::vector<std::pair<std::string, std::string>>& env_vars = {}) override;
+        const std::vector<std::pair<std::string, std::string>>& env_vars = {},
+        const OutputProcessLifecycle* lifecycle = nullptr) override;
 
     int find_free_port(int start_port) override;
     int run_command(const std::string& command, std::string& output, int timeout_seconds) override;
@@ -407,7 +409,8 @@ int MacOSProcessPlatform::run_with_output(
     const std::string& working_dir,
     int timeout_seconds,
     bool capture_stderr,
-    const std::vector<std::pair<std::string, std::string>>& env_vars) {
+    const std::vector<std::pair<std::string, std::string>>& env_vars,
+    const OutputProcessLifecycle* lifecycle) {
 
     // For simplicity, reuse fork/exec for run_with_output on macOS
     // (This is a less critical path than spawn)
@@ -465,91 +468,107 @@ int MacOSProcessPlatform::run_with_output(
     int flags = fcntl(stdout_pipe[0], F_GETFL, 0);
     fcntl(stdout_pipe[0], F_SETFL, flags | O_NONBLOCK);
 
-    while (true) {
-        if (timeout_seconds > 0) {
-            auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
-                std::chrono::steady_clock::now() - start_time).count();
-            if (elapsed > timeout_seconds) {
-                ::kill(pid, SIGKILL);
-                killed_by_callback = true;
-                break;
-            }
-        }
-
-        bytes_read = read(stdout_pipe[0], buffer, sizeof(buffer) - 1);
-
-        if (bytes_read > 0) {
-            buffer[bytes_read] = '\0';
-            line_buffer += buffer;
-
-            size_t pos;
-            while (true) {
-                size_t newline_pos = line_buffer.find('\n');
-                size_t cr_pos = line_buffer.find('\r');
-
-                if (newline_pos == std::string::npos && cr_pos == std::string::npos) {
-                    break;
-                }
-
-                if (newline_pos == std::string::npos) {
-                    pos = cr_pos;
-                } else if (cr_pos == std::string::npos) {
-                    pos = newline_pos;
-                } else {
-                    pos = std::min(newline_pos, cr_pos);
-                }
-
-                std::string line = line_buffer.substr(0, pos);
-
-                size_t skip = 1;
-                if (pos + 1 < line_buffer.size() &&
-                    line_buffer[pos] == '\r' && line_buffer[pos + 1] == '\n') {
-                    skip = 2;
-                }
-                line_buffer = line_buffer.substr(pos + skip);
-
-                if (line.empty()) {
-                    continue;
-                }
-
-                if (on_line && !on_line(line)) {
-                    ::kill(pid, SIGKILL);
+    std::exception_ptr failure;
+    try {
+        if (lifecycle) lifecycle->attach({nullptr, static_cast<int>(pid)});
+        while (true) {
+            if (lifecycle && lifecycle->cancelled && lifecycle->cancelled()) { killed_by_callback = true; break; }
+            if (timeout_seconds > 0) {
+                auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+                    std::chrono::steady_clock::now() - start_time).count();
+                if (elapsed > timeout_seconds) {
+                    if (!lifecycle) ::kill(pid, SIGKILL);
                     killed_by_callback = true;
                     break;
                 }
             }
 
-            if (killed_by_callback) break;
-        } else if (bytes_read == 0) {
-            break;
-        } else {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                int status = 0;
-                pid_t result = waitpid(pid, &status, WNOHANG);
-                if (result > 0) {
-                    fcntl(stdout_pipe[0], F_SETFL, flags);
-                    while ((bytes_read = read(stdout_pipe[0], buffer, sizeof(buffer) - 1)) > 0) {
-                        buffer[bytes_read] = '\0';
-                        line_buffer += buffer;
+            bytes_read = read(stdout_pipe[0], buffer, sizeof(buffer) - 1);
+
+            if (bytes_read > 0) {
+                buffer[bytes_read] = '\0';
+                line_buffer += buffer;
+                if (lifecycle && line_buffer.size() > OutputProcessLifecycle::maximum_line_bytes) throw std::runtime_error("Helper output line exceeds 64 KiB");
+
+                size_t pos;
+                while (true) {
+                    size_t newline_pos = line_buffer.find('\n');
+                    size_t cr_pos = line_buffer.find('\r');
+
+                    if (newline_pos == std::string::npos && cr_pos == std::string::npos) {
+                        break;
                     }
-                    break;
+
+                    if (newline_pos == std::string::npos) {
+                        pos = cr_pos;
+                    } else if (cr_pos == std::string::npos) {
+                        pos = newline_pos;
+                    } else {
+                        pos = std::min(newline_pos, cr_pos);
+                    }
+
+                    std::string line = line_buffer.substr(0, pos);
+
+                    size_t skip = 1;
+                    if (pos + 1 < line_buffer.size() &&
+                        line_buffer[pos] == '\r' && line_buffer[pos + 1] == '\n') {
+                        skip = 2;
+                    }
+                    line_buffer = line_buffer.substr(pos + skip);
+
+                    if (line.empty()) {
+                        continue;
+                    }
+
+                    if (on_line && !on_line(line)) {
+                        if (!lifecycle) ::kill(pid, SIGKILL);
+                        killed_by_callback = true;
+                        break;
+                    }
                 }
 
+                if (killed_by_callback) break;
+            } else if (bytes_read == 0) {
+                if (!lifecycle || has_exited({nullptr, static_cast<int>(pid)})) break;
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
             } else {
-                break;
+                if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                    if (has_exited({nullptr, static_cast<int>(pid)})) {
+                        while ((bytes_read = read(stdout_pipe[0], buffer, sizeof(buffer) - 1)) > 0) {
+                            buffer[bytes_read] = '\0';
+                            line_buffer += buffer;
+                            if (lifecycle && line_buffer.size() > OutputProcessLifecycle::maximum_line_bytes) throw std::runtime_error("Helper output line exceeds 64 KiB");
+                        }
+                        break;
+                    }
+
+                    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                } else if (errno != EINTR) {
+                    throw std::runtime_error("Failed to read helper output");
+                }
             }
         }
-    }
 
-    if (!line_buffer.empty() && on_line && !killed_by_callback) {
-        on_line(line_buffer);
-    }
+        if (!line_buffer.empty() && on_line && !killed_by_callback) {
+            if (!on_line(line_buffer)) killed_by_callback = true;
+        }
 
+    } catch (...) { failure = std::current_exception(); killed_by_callback = true; }
     close(stdout_pipe[0]);
-
+    if (lifecycle) {
+        const int result = lifecycle->finish(killed_by_callback);
+        if (failure) std::rethrow_exception(failure);
+        return result;
+    }
+    if (failure) {
+        if (!terminate({nullptr, static_cast<int>(pid)}))
+            throw std::runtime_error("Helper output failed and direct-child cleanup remains unconfirmed");
+        std::rethrow_exception(failure);
+    }
     int status = 0;
-    waitpid(pid, &status, 0);
+    pid_t collected;
+    do { collected = waitpid(pid, &status, 0); } while (collected < 0 && errno == EINTR);
+    if (collected != pid) return -1;
 
     if (killed_by_callback) {
         return -1;

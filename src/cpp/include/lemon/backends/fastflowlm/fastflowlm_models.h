@@ -52,10 +52,11 @@ std::vector<std::string> flm_pull_arguments(const std::string& checkpoint,
 
 void flm_download(const std::string& checkpoint, bool do_not_upgrade,
                   DownloadProgressCallback progress_callback,
-                  RemoteRegistrySource source = RemoteRegistrySource::HuggingFace);
+                  RemoteRegistrySource source = RemoteRegistrySource::HuggingFace,
+                  ModelManager* manager = nullptr, const std::string& model = "");
 
 // Remove an installed FLM model by checkpoint via `flm remove`; throws on failure.
-void flm_remove(const std::string& checkpoint);
+void flm_remove(const std::string& checkpoint, ModelManager* manager = nullptr, const std::string& model = "");
 
 } // namespace fastflowlm
 } // namespace backends

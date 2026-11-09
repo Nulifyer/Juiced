@@ -1,5 +1,6 @@
 #include <lemon/utils/process_manager.h>
 #include <lemon/utils/process_platform.h>
+#include <stdexcept>
 
 namespace lemon {
 namespace utils {
@@ -46,6 +47,10 @@ int ProcessManager::reap_process(ProcessHandle handle) {
     return platform->reap(handle);
 }
 
+std::optional<int> ProcessManager::collect_exit(ProcessHandle handle) {
+    return create_process_platform()->collect_exit(handle);
+}
+
 std::string ProcessManager::read_output(ProcessHandle handle, int max_bytes) {
     // Note: This is a simplified version. Full implementation would need pipes
     // for stdout/stderr capture during process creation.
@@ -59,10 +64,13 @@ int ProcessManager::run_process_with_output(
     const std::string& working_dir,
     int timeout_seconds,
     bool capture_stderr,
-    const std::vector<std::pair<std::string, std::string>>& env_vars) {
+    const std::vector<std::pair<std::string, std::string>>& env_vars,
+    const OutputProcessLifecycle* lifecycle) {
 
+    if (lifecycle && (!lifecycle->attach || !lifecycle->finish))
+        throw std::invalid_argument("Captured process ownership requires attach and finish callbacks");
     auto platform = create_process_platform();
-    return platform->run_with_output(executable, args, on_line, working_dir, timeout_seconds, capture_stderr, env_vars);
+    return platform->run_with_output(executable, args, on_line, working_dir, timeout_seconds, capture_stderr, env_vars, lifecycle);
 }
 
 void ProcessManager::kill_process(ProcessHandle handle) {

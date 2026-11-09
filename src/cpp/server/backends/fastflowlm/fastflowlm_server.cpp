@@ -68,73 +68,15 @@ FastFlowLMServer::FastFlowLMServer(const std::string& log_level, ModelManager* m
 
 std::string FastFlowLMServer::download_model(const std::string& checkpoint, bool do_not_upgrade,
                                              RemoteRegistrySource source) {
-    auto admission = model_manager_ ? model_manager_->admit_acquisition(checkpoint) : ResourceAdmission::Lease{};
-    LOG(INFO, "FastFlowLM") << "Pulling model with FLM: " << checkpoint << std::endl;
-
-    std::string flm_path = get_flm_path();
-    if (flm_path.empty()) {
-        throw std::runtime_error("FLM not found");
-    }
-
-    std::vector<std::string> args = fastflowlm::flm_pull_arguments(
-        checkpoint, do_not_upgrade, source);
-
-    LOG(INFO, "ProcessManager") << "Starting process: \"" << flm_path << "\"";
-    for (const auto& arg : args) {
-        LOG(INFO, "ProcessManager") << " \"" << arg << "\"";
-    }
-    LOG(INFO, "ProcessManager") << std::endl;
-
-    auto handle = utils::ProcessManager::start_process(flm_path, args, "", is_debug());
-
-    // Wait for process to complete (handles both fast exits and long downloads).
-    // Use the owning wait primitive directly because this helper intentionally
-    // reaps the short-lived `flm pull` child.
-    int timeout_seconds = 300; // 5 minutes
-    LOG(INFO, "FastFlowLM") << "Waiting for model download to complete..." << std::endl;
-    bool completed = false;
-    int exit_code = -1;
-
-#ifdef _WIN32
-    DWORD wait_result = WaitForSingleObject(handle.handle, timeout_seconds * 1000);
-    if (wait_result == WAIT_OBJECT_0) {
-        DWORD win_exit_code;
-        GetExitCodeProcess(handle.handle, &win_exit_code);
-        exit_code = static_cast<int>(win_exit_code);
-        completed = true;
-    }
-#else
-    for (int i = 0; i < timeout_seconds * 10; ++i) {
-        int status;
-        pid_t result = waitpid(handle.pid, &status, WNOHANG);
-        if (result > 0) {
-            exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
-            completed = true;
-            break;
-        } else if (result < 0) {
-            // Process doesn't exist or error
-            completed = true;
-            exit_code = -1;
-            break;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-
-        // Print progress every 5 seconds
-        if (i % 50 == 0 && i > 0) {
-            LOG(INFO, "FastFlowLM") << "Still downloading... (" << (i/10) << "s elapsed)" << std::endl;
-        }
-    }
-#endif
-
-    if (!completed) {
-        utils::ProcessManager::stop_process(handle);
-        throw std::runtime_error("FLM pull timed out after " + std::to_string(timeout_seconds) + " seconds");
-    }
-
-    if (exit_code != 0) {
-        LOG(ERROR, "FastFlowLM") << "FLM pull failed with exit code: " << exit_code << std::endl;
-        throw std::runtime_error("FLM pull failed with exit code: " + std::to_string(exit_code));
-    }
+    if (!model_manager_) throw AdmissionError("operation_unqualified", "FLM acquisition requires its native management owner", 503);
+    const auto model = model_name_.empty() ? checkpoint : model_name_;
+    auto admission = model_manager_->admit_acquisition(model);
+    const auto executable = get_flm_path();
+    if (executable.empty()) throw std::runtime_error("FLM not found");
+    const auto args = fastflowlm::flm_pull_arguments(checkpoint, do_not_upgrade, source);
+    const int exit_code = model_manager_->run_flm_helper(model, "load-pull", executable, args,
+        {}, 300, [this] { return load_cancelled(); });
+    if (exit_code != 0) throw std::runtime_error("FLM pull failed or was cancelled (exit code " + std::to_string(exit_code) + ")");
 
     LOG(INFO, "FastFlowLM") << "Model pull completed successfully" << std::endl;
     return checkpoint;
@@ -439,7 +381,7 @@ public:
         RemoteRegistrySource source = ctx.model_manager
             ? ctx.model_manager->download_source_for(info)
             : RemoteRegistrySource::HuggingFace;
-        flm_download(info.checkpoint(), do_not_upgrade, progress, source);
+        flm_download(info.checkpoint(), do_not_upgrade, progress, source, ctx.model_manager, info.model_name);
     }
 
     bool invalidates_cache_after_download() const override { return true; }

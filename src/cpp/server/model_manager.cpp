@@ -1551,6 +1551,7 @@ void ModelManager::set_extra_models_dir(const std::string& dir) {
 
 ModelManager::~ModelManager() {
     stop_model_notifications();
+    cleanup_native_helpers();
 }
 
 void ModelManager::stop_model_notifications() {
@@ -4910,6 +4911,7 @@ void ModelManager::register_user_model(const std::string& model_name,
                                       const std::string& source, bool replace_existing,
                                       const std::string& publication_id) {
     auto mutation = model_mutation(model_name);
+    guard_native_helper_mutation(model_name);
     const std::string recipe = model_data.value("recipe", std::string());
 
     // Remove "user." prefix if present
@@ -5013,6 +5015,7 @@ void ModelManager::register_user_model(const std::string& model_name,
 
 void ModelManager::unregister_user_model(const std::string& model_name) {
     auto mutation = model_mutation(model_name);
+    guard_native_helper_mutation(model_name);
     std::lock_guard<std::recursive_mutex> references(model_references_mutex_);
     if (model_removal_guard_) model_removal_guard_(model_name);
     std::string clean_name = model_name;
@@ -7044,7 +7047,7 @@ void ModelManager::delete_model(const std::string& model_name) {
 
     // FLM models have no local HF cache; deletion is the backend's `flm remove`.
     if (info.recipe == "flm") {
-        backends::fastflowlm::flm_remove(info.checkpoint());
+        backends::fastflowlm::flm_remove(info.checkpoint(), this, canonical_model_name);
 
         // Remove from user models if it's a user model
         if (is_user_model_name(canonical_model_name)) {

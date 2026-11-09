@@ -50,6 +50,13 @@ void ServerProcess::stop() {
     handle_ = {nullptr, 0};
 }
 
+std::optional<int> ServerProcess::collect_exit() {
+    if (!has_handle(handle_)) return std::nullopt;
+    const auto result = ProcessManager::collect_exit(handle_);
+    if (result) handle_ = {nullptr, 0};
+    return result;
+}
+
 bool ServerProcess::exited() const {
     return !has_handle(handle_) || ProcessManager::has_exited(handle_);
 }

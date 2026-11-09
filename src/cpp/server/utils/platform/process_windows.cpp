@@ -24,6 +24,7 @@
 #include <chrono>
 #include <thread>
 #include <stdexcept>
+#include <exception>
 
 namespace lemon {
 namespace utils {
@@ -447,6 +448,14 @@ public:
         return exit_code == STILL_ACTIVE ? -1 : static_cast<int>(exit_code);
     }
 
+    std::optional<int> collect_exit(ProcessHandle handle) override {
+        if (!handle.handle || WaitForSingleObject(handle.handle, 0) != WAIT_OBJECT_0) return std::nullopt;
+        DWORD code;
+        if (!GetExitCodeProcess(handle.handle, &code)) return std::nullopt;
+        if (!CloseHandle(handle.handle)) return std::nullopt;
+        return static_cast<int>(code);
+    }
+
     void kill(ProcessHandle handle) override {
         if (handle.handle) {
             TerminateProcess(handle.handle, 1);
@@ -467,7 +476,8 @@ public:
         const std::string& working_dir,
         int timeout_seconds,
         bool capture_stderr = true,
-        const std::vector<std::pair<std::string, std::string>>& env_vars = {}) override {
+        const std::vector<std::pair<std::string, std::string>>& env_vars = {},
+        const OutputProcessLifecycle* lifecycle = nullptr) override {
 
         std::string cmdline = escape_windows_arg(executable);
         for (const auto& arg : args) {
@@ -533,112 +543,137 @@ public:
 
         auto start_time = std::chrono::steady_clock::now();
 
-        while (true) {
-            // Check timeout
-            if (timeout_seconds > 0) {
-                auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
-                    std::chrono::steady_clock::now() - start_time).count();
-                if (elapsed > timeout_seconds) {
-                    TerminateProcess(pi.hProcess, 1);
-                    killed_by_callback = true;
-                    break;
-                }
-            }
-
-            // Check if there's data to read (non-blocking peek)
-            DWORD available = 0;
-            if (!PeekNamedPipe(stdout_read, nullptr, 0, nullptr, &available, nullptr)) {
-                break;  // Pipe closed or error
-            }
-
-            if (available > 0) {
-                DWORD to_read = (std::min)(available, (DWORD)(sizeof(buffer) - 1));
-                if (ReadFile(stdout_read, buffer, to_read, &bytes_read, nullptr) && bytes_read > 0) {
-                    buffer[bytes_read] = '\0';
-                    line_buffer += buffer;
-
-                    // Process complete lines (split on \n or \r for in-place progress updates)
-                    size_t pos;
-                    while (true) {
-                        // Find the first line terminator (\n or \r)
-                        size_t newline_pos = line_buffer.find('\n');
-                        size_t cr_pos = line_buffer.find('\r');
-
-                        if (newline_pos == std::string::npos && cr_pos == std::string::npos) {
-                            break;  // No complete line yet
-                        }
-
-                        // Use whichever comes first
-                        if (newline_pos == std::string::npos) {
-                            pos = cr_pos;
-                        } else if (cr_pos == std::string::npos) {
-                            pos = newline_pos;
-                        } else {
-                            pos = (std::min)(newline_pos, cr_pos);
-                        }
-
-                        std::string line = line_buffer.substr(0, pos);
-
-                        // Skip \r\n as a single delimiter
-                        size_t skip = 1;
-                        if (pos + 1 < line_buffer.size() &&
-                            line_buffer[pos] == '\r' && line_buffer[pos + 1] == '\n') {
-                            skip = 2;
-                        }
-                        line_buffer = line_buffer.substr(pos + skip);
-
-                        // Skip empty lines
-                        if (line.empty()) {
-                            continue;
-                        }
-
-                        // Call the callback
-                        if (on_line && !on_line(line)) {
-                            TerminateProcess(pi.hProcess, 1);
-                            killed_by_callback = true;
-                            break;
-                        }
+        std::exception_ptr failure;
+        try {
+            if (lifecycle) lifecycle->attach({pi.hProcess, static_cast<int>(pi.dwProcessId)});
+            while (true) {
+                if (lifecycle && lifecycle->cancelled && lifecycle->cancelled()) { killed_by_callback = true; break; }
+                // Check timeout
+                if (timeout_seconds > 0) {
+                    auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+                        std::chrono::steady_clock::now() - start_time).count();
+                    if (elapsed > timeout_seconds) {
+                        if (!lifecycle) TerminateProcess(pi.hProcess, 1);
+                        killed_by_callback = true;
+                        break;
                     }
-
-                    if (killed_by_callback) break;
                 }
-            } else {
-                // No data available, check if process is still running
-                DWORD exit_code;
-                if (GetExitCodeProcess(pi.hProcess, &exit_code) && exit_code != STILL_ACTIVE) {
-                    // Process exited, drain any remaining output
-                    while (ReadFile(stdout_read, buffer, sizeof(buffer) - 1, &bytes_read, nullptr) && bytes_read > 0) {
+
+                // Check if there's data to read (non-blocking peek)
+                DWORD available = 0;
+                if (!PeekNamedPipe(stdout_read, nullptr, 0, nullptr, &available, nullptr)) {
+                    const auto pipe_error = GetLastError();
+                    if (!lifecycle || WaitForSingleObject(pi.hProcess, 0) == WAIT_OBJECT_0) break;
+                    if (pipe_error != ERROR_BROKEN_PIPE) throw std::runtime_error("Failed to read helper output");
+                    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                    continue;
+                }
+
+                if (available > 0) {
+                    DWORD to_read = (std::min)(available, (DWORD)(sizeof(buffer) - 1));
+                    if (ReadFile(stdout_read, buffer, to_read, &bytes_read, nullptr) && bytes_read > 0) {
                         buffer[bytes_read] = '\0';
                         line_buffer += buffer;
+                        if (lifecycle && line_buffer.size() > OutputProcessLifecycle::maximum_line_bytes) throw std::runtime_error("Helper output line exceeds 64 KiB");
+
+                        // Process complete lines (split on \n or \r for in-place progress updates)
+                        size_t pos;
+                        while (true) {
+                            // Find the first line terminator (\n or \r)
+                            size_t newline_pos = line_buffer.find('\n');
+                            size_t cr_pos = line_buffer.find('\r');
+
+                            if (newline_pos == std::string::npos && cr_pos == std::string::npos) {
+                                break;  // No complete line yet
+                            }
+
+                            // Use whichever comes first
+                            if (newline_pos == std::string::npos) {
+                                pos = cr_pos;
+                            } else if (cr_pos == std::string::npos) {
+                                pos = newline_pos;
+                            } else {
+                                pos = (std::min)(newline_pos, cr_pos);
+                            }
+
+                            std::string line = line_buffer.substr(0, pos);
+
+                            // Skip \r\n as a single delimiter
+                            size_t skip = 1;
+                            if (pos + 1 < line_buffer.size() &&
+                                line_buffer[pos] == '\r' && line_buffer[pos + 1] == '\n') {
+                                skip = 2;
+                            }
+                            line_buffer = line_buffer.substr(pos + skip);
+
+                            // Skip empty lines
+                            if (line.empty()) {
+                                continue;
+                            }
+
+                            // Call the callback
+                            if (on_line && !on_line(line)) {
+                                if (!lifecycle) TerminateProcess(pi.hProcess, 1);
+                                killed_by_callback = true;
+                                break;
+                            }
+                        }
+
+                        if (killed_by_callback) break;
                     }
-                    break;
+                } else {
+                    // No data available, check if process is still running
+                    if (WaitForSingleObject(pi.hProcess, 0) == WAIT_OBJECT_0) {
+                        // Process exited, drain any remaining output
+                        while (PeekNamedPipe(stdout_read, nullptr, 0, nullptr, &available, nullptr) && available > 0 &&
+                               ReadFile(stdout_read, buffer, (std::min)(available, DWORD(sizeof(buffer) - 1)), &bytes_read, nullptr) && bytes_read > 0) {
+                            buffer[bytes_read] = '\0';
+                            line_buffer += buffer;
+                            if (lifecycle && line_buffer.size() > OutputProcessLifecycle::maximum_line_bytes) throw std::runtime_error("Helper output line exceeds 64 KiB");
+                        }
+                        break;
+                    }
+
+                    // Sleep briefly to avoid busy-waiting
+                    std::this_thread::sleep_for(std::chrono::milliseconds(10));
                 }
-
-                // Sleep briefly to avoid busy-waiting
-                std::this_thread::sleep_for(std::chrono::milliseconds(10));
             }
-        }
 
-        // Process any remaining partial line
-        if (!line_buffer.empty() && on_line && !killed_by_callback) {
-            // Remove trailing \r if present
-            if (!line_buffer.empty() && line_buffer.back() == '\r') {
-                line_buffer.pop_back();
+            // Process any remaining partial line
+            if (!line_buffer.empty() && on_line && !killed_by_callback) {
+                // Remove trailing \r if present
+                if (!line_buffer.empty() && line_buffer.back() == '\r') {
+                    line_buffer.pop_back();
+                }
+                if (!line_buffer.empty()) {
+                    if (!on_line(line_buffer)) killed_by_callback = true;
+                }
             }
-            if (!line_buffer.empty()) {
-                on_line(line_buffer);
-            }
-        }
 
+        } catch (...) { failure = std::current_exception(); killed_by_callback = true; }
         CloseHandle(stdout_read);
+        CloseHandle(pi.hThread);
+        if (lifecycle) {
+            const int result = lifecycle->finish(killed_by_callback);
+            if (failure) std::rethrow_exception(failure);
+            return result;
+        }
+        if (failure) {
+            if (!terminate({pi.hProcess, static_cast<int>(pi.dwProcessId)}))
+                throw std::runtime_error("Helper output failed and direct-child cleanup remains unconfirmed");
+            std::rethrow_exception(failure);
+        }
 
         // Get exit code
         DWORD exit_code = 0;
-        WaitForSingleObject(pi.hProcess, 5000);
-        GetExitCodeProcess(pi.hProcess, &exit_code);
+        if (WaitForSingleObject(pi.hProcess, 5000) != WAIT_OBJECT_0 ||
+            !GetExitCodeProcess(pi.hProcess, &exit_code)) {
+            if (!terminate({pi.hProcess, static_cast<int>(pi.dwProcessId)}))
+                throw std::runtime_error("Direct-child cleanup remains unconfirmed");
+            return -1;
+        }
 
         CloseHandle(pi.hProcess);
-        CloseHandle(pi.hThread);
 
         return killed_by_callback ? -1 : static_cast<int>(exit_code);
     }

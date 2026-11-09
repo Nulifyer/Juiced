@@ -36,6 +36,11 @@ public:
         return get_exit_code(handle);
     }
 
+    virtual std::optional<int> collect_exit(ProcessHandle handle) {
+        const int result = reap(handle);
+        return result >= 0 ? std::optional<int>(result) : std::nullopt;
+    }
+
     virtual void terminate_without_cleanup(ProcessHandle handle) = 0;
 
     // Process with output callback
@@ -46,7 +51,8 @@ public:
         const std::string& working_dir,
         int timeout_seconds,
         bool capture_stderr = true,
-        const std::vector<std::pair<std::string, std::string>>& env_vars = {}) = 0;
+        const std::vector<std::pair<std::string, std::string>>& env_vars = {},
+        const OutputProcessLifecycle* lifecycle = nullptr) = 0;
 
     // Utility functions
     virtual int find_free_port(int start_port) = 0;

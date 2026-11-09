@@ -21,6 +21,7 @@
 #include "model_types.h"
 #include "recipe_options.h"
 #include "resource_admission.h"
+#include "server_process.h"
 
 namespace lemon {
 
@@ -201,8 +202,14 @@ public:
     // Call from the owner thread, never from a model-change callback.
     void stop_model_notifications();
     // Bind before serving/background work. The view shares Router's ledger.
-    void set_resource_admission(const ResourceAdmission& admission) { resource_admission_ = admission; }
+    void set_resource_admission(const ResourceAdmission& admission);
     ResourceAdmission::Lease admit_acquisition(const std::string& model);
+    int run_flm_helper(const std::string& model, const std::string& operation,
+                       const std::string& executable, const std::vector<std::string>& args,
+                       utils::OutputLineCallback on_line = {}, int timeout_seconds = 300,
+                       std::function<bool()> cancelled = {});
+    bool cleanup_native_helpers() noexcept;
+    json native_helper_status();
 
 
     std::map<std::string, ModelInfo> discover_extra_models_for_test() const {
@@ -676,6 +683,19 @@ private:
     mutable std::mutex models_cache_mutex_;
     std::mutex models_cache_build_mutex_;
     uint64_t cache_revision_ = 0;
+    struct FlmHelper {
+        ResourceAdmission::Lease admission;
+        std::unique_ptr<ServerProcess> process;
+        json intent;
+        std::optional<int> result;
+        bool dispatched = false, interrupted = false, finish_attempted = false;
+    };
+    std::mutex flm_helper_mutex_;
+    std::unique_ptr<FlmHelper> flm_helper_;
+    std::shared_ptr<const std::string> flm_helper_model_;
+    std::function<void()> flm_helper_stop_barrier_;
+    int finish_flm_helper_locked(bool interrupted);
+    void guard_native_helper_mutation(const std::string& model);
     std::mutex model_mutations_mutex_;
     std::map<std::string, std::shared_ptr<ModelMutationState>> model_mutations_;
     std::filesystem::path uploaded_artifact_directory_;

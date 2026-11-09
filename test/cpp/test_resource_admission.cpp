@@ -541,6 +541,31 @@ int main() {
         check(error([&] { management.configure({{"mode", "protected"}}); }, "admission_configuration_busy"),
               "unresolved helper ownership blocks configuration promotion");
     }
+    {
+        ResourceAdmission references;
+        {
+            auto runtime = references.acquire_management("flm:npu", "runtime-reference"); runtime.started();
+            check(error([&] { references.acquire_management("flm:npu", "runtime-install"); }, "runtime_reference_busy") &&
+                  error([&] { references.acquire_management("flm:npu", "runtime-uninstall"); }, "runtime_reference_busy"),
+                  "an accepted runtime reference excludes install and uninstall of the same managed tree");
+            auto unrelated = references.acquire_management("llamacpp:cpu", "runtime-install");
+            check(bool(unrelated), "runtime references preserve unrelated package operations");
+            runtime.completed();
+        }
+        {
+            auto mutation = references.acquire_management("flm:npu", "runtime-install");
+            check(error([&] { references.acquire_management("flm:npu", "runtime-reference"); }, "runtime_reference_busy"),
+                  "runtime mutation prevents a helper from acquiring its files during replacement");
+        }
+        {
+            auto runtime = references.acquire_management("flm:npu", "runtime-reference");
+            check(bool(runtime), "confirmed reference and mutation completion restore acquisition");
+            runtime.started();
+        }
+        check(references.snapshot()["uncertain"] == 1 &&
+              error([&] { references.acquire_management("flm:npu", "runtime-uninstall"); }, "runtime_reference_busy"),
+              "destroying an unresolved runtime owner does not authorize reclamation");
+    }
     std::printf("Resource admission: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

@@ -939,11 +939,14 @@ void Server::shutdown_background_activity() {
     cancel_download_jobs();
     stop();  // Cancels/joins metadata warmup and background sync producers too.
     job_manager_.reset();  // Join its worker while provider/model state is alive.
+    bool helpers_drained = true;
     if (model_manager_) {
         model_manager_->stop_model_notifications();
+        helpers_drained = model_manager_->cleanup_native_helpers();
         model_manager_->set_model_removal_guard({});
     }
-    LOG(INFO, "Server") << "Background model activity stopped" << std::endl;
+    if (helpers_drained) LOG(INFO, "Server") << "Background model activity stopped" << std::endl;
+    else LOG(WARNING, "Server") << "Background requests stopped; native helper cleanup remains pending" << std::endl;
 }
 
 
@@ -2809,6 +2812,7 @@ void Server::handle_health(const httplib::Request& req, httplib::Response& res) 
 
     // Multi-model support: Add all loaded models
     response["all_models_loaded"] = router_->get_all_loaded_models();
+    response["native_helpers"] = model_manager_->native_helper_status();
 
     // Add max model limits
     response["max_models"] = router_->get_max_model_limits();

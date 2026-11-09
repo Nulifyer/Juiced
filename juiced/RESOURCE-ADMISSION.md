@@ -573,6 +573,29 @@ duplicate startup and remains unresolved. Complete operator recovery, descendant
 termination, actual speech and end-to-end stop deadlines remain P1 prerequisites.
 The helper fixture uses controlled process substitution and metadata failures.
 
+FLM load-time pull, explicit download and removal now share ModelManager's native
+command owner. `native_helpers.json` records dispatch intent and an opaque command
+identity before spawn. The process layer attaches its handle before output callbacks
+and delegates terminal cleanup to that retained owner. Timeout, cancellation,
+callback failure and failed terminal publication keep unresolved handles, tickets
+and mutation exclusion. A matching retry can publish a previously collected success
+without executing the command again. Native health exposes pending helper state.
+
+Helper tickets hold a `flm:npu` runtime reference in the existing ledger. Participating
+BackendManager install/uninstall operations exclude that reference, including
+uncertainty reconstructed from a prior-manager journal. A new helper cannot acquire
+runtime files during their managed replacement. Unknown prior-manager ownership
+blocks another FLM command and reclamation. Activation can reject when a paused or
+protected bootstrap cannot restore that conservative reference. Complete operator
+recovery, immutable bundle manifests and external-executable replacement remain
+separate P1/P3 obligations.
+
+Owned command output lines have a 64-KiB limit. POSIX streaming observes exit without
+reaping in the output loop and retains the collected status. Callback exceptions
+propagate after owned cleanup. Windows collection requires a completed wait and
+preserves signed exit codes. These are direct-child contracts. The controlled CLI
+fixtures do not qualify an NPU, real FLM downloads, descendants or model quality.
+
 Local acceptance includes real direct children, non-consuming exit observation,
 unowned PID rejection, controlled failed stop/replacement, exact-generation
 reconciliation and actual neutral CPU serving/cache. This does not establish

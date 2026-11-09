@@ -39,6 +39,7 @@ public:
     virtual void stop();
     virtual bool running() const;
     virtual bool exited() const;
+    virtual std::optional<int> collect_exit();
 
     utils::ProcessHandle handle() const { return handle_; }
     const std::vector<std::string>& command_line() const { return command_line_; }

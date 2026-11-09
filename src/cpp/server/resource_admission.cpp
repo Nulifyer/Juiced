@@ -379,6 +379,17 @@ ResourceAdmission::Lease ResourceAdmission::acquire(Work work) {
     if (entry->work.operation == Operation::Management) {
         if (entry->protected_mode)
             reject("operation_unqualified", "Background acquisition and mutation envelopes are not qualified for protected admission", 503);
+        const bool referencing = entry->work.service == "runtime-reference";
+        const bool mutating_runtime = entry->work.service == "runtime-install" || entry->work.service == "runtime-uninstall";
+        if (referencing || mutating_runtime) {
+            for (const auto& [id, active] : state_->active) {
+                if (active->work.operation != Operation::Management || active->work.model != entry->work.model) continue;
+                const bool held_reference = active->work.service == "runtime-reference";
+                const bool held_mutation = active->work.service == "runtime-install" || active->work.service == "runtime-uninstall";
+                if ((mutating_runtime && held_reference) || (referencing && held_mutation))
+                    reject("runtime_reference_busy", "Runtime files are held by an accepted helper or mutation; finish cleanup before replacement", 409);
+            }
+        }
         // Legacy operations retain their existing unbounded behavior. Track the
         // synchronous native owner's lifetime so configuration cannot cross it.
         // These zero-cost tickets do not consume inference queue capacity.

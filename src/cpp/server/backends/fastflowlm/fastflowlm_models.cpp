@@ -351,7 +351,8 @@ std::vector<std::string> flm_pull_arguments(const std::string& checkpoint,
 
 void flm_download(const std::string& checkpoint, bool do_not_upgrade,
                   DownloadProgressCallback progress_callback,
-                  RemoteRegistrySource source) {
+                  RemoteRegistrySource source, ModelManager* manager, const std::string& model) {
+    if (!manager) throw AdmissionError("operation_unqualified", "FLM download requires its native management owner", 503);
     LOG(INFO, "ModelManager") << "Pulling FLM model: " << checkpoint << std::endl;
 
     auto status = SystemInfoCache::get_flm_status();
@@ -378,9 +379,14 @@ void flm_download(const std::string& checkpoint, bool do_not_upgrade,
     std::string current_filename;
     bool cancelled = false;
 
-    int exit_code = lemon::utils::ProcessManager::run_process_with_output(
-        flm_path, args,
-        [&](const std::string& line) -> bool {
+    DownloadProgress latest;
+    std::exception_ptr callback_failure;
+    const auto emit_progress = [&](const DownloadProgress& progress) {
+        latest = progress;
+        try { return !progress_callback || progress_callback(progress); }
+        catch (...) { callback_failure = std::current_exception(); return false; }
+    };
+    const auto on_line = [&](const std::string& line) -> bool {
             LOG(INFO, "FLM") << line << std::endl;
 
             // Pattern: "[FLM]  Downloading X/Y: filename"
@@ -409,7 +415,7 @@ void flm_download(const std::string& checkpoint, bool do_not_upgrade,
                             progress.percent = (total_files > 0) ?
                                 ((current_file_index - 1) * 100 / total_files) : 0;
 
-                            if (!progress_callback(progress)) {
+                            if (!emit_progress(progress)) {
                                 cancelled = true;
                                 return false;  // Kill the process
                             }
@@ -477,7 +483,7 @@ void flm_download(const std::string& checkpoint, bool do_not_upgrade,
                             // Use intra-file percent when we have byte-level progress
                             progress.percent = static_cast<int>(file_percent);
 
-                            if (!progress_callback(progress)) {
+                            if (!emit_progress(progress)) {
                                 cancelled = true;
                                 return false;  // Kill the process
                             }
@@ -505,7 +511,7 @@ void flm_download(const std::string& checkpoint, bool do_not_upgrade,
                             progress.bytes_total = 0;
                             progress.percent = overall_percent;
 
-                            if (!progress_callback(progress)) {
+                            if (!emit_progress(progress)) {
                                 cancelled = true;
                                 return false;  // Kill the process
                             }
@@ -529,10 +535,17 @@ void flm_download(const std::string& checkpoint, bool do_not_upgrade,
             }
 
             return true;  // Continue
-        },
-        "",  // Working directory
-        3600  // 1 hour timeout for large model downloads
-    );
+        };
+    auto next_probe = std::chrono::steady_clock::now();
+    const int exit_code = manager->run_flm_helper(model.empty() ? checkpoint : model, "download", flm_path, args,
+        on_line, 3600, [&] {
+            if (std::chrono::steady_clock::now() < next_probe) return false;
+            next_probe = std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
+            if (!emit_progress(latest)) cancelled = true;
+            if (callback_failure) std::rethrow_exception(callback_failure);
+            return cancelled;
+        });
+    if (callback_failure) std::rethrow_exception(callback_failure);
 
     if (cancelled) {
         LOG(INFO, "ModelManager") << "FLM download cancelled by client" << std::endl;
@@ -769,31 +782,13 @@ bool run_flm_validate(const std::string& flm_path, std::string& error_message) {
 }
 
 
-void flm_remove(const std::string& checkpoint) {
-    if (checkpoint.empty()) {
-        throw std::runtime_error("FLM model has empty checkpoint field, cannot delete");
-    }
-    std::string flm_path = find_flm_binary();
-    if (flm_path.empty()) {
-        throw std::runtime_error("FLM executable not found");
-    }
-    std::vector<std::string> args = {"remove", checkpoint};
-    auto handle = lemon::utils::ProcessManager::start_process(flm_path, args, "", false);
-
-    int timeout_seconds = 60;
-    for (int i = 0; i < timeout_seconds * 10; ++i) {
-        if (!lemon::utils::ProcessManager::is_running(handle)) {
-            int exit_code = lemon::utils::ProcessManager::get_exit_code(handle);
-            if (exit_code != 0) {
-                throw std::runtime_error("FLM remove failed for " + checkpoint +
-                                         " (exit code " + std::to_string(exit_code) + ")");
-            }
-            return;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    }
-    lemon::utils::ProcessManager::stop_process(handle);
-    throw std::runtime_error("FLM remove timed out for " + checkpoint);
+void flm_remove(const std::string& checkpoint, ModelManager* manager, const std::string& model) {
+    if (!manager) throw AdmissionError("operation_unqualified", "FLM removal requires its native management owner", 503);
+    if (checkpoint.empty()) throw std::runtime_error("FLM model has empty checkpoint field, cannot delete");
+    const auto executable = find_flm_binary();
+    if (executable.empty()) throw std::runtime_error("FLM executable not found");
+    const int result = manager->run_flm_helper(model.empty() ? checkpoint : model, "remove", executable, {"remove", checkpoint}, {}, 60);
+    if (result != 0) throw std::runtime_error("FLM remove failed or timed out (exit code " + std::to_string(result) + ")");
 }
 
 } // namespace fastflowlm

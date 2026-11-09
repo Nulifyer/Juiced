@@ -1,8 +1,10 @@
 #pragma once
 
+#include <cstddef>
 #include <string>
 #include <vector>
 #include <functional>
+#include <optional>
 
 namespace lemon {
 namespace utils {
@@ -14,6 +16,16 @@ struct ProcessHandle {
 
 // Returns true to continue, false to kill the process
 using OutputLineCallback = std::function<bool(const std::string& line)>;
+
+// An operation owner retains the handle before output callbacks run. finish()
+// must confirm cleanup or retain ownership and throw. The observer outlives this
+// synchronous exchange; its retained process may outlive the initiating request.
+struct OutputProcessLifecycle {
+    static constexpr std::size_t maximum_line_bytes = 64 * 1024;
+    std::function<void(ProcessHandle)> attach;
+    std::function<int(bool)> finish;
+    std::function<bool()> cancelled;
+};
 
 class ProcessManager {
 public:
@@ -34,7 +46,8 @@ public:
         const std::string& working_dir = "",
         int timeout_seconds = -1,
         bool capture_stderr = true,
-        const std::vector<std::pair<std::string, std::string>>& env_vars = {});
+        const std::vector<std::pair<std::string, std::string>>& env_vars = {},
+        const OutputProcessLifecycle* lifecycle = nullptr);
 
     // True only after the owned direct child's exit is observed and cleanup succeeds.
     static bool stop_process(ProcessHandle handle);
@@ -54,6 +67,7 @@ public:
     // cannot be obtained. This is intentionally explicit so liveness checks stay
     // read-only while lifecycle cleanup can reliably remove zombies.
     static int reap_process(ProcessHandle handle);
+    static std::optional<int> collect_exit(ProcessHandle handle);
 
     static std::string read_output(ProcessHandle handle, int max_bytes = 4096);
 
