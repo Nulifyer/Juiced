@@ -1,7 +1,7 @@
 # Juiced platform plan
 
-Revision: 2, 2026-11-07
-State: proposed for independent council review; not implementation acceptance
+Revision: 3, 2026-11-09
+State: proposed for renewed independent council review; revision 2 approval remains historical, not revision 3 or implementation acceptance
 Baseline: v0.8.6, source 9cd79d01b32dfcd8b3a1a351afc68dc99c0a5266
 Owner: primary Juiced maintainer agent; three independent plan reviewers
 
@@ -13,13 +13,20 @@ or a measured recommendation, and serves standard APIs directly to other tools.
 The product manages artifacts, runtimes, resources, lifecycle, compatibility and
 bounded operational evidence. Its UI tests services temporarily.
 
-The user's latest direction authorizes continued implementation, with this limit:
-no expansion into an agent or interaction application. No saved chat/project UI,
-character histories, document/RAG workspaces, creative canvas/gallery, browser or
-shell tools, agent loops, task planning, or general workflow authoring. Pi/T3,
-Home Assistant and other clients own those. Model tool-call parsing is in scope;
-executing the model's tools is not. Fixed provider inference pipelines and media
-jobs are in scope; an arbitrary user-authored agent/workflow executor is not.
+The user's November 9 direction adds one agent exception: Barista, an optional
+Juiced operator assistant whose hosted model role is `juiced-assistant`. It is off
+by default, uses a user-selected normal Chat model and its existing settings,
+and can inspect and control Juiced through typed native tools under operator
+permissions. Its system prompt, curated skills and small-model evaluation are
+required product work. `BARISTA.md` owns this bounded exception and acceptance.
+
+General agent/interaction expansion remains excluded: no saved chat/project UI,
+character histories, document/RAG workspaces, creative canvas/gallery, arbitrary
+browser/filesystem/shell tools, general agent framework or workflow authoring.
+Pi/T3, Home Assistant and other clients retain those responsibilities. Ordinary
+model APIs parse/return tool calls and do not execute them. Barista's explicit
+operator interface alone executes its allowed native Juiced tools; it does not
+revive inherited Omni or arbitrary job graphs. Fixed inference/media jobs remain.
 
 Host the same product on supported Linux systems, native macOS and Windows,
 including CPU-only systems. Optional accelerator packages enable appropriate
@@ -41,11 +48,17 @@ The 77-tool survey and 211-family comparison live in the adjacent Homelab reposi
 `docs/juiced-tool-survey.md`, `docs/juiced-feature-catalog.md`,
 `docs/juiced-feature-gaps.md`, and `docs/evidence/juiced-capability-survey/`.
 The authoritative disposition is `juiced/PLATFORM-FEATURES.json`, schema 1,
-plan revision 2, SHA256 `88611238af5f856a6780a1fdb68289c17203fa5b348d5d49c5f639a4d54a9840`. It maps every catalogue ID to a phase, retained
+plan revision 3, SHA256 `7e35d19f19f8fb7950c22ce119999f48229a8ddc79eaf331611c4913951313d0`. It maps every catalogue ID to a phase, retained
 behavior, conditional integration or explicit exclusion. The Homelab Markdown
-projection has SHA256 `70dbe336947ab624e4330afd5a6210005db81991ef7d956307c5cb0b3998258a`. Council approval binds this plan and both annex
+projection has SHA256 `2c438ca7250e6fc5a14180795e2be6ec59f6d0c9aa13edfda091c5b5882b37da`. Council approval binds this plan and both annex
 hashes as one review bundle; the JSON owns phase assignments. It is a traceability aid, not
 211 independent implementation tickets or a commitment to emulate every product.
+J001-J003 in the annex separately trace the November 9 assistant, default-session
+and sidebar-version requests without altering the survey's original IDs/statuses.
+The normative Barista contract is `juiced/BARISTA.md`, SHA256
+`d9e0d232bf14f8278699921cb0d522821e73a9f3a0fc4934fc611a6f2ca04ae6`. Approval binds that contract too.
+Revision 2's approved bundle is retained in Git and the coordinating evidence
+archive; its approvals cannot be carried forward to this material scope change.
 
 Current delivery owners are `juiced/RUNTIME-PROFILES.md`, `juiced/UI-DESIGN.md`,
 native `src/cpp/server/juiced/`, backend descriptors, ModelManager, Router,
@@ -101,6 +114,10 @@ fills the right owner rather than adding pages for every engine feature.
 | Service APIs | Connect external clients directly | Exact endpoint/auth/model discovery, operation support, versions, short copyable client configuration and connection probe |
 | Diagnostics | Explain behavior and compare setups | Resource/request phases, raw/parsed logs, redacted export, neutral fixed-fixture benchmark and qualification receipts |
 | Test services | Verify a service temporarily | Capability-led chat/transcribe/speak/image and other qualified task inputs; stop/reset; no saved interactions |
+
+Barista is a compact top-bar panel, not a ninth destination. Its one-time
+invitation is dismissible; it remains disabled until the operator enables it.
+The sidebar footer shows the connected Juiced service version.
 
 The model inspector is a pane, not an additional main destination. Test services
 is the existing playground destination. Preserve accessible compact controls,
@@ -221,21 +238,49 @@ profiles unmeasured/unprotected until qualified. An explicit trial needs declare
 resource ceilings and bounded deadlines. Observed headroom shortfall stops new
 background admission rather than evicting Hot workers or trusting zero estimates.
 
-Initial queue defaults are global pending 64, per service 16, and per authenticated
-principal 8; anonymous callers share one principal pool. Essential wait deadline
-2 seconds, interactive 10 seconds and batch 30 seconds are configurable upper
-bounds on queue waiting, not completion guarantees. Request deadlines are separate
-and must be declared by the operation/acceptance profile. Within each class use
-FIFO; after at most eight consecutive essential admissions, attempt the oldest
-eligible nonessential waiter before granting more essential work. Preserve essential
-headroom during that attempt. Every waiter is admitted or receives a bounded
-error by its queue deadline, never waits forever. Eligibility excludes resource/
-policy-incompatible requests. If a running nonpreemptible operation prevents an
-essential request meeting its admission bound, reject/defer that background class
-before execution on subsequent admissions. Tests must prove reservation race
-safety, lease release, eligible aging and bounded rejection under both long-prefill
-and image interference. This is an observable anti-starvation/overload contract,
-not a claim of hard realtime scheduling.
+No default limit counts a user's conversations or imposes a per-model session
+quota. A user with five chat threads can keep all five and submit work normally.
+Idle threads do not each hold a live inference slot or duplicate model weights.
+By default, per-principal pending/concurrency/rate/token caps are unset; operators
+can explicitly add per-model or per-principal limits. Preserve genuinely explicit caps through migration;
+do not turn a historical hardcoded default into a user choice. Distinguish unset
+from explicit policy in the persisted schema and UI.
+
+Execution capacity is physical and provider-specific. Router fairly queues active
+requests when slots or compute are occupied, uses qualified continuous batching
+or compatible state reuse where available, and applies backpressure when predicted
+or observed RAM/VRAM/workspace headroom cannot safely fit the next operation.
+Do not wait for an actual OOM. CPU saturation, nonpreemptible device work, bounded
+request buffering and explicit operator limits can also require queueing. None
+is a business limit on how many consumer conversations can exist.
+
+Initial shared safety bounds remain global pending 64 and per-service pending 16,
+subject to measured buffered-request memory/deadline acceptance. These are bounded
+server queues, not per-user quotas. Anonymous callers share authority and the
+native fairness domain; session strings do not grant more privileges. Essential
+wait deadline 2 seconds, interactive 10 seconds and batch 30 seconds are configurable
+queue bounds, not completion guarantees. Within each class use FIFO; after at most
+eight consecutive essential admissions, attempt the oldest eligible nonessential
+waiter while preserving essential headroom. Every waiter progresses or receives
+a reasoned bounded overload response; no starvation or indefinite wait.
+
+P1 must join actual backend/state-slot acquisition to this queue and prove five
+simultaneous requests under measured headroom, plus idle/resumed thread counts
+above slot count. The current llama.cpp single-slot default and cache busy path
+are implementation audit targets, not the desired final behavior. Do not blindly
+set a current-upstream auto-slot flag on an older pinned engine or reduce saved
+per-request context to manufacture more slots. Qualify total versus per-request
+KV/recurrent budgets, context identity and cancellation for each selected engine.
+Unknown capacity still follows the explicit-trial/unprotected-profile rules above.
+Preserve useful cached state where compatible; cold reconstruction is explicit.
+
+Queue outcomes distinguish native slot occupancy, resource pressure, shared
+buffer exhaustion, deadline and an optional operator quota. Test no artificial
+principal/session rejection with caps unset, both default and explicit limits,
+fairness across users/threads, pressure recovery and lease cleanup. Include CPU,
+UMA and discrete pools without adding overlapping RAM and VRAM. If a nonpreemptible
+operation prevents essential service meeting its bound, reject/defer that
+background class before subsequent execution. This is not hard realtime.
 
 Respect busy leases, bounded draining and cached-state references. Cold load,
 weights-only sleep/downsize and hard eviction are different transitions. Resume
@@ -411,8 +456,10 @@ Improve existing OpenAI, Anthropic, Ollama, A1111, Wyoming and native handlers i
 place. Each supported operation defines request/result schema, error behavior,
 streaming/cancellation, auth, capability discovery and conformance fixture. Reject
 unsupported fields explicitly where silently ignoring changes output semantics.
-Core OpenAI compatibility does not imply stored conversations, hosted tools or an
-agent. Expose runtime model operations through optional MCP only; no file/shell tools.
+Core OpenAI compatibility does not imply stored conversations or general agents.
+Expose runtime model operations through the native APIs and optional MCP. Barista
+uses its explicit operator interface for its typed tools; ordinary protocol calls
+never gain that authority. No arbitrary file/shell tools.
 
 Prioritize actual client contracts: HA core llama_cpp plus Wyoming, Pi/T3's model
 provider, SillyTavern text/image/speech and standard OpenAI clients. Use public
@@ -494,6 +541,29 @@ for a genuinely read-only metadata-only change.
 No raw credential-bearing Compose exports. Keep Home Assistant and Pi running while
 rolling out unrelated UI/metadata work; use controlled maintenance for native restarts.
 
+### H. Barista operator assistant
+
+`BARISTA.md` defines the sole agent exception. Extend the native Juiced operator
+service with one bounded assistant owner; its tools call existing ModelManager,
+BackendOps, RuntimeConfig, Router, cache, preparation, comparison and job owners.
+No parallel model registry, scheduler, helper executor or required agent sidecar.
+The stable `juiced-assistant` role selects a normal hosted Chat model and shares
+its settings/worker. Operator-only dispatch rechecks enabled state, current
+permissions and target revisions, with task-driven access to Juiced data.
+Default permissions are full Juiced management after explicit enablement; optional
+restrictions can narrow them. Regular inference credentials cannot gain admin
+powers. Credential handles, offline/cloud consent and native resource/reference
+checks remain authoritative. Missing native operations must be completed rather
+than replaced by generated shell commands.
+
+B0 defines tools/skills and the role during P0/P1. B1 evaluates exact 2B/4B and
+larger model profiles in P2; B2 delivers optional onboarding/panel/control in P2
+after native guards and qualification. B3 adds P3/P4's qualified lifecycle/parser
+operations; B4 covers P5/P6 access and portability. Neither Barista nor adaptive
+sessions is deferred to P7. Full P1 and the current foundation corrections remain
+prerequisites to a mutating assistant release. The finite model/tool quality and
+authority suite, normal settings and all six requested tasks are mandatory.
+
 ## Platform support and qualification
 
 Support is a versioned matrix, not a list of logos. Compilation, package availability,
@@ -536,14 +606,14 @@ because its plan or code is approved.
 
 | Phase | Deliverable and existing owners | Exit evidence |
 | --- | --- | --- |
-| P0 Foundation | Reconcile docs; capabilities/qualification from ModelManager/BackendOps; native principal/session/operation context; exclude inherited Omni/arbitrary jobs; state-restore gate | Schema/unknown/policy discovery tests; negative graph/Omni/MCP fixtures; auth-header/session-isolation cases; backup/restore prerequisite for any changed durable state; no weight/profile change; existing HA/Pi checks |
-| P1 Resources | Shared-pool estimates and scoped atomic reservations, bounded queues/aging/deadlines, Hot protection, idle/maintenance controls in Router/EvictionEngine | UMA/device accounting fixtures; races/drain/cancel/failure tests; frozen acceptance profiles pass long-prefill/image interference and HA-like timing/resource gates; no hard realtime promise |
-| P2 Evidence and tuning | Versioned comparison runner, receipt invalidation, request phases/redacted bundle, evidence-backed recommendations | Frozen acceptance profiles pass matched quant/runtime cold/warm/concurrency/quality gates; cleanup/restoration and recommendation significance; deterministic report; UI task/error states |
-| P3 Packages and artifacts | Full-source/companion acquisition; separate complete model-revision and runtime-bundle promotion/rollback; components/adapters/drafts; matched optional preparation | Interrupted download/install/convert/promotion/restart and hash/disk failures; restore complete prior model plus companions/package; reference safety; concrete quality/resource gates; loss disclosure |
-| P4 Direct services | Complete selected image/speech/specialist contracts and client fixtures; broaden cache qualification by exact engine/protocol | Real native client success, failures, cancel and partial-stream checks; supported cache continuation after replacement/restart; policy/auth/admission parity |
-| P5 Auto service and access | Existing router integration, capability/affinity/fallback, optional per-client controls and quotas | Route replay/overhead/quality versus explicit models; no silent cloud; cross-protocol allowlist/admin/cancel tests; existing anonymous mode preserved |
-| P6 Portable distribution | Linux multiarch/Windows/native Mac packaging, host diagnostics and tested deployment guides; qualified additional providers | Core build/package CI per OS/arch; real-host support receipts separately named; clean install/upgrade/recovery and consumer smoke on qualified targets |
-| P7 Optional scale and formats | Remote native workers, replicas, OCI/dedup, advanced quant/compiled targets, answer cache/Batch/additional protocols, tiered cache and specialty providers when justified | Named consumer/workload, matched importer/engine and hardware evidence; no mandatory new infrastructure; no agent features |
+| P0 Foundation | Reconcile docs; capabilities/qualification from ModelManager/BackendOps; native principal/session/operation context; exclude inherited Omni/arbitrary jobs; sidebar service version; Barista B0 contract; state-restore gate | Schema/unknown/policy discovery tests; negative graph/Omni/MCP fixtures; auth-header/session-isolation cases; backup/restore prerequisite for any changed durable state; no weight/profile change; existing HA/Pi checks |
+| P1 Resources | Shared-pool estimates and scoped atomic reservations, bounded queues/aging/deadlines, Hot protection, adaptive session/slot acquisition with no default user quota, idle/maintenance controls in Router/EvictionEngine | UMA/device accounting, five concurrent/over-slot thread cases with unchanged context and optional caps; races/drain/cancel/failure tests; frozen acceptance profiles pass long-prefill/image interference and HA-like timing/resource gates; no hard realtime promise |
+| P2 Evidence and tuning | Versioned comparison runner, receipt invalidation, request phases/redacted bundle, evidence-backed recommendations; Barista B1 actual-model/tool qualification and B2 optional operator assistant | Frozen acceptance profiles pass matched quant/runtime cold/warm/concurrency/quality gates; cleanup/restoration and recommendation significance; deterministic report; UI task/error states; BARISTA.md quality/authority/cancellation suite and off-by-default onboarding |
+| P3 Packages and artifacts | Full-source/companion acquisition; separate complete model-revision and runtime-bundle promotion/rollback; components/adapters/drafts; matched optional preparation; Barista B3 lifecycle tools as their owners qualify | Interrupted download/install/convert/promotion/restart and hash/disk failures; restore complete prior model plus companions/package; reference safety; concrete quality/resource gates; loss disclosure |
+| P4 Direct services | Complete selected image/speech/specialist contracts and client fixtures; broaden cache qualification by exact engine/protocol; Barista B3 selected tool/parser conformance | Real native client success, failures, cancel and partial-stream checks; supported cache continuation after replacement/restart; policy/auth/admission parity |
+| P5 Auto service and access | Existing router integration, capability/affinity/fallback, optional per-client/model controls and quotas (unset by default); Barista B4 multi-operator restrictions | Route replay/overhead/quality versus explicit models; no silent cloud; cross-protocol allowlist/admin/cancel tests; existing anonymous mode preserved |
+| P6 Portable distribution | Linux multiarch/Windows/native Mac packaging, host diagnostics and tested deployment guides; qualified additional providers and Barista B4 | Core build/package CI per OS/arch; real-host support receipts separately named; clean install/upgrade/recovery and consumer smoke on qualified targets |
+| P7 Optional scale and formats | Remote native workers, replicas, OCI/dedup, advanced quant/compiled targets, answer cache/Batch/additional protocols, tiered cache and specialty providers when justified | Named consumer/workload, matched importer/engine and hardware evidence; no mandatory new infrastructure; no additional agent features beyond Barista |
 
 Every P3/P4/P6/P7 release has a selected-family manifest naming exact providers,
 models/artifact families, operations, platforms and acceptance profiles. Unselected
@@ -602,7 +672,7 @@ Each returns APPROVE or REQUEST CHANGES, blocking findings with source/reason,
 required edits and important nonblocking risks. The parent resolves objections in
 one canonical revision and records an evidence-linked disposition. Rechecks are
 new review tasks with the revised plan and prior findings. Whole-plan approval
-requires three explicit approvals on the same plan revision/hash and pinned annex
+requires three explicit approvals on the same plan revision/hash, pinned annex and normative Barista contract
 bundle, no unaddressed blocker,
 and preserved user exclusions. Approval permits implementation; it does not certify
 unimplemented capabilities, all hardware, performance or deployment success.

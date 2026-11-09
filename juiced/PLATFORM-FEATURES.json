@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "plan_revision": 2,
+  "plan_revision": 3,
   "baseline": "Juiced v0.8.6 / 9cd79d01",
   "scope_rules": {
     "core": "Required staged product behavior within selected supported families; no claim of every provider combination",
@@ -1020,13 +1020,13 @@
       "id": "F084",
       "feature": "Multiple concurrent chat slots",
       "baseline_status": "delivered",
-      "phase": "retain",
-      "disposition": "preserve and regression-check only where affected",
+      "phase": "P1",
+      "disposition": "resource-driven concurrent request/slot scheduling with no default per-user or per-model session quota; preserve normal context and shared workers; operator caps remain optional",
       "baseline_evidence": [
         "knobs",
         "router"
       ],
-      "scope": "retained"
+      "scope": "core"
     },
     {
       "id": "F085",
@@ -1105,7 +1105,7 @@
       "feature": "Tool calling and reasoning parsers",
       "baseline_status": "partial",
       "phase": "P4",
-      "disposition": "selected tool/reasoning parser conformance; never execute returned model tools; P0 excludes inherited Omni loop",
+      "disposition": "P2 qualifies the selected Barista tool/parser subset under its operator-only contract; P4 broadens inference parser conformance; ordinary APIs never execute returned model tools and inherited Omni stays excluded",
       "baseline_evidence": [
         "api",
         "models"
@@ -2301,7 +2301,7 @@
       "feature": "Per-client rate, token and resource quotas",
       "baseline_status": "missing",
       "phase": "P1",
-      "disposition": "global/anonymous and service queue/resource bounds first; P5 adds authenticated client-specific policy",
+      "disposition": "P1 requires shared physical-resource admission, fair bounded queues and disabled-by-default identity/session quotas; P5 adds optional operator-configured client limits",
       "baseline_evidence": [
         "router",
         "compatibility"
@@ -2348,13 +2348,13 @@
       "id": "F194",
       "feature": "Web search, terminal tools and agent execution loops",
       "baseline_status": "outside",
-      "phase": "excluded",
-      "disposition": "preserve runtime/client boundary; do not implement in core",
+      "phase": "P2",
+      "disposition": "sole Barista operator-assistant exception under BARISTA.md B0-B4; off by default, typed native Juiced tools and bounded primary-source retrieval; general agents, arbitrary terminal/browser/filesystem tools and workflows remain excluded",
       "baseline_evidence": [
         "UI",
         "api"
       ],
-      "scope": "excluded"
+      "scope": "core"
     },
     {
       "id": "F195",
@@ -2407,13 +2407,13 @@
       "id": "F199",
       "feature": "Total versus per-request context budgets",
       "baseline_status": "delivered",
-      "phase": "retain",
-      "disposition": "preserve and regression-check only where affected",
+      "phase": "P1",
+      "disposition": "preserve configured per-request context while budgeting total KV/recurrent/cache state and physical slots across resource-driven concurrent sessions; qualify pinned engine semantics",
       "baseline_evidence": [
         "knobs",
         "models"
       ],
-      "scope": "retained"
+      "scope": "core"
     },
     {
       "id": "F200",
@@ -2559,6 +2559,32 @@
         "UI"
       ],
       "scope": "core"
+    }
+  ],
+  "user_requirements": [
+    {
+      "id": "J001",
+      "feature": "Barista optional Juiced operator assistant",
+      "phase": "P2",
+      "scope": "core",
+      "disposition": "B0 contract in P0/P1, B1 model/tool qualification and B2 optional operator UI in P2, B3 lifecycle/parser expansion in P3/P4, B4 access/portability in P5/P6; BARISTA.md owns acceptance",
+      "request_date": "2026-11-09"
+    },
+    {
+      "id": "J002",
+      "feature": "Resource-driven sessions with optional user limits",
+      "phase": "P1",
+      "scope": "core",
+      "disposition": "No mandatory session/principal quota; native fair queuing and real/predicted physical-pool admission; preserve explicit caps and context; P5 adds optional policy UI",
+      "request_date": "2026-11-09"
+    },
+    {
+      "id": "J003",
+      "feature": "Connected Juiced version in sidebar footer",
+      "phase": "P0",
+      "scope": "core",
+      "disposition": "Display native Juiced service version, with development/unknown states; never infer it from UI package or inherited manager version",
+      "request_date": "2026-11-09"
     }
   ]
 }

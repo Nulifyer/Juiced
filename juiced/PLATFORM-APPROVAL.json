@@ -1,12 +1,42 @@
 {
-  "plan_revision": 2,
-  "plan_sha256": "987a9cd9dbf23edcdb4efc83d26a05ad9cfb0fa8e4a30c2a7546b102694d532b",
-  "annex_sha256": "88611238af5f856a6780a1fdb68289c17203fa5b348d5d49c5f639a4d54a9840",
-  "reviewed_at": "2026-11-07",
-  "reviewers": [
-    {"seat": "A", "model": "gpt-6.1-sol", "reasoningEffort": "high", "verdict": "APPROVE"},
-    {"seat": "B", "model": "gpt-6.1-sol", "reasoningEffort": "high", "verdict": "APPROVE"},
-    {"seat": "C", "model": "gpt-6.1-sol", "reasoningEffort": "high", "verdict": "APPROVE"}
-  ],
-  "scope": "Staged plan approval only; implementation, hardware, performance and deployment require separate acceptance."
+  "plan_revision": 3,
+  "status": "pending_review",
+  "plan_sha256": "2443f4a5d089b633c18cbf2b2b91df7905f26a38a84486b332ef53703beda5dd",
+  "annex_sha256": "7e35d19f19f8fb7950c22ce119999f48229a8ddc79eaf331611c4913951313d0",
+  "projection_sha256": "2c438ca7250e6fc5a14180795e2be6ec59f6d0c9aa13edfda091c5b5882b37da",
+  "barista_contract_sha256": "d9e0d232bf14f8278699921cb0d522821e73a9f3a0fc4934fc611a6f2ca04ae6",
+  "requested_review": {
+    "seats": 3,
+    "model": "gpt-6.1-sol",
+    "reasoningEffort": "high"
+  },
+  "reviewers": [],
+  "previous_approved": {
+    "plan_revision": 2,
+    "plan_sha256": "987a9cd9dbf23edcdb4efc83d26a05ad9cfb0fa8e4a30c2a7546b102694d532b",
+    "annex_sha256": "88611238af5f856a6780a1fdb68289c17203fa5b348d5d49c5f639a4d54a9840",
+    "reviewed_at": "2026-11-07",
+    "reviewers": [
+      {
+        "seat": "A",
+        "model": "gpt-6.1-sol",
+        "reasoningEffort": "high",
+        "verdict": "APPROVE"
+      },
+      {
+        "seat": "B",
+        "model": "gpt-6.1-sol",
+        "reasoningEffort": "high",
+        "verdict": "APPROVE"
+      },
+      {
+        "seat": "C",
+        "model": "gpt-6.1-sol",
+        "reasoningEffort": "high",
+        "verdict": "APPROVE"
+      }
+    ],
+    "scope": "Staged plan approval only; implementation, hardware, performance and deployment require separate acceptance."
+  },
+  "scope": "Revision 3 adds the user-authorized Barista exception, resource-driven session defaults and sidebar service version. Revision 2 approval does not qualify this new bundle or implementation."
 }
