@@ -988,7 +988,7 @@ void JuicedService::publish_import(const std::string& id) {
   { std::lock_guard<std::mutex> lock(mutex_); job = state_["imports"].at(id); }
   const auto intent = job.at("publication");
   auto mutation = server_.model_manager_->model_mutation(intent.at("name").get<std::string>(), false);
-  if (!mutation.lock.owns_lock()) throw AdmissionError("model_mutation_busy", "Wait for the current model mutation to finish", 409);
+  if (!mutation.owns_lock()) throw AdmissionError("model_mutation_busy", "Wait for the current model mutation to finish", 409);
   const auto source = directory_ / "imports" / (id + ".part");
   const auto destination = std::filesystem::path(intent.at("destination").get<std::string>());
   const auto valid = [&](const std::filesystem::path& path) {

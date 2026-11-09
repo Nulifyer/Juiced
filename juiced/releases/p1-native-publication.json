@@ -11,7 +11,8 @@
     "coherent model-options response snapshots",
     "snapshot publication and terminal manager-process recovery",
     "persistent HTTP credential transition epochs",
-    "recoverable chunked GGUF import publication"
+    "recoverable chunked GGUF import publication",
+    "native model discovery and coherent options publication"
   ],
   "scope": [
     "Juiced state writes retain a private last-committed checkpoint; failed writes restore rejected policy/cache controls and revision. Policy is the sole authority for Hot residency.",
@@ -40,11 +41,14 @@
     "ModelManager per-model mutation ownership serializes registration, import publication and removal. Committed publishing intent vetoes native/gateway removal; final publication revalidates provenance. Import no-overwrite protects the full current public namespace, including conflict rename.",
     "Initial/replayed import recipe and purpose normalize to one effective definition. Compact Library controls retry publication, resolve name conflicts and retry cleanup through native endpoints.",
     "Unset/empty admin overrides inherit the regular key before enforcement, identity and epoch activation. Empty credentials never match configured keys. Trusted-LAN and admin-only behavior remain explicit.",
-    "Cache-profile qualification parses the actual slot-save argument through the backend argument owner and compares filesystem directories. JSON escaping, unrelated option values and ambiguous duplicate flags cannot qualify storage."
+    "Cache-profile qualification parses the actual slot-save argument through the backend argument owner and compares filesystem directories. JSON escaping, unrelated option values and ambiguous duplicate flags cannot qualify storage.",
+    "Dynamic BackendOps discovery executes outside shared model cache/options-writer locks. A serialized builder revalidates native invalidation and provider revisions before native cache publication.",
+    "Options/profile write snapshots hold per-model and file-writer ownership after discovery, binding the recipe, selection and registry defaults through persistence. Notifications defer until outer mutation ownership releases. Unknown-model import option overlays remain supported.",
+    "Directory watcher lifecycle serializes separately; joining a watcher holds no cache lock, and directory/invalidation publication is atomic under the cache owner."
   ],
   "verification": {
-    "status": "Final local Linux28 native/API43/UI77, actual CPU cache/auth/disk and controlled cancellation/save-failure gates passed. Fresh exact-source platform/image/recovery evidence pending.",
-    "native_contracts": 28,
+    "status": "Final local ModelManager lock gates passed:29 native contracts,20 discovery/publication assertions,43 API cases and actual CPU/cache/configuration/cloud suites. Exact-source platform/image results remain pending.",
+    "native_contracts": 29,
     "persistence_checks": 90,
     "gateway_assertions": 34,
     "cloud_runtime_assertions": 12,
@@ -63,7 +67,8 @@
     "failed_authentication_activation_cases": 2,
     "recovery_scope": "Manager-process restart with filesystem contents retained and synchronous injected failures. Host-crash/power-loss ordering is unqualified; no file/directory synchronization is claimed.",
     "import_ownership_assertions": 48,
-    "ui_workflows": 77
+    "ui_workflows": 77,
+    "model_discovery_assertions": 20
   },
   "remaining": [
     "Full P1 fourteen-family path coverage, ingress/background/acquisition/preparation/install bounds, all-writer maintenance, exact execution identities, Realtime context/quiescence, termination reconciliation, early streaming status, shared observations and frozen service-protection gates.",

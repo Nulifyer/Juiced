@@ -226,3 +226,20 @@ filesystem directory with Juiced storage. It accepts quoted paths containing spa
 or backslashes and rejects missing or duplicate storage flags. An unrelated option
 containing the directory does not establish cache configuration. Backend version
 and exact-profile useful-reuse acceptance still apply.
+
+Dynamic provider discovery runs outside ModelManager's shared cache and options-
+writer locks. One builder serializes discovery, captures the native invalidation
+revision and discards results if that revision changes. Provider-specific revision
+checks remain at insertion. Native projection and alias publication stay under the
+existing cache owner.
+
+Options/profile writes capture the recipe, selection and registry defaults after
+discovery, with per-model mutation and file-writer ownership. Registration cannot
+change that captured definition during persistence. Nested changes defer model-
+change notifications until the outer claim releases, after writer ownership ends.
+Watcher start/stop is serialized without holding the cache lock while joining;
+directory changes publish with cache invalidation under that lock.
+
+This lock boundary does not establish request-wide lookup deadlines, pre-body or
+aggregate ingress admission, all-writer maintenance or essential-service protection.
+Those remain P1 gates, alongside exact execution identities and terminal accounting.

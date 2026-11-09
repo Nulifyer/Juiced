@@ -26,6 +26,7 @@
 #include <cstdint>
 #include <cstring>
 #include <exception>
+#include <cstdio>
 #include <sstream>
 #include <thread>
 #include <chrono>
@@ -1467,9 +1468,14 @@ std::string ModelManager::get_hf_cache_dir() const {
     return lemon::utils::get_hf_cache_dir();
 }
 
+void ModelManager::invalidate_models_cache_locked() {
+    ++cache_revision_;
+    cache_valid_ = false;
+}
+
 void ModelManager::invalidate_models_cache() {
     std::lock_guard<std::mutex> lock(models_cache_mutex_);
-    cache_valid_ = false;
+    invalidate_models_cache_locked();
 }
 
 void ModelManager::set_models_changed_callback(std::function<void(uint64_t)> cb) {
@@ -1519,20 +1525,20 @@ void ModelManager::notify_models_changed() {
 }
 
 void ModelManager::set_extra_models_dir(const std::string& dir) {
-    extra_models_dir_ = dir;
-
-    directory_watcher_.reset();
-
-    if (!extra_models_dir_.empty()) {
-        LOG(INFO, "ModelManager") << "Extra models directory set to: " << extra_models_dir_ << std::endl;
-        start_directory_watcher();
-    }
-
     {
-        std::lock_guard<std::mutex> lock(models_cache_mutex_);
-        cache_valid_ = false;
+        // Joining the old watcher must not hold the cache lock its callback uses.
+        std::lock_guard<std::mutex> watcher(directory_watcher_mutex_);
+        directory_watcher_.reset();
+        {
+            std::lock_guard<std::mutex> lock(models_cache_mutex_);
+            extra_models_dir_ = dir;
+            invalidate_models_cache_locked();
+        }
+        if (!dir.empty()) {
+            LOG(INFO, "ModelManager") << "Extra models directory set to: " << dir << std::endl;
+            start_directory_watcher();
+        }
     }
-
     notify_models_changed();
 }
 
@@ -1546,7 +1552,7 @@ void ModelManager::start_directory_watcher() {
         LOG(DEBUG, "ModelManager") << "Extra models directory changed, invalidating cache" << std::endl;
         {
             std::lock_guard<std::mutex> lock(models_cache_mutex_);
-            cache_valid_ = false;
+            invalidate_models_cache_locked();
         }
         notify_models_changed();
     });
@@ -2273,16 +2279,42 @@ void ModelManager::save_user_models(const json& user_models) {
     save_user_json(get_user_models_file(), user_models);
 }
 
+ModelManager::OptionsWriteSnapshot ModelManager::begin_options_write(const std::string& model_name) {
+    for (;;) {
+        // External discovery must finish before writer ownership is acquired.
+        build_cache();
+        std::string key;
+        {
+            std::lock_guard<std::mutex> cache(models_cache_mutex_);
+            if (!cache_valid_) continue;
+            const auto alias = public_model_aliases_.find(model_name);
+            key = alias == public_model_aliases_.end() ? model_name : alias->second;
+        }
+        auto mutation = model_mutation(key);
+        std::unique_lock<std::mutex> writer(recipe_options_write_mutex_);
+        std::lock_guard<std::mutex> cache(models_cache_mutex_);
+        if (!cache_valid_) continue;
+        const auto alias = public_model_aliases_.find(model_name);
+        const auto current_key = alias == public_model_aliases_.end() ? model_name : alias->second;
+        if (current_key != key) continue;
+        std::optional<ModelInfo> info;
+        const auto found = models_cache_.find(key);
+        if (found != models_cache_.end()) info = apply_execution_profile_locked(key, found->second);
+        return {std::move(mutation), std::move(writer), key, cache_key_to_canonical_id(key), std::move(info), registry_recipe_options_locked(key)};
+    }
+}
+
 void ModelManager::save_model_options(const ModelInfo& info) {
     LOG(INFO, "ModelManager") << "Saving options for model: " << info.model_name << std::endl;
     // Persist under canonical ID (built-ins are keyed bare in cache but
     // recipe_options.json stores them as builtin.<name>).
-    std::lock_guard<std::mutex> write_lock(recipe_options_write_mutex_);
-    auto current = get_model_info(info.model_name);
+    auto write = begin_options_write(info.model_name);
+    if (!write.info) throw std::runtime_error("Model not found: " + info.model_name);
+    auto current = *write.info;
     if (current.recipe != info.recipe)
         throw std::invalid_argument("Execution profile changed before saving options; refresh and retry");
-    const std::string key = resolve_model_name(info.model_name);
-    const std::string id = cache_key_to_canonical_id(key);
+    const auto& key = write.key;
+    const auto& id = write.id;
     current.model_name = key;
     current.recipe_options = RecipeOptions(current.recipe, info.recipe_options.to_json());
     json snapshot;
@@ -2291,6 +2323,7 @@ void ModelManager::save_model_options(const ModelInfo& info) {
         snapshot = recipe_options_;
         snapshot[id] = current.recipe_options.to_json();
     }
+    if (options_persistence_barrier_) options_persistence_barrier_();
     save_user_json(get_recipe_options_file(), snapshot);
     {
         std::lock_guard<std::mutex> lock(models_cache_mutex_);
@@ -2384,14 +2417,12 @@ json ModelManager::update_saved_model_options(const std::string& model_name, con
 json ModelManager::write_saved_model_options(const std::string& model_name,
                                              const json& options, bool merge, const std::string& expected_recipe) {
     if (options_write_barrier_) options_write_barrier_();
-    std::lock_guard<std::mutex> write_lock(recipe_options_write_mutex_);
-    const std::string cache_key = resolve_model_name(model_name);
-    const std::string id = cache_key_to_canonical_id(cache_key);
+    auto write = begin_options_write(model_name);
+    const auto& cache_key = write.key;
+    const auto& id = write.id;
     LOG(INFO, "ModelManager") << "Updating saved options for model: " << model_name << std::endl;
-    ModelInfo info;
-    bool have_info = true;
-    try { info = get_model_info(cache_key); }
-    catch (const std::exception&) { have_info = false; }
+    ModelInfo info = write.info.value_or(ModelInfo{});
+    const bool have_info = write.info.has_value();
     if (!expected_recipe.empty() && (!have_info || info.recipe != expected_recipe))
         throw std::invalid_argument("Execution profile changed before saving options; refresh and retry");
     info.model_name = cache_key;
@@ -2419,6 +2450,7 @@ json ModelManager::write_saved_model_options(const std::string& model_name,
         if (saved.empty()) snapshot.erase(id);
         else snapshot[id] = saved;
     }
+    if (options_persistence_barrier_) options_persistence_barrier_();
     save_user_json(get_recipe_options_file(), snapshot);
     {
         std::lock_guard<std::mutex> lock(models_cache_mutex_);
@@ -2426,9 +2458,9 @@ json ModelManager::write_saved_model_options(const std::string& model_name,
 
         if (have_info) {
             info.recipe_options = build_recipe_options(
-                info, registry_recipe_options_locked(cache_key), id, json{{id, saved}});
+                info, write.registry_options, id, json{{id, saved}});
             update_model_options_in_cache_locked(info);
-        } else cache_valid_ = false;
+        } else invalidate_models_cache_locked();
     }
 
     return saved;
@@ -2462,21 +2494,22 @@ json ModelManager::get_execution_profiles(const std::string& model_name) {
 }
 
 void ModelManager::select_execution_profile(const std::string& model_name, const json& profile) {
-    const auto key = resolve_model_name(model_name);
-    const auto id = cache_key_to_canonical_id(key);
     const auto profile_id = profile.at("id").get<std::string>();
     if (profile_id.empty() || profile_id.size() > 160) throw std::invalid_argument("Invalid execution profile identifier");
     if (profile_id != "registered" && !backends::descriptor_for(profile.at("recipe").get<std::string>()))
         throw std::invalid_argument("Unknown execution runtime");
-    std::lock_guard<std::mutex> writer(recipe_options_write_mutex_);
-    const auto current = get_model_info(model_name);
+    auto write = begin_options_write(model_name);
+    if (!write.info) throw std::runtime_error("Model not found: " + model_name);
+    const auto& id = write.id;
+    const auto& current = *write.info;
     const auto current_options = current.recipe_options.to_json();
-    const auto previous_saved = get_saved_model_options(model_name);
+    json previous_saved;
     json previous_profiles, next_profiles, previous_options, next_options;
     {
         std::lock_guard<std::mutex> lock(models_cache_mutex_);
         previous_profiles = execution_profiles_;
         previous_options = recipe_options_;
+        previous_saved = recipe_options_.value(id, json::object());
     }
     next_profiles = previous_profiles;
     next_options = previous_options;
@@ -2514,7 +2547,7 @@ void ModelManager::select_execution_profile(const std::string& model_name, const
         std::lock_guard<std::mutex> lock(models_cache_mutex_);
         execution_profiles_.swap(next_profiles);
         recipe_options_.swap(next_options);
-        cache_valid_ = false;
+        invalidate_models_cache_locked();
     }
 }
 
@@ -3754,13 +3787,45 @@ std::unique_lock<std::mutex> ModelManager::lock_current_models_cache() {
     }
 }
 
-void ModelManager::build_cache() {
-    std::lock_guard<std::mutex> lock(models_cache_mutex_);
+std::vector<ModelInfo> ModelManager::discover_dynamic_models() {
+    std::vector<ModelInfo> models;
+    const auto* config = RuntimeConfig::global();
+    const bool offline = config && config->offline();
+    backends::BackendOpsContext context;
+    context.model_manager = this;
+    context.cloud_registry = cloud_registry_;
+    for (const auto* descriptor : backends::all_descriptors()) {
+        if (!descriptor->dynamic_models || (offline && descriptor->recipe == "cloud")) continue;
+        for (auto& model : backends::ops_for(descriptor->recipe)->discover_models(context))
+            models.push_back(std::move(model));
+    }
+    return models;
+}
 
-    if (cache_valid_) {
+void ModelManager::build_cache() {
+    {
+        std::lock_guard<std::mutex> lock(models_cache_mutex_);
+        if (cache_valid_) return;
+    }
+    // Serialize builders, not registry readers/writers or options publication.
+    std::lock_guard<std::mutex> builder(models_cache_build_mutex_);
+    for (;;) {
+        uint64_t revision;
+        {
+            std::lock_guard<std::mutex> lock(models_cache_mutex_);
+            if (cache_valid_) return;
+            revision = cache_revision_;
+        }
+        auto dynamic_models = discover_dynamic_models();
+        std::unique_lock<std::mutex> lock(models_cache_mutex_);
+        if (cache_valid_) return;
+        if (revision != cache_revision_) continue;
+        rebuild_models_cache_locked(std::move(dynamic_models));
         return;
     }
+}
 
+void ModelManager::rebuild_models_cache_locked(std::vector<ModelInfo> dynamic_models) {
     LOG(INFO, "ModelManager") << "Building models cache..." << std::endl;
 
     models_cache_.clear();
@@ -3953,38 +4018,9 @@ void ModelManager::build_cache() {
         all_models[name] = info;
     }
 
-    // Step 1.6: Dynamic discovery. Backends whose models are supplied at runtime
-    // (descriptor dynamic_models = true - flm from `flm list`, cloud from each
-    // provider) contribute their models via ops->discover_models(). Each carries
-    // its own downloaded status. Precedence: server/user/extra models win, so we
-    // emplace (don't overwrite). Failures are handled inside each backend's ops.
-    {
-        const bool offline = [] {
-            auto* cfg = RuntimeConfig::global();
-            return cfg && cfg->offline();
-        }();
-
-        backends::BackendOpsContext octx;
-        octx.model_manager = this;
-        octx.cloud_registry = cloud_registry_;
-
-        for (const auto* desc : backends::all_descriptors()) {
-            if (!desc->dynamic_models) {
-                continue;
-            }
-
-            if (offline && desc->recipe == "cloud") {
-                LOG(DEBUG, "ModelManager")
-                    << "Offline mode enabled, skipping cloud model discovery"
-                    << std::endl;
-                continue;
-            }
-
-            for (auto& m : backends::ops_for(desc->recipe)->discover_models(octx)) {
-                all_models.emplace(m.model_name, std::move(m));
-            }
-        }
-    }
+    // Native inputs are sampled under this lock; external results retain their
+    // provider revisions and are checked again when inserted below.
+    for (auto& model : dynamic_models) all_models.emplace(model.model_name, std::move(model));
 
     // Clients are not guaranteed to handle a model that declares no deployment
     // label. Every ingest path above stamps one; name any model that reached
@@ -4283,7 +4319,7 @@ void ModelManager::update_model_in_cache(const std::string& model_name, bool dow
         if (downloaded) {
             resolve_all_model_paths(it->second);
             if (backends::ops_for(it->second.recipe)->invalidates_cache_after_download()) {
-                cache_valid_ = false;
+                invalidate_models_cache_locked();
                 LOG(INFO, "ModelManager") << "Invalidated model cache after download for '"
                           << model_name << "' (backend rebuilds its model list)" << std::endl;
                 return;
@@ -4835,16 +4871,36 @@ static bool user_entry_is_router_collection(const json& user_models,
         user_models.at(key).value("recipe", std::string()));
 }
 
+ModelManager::ModelMutation::ModelMutation(ModelManager* manager, std::shared_ptr<ModelMutationState> owner, bool wait)
+    : owner_(std::move(owner)), manager_(manager), lock_(owner_->mutex, std::defer_lock) {
+    if (wait) lock_.lock(); else (void)lock_.try_lock();
+    if (lock_.owns_lock()) ++owner_->depth;
+}
+ModelManager::ModelMutation::ModelMutation(ModelMutation&& other) noexcept
+    : owner_(std::move(other.owner_)), manager_(other.manager_), lock_(std::move(other.lock_)) {}
+ModelManager::ModelMutation::~ModelMutation() noexcept {
+    if (!lock_.owns_lock()) return;
+    const bool notify = --owner_->depth == 0 && owner_->notification;
+    if (notify) owner_->notification = false;
+    lock_.unlock();
+    if (notify) {
+        try { manager_->notify_models_changed(); }
+        catch (...) { std::fputs("ModelManager: notification failed after mutation release\n", stderr); }
+    }
+}
+void ModelManager::notify_after_mutation(ModelMutation& mutation) noexcept {
+    mutation.owner_->notification = true;
+}
 ModelManager::ModelMutation ModelManager::model_mutation(const std::string& model_name, bool wait) {
     const auto name = is_user_model_name(model_name) ? strip_user_model_prefix(model_name) : model_name;
-    std::shared_ptr<std::recursive_mutex> owner;
+    std::shared_ptr<ModelMutationState> owner;
     {
         std::lock_guard<std::mutex> lock(model_mutations_mutex_);
         auto& entry = model_mutations_[name];
-        if (!entry) entry = std::make_shared<std::recursive_mutex>();
+        if (!entry) entry = std::make_shared<ModelMutationState>();
         owner = entry;
     }
-    return ModelMutation(std::move(owner), wait);
+    return ModelMutation(this, std::move(owner), wait);
 }
 
 void ModelManager::register_user_model(const std::string& model_name,
@@ -4920,7 +4976,7 @@ void ModelManager::register_user_model(const std::string& model_name,
                 updated_user_models.at(clean_name).value("checkpoints", json::object()) == model_entry.value("checkpoints", json::object()) &&
                 updated_user_models.at(clean_name).value("source", "") == "local_path") {
                 user_models_ = std::move(updated_user_models);
-                cache_valid_ = false;
+                invalidate_models_cache_locked();
                 return;
             }
             throw ModelRegistrationConflict("That model variant is already registered; existing settings were preserved");
@@ -4932,7 +4988,7 @@ void ModelManager::register_user_model(const std::string& model_name,
         updated_user_models[clean_name] = model_entry;
         save_user_models(updated_user_models);
         user_models_ = std::move(updated_user_models);
-        cache_valid_ = false;
+        invalidate_models_cache_locked();
     }
 
     // A router collection carries a routing policy, so its lifecycle affects the
@@ -4942,7 +4998,7 @@ void ModelManager::register_user_model(const std::string& model_name,
     // reconcile. Registering ordinary models (e.g. a collection's helper
     // components) still must not trigger one.
     if (is_router_collection_recipe(recipe) || overwrote_router_collection) {
-        notify_models_changed();
+        notify_after_mutation(mutation);
     }
 }
 
@@ -4966,11 +5022,11 @@ void ModelManager::unregister_user_model(const std::string& model_name) {
         updated_user_models.erase(clean_name);
         save_user_models(updated_user_models);
         user_models_ = std::move(updated_user_models);
-        cache_valid_ = false;
+        invalidate_models_cache_locked();
     }
 
     if (was_router_collection) {
-        notify_models_changed();
+        notify_after_mutation(mutation);
     }
 }
 
@@ -5046,7 +5102,7 @@ void ModelManager::download_registered_model(const ModelInfo& info, bool do_not_
                 (*model)["size"] = it->second.size;
                 save_user_models(updated_user_models);
                 user_models_ = std::move(updated_user_models);
-                cache_valid_ = false;
+                invalidate_models_cache_locked();
             }
         }
     }
@@ -5684,7 +5740,7 @@ void ModelManager::download_model(const std::string& model_name,
         // the stale empty-components/not-downloaded state until a restart.
         if (!repo_id.empty()) {
             std::lock_guard<std::mutex> lock(models_cache_mutex_);
-            cache_valid_ = false;
+            invalidate_models_cache_locked();
         }
 
         // Emit a single completion event for the whole collection
@@ -6769,14 +6825,15 @@ void ModelManager::delete_model(const std::string& model_name) {
     const int uncaught_on_entry = std::uncaught_exceptions();
     struct DeleteNotifier {
         ModelManager* manager;
+        ModelMutation* mutation;
         bool enabled;
         int uncaught_on_entry;
         ~DeleteNotifier() {
             if (enabled && std::uncaught_exceptions() == uncaught_on_entry) {
-                manager->notify_models_changed();
+                manager->notify_after_mutation(*mutation);
             }
         }
-    } delete_notifier{this, notify_on_delete, uncaught_on_entry};
+    } delete_notifier{this, &mutation, notify_on_delete, uncaught_on_entry};
 
     // Handle extra models (from --extra-models-dir) - these are user-managed external files
     if (canonical_model_name.substr(0, 6) == "extra.") {
@@ -6866,7 +6923,7 @@ void ModelManager::delete_model(const std::string& model_name) {
             updated_user_models.erase(strip_user_model_prefix(canonical_model_name));
             save_user_models(updated_user_models);
             user_models_ = std::move(updated_user_models);
-            cache_valid_ = false;
+            invalidate_models_cache_locked();
             LOG(INFO, "ModelManager") << "✓ Removed from user_models.json" << std::endl;
         }
 
@@ -6915,7 +6972,7 @@ void ModelManager::delete_model(const std::string& model_name) {
             updated_user_models.erase(strip_user_model_prefix(canonical_model_name));
             save_user_models(updated_user_models);
             user_models_ = std::move(updated_user_models);
-            cache_valid_ = false;
+            invalidate_models_cache_locked();
             LOG(INFO, "ModelManager") << "✓ Removed from user_models.json" << std::endl;
         }
 
@@ -7060,7 +7117,7 @@ void ModelManager::delete_model(const std::string& model_name) {
         updated_user_models.erase(strip_user_model_prefix(canonical_model_name));
         save_user_models(updated_user_models);
         user_models_ = std::move(updated_user_models);
-        cache_valid_ = false;
+        invalidate_models_cache_locked();
         LOG(INFO, "ModelManager") << "✓ Removed from user_models.json" << std::endl;
     }
 

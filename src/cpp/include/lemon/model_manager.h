@@ -182,6 +182,11 @@ class CloudProviderRegistry;
 
 class ModelManager {
     friend struct ModelPublicationTestHook;
+    struct ModelMutationState {
+        std::recursive_mutex mutex;
+        size_t depth = 0;
+        bool notification = false;
+    };
 public:
     explicit ModelManager(const std::string& extra_models_dir = "");
 
@@ -268,13 +273,18 @@ public:
 
     // One model's publication/removal spans registry and artifact/state commits.
     // Recursive ownership lets those operations call the normal registry writers.
-    struct ModelMutation {
-        std::shared_ptr<std::recursive_mutex> owner;
-        std::unique_lock<std::recursive_mutex> lock;
-        ModelMutation(std::shared_ptr<std::recursive_mutex> mutex, bool wait)
-            : owner(std::move(mutex)), lock(*owner, std::defer_lock) {
-            if (wait) lock.lock(); else (void)lock.try_lock();
-        }
+    class ModelMutation {
+        friend class ModelManager;
+        std::shared_ptr<ModelMutationState> owner_;
+        ModelManager* manager_;
+        std::unique_lock<std::recursive_mutex> lock_;
+        ModelMutation(ModelManager*, std::shared_ptr<ModelMutationState>, bool wait);
+    public:
+        ModelMutation(const ModelMutation&) = delete;
+        ModelMutation& operator=(const ModelMutation&) = delete;
+        ModelMutation(ModelMutation&&) noexcept;
+        ~ModelMutation() noexcept;
+        bool owns_lock() const { return lock_.owns_lock(); }
     };
     ModelMutation model_mutation(const std::string& model_name, bool wait = true);
     // Installed before serving; the durable import owner can veto deletion.
@@ -559,6 +569,19 @@ private:
     json registry_recipe_options_locked(const std::string& cache_key);
     json write_saved_model_options(const std::string& model_name, const json& options, bool merge, const std::string& expected_recipe);
 
+    struct OptionsWriteSnapshot {
+        ModelMutation mutation;
+        std::unique_lock<std::mutex> writer;
+        std::string key, id;
+        std::optional<ModelInfo> info;
+        json registry_options;
+    };
+    void notify_after_mutation(ModelMutation& mutation) noexcept;
+    OptionsWriteSnapshot begin_options_write(const std::string& model_name);
+    std::vector<ModelInfo> discover_dynamic_models();
+    void rebuild_models_cache_locked(std::vector<ModelInfo> dynamic_models);
+    void invalidate_models_cache_locked();
+
     // Cache management
     void build_cache();
     std::unique_lock<std::mutex> lock_current_models_cache();
@@ -598,13 +621,14 @@ private:
     json recipe_options_;
     json execution_profiles_ = json::object();
     std::function<void()> profile_persistence_barrier_;
-    std::function<void()> cache_read_barrier_, options_write_barrier_;
+    std::function<void()> cache_read_barrier_, options_write_barrier_, options_persistence_barrier_;
     ModelInfo apply_execution_profile_locked(const std::string& cache_key, ModelInfo info) const;
     json architecture_defaults_;  // Per-architecture recipe option overlays (from resources)
     std::string extra_models_dir_;  // Secondary directory for GGUF model discovery
     CloudProviderRegistry* cloud_registry_ = nullptr;  // Not owned
     std::function<std::string()> default_model_source_provider_;
     std::unique_ptr<DirectoryWatcher> directory_watcher_;
+    std::mutex directory_watcher_mutex_;
 
     // Fired after the model registry changes (add/edit/remove). Guarded by its
     // own mutex; invoked outside all other ModelManager locks.
@@ -618,8 +642,10 @@ private:
 
     // Cache of all models with their download status
     mutable std::mutex models_cache_mutex_;
+    std::mutex models_cache_build_mutex_;
+    uint64_t cache_revision_ = 0;
     std::mutex model_mutations_mutex_;
-    std::map<std::string, std::shared_ptr<std::recursive_mutex>> model_mutations_;
+    std::map<std::string, std::shared_ptr<ModelMutationState>> model_mutations_;
     std::function<void(const std::string&)> model_removal_guard_;
     // Orders recipe_options.json rewrites without holding models_cache_mutex_
     // (which every request thread contends on) across disk I/O.

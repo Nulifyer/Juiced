@@ -3,6 +3,8 @@
 #include "lemon/error_types.h"
 #include "lemon/router.h"
 #include "support/test_state_isolation.h"
+#include "lemon/utils/path_utils.h"
+#include <fstream>
 
 #include <atomic>
 #include <cstdio>
@@ -18,6 +20,13 @@ static void check(bool ok, const char* label) {
 }
 
 namespace lemon {
+struct ModelPublicationTestHook {
+    static void options_barrier(ModelManager& models, std::function<void()> barrier) { models.options_persistence_barrier_ = std::move(barrier); }
+    static bool writer_available(ModelManager& models) {
+        std::unique_lock<std::mutex> lock(models.recipe_options_write_mutex_, std::try_to_lock);
+        return lock.owns_lock();
+    }
+};
 struct RoutingHelperTestHook {
     static void add(Router& router, const std::shared_ptr<WrappedServer>& worker) {
         std::lock_guard<std::mutex> lock(router.load_mutex_);
@@ -84,7 +93,114 @@ public:
     std::atomic<bool> fail_unload{false};
 };
 
-int main() {
+static void discovery_boundaries() {
+    for (int kind = 0; kind < 3; ++kind) {
+        Endpoint a("a"), b("b");
+        auto defaults = ConfigFile::base_defaults(); defaults["offline"] = true; defaults["disable_model_filtering"] = true;
+        RuntimeConfig config(defaults); RuntimeConfig::set_global(&config);
+        {
+            CloudProviderRegistry registry; ModelManager models; models.set_cloud_registry(&registry);
+            const auto root = lemon::test::make_scratch_dir("discovery-locks");
+            const auto name = "Discovery-" + root.filename().string();
+            const auto added = "Concurrent-" + root.filename().string();
+            const auto overlay = "user.Overlay-" + root.filename().string();
+            const auto file = root / "metadata.gguf";
+            { std::ofstream out(file, std::ios::binary); out << "GGUF"; const uint32_t version = 3; const uint64_t zero = 0; out.write(reinterpret_cast<const char*>(&version), 4); out.write(reinterpret_cast<const char*>(&zero), 8); out.write(reinterpret_cast<const char*>(&zero), 8); }
+            const json definition = {{"recipe", "llamacpp"}, {"source", "local_path"}, {"checkpoints", {{"main", file.string()}}}, {"labels", json::array({"chat"})}};
+            models.register_user_model(name, definition, "local_path");
+            auto info = models.get_model_info(name);
+            info.recipe_options = RecipeOptions("llamacpp", {{"ctx_size", 3072}});
+            registry.install("fixture", a.base, a.options(), {}, a.key());
+            config.set({{"offline", false}}); models.invalidate_models_cache();
+            a.block_discovery = true;
+            auto entered = a.entered.get_future();
+            auto writer = std::async(std::launch::async, [&] {
+                if (kind == 0) models.save_model_options(info);
+                else if (kind == 1) models.update_saved_model_options(name, {{"ctx_size", 3072}}, "llamacpp");
+                else models.select_execution_profile(name, {{"id", "fixture-profile"}, {"recipe", "llamacpp"}, {"options", {{"ctx_size", 3072}}}});
+            });
+            const bool requested = entered.wait_for(std::chrono::seconds(5)) == std::future_status::ready;
+            const bool writer_free = ModelPublicationTestHook::writer_available(models);
+            auto registration = std::async(std::launch::async, [&] { models.register_user_model(added, definition, "local_path"); });
+            const bool registry_free = registration.wait_for(std::chrono::seconds(3)) == std::future_status::ready;
+            const auto extra = root / "extra"; std::filesystem::create_directories(extra);
+            auto directory = std::async(std::launch::async, [&] { models.set_extra_models_dir(extra.string()); });
+            const bool directory_free = directory.wait_for(std::chrono::seconds(3)) == std::future_status::ready;
+            registry.install("fixture", b.base, b.options(), {}, b.key()); models.invalidate_models_cache();
+            a.block_discovery = false; a.release.set_value();
+            directory.get();
+            registration.get(); writer.get();
+            check(requested && writer_free && registry_free && directory_free,
+                  "all three native options/profile writers await provider discovery without holding shared cache or writer locks");
+            check(models.model_exists(added) && models.model_exists("fixture.b-model") && !models.model_exists("fixture.a-model"),
+                  "publication retries changed native revisions and discards delayed provider results while preserving concurrent registration");
+            check(models.get_model_info(name).recipe_options.get_option("ctx_size") == 3072 && models.get_saved_model_options(name).at("ctx_size") == 3072,
+                  "options/profile publication remains coherent after an overlapping cache rebuild");
+            models.update_saved_model_options(overlay, {{"ctx_size", 512}});
+            models.register_user_model(overlay, definition, "local_path");
+            check(models.get_model_info(overlay).recipe_options.get_option("ctx_size") == 512,
+                  "unknown-model import option overlays survive the committed writer snapshot boundary");
+            check(a.mismatches == 0 && b.mismatches == 0,
+                  "external discovery keeps destination and credentials paired through native revision retries");
+        }
+        RuntimeConfig::set_global(nullptr);
+    }
+}
+
+static void mutation_publication_boundaries() {
+    auto defaults = ConfigFile::base_defaults(); defaults["offline"] = true; defaults["disable_model_filtering"] = true;
+    RuntimeConfig config(defaults); RuntimeConfig::set_global(&config);
+    const auto root = lemon::test::make_scratch_dir("model-write-boundary");
+    const auto name = "WriteBoundary-" + root.filename().string();
+    const auto actor = "NotifyBoundary-" + root.filename().string();
+    const auto file = root / "metadata.gguf";
+    { std::ofstream out(file, std::ios::binary); out << "GGUF"; const uint32_t version = 3; const uint64_t zero = 0; out.write(reinterpret_cast<const char*>(&version), 4); out.write(reinterpret_cast<const char*>(&zero), 8); out.write(reinterpret_cast<const char*>(&zero), 8); }
+    json definition = {{"recipe", "llamacpp"}, {"source", "local_path"}, {"checkpoints", {{"main", file.string()}}}, {"recipe_options", {{"ctx_size", 4096}}}, {"labels", json::array({"chat"})}};
+    {
+        ModelManager models;
+        models.register_user_model(name, definition, "local_path");
+        std::promise<void> entered, release; auto released = release.get_future().share();
+        ModelPublicationTestHook::options_barrier(models, [&] { entered.set_value(); released.wait(); });
+        auto writer = std::async(std::launch::async, [&] { models.update_saved_model_options(name, {{"llamacpp_backend", "cpu"}}, "llamacpp"); });
+        const bool staged = entered.get_future().wait_for(std::chrono::seconds(5)) == std::future_status::ready;
+        const bool mutation_free = std::async(std::launch::async, [&] { auto mutation = models.model_mutation(name, false); return mutation.owns_lock(); }).get();
+        definition["recipe_options"]["ctx_size"] = 8192;
+        auto registration = std::async(std::launch::async, [&] { models.register_user_model(name, definition, "local_path"); });
+        const bool overtook = registration.wait_for(std::chrono::milliseconds(100)) == std::future_status::ready;
+        const auto before = models.get_model_info(name).recipe_options.get_option("ctx_size");
+        release.set_value(); writer.get(); registration.get(); ModelPublicationTestHook::options_barrier(models, {});
+        check(staged && !mutation_free && !overtook && before == 4096,
+              "registration cannot overtake an options transaction after its committed recipe/default snapshot");
+        check(models.get_model_info(name).recipe_options.get_option("ctx_size") == 8192 && models.get_saved_model_options(name).at("llamacpp_backend") == "cpu",
+              "successful registration and saved options publish one coherent final view without stale cached defaults");
+        std::atomic<int> calls{0}; std::atomic<bool> released_before_effect{false};
+        models.set_models_changed_callback([&](uint64_t) {
+            ++calls;
+            released_before_effect = std::async(std::launch::async, [&] { auto mutation = models.model_mutation(actor, false); return mutation.owns_lock(); }).get();
+        });
+        {
+            auto outer = models.model_mutation(actor);
+            models.register_user_model(actor, {{"recipe", COLLECTION_ROUTER_MODEL_RECIPE}, {"labels", json::array({"chat"})}});
+            check(calls == 0, "nested model changes defer notifications until the outer publication claim ends");
+        }
+        check(calls == 1 && released_before_effect,
+              "model-change callbacks run once after mutation ownership releases, allowing native reentry");
+        models.set_models_changed_callback({}); models.unregister_user_model(actor);
+    }
+    {
+        ModelManager models;
+        check(models.get_model_info(name).recipe_options.get_option("ctx_size") == 8192 && models.get_saved_model_options(name).at("llamacpp_backend") == "cpu",
+              "restart readback matches the final registered recipe/default and saved-option publication");
+    }
+    RuntimeConfig::set_global(nullptr);
+}
+
+int main(int argc, char** argv) {
+    if (argc > 1 && std::string(argv[1]) == "--discovery") {
+        discovery_boundaries(); mutation_publication_boundaries();
+        std::fprintf(stderr, "Discovery boundaries: %d checks, %d failures\n", checks, failures);
+        return failures ? 1 : 0;
+    }
     Endpoint a("a"), b("b");
     auto defaults = ConfigFile::base_defaults(); defaults["offline"] = true; defaults["auto_evict"] = false;
     RuntimeConfig config(defaults); RuntimeConfig::set_global(&config);

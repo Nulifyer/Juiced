@@ -27,7 +27,7 @@ bool JuicedService::import_owns_model_locked(const std::string& name) const {
 }
 void JuicedService::with_model_removal(const std::string& model, const std::function<void()>& remove) {
   auto mutation = server_.model_manager_->model_mutation(model, false);
-  if (!mutation.lock.owns_lock()) throw AdmissionError("model_mutation_busy", "Wait for model publication to finish", 409);
+  if (!mutation.owns_lock()) throw AdmissionError("model_mutation_busy", "Wait for model publication to finish", 409);
   {
     std::lock_guard<std::mutex> lock(mutex_);
     if (import_owns_model_locked(model))
