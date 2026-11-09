@@ -339,3 +339,17 @@ and conservatively report unavailable after rejection. This contains those
 provider-driven paths. Filesystem catalog scans, hardware probes, legacy CLI
 output/termination, parsing peaks and full metadata resource qualification remain
 part of the P1 audit.
+
+ModelManager JSON files now share the existing JsonUtils atomic byte writer.
+This includes registration, options, profile selection, startup option migration,
+collection manifests and registry provenance. ModelManager retains candidate,
+transaction, repository and rollback ownership. The duplicated private byte
+writer is removed.
+
+Serialization completes before storage changes. A unique sibling is flushed and
+closed before platform replacement. Existing POSIX file modes are preserved.
+Failures preserve the committed file and clean staging when possible. If cleanup
+fails, the error identifies the retained uncommitted path. Such files do not
+become registered models or committed options. Complete staging-file recovery,
+cross-writer maintenance, multi-file promotion and host-crash durability remain
+separate gates.

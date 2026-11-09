@@ -1,5 +1,7 @@
 #pragma once
 
+#include <filesystem>
+#include <functional>
 #include <string>
 #include <nlohmann/json.hpp>
 
@@ -13,7 +15,7 @@ public:
     // Load JSON from file
     static json load_from_file(const std::string& file_path);
 
-    // Save JSON to file
+    // Atomic replacement preserves the previous file on serialization or I/O failure.
     static void save_to_file(const json& j, const std::string& file_path);
 
     // Parse JSON from string
@@ -50,6 +52,11 @@ public:
 
     // Decode base64 string to binary data
     static std::string base64_decode(const std::string& input);
+
+private:
+    friend struct JsonPersistenceTestHook;
+    static void save_to_file(const json& j, const std::string& file_path,
+                             const std::function<void(const std::filesystem::path&)>& before_replace);
 };
 
 } // namespace utils

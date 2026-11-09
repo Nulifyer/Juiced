@@ -26,8 +26,18 @@
 #include <windows.h>
 #endif
 
+namespace lemon::utils {
+struct JsonPersistenceTestHook {
+    static void save(const nlohmann::json& body, const std::filesystem::path& target,
+                     std::function<void(const std::filesystem::path&)> before_replace) {
+        JsonUtils::save_to_file(body, path_to_utf8(target), std::move(before_replace));
+    }
+};
+}
+
 namespace lemon {
 struct ModelPublicationTestHook {
+    static std::string builtin_name(ModelManager& models) { return models.server_models_.begin().key(); }
     static void read_barrier(ModelManager& models, std::function<void()> callback) { models.cache_read_barrier_ = std::move(callback); }
     static void write_barrier(ModelManager& models, std::function<void()> callback) { models.options_write_barrier_ = std::move(callback); }
     static void discovered(ModelManager& models, const std::string& name) {
@@ -437,6 +447,74 @@ static void retained_jobs() {
         lemon::jobs::JobManager restarted(root.string(), root.string(), {});
         check(!restarted.get("retained-1"), "durable deletion does not reappear after restart");
     }
+}
+
+static void metadata_json_files() {
+    const auto root = lemon::test::make_scratch_dir("metadata-json");
+    const json previous = {{"revision", 1}, {"value", "committed"}};
+    const json candidate = {{"revision", 2}, {"value", "candidate"}};
+    for (const auto* name : {"user_models.json", "recipe_options.json", "execution_profiles.json",
+                             ".download_manifest.json", ".lemonade_registry.json"}) {
+        const auto target = root / name;
+        write(target, previous);
+#ifndef _WIN32
+        fs::permissions(target, fs::perms::owner_read | fs::perms::owner_write);
+#endif
+        bool rejected = false;
+        try { lemon::utils::JsonUtils::save_to_file({{"value", std::string(1, static_cast<char>(0xff))}}, target.string()); }
+        catch (const std::exception&) { rejected = true; }
+        check(rejected && read(target) == previous, "serialization failure never truncates committed model JSON");
+        fs::path staged;
+        bool complete = false; rejected = false;
+        try {
+            lemon::utils::JsonPersistenceTestHook::save(candidate, target, [&](const auto& temporary) {
+                staged = temporary; complete = read(temporary) == candidate && read(target) == previous;
+                throw std::runtime_error("controlled pre-replacement failure");
+            });
+        } catch (const std::exception&) { rejected = true; }
+        check(rejected && complete && !fs::exists(staged) && read(target) == previous,
+              "failed staged publication cleans its complete candidate and preserves committed JSON");
+        std::unique_ptr<BlockReplacement> block;
+        std::string failure;
+        try {
+            lemon::utils::JsonPersistenceTestHook::save(candidate, target, [&](const auto& temporary) {
+                staged = temporary; block = std::make_unique<BlockReplacement>(target);
+            });
+        } catch (const std::exception& error) { failure = error.what(); }
+        block.reset();
+        check(!failure.empty() && read(target) == previous,
+              "replacement failure after complete staging preserves the previous JSON record");
+        check(!fs::exists(staged) || (failure.find(lemon::utils::path_to_utf8(staged)) != std::string::npos && read(staged) == candidate),
+              "failed cleanup retains an explicit path to the uncommitted candidate");
+        if (fs::exists(staged)) fs::remove(staged);
+        lemon::utils::JsonUtils::save_to_file(candidate, target.string());
+        check(read(target) == candidate, "retry publishes the complete model JSON candidate");
+#ifndef _WIN32
+        check(fs::status(target).permissions() == (fs::perms::owner_read | fs::perms::owner_write),
+              "atomic JSON replacement preserves restrictive existing file permissions");
+#endif
+    }
+    auto defaults = lemon::ConfigFile::base_defaults(); defaults["offline"] = true; defaults["auto_check_model_updates"] = false;
+    lemon::RuntimeConfig runtime(defaults); lemon::RuntimeConfig::set_global(&runtime);
+    std::string name;
+    { lemon::ModelManager initial; name = lemon::ModelPublicationTestHook::builtin_name(initial); }
+    const auto options = fs::path(lemon::utils::get_config_dir()) / "recipe_options.json";
+    const json original = {{name, {{"ctx_size", 2048}}}};
+    write(options, original);
+    {
+        BlockReplacement blocked(options);
+        lemon::ModelManager failed;
+        check(read(options) == original, "failed startup option migration preserves its committed input file");
+    }
+    {
+        lemon::ModelManager restarted;
+        const auto migrated = read(options);
+        check(!migrated.contains(name) && migrated.size() == 1 && migrated.begin().value() == original.at(name),
+              "startup retry commits one complete canonical option migration");
+        check(restarted.get_saved_model_options(name) == original.at(name),
+              "restarted ModelManager reads the same effective saved values after migration");
+    }
+    lemon::RuntimeConfig::set_global(nullptr);
 }
 
 static void model_files() {
@@ -1459,7 +1537,9 @@ static void policy_failures() {
 }
 
 int main(int argc, char** argv) {
-    if (argc > 1 && std::string(argv[1]) == "--import-ownership") {
+    if (argc > 1 && std::string(argv[1]) == "--metadata-files") {
+        metadata_json_files();
+    } else if (argc > 1 && std::string(argv[1]) == "--import-ownership") {
         import_removal_ownership(); import_deletion_overlap(); import_definition_replays();
     } else if (argc > 1 && std::string(argv[1]) == "--save-dispatch") {
         cache_pre_dispatch();

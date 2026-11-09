@@ -2254,52 +2254,8 @@ json ModelManager::get_architecture_defaults(const std::string& architecture) co
     return json::object();
 }
 
-static void save_user_json(const std::string& save_path, const json& to_save) {
-    // Ensure directory exists
-    fs::path target = path_from_utf8(save_path);
-    fs::path dir = target.parent_path();
-    ensure_create_directories(dir);
-
-    LOG(INFO, "ModelManager") << "Saving " << target.filename() << std::endl;
-
-    // Write via a unique sibling temp file and then rename into place. Readers
-    // should never observe a truncated or half-written registry, and concurrent
-    // writers should not collide on the same temporary path.
-    std::ostringstream tmp_suffix;
-    tmp_suffix << ".tmp."
-               << std::this_thread::get_id() << "."
-               << std::chrono::steady_clock::now().time_since_epoch().count() << "."
-               << reinterpret_cast<std::uintptr_t>(&to_save);
-    fs::path tmp = target;
-    tmp += tmp_suffix.str();
-    {
-        std::ofstream file(tmp, std::ios::trunc);
-        if (!file.is_open()) {
-            throw std::runtime_error("Failed to open file for writing: " + path_to_utf8(tmp));
-        }
-        try {
-            file << to_save.dump(2);
-            file.flush();
-            file.close();
-        } catch (const json::exception& e) {
-            throw std::runtime_error("Failed to write JSON to file " + path_to_utf8(tmp) + ": " + e.what());
-        }
-        if (!file) {
-            throw std::runtime_error("Failed to flush JSON file: " + path_to_utf8(tmp));
-        }
-    }
-
-    std::error_code ec;
-    utils::atomic_replace_file(tmp, target, ec);
-    if (ec) {
-        std::error_code cleanup_ec;
-        fs::remove(tmp, cleanup_ec);
-        throw std::runtime_error("Failed to replace JSON file " + save_path + ": " + ec.message());
-    }
-}
-
 void ModelManager::save_user_models(const json& user_models) {
-    save_user_json(get_user_models_file(), user_models);
+    JsonUtils::save_to_file(user_models, get_user_models_file());
 }
 
 ModelManager::OptionsWriteSnapshot ModelManager::begin_options_write(const std::string& model_name) {
@@ -2347,7 +2303,7 @@ void ModelManager::save_model_options(const ModelInfo& info) {
         snapshot[id] = current.recipe_options.to_json();
     }
     if (options_persistence_barrier_) options_persistence_barrier_();
-    save_user_json(get_recipe_options_file(), snapshot);
+    JsonUtils::save_to_file(snapshot, get_recipe_options_file());
     {
         std::lock_guard<std::mutex> lock(models_cache_mutex_);
         recipe_options_.swap(snapshot);
@@ -2474,7 +2430,7 @@ json ModelManager::write_saved_model_options(const std::string& model_name,
         else snapshot[id] = saved;
     }
     if (options_persistence_barrier_) options_persistence_barrier_();
-    save_user_json(get_recipe_options_file(), snapshot);
+    JsonUtils::save_to_file(snapshot, get_recipe_options_file());
     {
         std::lock_guard<std::mutex> lock(models_cache_mutex_);
         recipe_options_.swap(snapshot);
@@ -2554,12 +2510,12 @@ void ModelManager::select_execution_profile(const std::string& model_name, const
     bool profiles_saved = false;
     if (profile_persistence_barrier_) profile_persistence_barrier_();
     try {
-        save_user_json(profiles_path, next_profiles);
+        JsonUtils::save_to_file(next_profiles, profiles_path);
         profiles_saved = true;
-        save_user_json(get_recipe_options_file(), next_options);
+        JsonUtils::save_to_file(next_options, get_recipe_options_file());
     } catch (...) {
         if (profiles_saved) {
-            try { save_user_json(profiles_path, previous_profiles); }
+            try { JsonUtils::save_to_file(previous_profiles, profiles_path); }
             catch (const std::exception& error) {
                 LOG(ERROR, "ModelManager") << "Execution-profile rollback requires recovery: " << error.what() << std::endl;
             }

@@ -1,7 +1,12 @@
 #include <lemon/utils/json_utils.h>
 #include <lemon/utils/path_utils.h>
+#include <chrono>
+#include <cstdint>
+#include <exception>
 #include <fstream>
+#include <sstream>
 #include <stdexcept>
+#include <thread>
 #include <vector>
 
 namespace lemon {
@@ -24,15 +29,46 @@ json JsonUtils::load_from_file(const std::string& file_path) {
 }
 
 void JsonUtils::save_to_file(const json& j, const std::string& file_path) {
-    std::ofstream file(path_from_utf8(file_path));
-    if (!file.is_open()) {
-        throw std::runtime_error("Failed to open file for writing: " + file_path);
-    }
+    save_to_file(j, file_path, {});
+}
 
+void JsonUtils::save_to_file(const json& j, const std::string& file_path,
+                            const std::function<void(const std::filesystem::path&)>& before_replace) {
+    const auto contents = j.dump(2);
+    const auto target = path_from_utf8(file_path);
+    if (!target.parent_path().empty()) std::filesystem::create_directories(target.parent_path());
+    std::error_code ec;
+    const auto previous = std::filesystem::status(target, ec);
+    if (ec && ec != std::errc::no_such_file_or_directory)
+        throw std::filesystem::filesystem_error("Could not inspect JSON target", target, ec);
+    std::ostringstream suffix;
+    suffix << ".tmp." << std::this_thread::get_id() << "."
+           << std::chrono::steady_clock::now().time_since_epoch().count() << "."
+           << reinterpret_cast<std::uintptr_t>(&j);
+    auto temporary = target; temporary += suffix.str();
     try {
-        file << j.dump(2);  // Pretty print with 2 space indent
-    } catch (const json::exception& e) {
-        throw std::runtime_error("Failed to write JSON to file " + file_path + ": " + e.what());
+        std::ofstream file(temporary, std::ios::trunc);
+        if (!file.is_open()) throw std::runtime_error("Failed to stage JSON file: " + file_path);
+        if (std::filesystem::is_regular_file(previous) && previous.permissions() != std::filesystem::perms::unknown) {
+            std::filesystem::permissions(temporary, previous.permissions(), ec);
+            if (ec) throw std::filesystem::filesystem_error("Could not preserve JSON permissions", temporary, ec);
+        }
+        file << contents;
+        file.flush(); file.close();
+        if (!file) throw std::runtime_error("Failed to flush staged JSON file: " + file_path);
+        if (before_replace) before_replace(temporary);
+        if (!atomic_replace_file(temporary, target, ec))
+            throw std::runtime_error("Failed to replace JSON file " + file_path + ": " + ec.message());
+    } catch (...) {
+        const auto failure = std::current_exception();
+        std::filesystem::remove(temporary, ec);
+        if (ec) {
+            try { std::rethrow_exception(failure); }
+            catch (const std::exception& error) {
+                throw std::runtime_error(std::string(error.what()) + "; uncommitted staging retained at " + path_to_utf8(temporary));
+            }
+        }
+        std::rethrow_exception(failure);
     }
 }
 
