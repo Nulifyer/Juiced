@@ -143,3 +143,62 @@ test('runtime details keep unavailable telemetry explicit', async ({ page, runti
   await expect(popup.locator('dd')).toHaveText(['—', '—', '—', '—']);
   expect(runtime.writes).toEqual([]);
 });
+
+for (const width of [1440, 390]) test(`cache model overrides list only explicit settings at ${width}px`, async ({ page, runtime }) => {
+  const first = runtime.models[0].id, second = runtime.models[1].id;
+  runtime.cache.settings.model_modes = { [first]: 'memory', 'Unavailable-model': 'persistent' };
+  await page.setViewportSize({ width, height: 960 });
+  await page.goto('/');
+  if (width < 700) await page.getByRole('button', { name: 'Toggle navigation' }).click();
+  await page.getByRole('button', { name: 'Cache', exact: true }).click();
+  await page.getByRole('button', { name: /^Model overrides/ }).click();
+  const rows = page.locator('.cache-override-row');
+  await expect(rows).toHaveCount(2);
+  await expect(page.getByLabel(`Cache mode for ${first}`, { exact: true })).toHaveValue('memory');
+  await expect(page.getByLabel('Cache mode for Unavailable-model', { exact: true })).toHaveValue('persistent');
+  await expect(page.getByLabel(`Cache mode for ${second}`, { exact: true })).toHaveCount(0);
+  await page.getByLabel('Model', { exact: true }).selectOption(second);
+  await page.locator('.cache-override-add').getByLabel('Reuse mode', { exact: true }).selectOption('persistent');
+  await page.getByRole('button', { name: 'Add override', exact: true }).click();
+  await expect(rows).toHaveCount(3);
+  await expect(page.getByLabel('Model', { exact: true }).locator(`option[value="${second}"]`)).toHaveCount(0);
+  expect(runtime.writes).toEqual([]);
+  await page.getByRole('button', { name: /^Storage policy/ }).click();
+  await page.getByRole('button', { name: /^Model overrides/ }).click();
+  await expect(page.getByLabel(`Cache mode for ${second}`, { exact: true })).toHaveValue('persistent');
+  await page.getByRole('button', { name: 'Save changes', exact: true }).click();
+  await expect.poll(() => runtime.cache.settings.model_modes[second]).toBe('persistent');
+  if (captures) await page.screenshot({ path: `${captures}/cache-overrides-${width}.png` });
+  await page.getByRole('button', { name: `Use default for ${first}`, exact: true }).click();
+  await expect(page.getByLabel('Model', { exact: true })).toBeFocused();
+  await expect(rows).toHaveCount(2);
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(rows).toHaveCount(3);
+  for (const id of [first, second, 'Unavailable-model'])
+    await page.getByRole('button', { name: `Use default for ${id}`, exact: true }).click();
+  await expect(rows).toHaveCount(0);
+  await expect(page.getByText('No model overrides. All models use the default reuse mode.', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Save changes', exact: true }).click();
+  await expect.poll(() => runtime.cache.settings.model_modes).toEqual({});
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  if (captures) await page.screenshot({ path: `${captures}/cache-overrides-empty-${width}.png` });
+});
+
+test('failed cache override save keeps the draft for retry', async ({ page, runtime }) => {
+  let fail = true;
+  await page.route('**/v1/juiced/cache', route => route.request().method() === 'POST' && fail
+    ? route.fulfill({ status: 503, json: { error: 'Fixture cache save failed' } }) : route.fallback());
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Cache', exact: true }).click();
+  await page.getByRole('button', { name: /^Model overrides/ }).click();
+  await expect(page.locator('.cache-override-row')).toHaveCount(0);
+  await page.getByLabel('Model', { exact: true }).selectOption(runtime.models[0].id);
+  await page.getByRole('button', { name: 'Add override', exact: true }).click();
+  await page.getByRole('button', { name: 'Save changes', exact: true }).click();
+  await expect(page.getByText('Fixture cache save failed', { exact: true })).toBeVisible();
+  await expect(page.getByLabel(`Cache mode for ${runtime.models[0].id}`, { exact: true })).toHaveValue('memory');
+  expect(runtime.cache.settings.model_modes).toEqual({});
+  fail = false;
+  await page.getByRole('button', { name: 'Save changes', exact: true }).click();
+  await expect.poll(() => runtime.cache.settings.model_modes).toEqual({ [runtime.models[0].id]: 'memory' });
+});

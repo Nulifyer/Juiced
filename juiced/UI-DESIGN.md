@@ -27,6 +27,10 @@ Use one level of task tabs instead of repeated accordions: Settings/Advanced in
 the model inspector, Snapshots/Storage policy/Model overrides in Cache, and a
 protocol selector in Service APIs. Provider grouping remains collapsible because
 it organizes a potentially large engine inventory. Show hardware context directly.
+Cache Model overrides lists only explicit saved or drafted settings, including
+settings for models no longer in the current inventory. Add override selects a
+model and mode; Use default removes its entry. Inherited models stay out of the
+list. These edits use the existing Save changes/Cancel draft flow.
 
 The inspected [LM Studio model table](https://lmstudio.ai/docs/app/advanced/per-model)
 informs row density, explicit quant/size columns and contextual actions. The

@@ -39,6 +39,8 @@ export function CacheWorkspace({
     [dirty, setDirty] = useState(false),
     [validationError, setValidationError] = useState(""),
     [busy, setBusy] = useState(false);
+  const [overrideModel, setOverrideModel] = useState("");
+  const [overrideMode, setOverrideMode] = useState("memory");
   const [leaveAction, setLeaveAction] = useState<(() => void) | null>(null);
   useEffect(() => {
     registerNavigationGuard(action => {
@@ -69,6 +71,11 @@ export function CacheWorkspace({
       (filter === "all" || s.retained),
   );
   const current = snapshots.find((s) => s.id === selected);
+  const overrideEntries = Object.entries(draft?.model_modes || {}) as [string, string][];
+  const availableOverrideModels = models.filter(model =>
+    model.downloaded && model.recipe === "llamacpp" && model.service === "Chat" &&
+    !Object.hasOwn(draft?.model_modes || {}, model.id)
+  ).sort((a, b) => a.id.localeCompare(b.id));
   async function refresh() {
     setCache(await api("juiced/cache"));
   }
@@ -339,37 +346,47 @@ export function CacheWorkspace({
               </div>
               <div className="cache-model-overrides" hidden={tab !== "overrides"}>
                 <div className="field-label">Model overrides <HelpTip label="Model overrides">Override the default reuse mode per model. Memory only permits Ollama and other protocols without changing persistent caching for other models. Existing snapshots are kept.</HelpTip></div>
-                {models
-                  .filter(
-                    (m) =>
-                      m.downloaded &&
-                      m.recipe === "llamacpp" &&
-                      m.service === "Chat",
-                  )
-                  .sort((a, b) => a.id.localeCompare(b.id))
-                  .map((model) => (
-                    <label key={model.id}>
-                      {model.id}
-                      <select
-                        value={draft.model_modes?.[model.id] || ""}
-                        onChange={(e) => {
-                          const modes = { ...draft.model_modes };
-                          if (e.target.value) modes[model.id] = e.target.value;
-                          else delete modes[model.id];
-                          edit("model_modes", modes);
-                        }}
-                      >
-                        <option value="">Use default</option>
+                {overrideEntries.length === 0 && <p className="cache-overrides-empty">No model overrides. All models use the default reuse mode.</p>}
+                {overrideEntries.sort(([a], [b]) => a.localeCompare(b)).map(([id, mode]) => (
+                  <div className="cache-override-row" key={id}>
+                    <label>
+                      <span>{id}</span>
+                      <select aria-label={`Cache mode for ${id}`} value={mode} disabled={busy}
+                        onChange={e => edit("model_modes", { ...draft.model_modes, [id]: e.target.value })}>
                         <option value="memory">Memory only</option>
-                        <option
-                          value="persistent"
-                          disabled={!cache?.persistent_supported}
-                        >
-                          Persistent disk snapshots
-                        </option>
+                        <option value="persistent" disabled={!cache?.persistent_supported}>Persistent disk snapshots</option>
                       </select>
                     </label>
-                  ))}
+                    <Button type="button" variant="ghost" disabled={busy} aria-label={`Use default for ${id}`}
+                      onClick={() => {
+                        const modes = { ...draft.model_modes };
+                        delete modes[id];
+                        edit("model_modes", modes);
+                        requestAnimationFrame(() => document.getElementById("cache-override-model")?.focus());
+                      }}>Use default</Button>
+                  </div>
+                ))}
+                <div className="cache-override-add">
+                  <label htmlFor="cache-override-model">Model
+                    <select id="cache-override-model" aria-label="Model" value={overrideModel} disabled={busy || !availableOverrideModels.length}
+                      onChange={e => setOverrideModel(e.target.value)}>
+                      <option value="">{availableOverrideModels.length ? "Choose a model…" : "No more eligible models"}</option>
+                      {availableOverrideModels.map(model => <option key={model.id} value={model.id}>{model.id}</option>)}
+                    </select>
+                  </label>
+                  <label htmlFor="cache-override-mode">Reuse mode
+                    <select id="cache-override-mode" aria-label="Reuse mode" value={overrideMode} disabled={busy}
+                      onChange={e => setOverrideMode(e.target.value)}>
+                      <option value="memory">Memory only</option>
+                      <option value="persistent" disabled={!cache?.persistent_supported}>Persistent disk snapshots</option>
+                    </select>
+                  </label>
+                  <Button type="button" variant="outline" disabled={busy || !availableOverrideModels.some(model => model.id === overrideModel)}
+                    onClick={() => {
+                      edit("model_modes", { ...draft.model_modes, [overrideModel]: overrideMode });
+                      setOverrideModel("");
+                    }}>Add override</Button>
+                </div>
               </div>
               <div className="cache-policy-fields" hidden={tab !== "settings"}>
               <label htmlFor="cache-expiry-days">
