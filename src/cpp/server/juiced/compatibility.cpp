@@ -295,11 +295,42 @@ void JuicedService::image_compatibility(const httplib::Request &req,
   }
 }
 
+bool JuicedService::finish_voice_cleanup() noexcept {
+  if (!voice_process_ && !voice_admission_) return true;
+  try {
+    if (voice_process_) {
+      voice_process_->stop();
+      if (!voice_process_->exited()) throw std::runtime_error("Voice helper exit is unconfirmed");
+    }
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      state_["voice_writer"] = {{"owner", cache_run_id_}, {"pending", false}, {"state", "stopped"}};
+      persist_locked();
+      voice_status_["cleanup_pending"] = false;
+      voice_status_["process_running"] = false;
+      voice_status_.erase("error");
+    }
+    voice_admission_.completed();
+    voice_process_.reset();
+    voice_admission_ = {};
+    return true;
+  } catch (const std::exception& error) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    voice_status_["cleanup_pending"] = true;
+    voice_status_["error"] = error.what();
+  } catch (...) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    voice_status_["cleanup_pending"] = true;
+    voice_status_["error"] = "Voice helper cleanup failed";
+  }
+  return false;
+}
 void JuicedService::reconcile_voice() {
   const bool enabled = environment("JUICED_WYOMING_ENABLED", "false") == "true";
   const auto executable = environment("JUICED_VOICE_PYTHON");
   const auto script = environment("JUICED_VOICE_SCRIPT");
   const auto uri = environment("JUICED_WYOMING_URI", "tcp://0.0.0.0:10300");
+  const auto port = server_.config_->port();
   json models = json::object({{"stt", json::array()}, {"tts", json::array()}});
   {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -309,52 +340,67 @@ void JuicedService::reconcile_voice() {
           state_["policies"].value(name, "disabled") == "disabled" ||
           m.value("available", true) == false)
         continue;
-      if (m.value("service", "") == "Transcribe")
-        models["stt"].push_back(name);
-      if (m.value("recipe", "") == "kokoro")
-        models["tts"].push_back(name);
+      if (m.value("service", "") == "Transcribe") models["stt"].push_back(name);
+      if (m.value("recipe", "") == "kokoro") models["tts"].push_back(name);
+    }
+    voice_status_.update({{"enabled", enabled}, {"uri", uri}, {"models", models}, {"implementation", "wyoming_openai 0.8.0"}});
+    const auto previous = state_.value("voice_writer", json::object());
+    if (previous.value("pending", false) && previous.value("owner", "") != cache_run_id_) {
+      voice_status_.update({{"configured", false}, {"process_running", false}, {"cleanup_pending", true},
+                           {"error", "Previous voice helper termination is unconfirmed"}});
+      return;
     }
   }
-  const auto signature = models.dump();
+  const auto signature = json{{"models", models}, {"program", executable}, {"script", script}, {"uri", uri}, {"port", port}}.dump();
   const bool configured = enabled && !executable.empty() && !script.empty() &&
                           (!models["stt"].empty() || !models["tts"].empty());
-  if (!configured || signature != voice_signature_) {
-    voice_process_.reset();
-    voice_signature_ = signature;
-    voice_retry_after_ = 0;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    voice_status_["configured"] = configured;
   }
-  if (configured && (!voice_process_ || !voice_process_->running()) &&
-      seconds() >= voice_retry_after_) {
-    voice_process_.reset();
+  bool cleanup_pending;
+  { std::lock_guard<std::mutex> lock(mutex_); cleanup_pending = voice_status_.value("cleanup_pending", false); }
+  if (!configured || signature != voice_signature_ || cleanup_pending ||
+      (voice_process_ && !voice_process_->running())) {
+    if (!finish_voice_cleanup()) return;
+    if (signature != voice_signature_) voice_retry_after_ = 0;
+    voice_signature_ = signature;
+  }
+  if (configured && !voice_process_ && !voice_admission_ && seconds() >= voice_retry_after_) {
     voice_retry_after_ = seconds() + 15;
     try {
-      auto process =
-          std::make_unique<NativeProcess>(ProcessOutput{true, false});
+      auto accepted = server_.router_->admit_management("wyoming", "voice-helper");
+      // Persist dispatch intent before handing a process to the operating system.
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        state_["voice_writer"] = {{"owner", cache_run_id_}, {"pending", true}, {"state", "dispatching"}};
+        persist_locked();
+      }
+      voice_admission_ = std::move(accepted);
+      voice_process_ = voice_process_factory_ ? voice_process_factory_() : std::make_unique<NativeProcess>(ProcessOutput{true, false});
+      if (!voice_process_) throw std::runtime_error("Voice process factory returned no owner");
       ServerCommand command;
       command.program = executable;
-      command.args = {
-          "-u",
-          script,
-          "--url",
-          "http://127.0.0.1:" + std::to_string(server_.config_->port()) + "/v1",
-          "--uri",
-          uri,
-          "--models",
-          signature};
-      command.env = {{"STT_OPENAI_KEY", server_.api_key_},
-                     {"TTS_OPENAI_KEY", server_.api_key_}};
-      process->start(command);
-      voice_process_ = std::move(process);
-    } catch (const std::exception &) {
+      command.args = {"-u", script, "--url", "http://127.0.0.1:" + std::to_string(port) + "/v1", "--uri", uri, "--models", models.dump()};
+      command.env = {{"STT_OPENAI_KEY", server_.api_key_}, {"TTS_OPENAI_KEY", server_.api_key_}};
+      voice_admission_.started();
+      voice_process_->start(command);
+      std::lock_guard<std::mutex> lock(mutex_);
+      voice_status_["cleanup_pending"] = false;
+      voice_status_.erase("error");
+    } catch (const std::exception& error) {
+      const std::string message = error.what();
+      const bool cleaned = finish_voice_cleanup();
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (cleaned) voice_status_["error"] = message;
+    } catch (...) {
+      const bool cleaned = finish_voice_cleanup();
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (cleaned) voice_status_["error"] = "Voice helper startup failed";
     }
   }
   std::lock_guard<std::mutex> lock(mutex_);
-  voice_status_ = {
-      {"enabled", enabled},
-      {"configured", configured},
-      {"process_running", voice_process_ && voice_process_->running()},
-      {"uri", uri},
-      {"models", models},
-      {"implementation", "wyoming_openai 0.8.0"}};
+  voice_status_["process_running"] = voice_process_ && voice_process_->running();
 }
+
 } // namespace lemon

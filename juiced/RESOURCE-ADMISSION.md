@@ -562,6 +562,17 @@ writer recovery and full descendant termination remain P1 prerequisites. The
 retained native fixture controls helper startup and stop outcomes, with no model
 conversion, installation or accelerator claim.
 
+Wyoming helper startup now acquires a native management ticket and persists its
+dispatch intent. Replacement and shutdown explicitly stop and confirm the owned
+direct process before discarding it. Failed stop or terminal-state publication
+keeps the process and ticket, exposes `cleanup_pending`, and permits cleanup retry
+without launching a duplicate. Changes to the helper command or endpoint also
+require retirement of the prior owner. Paused/protected admission rejects new
+unqualified helper dispatch. On manager restart, a pending prior-run intent blocks
+duplicate startup and remains unresolved. Complete operator recovery, descendant
+termination, actual speech and end-to-end stop deadlines remain P1 prerequisites.
+The helper fixture uses controlled process substitution and metadata failures.
+
 Local acceptance includes real direct children, non-consuming exit observation,
 unowned PID rejection, controlled failed stop/replacement, exact-generation
 reconciliation and actual neutral CPU serving/cache. This does not establish

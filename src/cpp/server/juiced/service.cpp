@@ -205,7 +205,7 @@ void JuicedService::stop() {
   finish_preparation_cleanup();
   std::deque<PreparationTask> unused;
   { std::lock_guard<std::mutex> lock(mutex_); unused.swap(preparation_pending_); }
-  voice_process_.reset();
+  finish_voice_cleanup();
 }
 JuicedService::json JuicedService::save_state_locked(json candidate) {
   candidate["revision"] = state_.value("revision", uint64_t(0)) + 1;

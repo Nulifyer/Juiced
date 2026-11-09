@@ -83,7 +83,10 @@ private:
   std::function<std::unique_ptr<ServerProcess>()> preparation_process_factory_;
   std::function<void()> preparation_admission_barrier_;
   std::set<std::string> preparation_cancelled_;
-  std::unique_ptr<NativeProcess> voice_process_;
+  std::unique_ptr<ServerProcess> voice_process_;
+  ResourceAdmission::Lease voice_admission_;
+  std::function<std::unique_ptr<ServerProcess>()> voice_process_factory_;
+  bool finish_voice_cleanup() noexcept;
   std::string voice_signature_;
   long long voice_retry_after_ = 0;
   json voice_status_ = {{"enabled", false}, {"process_running", false}};

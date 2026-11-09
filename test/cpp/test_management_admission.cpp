@@ -8,7 +8,9 @@
 #include "lemon/utils/path_utils.h"
 #include "support/test_state_isolation.h"
 
+#include <algorithm>
 #include <atomic>
+#include <cstdlib>
 #include <cstdio>
 #include <fstream>
 #include <future>
@@ -63,6 +65,49 @@ public:
 private:
     std::shared_ptr<PreparationProcessControl> control_;
 };
+struct VoiceProcessControl {
+    bool running = false, fail_stop = false, fail_start = false, overlapped = false;
+    int starts = 0, stops = 0;
+    ServerCommand command;
+};
+class ControlledVoiceProcess : public ServerProcess {
+public:
+    explicit ControlledVoiceProcess(std::shared_ptr<VoiceProcessControl> control)
+        : ServerProcess(ProcessOutput{}), control_(std::move(control)) {}
+    std::string start(const ServerCommand& command) override {
+        control_->overlapped |= control_->running;
+        control_->running = true; ++control_->starts; control_->command = command;
+        if (control_->fail_start) throw std::runtime_error("injected post-dispatch voice start failure");
+        return "127.0.0.1";
+    }
+    void stop() override {
+        if (!control_->running) return;
+        ++control_->stops;
+        if (control_->fail_stop) throw std::runtime_error("injected unconfirmed voice stop");
+        control_->running = false;
+    }
+    bool running() const override { return control_->running; }
+    bool exited() const override { return !control_->running; }
+private:
+    std::shared_ptr<VoiceProcessControl> control_;
+};
+class VoiceEnvironment {
+public:
+    VoiceEnvironment(const char* key, const char* value) : key_(key) {
+        if (const char* previous = std::getenv(key)) { previous_ = previous; present_ = true; }
+        set(value);
+    }
+    ~VoiceEnvironment() { set(present_ ? previous_.c_str() : nullptr); }
+    void set(const char* value) {
+#ifdef _WIN32
+        _putenv_s(key_.c_str(), value ? value : "");
+#else
+        if (value) setenv(key_.c_str(), value, 1); else unsetenv(key_.c_str());
+#endif
+    }
+private:
+    std::string key_, previous_; bool present_ = false;
+};
 namespace lemon {
 struct ModelPublicationTestHook {
     static size_t history(ModelManager& models) {
@@ -71,6 +116,18 @@ struct ModelPublicationTestHook {
     }
 };
 struct StatePublicationTestHook {
+    static void voice_factory(Server& server, const std::shared_ptr<VoiceProcessControl>& control) {
+        server.juiced_->voice_process_factory_ = [control] { return std::make_unique<ControlledVoiceProcess>(control); };
+    }
+    static void voice_models(Server& server, const std::string& model) {
+        std::lock_guard<std::mutex> lock(server.juiced_->mutex_);
+        server.juiced_->catalog_ = json::array({{{"id", model}, {"downloaded", true}, {"service", "Transcribe"}}});
+        server.juiced_->state_["policies"][model] = "on-demand";
+        server.juiced_->persist_locked();
+    }
+    static void voice(Server& server) { server.juiced_->voice_retry_after_ = 0; server.juiced_->reconcile_voice(); }
+    static json voice_status(Server& server) { std::lock_guard<std::mutex> lock(server.juiced_->mutex_); return server.juiced_->voice_status_; }
+    static json voice_intent(Server& server) { std::lock_guard<std::mutex> lock(server.juiced_->mutex_); return server.juiced_->state_.value("voice_writer", json::object()); }
     static void start_barrier(Server& server, std::function<void(const std::string&)> hook) {
         server.background_start_barrier_ = std::move(hook);
     }
@@ -480,9 +537,86 @@ static void preparation_cleanup() {
     }
 }
 
+static void voice_helper_ownership() {
+    using Hook = StatePublicationTestHook;
+    VoiceEnvironment enabled("JUICED_WYOMING_ENABLED", "false");
+    VoiceEnvironment executable("JUICED_VOICE_PYTHON", "controlled-voice-python");
+    VoiceEnvironment script("JUICED_VOICE_SCRIPT", "controlled-voice-script");
+    VoiceEnvironment uri("JUICED_WYOMING_URI", "tcp://127.0.0.1:10300");
+    auto defaults = ConfigFile::base_defaults(); defaults["offline"] = true; defaults["broadcast"] = false;
+    const auto root = test::make_scratch_dir("voice-ownership");
+    auto config = std::make_shared<RuntimeConfig>(defaults); RuntimeConfig::set_global(config.get());
+    auto control = std::make_shared<VoiceProcessControl>();
+    {
+        Server server(config, root.string(), root.string()); Hook::stop_preparation(server);
+        Hook::voice_factory(server, control); Hook::voice_models(server, "Voice-One"); enabled.set("true");
+        Hook::pause(server, true); Hook::voice(server);
+        check(control->starts == 0 && Hook::admission(server)["active"] == 0,
+              "paused admission rejects voice before intent or process dispatch");
+        Hook::pause(server, false); Hook::configure(server, {{"mode", "protected"}}); Hook::voice(server);
+        check(control->starts == 0 && Hook::admission(server)["active"] == 0,
+              "protected admission contains the unqualified voice helper before dispatch");
+        Hook::configure(server, {{"mode", "legacy"}}); Hook::voice(server);
+        check(control->starts == 1 && control->running && Hook::voice_status(server)["process_running"] == true &&
+              Hook::voice_intent(server)["pending"] == true && Hook::admission(server)["active"] == 1,
+              "voice dispatch persists intent and retains its accepted native helper ticket");
+        bool blocked = false;
+        try { Hook::configure(server, {{"mode", "protected"}}); }
+        catch (const AdmissionError& error) { blocked = error.code == "admission_configuration_busy"; }
+        check(blocked, "an accepted voice helper blocks protected activation until cleanup is confirmed");
+        Hook::voice(server);
+        check(control->starts == 1, "unchanged voice configuration keeps its existing process owner");
+        control->fail_stop = true; Hook::voice_models(server, "Voice-Two"); Hook::voice(server);
+        check(control->starts == 1 && control->running && Hook::voice_status(server)["cleanup_pending"] == true && Hook::admission(server)["active"] == 1,
+              "failed replacement stop keeps the old process and ticket without launching another helper");
+        Hook::stop_preparation(server);
+        check(control->starts == 1 && control->running && Hook::voice_intent(server)["pending"] == true && Hook::admission(server)["active"] == 1,
+              "shutdown acknowledges no cleanup success while voice termination remains unconfirmed");
+        control->fail_stop = false; Hook::voice(server);
+        check(control->starts == 2 && control->running && !control->overlapped && Hook::admission(server)["active"] == 1,
+              "confirmed cleanup permits one replacement without overlapping helper ownership");
+        uri.set("tcp://127.0.0.1:10301"); Hook::voice(server);
+        check(control->starts == 3 && std::find(control->command.args.begin(), control->command.args.end(), "tcp://127.0.0.1:10301") != control->command.args.end(),
+              "voice endpoint changes retire and replace the command snapshot");
+        enabled.set("false"); control->fail_stop = true; Hook::voice(server);
+        check(Hook::voice_status(server)["cleanup_pending"] == true && Hook::admission(server)["active"] == 1,
+              "disabling voice cannot discard unconfirmed process ownership");
+        control->fail_stop = false; Hook::voice(server);
+        check(!control->running && Hook::admission(server)["active"] == 0 && Hook::voice_intent(server)["pending"] == false,
+              "confirmed disabled-helper cleanup commits stopped intent before releasing the ticket");
+        enabled.set("true"); control->fail_start = true; control->fail_stop = true; Hook::voice(server);
+        check(control->starts == 4 && control->running && Hook::voice_status(server)["cleanup_pending"] == true && Hook::admission(server)["active"] == 1,
+              "post-dispatch startup failure retains the process when its cleanup also fails");
+        control->fail_start = false; control->fail_stop = false; Hook::voice(server);
+        check(control->starts == 5 && !control->overlapped && Hook::admission(server)["active"] == 1,
+              "startup cleanup retry reconciles its owner before allowing another dispatch");
+        enabled.set("false"); fs::create_directory(root / "juiced/state.json.tmp"); Hook::voice(server);
+        check(!control->running && Hook::admission(server)["active"] == 1 && Hook::voice_intent(server)["pending"] == true &&
+              Hook::voice_status(server)["cleanup_pending"] == true,
+              "failed cleanup publication retains the stopped process owner and ticket for retry");
+        fs::remove(root / "juiced/state.json.tmp"); Hook::voice(server);
+        check(Hook::admission(server)["active"] == 0 && Hook::voice_intent(server)["pending"] == false,
+              "cleanup publication retry commits the terminal result before releasing ownership");
+        fs::create_directory(root / "juiced/state.json.tmp"); enabled.set("true"); Hook::voice(server);
+        check(control->starts == 5 && !control->running && Hook::admission(server)["active"] == 0 && Hook::voice_intent(server)["pending"] == false,
+              "failed durable voice intent prevents dispatch and releases the unstarted ticket");
+        fs::remove(root / "juiced/state.json.tmp"); Hook::voice(server);
+        check(control->starts == 6 && control->running, "voice dispatch retries after metadata persistence is repaired");
+        control->fail_stop = true; Hook::stop_preparation(server);
+    }
+    {
+        enabled.set("false"); Server restarted(config, root.string(), root.string()); Hook::stop_preparation(restarted);
+        Hook::voice_factory(restarted, control); enabled.set("true"); Hook::voice(restarted);
+        check(control->starts == 6 && Hook::voice_status(restarted)["cleanup_pending"] == true && Hook::voice_intent(restarted)["pending"] == true,
+              "manager restart retains prior-helper uncertainty and refuses duplicate dispatch");
+    }
+    RuntimeConfig::set_global(nullptr);
+}
+
 int main(int argc, char** argv) {
     try {
-        if (argc > 1 && std::string(argv[1]) == "--preparation-cleanup") preparation_cleanup();
+        if (argc > 1 && std::string(argv[1]) == "--voice-cleanup") voice_helper_ownership();
+        else if (argc > 1 && std::string(argv[1]) == "--preparation-cleanup") preparation_cleanup();
         else { native_owners(); entry_boundaries(); worker_start_boundaries(); }
     }
     catch (const std::exception& error) { ++failures; std::fprintf(stderr, "Unexpected fixture failure: %s\n", error.what()); }
