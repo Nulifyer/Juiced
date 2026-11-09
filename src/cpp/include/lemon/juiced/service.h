@@ -86,6 +86,7 @@ private:
   std::unique_ptr<ServerProcess> voice_process_;
   ResourceAdmission::Lease voice_admission_;
   std::function<std::unique_ptr<ServerProcess>()> voice_process_factory_;
+  bool voice_recovery_required_locked();
   bool finish_voice_cleanup() noexcept;
   std::string voice_signature_;
   long long voice_retry_after_ = 0;

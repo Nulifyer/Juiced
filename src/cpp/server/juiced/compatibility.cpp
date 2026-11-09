@@ -295,9 +295,36 @@ void JuicedService::image_compatibility(const httplib::Request &req,
   }
 }
 
+bool JuicedService::voice_recovery_required_locked() {
+  if (!state_.contains("voice_writer")) return false;
+  const auto& previous = state_.at("voice_writer");
+  const bool valid = previous.is_object() && previous.size() == 3 &&
+      previous.contains("owner") && previous.at("owner").is_string() &&
+      !previous.at("owner").get_ref<const std::string&>().empty() &&
+      previous.at("owner").get_ref<const std::string&>().size() <= 160 &&
+      previous.contains("pending") && previous.at("pending").is_boolean() &&
+      previous.contains("state") && previous.at("state").is_string() &&
+      previous.at("state") == (previous.at("pending").get<bool>() ? "dispatching" : "stopped");
+  const bool unknown = valid && previous.at("pending").get<bool>() &&
+      (previous.at("owner") != cache_run_id_ || (!voice_process_ && !voice_admission_));
+  if (!valid || unknown) {
+    voice_status_.update({{"configured", false}, {"process_running", false},
+        {"cleanup_pending", true}, {"recovery_required", true},
+        {"error", valid ? "Previous voice helper termination is unconfirmed" :
+            "Voice helper intent is incomplete or unsupported; preserve it for recovery"}});
+    return true;
+  }
+  voice_status_["recovery_required"] = false;
+  return false;
+}
+
 bool JuicedService::finish_voice_cleanup() noexcept {
-  if (!voice_process_ && !voice_admission_) return true;
   try {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (voice_recovery_required_locked()) return false;
+    }
+    if (!voice_process_ && !voice_admission_) return true;
     if (voice_process_) {
       voice_process_->stop();
       if (!voice_process_->exited()) throw std::runtime_error("Voice helper exit is unconfirmed");
@@ -344,12 +371,7 @@ void JuicedService::reconcile_voice() {
       if (m.value("recipe", "") == "kokoro") models["tts"].push_back(name);
     }
     voice_status_.update({{"enabled", enabled}, {"uri", uri}, {"models", models}, {"implementation", "wyoming_openai 0.8.0"}});
-    const auto previous = state_.value("voice_writer", json::object());
-    if (previous.value("pending", false) && previous.value("owner", "") != cache_run_id_) {
-      voice_status_.update({{"configured", false}, {"process_running", false}, {"cleanup_pending", true},
-                           {"error", "Previous voice helper termination is unconfirmed"}});
-      return;
-    }
+    if (voice_recovery_required_locked()) return;
   }
   const auto signature = json{{"models", models}, {"program", executable}, {"script", script}, {"uri", uri}, {"port", port}}.dump();
   const bool configured = enabled && !executable.empty() && !script.empty() &&

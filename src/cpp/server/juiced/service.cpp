@@ -147,6 +147,7 @@ JuicedService::JuicedService(Server &server)
   if (!state_.contains("snapshot_cleanup")) state_["snapshot_cleanup"] = json::object();
   if (!state_.contains("snapshot_writes")) state_["snapshot_writes"] = json::object();
   cache_run_id_ = identifier();
+  voice_recovery_required_locked();
   if (!state_.contains("qualified_profiles"))
     state_["qualified_profiles"] = json::object();
   if (!state_.contains("preparations")) state_["preparations"] = json::object();

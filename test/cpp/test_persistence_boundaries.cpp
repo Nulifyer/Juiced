@@ -101,6 +101,7 @@ public:
         if (failure == 2) throw RouterResidencyConflictException(get_model_name(), get_model_name(), "injected busy drain");
         PolicyWorker::unload();
     }
+    bool is_backend_alive() const override { return failure == 1 || PolicyWorker::is_backend_alive(); }
     int failure;
 };
 struct StatePublicationTestHook {
@@ -1050,6 +1051,27 @@ static void native_load_publication() {
         restart.open(); const auto recovered = recovering.get();
         check(restarting && recovered.status == 200 && Hook::generation(server, recovery) != recovery_generation && Hook::pinned(server, recovery),
               "unavailable-worker recovery publishes a new generation with current Hot pinning");
+        const std::string cleanup = "user.CleanupPending"; Hook::register_local_model(server, cleanup);
+        Hook::mutate(server, {{"model", cleanup}, {"policy", "on-demand"}});
+        auto failed = Hook::failed_runtime(server, cleanup, 1);
+        const auto failed_generation = failed->get_instance_id();
+        bool stop_failed = false;
+        try { Hook::unload(server, cleanup); } catch (const std::runtime_error&) { stop_failed = true; }
+        check(stop_failed && failed->cleanup_pending() && failed->get_state() == lemon::ModelState::UNLOADED && failed->is_backend_alive(),
+              "failed unload retains a live but unavailable cleanup-pending worker");
+        starts = 0; Hook::factory(server, [&] { ++starts; });
+        const auto rejected_load = Hook::native_load(server, cleanup);
+        bool automatic_rejected = false;
+        try { Hook::auto_load(server, cleanup); }
+        catch (const lemon::AdmissionError& error) { automatic_rejected = error.code == "worker_cleanup_pending" && error.status == 503; }
+        check(rejected_load.status == 503 && automatic_rejected && starts == 0 && Hook::generation(server, cleanup) == failed_generation,
+              "native and automatic loads reject unresolved cleanup without success or duplicate startup");
+        failed->failure = 0; Hook::unload(server, cleanup);
+        check(Hook::generation(server, cleanup) == 0 && Hook::generation(server, recovery) != 0,
+              "confirmed cleanup retires only the failed generation and preserves another service");
+        const auto reloaded = Hook::native_load(server, cleanup);
+        check(reloaded.status == 200 && starts == 1 && Hook::generation(server, cleanup) != failed_generation,
+              "one usable replacement loads after confirmed cleanup");
     }
     lemon::RuntimeConfig::set_global(nullptr);
 }

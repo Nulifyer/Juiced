@@ -534,6 +534,8 @@ bool Router::ensure_loaded_model_residency_canonical(
 
     WrappedServer* existing =
         find_server_by_model_name(canonical_model_name);
+    if (existing && existing->cleanup_pending())
+        throw AdmissionError("worker_cleanup_pending", "Confirm retirement of the previous worker before loading this model", 503);
     if (!existing || !existing->is_backend_alive()) {
         return false;
     }
@@ -1042,6 +1044,8 @@ void Router::load_model(const std::string& model_name,
         // entries are evicted first so auto-load performs a real lazy restart.
         WrappedServer* existing = find_server_by_model_name(canonical_model_name);
         std::shared_ptr<WrappedServer> replace_existing;
+        if (existing && existing->cleanup_pending())
+            throw AdmissionError("worker_cleanup_pending", "Confirm retirement of the previous worker before loading this model", 503);
         if (existing && (!existing->is_backend_alive() || existing->was_watchdog_triggered())) {
             LOG(WARNING, "Router") << "Existing backend for " << canonical_model_name
                                     << " is unavailable or watchdog triggered, evicting before reload" << std::endl;

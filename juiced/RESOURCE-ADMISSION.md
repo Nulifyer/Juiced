@@ -573,6 +573,17 @@ duplicate startup and remains unresolved. Complete operator recovery, descendant
 termination, actual speech and end-to-end stop deadlines remain P1 prerequisites.
 The helper fixture uses controlled process substitution and metadata failures.
 
+A present Wyoming intent must contain a bounded nonempty owner, boolean pending
+state and a matching dispatching/stopped outcome. Missing, inconsistent or
+unsupported records remain unchanged and report `recovery_required`; constructor,
+reconciliation and shutdown cannot replace them or authorize a new helper.
+An absent legacy record or valid stopped record can start an owned helper.
+
+Native loading and automatic residency reuse reject `worker_cleanup_pending`
+with HTTP 503 while retirement remains unresolved. A live child retained after
+failed unload is unavailable for successful reuse. Confirmed exact-generation
+cleanup must precede a replacement.
+
 FLM load-time pull, explicit download and removal now share ModelManager's native
 command owner. `native_helpers.json` records dispatch intent and an opaque command
 identity before spawn. The process layer attaches its handle before output callbacks

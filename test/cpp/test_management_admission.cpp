@@ -537,6 +537,71 @@ static void preparation_cleanup() {
     }
 }
 
+static void voice_intent_recovery() {
+    using Hook = StatePublicationTestHook;
+    VoiceEnvironment enabled("JUICED_WYOMING_ENABLED", "false");
+    VoiceEnvironment executable("JUICED_VOICE_PYTHON", "controlled-voice-python");
+    VoiceEnvironment script("JUICED_VOICE_SCRIPT", "controlled-voice-script");
+    auto defaults = ConfigFile::base_defaults(); defaults["offline"] = true; defaults["broadcast"] = false;
+    auto config = std::make_shared<RuntimeConfig>(defaults); RuntimeConfig::set_global(config.get());
+    const json pending = {{"owner", "previous-manager"}, {"pending", true}, {"state", "dispatching"}};
+    auto missing = pending; missing.erase("pending");
+    auto inconsistent = pending; inconsistent["pending"] = false;
+    auto owner_type = pending; owner_type["owner"] = 3;
+    auto empty_owner = pending; empty_owner["owner"] = "";
+    auto pending_type = pending; pending_type["pending"] = "true";
+    auto unsupported = pending; unsupported["state"] = "unknown";
+    auto extra = pending; extra["version"] = 2;
+    const std::vector<json> ambiguous = {missing, inconsistent, owner_type, empty_owner, pending_type, unsupported, extra, json(nullptr)};
+    fs::path restart_root;
+    for (const auto& marker : ambiguous) {
+        const auto root = test::make_scratch_dir("voice-intent-recovery");
+        fs::create_directories(root / "juiced");
+        json initial = {{"version", 1}, {"revision", 0}, {"policies", json::object()},
+            {"cache", {{"mode", "memory"}}}, {"imports", json::object()}, {"voice_writer", marker}};
+        { std::ofstream out(root / "juiced/state.json"); out << initial; }
+        enabled.set("false");
+        auto control = std::make_shared<VoiceProcessControl>();
+        {
+            Server server(config, root.string(), root.string()); Hook::stop_preparation(server);
+            check(Hook::voice_status(server).value("recovery_required", false) && Hook::voice_intent(server) == marker,
+                  "constructor quarantines a present ambiguous voice intent without changing it");
+            Hook::voice_factory(server, control); Hook::voice_models(server, "Voice-Recovery"); enabled.set("true");
+            Hook::voice(server); Hook::voice(server); Hook::stop_preparation(server);
+            check(control->starts == 0 && Hook::voice_status(server).value("recovery_required", false) &&
+                  Hook::voice_intent(server) == marker,
+                  "reconciliation and shutdown preserve ambiguous voice ownership without dispatch");
+        }
+        json persisted; { std::ifstream in(root / "juiced/state.json"); in >> persisted; }
+        check(persisted.at("voice_writer") == marker, "durable voice quarantine preserves the original record");
+        restart_root = root;
+    }
+    {
+        enabled.set("false"); Server restarted(config, restart_root.string(), restart_root.string()); Hook::stop_preparation(restarted);
+        auto control = std::make_shared<VoiceProcessControl>(); Hook::voice_factory(restarted, control);
+        Hook::voice_models(restarted, "Voice-Recovery"); enabled.set("true"); Hook::voice(restarted);
+        check(control->starts == 0 && Hook::voice_status(restarted).value("recovery_required", false) &&
+              Hook::voice_intent(restarted).is_null(), "manager restart cannot replace quarantined ambiguous voice intent");
+    }
+    for (bool stopped : {false, true}) {
+        enabled.set("false"); const auto root = test::make_scratch_dir("voice-valid-intent");
+        if (stopped) {
+            fs::create_directories(root / "juiced");
+            json initial = {{"version", 1}, {"revision", 0}, {"policies", json::object()},
+                {"cache", {{"mode", "memory"}}}, {"imports", json::object()},
+                {"voice_writer", {{"owner", "previous-manager"}, {"pending", false}, {"state", "stopped"}}}};
+            std::ofstream(root / "juiced/state.json") << initial;
+        }
+        Server server(config, root.string(), root.string()); Hook::stop_preparation(server);
+        auto control = std::make_shared<VoiceProcessControl>(); Hook::voice_factory(server, control);
+        Hook::voice_models(server, "Voice-Valid"); enabled.set("true"); Hook::voice(server);
+        check(control->starts == 1 && control->running && !Hook::voice_status(server).value("recovery_required", false),
+              "absent legacy and valid stopped intents permit one owned voice dispatch");
+        enabled.set("false"); Hook::voice(server);
+    }
+    RuntimeConfig::set_global(nullptr);
+}
+
 static void voice_helper_ownership() {
     using Hook = StatePublicationTestHook;
     VoiceEnvironment enabled("JUICED_WYOMING_ENABLED", "false");
@@ -616,6 +681,7 @@ static void voice_helper_ownership() {
 int main(int argc, char** argv) {
     try {
         if (argc > 1 && std::string(argv[1]) == "--voice-cleanup") voice_helper_ownership();
+        else if (argc > 1 && std::string(argv[1]) == "--voice-intent") voice_intent_recovery();
         else if (argc > 1 && std::string(argv[1]) == "--preparation-cleanup") preparation_cleanup();
         else { native_owners(); entry_boundaries(); worker_start_boundaries(); }
     }
