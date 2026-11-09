@@ -1,6 +1,8 @@
 #pragma once
 
 #include <filesystem>
+#include <functional>
+#include <mutex>
 #include <optional>
 #include <shared_mutex>
 #include <string>
@@ -22,11 +24,13 @@ public:
     /**
      * Set or update an alias binding: alias -> target.
      * Returns true on success. Returns false and sets err_msg on validation or cycle error.
+     * Persistence failures throw without changing the live bindings.
      */
     bool set_alias(const std::string& alias, const std::string& target, std::string& err_msg);
 
     /**
      * Remove an alias binding. Returns true if the alias was present and removed.
+     * Persistence failures throw without changing the live bindings.
      */
     bool remove_alias(const std::string& alias);
 
@@ -57,7 +61,12 @@ public:
     void save();
 
 private:
+    friend struct AliasPublicationTestHook;
+    static std::unordered_map<std::string, std::string> read_aliases(const std::string& cache_dir);
+    void save_locked(const std::unordered_map<std::string, std::string>& aliases);
+    std::function<void(const std::string&, const std::unordered_map<std::string, std::string>&)> persist_override_;
     std::string cache_dir_;
+    std::mutex write_mutex_;
     mutable std::shared_mutex mutex_;
     std::unordered_map<std::string, std::string> aliases_;
 };

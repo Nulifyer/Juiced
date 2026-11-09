@@ -6914,9 +6914,12 @@ void Server::handle_aliases_add(const httplib::Request& req, httplib::Response& 
             {"target", target}
         };
         res.set_content(response.dump(), "application/json");
-    } catch (const std::exception& e) {
+    } catch (const nlohmann::json::exception& e) {
         res.status = 400;
         res.set_content(create_alias_error(e.what(), "invalid_request").dump(), "application/json");
+    } catch (const std::exception& e) {
+        res.status = 500;
+        res.set_content(create_alias_error(e.what(), "internal_error", "server_error").dump(), "application/json");
     }
 }
 

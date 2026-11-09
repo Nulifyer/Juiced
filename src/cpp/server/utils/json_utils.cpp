@@ -29,11 +29,21 @@ json JsonUtils::load_from_file(const std::string& file_path) {
 }
 
 void JsonUtils::save_to_file(const json& j, const std::string& file_path) {
-    save_to_file(j, file_path, {});
+    save_to_file(j, file_path, {}, std::filesystem::perms::unknown);
+}
+
+void JsonUtils::save_to_file(const json& j, const std::string& file_path, std::filesystem::perms permissions) {
+    save_to_file(j, file_path, {}, permissions);
 }
 
 void JsonUtils::save_to_file(const json& j, const std::string& file_path,
                             const std::function<void(const std::filesystem::path&)>& before_replace) {
+    save_to_file(j, file_path, before_replace, std::filesystem::perms::unknown);
+}
+
+void JsonUtils::save_to_file(const json& j, const std::string& file_path,
+                            const std::function<void(const std::filesystem::path&)>& before_replace,
+                            std::filesystem::perms permissions) {
     const auto contents = j.dump(2);
     const auto target = path_from_utf8(file_path);
     if (!target.parent_path().empty()) std::filesystem::create_directories(target.parent_path());
@@ -49,8 +59,10 @@ void JsonUtils::save_to_file(const json& j, const std::string& file_path,
     try {
         std::ofstream file(temporary, std::ios::trunc);
         if (!file.is_open()) throw std::runtime_error("Failed to stage JSON file: " + file_path);
-        if (std::filesystem::is_regular_file(previous) && previous.permissions() != std::filesystem::perms::unknown) {
-            std::filesystem::permissions(temporary, previous.permissions(), ec);
+        if (permissions == std::filesystem::perms::unknown && std::filesystem::is_regular_file(previous))
+            permissions = previous.permissions();
+        if (permissions != std::filesystem::perms::unknown) {
+            std::filesystem::permissions(temporary, permissions, ec);
             if (ec) throw std::filesystem::filesystem_error("Could not preserve JSON permissions", temporary, ec);
         }
         file << contents;

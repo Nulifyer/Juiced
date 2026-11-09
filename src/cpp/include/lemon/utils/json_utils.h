@@ -17,6 +17,8 @@ public:
 
     // Atomic replacement preserves the previous file on serialization or I/O failure.
     static void save_to_file(const json& j, const std::string& file_path);
+    static void save_to_file(const json& j, const std::string& file_path,
+                             std::filesystem::perms permissions);
 
     // Parse JSON from string
     static json parse(const std::string& json_str);
@@ -57,6 +59,9 @@ private:
     friend struct JsonPersistenceTestHook;
     static void save_to_file(const json& j, const std::string& file_path,
                              const std::function<void(const std::filesystem::path&)>& before_replace);
+    static void save_to_file(const json& j, const std::string& file_path,
+                             const std::function<void(const std::filesystem::path&)>& before_replace,
+                             std::filesystem::perms permissions);
 };
 
 } // namespace utils

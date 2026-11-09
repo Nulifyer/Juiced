@@ -15,7 +15,7 @@ import urllib.request
 
 def launch(binary, root, port, embedded=False):
     for name in ("config", "cache", "run", "watched"):
-        (root / name).mkdir()
+        (root / name).mkdir(exist_ok=True)
     (root / "config/config.json").write_text(
         json.dumps(
             {

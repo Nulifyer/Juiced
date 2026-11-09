@@ -407,3 +407,15 @@ failures log and return a failure status without an error dialog.
 Windows qualification requires `EmbeddedServerShutdownTest`, which builds the
 actual embedded executable and checks HTTP shutdown and occupied-port cleanup.
 Linux terminal-shutdown checks do not establish Windows execution evidence.
+
+AliasManager serializes alias writers, reloads and directory changes. Candidates
+persist before live publication. File I/O runs outside its read lock, so model
+lookups retain the committed map during a staged save. Alias byte persistence
+uses JsonUtils atomic replacement; it has no overwrite-copy fallback. POSIX alias
+files retain owner-only permissions. Windows ACL behavior remains unqualified.
+
+Failed alias storage returns HTTP500 and preserves live bindings. Invalid JSON
+and field types remain HTTP400; validation conflicts remain HTTP409. Retry and
+restart consume only committed changes. Corrupt-file recovery retains separate
+backups. These are per-owner publication contracts, not cross-process exclusion
+or whole-store maintenance.

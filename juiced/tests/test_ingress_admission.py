@@ -19,6 +19,7 @@ PREFIXES = ("/api/v0/", "/api/v1/", "/v0/", "/v1/")
 
 def run(binary, output):
     assertions = []
+    observations = {}
 
     def check(condition, label):
         assertions.append({"check": label, "passed": bool(condition)})
@@ -227,7 +228,10 @@ def run(binary, output):
                 "exact 8 MiB import chunk remains supported",
             )
             check(wait_empty(), "completed maximum chunk releases ingress charge")
-            code, _ = request(
+            observations["before_protected_activation"] = request(
+                "/v1/juiced/admission"
+            )[1]
+            code, activation = request(
                 "/internal/set",
                 {
                     "admission": {
@@ -236,6 +240,10 @@ def run(binary, output):
                     }
                 },
             )
+            observations["protected_activation"] = {
+                "status": code,
+                "response": activation,
+            }
             check(
                 code == 200,
                 "bounded settings request can publish compatible admission configuration",
@@ -433,6 +441,7 @@ def run(binary, output):
                 json.dumps(
                     {
                         "checks": assertions,
+                        "observations": observations,
                         "scope": "Model-free local HTTP body/import acceptance",
                         "server_exit": process.returncode,
                     },

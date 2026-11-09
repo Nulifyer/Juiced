@@ -1,16 +1,15 @@
 #include "lemon/alias_manager.h"
+#include "lemon/utils/aixlog.hpp"
+#include "lemon/utils/json_utils.h"
 #include "lemon/utils/model_name_utils.h"
 #include "lemon/utils/path_utils.h"
-#include "lemon/utils/aixlog.hpp"
 
-#include <nlohmann/json.hpp>
 #include <filesystem>
 #include <fstream>
+#include <mutex>
+#include <nlohmann/json.hpp>
+#include <stdexcept>
 #include <system_error>
-
-#ifndef _WIN32
-#include <sys/stat.h>
-#endif
 
 namespace fs = std::filesystem;
 using json = nlohmann::json;
@@ -25,16 +24,11 @@ AliasManager::AliasManager(std::string cache_dir)
 }
 
 void AliasManager::set_cache_dir(const std::string& cache_dir) {
-    {
-        std::unique_lock lock(mutex_);
-        cache_dir_ = cache_dir;
-    }
-    if (!cache_dir.empty()) {
-        load();
-    } else {
-        std::unique_lock lock(mutex_);
-        aliases_.clear();
-    }
+    std::unique_lock writer(write_mutex_);
+    auto candidate = read_aliases(cache_dir);
+    std::unique_lock lock(mutex_);
+    cache_dir_ = cache_dir;
+    aliases_.swap(candidate);
 }
 
 std::string AliasManager::get_cache_dir() const {
@@ -59,10 +53,9 @@ bool AliasManager::set_alias(const std::string& alias, const std::string& target
         return false;
     }
 
-    std::unordered_map<std::string, std::string> temp_aliases;
+    std::unique_lock writer(write_mutex_);
     {
-        std::unique_lock lock(mutex_);
-        temp_aliases = aliases_;
+        auto temp_aliases = get_all_aliases();
         temp_aliases[clean_alias] = clean_target;
 
         // Cycle detection check
@@ -86,31 +79,24 @@ bool AliasManager::set_alias(const std::string& alias, const std::string& target
             }
         }
 
-        aliases_[clean_alias] = clean_target;
+        save_locked(temp_aliases);
+        std::unique_lock lock(mutex_);
+        aliases_.swap(temp_aliases);
     }
 
     LOG(INFO, "AliasManager") << "Set alias: " << clean_alias << " -> " << clean_target << std::endl;
-    save();
     return true;
 }
 
 bool AliasManager::remove_alias(const std::string& alias) {
-    std::string clean_alias = utils::normalize_model_name(alias);
-    bool removed = false;
-    {
-        std::unique_lock lock(mutex_);
-        auto it = aliases_.find(clean_alias);
-        if (it != aliases_.end()) {
-            aliases_.erase(it);
-            removed = true;
-        }
-    }
-
-    if (removed) {
-        LOG(INFO, "AliasManager") << "Removed alias: " << clean_alias << std::endl;
-        save();
-    }
-    return removed;
+    const auto clean_alias = utils::normalize_model_name(alias);
+    std::unique_lock writer(write_mutex_);
+    auto candidate = get_all_aliases();
+    if (!candidate.erase(clean_alias)) return false;
+    save_locked(candidate);
+    { std::unique_lock lock(mutex_); aliases_.swap(candidate); }
+    LOG(INFO, "AliasManager") << "Removed alias: " << clean_alias << std::endl;
+    return true;
 }
 
 std::optional<std::string> AliasManager::resolve_alias(const std::string& alias_or_name) const {
@@ -158,24 +144,21 @@ std::unordered_map<std::string, std::string> AliasManager::get_all_aliases() con
 }
 
 void AliasManager::load() {
-    std::string current_cache_dir;
-    {
-        std::shared_lock lock(mutex_);
-        current_cache_dir = cache_dir_;
-    }
+    std::unique_lock writer(write_mutex_);
+    auto candidate = read_aliases(get_cache_dir());
+    std::unique_lock lock(mutex_);
+    aliases_.swap(candidate);
+}
 
-    if (current_cache_dir.empty()) {
-        return;
-    }
+std::unordered_map<std::string, std::string> AliasManager::read_aliases(const std::string& current_cache_dir) {
+    if (current_cache_dir.empty()) return {};
 
     fs::path cache_path = utils::path_from_utf8(current_cache_dir);
+    if (fs::exists(cache_path) && !fs::is_directory(cache_path))
+        throw std::runtime_error("Alias cache must be a directory: " + current_cache_dir);
     fs::path alias_path = cache_path / "aliases.json";
 
-    if (!fs::exists(alias_path)) {
-        std::unique_lock lock(mutex_);
-        aliases_.clear();
-        return;
-    }
+    if (!fs::exists(alias_path)) return {};
 
     std::unordered_map<std::string, std::string> loaded_aliases;
     bool parse_failed = false;
@@ -183,8 +166,7 @@ void AliasManager::load() {
     {
         std::ifstream file(alias_path, std::ios::in | std::ios::binary);
         if (!file.is_open()) {
-            LOG(WARNING, "AliasManager") << "Failed to open " << utils::path_to_utf8(alias_path) << std::endl;
-            return;
+            throw std::runtime_error("Failed to open alias configuration: " + utils::path_to_utf8(alias_path));
         }
 
         try {
@@ -200,7 +182,7 @@ void AliasManager::load() {
                     }
                 }
             }
-        } catch (const std::exception& e) {
+        } catch (const json::exception& e) {
             parse_failed = true;
             LOG(WARNING, "AliasManager") << "Failed to parse " << utils::path_to_utf8(alias_path)
                                          << ": " << e.what() << std::endl;
@@ -210,12 +192,14 @@ void AliasManager::load() {
     if (parse_failed) {
         std::error_code ec;
         fs::path corrupted_path = cache_path / "aliases.json.corrupted";
+        size_t suffix = 0;
+        while (fs::exists(corrupted_path))
+            corrupted_path = cache_path / ("aliases.json.corrupted." + std::to_string(++suffix));
         fs::rename(alias_path, corrupted_path, ec);
+        if (ec) throw fs::filesystem_error("Could not preserve corrupted alias configuration", alias_path, corrupted_path, ec);
         LOG(WARNING, "AliasManager") << "Renamed corrupted aliases file to "
                                      << utils::path_to_utf8(corrupted_path) << std::endl;
-        std::unique_lock lock(mutex_);
-        aliases_.clear();
-        return;
+        return {};
     }
 
     // Prune cyclic dependencies loaded from disk
@@ -248,70 +232,21 @@ void AliasManager::load() {
         }
     }
 
-    {
-        std::unique_lock lock(mutex_);
-        aliases_ = std::move(sanitized_aliases);
-    }
-    LOG(INFO, "AliasManager") << "Loaded " << aliases_.size() << " alias binding(s) from disk." << std::endl;
+    LOG(INFO, "AliasManager") << "Loaded " << sanitized_aliases.size() << " alias binding(s) from disk." << std::endl;
+    return sanitized_aliases;
 }
 
 void AliasManager::save() {
-    std::string current_cache_dir;
-    std::unordered_map<std::string, std::string> aliases_copy;
-    {
-        std::shared_lock lock(mutex_);
-        current_cache_dir = cache_dir_;
-        aliases_copy = aliases_;
-    }
+    std::unique_lock writer(write_mutex_);
+    save_locked(get_all_aliases());
+}
 
-    if (current_cache_dir.empty()) {
-        return;
-    }
-
-    fs::path cache_path = utils::path_from_utf8(current_cache_dir);
-    if (!fs::exists(cache_path)) {
-        std::error_code ec;
-        fs::create_directories(cache_path, ec);
-    }
-
-    fs::path target_path = cache_path / "aliases.json";
-    fs::path temp_path = cache_path / "aliases.json.tmp";
-
-    // Scope output file stream so handle closes before rename/copy
-    {
-        std::ofstream file(temp_path, std::ios::out | std::ios::binary);
-        if (!file.is_open()) {
-            LOG(ERROR, "AliasManager") << "Failed to open temp file for writing: "
-                                       << utils::path_to_utf8(temp_path) << std::endl;
-            return;
-        }
-
-        json j = json::object();
-        for (const auto& [k, v] : aliases_copy) {
-            j[k] = v;
-        }
-        file << j.dump(2) << "\n";
-    }
-
-#ifndef _WIN32
-    chmod(temp_path.c_str(), 0600);
-#endif
-
-    std::error_code ec;
-    fs::rename(temp_path, target_path, ec);
-    if (ec) {
-        std::error_code copy_ec;
-        fs::copy_file(temp_path, target_path, fs::copy_options::overwrite_existing, copy_ec);
-        if (copy_ec) {
-            LOG(ERROR, "AliasManager") << "Failed to replace " << utils::path_to_utf8(target_path)
-                                       << ": " << copy_ec.message() << std::endl;
-        } else {
-#ifndef _WIN32
-            chmod(target_path.c_str(), 0600);
-#endif
-        }
-        fs::remove(temp_path, ec);
-    }
+void AliasManager::save_locked(const std::unordered_map<std::string, std::string>& aliases) {
+    const auto cache_dir = get_cache_dir();
+    if (cache_dir.empty()) return;
+    const auto target = utils::path_to_utf8(utils::path_from_utf8(cache_dir) / "aliases.json");
+    if (persist_override_) persist_override_(target, aliases);
+    else utils::JsonUtils::save_to_file(json(aliases), target, fs::perms::owner_read | fs::perms::owner_write);
 }
 
 } // namespace lemon

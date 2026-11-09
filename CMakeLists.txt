@@ -3093,6 +3093,10 @@ if(BUILD_TESTING AND EXISTS "${_MODEL_ALIAS_TEST_SRC}")
 
     include(CTest)
     add_cpp_ci_test(ModelAliasTest CI ON COMMAND test_model_alias)
+    add_cpp_ci_test(AliasPublicationHTTPTest CI ON COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/juiced/tests/test_alias_publication.py --binary $<TARGET_FILE:${EXECUTABLE_NAME}>
+        --out ${CMAKE_CURRENT_BINARY_DIR}/alias-publication-proof.json DEPENDS ${EXECUTABLE_NAME})
+    set_tests_properties(ModelAliasTest AliasPublicationHTTPTest PROPERTIES TIMEOUT 90)
 endif()
 
 # Router-backed ClassifierServices wiring (issue #2384): binds the pure engine's
