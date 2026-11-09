@@ -24,7 +24,6 @@ import {
   Search,
   Download,
   Upload,
-  HardDrive,
   Terminal,
   Github,
 } from "lucide-react";
@@ -37,6 +36,7 @@ import {
 } from "./components/t3/sidebar";
 import { ModelLibrary } from "./components/ModelLibrary";
 import { Acquisition } from "./components/Acquisition";
+import type { PublishedSource } from "./components/modelDiscovery";
 import { CacheWorkspace } from "./components/CacheWorkspace";
 import { Playground } from "./components/Playground";
 import { api, type Model } from "./api";
@@ -74,9 +74,10 @@ export default function App() {
     [serviceVersion, setServiceVersion] = useState<string>(),
     [ready, setReady] = useState(false),
     [mobile, setMobile] = useState(false),
-    [libraryTab, setLibraryTab] = useState("discover"),
+    [libraryTab, setLibraryTab] = useState("models"),
+    [libraryActivityRequest, setLibraryActivityRequest] = useState(0),
     [inspected, setInspected] = useState<Model | null>(null),
-    [acquireRepo, setAcquireRepo] = useState<{ repo?: string; query?: string; runtime?: string }>(),
+    [acquireRepo, setAcquireRepo] = useState<{ repo?: string; query?: string; runtime?: string; source?: PublishedSource }>(),
     [cache, setCache] = useState<any>(),
     [removalRequested, setRemovalRequested] = useState(false),
     [preferredModel, setPreferredModel] = useState("");
@@ -85,6 +86,10 @@ export default function App() {
   const registerNavigationGuard = useCallback((guard?: (action: () => void) => void) => { navigationGuard.current = guard; }, []);
   function navigate(action: () => void) { setMobile(false); if (navigationGuard.current) navigationGuard.current(action); else action(); }
   function chooseScreen(next: string) { navigate(() => { setScreen(next); setMobile(false); }); }
+  function openLibraryActivity() {
+    navigate(() => { setInspected(null); setLibraryTab("models"); setLibraryActivityRequest((value) => value + 1); setScreen("library"); });
+  }
+  function openTest(model: Model) { setPreferredModel(model.id); setTask(model.service); setScreen("playground"); }
   const inspectable = ["models", "policy", "library"].includes(screen);
   useEffect(() => {
     if (!notice) return;
@@ -179,7 +184,7 @@ export default function App() {
             variant="ghost"
             size="sm"
             onClick={() => {
-              navigate(() => { setInspected(null); setLibraryTab("transfers"); setScreen("library"); });
+              openLibraryActivity();
             }}
           >
             <DownloadActivity />
@@ -279,9 +284,7 @@ export default function App() {
           <SidebarGroup>
             <div className="sidebar-label">Your library</div>
             {[
-              ["discover", "Discover models", Search],
-              ["downloaded", "Downloaded", HardDrive],
-              ["transfers", "Downloads", Download],
+              ["models", "Find & run models", Search],
               ["import", "Import GGUF", Upload],
             ].map(([id, label, Icon]: any) => (
               <button
@@ -290,21 +293,17 @@ export default function App() {
                   "sidebar-link " + (libraryTab === id ? "active" : "")
                 }
                 onClick={() => {
-                  setLibraryTab(id);
-                  setService("All services");
-                  setMobile(false);
+                  navigate(() => { setInspected(null); setLibraryTab(id); setService("All services"); });
                 }}
               >
                 <Icon size={15} />
                 <span>{label}</span>
-                {id === "downloaded" && (
+                {id === "models" && (
                   <span className="count">
                     {models.filter((m) => m.downloaded).length}
                   </span>
                 )}
-                {id === "transfers" && activeJobs.length > 0 && (
-                  <span className="count">{activeJobs.length}</span>
-                )}
+
               </button>
             ))}
           </SidebarGroup>
@@ -373,10 +372,11 @@ export default function App() {
             onBackends={() => chooseScreen("backends")}
             initialRepository={acquireRepo}
             onRepositoryOpened={() => setAcquireRepo(undefined)}
-            service={service}
             jobs={jobs}
             notify={notify}
             refresh={refresh}
+            onTry={(model) => navigate(() => openTest(model))}
+            activityRequest={libraryActivityRequest}
             tab={libraryTab}
             setTab={setLibraryTab}
             onInspect={(m) => {
@@ -394,9 +394,9 @@ export default function App() {
           />
         )}
         {["logs", "diagnostics"].includes(screen) && <Diagnostics initialTab={screen === "logs" ? "logs" : diagnosticTab} data={telemetry} logs={logs} models={models} inspect={(model) => { setInspected(model); setScreen("models"); }} />}
-        {screen === "backends" && <BackendInventory models={models} jobs={jobs} openDownloads={() => { setInspected(null); setLibraryTab("transfers"); setScreen("library"); }} />}
+        {screen === "backends" && <BackendInventory models={models} jobs={jobs} openDownloads={openLibraryActivity} />}
         {screen === "services" && (
-          <ServiceEndpoints models={models} notify={notify} />
+          <ServiceEndpoints models={models} notify={notify} initialModel={preferredModel} />
         )}
         {screen === "cache" && (
           <CacheWorkspace
@@ -433,19 +433,15 @@ export default function App() {
           onFindVariant={(model, runtime) => {
             setInspected(null);
             setAcquireRepo({ query: model.id.replace(/[-_](?:IQ[0-9][A-Z0-9_]*|Q[0-9][A-Z0-9_]*|GGUF)$/ig, ""), runtime });
-            setLibraryTab("discover"); setScreen("library");
+            setLibraryTab("models"); setScreen("library");
           }}
-          onBrowse={(repo) => {
+          onBrowse={(repo, source) => {
             setInspected(null);
-            setAcquireRepo({ repo });
-            setLibraryTab("discover");
+            setAcquireRepo({ repo, source });
+            setLibraryTab("models");
             setScreen("library");
           }}
-          onTest={(m) => {
-            setPreferredModel(m.id);
-            setTask(m.service);
-            setScreen("playground");
-          }}
+          onTest={openTest}
           refresh={refresh}
           notify={notify}
         />

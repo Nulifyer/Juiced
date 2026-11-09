@@ -214,12 +214,12 @@ test('larger text, visible focus and text contrast remain usable', async ({ page
 test('search groups quants, and an existing checkpoint opens its installed registration', async ({ page, runtime }) => {
   await page.goto('/');
   await page.getByRole('button', { name: 'Library', exact: true }).click();
-  await page.getByRole('button', { name: 'Hugging Face', exact: true }).click();
-  await page.getByLabel('Search Hugging Face models', { exact: true }).fill('Ornith');
-  await page.getByRole('button', { name: 'Search', exact: true }).click();
-  await page.getByRole('button', { name: 'Browse quants', exact: true }).click();
+  await page.getByLabel('Search models', { exact: true }).fill('Ornith');
+  await page.getByRole('button', { name: 'Search published models', exact: true }).click();
+  await page.getByRole('button', { name: 'Choose files', exact: true }).click();
   await expect(page.getByRole('dialog')).toBeVisible();
   await expect(page.getByText('Ornith-Q4_K_M.gguf', { exact: true })).toBeVisible();
+  await page.getByRole('radio', { name: /Ornith-Q6_K/ }).check();
   await page.getByRole('button', { name: 'Open installed variant', exact: true }).click();
   await expect(page.getByRole('heading', { name: modelId, exact: true })).toBeVisible();
   expect(runtime.writes).toEqual([]);

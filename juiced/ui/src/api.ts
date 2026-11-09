@@ -11,6 +11,8 @@ export type ModelContext = {
 export type Model = {
   id: string;
   recipe: string;
+  source?: string;
+  registry_source?: string;
   labels: string[];
   service: string;
   downloaded: boolean;

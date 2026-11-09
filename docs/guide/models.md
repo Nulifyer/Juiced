@@ -3,33 +3,43 @@
 Add weights through **Library**, then enable the model when you are ready to use it.
 New downloads and imports start **Disabled**.
 
-## Download from the catalog
+## Find and download a model
 
-1. Open **Library → Discover models → Model catalog**.
-2. Filter by service, capability, runtime, size, or download status.
-3. Open a model to inspect its description and components.
-4. Select **Download**.
-5. Check progress under **Library → Downloads**.
+1. Open **Library → Find & run models**.
+2. Search the known models by name. Use **Filter known models** for service,
+   capability, runtime, size or availability. Running and downloaded models appear first.
+3. For a known model, select **Review download** to inspect its declared files,
+   companions and size before selecting **Download model**.
+4. To search published repositories with the same query, select **Search published
+   models**. You can also paste a Hugging Face repository URL or `publisher/repository`.
+5. Select **Choose files** on a repository, then explicitly choose a published quant
+   and any required projector. Review the exact filenames and registration name.
+6. Start the download. Activity opens on the same page; the query remains available.
 
-**Recommended** is a catalog label. It does not set the model's Hot policy or
-establish that the model fits your hardware.
+**Catalog picks** identifies catalog labels. It does not establish host fit or
+set the model's Hot policy. Download size excludes context, engine workspace and
+other runtime allocations. Missing size or context metadata is reported as unknown.
 
-## Find a GGUF on Hugging Face
+A quant is a published weight representation such as `Q4_K_M` or `Q6_K`.
+Smaller quants usually reduce storage and memory, with a precision tradeoff.
+Juiced downloads published variants; it does not convert or quantize weights.
+A vision model may require a matching projector. Selecting text only does not
+qualify vision service.
 
-1. Open the **Hugging Face** discovery tab.
-2. Choose **llama.cpp · GGUF** as the target runtime.
-3. Search by model name, or paste a Hugging Face model URL.
-4. Open a repository and review its available quants.
-5. Choose the quant and required companion files.
-6. Start the download and check **Downloads** for completion or errors.
+The runtime filter also finds vLLM and FastFlowLM candidates. **Review files** opens
+the publisher's package; this GGUF download flow does not import every format in
+those results. Review runtime compatibility before acquiring a different format.
 
-A quant is a weight representation such as `Q4_K_M` or `Q6_K`. Smaller quants
-usually reduce storage and memory, with a precision tradeoff. Download size does
-not include all memory needed to serve the model.
+## Follow progress and recover
 
-Search for vLLM or FastFlowLM candidates with the corresponding target runtime.
-Use **Review files** to inspect the publisher's package. The GGUF downloader does
-not import every format shown in those searches.
+Download activity stays inside **Find & run models**. The top-bar download button
+opens the same activity. It shows file progress, retry delays and actionable errors.
+Use **Pause** or **Cancel** to stop a transfer; wait for the worker to acknowledge
+that stop before **Resume / retry** becomes available. Retry uses the retained
+registration and source. Interrupted transfers remain recoverable after restart.
+
+After completion, select **Review model** or find the downloaded row in the same
+search. Downloading never enables the model automatically.
 
 ## Import a local GGUF
 
@@ -48,10 +58,10 @@ Vision models can require a separate projector. Check **Weights & variants** and
 
 ## Enable the model
 
-1. Open **Models** or **Library → Downloaded**.
+1. Open **Models** or **Library → Find & run models**.
 2. Open the model details.
-3. Choose [Hot or On-demand](loading-policy.md).
-4. Load it and [complete a service test](testing.md).
+3. Review **Runtime** and **Settings**, then choose [Hot or On-demand](loading-policy.md).
+4. Load it and [complete a service test](testing.md). A running model also offers **Try model** in Library.
 
 Keep the exact public model ID when configuring clients. Quant variants are
 separate registrations and can have different runtime settings and loading policies.

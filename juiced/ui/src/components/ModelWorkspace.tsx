@@ -11,7 +11,7 @@ import { api, bytes, type Model } from "../api";
 import { Button } from "./t3/button";
 import { ModelRemoval } from "./ModelRemoval";
 import { policyNames } from "./ModelLibrary";
-import { modelQuant } from "./modelDiscovery";
+import { modelQuant, modelRegistrySource, repositoryUrl, type PublishedSource } from "./modelDiscovery";
 import {
   editableOptions,
   optionPatch,
@@ -83,7 +83,7 @@ export function ModelWorkspace({
   registerNavigationGuard: (guard?: (action: () => void) => void) => void;
   onClose: () => void;
   onInspect: (model: Model) => void;
-  onBrowse: (repo: string) => void;
+  onBrowse: (repo: string, source?: PublishedSource) => void;
   onTest: (model: Model) => void;
   onFindVariant: (model: Model, runtime: string) => void;
   refresh: () => Promise<void>;
@@ -101,9 +101,10 @@ export function ModelWorkspace({
   const [extra, setExtra] = useState("");
   const [extraEdited, setExtraEdited] = useState(false);
   const [copyFrom, setCopyFrom] = useState("");
-  const repo = repository(model);
+  const source = modelRegistrySource(model);
+  const repo = source ? repository(model) : "";
   const related = repo
-    ? models.filter((m) => repository(m) === repo && m.downloaded)
+    ? models.filter((m) => repository(m) === repo && modelRegistrySource(m) === source && m.downloaded)
     : [];
   const args = String(
     draft.llamacpp_args ?? response?.effective.llamacpp_args ?? "",
@@ -404,12 +405,13 @@ export function ModelWorkspace({
               {repo && (
                 <Button
                   variant="ghost"
-                  onClick={() => leave(() => onBrowse(repo))}
+                  onClick={() => leave(() => onBrowse(repo, source))}
                 >
                   <Download size={14} /> Add another quant
                 </Button>
               )}
             </div>
+            {model.downloaded && !model.loaded && <p className="page-note" role="status">{model.available === false ? model.unavailable_reason || "The required runtime is unavailable. Review Runtime or find another published variant." : model.policy === "disabled" ? "These weights are on this host. Choose On demand to allow loading when needed, or Hot to keep this model ready. Then use Load model below and Test this variant." : "Review the settings, then use Load model below. Test this variant becomes available after the worker is ready."}</p>}
             <nav className="workspace-tabs" aria-label="Model details">
               {[
                 [model.recipe === "llamacpp" ? "settings" : "advanced", "Settings"],
@@ -667,7 +669,7 @@ export function ModelWorkspace({
               ))}
             {tab === "runtime" && <ExecutionProfiles model={model} dirty={dirty} refresh={refresh} onChanged={() => setRevision(v => v + 1)} onFindVariant={runtime => leave(() => onFindVariant(model, runtime))} />}
             {tab === "effective" && response && <ModelEffective model={model} options={response} draft={draft} extra={extraEdited ? extra : undefined} />}
-            {tab === "readme" && <ModelReadme repository={repo} />}
+            {tab === "readme" && <ModelReadme repository={repo} source={source} />}
             {tab === "weights" && (
               <>
                 <section className="settings-section">
@@ -694,7 +696,7 @@ export function ModelWorkspace({
                   </dl>
                   {repo && (
                     <a
-                      href={`https://huggingface.co/${repo}`}
+                      href={repositoryUrl(repo, source)}
                       target="_blank"
                       rel="noreferrer"
                     >
@@ -798,7 +800,7 @@ export function ModelWorkspace({
                   pending ||
                   busy ||
                   model.policy === "disabled" ||
-                  !model.downloaded
+                  !model.downloaded || model.available === false
                 }
                 onClick={() => void apply(true)}
               >

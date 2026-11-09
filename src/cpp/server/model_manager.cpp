@@ -6398,6 +6398,8 @@ void ModelManager::download_from_manifest(const json& manifest, std::map<std::st
         // Create progress callback that reports to both console and SSE callback
         // Returns bool: true = continue, false = cancel
         utils::ProgressCallback http_progress_cb;
+        utils::DownloadRetry retry;
+        download_opts.on_retry = [&](const utils::DownloadRetry& value) { retry = value; };
         if (progress_callback) {
             http_progress_cb = [&, total_download_size, bytes_on_disk](size_t downloaded, size_t total) -> bool {
                 DownloadProgress progress;
@@ -6405,10 +6407,12 @@ void ModelManager::download_from_manifest(const json& manifest, std::map<std::st
                 progress.file_index = file_index;
                 progress.total_files = total_files;
                 progress.bytes_downloaded = downloaded;
-                progress.bytes_total = total;
+                progress.bytes_total = (std::max)(file_size, total);
                 progress.total_download_size = total_download_size;
                 progress.bytes_previously_downloaded = bytes_on_disk;
-                progress.percent = (total > 0) ? static_cast<int>((downloaded * 100) / total) : 0;
+                progress.retry = retry;
+                progress.percent = progress.bytes_total > 0
+                    ? static_cast<int>((downloaded * 100) / progress.bytes_total) : 0;
                 return progress_callback(progress);  // Propagate cancellation
             };
         } else {

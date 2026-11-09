@@ -50,7 +50,8 @@ const endpoints: Record<string, Endpoint[]> = {
     ["Progress", "GET", "/sdapi/v1/progress", "Reads current image-generation progress."],
   ],
 };
-export function ServiceEndpoints({ models, notify }: { models: Model[]; notify: (message: string) => void }) {
+export function ServiceEndpoints({ models, notify, initialModel }: { models: Model[]; notify: (message: string) => void; initialModel?: string }) {
+  const [modelId, setModelId] = useState(initialModel || "");
   const [protocols, setProtocols] = useState<Protocol[]>([]);
   const [selected, setSelected] = useState("openai");
   const [protocolError, setProtocolError] = useState("");
@@ -68,7 +69,8 @@ export function ServiceEndpoints({ models, notify }: { models: Model[]; notify: 
     return () => { controller.abort(); window.clearInterval(timer); };
   }, [revision]);
   const origin = window.location.origin;
-  const enabled = models.filter((m) => m.policy !== "disabled" && m.available !== false);
+  const enabled = models.filter((m) => m.downloaded && m.policy !== "disabled" && m.available !== false);
+  const connectionModel = enabled.find((m) => m.id === modelId) || enabled.find((m) => m.loaded && m.service === "Chat") || enabled[0];
   const protocol = protocols.find((p) => p.id === selected) || protocols[0];
   const routes = [...(endpoints[protocol?.id || ""] || [])];
   const speech = enabled.find((m) => m.service === "Speak" && m.loaded) || enabled.find((m) => m.service === "Speak");
@@ -79,8 +81,8 @@ export function ServiceEndpoints({ models, notify }: { models: Model[]; notify: 
     try { voicePort = new URL(protocol.listener.uri).port || voicePort; } catch { /* Use the documented listener port. */ }
   }
   const address = protocol?.id === "wyoming" ? `Private TCP · port ${voicePort}` : origin + (protocol?.base_path ?? "/v1");
-  const copy = (value: string) => void navigator.clipboard.writeText(value)
-    .then(() => notify("Endpoint copied."))
+  const copy = (value: string, message = "Endpoint copied.") => void navigator.clipboard.writeText(value)
+    .then(() => notify(message))
     .catch(() => notify("Select the address and copy it manually."));
   return (
     <div className="service-endpoints">
@@ -109,6 +111,19 @@ export function ServiceEndpoints({ models, notify }: { models: Model[]; notify: 
             {protocol.id !== "wyoming" && <Button size="compact" variant="outline" onClick={() => copy(address)}><Copy size={14} />Copy base URL</Button>}
           </div>
         </section>
+        {protocol.id !== "wyoming" && <section className="endpoint-primary" aria-label="Client model selection">
+          <h2>Model ID</h2>
+          {connectionModel ? <>
+            <label htmlFor="client-model-id" className="sr-only">Client model</label>
+            <div className="endpoint-address">
+              <select id="client-model-id" value={connectionModel.id} onChange={(event) => setModelId(event.target.value)}>
+                {enabled.map((model) => <option key={model.id} value={model.id}>{model.id}</option>)}
+              </select>
+              <Button size="compact" variant="outline" onClick={() => copy(connectionModel.id, "Model ID copied.")}><Copy size={14} />Copy model ID</Button>
+            </div>
+            <p className="page-note">Use this exact ID in your client. {connectionModel.service} · {connectionModel.loaded ? "Running" : connectionModel.policy === "hot" ? "Hot · not running" : "On demand · not running"}. Check that the selected protocol supports the operation you need.</p>
+          </> : <p className="page-note">Download and enable a model in Library before configuring its ID in a client.</p>}
+        </section>}
         {routes.length > 0 && <>
           <div className="endpoint-section-heading"><h2>{protocolNames[protocol.id] || protocol.id} endpoints</h2></div>
           <div className="endpoint-table">

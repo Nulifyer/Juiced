@@ -16,7 +16,7 @@ If startup reports permission errors, verify the data mount and UID/GID `10001`.
 
 ## A model is missing from a client
 
-1. Find it under **Library → Downloaded**.
+1. Find it under **Library → Find & run models**.
 2. Check that it is available and has all required components.
 3. Change Disabled to **Hot** or **On-demand** if you intend to serve it.
 4. Refresh the client's model list and check its base URL.

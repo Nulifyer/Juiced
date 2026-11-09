@@ -22,6 +22,7 @@
 #include "recipe_options.h"
 #include "resource_admission.h"
 #include "server_process.h"
+#include "utils/http_client.h"
 
 namespace lemon {
 
@@ -72,6 +73,7 @@ struct DownloadProgress {
     size_t total_download_size = 0; // Total bytes across ALL files in this download
     size_t bytes_previously_downloaded = 0; // Bytes already on disk (resume offset or skipped file)
     int percent = 0;            // Overall percentage (0-100)
+    utils::DownloadRetry retry;
     bool complete = false;      // True when all downloads finished
     std::string error;          // Error message if failed
 };

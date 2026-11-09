@@ -40,8 +40,8 @@ test('published variant search keeps the requested runtime and source name', asy
   await openModel(page); await page.getByRole('button', { name: 'Runtime', exact: true }).click();
   await page.getByRole('combobox', { name: 'Runtime', exact: true }).click(); await page.getByRole('option', { name: 'vLLM', exact: true }).click();
   await page.getByRole('button', { name: 'Find a published variant' }).click();
-  await expect(page.getByRole('textbox', { name: 'Search Hugging Face models' })).toHaveValue(/Ornith/);
-  await expect(page.getByRole('combobox', { name: 'Search target runtime' })).toHaveValue('vllm');
+  await expect(page.getByRole('textbox', { name: 'Search models' })).toHaveValue(/Ornith/);
+  await expect(page.getByRole('combobox', { name: 'Filter by runtime' })).toHaveValue('vllm');
 });
 
 for (const width of [1440,390]) test(`runtime controls remain compact at ${width}px`, async ({ page, runtime }) => {

@@ -71,9 +71,23 @@ Browser tests require Playwright Chromium. `JUICED_TEST_CHROMIUM` can select an
 installed test browser. Native contract tests require building their targets
 before running `ctest`. Use the release workflow's target list and test selection.
 
-Real-engine, cache, concurrency, preparation, and runtime-image checks live under
+Real-engine, cache, concurrency, retirement, and runtime-image checks live under
 `juiced/tests/`. Read each command's `--help` and prerequisites before running it.
 Compilation and fixture tests do not qualify unseen models or hardware.
+
+The real Library browser journey uses a retained tiny GGUF and an existing CPU
+engine. On Linux it requires `bwrap`, OpenSSL, `curl-config`, Bun, Node and
+Playwright Chromium. It serves copied fixture bytes over loopback HTTPS; private
+mount-namespace trust leaves the host CA bundle unchanged. It starts isolated
+native and Vite processes, exercises failure/restart/pause/retry and actual CPU
+serving, and retains traces and a receipt under the requested output directory.
+It never downloads an external model or runs a converter.
+
+```bash
+python3 juiced/tests/test_library_journey.py \
+  --binary build/lemond --engine /path/to/cpu/llama-server \
+  --model-file /path/to/retained/tiny.gguf --out /tmp/juiced-library-acceptance
+```
 
 ## Build the container
 
@@ -83,8 +97,8 @@ From the repository root:
 docker build -f juiced/Dockerfile -t juiced:development .
 ```
 
-The image uses separate build stages for native code, UI, engines, preparation,
-and voice. The runtime excludes compilers and package installers. Persist weights
+The image uses separate build stages for native code, UI, engines and voice.
+Model-weight converters and quantizers are excluded. The runtime excludes compilers and package installers. Persist weights
 and state outside the image. Host drivers and firmware remain host-owned.
 
 ## Maintain documentation

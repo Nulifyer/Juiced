@@ -103,9 +103,8 @@ test('clearing an advanced override shows inheritance and sends a reset',async({
 
 for(const width of [1440,390]) test(`file-review help stays above its modal and Escape preserves the review at ${width}px`,async({page,runtime})=>{
   await page.setViewportSize({width,height:960});await page.goto('/');await navigate(page,'Library');
-  await page.getByRole('button',{name:'Hugging Face',exact:true}).click();
-  await page.getByRole('textbox',{name:'Search Hugging Face models',exact:true}).fill('Ornith');
-  await page.getByRole('button',{name:'Search',exact:true}).click();await page.getByRole('button',{name:'Browse quants',exact:true}).click();
+  await page.getByRole('textbox',{name:'Search models',exact:true}).fill('Ornith');
+  await page.getByRole('button',{name:'Search published models',exact:true}).click();await page.getByRole('button',{name:'Choose files',exact:true}).click();
   const review=page.getByRole('dialog',{name:'Ornith-GGUF',exact:true});await expect(review).toBeVisible();
   const trigger=page.getByRole('button',{name:'About File review',exact:true});await trigger.focus();await page.keyboard.press('Enter');
   const help=page.getByRole('dialog',{name:'File review',exact:true});await expect(help).toBeVisible();

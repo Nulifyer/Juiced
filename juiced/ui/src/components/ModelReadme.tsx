@@ -3,14 +3,15 @@ import Markdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Button } from "./t3/button";
 import { HelpTip } from "./HelpTip";
+import { repositoryUrl, type PublishedSource } from "./modelDiscovery";
 import "./ModelEffective.css";
 
-export function ModelReadme({ repository }: { repository: string }) {
+export function ModelReadme({ repository, source = "huggingface" }: { repository: string; source?: PublishedSource }) {
   const [content, setContent] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [retry, setRetry] = useState(0);
-  const valid = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(repository);
+  const valid = source === "huggingface" && /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(repository);
   useEffect(() => {
     setContent(""); setError("");
     if (!valid) return;
@@ -27,6 +28,7 @@ export function ModelReadme({ repository }: { repository: string }) {
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
   }, [repository, valid, retry]);
+  if (source === "modelscope" && repository) return <section aria-label="Publisher model card"><p className="page-note">This model comes from ModelScope. Open its publisher documentation to review the model card.</p><a href={repositoryUrl(repository, source)} target="_blank" rel="noreferrer">Open publisher documentation</a></section>;
   if (!valid) return <p className="page-note">No Hugging Face model card is associated with these local weights.</p>;
   return <section className="model-readme" aria-label="Publisher model card">
     <div className="heading-with-help"><a href={`https://huggingface.co/${repository}`} target="_blank" rel="noreferrer">{repository}</a><HelpTip label="Publisher documentation">This model card is supplied by the publisher. Its claims do not establish compatibility with the selected runtime or hardware.</HelpTip></div>

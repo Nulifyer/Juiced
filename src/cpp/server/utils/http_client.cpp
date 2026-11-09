@@ -439,8 +439,11 @@ static int progress_callback(void* clientp, curl_off_t dltotal, curl_off_t dlnow
         return 1;
     }
 
+    const bool model_body = data->current_response_code >= 200 &&
+                            data->current_response_code < 300;
     if (data->callback &&
-        !data->callback(curl_off_to_size(dlnow), curl_off_to_size(dltotal))) {
+        !data->callback(model_body ? curl_off_to_size(dlnow) : 0,
+                        model_body ? curl_off_to_size(dltotal) : 0)) {
         data->cancelled = true;
         return 1;
     }
@@ -1275,7 +1278,25 @@ DownloadResult HttpClient::download_file(const std::string& url,
         if (attempt > 0) {
             LOG(INFO, "Download") << " Retry " << attempt << "/" << options.max_retries
                       << " after " << (retry_delay_ms / 1000.0) << "s..." << std::endl;
-            std::this_thread::sleep_for(std::chrono::milliseconds(retry_delay_ms));
+            if (options.on_retry) {
+                options.on_retry({attempt, options.max_retries, retry_delay_ms,
+                                  final_result.http_code});
+            }
+            const auto retry_deadline = std::chrono::steady_clock::now() +
+                                        std::chrono::milliseconds(retry_delay_ms);
+            while (std::chrono::steady_clock::now() < retry_deadline) {
+                if (g_download_cancelled.load() ||
+                    (callback && !callback(resume_offset, 0))) {
+                    final_result.cancelled = true;
+                    final_result.success = false;
+                    final_result.error_message = "Download cancelled during retry wait";
+                    return final_result;
+                }
+                std::this_thread::sleep_until((std::min)(
+                    retry_deadline, std::chrono::steady_clock::now() +
+                                        std::chrono::milliseconds(100)));
+            }
+            if (options.on_retry) options.on_retry({});
 
             // Exponential backoff (parentheses avoid Windows min/max macro)
             retry_delay_ms = (std::min)(retry_delay_ms * 2, options.max_retry_delay_ms);

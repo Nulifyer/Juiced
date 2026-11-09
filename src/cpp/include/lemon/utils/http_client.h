@@ -102,8 +102,16 @@ enum class HttpSecurityPolicy {
     AllowInsecureHttp,
 };
 
+struct DownloadRetry {
+    int attempt = 0;
+    int max_retries = 0;
+    int delay_ms = 0;
+    long http_code = 0;
+};
+
 // Download configuration options
 struct DownloadOptions {
+    std::function<void(const DownloadRetry&)> on_retry;
     int max_retries = 5;              // Maximum retry attempts
     int initial_retry_delay_ms = 1000; // Initial delay between retries (doubles each time)
     int max_retry_delay_ms = 60000;   // Maximum delay between retries (1 minute)

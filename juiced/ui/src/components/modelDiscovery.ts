@@ -14,9 +14,9 @@ export function matchesModelSearch(query: string, values: string[]) {
   return normalize(query).split(/\s+/).filter(Boolean).every((word) => text.includes(word) || compact.includes(word));
 }
 
-export function catalogEntries<T extends { id: string; recipe: string; checkpoint?: string; checkpoints?: Record<string, string>; available?: boolean }>(models: T[]) {
-  const identities = new Set(models.filter((m) => !m.id.startsWith("builtin.")).map((m) => JSON.stringify([m.id, m.recipe, m.checkpoints?.main || m.checkpoint])));
-  return models.filter((m) => m.available !== false && (!m.id.startsWith("builtin.") || !identities.has(JSON.stringify([m.id.slice(8), m.recipe, m.checkpoints?.main || m.checkpoint]))));
+export function catalogEntries<T extends { id: string; recipe: string; checkpoint?: string; checkpoints?: Record<string, string>; available?: boolean; downloaded?: boolean; source?: string; registry_source?: string }>(models: T[]) {
+  const identities = new Set(models.filter((m) => !m.id.startsWith("builtin.")).map((m) => JSON.stringify([m.id, m.recipe, m.checkpoints?.main || m.checkpoint, modelRegistrySource(m)])));
+  return models.filter((m) => (m.available !== false || m.downloaded) && (!m.id.startsWith("builtin.") || !identities.has(JSON.stringify([m.id.slice(8), m.recipe, m.checkpoints?.main || m.checkpoint, modelRegistrySource(m)]))));
 }
 // Strip only known terminal weight formats. Model versions and fine-tune names
 // remain distinct, and different publishers are never merged.
@@ -49,6 +49,8 @@ export function existingVariant<
     recipe: string;
     checkpoints?: Record<string, string>;
     checkpoint?: string;
+    source?: string;
+    registry_source?: string;
   },
 >(
   models: T[],
@@ -56,6 +58,7 @@ export function existingVariant<
   variant: { name: string; files?: string[]; primary_file?: string },
   recipe: string,
   projector: string,
+  source: PublishedSource = "huggingface",
 ) {
   const matches = new Set([
     `${repo}:${variant.name}`,
@@ -65,7 +68,7 @@ export function existingVariant<
   ]);
   return models.find(
     (model) =>
-      model.recipe === recipe &&
+      modelRegistrySource(model) === source && model.recipe === recipe &&
       matches.has(model.checkpoints?.main || model.checkpoint || "") &&
       (model.checkpoints?.mmproj || "") ===
         (projector ? `${repo}:${projector}` : ""),
@@ -106,4 +109,13 @@ export function groupRepositories(repositories: Repository[]) {
       group.repositories.push(repository);
   }
   return [...groups.values()];
+}
+
+export type PublishedSource = "huggingface" | "modelscope";
+export function modelRegistrySource(model: { registry_source?: string; source?: string }): PublishedSource | undefined {
+  const source = model.registry_source || model.source || "huggingface";
+  return source === "huggingface" || source === "modelscope" ? source : undefined;
+}
+export function repositoryUrl(repository: string, source: PublishedSource = "huggingface") {
+  return (source === "modelscope" ? "https://modelscope.cn/models/" : "https://huggingface.co/") + repository;
 }

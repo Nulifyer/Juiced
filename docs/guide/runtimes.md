@@ -9,7 +9,7 @@ engine, hardware variant, and settings used to run its weights.
 2. Check the detected devices and their access status.
 3. Find the engine and inspect its hardware variants.
 4. Install a required package through its available action.
-5. Check **Downloads** if installation queues a transfer.
+5. Use the top-bar download button to open Library activity if installation queues a transfer.
 
 A detected device, an installed package, and a compatible model are separate
 requirements. Complete an inference test after all three are available.

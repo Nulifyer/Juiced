@@ -88,3 +88,27 @@ test('catalog token search handles punctuation and preserves exact model version
   ];
   expect(catalogEntries(models)).toEqual([models[0], models[2]]);
 });
+
+test('known model search keeps retained weights visible when their runtime is unavailable', async () => {
+  const { catalogEntries } = await import('../src/components/modelDiscovery');
+  const retained = { id: 'Retained weights', recipe: 'old', available: false, downloaded: true };
+  const missing = { id: 'Unavailable catalog entry', recipe: 'old', available: false, downloaded: false };
+  expect(catalogEntries([retained, missing])).toEqual([retained]);
+});
+
+test('registry provenance distinguishes equal repository names and rejects unknown sources', async () => {
+  const { modelRegistrySource, repositoryUrl } = await import('../src/components/modelDiscovery');
+  expect(modelRegistrySource({ source: 'huggingface', registry_source: 'modelscope' })).toBe('modelscope');
+  expect(modelRegistrySource({ source: 'custom-provider' })).toBeUndefined();
+  expect(repositoryUrl('Owner/Model', 'huggingface')).toBe('https://huggingface.co/Owner/Model');
+  expect(repositoryUrl('Owner/Model', 'modelscope')).toBe('https://modelscope.cn/models/Owner/Model');
+});
+
+test('an equal checkpoint in another registry is a distinct installed variant', async () => {
+  const { existingVariant, catalogEntries } = await import('../src/components/modelDiscovery');
+  const hf = { id: 'Model', recipe: 'llamacpp', checkpoint: 'Owner/Model:Q6_K', registry_source: 'huggingface' };
+  const ms = { ...hf, id: 'builtin.Model', registry_source: 'modelscope' };
+  expect(existingVariant([hf, ms], 'Owner/Model', { name: 'Q6_K' }, 'llamacpp', '', 'modelscope')).toBe(ms);
+  expect(existingVariant([hf, ms], 'Owner/Model', { name: 'Q6_K' }, 'llamacpp', '', 'huggingface')).toBe(hf);
+  expect(catalogEntries([hf, ms])).toEqual([hf, ms]);
+});

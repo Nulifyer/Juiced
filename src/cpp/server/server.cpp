@@ -7808,6 +7808,12 @@ nlohmann::json Server::download_progress_to_json(const DownloadProgress& p) {
     event_data["bytes_previously_downloaded"] = static_cast<uint64_t>(p.bytes_previously_downloaded);
     event_data["percent"] = p.percent;
     event_data["complete"] = p.complete;
+    if (p.retry.attempt > 0) {
+        event_data["retry"] = {{"attempt", p.retry.attempt},
+                               {"max_retries", p.retry.max_retries},
+                               {"delay_ms", p.retry.delay_ms},
+                               {"http_code", p.retry.http_code}};
+    }
     if (!p.error.empty()) {
         event_data["error"] = p.error;
     }

@@ -7,10 +7,13 @@ and enough memory for the model and its context.
 ## Download a model
 
 1. Open `http://localhost:8080`, or your server's configured address.
-2. Select **Library → Discover models**.
-3. Choose **Model catalog** and filter the service to **Chat**.
-4. Choose a small GGUF model and select **Download**.
-5. Open **Library → Downloads** and wait for the download to finish.
+2. Select **Library → Find & run models**.
+3. Search for a model, or open **Filter known models** and choose **Chat**.
+4. Select **Review download** on a small GGUF model, review its files, then select
+   **Download model**. For other published models, use the same query and
+   **Search published models**, then **Choose files** and select a quant.
+5. Follow download activity on the same page. Errors and **Resume / retry** stay
+   beside the transfer. Select **Review model** when it completes.
 
 Download size describes the weights on disk. Runtime memory also includes
 context, engine buffers, and any companion components.
@@ -46,7 +49,8 @@ clears chat results. Use a connected client for conversations you want to keep.
 
 Open **Service APIs** and choose your client's protocol. For an OpenAI-compatible
 client on the same machine, use `http://localhost:8080/v1` and the exact model ID
-shown by Juiced. Follow [connect an application](../integrations/README.md) for
+shown under **Model ID**. The model you just tested is selected; use **Copy model ID**
+to keep its spelling intact. Follow [connect an application](../integrations/README.md) for
 remote addresses, API keys, and compatibility limits.
 
 Choose [On-demand](loading-policy.md) if the model should load only when requested.

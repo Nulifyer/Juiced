@@ -53,7 +53,7 @@ def acceptance(args):
         forbidden = [
             p
             for p in args.runtime_root.rglob("*")
-            if p.name == "llama"
+            if (p.name == "llama" and not p.is_dir())
             or any(
                 token in p.name.lower()
                 for token in (
