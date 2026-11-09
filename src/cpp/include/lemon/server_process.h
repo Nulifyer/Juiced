@@ -23,8 +23,8 @@ struct ProcessOutput {
     bool filter_health_logs = false;
 };
 
-// Destroying a ServerProcess stops its server, so a load that throws after
-// start() cannot leave the process running.
+// Explicit stop requires observed direct-process exit. Destruction retries cleanup
+// and reports uncertainty; it cannot establish descendant or device termination.
 class ServerProcess {
 public:
     explicit ServerProcess(ProcessOutput output) : output_(output) {}
@@ -38,6 +38,7 @@ public:
     // already exited. Does nothing when it never started.
     virtual void stop();
     virtual bool running() const;
+    virtual bool exited() const;
 
     utils::ProcessHandle handle() const { return handle_; }
     const std::vector<std::string>& command_line() const { return command_line_; }

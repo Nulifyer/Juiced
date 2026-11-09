@@ -482,7 +482,8 @@ void ResourceAdmission::Lease::started() {
     if (!id_) return;
     std::lock_guard<std::mutex> lock(state_->mutex);
     auto& entry = *state_->active.at(id_);
-    entry.started = !entry.costs.empty() || entry.work.operation == Operation::State;
+    entry.started = !entry.costs.empty() || entry.work.operation == Operation::State ||
+        entry.work.operation == Operation::Load;
     entry.complete = false;
 }
 void ResourceAdmission::Lease::completed() {

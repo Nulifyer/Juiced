@@ -497,6 +497,21 @@ int main() {
         check(error([&] { view.acquire_management("asset", "runtime-uninstall"); }, "admission_paused"),
               "retained management views preserve owner shutdown rejection");
     }
+    {
+        ResourceAdmission legacy;
+        ResourceAdmission::Work load;
+        load.model = "legacy-native-process";
+        load.operation = ResourceAdmission::Operation::Load;
+        load.generation = 707;
+        { auto process = legacy.acquire(load); process.started(); }
+        check(legacy.snapshot()["uncertain"] == 1 && legacy.snapshot()["active"] == 1,
+              "unconfirmed zero-cost native loads retain logical ownership after release");
+        check(error([&] { legacy.configure({{"mode", "protected"}}); }, "admission_configuration_busy"),
+              "unconfirmed native ownership blocks promotion even without a physical estimate");
+        legacy.reconcile_stopped_generation(707);
+        check(legacy.snapshot()["active"] == 0,
+              "exact native generation stop releases unestimated logical ownership");
+    }
     std::printf("Resource admission: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

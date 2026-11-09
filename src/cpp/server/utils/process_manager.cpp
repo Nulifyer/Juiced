@@ -16,9 +16,14 @@ ProcessHandle ProcessManager::start_process(
     return platform->spawn(executable, args, working_dir, inherit_output, filter_health_logs, env_vars);
 }
 
-void ProcessManager::stop_process(ProcessHandle handle) {
+bool ProcessManager::stop_process(ProcessHandle handle) {
     auto platform = create_process_platform();
-    platform->terminate(handle);
+    return platform->terminate(handle);
+}
+
+bool ProcessManager::has_exited(ProcessHandle handle) {
+    auto platform = create_process_platform();
+    return platform->has_exited(handle);
 }
 
 bool ProcessManager::is_running(ProcessHandle handle) {

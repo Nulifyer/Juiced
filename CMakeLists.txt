@@ -3659,6 +3659,10 @@ if(BUILD_TESTING AND EXISTS "${_LAUNCH_COMMAND_TEST_SRC}")
     add_executable(test_launch_command test/cpp/test_launch_command.cpp)
     target_link_libraries(test_launch_command PRIVATE lemonade-server-core)
     add_cpp_ci_test(LaunchCommandTest CI ON COMMAND test_launch_command)
+    add_executable(test_process_exit test/cpp/test_process_exit.cpp)
+    target_link_libraries(test_process_exit PRIVATE lemonade-server-core)
+    add_cpp_ci_test(ProcessExitObservationTest CI ON COMMAND test_process_exit)
+    set_tests_properties(ProcessExitObservationTest PROPERTIES TIMEOUT 45)
 endif()
 
 # What `lemonade launch pi` writes into pi's agent directory. The CLI sources

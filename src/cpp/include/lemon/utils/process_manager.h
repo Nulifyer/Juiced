@@ -36,7 +36,9 @@ public:
         bool capture_stderr = true,
         const std::vector<std::pair<std::string, std::string>>& env_vars = {});
 
-    static void stop_process(ProcessHandle handle);
+    // True only after the owned direct child's exit is observed and cleanup succeeds.
+    static bool stop_process(ProcessHandle handle);
+    static bool has_exited(ProcessHandle handle);
 
     // Must be non-mutating: on POSIX it must not reap the child, because
     // status/health checks may call this frequently.

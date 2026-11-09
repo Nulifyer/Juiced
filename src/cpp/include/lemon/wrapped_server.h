@@ -544,7 +544,7 @@ public:
                      bool do_not_upgrade = false) = 0;
 
     // Unload the model and stop the server
-    virtual void unload() { set_state(ModelState::UNLOADED); stop_server(); }
+    virtual void unload() { stop_server(); set_state(ModelState::UNLOADED); }
 
     void set_load_cancel_flag(std::atomic<bool>* f) { load_cancel_ = f; }
 
@@ -755,6 +755,8 @@ protected:
     int port_;
     std::string host_ = "127.0.0.1";
     std::unique_ptr<ServerProcess> process_;
+    std::vector<std::unique_ptr<ServerProcess>> unconfirmed_processes_;
+    std::size_t process_stops_in_progress_ = 0;
     mutable std::mutex process_mutex_;
     Telemetry telemetry_;
     std::string log_level_;
@@ -810,6 +812,7 @@ private:
     bool has_backend_process_exited() const;
     bool process_running() const;
     std::unique_ptr<ServerProcess> take_process();
+    void stop_owned_process(std::unique_ptr<ServerProcess> process);
     bool wait_for_ready(const std::string& endpoint, long timeout_seconds);
 
     mutable std::mutex watchdog_mutex_;

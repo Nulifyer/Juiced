@@ -353,12 +353,23 @@ public:
         return handle;
     }
 
-    void terminate(ProcessHandle handle) override {
-        if (handle.handle) {
-            TerminateProcess(handle.handle, 0);
-            WaitForSingleObject(handle.handle, 5000);  // Wait up to 5 seconds
-            CloseHandle(handle.handle);
+    bool terminate(ProcessHandle handle) override {
+        if (!handle.handle) return false;
+        const auto initial = WaitForSingleObject(handle.handle, 0);
+        if (initial != WAIT_OBJECT_0) {
+            if (initial != WAIT_TIMEOUT) return false;
+            if (!TerminateProcess(handle.handle, 0) && WaitForSingleObject(handle.handle, 0) != WAIT_OBJECT_0)
+                return false;
+            if (WaitForSingleObject(handle.handle, 5000) != WAIT_OBJECT_0) return false;
         }
+        DWORD code = 0;
+        if (GetExitCodeProcess(handle.handle, &code))
+            LOG(INFO, "ProcessManager") << "Direct child PID " << handle.pid << " exit observed, code " << code << std::endl;
+        return CloseHandle(handle.handle) != FALSE;
+    }
+
+    bool has_exited(ProcessHandle handle) override {
+        return handle.handle && WaitForSingleObject(handle.handle, 0) == WAIT_OBJECT_0;
     }
 
     bool is_running(ProcessHandle handle) override {

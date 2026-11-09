@@ -34,23 +34,24 @@ void ServerProcess::spawn(std::vector<std::string> command_line, const std::stri
 }
 
 ServerProcess::~ServerProcess() {
-    ServerProcess::stop();
+    try { ServerProcess::stop(); }
+    catch (const std::exception& error) {
+        LOG(ERROR, "ServerProcess") << "Direct-process cleanup remains unconfirmed for PID "
+                                   << handle_.pid << ": " << error.what() << std::endl;
+    }
 }
 
 void ServerProcess::stop() {
     if (!has_handle(handle_)) {
         return;
     }
-    if (ProcessManager::is_running(handle_)) {
-        LOG(INFO, "ServerProcess") << "Stopping " << command_line_.front() << " (PID "
-                                   << handle_.pid << ")" << std::endl;
-        ProcessManager::stop_process(handle_);
-    } else {
-        const int exit_code = ProcessManager::reap_process(handle_);
-        LOG(ERROR, "ServerProcess") << command_line_.front() << " (PID " << handle_.pid
-                                    << ") had exited with code " << exit_code << std::endl;
-    }
+    if (!ProcessManager::stop_process(handle_))
+        throw std::runtime_error("Direct-process exit could not be confirmed for PID " + std::to_string(handle_.pid));
     handle_ = {nullptr, 0};
+}
+
+bool ServerProcess::exited() const {
+    return !has_handle(handle_) || ProcessManager::has_exited(handle_);
 }
 
 bool ServerProcess::running() const {

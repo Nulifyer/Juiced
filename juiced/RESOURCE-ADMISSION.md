@@ -484,3 +484,33 @@ remain owned until joined. Controlled native fixtures inject a failure immediate
 before thread construction, then execute successful retries through actual threads.
 These checks do not exhaust OS thread quotas or establish all-writer quiescence.
 The complete native writer/termination audit remains a P1 prerequisite.
+
+
+Native direct-process stop now requires observed exit and owned handle cleanup.
+`ProcessManager::has_exited()` is a positive, non-mutating observation. A failed
+liveness query, unknown PID ownership, invalid handle or stop timeout is not exit
+proof. Windows waits for the process object before closing its handle. Linux and
+macOS share an owned-child helper that checks wait ownership before signaling,
+uses bounded TERM/KILL waits and keeps unknown outcomes conservative. Existing
+backend cooldown remains separate from device-termination evidence.
+
+ServerProcess keeps its handle when explicit stop cannot confirm cleanup.
+WrappedServer retains failed process owners for retry, including previous processes
+whose cleanup failed during replacement. Stop success requires every retained
+owner to finish and the worker's process membership to remain unchanged. A detached
+process remains tracked while another stop owns it. An empty current-process slot
+cannot certify that concurrent stop as completed. Watchdog
+cleanup failures retain ownership and report failure without escaping their thread.
+A failed worker destructor retains uncertain residency in the live admission ledger.
+Dispatched loads retain logical uncertainty even when their legacy estimate is zero.
+
+Local acceptance includes real direct children, non-consuming exit observation,
+unowned PID rejection, controlled failed stop/replacement, exact-generation
+reconciliation and actual neutral CPU serving/cache. This does not establish
+process-tree, helper descendant, device-kernel or remote termination. Destruction
+can report an unknown native cleanup outcome but cannot guarantee OS cleanup.
+Unknown prior-manager writers and reversible all-writer maintenance remain open.
+The native contracts follow
+[Windows termination](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-terminateprocess),
+[process-object waiting](https://learn.microsoft.com/en-us/windows/win32/api/synchapi/nf-synchapi-waitforsingleobject),
+and [owned-child wait observation](https://man7.org/linux/man-pages/man2/waitpid.2.html).

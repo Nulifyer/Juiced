@@ -1,3 +1,4 @@
+#include "process_posix_lifecycle.h"
 #include <lemon/utils/process_platform.h>
 #include <lemon/utils/aixlog.hpp>
 
@@ -62,7 +63,8 @@ public:
         bool filter_health_logs,
         const std::vector<std::pair<std::string, std::string>>& env_vars) override;
 
-    void terminate(ProcessHandle handle) override;
+    bool terminate(ProcessHandle handle) override;
+    bool has_exited(ProcessHandle handle) override { return detail::owned_child_has_exited(handle.pid); }
     bool is_running(ProcessHandle handle) override;
     int get_exit_code(ProcessHandle handle) override;
     int wait_for_exit(ProcessHandle handle, int timeout_seconds) override;
@@ -273,63 +275,8 @@ ProcessHandle MacOSProcessPlatform::spawn(
 }
 
 // Reuse Unix implementations for other methods
-void MacOSProcessPlatform::terminate(ProcessHandle handle) {
-    if (handle.pid <= 0) {
-        return;
-    }
-
-#ifdef WNOWAIT
-    siginfo_t info;
-    std::memset(&info, 0, sizeof(info));
-    if (waitid(P_PID, static_cast<id_t>(handle.pid), &info, WEXITED | WNOHANG | WNOWAIT) == 0) {
-        if (info.si_pid != 0) {
-            reap(handle);
-            LOG(INFO, "ProcessManager") << "Process already exited; reaped PID "
-                                        << handle.pid << std::endl;
-            LOG(INFO, "ProcessManager") << "Process terminated, waiting for GPU driver cleanup..." << std::endl;
-            std::this_thread::sleep_for(std::chrono::seconds(2));
-            return;
-        }
-    } else if (errno == ECHILD) {
-        LOG(WARNING, "ProcessManager") << "Process PID " << handle.pid
-                                       << " is no longer an owned child; skipping termination"
-                                       << std::endl;
-        return;
-    }
-#endif
-
-    errno = 0;
-    if (::kill(handle.pid, SIGTERM) != 0 && errno == ESRCH) {
-        LOG(INFO, "ProcessManager") << "Process PID " << handle.pid
-                                    << " was already gone before SIGTERM" << std::endl;
-        return;
-    }
-
-    int status = 0;
-    bool exited_gracefully = false;
-    for (int i = 0; i < 50; ++i) {
-        pid_t result = waitpid(handle.pid, &status, WNOHANG);
-        if (result > 0) {
-            exited_gracefully = true;
-            break;
-        }
-        if (result < 0 && errno == ECHILD) {
-            exited_gracefully = true;
-            break;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    }
-
-    if (!exited_gracefully) {
-        LOG(WARNING, "ProcessManager") << "Process did not respond to SIGTERM, using SIGKILL" << std::endl;
-        errno = 0;
-        if (::kill(handle.pid, SIGKILL) == 0 || errno != ESRCH) {
-            waitpid(handle.pid, &status, 0);
-        }
-    }
-
-    LOG(INFO, "ProcessManager") << "Process terminated, waiting for GPU driver cleanup..." << std::endl;
-    std::this_thread::sleep_for(std::chrono::seconds(2));
+bool MacOSProcessPlatform::terminate(ProcessHandle handle) {
+    return detail::stop_owned_child(handle.pid);
 }
 
 bool MacOSProcessPlatform::is_running(ProcessHandle handle) {

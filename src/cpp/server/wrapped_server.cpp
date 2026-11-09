@@ -192,7 +192,10 @@ json create_backend_error_response(const std::string& server_name, int status_co
 } // namespace
 
 WrappedServer::~WrappedServer() {
-    stop_server();
+    try { stop_server(); }
+    catch (const std::exception& error) {
+        LOG(ERROR, "WrappedServer") << "Worker destruction retains unconfirmed termination: " << error.what() << std::endl;
+    }
 }
 
 WrappedServer::InferenceLease::InferenceLease(WrappedServer* server, bool state_operation)
@@ -274,6 +277,7 @@ std::string WrappedServer::get_base_url() const {
 
 std::unique_ptr<ServerProcess> WrappedServer::take_process() {
     std::lock_guard<std::mutex> lock(process_mutex_);
+    if (process_) ++process_stops_in_progress_;
     port_ = 0;
     host_ = "127.0.0.1";
     return std::move(process_);
@@ -297,12 +301,11 @@ std::string WrappedServer::get_backend_health_state() const {
     }
     {
         std::lock_guard<std::mutex> lock(process_mutex_);
+        if (process_stops_in_progress_) return "stopping";
         if (!process_) {
             return "stopped";
         }
-        if (!process_->running()) {
-            return "exited";
-        }
+        if (!process_->running()) return process_->exited() ? "exited" : "unknown";
     }
     if (active_backend_requests_.load(std::memory_order_acquire) > 0) {
         return "busy";
@@ -460,7 +463,7 @@ bool WrappedServer::has_backend_process_exited() const {
     // streaming and long-running non-streaming requests alike. It detects a
     // crashed or zombie child without killing slow work such as image generation.
     std::lock_guard<std::mutex> lock(process_mutex_);
-    return process_ && !process_->running();
+    return process_ && process_->exited() && unconfirmed_processes_.empty() && process_stops_in_progress_ == 0;
 }
 
 void WrappedServer::start_server(std::unique_ptr<ServerProcess> process,
@@ -471,12 +474,13 @@ void WrappedServer::start_server(std::unique_ptr<ServerProcess> process,
     {
         std::lock_guard<std::mutex> lock(process_mutex_);
         previous = std::move(process_);
+        if (previous) ++process_stops_in_progress_;
         process_ = std::move(process);
         port_ = command.port;
         host_ = host;
     }
     if (previous) {
-        previous->stop();
+        stop_owned_process(std::move(previous));
     }
 
     if (!wait_for_ready(command.ready_endpoint, timeout_seconds)) {
@@ -488,9 +492,45 @@ void WrappedServer::start_server(std::unique_ptr<ServerProcess> process,
 
 void WrappedServer::stop_server() {
     stop_backend_watchdog();
-    if (auto process = take_process()) {
-        process->stop();
+    residency_resources_.started();
+    std::vector<std::unique_ptr<ServerProcess>> pending;
+    {
+        std::lock_guard<std::mutex> lock(process_mutex_);
+        pending.swap(unconfirmed_processes_);
+        process_stops_in_progress_ += pending.size();
     }
+    std::exception_ptr failure;
+    if (auto process = take_process()) {
+        try { stop_owned_process(std::move(process)); }
+        catch (...) { failure = std::current_exception(); }
+    }
+    for (auto& process : pending) {
+        try { stop_owned_process(std::move(process)); }
+        catch (...) { if (!failure) failure = std::current_exception(); }
+    }
+    if (failure) std::rethrow_exception(failure);
+    {
+        std::lock_guard<std::mutex> lock(process_mutex_);
+        if (process_ || !unconfirmed_processes_.empty() || process_stops_in_progress_ != 0)
+            throw std::runtime_error("Worker process ownership changed during stop");
+    }
+    residency_resources_.completed();
+}
+
+void WrappedServer::stop_owned_process(std::unique_ptr<ServerProcess> process) {
+    if (!process) return;
+    try {
+        process->stop();
+        if (!process->exited()) throw std::runtime_error("The process stop did not establish exit");
+    } catch (...) {
+        std::lock_guard<std::mutex> lock(process_mutex_);
+        if (!process_) process_ = std::move(process);
+        else unconfirmed_processes_.push_back(std::move(process));
+        --process_stops_in_progress_;
+        throw;
+    }
+    std::lock_guard<std::mutex> lock(process_mutex_);
+    --process_stops_in_progress_;
 }
 
 void WrappedServer::request_backend_reset_from_watchdog(const std::string& reason) {
@@ -510,7 +550,11 @@ void WrappedServer::request_backend_reset_from_watchdog(const std::string& reaso
         LOG(ERROR, "BackendWatchdog") << server_name_ << " backend marked unavailable: "
                                       << reason << "; stopping backend process PID "
                                       << process->handle().pid << std::endl;
-        process->stop();
+        try {
+            stop_owned_process(std::move(process));
+        } catch (const std::exception& error) {
+            LOG(ERROR, "BackendWatchdog") << "Unconfirmed process retained for retry: " << error.what() << std::endl;
+        }
     } else {
         LOG(ERROR, "BackendWatchdog") << server_name_ << " backend marked unavailable: "
                                       << reason << "; no process to stop" << std::endl;

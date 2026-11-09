@@ -20,7 +20,8 @@
     "separate ingress read/body lifetimes, compact control reserve and JSON structure bounds",
     "exclusive native cache/config directory ownership",
     "direct native host memory and explicit containment uncertainty",
-    "terminal background worker-start failure ownership"
+    "terminal background worker-start failure ownership",
+    "observed direct-process exit and uncertain worker residency"
   ],
   "scope": [
     "Juiced state writes retain a private last-committed checkpoint; failed writes restore rejected policy/cache controls and revision. Policy is the sole authority for Hot residency.",
@@ -65,7 +66,8 @@
     "Completed body reads release ordinary read slots while retaining byte charges through response completion. Compact native controls have separate read/headroom capacity. Native/gateway handler wrappers cap JSON depth64 and32768 key/value events. Raw import bytes remain unchanged; protected multipart input is contained. Full HTTP worker fairness, absolute input deadlines and physical-pool parse estimates remain open.",
     "lemond and the Windows embedded server acquire nonblocking canonical-directory OS leases before configuration migration. The lease spans owned Server teardown, retains its control file, and protects legacy cache sources before migration. Participating processes sharing cache or configuration roots cannot serve concurrently. External model/snapshot roots, uncooperative binaries, network filesystems and backend termination remain unqualified.",
     "Router and CPU/NPU automatic sizing use SystemMetricsPlatform available-byte budgets rather than GPU-derived CPU proxies. Windows reads physical/commit/address headroom and contains unqualified job hierarchies. macOS reads raw free pages and contains finite/unreadable process limits. Unknown live input memory returns503 ingress_memory_unknown before configuration publication. HTTP proof distinguishes positive admission from explicit containment and tests unknown configured capacity on every platform.",
-    "Sync resolves initial targets before publishing a running generation. Native thread-owner storage is reserved before sync dispatch. Failed worker construction publishes a terminal sync/download error, releases accepted management captures and permits retry. Sync start errors validate generation identity; stale errors cannot terminate a newer queue. Private fault fixtures run before construction and successful retries use actual owned threads."
+    "Sync resolves initial targets before publishing a running generation. Native thread-owner storage is reserved before sync dispatch. Failed worker construction publishes a terminal sync/download error, releases accepted management captures and permits retry. Sync start errors validate generation identity; stale errors cannot terminate a newer queue. Private fault fixtures run before construction and successful retries use actual owned threads.",
+    "Native stop returns confirmed direct-child cleanup. Positive exit observation is separate from boolean liveness. POSIX shares bounded owned-child TERM/KILL observation; Windows retains handles after failed waits. ServerProcess rejects unconfirmed explicit stop. WrappedServer retains failed current/previous process owners for retry and only completes residency after all captured owners finish with stable membership. Unknown destruction retains logical/resource uncertainty. These contracts do not qualify descendant,device or remote termination."
   ],
   "verification": {
     "status": "Local32-contract regression passed; final extension passes116 management assertions,53 ledger checks,API43 and actual CPU/cache acceptance. The Linux watcher fixture passes with a debounce quiet window. Fresh exact-source platform/image results remain pending.",
@@ -93,7 +95,7 @@
     "model_shutdown_assertions": 9,
     "shutdown_entrypoint_cases": 4,
     "management_assertions": 129,
-    "ledger_assertions": 86,
+    "ledger_assertions": 89,
     "management_scope": "Controlled native manager/handler/queued work and actual neutral Stories15M CPU/cache. Metadata/discovery, ingress/import bounds and reversible all-writer maintenance remain incomplete.",
     "ingress_scope": "45 real HTTP assertions,63 ledger checks including standalone ASan/UBSan,10 selected native contracts,43 API cases and complete neutral Stories15M CPU/cache/authentication acceptance pass locally. Buffered body bounds do not qualify total heap, slow-client fairness or full P1 protection.",
     "ingress_assertions": 101,
@@ -111,7 +113,10 @@
     "managed_directory_scope": "Four selected local contracts pass, including configuration merging, four Linux shutdown cases, eleven native lease checks and seventeen process checks. Final crash-restart retry refinement passes separately.43 API cases and complete actual neutral Stories15M CPU/cache/authenticated restart isolation pass. POSIX tray source syntax passes. Windows native execution and whole-store maintenance remain open.",
     "native_host_scope": "Seven selected local contracts pass, including direct native memory,ledger,AutoTune,Router,HTTP and retained directory ownership.43 API cases pass. Local HTTP covers both positive headroom and explicit unknown configured capacity. Windows/macOS source branches await exact-source native execution; job/finite-limit containment does not qualify successful protection. Final HTTP extension passes101 assertions, including unknown-memory rejection before body/100 Continue. Standalone ledger86 passes ASan/UBSan. Complete actual neutral Stories15M CPU/cache/authentication passes.",
     "native_host_memory_assertions_local_linux": 37,
-    "worker_start_scope": "Four distinct local contracts pass:Management129 controlled assertions,four actual Linux shutdown cases,rebuilt ModelShutdown and ModelSyncAndAutoUpdate regressions.43 actual API cases pass. No OS thread-quota exhaustion or whole-store quiescence qualification."
+    "worker_start_scope": "Four distinct local contracts pass:Management129 controlled assertions,four actual Linux shutdown cases,rebuilt ModelShutdown and ModelSyncAndAutoUpdate regressions.43 actual API cases pass. No OS thread-quota exhaustion or whole-store quiescence qualification.",
+    "direct_process_scope": "Nine rebuilt local contracts pass,including89 ledger assertions,19 launch ownership/overlap checks and7 real Linux process-exit checks.43 API cases and complete actual neutral CPU/cache/authentication pass on the final runtime. Standalone ledger89 passes ASan/UBSan. Windows/macOS direct-process branches require exact-source CI. No descendant,device,remote or whole-store quiescence qualification.",
+    "process_exit_assertions_local_linux": 7,
+    "process_ownership_assertions": 19
   },
   "remaining": [
     "Full P1 fourteen-family path coverage, complete ingress/parsing/background/acquisition/preparation/install bounds, all-writer maintenance, exact execution identities, Realtime context/quiescence, termination reconciliation, early streaming status, shared observations and frozen service-protection gates.",
@@ -119,6 +124,7 @@
     "Complete crash-consistent model/runtime revision promotion and references remain P3. Current candidate recovery is required before production promotion.",
     "P2-P7 retain approved gates and selected-family manifests.",
     "Interrupted snapshot writes from an unknown previous manager remain conservatively charged. Complete operator recovery, and hard filesystem enforcement beyond declared qualified provider envelopes, remain unqualified; no generic filesystem quota is claimed.",
-    "Complete host-crash/power-loss durability remains unqualified. Unknown prior-manager unsealed-write and legacy migration recovery still require their P1/P3 gates."
+    "Complete host-crash/power-loss durability remains unqualified. Unknown prior-manager unsealed-write and legacy migration recovery still require their P1/P3 gates.",
+    "Direct-child exit is narrower than complete descendant/device/remote termination. Stop waits and maintenance still require complete end-to-end deadlines and avoidance of shared registry-lock contention."
   ]
 }
