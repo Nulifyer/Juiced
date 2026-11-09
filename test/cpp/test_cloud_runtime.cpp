@@ -247,7 +247,11 @@ static void notification_shutdown() {
         int sequence = 0;
         while (!entered && std::chrono::steady_clock::now() < end) {
             std::ofstream(watched / (std::to_string(destroy_server) + "-" + std::to_string(++sequence) + ".txt")) << "metadata";
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            // macOS coalesces notifications until the tree has been quiet for
+            // 200ms. Continuous 50ms writes would postpone that callback forever.
+            const auto quiet = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
+            while (!entered && std::chrono::steady_clock::now() < quiet)
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
         check(entered, "a real ModelManager directory notification reaches the controlled callback");
         if (!entered) { release.set_value(); continue; }

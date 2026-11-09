@@ -262,3 +262,30 @@ uses normal teardown instead of a detached thread and process exit. POSIX signal
 handlers publish atomic intent; an owned worker applies shutdown/reload operations
 outside signal handlers and joins before Server destruction. Startup bind failure
 also returns through teardown. Parent-watchdog signaling remains separate.
+
+ModelManager and BackendManager share the Router admission ledger. Protected mode
+rejects unqualified weight acquisition, registry update/sync work, runtime package
+installation/removal and preparation before asset or tool dispatch. Native JSON,
+SSE and server-owned entry paths preserve admission status, code and retry metadata.
+A protected load can reuse an installed runtime without checking for updates.
+
+Legacy management calls hold transition tickets through native execution. Those
+tickets also follow accepted deferred streams, server-owned jobs and preparation
+queues. They exclude configuration publication without consuming inference queue
+capacity. Discarded undispatched streams and terminally stopped queues release
+unused tickets. Unadmitted queued work rechecks policy before dispatch; rejected
+model sync work reaches a terminal status. These legacy tickets provide lifetime
+tracking without resource-ceiling qualification.
+
+The llama.cpp owner contains native HF loading and opaque load controls. The
+protected CLI subset accepts its single-slot default and snapshot-directory syntax.
+Other raw controls, including URL/HF model selection and dynamic model directories,
+remain unqualified. Persistent-cache ownership still validates the configured
+directory and exact-profile useful reuse. Legacy controls retain native lifetime
+tracking. Backend install-path lookup leaves the binary-cache directory uncreated; install
+helpers retain explicit directory creation.
+
+This containment does not finish ingress/import memory bounds, metadata/discovery
+I/O qualification, durable-writer maintenance, full execution identity or provider
+termination. Standalone helpers outside a live Router and external writers retain
+their separate reference, promotion and recovery gates.

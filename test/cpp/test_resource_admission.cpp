@@ -340,6 +340,34 @@ int main() {
         check(transitions.policy().revision == revision + 1,
               "successful publication advances one policy revision");
     }
+    {
+        ResourceAdmission management;
+        json legacy = {{"mode", "legacy"}, {"active_limit", 1}};
+        management.configure(legacy);
+        auto view = management;
+        {
+            auto mutation = view.acquire_management("asset", "model-acquisition");
+            check(management.snapshot()["active"] == 1,
+                  "native management views retain one shared ledger lifetime");
+            check(error([&] { management.configure(config); }, "admission_configuration_busy"),
+                  "protected configuration cannot overtake an active legacy mutation");
+            auto request = management.acquire(work());
+            check(management.snapshot()["active"] == 2,
+                  "legacy management tracking does not consume inference concurrency capacity");
+        }
+        check(management.snapshot()["active"] == 0 && management.snapshot()["uncertain"] == 0,
+              "finished synchronous legacy management releases its transition ticket");
+        management.pause(true);
+        check(error([&] { view.acquire_management("asset", "runtime-install"); }, "admission_paused"),
+              "pause rejects new management work through every shared view");
+        management.pause(false);
+        management.configure(config);
+        check(error([&] { view.acquire_management("model", "model-acquisition"); }, "operation_unqualified"),
+              "protected profiles cannot authorize unqualified acquisition through model estimates");
+        management.shutdown();
+        check(error([&] { view.acquire_management("asset", "runtime-uninstall"); }, "admission_paused"),
+              "retained management views preserve owner shutdown rejection");
+    }
     std::printf("Resource admission: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

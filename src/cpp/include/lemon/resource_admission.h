@@ -32,7 +32,7 @@ public:
 class ResourceAdmission {
     struct State;
 public:
-    enum class Operation { Load, Request, State, Realtime };
+    enum class Operation { Load, Request, State, Realtime, Management };
     struct Work {
         std::string model;
         std::string service;
@@ -78,6 +78,9 @@ public:
     void configure(const nlohmann::json& config, std::function<void()> publish = {});
     Policy policy() const;
     Lease acquire(Work work);
+    // Copies share this ledger's state. Native management owners keep a view so
+    // shutdown and configuration transitions remain authoritative after binding.
+    Lease acquire_management(const std::string& target, const std::string& service);
     void pause(bool paused);
     void shutdown();
     void reconcile_stopped_generation(uint64_t generation);

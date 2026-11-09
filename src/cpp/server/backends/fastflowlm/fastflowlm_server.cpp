@@ -68,6 +68,7 @@ FastFlowLMServer::FastFlowLMServer(const std::string& log_level, ModelManager* m
 
 std::string FastFlowLMServer::download_model(const std::string& checkpoint, bool do_not_upgrade,
                                              RemoteRegistrySource source) {
+    auto admission = model_manager_ ? model_manager_->admit_acquisition(checkpoint) : ResourceAdmission::Lease{};
     LOG(INFO, "FastFlowLM") << "Pulling model with FLM: " << checkpoint << std::endl;
 
     std::string flm_path = get_flm_path();
@@ -430,6 +431,7 @@ public:
 
     void download_model(const ModelInfo& info, bool do_not_upgrade, DownloadProgressCallback progress,
                         const BackendOpsContext& ctx) const override {
+        auto admission = ctx.model_manager ? ctx.model_manager->admit_acquisition(info.model_name) : ResourceAdmission::Lease{};
         RemoteRegistrySource source = ctx.model_manager
             ? ctx.model_manager->download_source_for(info)
             : RemoteRegistrySource::HuggingFace;

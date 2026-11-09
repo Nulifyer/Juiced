@@ -12,7 +12,8 @@
     "snapshot publication and terminal manager-process recovery",
     "persistent HTTP credential transition epochs",
     "recoverable chunked GGUF import publication",
-    "native model discovery and coherent options publication"
+    "native model discovery and coherent options publication",
+    "server-mediated acquisition and preparation containment"
   ],
   "scope": [
     "Juiced state writes retain a private last-committed checkpoint; failed writes restore rejected policy/cache controls and revision. Policy is the sole authority for Hot residency.",
@@ -46,11 +47,14 @@
     "Options/profile write snapshots hold per-model and file-writer ownership after discovery, binding the recipe, selection and registry defaults through persistence. Notifications defer until outer mutation ownership releases. Unknown-model import option overlays remain supported.",
     "Directory watcher lifecycle serializes separately; joining a watcher holds no cache lock, and directory/invalidation publication is atomic under the cache owner.",
     "Server terminal shutdown drains native model notifications and retained-job workers before model/provider dependency destruction. Failed construction follows the same cleanup path; terminal watchers cannot restart and the backend process accessor cannot retain a destroyed instance.",
-    "HTTP shutdown and startup failure return through Server lifetime teardown. Signal handlers publish atomic intent to a joined native worker; no detached reload callback holds a Server pointer."
+    "HTTP shutdown and startup failure return through Server lifetime teardown. Signal handlers publish atomic intent to a joined native worker; no detached reload callback holds a Server pointer.",
+    "Native acquisition/remote registration/update/sync, runtime mutation, HF/FLM paths and preparation share Router admission state. Protected unqualified work rejects before asset/tool dispatch; installed runtimes can be reused without updating.",
+    "Legacy transition tickets follow native calls, accepted deferred streams/server-owned jobs and preparation queues. They do not consume inference capacity. Rejected unadmitted sync/preparation reaches terminal state; proven unused work releases tickets.",
+    "The llama.cpp owner rejects opaque load controls under protected admission. Native single-slot/snapshot-directory controls remain supported in the tested CPU subset. Runtime path lookup is read-only."
   ],
   "verification": {
-    "status": "Local notification/dependency regression passed30 native contracts. Final9 native shutdown assertions,4 subprocess terminal cases,43 API cases and actual CPU/cache restart gates passed. Final shutdown CTest registration checks pass; exact-source platform/image acceptance pending.",
-    "native_contracts": 30,
+    "status": "Local32-contract regression passed; final extension passes116 management assertions,53 ledger checks,API43 and actual CPU/cache acceptance. The Linux watcher fixture passes with a debounce quiet window. Fresh exact-source platform/image results remain pending.",
+    "native_contracts": 32,
     "persistence_checks": 90,
     "gateway_assertions": 34,
     "cloud_runtime_assertions": 12,
@@ -72,7 +76,10 @@
     "ui_workflows": 77,
     "model_discovery_assertions": 20,
     "model_shutdown_assertions": 9,
-    "shutdown_entrypoint_cases": 4
+    "shutdown_entrypoint_cases": 4,
+    "management_assertions": 116,
+    "ledger_assertions": 53,
+    "management_scope": "Controlled native manager/handler/queued work and actual neutral Stories15M CPU/cache. Metadata/discovery, ingress/import bounds and reversible all-writer maintenance remain incomplete."
   },
   "remaining": [
     "Full P1 fourteen-family path coverage, ingress/background/acquisition/preparation/install bounds, all-writer maintenance, exact execution identities, Realtime context/quiescence, termination reconciliation, early streaming status, shared observations and frozen service-protection gates.",

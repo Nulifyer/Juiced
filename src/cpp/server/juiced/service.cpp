@@ -197,6 +197,8 @@ void JuicedService::stop() {
   if (worker_.joinable())
     worker_.join();
   if (preparation_worker_.joinable()) preparation_worker_.join();
+  std::deque<PreparationTask> unused;
+  { std::lock_guard<std::mutex> lock(mutex_); unused.swap(preparation_pending_); }
   voice_process_.reset();
 }
 JuicedService::json JuicedService::save_state_locked(json candidate) {

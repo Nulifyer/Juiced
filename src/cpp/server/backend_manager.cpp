@@ -591,6 +591,13 @@ void BackendManager::install_backend(const std::string& recipe, const std::strin
     const std::string existing_backend_binary =
         installed_backend_binary_path(*spec, resolved_backend);
     const bool has_existing_backend = !existing_backend_binary.empty();
+    if (!force && has_existing_backend && resource_admission_ && resource_admission_->policy().protected_mode) {
+        // A protected load may reuse its installed runtime, never update it.
+        report_backend_ready(recipe, resolved_backend, progress_cb);
+        return;
+    }
+    auto admission = resource_admission_ ? resource_admission_->acquire_management(
+        recipe + ":" + resolved_backend, "runtime-install") : ResourceAdmission::Lease{};
 
     if (auto* cfg = RuntimeConfig::global()) {
         const bool offline = cfg->offline();
@@ -847,6 +854,9 @@ void BackendManager::uninstall_backend(const std::string& recipe, const std::str
     if (!spec) {
         throw std::runtime_error("[BackendManager] Unknown recipe: " + recipe);
     }
+
+    auto admission = resource_admission_ ? resource_admission_->acquire_management(
+        recipe + ":" + resolved_backend, "runtime-uninstall") : ResourceAdmission::Lease{};
 
     std::string install_dir = backends::BackendUtils::get_install_directory(spec->recipe, resolved_backend);
 

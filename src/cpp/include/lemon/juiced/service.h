@@ -1,5 +1,6 @@
 #pragma once
 #include "lemon/server_process.h"
+#include "lemon/resource_admission.h"
 #include "lemon/wrapped_server.h"
 #include <atomic>
 #include <condition_variable>
@@ -70,7 +71,9 @@ private:
   unsigned long long request_sequence_ = 0;
   std::atomic<bool> stopping_{false};
   std::thread worker_, preparation_worker_;
-  std::deque<json> preparation_pending_;
+  struct PreparationTask { json job; ResourceAdmission::Lease admission; };
+  std::deque<PreparationTask> preparation_pending_;
+  std::function<void()> preparation_admission_barrier_;
   std::set<std::string> preparation_cancelled_;
   std::unique_ptr<NativeProcess> voice_process_;
   std::string voice_signature_;

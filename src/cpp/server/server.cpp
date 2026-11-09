@@ -2907,11 +2907,17 @@ void Server::handle_models_sync(const httplib::Request& req, httplib::Response& 
         }
     }
 
+    std::shared_ptr<ResourceAdmission::Lease> admission;
+    try { admission = std::make_shared<ResourceAdmission::Lease>(router_->admit_management("model-sync", "model-sync-entry")); }
+    catch (const AdmissionError& error) { set_model_error_response(error.to_json(), res); return; }
+
     if (dry_run) {
         try {
             nlohmann::json sync_result = model_manager_->sync_models(target_models, true);
             res.set_content(sync_result.dump(), "application/json");
             res.status = 200;
+        } catch (const AdmissionError& error) {
+            set_model_error_response(error.to_json(), res);
         } catch (const std::exception& e) {
             LOG(WARNING, "Server") << "Model sync dry-run failed: " << e.what() << std::endl;
             res.status = 500;
@@ -2923,7 +2929,9 @@ void Server::handle_models_sync(const httplib::Request& req, httplib::Response& 
     }
 
     if (!async_specified || async_dispatch) {
-        auto enqueue_res = model_manager_->enqueue_sync(target_models, attach_if_running);
+        ModelManager::SyncEnqueueResult enqueue_res{};
+        try { enqueue_res = model_manager_->enqueue_sync(target_models, attach_if_running); }
+        catch (const AdmissionError& error) { set_model_error_response(error.to_json(), res); return; }
         if (enqueue_res.already_running) {
             nlohmann::json status = model_manager_->get_sync_status(enqueue_res.sync_id);
             res.set_content(status.dump(), "application/json");
@@ -2943,11 +2951,12 @@ void Server::handle_models_sync(const httplib::Request& req, httplib::Response& 
         }
 
         auto finished_flag = std::make_shared<std::atomic<bool>>(false);
-        std::thread worker([this, finished_flag]() {
+        std::thread worker([this, finished_flag, admission]() {
+            (void)admission; // Keep accepted sync admission until its worker finishes.
             try {
                 LOG(INFO, "Server") << "Background model sync thread started" << std::endl;
-                model_manager_->execute_sync();
-                LOG(INFO, "Server") << "Background model sync thread completed successfully" << std::endl;
+                const auto result = model_manager_->execute_sync();
+                LOG(INFO, "Server") << "Background model sync ended with status: " << result.value("status", "unknown") << std::endl;
             } catch (const std::exception& e) {
                 LOG(WARNING, "Server") << "Background model sync failed: " << e.what() << std::endl;
             }
@@ -6015,6 +6024,8 @@ void Server::handle_pull(const httplib::Request& req, httplib::Response& res) {
         bool subscribe = request_json.value("subscribe", true);
         bool local_import = request_json.value("local_import", false);
 
+        auto acquisition = std::make_shared<ResourceAdmission::Lease>(router_->admit_management(model_name, "model-acquisition-entry"));
+
         // Resolve the pull's registry provenance once, up front, so download,
         // cache layout, and later refresh stay consistent. A registry-backed
         // checkpoint that names no source inherits the configured default; a
@@ -6082,7 +6093,8 @@ void Server::handle_pull(const httplib::Request& req, httplib::Response& res) {
         }
 
         if (stream) {
-            auto operation = [this, model_name, download_request, do_not_upgrade](DownloadProgressCallback progress_cb) {
+            auto operation = [this, model_name, download_request, do_not_upgrade, acquisition](DownloadProgressCallback progress_cb) {
+                (void)acquisition; // Retain admission through deferred/server-owned execution.
                 model_manager_->download_model(model_name, download_request, do_not_upgrade, progress_cb);
             };
 
@@ -6131,6 +6143,8 @@ void Server::handle_pull(const httplib::Request& req, httplib::Response& res) {
                                 {"code", lemon::kRegistryUnavailableErrorCode},
                                 {"upstream_status_code", e.status_code()}};
         res.set_content(error.dump(), "application/json");
+    } catch (const AdmissionError& error) {
+        set_model_error_response(error.to_json(), res);
     } catch (const std::exception& e) {
         LOG(ERROR, "Server") << "ERROR in handle_pull: " << e.what() << std::endl;
         res.status = 500;
@@ -8300,6 +8314,8 @@ void Server::handle_install(const httplib::Request& req, httplib::Response& res)
 
         LOG(INFO, "Server") << "Installing backend: " << recipe << ":" << backend << std::endl;
 
+        auto installation = std::make_shared<ResourceAdmission::Lease>(router_->admit_management(recipe + ":" + backend, "runtime-install-entry"));
+
         // Get fresh state before any checks
         SystemInfoCache::invalidate_recipes();
 
@@ -8341,7 +8357,8 @@ void Server::handle_install(const httplib::Request& req, httplib::Response& res)
         }
 
         if (stream) {
-            auto operation = [this, recipe, backend, force](DownloadProgressCallback progress_cb) {
+            auto operation = [this, recipe, backend, force, installation](DownloadProgressCallback progress_cb) {
+                (void)installation; // Retain admission through deferred/server-owned execution.
                 backend_manager_->install_backend(recipe, backend, force, progress_cb);
                 SystemInfoCache::invalidate_recipes();
                 model_manager_->invalidate_models_cache();
@@ -8374,6 +8391,8 @@ void Server::handle_install(const httplib::Request& req, httplib::Response& res)
             res.set_content(response.dump(), "application/json");
         }
 
+    } catch (const AdmissionError& error) {
+        set_model_error_response(error.to_json(), res);
     } catch (const std::exception& e) {
         LOG(ERROR, "Server") << "ERROR in handle_install: " << e.what() << std::endl;
         res.status = 500;
@@ -8504,6 +8523,8 @@ void Server::handle_uninstall(const httplib::Request& req, httplib::Response& re
 
         LOG(INFO, "Server") << "Uninstalling backend: " << recipe << ":" << backend << std::endl;
 
+        auto removal = router_->admit_management(recipe + ":" + backend, "runtime-uninstall-entry");
+
         // Check if any loaded models use this recipe+backend and unload them first
         auto loaded_models = router_->get_all_loaded_models();
         std::string backend_option_key = recipe + "_backend";
@@ -8539,6 +8560,8 @@ void Server::handle_uninstall(const httplib::Request& req, httplib::Response& re
     } catch (const RouterResidencyConflictException& error) {
         set_router_residency_conflict_response(error, res);
         res.set_header("Retry-After", "1");
+    } catch (const AdmissionError& error) {
+        set_model_error_response(error.to_json(), res);
     } catch (const std::exception& e) {
         LOG(ERROR, "Server") << "ERROR in handle_uninstall: " << e.what() << std::endl;
         res.status = 500;

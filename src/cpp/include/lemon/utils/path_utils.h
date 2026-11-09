@@ -142,7 +142,7 @@ std::string get_runtime_dir();
  * This is in the user's cache directory (~/.cache/lemonade/bin on all platforms)
  * to support All Users installations where the install directory may be read-only.
  */
-std::string get_downloaded_bin_dir();
+std::string get_downloaded_bin_dir(bool create = true);
 
 bool atomic_replace_file(const std::filesystem::path& src,
                          const std::filesystem::path& dest,

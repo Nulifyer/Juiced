@@ -311,7 +311,7 @@ namespace lemon::backends {
 
     std::string BackendUtils::get_install_directory(const std::string& dir_name, const std::string& backend) {
         // Use fs::path throughout to ensure consistent native separators
-        fs::path ret = fs::path(utils::get_downloaded_bin_dir()) / dir_name;
+        fs::path ret = fs::path(utils::get_downloaded_bin_dir(false)) / dir_name;
         if (!backend.empty()) ret /= backend;
         return ret.make_preferred().string();
     }

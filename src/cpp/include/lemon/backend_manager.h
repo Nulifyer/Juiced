@@ -15,6 +15,8 @@ class BackendManager {
 public:
     BackendManager();
     ~BackendManager();
+    // Bound once before native work; shares Router's admission state.
+    void set_resource_admission(const ResourceAdmission& admission) { resource_admission_ = admission; }
 
     // Core operations
     void install_backend(const std::string& recipe, const std::string& backend,
@@ -70,6 +72,7 @@ public:
     static BackendManager* global();
 
 private:
+    std::optional<ResourceAdmission> resource_admission_;
     // Cached backend_versions.json (loaded once at construction)
     json backend_versions_;
 

@@ -20,6 +20,7 @@
 #include "model_registry.h"
 #include "model_types.h"
 #include "recipe_options.h"
+#include "resource_admission.h"
 
 namespace lemon {
 
@@ -199,6 +200,10 @@ public:
     // callbacks before the owning Server destroys their dependencies.
     // Call from the owner thread, never from a model-change callback.
     void stop_model_notifications();
+    // Bind before serving/background work. The view shares Router's ledger.
+    void set_resource_admission(const ResourceAdmission& admission) { resource_admission_ = admission; }
+    ResourceAdmission::Lease admit_acquisition(const std::string& model);
+
 
     std::map<std::string, ModelInfo> discover_extra_models_for_test() const {
         return discover_extra_models();
@@ -573,6 +578,9 @@ private:
     // Caller must hold models_cache_mutex_.
     json registry_recipe_options_locked(const std::string& cache_key);
     json write_saved_model_options(const std::string& model_name, const json& options, bool merge, const std::string& expected_recipe);
+
+    void download_registered_model_impl(const ModelInfo&, bool, DownloadProgressCallback);
+    std::optional<ResourceAdmission> resource_admission_;
 
     struct OptionsWriteSnapshot {
         ModelMutation mutation;

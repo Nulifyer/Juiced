@@ -51,6 +51,7 @@ std::string operation_name(ResourceAdmission::Operation operation) {
         case ResourceAdmission::Operation::Load: return "load";
         case ResourceAdmission::Operation::State: return "state";
         case ResourceAdmission::Operation::Realtime: return "realtime";
+        case ResourceAdmission::Operation::Management: return "management";
         default: return "request";
     }
 }
@@ -95,7 +96,7 @@ struct ResourceAdmission::State {
     bool eligible(const Entry& entry) const {
         size_t running = 0, state_running = 0, generation_running = 0;
         for (const auto& item : active) {
-            if (item.second->resident) continue;
+            if (item.second->resident || item.second->work.operation == Operation::Management) continue;
             if (item.second->uncertain && item.second->work.generation == entry.work.generation &&
                 item.second->work.operation != Operation::Request) return false;
             if (item.second->work.operation == Operation::State) { ++state_running; continue; }
@@ -246,6 +247,11 @@ ResourceAdmission::Policy ResourceAdmission::policy() const {
             state_->paused || state_->stopped || state_->configuration_pending};
 }
 
+ResourceAdmission::Lease ResourceAdmission::acquire_management(const std::string& target, const std::string& service) {
+    Work work; work.model = target; work.service = service; work.operation = Operation::Management;
+    return acquire(std::move(work));
+}
+
 ResourceAdmission::Lease ResourceAdmission::acquire(Work work) {
     auto entry = std::make_shared<State::Entry>();
     entry->work = std::move(work);
@@ -261,6 +267,19 @@ ResourceAdmission::Lease ResourceAdmission::acquire(Work work) {
     if (state_->stopped || state_->paused) reject("admission_paused", "Runtime admission is paused", 503);
     if (entry->work.cancelled && entry->work.cancelled()) reject("request_cancelled", "Request disconnected before admission", 499);
     const auto& config = state_->config;
+    if (entry->work.operation == Operation::Management) {
+        if (entry->protected_mode)
+            reject("operation_unqualified", "Background acquisition and mutation envelopes are not qualified for protected admission", 503);
+        // Legacy operations retain their existing unbounded behavior. Track the
+        // synchronous native owner's lifetime so configuration cannot cross it.
+        // These zero-cost tickets do not consume inference queue capacity.
+        entry->priority = "background";
+        entry->id = ++state_->next_id;
+        entry->completion_deadline = Clock::now() + entry->completion_limit;
+        state_->active.emplace(entry->id, entry);
+        ++state_->admitted;
+        return Lease(state_, entry->id);
+    }
     const auto profiles = config.value("models", json::object());
     const auto profile = profiles.find(entry->work.model);
     if (profile != profiles.end()) {

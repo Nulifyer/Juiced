@@ -280,6 +280,10 @@ void LlamaCppServer::load(const std::string& model_name,
                          const ModelInfo& model_info,
                          const RecipeOptions& options,
                          bool do_not_upgrade) {
+    ResourceAdmission::Lease acquisition;
+    if (model_manager_ && model_info.extra<bool>("hf_load", false))
+        acquisition = model_manager_->admit_acquisition(model_name);
+
     LOG(INFO, "LlamaCpp") << "Loading model: " << model_name << std::endl;
 
     LOG(DEBUG, "LlamaCpp") << "Per-model settings: " << options.to_log_string() << std::endl;
@@ -290,6 +294,20 @@ void LlamaCppServer::load(const std::string& model_name,
     std::string llamacpp_backend_option = options.get_option("llamacpp_backend");
     std::string llamacpp_backend = resolve_llamacpp_backend(llamacpp_backend_option);
     std::string llamacpp_args = options.get_option("llamacpp_args");
+
+    // Opaque CLI controls can select remote weights, another model directory or
+    // an unbounded slot policy. The protected subset only qualifies the native
+    // single-slot default and managed snapshot storage. Keep interpretation here.
+    const auto controls = parse_custom_args(llamacpp_args);
+    bool qualified_controls = controls.size() % 2 == 0;
+    bool parallel = false, storage = false;
+    for (size_t i = 0; qualified_controls && i < controls.size(); i += 2) {
+        if ((controls[i] == "--parallel" || controls[i] == "-np") && !parallel && controls[i + 1] == "1") parallel = true;
+        else if (controls[i] == "--slot-save-path" && !storage && !controls[i + 1].empty()) storage = true;
+        else qualified_controls = false;
+    }
+    if (model_manager_ && !qualified_controls)
+        acquisition = model_manager_->admit_acquisition(model_name);
 
     RuntimeConfig::validate_backend_choice("llamacpp", llamacpp_backend_option);
 

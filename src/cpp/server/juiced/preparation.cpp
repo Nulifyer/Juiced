@@ -190,6 +190,9 @@ void JuicedService::preparation_api(const httplib::Request &req,
       }
     } else {
       const auto body = json::parse(req.body);
+      ResourceAdmission::Lease mutation;
+      if (body.value("action", "") != "cancel")
+        mutation = server_.router_->admit_management(body.value("model", body.value("id", std::string("preparation"))), "preparation-entry");
       if (body.value("action", "") == "delete_cache") {
         const auto id = body.at("id").get<std::string>();
         if (!std::regex_match(id, std::regex("[a-f0-9]{64}")))
@@ -262,13 +265,17 @@ void JuicedService::preparation_api(const httplib::Request &req,
                 "That variant is already being prepared");
         state_["preparations"][id] = job;
         persist_locked();
-        preparation_pending_.push_back(job);
+        preparation_pending_.push_back({job, std::move(mutation)});
         wake_.notify_all();
         result = job;
         res.status = 202;
       }
     }
     res.set_content(result.dump(), "application/json");
+  } catch (const AdmissionError &error) {
+    res.status = error.status;
+    if (error.retry_after()) res.set_header("Retry-After", std::to_string(error.retry_after()));
+    res.set_content(error.to_json().dump(), "application/json");
   } catch (const std::exception &error) {
     res.status = 400;
     res.set_content(json{{"error", error.what()}}.dump(), "application/json");
@@ -278,6 +285,7 @@ void JuicedService::preparation_api(const httplib::Request &req,
 void JuicedService::preparation_run() {
   while (!stopping_) {
     json job;
+    ResourceAdmission::Lease accepted;
     {
       std::unique_lock<std::mutex> lock(mutex_);
       wake_.wait_for(lock, std::chrono::milliseconds(250), [this] {
@@ -287,13 +295,17 @@ void JuicedService::preparation_run() {
         break;
       if (preparation_pending_.empty())
         continue;
-      job = preparation_pending_.front();
+      job = std::move(preparation_pending_.front().job);
+      accepted = std::move(preparation_pending_.front().admission);
       preparation_pending_.pop_front();
     }
     const auto id = job.at("id").get<std::string>();
     const auto dir = directory_ / "preparations" / id;
     const auto cache = directory_ / "prepared";
+    ResourceAdmission::Lease admission;
     try {
+      if (preparation_admission_barrier_) preparation_admission_barrier_();
+      admission = server_.router_->admit_management(id, "preparation");
       {
         std::lock_guard<std::mutex> lock(mutex_);
         if (preparation_cancelled_.count(id))

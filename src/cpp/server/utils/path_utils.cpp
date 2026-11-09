@@ -408,7 +408,7 @@ std::string get_runtime_dir() {
     return platform()->get_runtime_dir();
 }
 
-std::string get_downloaded_bin_dir() {
+std::string get_downloaded_bin_dir(bool create) {
     // Use cache directory on all platforms for consistent multi-user support
     // This is important for All Users installs on Windows where Program Files is read-only
     // Use fs::path to ensure native path separators (avoids cmd.exe issues on Windows)
@@ -416,7 +416,7 @@ std::string get_downloaded_bin_dir() {
 
     // Ensure directory exists
     fs::path bin_path = path_from_utf8(bin_dir);
-    if (!fs::exists(bin_path)) {
+    if (create && !fs::exists(bin_path)) {
         fs::create_directories(bin_path);
     }
 

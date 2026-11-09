@@ -2602,6 +2602,7 @@ static bool hf_selected_artifacts_unchanged(
     HfTreePageCache* tree_cache);
 
 ModelManager::UpdateCheckResult ModelManager::check_for_model_updates(const std::vector<std::string>& targets) {
+    auto admission = admit_acquisition("model-update-check");
     std::lock_guard<std::mutex> update_check_lock(update_check_mutex_);
 
     if (update_check_override_) {
@@ -3064,6 +3065,7 @@ void ModelManager::cancel_sync() {
 }
 
 ModelManager::SyncEnqueueResult ModelManager::enqueue_sync(const std::vector<std::string>& target_models, bool attach_if_running) {
+    auto admission = admit_acquisition("model-sync-enqueue");
     std::lock_guard<std::mutex> lock(sync_state_.mutex);
 
     auto is_already_known = [this](const std::string& target) -> bool {
@@ -3159,6 +3161,7 @@ json ModelManager::execute_sync() {
     std::unordered_map<std::string, ModelCheckOutcome> checked_canonicals_in_job;
 
     try {
+        auto admission = admit_acquisition("model-sync");
         while (true) {
             std::vector<std::string> current_batch;
             bool run_full_sync = false;
@@ -3403,6 +3406,7 @@ json ModelManager::execute_sync() {
 }
 
 json ModelManager::sync_models(const std::vector<std::string>& target_models, bool dry_run, bool attach_if_running) {
+    auto admission = admit_acquisition("model-sync-request");
     if (dry_run) {
         LOG(INFO, "ModelManager") << "Checking models for sync/update (dry-run)..." << std::endl;
         UpdateCheckResult check_res = check_for_model_updates(target_models);
@@ -3664,6 +3668,7 @@ bool ModelManager::checkpoints_complete(const ModelInfo& info) const {
 
 void ModelManager::download_from_registry_engine(const ModelInfo& info,
                                                  DownloadProgressCallback progress_callback) {
+    auto admission = admit_acquisition(info.model_name);
     download_from_registry(info, progress_callback);
 }
 
@@ -5083,7 +5088,16 @@ bool ModelManager::backend_self_manages_downloads(const std::string& recipe) con
     return desc && desc->self_manages_downloads;
 }
 
+ResourceAdmission::Lease ModelManager::admit_acquisition(const std::string& model) {
+    return resource_admission_ ? resource_admission_->acquire_management(model, "model-acquisition") : ResourceAdmission::Lease{};
+}
+
 void ModelManager::download_registered_model(const ModelInfo& info, bool do_not_upgrade, DownloadProgressCallback progress_callback) {
+    auto admission = admit_acquisition(info.model_name);
+    download_registered_model_impl(info, do_not_upgrade, std::move(progress_callback));
+}
+
+void ModelManager::download_registered_model_impl(const ModelInfo& info, bool do_not_upgrade, DownloadProgressCallback progress_callback) {
     // Serialize downloads per checkpoint repo. A second request for the same
     // repo (e.g. a client that timed out and retried /pull while the first
     // download is still running) must wait for the in-flight download instead
@@ -5449,6 +5463,7 @@ void ModelManager::register_model(const std::string& model_name,
                                  const json& model_data,
                                  bool allow_missing_checkpoint,
                                  bool replace_existing) {
+    auto admission = admit_acquisition(model_name);
     std::set<std::string> visited;
     download_model(model_name, model_data, true, nullptr, visited,
                    true, allow_missing_checkpoint, replace_existing);
@@ -5458,6 +5473,7 @@ void ModelManager::download_model(const std::string& model_name,
                                  const json& model_data,
                                  bool do_not_upgrade,
                                  DownloadProgressCallback progress_callback) {
+    auto admission = admit_acquisition(model_name);
     if (download_model_override_) {
         download_model_override_(model_name, model_data, do_not_upgrade, progress_callback);
         return;
@@ -5856,7 +5872,7 @@ void ModelManager::download_model(const std::string& model_name,
         }
     }
 
-    download_registered_model(model_info, do_not_upgrade, progress_callback);
+    download_registered_model_impl(model_info, do_not_upgrade, progress_callback);
 
     std::map<std::string, std::filesystem::path> resolved_paths_after;
     {

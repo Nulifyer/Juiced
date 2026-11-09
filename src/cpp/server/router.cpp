@@ -118,6 +118,8 @@ Router::Router(RuntimeConfig* config, ModelManager* model_manager, BackendManage
 #endif
       }) {
     admission_.configure(config_->snapshot().value("admission", json::object()));
+    if (model_manager_) model_manager_->set_resource_admission(admission_);
+    if (backend_manager_) backend_manager_->set_resource_admission(admission_);
 
     int max = config_->max_loaded_models();
     if (max == -1) {
@@ -178,6 +180,9 @@ bool Router::model_access_allowed(const std::string& model) const {
 }
 
 json Router::admission_snapshot() const { return admission_.snapshot(); }
+ResourceAdmission::Lease Router::admit_management(const std::string& target, const std::string& service) {
+    return admission_.acquire_management(target, service);
+}
 bool Router::generation_was_stopped(uint64_t generation) const { return admission_.generation_was_stopped(generation); }
 void Router::pause_admission(bool paused) { admission_.pause(paused); }
 void Router::configure_admission(const json& config, std::function<void()> publish) { admission_.configure(config, std::move(publish)); }
