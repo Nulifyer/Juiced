@@ -38,6 +38,7 @@ struct JsonPersistenceTestHook {
 
 namespace lemon {
 struct ModelPublicationTestHook {
+    static void removal_barrier(ModelManager& models, std::function<void(const std::string&)> callback) { models.removal_publication_barrier_ = std::move(callback); }
     static std::string builtin_name(ModelManager& models) { return models.server_models_.begin().key(); }
     static void read_barrier(ModelManager& models, std::function<void()> callback) { models.cache_read_barrier_ = std::move(callback); }
     static void write_barrier(ModelManager& models, std::function<void()> callback) { models.options_write_barrier_ = std::move(callback); }
@@ -266,6 +267,7 @@ struct StatePublicationTestHook {
         else server.juiced_->handle(request, response, "removal");
         return response;
     }
+    static void removal_barrier(Server& server, std::function<void()> callback) { server.juiced_->removal_claim_barrier_ = std::move(callback); }
     static void import_barrier(Server& server, std::function<void(const std::string&)> barrier) { server.juiced_->import_publication_barrier_ = std::move(barrier); }
     static void uncertain_write(Server& server, const std::string& file) {
         std::lock_guard<std::mutex> lock(server.juiced_->mutex_);
@@ -1633,6 +1635,108 @@ static void import_definition_replays() {
     lemon::RuntimeConfig::set_global(nullptr);
 }
 
+static void artifact_removal_ownership() {
+    using Hook = lemon::StatePublicationTestHook;
+    using ModelHook = lemon::ModelPublicationTestHook;
+    const auto registry = fs::path(lemon::utils::get_config_dir()) / "user_models.json";
+    // Removal must reconsider both the target definition and other registrations
+    // after obtaining the model claim, rather than trusting its earlier plan.
+    for (bool shared : {false, true}) {
+        const auto root = lemon::test::make_scratch_dir("artifact-removal-race");
+        const auto name = "Removal-" + root.filename().string();
+        auto defaults = lemon::ConfigFile::base_defaults(); defaults["offline"] = true; defaults["broadcast"] = false;
+        auto runtime = std::make_shared<lemon::RuntimeConfig>(defaults); lemon::RuntimeConfig::set_global(runtime.get());
+        {
+            lemon::Server server(runtime, root.string(), root.string()); Hook::stop(server);
+            const auto id = upload_fixture(server);
+            const auto imported = Hook::import_request(server, "finish", {{"id", id}, {"name", name}});
+            if (imported.status != 201) std::fprintf(stderr, "Import fixture response: %s\n", imported.body.c_str());
+            check(imported.status == 201, "removal fixture publishes an actual uploaded GGUF");
+            const auto original = Hook::models(server).user_model_definition(name);
+            const auto file = original.at("checkpoints").at("main").get<std::string>();
+            TestGate planned;
+            Hook::removal_barrier(server, [&] { planned.pause(); });
+            auto removal = std::async(std::launch::async, [&] { return Hook::remove(server, name); });
+            const bool reached = planned.await();
+            auto replacement = original;
+            if (!shared) { const auto other = root / "replacement.gguf"; fs::copy_file(file, other); replacement["checkpoints"]["main"] = other.string(); }
+            Hook::models(server).register_user_model(shared ? name + "-shared" : name, replacement);
+            const auto committed = Hook::models(server).user_model_definition(shared ? name + "-shared" : name);
+            planned.open(); const auto result = removal.get(); Hook::removal_barrier(server, {});
+            check(reached && result.status == 409 && fs::is_regular_file(file) && Hook::models(server).user_model_definition(shared ? name + "-shared" : name) == committed,
+                  "stale removal rejects a replaced definition or new shared reference without mutation");
+            const auto plan = json::parse(Hook::remove(server, name, false, true).body);
+            check(plan.at("action") == "unregister", "fresh removal describes the current external/shared artifact ownership");
+            check(Hook::remove(server, name).status == 200 && fs::is_regular_file(file), "fresh registration-only removal preserves referenced or replaced source files");
+        }
+        lemon::RuntimeConfig::set_global(nullptr);
+    }
+    for (const auto& phase : {"before", "sealed", "removed"}) {
+        const auto root = lemon::test::make_scratch_dir("artifact-removal-recovery");
+        const auto name = "Cleanup-" + root.filename().string();
+        auto defaults = lemon::ConfigFile::base_defaults(); defaults["offline"] = true; defaults["broadcast"] = false;
+        auto runtime = std::make_shared<lemon::RuntimeConfig>(defaults); lemon::RuntimeConfig::set_global(runtime.get());
+        fs::path file; json definition;
+        {
+            lemon::Server server(runtime, root.string(), root.string()); Hook::stop(server);
+            const auto id = upload_fixture(server);
+            check(Hook::import_request(server, "finish", {{"id", id}, {"name", name}}).status == 201, "cleanup fixture commits its uploaded artifact");
+            definition = Hook::models(server).user_model_definition(name); file = definition.at("checkpoints").at("main").get<std::string>();
+            std::unique_ptr<BlockReplacement> blocked;
+            if (std::string(phase) == "before") blocked = std::make_unique<BlockReplacement>(registry);
+            else ModelHook::removal_barrier(Hook::models(server), [&](const std::string& reached) {
+                if (reached != phase) return;
+                if (reached == "sealed") blocked = std::make_unique<BlockReplacement>(file);
+                else blocked = std::make_unique<BlockReplacement>(registry);
+            });
+            const auto failed = Hook::remove(server, name); ModelHook::removal_barrier(Hook::models(server), {});
+            blocked.reset();
+            const auto retained = Hook::models(server).user_model_definition(name);
+            check(failed.status >= 400 && fs::exists(file) == (std::string(phase) != "removed") &&
+                  retained.contains("juiced_removal") == (std::string(phase) != "before"),
+                  "failed intent/cleanup/final registry commit retains the correct file and recoverable definition");
+            if (std::string(phase) != "before") {
+                bool name_rejected = false, reference_rejected = false;
+                try { Hook::models(server).register_user_model(name, definition); } catch (const lemon::ModelRegistrationConflict&) { name_rejected = true; }
+                try { Hook::models(server).register_user_model(name + "-late", definition); } catch (const lemon::ModelRegistrationConflict&) { reference_rejected = true; }
+                bool unfiltered_rejected = false;
+                try { Hook::models(server).get_model_info_unfiltered("user." + name); }
+                catch (const lemon::AdmissionError& error) { unfiltered_rejected = error.code == "artifact_cleanup_pending"; }
+                check(name_rejected && reference_rejected && !Hook::models(server).model_exists(name) &&
+                      !Hook::models(server).model_exists_unfiltered("user." + name) && unfiltered_rejected,
+                      "pending cleanup reserves its name and artifact without exposing a filtered or unfiltered usable model");
+            } else check(retained == definition && Hook::models(server).model_exists(name), "failed removal intent preserves the published model and complete definition");
+        }
+        {
+            lemon::Server server(runtime, root.string(), root.string()); Hook::stop(server);
+            check(Hook::remove(server, name, std::string(phase) == "removed").status == 200 && !fs::exists(file) && Hook::models(server).user_model_definition(name).is_null(),
+                  "restart and ordinary/native retry finish confirmed artifact cleanup and unregister exactly its owner");
+        }
+        lemon::RuntimeConfig::set_global(nullptr);
+    }
+    {
+        const auto root = lemon::test::make_scratch_dir("artifact-reference-commit"); const auto name = "Reference-" + root.filename().string();
+        auto defaults = lemon::ConfigFile::base_defaults(); defaults["offline"] = true; defaults["broadcast"] = false;
+        auto runtime = std::make_shared<lemon::RuntimeConfig>(defaults); lemon::RuntimeConfig::set_global(runtime.get());
+        {
+            lemon::Server server(runtime, root.string(), root.string()); Hook::stop(server);
+            const auto id = upload_fixture(server); Hook::import_request(server, "finish", {{"id", id}, {"name", name}});
+            const auto definition = Hook::models(server).user_model_definition(name);
+            const auto file = definition.at("checkpoints").at("main").get<std::string>();
+            TestGate sealed; ModelHook::removal_barrier(Hook::models(server), [&](const std::string& phase) { if (phase == "sealed") sealed.pause(); });
+            auto removal = std::async(std::launch::async, [&] { return Hook::remove(server, name); });
+            const bool reached = sealed.await(); std::promise<void> entered;
+            auto registration = std::async(std::launch::async, [&] { entered.set_value(); try { Hook::models(server).register_user_model(name + "-late", definition); return false; } catch (const lemon::ModelRegistrationConflict&) { return true; } });
+            entered.get_future().wait();
+            const bool waited = registration.wait_for(std::chrono::milliseconds(50)) == std::future_status::timeout;
+            sealed.open(); const auto removed = removal.get(); const bool rejected = registration.get(); ModelHook::removal_barrier(Hook::models(server), {});
+            check(reached && waited && removed.status == 200 && rejected && !fs::exists(file) && Hook::models(server).user_model_definition(name + "-late").is_null(),
+                  "a new reference cannot commit between artifact validation and deletion or register the deleted upload afterward");
+        }
+        lemon::RuntimeConfig::set_global(nullptr);
+    }
+}
+
 static void policy_failures() {
     for (bool pin : {false, true}) for (bool staging : {false, true}) {
         const auto root = lemon::test::make_scratch_dir("policy");
@@ -1689,7 +1793,9 @@ static void policy_failures() {
 }
 
 int main(int argc, char** argv) {
-    if (argc > 1 && std::string(argv[1]) == "--config-effects") {
+    if (argc > 1 && std::string(argv[1]) == "--removal-ownership") {
+        artifact_removal_ownership();
+    } else if (argc > 1 && std::string(argv[1]) == "--config-effects") {
         configuration_effects(); runtime_swap_failures();
     } else if (argc > 1 && std::string(argv[1]) == "--metadata-files") {
         metadata_json_files();

@@ -302,8 +302,14 @@ public:
         bool owns_lock() const { return lock_.owns_lock(); }
     };
     ModelMutation model_mutation(const std::string& model_name, bool wait = true);
+    json user_model_definition(const std::string& model_name);
+    bool artifact_referenced(const std::string& model_name, const std::filesystem::path& file);
+    void remove_uploaded_model(const std::string& model_name, const json& expected_definition);
     // Installed before serving; the durable import owner can veto deletion.
-    void set_model_removal_guard(std::function<void(const std::string&)> guard) { model_removal_guard_ = std::move(guard); }
+    void set_model_removal_guard(std::function<void(const std::string&)> guard, std::filesystem::path artifact_directory = {}) {
+        model_removal_guard_ = std::move(guard);
+        if (!artifact_directory.empty()) uploaded_artifact_directory_ = std::move(artifact_directory);
+    }
 
     // Register or validate a model definition without downloading its files.
     // Uses the same registration path as download_model.
@@ -672,6 +678,9 @@ private:
     uint64_t cache_revision_ = 0;
     std::mutex model_mutations_mutex_;
     std::map<std::string, std::shared_ptr<ModelMutationState>> model_mutations_;
+    std::filesystem::path uploaded_artifact_directory_;
+    std::recursive_mutex model_references_mutex_;
+    std::function<void(const std::string&)> removal_publication_barrier_;
     std::function<void(const std::string&)> model_removal_guard_;
     // Orders recipe_options.json rewrites without holding models_cache_mutex_
     // (which every request thread contends on) across disk I/O.
@@ -729,6 +738,9 @@ private:
 
     json get_sync_status_locked() const;
     json publish_sync_result_locked();
+    json read_user_models();
+    void validate_registration_artifacts(const json& definition, const json& registrations);
+    bool artifact_referenced_locked(const std::string& model, const std::filesystem::path& file, const json& registrations);
     void rebuild_public_model_aliases_locked();
 };
 

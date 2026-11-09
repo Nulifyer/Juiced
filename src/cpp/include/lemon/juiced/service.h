@@ -93,6 +93,7 @@ private:
   std::string cache_run_id_;
   std::set<std::string> active_imports_, active_snapshot_publications_;
   std::function<void(const std::string&)> import_publication_barrier_;
+  std::function<void()> removal_claim_barrier_;
   void publish_import(const std::string& id);
   void reconcile_imports();
   static std::string file_digest(const std::filesystem::path& file);
@@ -147,6 +148,7 @@ private:
               const std::string &operation);
   json removal_plan(const std::string &model);
   bool import_owns_model_locked(const std::string& name) const;
+  void guard_model_removal_locked(const std::string& name) const;
   void with_model_removal(const std::string& model, const std::function<void()>& remove);
   void remove_model(const httplib::Request &, httplib::Response &);
   void import_file(const httplib::Request &, httplib::Response &,

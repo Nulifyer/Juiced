@@ -447,6 +447,13 @@ static void preparation_cleanup() {
             try { Hook::configure(server, {{"mode", "protected"}}); }
             catch (const AdmissionError& error) { guarded = error.code == "admission_configuration_busy"; }
             check(guarded, "configuration cannot discard an unresolved preparation writer");
+            bool unregister_guarded = false, delete_guarded = false;
+            try { Hook::models(server).unregister_user_model("Preparation-Source"); }
+            catch (const AdmissionError& error) { unregister_guarded = error.status == 409 && error.code == "preparation_cleanup_pending"; }
+            try { Hook::models(server).delete_model("Preparation-Source"); }
+            catch (const AdmissionError& error) { delete_guarded = error.status == 409 && error.code == "preparation_cleanup_pending"; }
+            check(unregister_guarded && delete_guarded && fs::exists(source) && Hook::models(server).model_exists("Preparation-Source"),
+                  "native unregister and delete retain an unresolved preparation's source and registration");
             if (boundary != 2) {
                 control->fail_stop = false;
                 if (boundary == 1) Hook::stop_preparation(server);
@@ -464,6 +471,10 @@ static void preparation_cleanup() {
                   "restart retains unknown prior-manager staging ownership without certifying termination");
             check(!Hook::removal(restarted, "Preparation-Source")["allowed"].get<bool>(),
                   "unknown prior preparation continues to protect its source from ordinary removal");
+            bool native_guarded = false;
+            try { Hook::models(restarted).delete_model("Preparation-Source"); }
+            catch (const AdmissionError& error) { native_guarded = error.status == 409 && error.code == "preparation_cleanup_pending"; }
+            check(native_guarded && fs::exists(source), "restart preserves the source guard through native deletion");
         }
         RuntimeConfig::set_global(nullptr);
     }

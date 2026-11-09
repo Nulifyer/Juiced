@@ -221,6 +221,21 @@ idempotency. Initial and replayed recipe/purpose values use the same effective
 labels. Library rows expose pending publication, errors, conflict-name resolution
 and cleanup retries through those native operations.
 
+Removal rechecks the complete registry definition after acquiring model mutation
+ownership. ModelManager serializes reference acquisition against artifact deletion.
+A new shared reference changes an uploaded-file removal into registration-only
+removal when the operator reviews it again. Uploaded-file deletion first persists
+`juiced_removal` in the existing registration. That marker hides the model from
+usable discovery and reserves its name and file until deletion and the final
+registry write succeed. Failed cleanup remains retryable through Juiced removal
+or native delete after manager restart. Missing appliance files cannot acquire a
+new registration reference. External files retain their existing registration
+semantics. No shared model-cache or Juiced-state mutex spans file deletion.
+
+This covers participating native registrations and owned upload cleanup, not a
+complete immutable model-revision lifecycle or uncooperative external writers.
+Pending import and preparation writers veto native removal of their source model.
+
 Cache-profile qualification parses the native slot-save argument and compares its
 filesystem directory with Juiced storage. It accepts quoted paths containing spaces
 or backslashes and rejects missing or duplicate storage flags. An unrelated option

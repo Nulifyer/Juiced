@@ -2258,6 +2258,21 @@ void ModelManager::save_user_models(const json& user_models) {
     JsonUtils::save_to_file(user_models, get_user_models_file());
 }
 
+json ModelManager::read_user_models() {
+    const auto path = get_user_models_file();
+    if (!fs::exists(path)) return json::object();
+    auto models = JsonUtils::load_from_file(path);
+    if (!models.is_object()) throw std::runtime_error("The model registry is not a JSON object");
+    return models;
+}
+
+json ModelManager::user_model_definition(const std::string& model_name) {
+    const auto key = is_user_model_name(model_name) ? strip_user_model_prefix(model_name) : model_name;
+    std::lock_guard<std::mutex> lock(models_cache_mutex_);
+    const auto models = read_user_models();
+    return models.value(key, json());
+}
+
 ModelManager::OptionsWriteSnapshot ModelManager::begin_options_write(const std::string& model_name) {
     for (;;) {
         // External discovery must finish before writer ownership is acquired.
@@ -3884,6 +3899,7 @@ void ModelManager::rebuild_models_cache_locked(std::vector<ModelInfo> dynamic_mo
 
     // Load user models with "user." prefix
     for (auto& [key, value] : user_models_.items()) {
+        if (value.contains("juiced_removal")) continue;
         ModelInfo info;
         info.model_name = "user." + key;
         info.checkpoints["main"] = JsonUtils::get_or_default<std::string>(value, "checkpoint", "");
@@ -4951,12 +4967,17 @@ void ModelManager::register_user_model(const std::string& model_name,
     // next auto-load. Read the latest disk copy under the same process mutex so
     // stale in-memory state cannot overwrite another registration.
     bool overwrote_router_collection = false;
-    {
-        auto lock = replace_existing ? std::unique_lock<std::mutex>(models_cache_mutex_) : lock_current_models_cache();
-        json updated_user_models = load_optional_json(get_user_models_file());
+    for (;;) {
+        if (!replace_existing) build_cache();
+        std::lock_guard<std::recursive_mutex> references(model_references_mutex_);
+        std::unique_lock<std::mutex> lock(models_cache_mutex_);
+        if (!replace_existing && !cache_valid_) continue;
+        json updated_user_models = read_user_models();
         if (!updated_user_models.is_object()) {
             updated_user_models = json::object();
         }
+        if (updated_user_models.contains(clean_name) && updated_user_models.at(clean_name).contains("juiced_removal"))
+            throw ModelRegistrationConflict("Finish pending artifact removal before replacing this model");
         if (!replace_existing && updated_user_models.contains(clean_name)) {
             if (!publication_id.empty() && updated_user_models.at(clean_name).value("juiced_import", "") == publication_id &&
                 updated_user_models.at(clean_name).value("checkpoints", json::object()) == model_entry.value("checkpoints", json::object()) &&
@@ -4969,12 +4990,14 @@ void ModelManager::register_user_model(const std::string& model_name,
         }
         if (!replace_existing && (server_models_.contains(clean_name) || models_cache_.count(clean_name) || public_model_aliases_.count(clean_name)))
             throw ModelRegistrationConflict("That public model name is already occupied; choose a distinct variant name");
+        validate_registration_artifacts(model_entry, updated_user_models);
         overwrote_router_collection =
             user_entry_is_router_collection(updated_user_models, clean_name);
         updated_user_models[clean_name] = model_entry;
         save_user_models(updated_user_models);
         user_models_ = std::move(updated_user_models);
         invalidate_models_cache_locked();
+        break;
     }
 
     // A router collection carries a routing policy, so its lifecycle affects the
@@ -4990,6 +5013,7 @@ void ModelManager::register_user_model(const std::string& model_name,
 
 void ModelManager::unregister_user_model(const std::string& model_name) {
     auto mutation = model_mutation(model_name);
+    std::lock_guard<std::recursive_mutex> references(model_references_mutex_);
     if (model_removal_guard_) model_removal_guard_(model_name);
     std::string clean_name = model_name;
     if (is_user_model_name(clean_name)) {
@@ -4999,10 +5023,12 @@ void ModelManager::unregister_user_model(const std::string& model_name) {
     bool was_router_collection = false;
     {
         std::lock_guard<std::mutex> lock(models_cache_mutex_);
-        json updated_user_models = load_optional_json(get_user_models_file());
+        json updated_user_models = read_user_models();
         if (!updated_user_models.is_object() || !updated_user_models.contains(clean_name)) {
             return;
         }
+        if (updated_user_models.at(clean_name).contains("juiced_removal"))
+            throw AdmissionError("artifact_cleanup_pending", "Finish pending artifact removal before unregistering this model", 409);
         was_router_collection =
             user_entry_is_router_collection(updated_user_models, clean_name);
         updated_user_models.erase(clean_name);
@@ -5084,16 +5110,17 @@ void ModelManager::download_registered_model_impl(const ModelInfo& info, bool do
     std::string canonical_model_name = resolve_model_name(info.model_name);
     if (is_user_model_name(canonical_model_name))
     {
+        std::lock_guard<std::recursive_mutex> references(model_references_mutex_);
         std::lock_guard<std::mutex> lock(models_cache_mutex_);
         auto it = models_cache_.find(canonical_model_name);
         if (it != models_cache_.end())
         {
-            json updated_user_models = load_optional_json(get_user_models_file());
+            json updated_user_models = read_user_models();
             if (!updated_user_models.is_object()) {
                 updated_user_models = json::object();
             }
             auto model = updated_user_models.find(strip_user_model_prefix(canonical_model_name));
-            if (model != updated_user_models.end()) {
+            if (model != updated_user_models.end() && !model->contains("juiced_removal")) {
                 (*model)["size"] = it->second.size;
                 save_user_models(updated_user_models);
                 user_models_ = std::move(updated_user_models);
@@ -6803,10 +6830,119 @@ static bool path_inside(const fs::path& path, const fs::path& root) {
     return !relative.empty() && *relative.begin() != fs::path("..");
 }
 
+// Reference acquisition and destructive removal share this owner. Filesystem
+// cleanup happens with no cache/state mutex held; the persisted marker reserves
+// both the model name and the artifact until cleanup and registry commit finish.
+static std::map<std::string, std::string> definition_checkpoints(json definition) {
+    ModelInfo info;
+    info.checkpoints["main"] = definition.value("checkpoint", "");
+    load_checkpoints(info, definition);
+    return info.checkpoints;
+}
+static bool same_artifact(const fs::path& first, const fs::path& second) {
+    if (first.empty() || second.empty()) return false;
+    std::error_code ec;
+    if (fs::equivalent(first, second, ec) && !ec) return true;
+    ec.clear(); const auto left = fs::weakly_canonical(first, ec);
+    if (ec) throw std::runtime_error("Cannot resolve artifact ownership: " + ec.message());
+    const auto right = fs::weakly_canonical(second, ec);
+    if (ec) throw std::runtime_error("Cannot resolve artifact ownership: " + ec.message());
+    return left == right;
+}
+void ModelManager::validate_registration_artifacts(const json& definition, const json& registrations) {
+    const auto& root = uploaded_artifact_directory_;
+    for (const auto& [role, path] : definition_checkpoints(definition)) {
+        if (path.empty()) continue;
+        for (const auto& [name, other] : registrations.items()) {
+            if (other.contains("juiced_removal") && same_artifact(path, other.at("juiced_removal").at("file").get<std::string>()))
+                throw ModelRegistrationConflict("Artifact cleanup is pending; finish removal before referencing this file");
+        }
+        // Local appliance files must still exist when the reference commits.
+        // Missing external paths retain their existing registration semantics.
+        if (path_inside(path, root) && !fs::is_regular_file(path))
+            throw ModelRegistrationConflict("The uploaded artifact no longer exists");
+    }
+}
+bool ModelManager::artifact_referenced_locked(const std::string& model, const fs::path& file, const json& registrations) {
+    const auto clean = is_user_model_name(model) ? strip_user_model_prefix(model) : model;
+    for (const auto& [name, definition] : registrations.items()) {
+        if (name == clean) continue;
+        for (const auto& [role, path] : definition_checkpoints(definition))
+            if (same_artifact(path, file)) return true;
+    }
+    for (const auto& [name, info] : models_cache_) {
+        if (name == "user." + clean) continue;
+        for (const auto& [role, path] : info.checkpoints)
+            if (same_artifact(path, file)) return true;
+    }
+    return false;
+}
+bool ModelManager::artifact_referenced(const std::string& model, const fs::path& file) {
+    std::lock_guard<std::recursive_mutex> references(model_references_mutex_);
+    std::lock_guard<std::mutex> lock(models_cache_mutex_);
+    return artifact_referenced_locked(model, file, read_user_models());
+}
+void ModelManager::remove_uploaded_model(const std::string& model, const json& expected) {
+    auto admission = admit_acquisition(model);
+    auto mutation = model_mutation(model);
+    std::lock_guard<std::recursive_mutex> references(model_references_mutex_);
+    if (model_removal_guard_) model_removal_guard_(model);
+    const auto clean = is_user_model_name(model) ? strip_user_model_prefix(model) : model;
+    fs::path file;
+    {
+        std::lock_guard<std::mutex> lock(models_cache_mutex_);
+        auto registrations = read_user_models();
+        if (!registrations.contains(clean))
+            throw AdmissionError("model_definition_changed", "Review the changed model before removing it", 409);
+        auto current = registrations.at(clean);
+        const auto marker = current.value("juiced_removal", json());
+        current.erase("juiced_removal");
+        if (current != expected)
+            throw AdmissionError("model_definition_changed", "Review the changed model before removing it", 409);
+        file = definition_checkpoints(current).at("main");
+        if (!path_inside(file, uploaded_artifact_directory_))
+            throw AdmissionError("artifact_not_owned", "Only uploaded appliance artifacts can use this removal operation", 409);
+        if (artifact_referenced_locked(model, file, registrations))
+            throw AdmissionError("artifact_reference_changed", "Another model references this artifact; review removal again", 409);
+        if (!marker.is_null() && marker.at("file") != file.string())
+            throw std::runtime_error("The pending removal does not match its artifact");
+        if (marker.is_null()) {
+            registrations[clean]["juiced_removal"] = {{"file", file.string()}};
+            save_user_models(registrations);
+            user_models_ = std::move(registrations);
+            invalidate_models_cache_locked();
+        }
+    }
+    notify_after_mutation(mutation);
+    if (removal_publication_barrier_) removal_publication_barrier_("sealed");
+    std::error_code error;
+    fs::remove(file, error);
+    if (error) throw std::runtime_error("Artifact cleanup remains pending: " + error.message());
+    if (removal_publication_barrier_) removal_publication_barrier_("removed");
+    {
+        std::lock_guard<std::mutex> lock(models_cache_mutex_);
+        auto registrations = read_user_models();
+        auto current = registrations.at(clean); current.erase("juiced_removal");
+        if (current != expected) throw std::runtime_error("The pending removal definition changed");
+        registrations.erase(clean);
+        save_user_models(registrations);
+        user_models_ = std::move(registrations);
+        invalidate_models_cache_locked();
+    }
+}
+
 void ModelManager::delete_model(const std::string& model_name) {
+    auto admission = admit_acquisition(model_name);
+    auto definition = user_model_definition(model_name);
+    if (definition.is_object() && definition.contains("juiced_removal")) {
+        definition.erase("juiced_removal");
+        remove_uploaded_model(model_name, definition);
+        return;
+    }
     auto info = get_model_info(model_name);
     auto mutation = model_mutation(info.model_name);
     info = get_model_info(model_name);
+    std::lock_guard<std::recursive_mutex> references(model_references_mutex_);
     if (model_removal_guard_) model_removal_guard_(info.model_name);
     std::string canonical_model_name = info.model_name;
 
@@ -6913,7 +7049,7 @@ void ModelManager::delete_model(const std::string& model_name) {
         // Remove from user models if it's a user model
         if (is_user_model_name(canonical_model_name)) {
             std::lock_guard<std::mutex> lock(models_cache_mutex_);
-            json updated_user_models = load_optional_json(get_user_models_file());
+            json updated_user_models = read_user_models();
             if (!updated_user_models.is_object()) {
                 updated_user_models = json::object();
             }
@@ -6962,7 +7098,7 @@ void ModelManager::delete_model(const std::string& model_name) {
 
         if (is_user_model_name(canonical_model_name)) {
             std::lock_guard<std::mutex> lock(models_cache_mutex_);
-            json updated_user_models = load_optional_json(get_user_models_file());
+            json updated_user_models = read_user_models();
             if (!updated_user_models.is_object()) {
                 updated_user_models = json::object();
             }
@@ -7107,7 +7243,7 @@ void ModelManager::delete_model(const std::string& model_name) {
     // Remove from user models if it's a user model
     if (is_user_model_name(canonical_model_name)) {
         std::lock_guard<std::mutex> lock(models_cache_mutex_);
-        json updated_user_models = load_optional_json(get_user_models_file());
+        json updated_user_models = read_user_models();
         if (!updated_user_models.is_object()) {
             updated_user_models = json::object();
         }
@@ -7411,7 +7547,7 @@ bool ModelManager::model_exists_unfiltered(const std::string& model_name) {
         if (auto canon = parse_canonical_id(name)) {
             switch (canon->source) {
                 case ModelSource::Registered:
-                    return user_models_.contains(canon->bare_name);
+                    return user_models_.contains(canon->bare_name) && !user_models_.at(canon->bare_name).contains("juiced_removal");
                 case ModelSource::Builtin:
                     return server_models_.contains(canon->bare_name);
                 case ModelSource::Imported:
@@ -7482,6 +7618,8 @@ ModelInfo ModelManager::get_model_info_unfiltered(const std::string& model_name)
     info.model_name = is_user_lookup
         ? canonical_id(ModelSource::Registered, registry_name)
         : registry_name;
+    if (model_json->contains("juiced_removal"))
+        throw AdmissionError("artifact_cleanup_pending", "Finish pending artifact removal before using this model", 409);
     info.checkpoints["main"] = JsonUtils::get_or_default<std::string>(*model_json, "checkpoint", "");
     parse_legacy_mmproj(info, *model_json);
     load_checkpoints(info, *model_json);
