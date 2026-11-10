@@ -744,7 +744,7 @@ int main() {
         ResourceAdmission::WriteToken cancelled_writer;
         { auto writer = cancellation.write_scope("cancelled-deferred"); cancelled_writer = writer.continuation(); }
         ResourceAdmission::Work cancelled_work;
-        cancelled_work.cancelled = [token = std::move(cancelled_writer)]() mutable { token = {}; return true; };
+        cancelled_work.cancelled = [&cancelled_writer] { cancelled_writer = {}; return true; };
         check(error([&] { cancellation.acquire(std::move(cancelled_work)); }, "request_cancelled") &&
               cancellation.wait_for_writes(50ms), "cancellation releases the final continuation without reentering the ledger mutex");
         ResourceAdmission::WriteToken terminal_writer;
@@ -753,6 +753,8 @@ int main() {
         terminal.operation = ResourceAdmission::Operation::Management;
         terminal.cancelled = [token = std::move(terminal_writer)] { return false; };
         auto terminal_lease = cancellation.acquire(std::move(terminal));
+        // A moved-from std::function may retain a copy of its callable.
+        terminal.cancelled = {};
         terminal_lease.started(); terminal_lease.completed(); terminal_lease = {};
         check(cancellation.wait_for_writes(50ms) && cancellation.snapshot()["writes"]["active_operations"] == 0,
               "terminal ledger cleanup can release its continuation while holding the ledger mutex");
