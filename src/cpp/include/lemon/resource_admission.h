@@ -134,6 +134,7 @@ public:
     bool generation_was_stopped(uint64_t generation) const;
     void reconcile_idle_requests(uint64_t generation);
     nlohmann::json snapshot() const;
+    nlohmann::json assess_load(const Work& work) const;
 private:
     std::shared_ptr<State> state_;
 };

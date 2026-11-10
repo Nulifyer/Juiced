@@ -53,6 +53,15 @@ Charges charges(const json& object, const char* key) {
     }
     return result;
 }
+const json* execution_profile(const json& config, const ResourceAdmission::Work& work) {
+    const auto models = config.find("models");
+    if (models == config.end()) return nullptr;
+    const auto profile = models->find(work.model);
+    if (profile == models->end()) return nullptr;
+    if (profile->at("checkpoint") != work.checkpoint || profile->at("options") != work.options)
+        throw AdmissionError("admission_profile_mismatch", "Execution settings differ from the declared resource profile", 409);
+    return &*profile;
+}
 uint64_t ingress_control_reserve(const json& ingress) {
     const auto request = natural(ingress, "request_bytes", ResourceAdmission::maximum_ingress_bytes);
     const auto total = natural(ingress, "total_bytes", 4 * ResourceAdmission::maximum_ingress_bytes);
@@ -128,9 +137,10 @@ struct ResourceAdmission::State {
     }
     enum class Capacity { Available, Unknown, Exhausted };
     Capacity capacity(const Entry& entry, const std::map<std::string, Pool>& limits,
-                      bool include_active = true) const {
+                      bool include_active = true, const Headroom* observation = nullptr) const {
         const bool ingress = entry.work.operation == Operation::Ingress;
         const auto used = include_active ? reserved() : Charges{};
+        const auto& sample = observation ? *observation : headroom;
         for (const auto& cost : entry.costs) {
             const auto pool = limits.find(cost.first);
             uint64_t reserve = 0;
@@ -144,11 +154,11 @@ struct ResourceAdmission::State {
                 const auto occupied = taken == used.end() ? 0 : taken->second;
                 if (occupied > cap || cost.second > cap - occupied) return Capacity::Exhausted;
             }
-            if (!headroom) {
+            if (!sample) {
                 if (ingress) return Capacity::Unknown;
                 continue;
             }
-            const auto available = headroom(cost.first);
+            const auto available = sample(cost.first);
             if (!available) return Capacity::Unknown;
             uint64_t outstanding = 0;
             if (include_active) for (const auto& active_entry : active) {
@@ -579,11 +589,10 @@ ResourceAdmission::Lease ResourceAdmission::acquire(Work work) {
                 reject("execution_slots_changed", "Worker slot inventory changed within one generation", 409);
         }
     }
-    const auto profiles = config.value("models", json::object());
-    const auto profile = profiles.find(entry->work.model);
-    if (profile != profiles.end()) {
-        if (profile->at("checkpoint") != entry->work.checkpoint || profile->at("options") != entry->work.options)
-            reject("admission_profile_mismatch", "Execution settings differ from the declared resource profile", 409);
+    const json* profile;
+    try { profile = execution_profile(config, entry->work); }
+    catch (const AdmissionError&) { ++state_->rejected; throw; }
+    if (profile) {
         entry->priority = profile->value("priority", std::string("interactive"));
         entry->concurrency = optional_limit(*profile, "concurrency");
         entry->completion_limit = std::chrono::milliseconds(natural(*profile, "completion_ms", 300000, 86400000));
@@ -775,6 +784,101 @@ bool ResourceAdmission::has_uncertain_generation(uint64_t generation) const {
         return item.second->work.generation == generation && item.second->uncertain;
     });
 }
+json ResourceAdmission::assess_load(const Work& work) const {
+    if (work.operation != Operation::Load)
+        throw std::invalid_argument("Load suitability requires a load work description");
+    std::lock_guard<std::mutex> lock(state_->mutex);
+    json blockers = json::array();
+    if (state_->paused) blockers.push_back("admission_paused");
+    if (state_->stopped) blockers.push_back("admission_stopped");
+    if (state_->maintenance) blockers.push_back("maintenance_requested");
+    if (state_->configuration_pending) blockers.push_back("admission_configuration_pending");
+    json result = {{"schema_version", 1}, {"model", work.model},
+        {"fit", "unknown"}, {"reason_code", "admission_profile_unknown"},
+        {"reason", "No execution-specific resource ceilings are recorded"},
+        {"configuration_revision", state_->revision},
+        {"observed_at_ms", std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count()},
+        {"scope", "new_worker_load_or_resident_with_one_request_and_state"},
+        {"estimate_kind", "operator_declared_upper_bounds"},
+        {"reservation", false}, {"hardware_qualified", false},
+        {"identity_scope", "declared_checkpoint_and_options"},
+        {"recommendation_qualified", false},
+        {"admission_open", blockers.empty()}, {"admission_blockers", blockers},
+        {"pools", json::object()}};
+    const json* profile;
+    try { profile = execution_profile(state_->config, work); }
+    catch (const AdmissionError& error) {
+        result["reason_code"] = error.code;
+        result["reason"] = error.what();
+        return result;
+    }
+    if (!profile) return result;
+    result["estimate_source"] = profile->at("source");
+    const auto load = charges(*profile, "load_bytes");
+    const auto resident = charges(*profile, "resident_bytes");
+    const auto request = charges(*profile, "request_bytes");
+    const auto saved_state = charges(*profile, "state_bytes");
+    if (load.empty() || resident.empty() || request.empty()) {
+        result["reason_code"] = "resource_ceiling_incomplete";
+        result["reason"] = "Load, resident and incremental request ceilings are required";
+        return result;
+    }
+    State::Entry candidate;
+    candidate.work = work;
+    candidate.priority = profile->value("priority", std::string("interactive"));
+    result["priority"] = candidate.priority;
+    candidate.costs = resident;
+    for (const auto* incremental : {&request, &saved_state})
+        for (const auto& [pool, bytes] : *incremental) {
+            auto& total = candidate.costs[pool];
+            if (bytes > std::numeric_limits<uint64_t>::max() - total) {
+                result["reason_code"] = "resource_ceiling_overflow";
+                result["reason"] = "Combined resource ceilings exceed the supported byte range";
+                return result;
+            }
+            total += bytes;
+        }
+    for (const auto& [pool, bytes] : load)
+        candidate.costs[pool] = std::max(candidate.costs[pool], bytes);
+    const auto reserved = state_->reserved();
+    std::map<std::string, std::optional<uint64_t>> observed;
+    for (const auto& [pool, bytes] : candidate.costs) {
+        try { observed[pool] = state_->headroom ? state_->headroom(pool) : std::nullopt; }
+        catch (const std::exception&) { observed[pool] = std::nullopt; }
+        const auto& limits = state_->pools.at(pool);
+        const auto used = reserved.find(pool);
+        result["pools"][pool] = {{"required_peak_bytes", bytes},
+            {"load_bytes", load.count(pool) ? load.at(pool) : 0},
+            {"resident_bytes", resident.count(pool) ? resident.at(pool) : 0},
+            {"request_bytes", request.count(pool) ? request.at(pool) : 0},
+            {"state_bytes", saved_state.count(pool) ? saved_state.at(pool) : 0},
+            {"capacity_bytes", limits.capacity ? json(*limits.capacity) : json(nullptr)},
+            {"observed_available_bytes", observed[pool] ? json(*observed[pool]) : json(nullptr)},
+            {"reserved_bytes", used == reserved.end() ? 0 : used->second},
+            {"essential_headroom_bytes", limits.essential_headroom}, {"source", limits.source}};
+        result["pools"][pool]["protected_headroom_bytes"] = candidate.priority == "essential" ? 0 : limits.essential_headroom;
+    }
+    const Headroom nominal;
+    const auto capacity = state_->capacity(candidate, state_->pools, false, &nominal);
+    const Headroom current = [&](const std::string& pool) { return observed.at(pool); };
+    const auto available = state_->capacity(candidate, state_->pools, true, &current);
+    if (capacity == State::Capacity::Exhausted) {
+        result.update({{"fit", "does_not_fit"}, {"reason_code", "declared_capacity_exceeded"},
+            {"reason", "The declared peak exceeds a physical pool ceiling or essential headroom"}});
+    } else if (capacity == State::Capacity::Unknown || available == State::Capacity::Unknown) {
+        result.update({{"reason_code", "capacity_unknown"},
+            {"reason", "A physical pool ceiling or current available capacity is unknown"}});
+    } else if (available == State::Capacity::Exhausted) {
+        result.update({{"fit", "limited_fit"}, {"reason_code", "current_capacity_exhausted"},
+            {"reason", "Declared ceilings fit, but current reservations or observed headroom do not"}});
+    } else {
+        result.update({{"fit", "fits"}, {"reason_code", "within_declared_limits"},
+            {"reason", "The declared peak fits the sampled headroom and configured physical pool ceilings"}});
+    }
+    return result;
+}
+
 json ResourceAdmission::snapshot() const {
     std::lock_guard<std::mutex> lock(state_->mutex);
     state_->prune_writes();

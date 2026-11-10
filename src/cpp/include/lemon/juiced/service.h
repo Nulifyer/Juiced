@@ -135,6 +135,7 @@ private:
   void preparation_run();
   bool finish_preparation_cleanup();
   json execution_plan(const std::string& model);
+  json model_suitability(const std::string& model);
   void execution_api(const httplib::Request &, httplib::Response &);
   void execution_devices(const httplib::Request &, httplib::Response &);
   void image_compatibility(const httplib::Request &, httplib::Response &,

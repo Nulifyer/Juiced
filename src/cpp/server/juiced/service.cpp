@@ -840,6 +840,11 @@ void JuicedService::routes(httplib::Server &http) {
     http.Get(prefix + "juiced/preparation", [this](const auto &q, auto &r) { preparation_api(q, r); });
     post(prefix + "juiced/preparation", [this](const auto &q, auto &r) { preparation_api(q, r); });
     http.Get(prefix + "juiced/execution", [this](const auto &q, auto &r) { execution_api(q, r); });
+    http.Get(prefix + "juiced/suitability", [this](const auto& req, auto& res) {
+      try { reply(res, model_suitability(req.get_param_value("model"))); }
+      catch (const std::invalid_argument& error) { reply(res, {{"error", error.what()}}, 400); }
+      catch (const std::exception& error) { reply(res, {{"error", error.what()}}, 400); }
+    });
     post(prefix + "juiced/execution", [this](const auto &q, auto &r) { execution_api(q, r); });
     http.Get(prefix + "juiced/devices",
              [this](const auto &q, auto &r) { execution_devices(q, r); });

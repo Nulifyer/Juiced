@@ -12,6 +12,37 @@
 #include <regex>
 
 namespace lemon {
+JuicedService::json JuicedService::model_suitability(const std::string& requested) {
+  if (requested.empty()) throw std::invalid_argument("Specify a model for host suitability");
+  const auto snapshot = server_.model_manager_->get_model_options_snapshot(requested);
+  const auto& info = snapshot.info;
+  const auto name = server_.model_manager_->get_public_model_name(info.model_name);
+  auto options = server_.router_->resolve_effective_options(info, RecipeOptions(info.recipe, json::object())).to_json();
+  options.erase("pinned");
+  ResourceAdmission::Work work;
+  work.model = name;
+  work.service = model_type_to_string(info.type);
+  work.checkpoint = info.checkpoint();
+  work.options = options;
+  work.operation = ResourceAdmission::Operation::Load;
+  auto resources = server_.router_->admission_view().assess_load(work);
+  const bool text = info.type == ModelType::LLM || info.type == ModelType::EMBEDDING || info.type == ModelType::RERANKING;
+  const auto context = options.value("ctx_size", json(nullptr));
+  if (text && (!context.is_number_integer() || context.get<int64_t>() <= 0)) {
+    resources["fit"] = "unknown";
+    resources["reason_code"] = "context_ceiling_unknown";
+    resources["reason"] = "Select a positive per-request context before assessing a text model's resource ceilings";
+  }
+  const auto model = server_.model_info_to_json(name, info);
+  const auto capabilities = model_capabilities(info, model);
+  return {{"model", name}, {"profile", snapshot.profile}, {"recipe", info.recipe},
+      {"downloaded", info.downloaded}, {"enabled", allows(name)},
+      {"context_tokens", text && context.is_number_integer() && context.get<int64_t>() > 0 ? context : json(nullptr)},
+      {"compatibility", capabilities.at("execution").at("compatibility")},
+      {"artifact", capabilities.at("artifact")}, {"resources", resources},
+      {"read_only", true}, {"reservation", false}};
+}
+
 JuicedService::json
 JuicedService::execution_plan(const std::string &requested) {
   auto info = server_.model_manager_->get_model_info(requested);

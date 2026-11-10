@@ -1,0 +1,12 @@
+.host-suitability { margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1px solid var(--border); font-size: 13px; }
+.host-suitability > header { display: flex; align-items: start; justify-content: space-between; gap: 12px; }
+.host-suitability h3 { margin: 0 0 5px; font-size: 14px; }
+.host-suitability p { margin: 6px 0; line-height: 1.5; overflow-wrap: anywhere; }
+.host-suitability header p, .host-fit-basis, .host-suitability small { color: var(--muted-foreground); }
+.host-fit-result { margin-top: 12px; }
+.host-fit-result summary { cursor: pointer; padding: 8px 0; }
+.host-fit-pools { display: flex; flex-wrap: wrap; gap: 12px 24px; }
+.host-fit-pools dl { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 6px 12px; margin: 8px 0; min-width: 0; }
+.host-fit-pools dt { color: var(--muted-foreground); }
+.host-fit-pools dd { margin: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+@media (max-width: 520px) { .host-suitability > header { flex-wrap: wrap; } }

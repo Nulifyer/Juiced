@@ -31,6 +31,7 @@ import { HelpTip } from "./HelpTip";
 import { ModelEffective } from "./ModelEffective";
 import { ModelReadme } from "./ModelReadme";
 import { ExecutionProfiles } from "./ExecutionProfiles";
+import { HostSuitability } from "./HostSuitability";
 import "./BackendInventory.css";
 
 function repository(model: Model) {
@@ -434,6 +435,7 @@ export function ModelWorkspace({
             </nav>
           </header>
           <div className="model-workspace-content">
+            {["settings", "advanced", "runtime"].includes(tab) && <HostSuitability model={model} dirty={dirty} revision={revision} />}
             {error && (
               <p className="inline-error" role="alert">
                 {error}

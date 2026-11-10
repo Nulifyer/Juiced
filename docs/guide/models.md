@@ -58,6 +58,13 @@ Vision models can require a separate projector. Check **Weights & variants** and
 
 ## Enable the model
 
+Open the model and select **Host fit → Check saved settings** before loading.
+The result separates declared memory limits from current capacity and runtime
+requirements. Expand **Memory details** to see the physical pools and reservations.
+An unknown result needs an execution-specific estimate; weight size alone does
+not establish fit. Save draft changes before checking them. A successful check
+reserves no capacity and does not enable the model or qualify its output quality.
+
 1. Open **Models** or **Library → Find & run models**.
 2. Open the model details.
 3. Review **Runtime** and **Settings**, then choose [Hot or On-demand](loading-policy.md).
