@@ -729,6 +729,7 @@ private:
 
     // Prevent startup and manual update checks from running concurrently.
     std::mutex update_check_mutex_;
+    std::function<RegistryRepository(const std::string&)> update_repository_override_;
 
     // Server sync state and queue management
     struct ModelSyncState {

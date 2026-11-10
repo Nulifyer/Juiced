@@ -15,6 +15,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <iostream>
 #include <mutex>
 #include <thread>
@@ -34,6 +35,115 @@ static void set_env_var(const std::string& name, const std::string& value) {
 #else
     setenv(name.c_str(), value.c_str(), 1);
 #endif
+}
+
+namespace lemon {
+struct ModelPublicationTestHook {
+    static void downloaded(ModelManager& models, const std::string& name) {
+        const auto key = models.resolve_model_name(name);
+        std::lock_guard lock(models.models_cache_mutex_);
+        models.models_cache_.at(key).downloaded = true;
+    }
+    static void repository(ModelManager& models, std::function<RegistryRepository(const std::string&)> callback) {
+        models.update_repository_override_ = std::move(callback);
+    }
+    static void read_barrier(ModelManager& models, std::function<void()> callback) {
+        models.cache_read_barrier_ = std::move(callback);
+    }
+    static void filtered(ModelManager& models, const std::string& name) {
+        std::lock_guard lock(models.models_cache_mutex_);
+        models.filtered_out_models_[name] = "controlled old filter observation";
+        models.recipes_all_models_filtered_.insert("controlled-old-recipe");
+    }
+};
+}
+
+static void update_publication_overlap() {
+    const std::string name = "Metadata-Publication";
+    lemon::ModelManager models;
+    models.register_user_model(name, {{"recipe", "llamacpp"}, {"checkpoint", "fixture/metadata:Q4_K_M"}});
+    lemon::ModelPublicationTestHook::downloaded(models, name);
+    std::promise<void> entered, release;
+    const auto released = release.get_future().share();
+    lemon::ModelPublicationTestHook::repository(models, [&](const auto&) {
+        entered.set_value(); released.wait();
+        lemon::RegistryRepository result; result.snapshot_id = "new-revision";
+        return result;
+    });
+    auto check_result = std::async(std::launch::async, [&] { return models.check_for_model_updates({name}); });
+    const bool reached = entered.get_future().wait_for(std::chrono::seconds(5)) == std::future_status::ready;
+    check("update check pauses after capturing the model and before remote completion", reached);
+    if (reached) {
+        models.register_user_model(name, {{"recipe", "llamacpp"}, {"checkpoint", "fixture/replacement:Q6_K"}});
+        const auto replacement = models.get_model_info(name);
+        check("registration replacement commits while the old remote check is paused", replacement.checkpoint() == "fixture/replacement:Q6_K");
+    }
+    release.set_value();
+    const auto result = check_result.get();
+    check("obsolete remote result is retryable and never advertises the replacement as updated",
+          reached && result.updated_models.empty() && result.up_to_date_models.empty() &&
+          result.failed_models.count(name) && !models.get_model_info(name).update_available);
+    lemon::ModelPublicationTestHook::repository(models, [](const auto&) {
+        lemon::RegistryRepository result; result.snapshot_id = "new-revision"; return result;
+    });
+    lemon::ModelPublicationTestHook::downloaded(models, name);
+    const auto retry = models.check_for_model_updates({name});
+    check("a fresh retry publishes an update only for the committed replacement definition",
+          retry.failed_models.empty() && retry.updated_models == std::vector<std::string>{name} && models.get_model_info(name).update_available);
+    std::promise<void> preview_entered, preview_release;
+    const auto preview_released = preview_release.get_future().share();
+    models.set_update_check_override_for_test([&](const auto&) {
+        preview_entered.set_value(); preview_released.wait();
+        lemon::ModelManager::UpdateCheckResult result; result.updated_models = {name}; return result;
+    });
+    auto preview = std::async(std::launch::async, [&] { return models.sync_models({name}, true); });
+    const bool preview_reached = preview_entered.get_future().wait_for(std::chrono::seconds(5)) == std::future_status::ready;
+    if (preview_reached) models.register_user_model(name, {{"recipe", "llamacpp"}, {"checkpoint", "fixture/last:Q8_0"}});
+    preview_release.set_value(); const auto preview_result = preview.get();
+    check("a changed sync preview reports retry without mixing old update lists with current download state",
+          preview_reached && preview_result["status"] == "failed" && preview_result["checked_count"] == 0 &&
+          preview_result["models_updated"].empty() && preview_result["models_up_to_date"].empty() && preview_result["failed_models"].contains(name));
+    models.unregister_user_model(name);
+}
+
+static void metadata_reader_overlap() {
+    lemon::ModelManager models;
+    const auto path = lemon::test::state_dir() / "metadata-reader.gguf";
+    { char header[24] = {'G', 'G', 'U', 'F', 3}; std::ofstream file(path, std::ios::binary); file.write(header, sizeof(header)); }
+    const std::string name = "Metadata-Read", canonical = "user." + name;
+    for (int reader_kind = 0; reader_kind < 7; ++reader_kind) {
+        models.register_user_model(name, {{"recipe", "llamacpp"}, {"source", "local_path"}, {"checkpoint", path.string()}});
+        models.set_update_check_override_for_test([&](const auto&) {
+            lemon::ModelManager::UpdateCheckResult result; result.up_to_date_models = {name}; return result;
+        });
+        check("metadata reader starts with a downloaded registered model", models.is_model_downloaded(name));
+        lemon::ModelPublicationTestHook::filtered(models, canonical);
+        std::promise<void> entered, release;
+        const auto released = release.get_future().share();
+        std::thread::id reader_id;
+        std::atomic<bool> first{true};
+        lemon::ModelPublicationTestHook::read_barrier(models, [&] {
+            if (std::this_thread::get_id() == reader_id && first.exchange(false)) { entered.set_value(); released.wait(); }
+        });
+        auto read = std::async(std::launch::async, [&]() -> std::string {
+            reader_id = std::this_thread::get_id();
+            if (reader_kind == 0) return models.model_exists(name) ? "present" : "absent";
+            if (reader_kind == 1) return models.is_model_downloaded(name) ? "present" : "absent";
+            if (reader_kind == 2) return models.resolve_model_name(name);
+            if (reader_kind == 3) return models.get_public_model_name(canonical);
+            if (reader_kind == 5) return models.get_model_filter_reason(name);
+            if (reader_kind == 6) return models.recipes_with_all_models_filtered().count("controlled-old-recipe") ? "present" : "absent";
+            return models.sync_models({name}, true).at("failed_models").contains(name) ? "absent" : "present";
+        });
+        const bool reached = entered.get_future().wait_for(std::chrono::seconds(5)) == std::future_status::ready;
+        if (reached) models.unregister_user_model(name);
+        release.set_value();
+        const auto result = read.get();
+        lemon::ModelPublicationTestHook::read_barrier(models, {});
+        const auto expected = reader_kind == 2 ? name : reader_kind == 3 ? canonical : reader_kind == 5 ? "" : "absent";
+        check("metadata lookup retries a cache invalidated by committed removal", reached && result == expected);
+        if (!reached) models.unregister_user_model(name);
+    }
 }
 
 int main() {
@@ -596,6 +706,11 @@ int main() {
         check("fresh full check authoritatively schedules model update",
               std::find(downloaded_models.begin(), downloaded_models.end(), "Tiny-Test-Model-GGUF") != downloaded_models.end());
     }
+
+    gcfg->set(json{{"offline", true}});
+    metadata_reader_overlap();
+    gcfg->set(json{{"offline", false}});
+    update_publication_overlap();
 
     if (failures == 0) {
         std::cout << "All Model Sync & Auto-Update tests passed successfully!" << std::endl;

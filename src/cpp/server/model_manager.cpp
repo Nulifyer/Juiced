@@ -2673,16 +2673,15 @@ ModelManager::UpdateCheckResult ModelManager::check_for_model_updates(const std:
 
     std::unordered_map<std::string, RepoEntry> repos;
     std::unordered_map<std::string, ModelInfo> candidate_models;
+    std::unordered_map<std::string, std::string> candidate_public_names;
+    uint64_t candidate_revision;
     registry_files::DeterminationTracker determination_tracker;
     // Fast path only — never the comparison baseline (see active_local_snapshot).
     std::unordered_map<std::string, std::string> processed_snapshots;
 
-    build_cache();
-
     {
-        std::lock_guard<std::mutex> lock(models_cache_mutex_);
-
-
+        auto lock = lock_current_models_cache();
+        candidate_revision = cache_revision_;
 
         std::unordered_set<std::string> target_canonicals;
         for (const auto& t : targets) {
@@ -2723,6 +2722,8 @@ ModelManager::UpdateCheckResult ModelManager::check_for_model_updates(const std:
             const std::string source = effective_registry_source(info);
 
             candidate_models.emplace(name, info);
+            const auto public_name = canonical_public_names_.find(name);
+            candidate_public_names[name] = public_name != canonical_public_names_.end() ? public_name->second : name;
 
             auto add_repo_entry = [&](const std::string& repo_id) {
                 auto& entry = repos[source + ":" + repo_id];
@@ -2781,11 +2782,11 @@ ModelManager::UpdateCheckResult ModelManager::check_for_model_updates(const std:
             }
 
             const RegistryRepository latest =
-                registry.fetch_repository(entry.repo_id);
+                update_repository_override_ ? update_repository_override_(entry.repo_id) : registry.fetch_repository(entry.repo_id);
 
             if (latest.snapshot_id.empty()) {
                 for (const auto& model_name : entry.model_names) {
-                    std::string pub_name = get_public_model_name(model_name);
+                    const auto& pub_name = candidate_public_names.at(model_name);
                     result.failed_models[pub_name] = "Empty snapshot returned from registry";
                 }
                 continue;
@@ -2949,11 +2950,8 @@ ModelManager::UpdateCheckResult ModelManager::check_for_model_updates(const std:
         } catch (const RegistryNotFoundError& e) {
             LOG(DEBUG, "ModelManager")
                 << e.what() << ", skipping update check" << std::endl;
-            std::lock_guard<std::mutex> lock(models_cache_mutex_);
             for (const auto& model_name : entry.model_names) {
-                const auto pub_it = canonical_public_names_.find(model_name);
-                std::string pub_name = pub_it != canonical_public_names_.end() ? pub_it->second : model_name;
-                result.failed_models[pub_name] = e.what();
+                result.failed_models[candidate_public_names.at(model_name)] = e.what();
             }
 
         } catch (const std::exception& e) {
@@ -2962,17 +2960,19 @@ ModelManager::UpdateCheckResult ModelManager::check_for_model_updates(const std:
                 << entry.repo_id
                 << " on " << entry.registry_source
                 << ": " << e.what() << std::endl;
-            std::lock_guard<std::mutex> lock(models_cache_mutex_);
             for (const auto& model_name : entry.model_names) {
-                const auto pub_it = canonical_public_names_.find(model_name);
-                std::string pub_name = pub_it != canonical_public_names_.end() ? pub_it->second : model_name;
-                result.failed_models[pub_name] = e.what();
+                result.failed_models[candidate_public_names.at(model_name)] = e.what();
             }
         }
     }
 
     {
         std::lock_guard<std::mutex> lock(models_cache_mutex_);
+        if (!cache_valid_ || cache_revision_ != candidate_revision) {
+            for (const auto& [name, public_name] : candidate_public_names)
+                result.failed_models[public_name] = "Model metadata changed during update check; retry";
+            return result;
+        }
 
         for (auto& [name, info] : models_cache_) {
             if (determination_tracker.is_verified(name)) {
@@ -3480,6 +3480,11 @@ json ModelManager::sync_models(const std::vector<std::string>& target_models, bo
     auto admission = admit_acquisition("model-sync-request");
     if (dry_run) {
         LOG(INFO, "ModelManager") << "Checking models for sync/update (dry-run)..." << std::endl;
+        uint64_t preview_revision;
+        {
+            auto lock = lock_current_models_cache();
+            preview_revision = cache_revision_;
+        }
         UpdateCheckResult check_res = check_for_model_updates(target_models);
 
         std::vector<std::string> models_to_update = check_res.updated_models;
@@ -3487,30 +3492,28 @@ json ModelManager::sync_models(const std::vector<std::string>& target_models, bo
         std::map<std::string, std::string> failed_models = check_res.failed_models;
         int checked_count = check_res.up_to_date_models.size() + check_res.updated_models.size();
 
-        if (!target_models.empty()) {
+        {
+            auto lock = lock_current_models_cache();
+            if (cache_revision_ != preview_revision) {
+                for (const auto& name : target_models) failed_models[name] = "Model metadata changed during sync preview; retry";
+                for (const auto& name : models_to_update) failed_models[name] = "Model metadata changed during sync preview; retry";
+                for (const auto& name : models_up_to_date) failed_models[name] = "Model metadata changed during sync preview; retry";
+                if (failed_models.empty()) failed_models["catalog"] = "Model metadata changed during sync preview; retry";
+                models_to_update.clear(); models_up_to_date.clear(); checked_count = 0;
+            }
             for (const auto& input_name : target_models) {
-                std::string canonical_name = resolve_model_name(input_name);
-                std::string pub_name = get_public_model_name(canonical_name);
-                if (failed_models.count(pub_name) || failed_models.count(input_name)) {
-                    continue;
-                }
-                ModelInfo info;
-                bool found = false;
-                {
-                    std::lock_guard<std::mutex> lock(models_cache_mutex_);
-                    auto it = models_cache_.find(canonical_name);
-                    if (it != models_cache_.end()) {
-                        info = it->second;
-                        found = true;
-                    }
-                }
-
-                if (!found) {
+                auto alias = public_model_aliases_.find(input_name);
+                const auto key = alias != public_model_aliases_.end() ? alias->second : input_name;
+                const auto public_name = canonical_public_names_.find(key);
+                if (failed_models.count(input_name) ||
+                    (public_name != canonical_public_names_.end() && failed_models.count(public_name->second))) continue;
+                const auto found = models_cache_.find(key);
+                if (found == models_cache_.end()) {
                     failed_models[input_name] = "Model not found or registered";
                     continue;
                 }
 
-                if (!info.downloaded) {
+                if (!found->second.downloaded) {
                     failed_models[input_name] = "Model is not downloaded";
                     continue;
                 }
@@ -5169,10 +5172,7 @@ void ModelManager::unregister_user_model(const std::string& model_name) {
 
 
 bool ModelManager::is_model_downloaded(const std::string& model_name) {
-    // Build cache if needed
-    build_cache();
-    // O(1) lookup - download status is in cache
-    std::lock_guard<std::mutex> lock(models_cache_mutex_);
+    auto lock = lock_current_models_cache();
     auto alias_it = public_model_aliases_.find(model_name);
     const std::string canonical_name = alias_it != public_model_aliases_.end()
         ? alias_it->second
@@ -7673,28 +7673,20 @@ ModelInfo ModelManager::get_model_info(const std::string& model_name) {
 }
 
 std::string ModelManager::resolve_model_name(const std::string& model_name) {
-    build_cache();
-
-    std::lock_guard<std::mutex> lock(models_cache_mutex_);
+    auto lock = lock_current_models_cache();
     auto it = public_model_aliases_.find(model_name);
     return it != public_model_aliases_.end() ? it->second : model_name;
 }
 
 std::string ModelManager::get_public_model_name(const std::string& model_name) {
-    build_cache();
-
-    std::lock_guard<std::mutex> lock(models_cache_mutex_);
+    auto lock = lock_current_models_cache();
     auto it = canonical_public_names_.find(model_name);
     return it != canonical_public_names_.end() ? it->second : model_name;
 }
 
 bool ModelManager::model_exists(const std::string& model_name) {
-    // Build cache if needed
-    build_cache();
-
-    // O(1) lookup in cache
     {
-        std::lock_guard<std::mutex> lock(models_cache_mutex_);
+        auto lock = lock_current_models_cache();
         auto alias_it = public_model_aliases_.find(model_name);
         std::string canonical_name = alias_it != public_model_aliases_.end() ? alias_it->second : model_name;
         if (models_cache_.find(canonical_name) != models_cache_.end()) {
@@ -7986,12 +7978,7 @@ ModelInfo ModelManager::get_model_info_unfiltered(const std::string& model_name)
 }
 
 std::string ModelManager::get_model_filter_reason(const std::string& model_name) {
-    // Ensure cache is built (this populates filtered_out_models_)
-    build_cache();
-
-    // Look up in the filtered-out models cache
-    // This is populated by filter_models_by_backend() during cache building
-    std::lock_guard<std::mutex> lock(models_cache_mutex_);
+    auto lock = lock_current_models_cache();
 
     auto alias_it = public_model_aliases_.find(model_name);
     std::string canonical_name = alias_it != public_model_aliases_.end() ? alias_it->second : model_name;
@@ -8005,8 +7992,7 @@ std::string ModelManager::get_model_filter_reason(const std::string& model_name)
 }
 
 std::set<std::string> ModelManager::recipes_with_all_models_filtered() {
-    build_cache();
-    std::lock_guard<std::mutex> lock(models_cache_mutex_);
+    auto lock = lock_current_models_cache();
     return recipes_all_models_filtered_;
 }
 

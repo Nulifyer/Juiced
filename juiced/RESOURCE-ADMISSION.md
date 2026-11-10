@@ -341,6 +341,13 @@ revision and discards results if that revision changes. Provider-specific revisi
 checks remain at insertion. Native projection and alias publication stay under the
 existing cache owner.
 
+Model existence, download state, aliases and filtering observations use that same
+final-validated cache lock. Sync previews resolve names and inspect download state
+under one current snapshot. Registry update checks capture candidate names and the
+cache revision before remote work. A changed revision rejects those results with
+a retry message before updating cached flags or advertising an update for a new
+definition under the same name.
+
 Options/profile writes capture the recipe, selection and registry defaults after
 discovery, with per-model mutation and file-writer ownership. Registration cannot
 change that captured definition during persistence. Nested changes defer model-
