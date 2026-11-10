@@ -232,6 +232,8 @@ ResourceAdmission::Lease Router::admit_worker(const WrappedServer& server, Resou
     }
     ResourceAdmission::Work work;
     work.config_revision = policy.revision;
+    if (operation == ResourceAdmission::Operation::Load)
+        work.model_cache_root = model_manager_->model_cache_root();
     if (protected_mode && request) work.workload = request->workload;
     else if (protected_mode && operation == ResourceAdmission::Operation::Request)
         throw AdmissionError("workload_unqualified", "Protected requests require a resolved provider envelope");
@@ -278,7 +280,11 @@ ResourceAdmission::Lease Router::admit_worker(const WrappedServer& server, Resou
     work.cancelled = [native_cancel, http_cancel, intent_cancelled] {
         return native_cancel.cancelled() || (http_cancel && http_cancel()) || (intent_cancelled && intent_cancelled());
     };
-    return admission_.acquire(std::move(work));
+    const auto cache_root = work.model_cache_root;
+    auto lease = admission_.acquire(std::move(work));
+    if (!cache_root.empty() && model_manager_->model_cache_root() != cache_root)
+        throw AdmissionError("model_cache_changed", "Model cache storage changed before admission; retry the load", 503);
+    return lease;
 }
 
 void Router::set_cloud_registry(CloudProviderRegistry* registry) {

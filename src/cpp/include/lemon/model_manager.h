@@ -355,6 +355,7 @@ public:
 
     // Clean up orphaned files from multi-repo models downloaded in old layout
     nlohmann::json cleanup_orphaned_cache(bool dry_run);
+    std::string model_cache_root() const;
 
     // Get model info by name
     ModelInfo get_model_info(const std::string& model_name);

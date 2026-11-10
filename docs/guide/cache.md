@@ -99,3 +99,20 @@ copy. Registered or active artifacts can block reclamation. This inventory is
 separate from downloaded source weights and prompt snapshots.
 
 Use [backup and restore](maintenance.md) before moving persistent data.
+
+## Clean misplaced companion files
+
+The CLI command `lemonade cleanup-cache --dry-run` previews legacy companion files
+stored in the wrong repository directory. Run `lemonade cleanup-cache` to remove
+eligible entries. This operation does not clear the entire download cache or saved
+prompt snapshots. Reported bytes are apparent sizes, not guaranteed free disk space.
+
+Unload affected models and finish downloads or metadata changes before cleanup.
+An unresolved worker stop or retained preparation writer can also block deletion.
+Review unknown custom arguments if cleanup reports `artifact_reference_unknown`.
+Use absolute paths for declared template, adapter or control-vector files.
+Preview again before retrying after a conflict or filesystem error.
+
+Changing the model directory also requires affected workers and accepted mutations
+to drain. If settings were saved but application failed, retry after resolving the
+reported ownership failure. Juiced preserves the old directory and its files.

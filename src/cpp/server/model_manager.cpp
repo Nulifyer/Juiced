@@ -5196,7 +5196,12 @@ bool ModelManager::backend_self_manages_downloads(const std::string& recipe) con
 }
 
 ResourceAdmission::Lease ModelManager::admit_acquisition(const std::string& model) {
-    return resource_admission_ ? resource_admission_->acquire_management(model, "model-acquisition") : ResourceAdmission::Lease{};
+    if (!resource_admission_) return {};
+    const auto root = model_cache_root();
+    auto lease = resource_admission_->acquire_management(model, "model-acquisition", root);
+    if (model_cache_root() != root)
+        throw AdmissionError("model_cache_changed", "Model cache storage changed before acquisition; retry against its current root", 503);
+    return lease;
 }
 
 void ModelManager::download_registered_model(const ModelInfo& info, bool do_not_upgrade, DownloadProgressCallback progress_callback) {
@@ -7003,6 +7008,9 @@ void ModelManager::validate_registration_artifacts(const json& definition, const
         // Missing external paths retain their existing registration semantics.
         if ((path_inside(path, root) || path_inside(path, prepared_artifact_directory_)) && !fs::is_regular_file(path))
             throw ModelRegistrationConflict("The managed artifact no longer exists");
+        if (definition.value("source", "") == "local_path" && path_inside(path, path_from_utf8(get_hf_cache_dir())) &&
+            !fs::is_regular_file(path) && !fs::is_directory(path))
+            throw ModelRegistrationConflict("The managed model cache artifact no longer exists");
     }
 }
 bool ModelManager::artifact_referenced_locked(const std::string& model, const fs::path& file, const json& registrations) {
@@ -7584,78 +7592,154 @@ void ModelManager::delete_model(const std::string& model_name) {
     remove_model_from_cache(canonical_model_name);
 }
 
+std::string ModelManager::model_cache_root() const {
+    return path_to_utf8(fs::weakly_canonical(path_from_utf8(get_hf_cache_dir())));
+}
+
 json ModelManager::cleanup_orphaned_cache(bool dry_run) {
-    build_cache();
-
-    std::string hf_cache = get_hf_cache_dir();
-    json orphaned_files = json::array();
-    size_t total_bytes = 0;
-
-    std::lock_guard<std::mutex> lock(models_cache_mutex_);
-
-    // Find multi-repo models where non-main checkpoints reference different repos
-    for (const auto& [name, info] : models_cache_) {
-        if (info.checkpoints.size() <= 1) continue;
-
-        std::string main_repo = checkpoint_to_repo_id(info.checkpoint("main"));
-        std::string main_cache = hf_cache + "/" + repo_id_to_cache_dir_name(main_repo, effective_registry_source(info));
-
-        for (const auto& [type, checkpoint] : info.checkpoints) {
-            if (type == "main" || type == "npu_cache") continue;
-
-            std::string cp_repo = checkpoint_to_repo_id(checkpoint);
-            if (cp_repo == main_repo) continue;  // Same repo, no orphan possible
-
-            std::string variant = checkpoint_to_variant(checkpoint);
-            if (variant.empty()) continue;
-
-            // Check if file exists in main repo dir (orphaned location)
-            fs::path main_cache_fs = path_from_utf8(main_cache);
-            if (!fs::exists(main_cache_fs)) continue;
-
-            // Search for the variant file in the main repo's cache
-            for (const auto& entry : fs::recursive_directory_iterator(main_cache_fs)) {
-                if (!entry.is_regular_file()) continue;
-
-                std::string filename = entry.path().filename().string();
-                // Match by filename for simple variants, or by path suffix for nested variants
-                bool matches = (filename == variant) ||
-                    (variant.find('/') != std::string::npos &&
-                     path_to_utf8(entry.path()).find(variant) != std::string::npos);
-
-                if (matches) {
-                    size_t file_size = fs::file_size(entry.path());
-                    std::string file_path = path_to_utf8(entry.path());
-
-                    orphaned_files.push_back({
-                        {"path", file_path},
-                        {"size", file_size},
-                        {"model", name},
-                        {"type", type},
-                        {"belongs_to", cp_repo}
-                    });
-                    total_bytes += file_size;
-
-                    if (!dry_run) {
-                        LOG(INFO, "ModelManager") << "Removing orphaned file: " << file_path << std::endl;
-                        fs::remove(entry.path());
-                    }
-                    break;  // Found the orphan for this checkpoint
+    if (!resource_admission_)
+        throw AdmissionError("admission_unavailable", "Model cache cleanup requires native resource ownership", 503);
+    auto operation = resource_admission_->write_scope("model-cache-cleanup");
+    for (;;) {
+        build_cache();
+        const auto root = path_from_utf8(model_cache_root());
+        if (removal_publication_barrier_) removal_publication_barrier_("cache-cleanup-root");
+        auto admission = resource_admission_->acquire_management("model-cache",
+            dry_run ? "model-cache-preview" : "model-cache-cleanup", path_to_utf8(root));
+        if (path_from_utf8(model_cache_root()) != root) continue;
+        std::unique_lock<std::recursive_mutex> references(model_references_mutex_);
+        const auto registrations = read_user_models();
+        std::map<std::string, ModelInfo> models;
+        std::vector<RecipeOptions> option_sets;
+        std::vector<fs::path> referenced_paths;
+        {
+            std::lock_guard<std::mutex> cache(models_cache_mutex_);
+            if (!cache_valid_) continue;
+            models = models_cache_;
+            for (const auto& [name, info] : models_cache_)
+                for (const auto& [role, path] : info.resolved_paths)
+                    if (!path.empty()) referenced_paths.push_back(path_from_utf8(path));
+            for (const auto& [name, definition] : server_models_.items()) {
+                if (models.count(name)) continue;
+                auto info = model_info_from_def(definition); info.model_name = name;
+                models.emplace(name, std::move(info));
+            }
+            for (const auto& [name, definition] : registrations.items()) {
+                auto info = model_info_from_def(definition); info.model_name = "user." + name;
+                models["user." + name] = std::move(info);
+            }
+            for (auto& [name, info] : models) {
+                const auto id = cache_key_to_canonical_id(name);
+                info.recipe_options = build_recipe_options(info, registry_recipe_options_locked(name), id, recipe_options_);
+                option_sets.push_back(info.recipe_options);
+                option_sets.push_back(apply_execution_profile_locked(name, info).recipe_options);
+            }
+            for (const auto& [name, state] : execution_profiles_.items()) {
+                const auto profiles = state.value("profiles", json::object());
+                for (const auto& [id, profile] : profiles.items())
+                    option_sets.emplace_back(profile.at("recipe").get<std::string>(), profile.value("options", json::object()));
+            }
+        }
+        size_t visited = 0;
+        const auto observe = [&] {
+            if (++visited > 10000) throw AdmissionError("cache_cleanup_scan_limit", "Too many catalog, snapshot or candidate entries for one cleanup request", 503);
+            if (admission.deadline_expired()) throw AdmissionError("completion_deadline_exceeded", "Cache cleanup exceeded its completion deadline", 504);
+        };
+        for (auto& [name, info] : models) {
+            observe();
+            if ((info.recipe == "cloud" || info.recipe == "flm") && info.source != "local_path" && info.source != "local_upload") continue;
+            if (is_model_collection_recipe(info.recipe)) {
+                const auto repo = checkpoint_to_repo_id(info.checkpoint());
+                if (!repo.empty()) referenced_paths.push_back(root / repo_id_to_cache_dir_name(repo, effective_registry_source(info)));
+                continue;
+            }
+            resolve_all_model_paths(info);
+            for (const auto& [role, path] : info.resolved_paths) {
+                if (path.empty()) continue;
+                referenced_paths.push_back(path_from_utf8(path));
+                std::set<fs::path> shards;
+                collect_registered_shards(path_from_utf8(path), root, shards);
+                referenced_paths.insert(referenced_paths.end(), shards.begin(), shards.end());
+            }
+        }
+        for (const auto& options : option_sets) {
+            observe();
+            const auto inputs = backends::ops_for(options.get_recipe())->declared_file_inputs(options);
+            if (!inputs) throw AdmissionError("artifact_reference_unknown", "Runtime " + options.get_recipe() + " has unqualified file references; review its arguments before cache cleanup", 409);
+            for (const auto& [role, path] : *inputs) {
+                if (!path_from_utf8(path).is_absolute())
+                    throw AdmissionError("artifact_reference_unknown", "Use an absolute declared file input before cache cleanup", 409);
+                referenced_paths.push_back(path_from_utf8(path));
+            }
+        }
+        const auto referenced = [&](const fs::path& candidate) {
+            return std::any_of(referenced_paths.begin(), referenced_paths.end(), [&](const auto& path) {
+                return same_artifact(candidate, path) || (fs::is_directory(path) && path_inside(candidate, path));
+            });
+        };
+        struct Candidate {
+            fs::path path, link_target;
+            fs::file_time_type modified;
+            uintmax_t bytes;
+            json record;
+        };
+        std::vector<Candidate> candidates;
+        std::set<fs::path> seen;
+        for (const auto& [name, info] : models) {
+            observe();
+            if (!info.source.empty() || info.recipe == "cloud" || info.recipe == "flm" || is_model_collection_recipe(info.recipe)) continue;
+            const auto main_repo = checkpoint_to_repo_id(info.checkpoint());
+            if (main_repo.empty() || info.checkpoints.size() <= 1) continue;
+            const auto directory = root / repo_id_to_cache_dir_name(main_repo, effective_registry_source(info));
+            if (fs::is_symlink(directory) || !fs::is_directory(directory) || !path_inside(directory, root)) continue;
+            std::vector<fs::path> layouts{directory};
+            const auto snapshots = directory / "snapshots";
+            if (!fs::is_symlink(snapshots) && fs::is_directory(snapshots))
+                for (const auto& entry : fs::directory_iterator(snapshots)) {
+                    observe();
+                    if (!entry.is_symlink() && entry.is_directory()) layouts.push_back(entry.path());
+                }
+            for (const auto& [role, checkpoint] : info.checkpoints) {
+                if (role == "main" || role == "npu_cache") continue;
+                const auto repo = checkpoint_to_repo_id(checkpoint);
+                const auto variant = path_from_utf8(checkpoint_to_variant(checkpoint));
+                if (repo.empty() || repo == main_repo || variant.empty() || variant.is_absolute()) continue;
+                if (std::any_of(variant.begin(), variant.end(), [](const auto& part) { return part == ".." || part == "."; })) continue;
+                for (const auto& layout : layouts) {
+                    observe();
+                    const auto path = (layout / variant).lexically_normal();
+                    if (!seen.insert(path).second || !fs::is_regular_file(path) || !path_inside(path, directory) || referenced(path)) continue;
+                    const auto bytes = fs::file_size(path);
+                    candidates.push_back({path, fs::is_symlink(path) ? fs::read_symlink(path) : fs::path{}, fs::last_write_time(path), bytes,
+                        {{"path", path_to_utf8(path)}, {"size", bytes}, {"model", name}, {"type", role}, {"belongs_to", repo}}});
                 }
             }
         }
+        // Keep the reference decision through deletion without retaining the cache lock.
+        if (removal_publication_barrier_) removal_publication_barrier_("cache-cleanup");
+        json files = json::array(); uintmax_t bytes = 0;
+        try {
+            if (!dry_run && model_removal_guard_) model_removal_guard_("");
+            for (const auto& candidate : candidates) {
+                if (!dry_run) {
+                    if (admission.deadline_expired()) throw AdmissionError("completion_deadline_exceeded", "Cache cleanup exceeded its completion deadline", 504);
+                    if (model_removal_guard_) model_removal_guard_(candidate.record.at("model").get<std::string>());
+                    const auto target = fs::is_symlink(candidate.path) ? fs::read_symlink(candidate.path) : fs::path{};
+                    if (target != candidate.link_target || fs::file_size(candidate.path) != candidate.bytes || fs::last_write_time(candidate.path) != candidate.modified)
+                        throw AdmissionError("artifact_reference_changed", "A cleanup candidate changed; review the cache again before deleting it", 409);
+                    if (removal_publication_barrier_) removal_publication_barrier_("cache-cleanup-remove");
+                    if (!fs::remove(candidate.path)) continue;
+                }
+                files.push_back(candidate.record); bytes += candidate.bytes;
+            }
+        } catch (...) {
+            invalidate_models_cache();
+            throw;
+        }
+        if (!dry_run && !files.empty()) invalidate_models_cache();
+        return {{"orphaned_files", std::move(files)}, {"total_bytes", bytes}, {"dry_run", dry_run},
+                {"bytes_are_estimate", true}, {"planning_entries", visited}};
     }
-
-    json result;
-    result["orphaned_files"] = orphaned_files;
-    result["total_bytes"] = total_bytes;
-    result["dry_run"] = dry_run;
-
-    LOG(INFO, "ModelManager") << "Cache cleanup: found " << orphaned_files.size()
-                << " orphaned file(s), " << (total_bytes / (1024 * 1024)) << " MB"
-                << (dry_run ? " (dry run)" : " (deleted)") << std::endl;
-
-    return result;
 }
 
 ModelInfo ModelManager::get_model_info(const std::string& model_name) {

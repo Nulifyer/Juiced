@@ -805,7 +805,16 @@ std::unique_ptr<WrappedServer> create(const BackendContext& ctx) {
 }
 
 const BackendSpec* spec() { return make_spec<SDServer>(descriptor); }
-const BackendOps* ops() { return default_backend_ops(); }
+class SDCppOps : public BackendOps {
+public:
+    std::optional<std::map<std::string, std::string>> argument_file_inputs(const RecipeOptions& options) const override {
+        const auto arguments = options.to_resolved_json().value("sdcpp_args", std::string());
+        for (const auto& token : utils::parse_custom_args(arguments))
+            if (token != "--diffusion-fa" && token != "--offload-to-cpu") return std::nullopt;
+        return std::map<std::string, std::string>{};
+    }
+};
+const BackendOps* ops() { return single_ops<SDCppOps>(); }
 }  // namespace sdcpp
 }  // namespace backends
 }  // namespace lemon

@@ -6,9 +6,10 @@
 #include <array>
 #include <cctype>
 #include <filesystem>
-#include <vector>
-#include <string>
 #include <cstdlib>
+#include <mutex>
+#include <string>
+#include <vector>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -21,8 +22,8 @@ namespace fs = std::filesystem;
 namespace lemon::utils {
 
 // ---------------------------------------------------------------------------
-// Lemonade cache dir and models dir — set once at startup before any
-// concurrent access, then read-only from that point on.
+// Cache/config overrides are startup-owned. The mutable model root uses its
+// own lock so resolution can perform filesystem work after copying the setting.
 // ---------------------------------------------------------------------------
 
 namespace {
@@ -40,6 +41,7 @@ std::string& config_dir_override() {
 } // namespace
 
 static std::string g_models_dir;
+static std::mutex models_dir_mutex;
 
 // Platform abstraction instance (created on first use)
 static PathPlatform* platform() {
@@ -56,6 +58,7 @@ void set_config_dir(const std::string& dir) {
 }
 
 void set_models_dir(const std::string& dir) {
+    std::lock_guard lock(models_dir_mutex);
     g_models_dir = dir;
 }
 
@@ -394,8 +397,14 @@ void migrate_legacy_paths(const std::string& cache_dir,
 }
 
 std::string get_hf_cache_dir() {
-    if (!g_models_dir.empty() && g_models_dir != "auto") {
-        fs::path p = path_from_utf8(g_models_dir);
+    std::string models_dir;
+    { std::lock_guard lock(models_dir_mutex); models_dir = g_models_dir; }
+    return resolve_models_dir(models_dir);
+}
+
+std::string resolve_models_dir(const std::string& models_dir) {
+    if (!models_dir.empty() && models_dir != "auto") {
+        fs::path p = path_from_utf8(models_dir);
         if (p.is_relative()) {
             p = path_from_utf8(get_executable_dir()) / p;
         }

@@ -1060,6 +1060,16 @@ public:
         return BackendOps::resolve_checkpoint_path(info, ctx);
     }
 
+    std::optional<std::map<std::string, std::string>> argument_file_inputs(const RecipeOptions& options) const override {
+        const auto settings = options.to_resolved_json();
+        const auto parsed = LlamaCppServer::execution_argument_inputs(settings.value("llamacpp_args", std::string()));
+        if (!parsed.at("unknown").empty()) return std::nullopt;
+        auto files = parsed.at("files").get<std::map<std::string, std::string>>();
+        const auto environment_template = utils::get_environment_variable_utf8("LLAMA_ARG_CHAT_TEMPLATE_FILE");
+        if (!environment_template.empty()) files["LLAMA_ARG_CHAT_TEMPLATE_FILE"] = environment_template;
+        return files;
+    }
+
     std::string find_imported_checkpoint(const std::string& import_dir) const override {
         // The primary artifact is the (non-mmproj) GGUF file.
         return resolve_gguf_path(import_dir, "");

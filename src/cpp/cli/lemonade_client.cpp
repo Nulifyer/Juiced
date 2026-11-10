@@ -1168,7 +1168,7 @@ int LemonadeClient::cleanup_cache(bool dry_run) const {
         size_t total_bytes = result.value("total_bytes", 0);
 
         if (orphaned.empty()) {
-            std::cout << "No orphaned files found. Cache is clean." << std::endl;
+            std::cout << "No eligible obsolete cache files found." << std::endl;
             return 0;
         }
 
@@ -1183,12 +1183,13 @@ int LemonadeClient::cleanup_cache(bool dry_run) const {
 
         double total_mb = total_bytes / (1024.0 * 1024.0);
         if (dry_run) {
-            std::cout << "\nWould free " << std::fixed << std::setprecision(1) << total_mb << " MB from "
-                      << orphaned.size() << " file(s). Run without --dry-run to delete." << std::endl;
+            std::cout << "\nWould remove " << orphaned.size() << " file entries, " << std::fixed << std::setprecision(1)
+                      << total_mb << " MB apparent size. Run without --dry-run to delete." << std::endl;
         } else {
-            std::cout << "\nFreed " << std::fixed << std::setprecision(1) << total_mb << " MB from "
-                      << orphaned.size() << " file(s)." << std::endl;
+            std::cout << "\nRemoved " << orphaned.size() << " file entries, " << std::fixed << std::setprecision(1)
+                      << total_mb << " MB apparent size." << std::endl;
         }
+        std::cout << "Physical reclaimed space can differ from file size." << std::endl;
 
         return 0;
     } catch (const std::exception& e) {

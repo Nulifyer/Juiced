@@ -44,7 +44,7 @@ void JuicedService::guard_model_removal_locked(const std::string& model) const {
   for (const auto& [id, job] : state_.at("preparations").items()) {
     if (!job.value("pending", false)) continue;
     const auto source = job.find("model");
-    if (source == job.end() || !source->is_string() || source->get_ref<const std::string&>().empty() ||
+    if (model.empty() || source == job.end() || !source->is_string() || source->get_ref<const std::string&>().empty() ||
         bare(source->get<std::string>()) == bare(model))
       throw AdmissionError("preparation_cleanup_pending", "Resolve retained writer ownership before removing its source model", 409);
   }

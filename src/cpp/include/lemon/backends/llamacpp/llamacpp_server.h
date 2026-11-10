@@ -13,6 +13,7 @@ class LlamaCppServer : public WrappedServer, public IEmbeddingsServer, public IR
 public:
     bool observes_inference_completion() const override { return true; }
     static InstallParams get_install_params(const std::string& backend, const std::string& version);
+    static json execution_argument_inputs(const std::string& arguments);
 
 
     LlamaCppServer(const std::string& log_level,
@@ -64,7 +65,6 @@ public:
 
 private:
     friend struct LlamaCppInputIdentityTestHook;
-    static json execution_argument_inputs(const std::string& arguments);
     static json execution_environment_inputs(const std::map<std::string, std::string>& environment, const std::string& directory);
 
     // llama-server echoes the local .gguf path it was launched with (`-m <path>`)

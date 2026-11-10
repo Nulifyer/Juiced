@@ -6,6 +6,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -50,6 +51,7 @@ public:
         uint64_t request_id = 0;
         std::vector<int> execution_slots;
         std::optional<int> requested_slot;
+        std::string model_cache_root;
     };
     struct Policy {
         uint64_t revision;
@@ -104,6 +106,7 @@ public:
         std::weak_ptr<WriterRecord> previous_;
     };
     WriteScope write_scope(const std::string& owner) const;
+    void reserve_model_cache_change(const std::set<std::string>& roots) const;
     void maintenance(bool requested);
     // Drained participating operations do not prove that idle workers or external
     // and prior-manager writers stopped; maintenance must validate those owners.
@@ -123,7 +126,7 @@ public:
     Lease acquire_ingress(uint64_t bytes, bool control = false);
     // Copies share this ledger's state. Native management owners keep a view so
     // shutdown and configuration transitions remain authoritative after binding.
-    Lease acquire_management(const std::string& target, const std::string& service);
+    Lease acquire_management(const std::string& target, const std::string& service, const std::string& model_cache_root = {});
     void pause(bool paused);
     void shutdown();
     void reconcile_stopped_generation(uint64_t generation);

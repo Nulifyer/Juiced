@@ -6606,11 +6606,17 @@ void Server::handle_cleanup_cache(const httplib::Request& req, httplib::Response
 
         auto result = model_manager_->cleanup_orphaned_cache(dry_run);
         res.set_content(result.dump(), "application/json");
+    } catch (const AdmissionError& error) {
+        res.status = error.status;
+        if (error.retry_after()) res.set_header("Retry-After", std::to_string(error.retry_after()));
+        res.set_content(error.to_json().dump(), "application/json");
+    } catch (const json::exception& error) {
+        res.status = 400;
+        res.set_content(json{{"error", {{"code", "invalid_request"}, {"message", error.what()}}}}.dump(), "application/json");
     } catch (const std::exception& e) {
         LOG(ERROR, "Server") << "ERROR in handle_cleanup_cache: " << e.what() << std::endl;
         res.status = 500;
-        auto error_response = create_model_error("", e);
-        res.set_content(error_response.dump(), "application/json");
+        res.set_content(json{{"error", {{"code", "cache_cleanup_failed"}, {"message", e.what()}}}}.dump(), "application/json");
     }
 }
 
@@ -6783,6 +6789,15 @@ json Server::publish_config(std::function<json()> read_changes) {
     // Cloud publication holds the registry owner. Its no-op callback must not
     // wait on effects that can read that registry while loading a backend.
     if (has_effects) effects.lock();
+    const auto storage = changes.contains("models_dir") ? changes.at("models_dir") :
+        has_effects ? pending_config_effects_.value("models_dir", json()) : json();
+    if (changes.contains("models_dir") || !storage.is_null()) {
+        if (!storage.is_string()) throw std::invalid_argument("models_dir must be a string");
+        const auto current = model_manager_->model_cache_root();
+        const auto next = utils::path_to_utf8(fs::weakly_canonical(utils::path_from_utf8(
+            utils::resolve_models_dir(storage.get<std::string>()))));
+        if (next != current) router_->admission_view().reserve_model_cache_change({current, next});
+    }
     auto result = config_->update_persisted([&] { return changes; }, [this](const json& updated) {
         if (config_dir_.empty()) return;
         json user_cfg = ConfigFile::load_raw(config_dir_);
@@ -7322,6 +7337,7 @@ void Server::handle_config_set(const httplib::Request& req, httplib::Response& r
         res.status = error.status;
         res.set_content(ErrorResponse::create(error.what(), ErrorType::CONFIGURATION_ERROR,
             {{"code", error.code}, {"retry_after", 1}}).dump(), "application/json");
+        if (error.retry_after()) res.set_header("Retry-After", std::to_string(error.retry_after()));
     } catch (const nlohmann::json::parse_error& e) {
         res.status = 400;
         nlohmann::json error = {{"error", "Invalid JSON in request body"}};

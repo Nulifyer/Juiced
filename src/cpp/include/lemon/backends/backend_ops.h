@@ -1,5 +1,6 @@
 #pragma once
 
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -41,6 +42,9 @@ struct CheckpointResolveContext {
 class BackendOps {
 public:
     virtual ~BackendOps() = default;
+
+    // nullopt means opaque arguments prevent a safe artifact-reference decision.
+    std::optional<std::map<std::string, std::string>> declared_file_inputs(const RecipeOptions& options) const;
 
     virtual json execution_compatibility(const ModelInfo& info, const std::string& recipe, const std::string& backend) const {
         (void)backend;
@@ -168,6 +172,8 @@ public:
         (void)default_install_command;
         return std::nullopt;
     }
+protected:
+    virtual std::optional<std::map<std::string, std::string>> argument_file_inputs(const RecipeOptions& options) const;
 };
 
 // Shared default ops instance for backends that override nothing.

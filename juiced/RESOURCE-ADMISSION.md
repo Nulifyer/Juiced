@@ -329,6 +329,39 @@ This covers participating native registrations and owned upload cleanup, not a
 complete immutable model-revision lifecycle or uncooperative external writers.
 Pending import and preparation writers veto native removal of their source model.
 
+Model-cache cleanup enters the existing writer and resource-admission owners.
+Load and acquisition tickets bind the canonical model-cache root, retaining that
+reference while resident or uncertain. Cleanup rejects if another accepted writer,
+queued load, active acquisition or worker holds the affected root. Preview also
+holds metadata stable, while permitting resident workers. Protected mode still
+rejects unqualified physical management work.
+
+ModelManager captures registrations, built-ins, selected settings and saved
+profiles under its reference owner. It releases the shared model-cache mutex before
+resolving paths, scanning or deleting files. References include checkpoint files,
+directories, GGUF shards, configured provider directories, runtime overrides and
+backend-declared argument files. Opaque arguments or
+relative declared inputs reject cleanup with `artifact_reference_unknown`.
+Only exact legacy auxiliary paths in repository roots or immediate snapshot
+revisions are candidates. Blob directories and filename substrings are excluded.
+Deletion rechecks each candidate's size, modification time and symlink target.
+Retained unresolved preparation writers veto destructive cleanup.
+
+Changing `models_dir` reserves both canonical roots through configuration
+persistence and effects. Active references prevent that transition. A failed effect
+reports saved intent separately from application. Later retries, including other
+settings requests, must reacquire storage ownership before applying pending effects.
+Failed persistence preserves the previous configuration and releases the reservation.
+New registrations cannot reference a missing file inside the managed cache.
+Admission observations expose cache references, inspections, cleanups, root changes
+and uncertainty without publishing private filesystem paths.
+
+The cleanup plan has a 10,000-entry ceiling and checks its completion deadline
+between entries. These checks do not bound a blocking filesystem call, backend path
+resolver or shard traversal. Apparent file sizes do not prove physical reclaimed
+space. External writers, moved control roots and complete management resource
+qualification remain unfinished P1 work.
+
 Cache-profile qualification parses the native slot-save argument and compares its
 filesystem directory with Juiced storage. It accepts quoted paths containing spaces
 or backslashes and rejects missing or duplicate storage flags. An unrelated option

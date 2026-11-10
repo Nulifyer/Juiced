@@ -2,7 +2,10 @@
 
 #include <algorithm>
 #include <filesystem>
+#include "lemon/backends/backend_descriptor_registry.h"
+#include "lemon/backends/backend_utils.h"
 #include "lemon/backends/hf_cache_util.h"
+#include "lemon/runtime_config.h"
 #include "lemon/utils/path_utils.h"
 
 namespace fs = std::filesystem;
@@ -12,6 +15,34 @@ namespace backends {
 
 using lemon::utils::path_from_utf8;
 using lemon::utils::path_to_utf8;
+
+std::optional<std::map<std::string, std::string>> BackendOps::declared_file_inputs(const RecipeOptions& options) const {
+    auto files = argument_file_inputs(options);
+    if (!files) return std::nullopt;
+    if (is_model_collection_recipe(options.get_recipe())) return files;
+    const auto* descriptor = descriptor_for(options.get_recipe());
+    if (!descriptor) return std::nullopt;
+    for (const auto& variant : descriptor->bin_variants) {
+        const auto path = BackendUtils::get_bin_config_value(options.get_recipe(), variant);
+        if (utils::looks_like_path(path)) (*files)["runtime:" + variant] = path;
+    }
+    if (const auto* config = RuntimeConfig::global()) {
+        for (const auto& [key, value] : descriptor->config_extra.items()) {
+            if (key.size() < 4 || key.substr(key.size() - 4) != "_dir") continue;
+            const auto path = config->backend_string(descriptor->effective_config_section(), key);
+            if (!path.empty()) (*files)[key] = path;
+        }
+    }
+    return files;
+}
+
+std::optional<std::map<std::string, std::string>> BackendOps::argument_file_inputs(const RecipeOptions& options) const {
+    const auto settings = options.to_resolved_json();
+    for (const auto& [key, value] : settings.items())
+        if (key != "merge_args" && key.size() >= 5 && key.substr(key.size() - 5) == "_args" && !value.is_null() &&
+            (!value.is_string() || !value.get<std::string>().empty())) return std::nullopt;
+    return std::map<std::string, std::string>{};
+}
 
 // Default checkpoint resolution: the shared remote-registry cache behavior. Locate the
 // requested variant (or auxiliary file like mmproj) within the active snapshot,

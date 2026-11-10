@@ -111,9 +111,10 @@ void migrate_legacy_paths(const std::string& cache_dir,
 
 /**
  * Set the models directory for HuggingFace model cache.
- * Must be called at startup with the value from config.json.
+ * Startup and serialized configuration effects publish the accepted value.
  */
 void set_models_dir(const std::string& dir);
+std::string resolve_models_dir(const std::string& dir);
 
 /**
  * Get the platform-specific default HuggingFace cache directory.

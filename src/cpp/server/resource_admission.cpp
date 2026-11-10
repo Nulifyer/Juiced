@@ -75,6 +75,10 @@ std::string operation_name(ResourceAdmission::Operation operation) {
         default: return "request";
     }
 }
+bool model_cache_control(const ResourceAdmission::Work& work) {
+    return work.operation == ResourceAdmission::Operation::Management &&
+        (work.service == "model-cache-cleanup" || work.service == "model-cache-preview");
+}
 }
 
 struct ResourceAdmission::State {
@@ -96,6 +100,7 @@ struct ResourceAdmission::State {
         bool uncertain = false;
         bool protected_mode = false;
         std::weak_ptr<WriterRecord> writer;
+        std::set<std::string> cache_change_roots;
     };
     mutable std::mutex mutex;
     std::condition_variable changed;
@@ -240,6 +245,9 @@ ResourceAdmission::WriteScope ResourceAdmission::write_scope(const std::string& 
         lock.unlock();
         return WriteScope(inherited);
     }
+    for (const auto& [id, held] : state_->active)
+        if (model_cache_control(held->work) || !held->cache_change_roots.empty())
+            throw AdmissionError("model_cache_busy", "Model cache inspection or cleanup is holding metadata references; retry this mutation afterward", 503);
     if (state_->configuration_pending)
         throw AdmissionError("admission_configuration_busy", "Admission configuration is changing; retry the state mutation", 409);
     if (state_->stopped)
@@ -257,6 +265,22 @@ ResourceAdmission::WriteScope ResourceAdmission::write_scope(const std::string& 
     record->id = entry->id;
     lock.unlock();
     return WriteScope(std::move(record));
+}
+void ResourceAdmission::reserve_model_cache_change(const std::set<std::string>& roots) const {
+    const auto writer = writer_context_.lock();
+    if (!writer || writer->state != state_) throw std::logic_error("Storage changes require an accepted native writer");
+    if (roots.empty() || roots.count("")) throw std::invalid_argument("Storage changes require native root identities");
+    std::lock_guard lock(state_->mutex); state_->prune_writes();
+    if (state_->stopped) throw AdmissionError("admission_paused", "Runtime admission is stopped", 503);
+    for (const auto& [id, held] : state_->active) {
+        if (id == writer->id) continue;
+        if (held->work.operation == Operation::Write || roots.count(held->work.model_cache_root))
+            throw AdmissionError("model_cache_busy", "Drain accepted writers and affected workers before changing model cache storage", 503);
+    }
+    for (const auto& held : state_->pending)
+        if (roots.count(held->work.model_cache_root))
+            throw AdmissionError("model_cache_busy", "Finish queued cache work before changing model cache storage", 503);
+    state_->active.at(writer->id)->cache_change_roots = roots;
 }
 void ResourceAdmission::maintenance(bool requested) {
     std::lock_guard<std::mutex> lock(state_->mutex);
@@ -433,8 +457,9 @@ ResourceAdmission::Lease ResourceAdmission::acquire_ingress(uint64_t bytes, bool
     return acquire(std::move(work));
 }
 
-ResourceAdmission::Lease ResourceAdmission::acquire_management(const std::string& target, const std::string& service) {
+ResourceAdmission::Lease ResourceAdmission::acquire_management(const std::string& target, const std::string& service, const std::string& model_cache_root) {
     Work work; work.model = target; work.service = service; work.operation = Operation::Management;
+    work.model_cache_root = model_cache_root;
     return acquire(std::move(work));
 }
 
@@ -496,9 +521,30 @@ ResourceAdmission::Lease ResourceAdmission::acquire(Work work) {
     if (state_->stopped || state_->paused) reject("admission_paused", "Runtime admission is paused", 503);
     if (entry->work.cancelled && entry->work.cancelled()) reject("request_cancelled", "Request disconnected before admission", 499);
     const auto& config = state_->config;
+    if (entry->work.operation == Operation::Management && entry->protected_mode)
+        reject("operation_unqualified", "Background acquisition and mutation envelopes are not qualified for protected admission", 503);
+    const auto cache_cleanup = [](const Work& work) {
+        return work.operation == Operation::Management && work.service == "model-cache-cleanup";
+    };
+    if (model_cache_control(entry->work) && entry->work.model_cache_root.empty())
+        throw std::invalid_argument("Model cache cleanup requires a native storage identity");
+    if (model_cache_control(entry->work))
+        for (const auto& [id, held] : state_->active)
+            if (held->work.operation == Operation::Write && (!writer || writer->state != state_ || writer->id != id))
+                reject("model_cache_busy", "Finish accepted metadata mutations before deleting model cache files", 503);
+    if (!entry->work.model_cache_root.empty()) {
+        const auto conflicts = [&](const auto& held) {
+            const bool owned_change = writer && writer->state == state_ && writer->id == held->id;
+            return (held->cache_change_roots.count(entry->work.model_cache_root) && !owned_change) ||
+                (held->work.model_cache_root == entry->work.model_cache_root &&
+                 (cache_cleanup(entry->work) || cache_cleanup(held->work)));
+        };
+        for (const auto& [id, held] : state_->active)
+            if (conflicts(held)) reject("model_cache_busy", "Model cache files are held by accepted work; finish cleanup or unload affected workers before retrying", 503);
+        for (const auto& held : state_->pending)
+            if (conflicts(held)) reject("model_cache_busy", "Model cache files are held by queued work; finish that work before cleanup", 503);
+    }
     if (entry->work.operation == Operation::Management) {
-        if (entry->protected_mode)
-            reject("operation_unqualified", "Background acquisition and mutation envelopes are not qualified for protected admission", 503);
         const bool referencing = entry->work.service == "runtime-reference";
         const bool mutating_runtime = entry->work.service == "runtime-install" || entry->work.service == "runtime-uninstall";
         if (referencing || mutating_runtime) {
@@ -745,9 +791,17 @@ json ResourceAdmission::snapshot() const {
             {"source", "native available-byte sampler"}, {"configured", false},
             {"limit_kind", "sampled-headroom"}, {"essential_headroom_bytes", 0}};
     size_t running = 0, resident = 0, uncertain = 0, bodies = 0, readers = 0, control_readers = 0;
+    size_t cache_references = 0, cache_cleanups = 0, cache_uncertain = 0, cache_inspections = 0, cache_changes = 0;
     json writers = json::array();
     uint64_t body_bytes = 0, host_bytes = 0;
     for (const auto& item : state_->active) {
+        if (!item.second->cache_change_roots.empty()) ++cache_changes;
+        if (!item.second->work.model_cache_root.empty()) {
+            if (item.second->work.service == "model-cache-cleanup") ++cache_cleanups;
+            else if (item.second->work.service == "model-cache-preview") ++cache_inspections;
+            else ++cache_references;
+            if (item.second->uncertain) ++cache_uncertain;
+        }
         if (item.second->work.operation == Operation::Write) {
             writers.push_back({{"id", item.first}, {"owner", item.second->work.service}});
             continue;
@@ -808,6 +862,9 @@ json ResourceAdmission::snapshot() const {
             {"model_concurrency", model_limits}}},
         {"configuration_pending", state_->configuration_pending}, {"pending", state_->pending.size()}, {"active", running},
         {"resident", resident}, {"uncertain", uncertain}, {"pools", pools},
+        {"model_cache", {{"schema_version", 1}, {"references", cache_references}, {"cleanups", cache_cleanups},
+            {"inspections", cache_inspections}, {"root_changes", cache_changes}, {"uncertain", cache_uncertain},
+            {"new_writes_closed", cache_cleanups + cache_inspections + cache_changes != 0}}},
         {"physical_slots", physical_slots}, {"latency_qualified", false},
         {"admitted_total", state_->admitted}, {"rejected_total", state_->rejected}};
 }

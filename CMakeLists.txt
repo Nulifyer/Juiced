@@ -3510,6 +3510,11 @@ if(BUILD_TESTING)
     add_cpp_ci_test(CacheSaveDispatchTest CI ON COMMAND test_persistence_boundaries --save-dispatch)
     set_tests_properties(CacheSaveDispatchTest PROPERTIES TIMEOUT 90)
 
+    add_executable(test_model_cache_cleanup test/cpp/test_model_cache_cleanup.cpp)
+    target_link_libraries(test_model_cache_cleanup PRIVATE lemonade-server-core)
+    add_cpp_ci_test(ModelCacheCleanupTest CI ON COMMAND test_model_cache_cleanup)
+    set_tests_properties(ModelCacheCleanupTest PROPERTIES TIMEOUT 120)
+
     add_executable(test_management_admission test/cpp/test_management_admission.cpp)
     target_link_libraries(test_management_admission PRIVATE lemonade-server-core)
     add_cpp_ci_test(VoiceHelperOwnershipTest CI ON COMMAND test_management_admission --voice-cleanup)
