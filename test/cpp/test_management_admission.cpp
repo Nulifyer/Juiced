@@ -161,6 +161,7 @@ struct StatePublicationTestHook {
     static void pause(Server& server, bool paused) { server.router_->pause_admission(paused); }
     static void configure(Server& server, const json& config) { server.router_->configure_admission(config); }
     static json admission(Server& server) { return server.router_->admission_snapshot(); }
+    static ResourceAdmission writer_admission(Server& server) { return server.router_->admission_view(); }
     static ModelManager& models(Server& server) { return *server.model_manager_; }
     static void add(Server& server, const std::shared_ptr<WrappedServer>& worker) {
         std::lock_guard<std::mutex> lock(server.router_->load_mutex_);
@@ -539,6 +540,14 @@ static void preparation_cleanup() {
             catch (const AdmissionError& error) { delete_guarded = error.status == 409 && error.code == "preparation_cleanup_pending"; }
             check(unregister_guarded && delete_guarded && fs::exists(source) && Hook::models(server).model_exists("Preparation-Source"),
                   "native unregister and delete retain an unresolved preparation's source and registration");
+            auto admission = Hook::writer_admission(server);
+            admission.maintenance(true);
+            check(!admission.wait_for_writes(std::chrono::milliseconds(5)),
+                  "maintenance cannot drain an unresolved retained preparation writer");
+            bool fresh_blocked = false;
+            try { auto fresh = admission.write_scope("new-preparation-control"); }
+            catch (const AdmissionError& error) { fresh_blocked = error.code == "maintenance_active"; }
+            check(fresh_blocked, "maintenance rejects a new operation while retained preparation cleanup remains owned");
             if (boundary != 2) {
                 control->fail_stop = false;
                 if (boundary == 1) Hook::stop_preparation(server);
@@ -547,6 +556,8 @@ static void preparation_cleanup() {
                 check(!fs::exists(partial) && !control->running && Hook::writer(server)["writer_state"] == "stopped" &&
                       Hook::writer(server)["phase"] == (boundary == 0 ? "cancelled" : "interrupted"),
                       "only confirmed cleanup removes staging and publishes the requested terminal outcome");
+                check(admission.wait_for_writes(std::chrono::seconds(5)),
+                      "accepted preparation cleanup drains during maintenance only after terminal effects finish");
             }
         }
         if (boundary == 2) {
@@ -757,13 +768,24 @@ static void voice_helper_ownership() {
         control->fail_start = false; control->fail_stop = false; Hook::voice(server);
         check(control->starts == 5 && !control->overlapped && Hook::admission(server)["active"] == 1,
               "startup cleanup retry reconciles its owner before allowing another dispatch");
+        auto admission = Hook::writer_admission(server); admission.maintenance(true);
+        check(!admission.wait_for_writes(std::chrono::milliseconds(5)),
+              "a retained running voice helper blocks maintenance drain through its existing ticket");
         enabled.set("false"); fs::create_directory(root / "juiced/state.json.tmp"); Hook::voice(server);
         check(!control->running && Hook::admission(server)["active"] == 1 && Hook::voice_intent(server)["pending"] == true &&
               Hook::voice_status(server)["cleanup_pending"] == true,
               "failed cleanup publication retains the stopped process owner and ticket for retry");
+        check(!admission.wait_for_writes(std::chrono::milliseconds(5)),
+              "stopped voice ownership remains undrained until terminal metadata commits");
         fs::remove(root / "juiced/state.json.tmp"); Hook::voice(server);
         check(Hook::admission(server)["active"] == 0 && Hook::voice_intent(server)["pending"] == false,
               "cleanup publication retry commits the terminal result before releasing ownership");
+        check(admission.wait_for_writes(std::chrono::seconds(5)),
+              "accepted voice cleanup completes during maintenance without an extra writer owner");
+        enabled.set("true"); Hook::voice(server);
+        check(control->starts == 5 && Hook::voice_intent(server)["pending"] == false,
+              "maintenance prevents a replacement voice dispatch after confirmed cleanup");
+        admission.maintenance(false);
         fs::create_directory(root / "juiced/state.json.tmp"); enabled.set("true"); Hook::voice(server);
         check(control->starts == 5 && !control->running && Hook::admission(server)["active"] == 0 && Hook::voice_intent(server)["pending"] == false,
               "failed durable voice intent prevents dispatch and releases the unstarted ticket");

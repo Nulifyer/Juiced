@@ -713,6 +713,13 @@ operation during maintenance; new helper dispatch rejects. Caller-owned deletion
 publication still requires its matching native owner. Prior-manager ambiguity
 still requires independent recovery and never gains a fabricated continuation.
 
+Retained voice and legacy preparation cleanup use their existing management
+tickets through confirmed process stop, staging cleanup and terminal metadata
+publication. Failed stop or publication keeps maintenance undrained. Cleanup of
+that accepted work can finish while new dispatch is closed. Prior-manager voice
+intent and legacy preparation records remain quarantined until separate recovery
+establishes termination.
+
 Maintenance rejects new loads and user inference. An accepted native mutation may
 finish a required load or restoration through its continuation, with the same exact
 resource-profile, physical-capacity, queue and deadline checks. A continuation never
