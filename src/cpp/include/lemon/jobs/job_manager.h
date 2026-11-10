@@ -1,64 +1,43 @@
 #pragma once
 
-#include "lemon/jobs/job_ops.h"
-#include "lemon/jobs/job_types.h"
+#include "lemon/resource_admission.h"
 
-#include <atomic>
-#include <condition_variable>
-#include <deque>
-#include <map>
-#include <memory>
+#include <nlohmann/json.hpp>
+
 #include <mutex>
 #include <optional>
+#include <stdexcept>
 #include <string>
-#include <thread>
-#include <vector>
+#include <utility>
 
-namespace lemon {
-namespace jobs {
+namespace lemon::jobs {
+
+using json = nlohmann::ordered_json;
+
+class JobError : public std::runtime_error {
+public:
+    JobError(int status, std::string message)
+        : std::runtime_error(std::move(message)), status(status) {}
+    int status;
+};
 
 class JobManager {
 public:
-    JobManager(std::string cache_dir, std::string config_dir, OpRegistry registry);
-    ~JobManager();
-
-    std::string create(const std::string& name, std::vector<StepRecord> steps, json inputs);
-    json list() const;
+    JobManager(const std::string& config_dir, ResourceAdmission admission);
+    json snapshot() const;
     std::optional<json> get(const std::string& id) const;
-    bool pause(const std::string& id);
-    bool interrupt(const std::string& id);
-    bool resume(const std::string& id);
-    bool remove(const std::string& id, bool& active_out);
+    bool remove(const std::string& id);
 
 private:
-    struct Control {
-        std::atomic<bool> pause_requested{false};
-        std::atomic<bool> interrupt_requested{false};
-        std::atomic<bool> delete_requested{false};
-        CancelFlag cancel{false};
-    };
-
-    void worker_main();
-    void execute(const std::string& id, const std::shared_ptr<Control>& ctrl);
-    void persist_locked(bool required = false, const std::string& exclude = {});
+    friend struct JobRecordTestHook;
     void load_from_disk();
-    void enqueue_locked(const std::string& id);
-    std::shared_ptr<Control> control_for_locked(const std::string& id);
+    void persist_locked(const json& document);
 
     std::string storage_path_;
-    OpRegistry registry_;
-
+    ResourceAdmission admission_;
     mutable std::mutex mutex_;
-    std::condition_variable cv_;
-    std::map<std::string, Job> jobs_;
-    std::map<std::string, std::shared_ptr<Control>> controls_;
-    std::vector<std::string> order_;
-    std::deque<std::string> queue_;
-    std::string active_id_;
-    uint64_t id_counter_ = 0;
-    bool stop_ = false;
-    std::thread worker_;
+    json document_ = {{"version", 1}, {"jobs", json::array()}};
+    std::string recovery_error_;
 };
 
-}
-}
+} // namespace lemon::jobs

@@ -73,6 +73,11 @@ private:
 // reconciliation internals without going through the ModelManager-backed
 // load/reconcile entry points (which read JSON from the cache dir).
 struct RoutingHelperTestHook {
+    static void loading(Router& router, bool loading) {
+        std::lock_guard<std::mutex> lock(router.load_mutex_);
+        router.is_loading_ = loading;
+        router.load_cv_.notify_all();
+    }
     static StubWrappedServer* add_server(Router& r, std::unique_ptr<StubWrappedServer> s) {
         StubWrappedServer* raw = s.get();
         std::lock_guard<std::mutex> lock(r.load_mutex_);
@@ -345,10 +350,6 @@ static void test_maintenance_completion_reclaims_helper(Router& router) {
           survived_during_maintenance && reclaimed);
 }
 
-// Reviewer's ask #5: a deferred reclaim firing during a load / exclusive session
-// must not give up — it waits for the residency slot to clear, then evicts. Here
-// the reclaim runs on a worker thread while the main thread holds an exclusive
-// session; it blocks until end_exclusive, then completes.
 static void test_deferred_reclaim_waits_for_slot(Router& router) {
     StubWrappedServer* helper =
         RoutingHelperTestHook::add_server(router, make_helper("slot.helper"));
@@ -356,21 +357,21 @@ static void test_deferred_reclaim_waits_for_slot(Router& router) {
     RoutingHelperTestHook::reconcile(router, {});  // marks pending-stale (busy)
     helper->set_busy(false);                       // idle + pending-stale, not needed
 
-    bool acquired = router.begin_exclusive();
+    RoutingHelperTestHook::loading(router, true);
 
     std::thread worker(
         [&] { RoutingHelperTestHook::reclaim_now(router, "slot.helper"); });
 
-    // The reclaim must block while the exclusive session owns the slot.
+    // The reclaim must block while a load owns the residency slot.
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
-    bool blocked_during_session = RoutingHelperTestHook::has_helper(router, "slot.helper");
+    bool blocked_during_load = RoutingHelperTestHook::has_helper(router, "slot.helper");
 
-    router.end_exclusive();
+    RoutingHelperTestHook::loading(router, false);
     worker.join();
-    bool reclaimed_after_session = !RoutingHelperTestHook::has_helper(router, "slot.helper");
+    bool reclaimed_after_load = !RoutingHelperTestHook::has_helper(router, "slot.helper");
 
-    check("deferred reclaim waits for the exclusive slot, then evicts",
-          acquired && blocked_during_session && reclaimed_after_session);
+    check("deferred reclaim waits for the load slot, then evicts",
+          blocked_during_load && reclaimed_after_load);
 }
 
 // Reviewer's lost-wakeup ask: a request that rescues the helper after the
@@ -382,18 +383,13 @@ static void test_reclaim_rearms_when_rescued_before_commit(Router& router) {
     StubWrappedServer* helper =
         RoutingHelperTestHook::add_server(router, make_helper("rescue.helper"));
 
-    // Take the residency slot first, while the helper is still idle, so
-    // begin_exclusive grants immediately. (begin_exclusive drains all in-flight
-    // requests before granting, so it can never be acquired while this helper
-    // already holds one — the reclaim must be parked behind an exclusive session
-    // that began idle, then rescued mid-session, exactly as in production.)
-    bool acquired = router.begin_exclusive();
-
     // A request is in flight and the policy drops the helper: prune arms the
     // release-triggered reclaim.
     helper->acquire_for_inference();
     RoutingHelperTestHook::reconcile(router, {});
     bool armed_survives = RoutingHelperTestHook::has_helper(router, "rescue.helper");
+
+    RoutingHelperTestHook::loading(router, true);
 
     // The release consumes the pending intent (take_pending_reclaim_if_idle
     // clears it) and dispatches the reclaim, which now blocks on the held slot.
@@ -408,7 +404,7 @@ static void test_reclaim_rearms_when_rescued_before_commit(Router& router) {
     // Releasing the slot lets the parked reclaim run. It finds the helper busy
     // again, so its commit is refused; with the intent already consumed, it must
     // re-arm rather than strand the helper — so it stays resident while busy.
-    router.end_exclusive();
+    RoutingHelperTestHook::loading(router, false);
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
     bool resident_while_busy = RoutingHelperTestHook::has_helper(router, "rescue.helper");
 
@@ -425,7 +421,7 @@ static void test_reclaim_rearms_when_rescued_before_commit(Router& router) {
     }
 
     check("reclaim re-arms on a refused commit; the rescuer's release evicts it",
-          armed_survives && acquired && consumed_stays_resident &&
+          armed_survives && consumed_stays_resident &&
           resident_while_busy && reclaimed);
 }
 
@@ -464,11 +460,11 @@ static void test_shutdown_with_pending_reclaim(RuntimeConfig& config) {
         helper->set_busy(false);                       // idle + pending-stale
 
         // Hold the slot so the dispatched reclaim blocks on the executor worker.
-        router.begin_exclusive();
+        RoutingHelperTestHook::loading(router, true);
         helper->finish_downsize(true);  // busy->idle edge posts the reclaim
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
-        // Scope exit destroys the Router without end_exclusive: it must wake the
+        // Scope exit destroys the Router during a load: it must wake the
         // blocked reclaim, join the executor, and tear down cleanly.
     }
     completed = true;

@@ -1046,7 +1046,6 @@ set(SOURCES_CORE
     src/cpp/server/juiced/cache.cpp
     src/cpp/server/juiced/removal.cpp
     src/cpp/server/collection_orchestrator.cpp
-    src/cpp/server/jobs/job_ops.cpp
     src/cpp/server/jobs/job_manager.cpp
     src/cpp/server/router.cpp
     src/cpp/server/global_vram_monitor.cpp
@@ -2657,33 +2656,6 @@ if(BUILD_TESTING AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test/cpp/test_hrx_contr
     add_cpp_ci_test(HrxContractTest CI ON COMMAND test_hrx_contract)
 endif()
 
-# Job engine pure core: the `when`/`branch` expression evaluator + reference
-# resolution, and step-graph validation (forward-only ⇒ no loops). Header-only,
-# so these link only nlohmann/json.
-set(_JOB_EXPR_TEST_SRC "${CMAKE_CURRENT_SOURCE_DIR}/test/cpp/test_job_expr.cpp")
-if(BUILD_TESTING AND EXISTS "${_JOB_EXPR_TEST_SRC}")
-    add_executable(test_job_expr test/cpp/test_job_expr.cpp)
-    target_include_directories(test_job_expr PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/cpp/include
-        ${CMAKE_CURRENT_BINARY_DIR}/include
-    )
-    target_link_libraries(test_job_expr PRIVATE nlohmann_json::nlohmann_json)
-    include(CTest)
-    add_cpp_ci_test(JobExprTest CI ON COMMAND test_job_expr)
-endif()
-
-set(_JOB_GRAPH_TEST_SRC "${CMAKE_CURRENT_SOURCE_DIR}/test/cpp/test_job_graph.cpp")
-if(BUILD_TESTING AND EXISTS "${_JOB_GRAPH_TEST_SRC}")
-    add_executable(test_job_graph test/cpp/test_job_graph.cpp)
-    target_include_directories(test_job_graph PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/cpp/include
-        ${CMAKE_CURRENT_BINARY_DIR}/include
-    )
-    target_link_libraries(test_job_graph PRIVATE nlohmann_json::nlohmann_json)
-    include(CTest)
-    add_cpp_ci_test(JobGraphTest CI ON COMMAND test_job_graph)
-endif()
-
 # Backend install atomicity (staging + verified atomic swap).
 # Header-only unit under test, so no extra source files are required.
 set(_INSTALL_ATOMICITY_TEST_SRC
@@ -3502,6 +3474,11 @@ if(BUILD_TESTING)
         --out ${CMAKE_CURRENT_BINARY_DIR}/ingress-admission-proof.json DEPENDS ${EXECUTABLE_NAME})
     set_tests_properties(IngressAdmissionTest PROPERTIES TIMEOUT 90)
     set_tests_properties(CloudRuntimeTest PROPERTIES TIMEOUT 90)
+
+    add_executable(test_job_records test/cpp/test_job_records.cpp)
+    target_link_libraries(test_job_records PRIVATE lemonade-server-core)
+    add_cpp_ci_test(RetainedJobRecordsTest CI ON COMMAND test_job_records)
+    set_tests_properties(RetainedJobRecordsTest PROPERTIES TIMEOUT 30)
 
     add_executable(test_writer_operations test/cpp/test_writer_operations.cpp)
     target_link_libraries(test_writer_operations PRIVATE lemonade-server-core)

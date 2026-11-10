@@ -295,15 +295,6 @@ public:
     // prefix) — it never influences routing and stores no message content.
     void note_route_decision(uint64_t conversation_fingerprint, const std::string& route_to);
 
-    bool begin_exclusive(std::atomic<bool>* cancel = nullptr);
-    void end_exclusive();
-
-    std::map<std::string, bool> snapshot_loaded_models() const;
-    std::map<std::string, json> unload_job_models(const std::map<std::string, int>& owned_live,
-                                                  const std::map<std::string, bool>& snapshot_pins);
-    int loaded_model_pid(const std::string& model_name) const;
-    std::string canonical_model_name(const std::string& model_name) const;
-
     // Registry lookup for seams that need ModelInfo without owning ModelManager
     // (e.g. routing CostServices). Returns nullopt when the name is unknown.
     std::optional<ModelInfo> try_get_model_info(const std::string& model_name) const;
@@ -367,11 +358,6 @@ private:
     // Set during ~Router (under load_mutex_) so a reclaim task waiting for the
     // residency slot to clear wakes and returns instead of blocking teardown.
     bool reclaim_shutdown_ = false;
-
-    bool exclusive_active_ = false;
-    std::thread::id exclusive_owner_;
-    std::condition_variable exclusive_cv_;
-    void wait_for_slot_clearance(std::unique_lock<std::mutex>& lock);
 
     std::unique_ptr<GlobalVramMonitor> vram_monitor_;
     std::mutex backend_update_mutex_;
@@ -439,7 +425,7 @@ private:
     // Release-triggered reclaim: unload a pending-stale routing helper once its
     // last request drains. Looks the server up by name (never a captured raw
     // pointer) and re-validates staleness under load_mutex_. Waits for the
-    // residency slot to clear (a load / exclusive session) rather than relying on
+    // residency slot to clear after a load rather than relying on
     // a later prune, so it is guaranteed to run and is safe to call from a thread
     // other than the one that ran release_inference / finish_downsize.
     void reclaim_stale_helper_if_idle(const std::string& model_name);

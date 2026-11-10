@@ -552,9 +552,7 @@ bool Router::ensure_loaded_model_residency_canonical(
 
     std::unique_lock<std::mutex> lock(load_mutex_);
     load_cv_.wait(lock, [&] {
-        return !is_loading_ &&
-               (!exclusive_active_ ||
-                exclusive_owner_ == std::this_thread::get_id());
+        return !is_loading_;
     });
 
     prune_unavailable_servers_locked();
@@ -625,9 +623,7 @@ void Router::apply_routing_helper_reconcile(std::set<std::string> needed, uint64
     // loaded_servers_ and blocks on request drain, neither of which is safe to
     // interleave with an in-flight load.
     load_cv_.wait(lock, [&] {
-        return !is_loading_ &&
-               (!exclusive_active_ ||
-                exclusive_owner_ == std::this_thread::get_id());
+        return !is_loading_;
     });
     prune_stale_routing_helpers_locked();
 }
@@ -676,13 +672,10 @@ void Router::reclaim_stale_helper_if_idle(const std::string& model_name) {
 
     while (true) {
         // Wait for the residency slot to clear rather than giving up and relying
-        // on a later prune (not guaranteed to run when the load / exclusive
-        // session ends). The wait is broken on shutdown so the executor worker
+        // on a later prune. The wait is broken on shutdown so the executor worker
         // can drain and join.
         load_cv_.wait(lock, [&] {
-            return reclaim_shutdown_ ||
-                   (!is_loading_ &&
-                    (!exclusive_active_ || exclusive_owner_ == std::this_thread::get_id()));
+            return reclaim_shutdown_ || !is_loading_;
         });
         if (reclaim_shutdown_) {
             return;
@@ -882,109 +875,6 @@ std::unique_ptr<WrappedServer> Router::create_backend_server(const ModelInfo& mo
     return std::make_unique<backends::LlamaCppServer>(log_level, model_manager_, backend_manager_);
 }
 
-bool Router::begin_exclusive(std::atomic<bool>* cancel) {
-    std::unique_lock<std::mutex> lock(load_mutex_);
-    exclusive_active_ = true;
-    exclusive_owner_ = std::this_thread::get_id();
-    while (true) {
-        if (cancel && cancel->load()) {
-            exclusive_active_ = false;
-            exclusive_owner_ = std::thread::id{};
-            exclusive_cv_.notify_all();
-            load_cv_.notify_all();
-            return false;
-        }
-        if (is_loading_) {
-            load_cv_.wait_for(lock, std::chrono::milliseconds(25));
-            continue;
-        }
-        bool busy = false;
-        for (const auto& server : loaded_servers_) {
-            if (server->is_busy()) {
-                busy = true;
-                break;
-            }
-        }
-        if (!busy) break;
-        lock.unlock();
-        std::this_thread::sleep_for(std::chrono::milliseconds(25));
-        lock.lock();
-    }
-    exclusive_cv_.notify_all();
-    load_cv_.notify_all();
-    return true;
-}
-
-void Router::end_exclusive() {
-    std::lock_guard<std::mutex> lock(load_mutex_);
-    exclusive_active_ = false;
-    exclusive_owner_ = std::thread::id{};
-    exclusive_cv_.notify_all();
-    load_cv_.notify_all();
-}
-
-void Router::wait_for_slot_clearance(std::unique_lock<std::mutex>& lock) {
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
-    while (exclusive_active_ && exclusive_owner_ != std::this_thread::get_id()) {
-        if (WrappedServer::current_request_cancel_context().cancelled())
-            throw AdmissionError("request_cancelled", "Request cancelled while waiting for maintenance", 499);
-        if (exclusive_cv_.wait_until(lock, deadline) == std::cv_status::timeout && exclusive_active_)
-            throw AdmissionError("queue_deadline_exceeded", "Runtime maintenance wait exceeded its deadline", 429);
-    }
-}
-
-std::map<std::string, bool> Router::snapshot_loaded_models() const {
-    std::lock_guard<std::mutex> lock(load_mutex_);
-    std::map<std::string, bool> models;
-    for (const auto& server : loaded_servers_)
-        if (server->is_backend_alive()) models[server->get_model_name()] = server->is_pinned();
-    return models;
-}
-
-std::map<std::string, json> Router::unload_job_models(const std::map<std::string, int>& owned_live,
-                                                      const std::map<std::string, bool>& snapshot_pins) {
-    std::unique_lock<std::mutex> lock(load_mutex_);
-    wait_for_slot_clearance(lock);
-    std::map<std::string, int> resolved_owned;
-    for (const auto& kv : owned_live) resolved_owned[resolve_model_name(kv.first)] = kv.second;
-    std::map<std::string, json> captured;
-    std::vector<WrappedServer*> victims;
-    for (const auto& server : loaded_servers_) {
-        if (!server->is_backend_alive()) continue;
-        const std::string name = server->get_model_name();
-        auto pin_it = snapshot_pins.find(name);
-        if (pin_it != snapshot_pins.end()) {
-            server->set_pinned(residency_pinned_locked(name, pin_it->second));
-            continue;
-        }
-        auto own_it = resolved_owned.find(name);
-        if (own_it == resolved_owned.end()) continue;
-        if (server->get_process_id() != own_it->second) continue;
-        if (residency_pinned_locked(name, server->is_pinned())) continue;
-        captured[name] = {{"options", server->get_recipe_options().to_json()},
-                          {"pinned", server->is_pinned()}};
-        victims.push_back(server.get());
-    }
-    for (auto* victim : victims) {
-        if (victim->is_pinned()) victim->set_pinned(false);
-        LOG(INFO, "Router") << "Reconcile-unload of job-loaded model: "
-                            << victim->get_model_name() << std::endl;
-        evict_server(victim);
-    }
-    return captured;
-}
-
-int Router::loaded_model_pid(const std::string& model_name) const {
-    std::lock_guard<std::mutex> lock(load_mutex_);
-    WrappedServer* server = find_server_by_model_name(resolve_model_name(model_name));
-    return server && server->is_backend_alive() ? server->get_process_id() : -1;
-}
-
-std::string Router::canonical_model_name(const std::string& model_name) const {
-    std::lock_guard<std::mutex> lock(load_mutex_);
-    return resolve_model_name(model_name);
-}
-
 static bool loaded_definition_matches(const WrappedServer& worker, const ModelInfo& info) {
     const auto snapshot = worker.execution_snapshot();
     const auto& definition = snapshot.at("definition");
@@ -1012,8 +902,7 @@ void Router::load_model(const std::string& model_name,
     std::unique_lock<std::mutex> lock(load_mutex_);
 
     load_cv_.wait(lock, [&] {
-        return !is_loading_
-               && (!exclusive_active_ || exclusive_owner_ == std::this_thread::get_id());
+        return !is_loading_;
     });
 
     if (pending_backend_updates_.count(model_info.recipe))
@@ -1542,7 +1431,6 @@ void Router::update_backend(const std::string& recipe, const std::function<void(
 
 void Router::unload_model(const std::string& model_name) {
     std::unique_lock<std::mutex> lock(load_mutex_);
-    wait_for_slot_clearance(lock);
     std::vector<std::shared_ptr<WrappedServer>> targets;
     const auto canonical = model_name.empty() ? "" : resolve_model_name(model_name);
     for (const auto& server : loaded_servers_)
@@ -1558,7 +1446,6 @@ void Router::unload_model(const std::string& model_name) {
                                                    "active operations did not drain before the deadline");
     }
     lock.lock();
-    wait_for_slot_clearance(lock);
     for (const auto& current : loaded_servers_) {
         if (!canonical.empty() && current->get_model_name() != canonical) continue;
         const bool retained = std::find(targets.begin(), targets.end(), current) != targets.end();
@@ -1614,14 +1501,9 @@ void Router::evict_if_committed(const std::string& model_name, uint64_t expected
         return;
     }
 
-    // An exclusive session may have started (and re-pinned this model via the
-    // job snapshot reconcile) since the EVICTING mark was set. Neither state
-    // was known when the eviction was decided, so abandon it.
-    if (exclusive_active_ || server->is_pinned()) {
+    if (server->is_pinned()) {
         server->rescue_from_eviction();
-        LOG(INFO, "Router") << "Eviction of " << model_name << " cancelled ("
-                            << (server->is_pinned() ? "pinned" : "exclusive session active")
-                            << ")" << std::endl;
+        LOG(INFO, "Router") << "Eviction of " << model_name << " cancelled (pinned)" << std::endl;
         return;
     }
 
@@ -2012,7 +1894,6 @@ json Router::execute_inference(const json& request, InferenceOperation request_o
 
         {
             std::unique_lock<std::mutex> lock(load_mutex_);
-            wait_for_slot_clearance(lock);
             server = find_server_by_model_name(resolve_model_name(requested_model));
             if (!server) {
                 return ErrorResponse::from_exception(ModelNotLoadedException(requested_model));
@@ -2165,7 +2046,6 @@ void Router::execute_streaming(const std::string& request_body, httplib::DataSin
 
         {
             std::unique_lock<std::mutex> lock(load_mutex_);
-            wait_for_slot_clearance(lock);
             server = find_server_by_model_name(resolve_model_name(requested_model));
             if (!server) {
                 json error = ErrorResponse::from_exception(ModelNotLoadedException(requested_model));
@@ -3483,7 +3363,6 @@ uint64_t Router::get_model_generation(const std::string& model_name) const {
 bool Router::apply_model_policy(const std::string& model_name, uint64_t generation,
                                 bool pinned, bool unload) {
     std::unique_lock<std::mutex> lock(load_mutex_);
-    wait_for_slot_clearance(lock);
     auto* worker = find_server_by_model_name(resolve_model_name(model_name));
     if (!worker || worker->get_instance_id() != generation) return false;
     const bool current_pinned = residency_pinned_locked(worker->get_model_name(), pinned);
@@ -3498,7 +3377,6 @@ bool Router::apply_model_policy(const std::string& model_name, uint64_t generati
 
 void Router::set_model_pinned(const std::string& model_name, bool pinned) {
     std::unique_lock<std::mutex> lock(load_mutex_);
-    wait_for_slot_clearance(lock);
     WrappedServer* server = find_server_by_model_name(resolve_model_name(model_name));
     if (!server) {
         throw std::runtime_error("Model not loaded: " + model_name);

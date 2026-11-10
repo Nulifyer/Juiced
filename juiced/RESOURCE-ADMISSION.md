@@ -674,6 +674,21 @@ registration and final journal publication. Persistent-chat finalizers retain th
 accepted context through snapshot save, cleanup and file/metadata publication.
 Background reconciliation takes a fresh operation scope before changing native state.
 
+Download controls retain their own accepted mutation scope through the final worker
+join. Read-only download inspection defers history expiry when maintenance closes
+writers, then permits normal expiry after reopening. Control acknowledgements do
+not establish that a still-running downloader stopped.
+
+Historical JobManager records have no executor or model-operation callbacks.
+Metadata deletion enters the same admission owner before locking the record store,
+commits before updating memory, and preserves unknown fields in other records.
+Read-only history never rewrites the file. Previously active graphs appear
+interrupted and cannot resume. Existing deletion tombstones remain quarantined,
+with bounded recovery metadata; neither startup nor ordinary history deletion
+can discard them or certify a prior writer stopped. Unsupported or malformed
+storage is preserved and blocks mutation. Fixed native acquisition, inference,
+media and Barista operations continue through their existing owners.
+
 Maintenance rejects new loads and user inference. An accepted native mutation may
 finish a required load or restoration through its continuation, with the same exact
 resource-profile, physical-capacity, queue and deadline checks. A continuation never
@@ -682,8 +697,8 @@ Draining waits for queued admission entries as well as active owners and finaliz
 Read-only native state inspection remains available without opening a writer.
 
 This is operation accounting, not whole-server maintenance acceptance. No public
-maintenance-ready endpoint is exposed. Retained-job cleanup, remaining helper/metadata
-writers, external roots, idle-worker stop and prior-manager recovery still need
+maintenance-ready endpoint is exposed. Remaining helper/metadata writers,
+external roots, idle-worker stop and prior-manager recovery still need
 complete integration and evidence. Empty participating-operation counts cannot
 prove storage consistency or that another process stopped writing. Synchronous
 profile rollback evidence still does not establish crash-consistent multi-file

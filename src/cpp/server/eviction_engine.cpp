@@ -72,10 +72,6 @@ void EvictionEngine::evaluate_servers(double current_vram_pct) {
     {
         std::lock_guard<std::mutex> lock(router_->load_mutex_);
 
-        // An exclusive job session owns model residency; auto-eviction and
-        // downsizing would yank models out from under its next step.
-        if (router_->exclusive_active_) return;
-
         auto now = std::chrono::steady_clock::now();
         double threshold = RuntimeConfig::global()->auto_evict_threshold_pct();
         bool pressure_evict = (current_vram_pct >= threshold);
@@ -176,7 +172,6 @@ void EvictionEngine::evaluate_servers(double current_vram_pct) {
         const auto name = selected->get_model_name();
         {
             std::lock_guard<std::mutex> lk(router_->load_mutex_);
-            if (router_->exclusive_active_) break;
             if (router_->find_server_by_model_name(name) != selected.get()) continue;
             const auto options = selected->get_recipe_options().to_json();
             const bool auto_evict = options.value("auto_evict", RuntimeConfig::global()->auto_evict());

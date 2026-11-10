@@ -62,6 +62,26 @@ struct StatePublicationTestHook {
         server.join_download_job(job);
         return job->status;
     }
+    static std::unique_lock<std::mutex> terminal_download(Server& server, bool expired) {
+        auto job = server.start_download_job("late-job", "model", "late-job", [](auto) {});
+        server.join_download_job(job);
+        if (expired) {
+            std::lock_guard lock(server.downloads_mutex_);
+            job->terminal_since = std::chrono::steady_clock::now() - 1h;
+        }
+        return std::unique_lock(job->worker_mutex);
+    }
+    static bool has_download(Server& server) {
+        std::lock_guard lock(server.downloads_mutex_); return server.download_jobs_.count("late-job") != 0;
+    }
+    static httplib::Response control_download(Server& server, const std::string& action) {
+        httplib::Request request; request.body = json{{"id", "late-job"}, {"action", action}}.dump();
+        httplib::Response response; response.status = 200; server.handle_download_control(request, response); return response;
+    }
+    static httplib::Response downloads(Server& server) {
+        httplib::Request request; httplib::Response response; response.status = 200;
+        server.handle_downloads(request, response); return response;
+    }
     static void enqueue(Server& server, const json& command) { server.juiced_->enqueue(command); }
     static bool execute_pending(Server& server) { return server.juiced_->execute_pending(); }
     static json operations(Server& server) { std::lock_guard lock(server.juiced_->mutex_); return server.juiced_->operations_; }
@@ -318,8 +338,47 @@ static void deferred_publication() {
     RuntimeConfig::set_global(nullptr);
 }
 
+static void late_download_controls() {
+    using Hook = StatePublicationTestHook;
+    const auto root = test::make_scratch_dir("writer-late-download");
+    auto settings = ConfigFile::base_defaults();
+    settings["broadcast"] = false; settings["auto_check_model_updates"] = false; settings["offline"] = true;
+    auto config = std::make_shared<RuntimeConfig>(settings); RuntimeConfig::set_global(config.get());
+    {
+        Server server(config, root.string(), root.string()); Hook::finish_background(server);
+        auto admission = Hook::admission(server);
+        for (const bool expiry : {false, true}) {
+            auto publication = Hook::terminal_download(server, expiry);
+            auto cleanup = std::async(std::launch::async, [&] {
+                return expiry ? Hook::downloads(server) : Hook::control_download(server, "remove");
+            });
+            const auto deadline = std::chrono::steady_clock::now() + 5s;
+            while (admission.snapshot()["writes"]["active_operations"] == 0 && std::chrono::steady_clock::now() < deadline)
+                std::this_thread::sleep_for(1ms);
+            admission.maintenance(true);
+            check(!admission.wait_for_writes(1ms), "late download control or expiry retains ownership through final worker join");
+            const auto rejected = Hook::control_download(server, "remove");
+            check(rejected.status == 503 && json::parse(rejected.body)["error"]["code"] == "maintenance_active" &&
+                  rejected.get_header_value("Retry-After") == "1", "new download controls return retryable maintenance status");
+            check(Hook::downloads(server).status == 200, "download inspection stays available while accepted cleanup is joining");
+            publication.unlock();
+            check(cleanup.get().status == 200 && admission.wait_for_writes(100ms) && !Hook::has_download(server),
+                  "accepted late cleanup finishes and releases its writer before maintenance drains");
+            admission.maintenance(false);
+        }
+        auto publication = Hook::terminal_download(server, true); publication.unlock();
+        admission.maintenance(true);
+        check(Hook::downloads(server).status == 200 && Hook::has_download(server) && admission.wait_for_writes(50ms),
+              "inspection defers new history expiry while maintenance closes mutations");
+        admission.maintenance(false);
+        check(Hook::downloads(server).status == 200 && !Hook::has_download(server) && admission.wait_for_writes(50ms),
+              "deferred history expiry resumes through its owner after maintenance reopens");
+    }
+    RuntimeConfig::set_global(nullptr);
+}
+
 int main() {
-    configuration_aliases(); model_publication(); server_effect_lifetime(); deferred_publication();
+    configuration_aliases(); model_publication(); server_effect_lifetime(); deferred_publication(); late_download_controls();
     std::fprintf(stderr, "Writer operations: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

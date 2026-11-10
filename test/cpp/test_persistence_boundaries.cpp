@@ -495,23 +495,23 @@ static void retained_jobs() {
         auto target = root / "jobs.json";
         write(target, {{"version", 1}, {"jobs", json::array({{{"id", "retained-1"}, {"status", status}}})}});
         {
-            lemon::jobs::JobManager jobs(root.string(), root.string(), {});
+            lemon::jobs::JobManager jobs(root.string(), lemon::ResourceAdmission{});
             auto before = jobs.get("retained-1"); const auto disk = read(target);
-            bool active = false, rejected = false;
+            bool rejected = false;
             if (staging) {
                 fs::create_directory(root / "jobs.json.tmp");
-                try { jobs.remove("retained-1", active); } catch (const lemon::jobs::JobError& e) { rejected = e.status == 500; }
+                try { jobs.remove("retained-1"); } catch (const lemon::jobs::JobError& e) { rejected = e.status == 500; }
                 fs::remove(root / "jobs.json.tmp");
             } else {
                 write(root / "jobs.json.tmp", json::object());
                 BlockReplacement block(target);
-                try { jobs.remove("retained-1", active); } catch (const lemon::jobs::JobError& e) { rejected = e.status == 500; }
+                try { jobs.remove("retained-1"); } catch (const lemon::jobs::JobError& e) { rejected = e.status == 500; }
             }
             check(rejected && jobs.get("retained-1") == before && read(target) == disk,
                   "failed retained deletion or tombstone preserves memory and committed record");
-            check(jobs.remove("retained-1", active), "failed retained deletion remains retryable");
+            check(jobs.remove("retained-1"), "failed retained deletion remains retryable");
         }
-        lemon::jobs::JobManager restarted(root.string(), root.string(), {});
+        lemon::jobs::JobManager restarted(root.string(), lemon::ResourceAdmission{});
         check(!restarted.get("retained-1"), "durable deletion does not reappear after restart");
     }
 }

@@ -219,6 +219,7 @@ class ApiContract(unittest.TestCase):
    root=pathlib.Path(tmp);(root/'config').mkdir();(root/'cache').mkdir();(root/'run').mkdir()
    with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
    (root/'config/config.json').write_text(json.dumps({'port':port,'broadcast':False,'auto_check_model_updates':False}))
+   (root/'config/jobs.json').write_text(json.dumps({'version':1,'jobs':[{'id':'history-'+str(i),'status':'completed'} for i in range(4)]+[{'id':'pending-cleanup','deleted':True,'status':'interrupted'}]}))
    with open(root/'server.log','w') as log:
     process=subprocess.Popen([BINARY,str(root/'cache'),str(root/'config'),'--host','127.0.0.1','--port',str(port)],stdout=log,stderr=log,env={**os.environ,'HOME':str(root),'XDG_RUNTIME_DIR':str(root/'run'),'LEMONADE_API_KEY':'fixture-regular','LEMONADE_ADMIN_API_KEY':'fixture-admin'})
     def request(path,headers=None,body=None,method=None):
@@ -246,6 +247,13 @@ class ApiContract(unittest.TestCase):
      self.assertEqual(request('/v1/models',{'Authorization':'Basic fixture-regular'}),401)
      self.assertEqual(request('/v1/jobs',{'Authorization':'Bearer fixture-regular'}),401)
      self.assertEqual(request('/v1/jobs',{'Authorization':'Bearer fixture-admin'}),200)
+     for index,prefix in enumerate(['/api/v0/','/api/v1/','/v0/','/v1/']):
+      path=prefix+'jobs/history-'+str(index)
+      self.assertEqual(request(path,{'Authorization':'Bearer fixture-regular'},method='DELETE'),401)
+      self.assertEqual(request(path,{'Authorization':'Bearer fixture-admin'}),200)
+      self.assertEqual(request(path,{'Authorization':'Bearer fixture-admin'},method='DELETE'),200)
+      self.assertEqual(request(path,{'Authorization':'Bearer fixture-admin'}),404)
+      self.assertEqual(request(prefix+'jobs/pending-cleanup',{'Authorization':'Bearer fixture-admin'},method='DELETE'),409)
      self.assertEqual(request('/v1/install',{'Authorization':'Bearer fixture-regular'},{}),401)
      self.assertEqual(request('/v1/models/Whisper-Tiny/options',{'Authorization':'Bearer fixture-regular'}),200)
      self.assertEqual(request('/v1/models/Whisper-Tiny/options',{'Authorization':'Bearer fixture-regular'},{}),401)
@@ -397,7 +405,8 @@ class ApiContract(unittest.TestCase):
   for prefix in ['/api/v0/','/api/v1/','/v0/','/v1/']:
    for body in [{'steps':[{'op':'model.load','params':{'model':'invalid'}}]}, {'definition':{'steps':[{'op':'model.load'}]}}, {'name':'graph','inputs':{},'definition':{'steps':[]}}]:
     status,_=self.request(prefix+'jobs',body);self.assertEqual(status,501)
-   status,_=self.request(prefix+'jobs/legacy-fixture/resume',{});self.assertEqual(status,501)
+   for action in ['resume','pause','interrupt']:
+    status,_=self.request(prefix+'jobs/legacy-fixture/'+action,{});self.assertEqual(status,501)
  def test_legacy_jobs_preserved_and_not_resumed(self):
   status,data=self.request('jobs/legacy-fixture');self.assertEqual(status,200,data)
   self.assertEqual(data['status'],'interrupted')

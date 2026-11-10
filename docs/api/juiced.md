@@ -46,6 +46,22 @@ URL-encode model IDs in query parameters. Request metadata is not a stored
 conversation API. The default native port for a source build is `13305`.
 The Juiced container explicitly uses `8080`.
 
+## Retained workflow history
+
+`GET /v1/jobs` and `GET /v1/jobs/ID` inspect historical workflow records.
+Queued or running history appears as interrupted; Juiced never executes it.
+Creating, resuming, pausing, or interrupting arbitrary workflows returns HTTP501.
+These endpoints also use the other native API prefixes and require operator access.
+
+`DELETE /v1/jobs/ID` deletes only the selected historical metadata and returns
+`metadata_only: true`. It does not stop workers or remove models, artifacts,
+or resource charges. Failed storage publication preserves the committed record.
+The list response includes `recovery`: unresolved prior cleanup is quarantined,
+with up to 50 record IDs and its total count. Ordinary deletion returns HTTP409
+for those records. Malformed or unsupported storage also blocks deletion and
+preserves the file. Recovery of an uncertain prior writer requires its own
+termination evidence; removing history cannot establish that it stopped.
+
 ## Pause new work for maintenance
 
 ```bash
