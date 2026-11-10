@@ -52,6 +52,18 @@ users. Snapshots bind the authenticated principal, credential epoch, protocol,
 session, and execution profile. Key rotation or an incompatible profile causes
 a cold rebuild. Clients without usable session affinity retain the memory fallback.
 
+A running worker keeps the input identity captured when it started. Registering
+another checkpoint under the same model name does not relabel that worker's saved
+computation. The replacement takes effect after unloading and loading the model.
+Checkpoint and companion content hashes distinguish changes even when file size
+and modification time stay the same. A changed profile requires fresh useful-reuse
+qualification; older snapshots remain retained under their original identity.
+
+The current fingerprint schema also records the launch executable and reported
+engine build. It does not yet establish complete loaded-library, physical-device
+or external-input identity. Existing qualification receipts cover only their named
+model/runtime combinations.
+
 ## Retain or forget a snapshot
 
 1. Open **Cache → Snapshots**.

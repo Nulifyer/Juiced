@@ -3,6 +3,7 @@
 #include "lemon/router.h"
 #include "lemon/server.h"
 #include "lemon/request_identity.h"
+#include "lemon/utils/content_hash.h"
 #include "lemon/utils/http_client.h"
 #include "lemon/utils/path_utils.h"
 #include "lemon/utils/custom_args.h"
@@ -104,34 +105,7 @@ std::string prefix_hash(const json &messages, size_t n) {
 }
 } // namespace
 std::string JuicedService::file_digest(const std::filesystem::path &file) {
-  mbedtls_md_context_t ctx;
-  mbedtls_md_init(&ctx);
-  struct Cleanup {
-    mbedtls_md_context_t *c;
-    ~Cleanup() { mbedtls_md_free(c); }
-  } cleanup{&ctx};
-  if (mbedtls_md_setup(&ctx, mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), 0) !=
-          0 ||
-      mbedtls_md_starts(&ctx) != 0)
-    throw std::runtime_error("Cannot checksum prompt state");
-  std::ifstream in(file, std::ios::binary);
-  char b[65536];
-  while (in) {
-    in.read(b, sizeof(b));
-    if (in.gcount() &&
-        mbedtls_md_update(&ctx, reinterpret_cast<const unsigned char *>(b),
-                          in.gcount()) != 0)
-      throw std::runtime_error("Snapshot checksum failed");
-  }
-  if (!in.eof())
-    throw std::runtime_error("Cannot read snapshot");
-  unsigned char out[32];
-  if (mbedtls_md_finish(&ctx, out) != 0)
-    throw std::runtime_error("Snapshot checksum failed");
-  std::ostringstream s;
-  for (auto c : out)
-    s << std::hex << std::setw(2) << std::setfill('0') << int(c);
-  return s.str();
+  return utils::content_sha256(file);
 }
 JuicedService::json JuicedService::mutate_prompt_slot(
     const std::string& model, int slot, const std::function<json()>& invoke) {
@@ -193,33 +167,16 @@ json JuicedService::cache_profile(const std::string &requested, WrappedServer::I
   const auto cancelled = [&] { return worker.deadline_expired() ||
       (context && context->cancelled && context->cancelled()); };
   if (cancelled()) throw AdmissionError("state_operation_cancelled", "State inspection was cancelled", 499);
-  auto info = server_.model_manager_->get_model_info(requested);
-  if (info.recipe != "llamacpp")
-    throw std::invalid_argument(
-        "Persistent prompt state requires a qualified llama.cpp deployment");
-  const auto name = server_.model_manager_->get_public_model_name(
-      server_.model_manager_->resolve_model_name(requested));
-  json identity = {{"profile_schema", 1},   {"model", name},
-                   {"recipe", info.recipe}, {"checkpoints", info.checkpoints},
-                   {"engine", "unknown"},   {"files", json::object()}};
-  for (const auto &[role, path] : info.resolved_paths) {
-    auto canonical = std::filesystem::canonical(path);
-    identity["files"][role] = {
-        {"path", canonical.string()},
-        {"size", std::filesystem::file_size(canonical)},
-        {"mtime", std::filesystem::last_write_time(canonical)
-                      .time_since_epoch()
-                      .count()}};
-  }
-  std::string address;
-  for (const auto &l : server_.router_->get_all_loaded_models())
-    if (l.value("model_name", "") == name) {
-      address = l.value("backend_url", "");
-      identity["options"] = l.value("recipe_options", json::object());
-      identity["options"].erase(
-          "pinned"); // Residency policy does not alter engine state format.
-      break;
-    }
+  const auto loaded = worker.execution_snapshot();
+  auto identity = loaded.value("identity", json::object());
+  if (identity.empty() || identity.value("recipe", "") != "llamacpp")
+    throw std::invalid_argument("Persistent prompt state requires a captured llama.cpp execution identity");
+  const auto name = server_.model_manager_->get_public_model_name(loaded.at("model").get<std::string>());
+  identity["profile_schema"] = 2;
+  identity["model"] = name;
+  identity["options"] = loaded.at("options");
+  identity["options"].erase("pinned");
+  auto address = loaded.at("address").get<std::string>();
   if (address.empty())
     throw std::invalid_argument(
         "Load the model before qualifying its prompt-state profile");
@@ -235,7 +192,10 @@ json JuicedService::cache_profile(const std::string &requested, WrappedServer::I
   if (cancelled()) throw AdmissionError("state_operation_cancelled", "State inspection was cancelled", 499);
   if (props.status_code != 200)
     throw std::runtime_error("Cannot inspect the engine state format");
-  identity["engine"] = json::parse(props.body).value("build_info", "unknown");
+  const auto observed_build = json::parse(props.body).value("build_info", std::string("unknown"));
+  if (identity.value("engine", std::string("unknown")) != "unknown" &&
+      identity.at("engine") != observed_build)
+    throw std::runtime_error("Engine build changed after execution identity publication");
   const auto args = utils::build_custom_args_map(utils::parse_custom_args(
       identity["options"].value("llamacpp_args", std::string())));
   const auto directory = args.find("--slot-save-path");
@@ -245,7 +205,7 @@ json JuicedService::cache_profile(const std::string &requested, WrappedServer::I
     correct_directory = std::filesystem::equivalent(
         std::filesystem::path(directory->second.front().front()), snapshot_directory_, ec) && !ec;
   }
-  const bool configured = correct_directory && identity["engine"].get<std::string>().find("dde879b") != std::string::npos;
+  const bool configured = identity.value("captured", false) && correct_directory && identity["engine"].get<std::string>().find("dde879b") != std::string::npos;
   auto fingerprint = digest(identity.dump());
   bool qualified;
   {

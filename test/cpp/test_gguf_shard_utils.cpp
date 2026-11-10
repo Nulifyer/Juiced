@@ -1,4 +1,6 @@
 #include "lemon/gguf_shard_utils.h"
+#include "lemon/model_manager.h"
+#include "lemon/utils/content_hash.h"
 
 #include <chrono>
 #include <cstdint>
@@ -150,6 +152,47 @@ int main() {
               lemon::sharded_gguf_size_bytes(sub / "model.00001-of-00002.gguf") == 70 + 80);
         check("underscore-separated shards are summed",
               lemon::sharded_gguf_size_bytes(sub / "other_00001-of-00002.gguf") == 90 + 100);
+    }
+
+    {
+        const auto main = base_dir / "identity.gguf", companion = base_dir / "projector.gguf";
+        { std::ofstream file(main); file << "abc"; }
+        { std::ofstream file(companion); file << "projector"; }
+        lemon::ModelInfo info;
+        info.recipe = "llamacpp";
+        info.checkpoints = {{"main", "fixture:main"}, {"mmproj", "fixture:projector"}};
+        info.resolved_paths = {{"main", main.string()}, {"mmproj", companion.string()}};
+        const auto captured = lemon::ModelManager::execution_inputs(info, {});
+        check("execution identity hashes primary content", captured.at("files").at("main")[0].at("sha256") ==
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+        check("execution identity retains companion and source roles", captured.at("files").contains("mmproj") && captured.at("checkpoints") == info.checkpoints);
+        const auto modified = fs::last_write_time(main);
+        { std::ofstream file(main); file << "abd"; }
+        fs::last_write_time(main, modified);
+        const auto changed = lemon::ModelManager::execution_inputs(info, {});
+        check("same size and restored mtime cannot hide content change", changed.at("files").at("main") != captured.at("files").at("main"));
+        check("captured identity remains unchanged after file replacement", captured.at("files").at("main")[0].at("sha256") ==
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+        bool cancelled = false;
+        try { lemon::ModelManager::execution_inputs(info, [] { return true; }); } catch (const std::exception&) { cancelled = true; }
+        check("execution identity honors cancellation before reading", cancelled);
+        int polls = 0;
+        cancelled = false;
+        try { lemon::utils::content_sha256(main, [&] { return ++polls == 2; }); } catch (const std::exception&) { cancelled = true; }
+        check("file hashing checks cancellation through completion", cancelled);
+        const auto first = make_file(base_dir, "identity-00001-of-00002.gguf", 17);
+        const auto second = make_file(base_dir, "identity-00002-of-00002.gguf", 19);
+        info.checkpoints = {{"main", "fixture:split"}};
+        info.resolved_paths = {{"main", first.string()}};
+        check("execution identity includes every split checkpoint", lemon::ModelManager::execution_inputs(info, {}).at("files").at("main").size() == 2);
+        fs::remove(second);
+        bool missing = false;
+        try { lemon::ModelManager::execution_inputs(info, {}); } catch (const std::exception&) { missing = true; }
+        check("missing split checkpoint cannot produce an identity", missing);
+        make_file(base_dir, "identity-1-of-2.gguf", 23);
+        bool duplicate = false;
+        try { lemon::ModelManager::execution_inputs(info, {}); } catch (const std::exception&) { duplicate = true; }
+        check("duplicate shard indices cannot disguise missing content", duplicate);
     }
 
     fs::remove_all(base_dir, ec);

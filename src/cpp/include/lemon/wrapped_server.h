@@ -104,6 +104,7 @@ public:
         bool deadline_expired() const { return resources_.deadline_expired(); }
         std::optional<int> execution_slot() const { return resources_.execution_slot(); }
         std::chrono::steady_clock::time_point completion_deadline() const { return resources_.completion_deadline(); }
+        json execution_snapshot() const { return server_ ? server_->execution_snapshot() : json::object(); }
         uint64_t generation() const { return server_ ? server_->get_instance_id() : 0; }
     private:
         friend class WrappedServer;
@@ -507,6 +508,7 @@ public:
     json execution_snapshot() const {
         std::lock_guard<std::mutex> lock(state_mutex_);
         return {{"options", recipe_options_.to_resolved_json()}, {"context", context_observation_},
+                {"model", model_name_}, {"address", get_address()}, {"identity", execution_identity_},
                 {"context_automatic", ctx_size_auto_}, {"state", model_state_to_string(state_)},
                 {"worker_generation", get_instance_id()}};
     }
@@ -784,6 +786,7 @@ protected:
     std::chrono::steady_clock::time_point last_access_time_;
     RecipeOptions recipe_options_;
     json context_observation_ = json::object();
+    json execution_identity_ = json::object();
     bool ctx_size_auto_ = false;
 
     // Busy state tracking (for safe eviction)

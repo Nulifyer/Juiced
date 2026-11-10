@@ -3,6 +3,7 @@
 #include <lemon/hf_variants.h>
 #include <lemon/model_registry.h>
 #include <lemon/routing_policy_parser.h>
+#include <lemon/utils/content_hash.h>
 #include <lemon/utils/json_utils.h>
 #include <lemon/utils/http_client.h>
 #include <lemon/utils/process_manager.h>
@@ -392,6 +393,50 @@ static void insert_shard_family(const fs::path& shard, std::set<fs::path>& out) 
             out.insert(entry.path());
         }
     }
+}
+
+json ModelManager::execution_inputs(const ModelInfo& info, const std::function<bool()>& cancelled) {
+    json files = json::object();
+    if (info.resolved_paths.empty() || info.extra<bool>("hf_load", false))
+        throw std::runtime_error("Loaded artifact content is not locally resolved");
+    for (const auto& [role, checkpoint] : info.checkpoints)
+        if (!checkpoint.empty() && (!info.resolved_paths.count(role) || info.resolved_paths.at(role).empty()))
+            throw std::runtime_error("An execution companion is not locally resolved");
+    for (const auto& [role, pathname] : info.resolved_paths) {
+        if (cancelled && cancelled()) throw std::runtime_error("Execution identity cancelled");
+        const auto declared = path_from_utf8(pathname);
+        const auto path = fs::canonical(declared);
+        std::set<fs::path> paths{path};
+        std::string base;
+        int total = 0;
+        if (is_gguf_shard_filename(declared.filename().string(), &base, &total)) {
+            if (total > 4096) throw std::runtime_error("Execution identity has too many shards");
+            size_t entries = 0;
+            std::set<int> indices;
+            for (const auto& entry : fs::directory_iterator(declared.parent_path())) {
+                if ((cancelled && cancelled()) || ++entries > 65536)
+                    throw std::runtime_error("Execution identity shard scan exceeded its bound");
+                if (same_shard_family(entry.path().filename().string(), base, total)) {
+                    int index = 0;
+                    is_gguf_shard_filename(entry.path().filename().string(), nullptr, nullptr, &index);
+                    if (!indices.insert(index).second) throw std::runtime_error("Execution identity has duplicate shard indices");
+                    paths.insert(fs::canonical(entry.path()));
+                }
+            }
+            if (indices.size() != static_cast<size_t>(total) || paths.size() != static_cast<size_t>(total)) throw std::runtime_error("Execution identity has missing shards");
+        }
+        files[role] = json::array();
+        for (const auto& file : paths) {
+            if (!fs::is_regular_file(file)) throw std::runtime_error("Execution identity requires regular artifact files");
+            const auto size = fs::file_size(file);
+            const auto modified = fs::last_write_time(file);
+            const auto checksum = utils::content_sha256(file, cancelled);
+            if (size != fs::file_size(file) || modified != fs::last_write_time(file))
+                throw std::runtime_error("Artifact changed while reading execution identity");
+            files[role].push_back({{"path", path_to_utf8(file)}, {"bytes", size}, {"sha256", checksum}});
+        }
+    }
+    return {{"recipe", info.recipe}, {"checkpoints", info.checkpoints}, {"files", files}};
 }
 
 static std::set<fs::path> repo_occupant_paths(const std::string& repo_id,

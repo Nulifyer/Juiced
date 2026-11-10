@@ -77,6 +77,7 @@ public:
     CacheBoundaryWorker(const std::string& name, int port, const std::filesystem::path& directory) : PolicyWorker(name) {
         port_ = port;
         context_observation_ = {{"slot_ids", json::array({0})}};
+        execution_identity_ = {{"recipe", "llamacpp"}, {"captured", true}, {"engine", "dde879b-controlled-save-boundary"}, {"scope", "controlled-test-inputs"}};
         set_model_metadata(name, "fixture", ModelType::LLM, DEVICE_CPU, RecipeOptions("llamacpp", {
             {"ctx_size", 2048}, {"llamacpp_backend", "cpu"}, {"llamacpp_args", "--slot-save-path \"" + directory.string() + "\""}}));
     }

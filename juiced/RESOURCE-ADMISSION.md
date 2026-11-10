@@ -763,3 +763,23 @@ rejects cleanup while accepted preparation jobs remain pending. Failed or partia
 cleanup stays visible for a reference-checked retry. These rules cover retained
 prepared files and synchronous failure, not complete P3 artifact/worker references,
 conversion quality, hard filesystem quotas or host-crash durability.
+
+### Loaded inputs and cache compatibility
+
+The held worker lease supplies cache profile identity, address, options and
+context. Cache inspection does not pair a newer registration's files with an
+older worker. For local llama.cpp loads, ModelManager enumerates each declared
+checkpoint/companion and complete GGUF shard family. Startup hashes their content
+and the launch executable, then verifies those inputs again after readiness.
+Cancellation is checked between 64-KiB reads; identity work also has a 120-second
+elapsed-time bound inside the accepted load deadline. Blocking filesystem calls
+are not an end-to-end I/O deadline guarantee. Directory-backed or remotely resolved
+inputs remain uncaptured and cannot qualify this persistent-cache path.
+
+Profile schema2 excludes generation, listener port and observation timestamps so
+unchanged worker reloads/restarts preserve compatibility. It includes the frozen
+artifact content/provenance, resolved options, context layout and reported engine
+build. Old schema1 receipts and snapshots are retained and require requalification.
+This is the declared-input/launch-executable identity subset. Loaded shared-library,
+actual physical-device and complete external-input identity remain explicit open
+P1 requirements, rather than an implied immutable runtime-bundle guarantee.

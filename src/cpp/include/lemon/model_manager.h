@@ -316,6 +316,7 @@ public:
         bool owns_lock() const { return lock_.owns_lock(); }
     };
     ModelMutation model_mutation(const std::string& model_name, bool wait = true);
+    static json execution_inputs(const ModelInfo& info, const std::function<bool()>& cancelled);
     json user_model_definition(const std::string& model_name);
     bool artifact_referenced(const std::string& model_name, const std::filesystem::path& file);
     void remove_uploaded_model(const std::string& model_name, const json& expected_definition);

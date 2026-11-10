@@ -2,6 +2,7 @@
 #include "lemon/backends/llamacpp/llamacpp.h"
 #include "lemon/backends/llamacpp/llamacpp_gguf.h"
 #include "lemon/backends/llamacpp/llamacpp_request.h"
+#include "lemon/utils/content_hash.h"
 #include "llamacpp_system_utils.h"
 #include "lemon/backends/backend_registry.h"
 #include "lemon/backends/backend_ops.h"
@@ -286,6 +287,7 @@ void LlamaCppServer::load(const std::string& model_name,
     {
         std::lock_guard<std::mutex> state(state_mutex_);
         context_observation_ = json::object();
+        execution_identity_ = json::object();
     }
     ResourceAdmission::Lease acquisition;
     if (model_manager_ && model_info.extra<bool>("hf_load", false))
@@ -581,6 +583,32 @@ void LlamaCppServer::load(const std::string& model_name,
     command.env = std::move(env_vars);
     command.port = port_;
 
+    const auto identity_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(120);
+    const auto identity_cancelled = [&] {
+        return load_cancelled() || current_request_cancel_context().cancelled() ||
+            std::chrono::steady_clock::now() >= identity_deadline;
+    };
+    json identity = {{"schema", 1}, {"recipe", model_info.recipe}, {"captured", false},
+        {"scope", "declared-artifact-content-and-launch-executable"},
+        {"unresolved", json::array({"loaded-runtime-modules", "physical-device-identity", "external-input-audit"})}};
+    const auto executable_identity = [&] {
+        const auto path = fs::canonical(utils::path_from_utf8(process_executable));
+        const auto bytes = fs::file_size(path);
+        const auto modified = fs::last_write_time(path);
+        const auto checksum = utils::content_sha256(path, identity_cancelled);
+        if (bytes != fs::file_size(path) || modified != fs::last_write_time(path))
+            throw std::runtime_error("Launch executable changed during identity capture");
+        return json{{"path", utils::path_to_utf8(path)}, {"bytes", bytes}, {"sha256", checksum}};
+    };
+    try {
+        identity.update(ModelManager::execution_inputs(model_info, identity_cancelled));
+        identity["launch_executable"] = executable_identity();
+        identity["captured"] = true;
+    } catch (const std::exception& error) {
+        if (load_cancelled() || current_request_cancel_context().cancelled())
+            throw AdmissionError("request_cancelled", "Execution identity capture was cancelled", 499);
+        identity["reason"] = error.what();
+    }
     bool inherit_llama_output = (log_level_ == "info") || is_debug();
     start_server(
         std::make_unique<NativeProcess>(ProcessOutput{inherit_llama_output, true}, working_dir),
@@ -638,6 +666,28 @@ void LlamaCppServer::load(const std::string& model_name,
             throw AdmissionError("request_cancelled", "Model load was cancelled during context inspection", 499);
         LOG(WARNING, "LlamaCpp") << "Runtime context observation is unavailable; discovery will label configured values" << std::endl;
     }
+    if (identity.value("captured", false)) {
+        try {
+            const auto verified = ModelManager::execution_inputs(model_info, identity_cancelled);
+            if (identity.at("files") != verified.at("files") || identity.at("launch_executable") != executable_identity())
+                throw AdmissionError("execution_inputs_changed", "Loaded input content changed during backend startup", 409);
+        } catch (const AdmissionError&) { throw; }
+        catch (const std::exception& error) {
+            if (load_cancelled() || current_request_cancel_context().cancelled())
+                throw AdmissionError("request_cancelled", "Execution identity verification was cancelled", 499);
+            identity["captured"] = false;
+            identity["reason"] = error.what();
+        }
+    }
+    {
+        std::lock_guard<std::mutex> state(state_mutex_);
+        identity["engine"] = context_observation_.value("engine_build", std::string("unknown"));
+        identity["context"] = context_observation_;
+        identity["context"].erase("observed_at_ms");
+        identity["device_type"] = device_type_to_string(device_type_);
+        execution_identity_ = std::move(identity);
+    }
+
 }
 
 json LlamaCppServer::normalize_response_model(json response, const json& request) const {
