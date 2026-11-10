@@ -1606,6 +1606,8 @@ void ModelManager::set_extra_models_dir(const std::string& dir) {
 }
 
 ModelManager::~ModelManager() {
+    try { cancel_sync(); }
+    catch (const std::exception& error) { LOG(ERROR, "ModelManager") << "Cannot publish sync cancellation during teardown: " << error.what() << std::endl; }
     stop_model_notifications();
     cleanup_native_helpers();
 }
@@ -2635,6 +2637,7 @@ static bool hf_selected_artifacts_unchanged(
     HfTreePageCache* tree_cache);
 
 ModelManager::UpdateCheckResult ModelManager::check_for_model_updates(const std::vector<std::string>& targets) {
+    auto operation = resource_admission_ ? resource_admission_->write_scope("model-update-check") : ResourceAdmission::WriteScope{};
     auto admission = admit_acquisition("model-update-check");
     std::lock_guard<std::mutex> update_check_lock(update_check_mutex_);
 
@@ -3072,6 +3075,8 @@ json ModelManager::get_sync_status_locked() const {
 }
 
 json ModelManager::publish_sync_result_locked() {
+    if (sync_state_.cancel_requested && sync_state_.terminal_error.empty())
+        sync_state_.terminal_error = "Model synchronization cancelled";
     sync_state_.is_sync_running = false;
     sync_state_.is_full_sync = false;
     sync_state_.active_targets.clear();
@@ -3088,6 +3093,9 @@ json ModelManager::publish_sync_result_locked() {
     sync_state_.completed_generation_results[sync_state_.current_generation] = result;
     while (sync_state_.completed_generation_results.size() > 32)
         sync_state_.completed_generation_results.erase(sync_state_.completed_generation_results.begin());
+    sync_state_.worker_claimed = false;
+    sync_state_.cancel_requested = false;
+    sync_state_.writer = {};
     sync_state_.cv.notify_all();
     return result;
 }
@@ -3113,18 +3121,31 @@ json ModelManager::get_sync_status(uint64_t sync_id) const {
 }
 
 void ModelManager::cancel_sync() {
-
     std::lock_guard<std::mutex> lock(sync_state_.mutex);
+    if (!sync_state_.is_sync_running) return;
+    auto operation = sync_state_.writer.enter();
     sync_state_.cancel_requested = true;
+    if (!sync_state_.worker_claimed) {
+        sync_state_.terminal_error = "Model synchronization cancelled before execution";
+        publish_sync_result_locked();
+    }
 }
 
 ModelManager::SyncEnqueueResult ModelManager::enqueue_sync(const std::vector<std::string>& target_models, bool attach_if_running) {
+    auto operation = resource_admission_ ? resource_admission_->write_scope("model-sync-queue") : ResourceAdmission::WriteScope{};
     auto admission = admit_acquisition("model-sync-enqueue");
+    struct Target { std::string input, canonical, pub; };
+    std::vector<Target> targets;
+    for (const auto& name : target_models) {
+        auto canonical = resolve_model_name(name);
+        targets.push_back({name, canonical, get_public_model_name(canonical)});
+    }
     std::lock_guard<std::mutex> lock(sync_state_.mutex);
 
-    auto is_already_known = [this](const std::string& target) -> bool {
-        std::string canonical = resolve_model_name(target);
-        std::string pub = get_public_model_name(canonical);
+    auto is_already_known = [this](const Target& item) -> bool {
+        const auto& target = item.input;
+        const auto& canonical = item.canonical;
+        const auto& pub = item.pub;
         if (sync_state_.active_targets.count(target) || sync_state_.active_targets.count(pub) || sync_state_.active_targets.count(canonical)) {
             return true;
         }
@@ -3147,21 +3168,17 @@ ModelManager::SyncEnqueueResult ModelManager::enqueue_sync(const std::vector<std
             if (target_models.empty()) {
                 sync_state_.is_full_sync = true;
             } else {
-                for (const auto& t : target_models) {
-                    std::string canonical = resolve_model_name(t);
-                    std::string pub = get_public_model_name(canonical);
-                    if (!is_already_known(t)) {
-                        sync_state_.pending_targets.insert(pub);
-                    }
-                }
+                for (const auto& target : targets)
+                    if (!is_already_known(target)) sync_state_.pending_targets.insert(target.pub);
             }
         }
         return SyncEnqueueResult{/*already_running=*/true, /*sync_id=*/sync_state_.current_generation};
     }
 
     std::set<std::string> initial_targets;
-    for (const auto& target : target_models)
-        initial_targets.insert(get_public_model_name(resolve_model_name(target)));
+    for (const auto& target : targets) initial_targets.insert(target.pub);
+    sync_state_.writer = operation.continuation();
+    sync_state_.worker_claimed = false;
     sync_state_.current_generation++;
     sync_state_.is_sync_running = true;
     sync_state_.is_full_sync = target_models.empty();
@@ -3179,23 +3196,38 @@ ModelManager::SyncEnqueueResult ModelManager::enqueue_sync(const std::vector<std
 
 void ModelManager::fail_sync_start(uint64_t sync_id, const std::string& message) {
     std::lock_guard<std::mutex> lock(sync_state_.mutex);
-    if (!sync_state_.is_sync_running || sync_state_.current_generation != sync_id) return;
+    if (!sync_state_.is_sync_running || sync_state_.current_generation != sync_id || sync_state_.worker_claimed) return;
+    auto operation = sync_state_.writer.enter();
     sync_state_.terminal_error = message;
     publish_sync_result_locked();
 }
 
-json ModelManager::execute_sync() {
+json ModelManager::execute_sync(uint64_t generation) {
+    auto writer = [&] {
+        std::lock_guard<std::mutex> lock(sync_state_.mutex);
+        if (!generation) generation = sync_state_.current_generation;
+        if (!sync_state_.is_sync_running || sync_state_.current_generation != generation)
+            throw AdmissionError("sync_generation_stale", "This synchronization generation is no longer queued", 409);
+        if (sync_state_.worker_claimed)
+            throw AdmissionError("sync_worker_busy", "This synchronization generation already has a worker", 409);
+        sync_state_.worker_claimed = true;
+        return sync_state_.writer;
+    }();
+    auto operation = writer.enter();
     struct SyncStateGuard {
         ModelManager& manager;
+        uint64_t generation;
         bool active = true;
         ~SyncStateGuard() {
             if (active) {
                 std::lock_guard<std::mutex> lock(manager.sync_state_.mutex);
-                manager.sync_state_.terminal_error = "Sync worker terminated unexpectedly";
-                manager.publish_sync_result_locked();
+                if (manager.sync_state_.current_generation == generation && manager.sync_state_.is_sync_running) {
+                    manager.sync_state_.terminal_error = "Sync worker terminated unexpectedly";
+                    manager.publish_sync_result_locked();
+                }
             }
         }
-    } guard{*this};
+    } guard{*this, generation};
 
     enum class ModelCheckOutcome {
         UpToDate,
@@ -3207,6 +3239,15 @@ json ModelManager::execute_sync() {
     try {
         auto admission = admit_acquisition("model-sync");
         while (true) {
+            {
+                std::lock_guard<std::mutex> lock(sync_state_.mutex);
+                if (sync_state_.cancel_requested) {
+                    sync_state_.terminal_error = "Model synchronization cancelled";
+                    auto result = publish_sync_result_locked();
+                    guard.active = false;
+                    return result;
+                }
+            }
             std::vector<std::string> current_batch;
             bool run_full_sync = false;
 
@@ -3222,11 +3263,15 @@ json ModelManager::execute_sync() {
                 LOG(INFO, "ModelManager") << "Checking all models for sync/update..." << std::endl;
                 UpdateCheckResult full_check = check_for_model_updates();
 
+                std::map<std::string, std::string> canonicals;
+                for (const auto& [model, error] : full_check.failed_models) canonicals[model] = resolve_model_name(model);
+                for (const auto& model : full_check.updated_models) canonicals[model] = resolve_model_name(model);
+                for (const auto& model : full_check.up_to_date_models) canonicals[model] = resolve_model_name(model);
                 std::vector<std::string> canonicals_to_notify;
                 {
                     std::lock_guard<std::mutex> lock(sync_state_.mutex);
                     for (const auto& [m, err] : full_check.failed_models) {
-                        std::string canonical = resolve_model_name(m);
+                        const auto& canonical = canonicals.at(m);
                         if (std::find(sync_state_.completed_targets.begin(), sync_state_.completed_targets.end(), m) == sync_state_.completed_targets.end()) {
                             checked_canonicals_in_job[canonical] = ModelCheckOutcome::Failed;
                             canonicals_to_notify.push_back(canonical);
@@ -3238,7 +3283,7 @@ json ModelManager::execute_sync() {
                         }
                     }
                     for (const auto& m : full_check.updated_models) {
-                        std::string canonical = resolve_model_name(m);
+                        const auto& canonical = canonicals.at(m);
                         if (std::find(sync_state_.completed_targets.begin(), sync_state_.completed_targets.end(), m) == sync_state_.completed_targets.end()) {
                             checked_canonicals_in_job[canonical] = ModelCheckOutcome::UpdateAvailable;
                             canonicals_to_notify.push_back(canonical);
@@ -3253,7 +3298,7 @@ json ModelManager::execute_sync() {
                         }
                     }
                     for (const auto& m : full_check.up_to_date_models) {
-                        std::string canonical = resolve_model_name(m);
+                        const auto& canonical = canonicals.at(m);
                         if (std::find(sync_state_.completed_targets.begin(), sync_state_.completed_targets.end(), m) == sync_state_.completed_targets.end()) {
                             checked_canonicals_in_job[canonical] = ModelCheckOutcome::UpToDate;
                             canonicals_to_notify.push_back(canonical);
@@ -3284,8 +3329,13 @@ json ModelManager::execute_sync() {
             }
 
             for (const auto& t : pending) {
+                {
+                    std::lock_guard<std::mutex> lock(sync_state_.mutex);
+                    if (sync_state_.cancel_requested) break;
+                }
+                std::string canonical_name = t;
                 try {
-                    std::string canonical_name = resolve_model_name(t);
+                    canonical_name = resolve_model_name(t);
                     std::string public_name = get_public_model_name(canonical_name);
 
                     bool skip = false;
@@ -3351,10 +3401,10 @@ json ModelManager::execute_sync() {
                     {
                         std::lock_guard<std::mutex> lock(sync_state_.mutex);
                         sync_state_.failed_models[t] = e.what();
-                        checked_canonicals_in_job[resolve_model_name(t)] = ModelCheckOutcome::Failed;
+                        checked_canonicals_in_job[canonical_name] = ModelCheckOutcome::Failed;
                     }
                     if (sync_phase_callback_) {
-                        sync_phase_callback_("target_check_done:" + resolve_model_name(t));
+                        sync_phase_callback_("target_check_done:" + canonical_name);
                     }
                 }
             }
@@ -3362,7 +3412,7 @@ json ModelManager::execute_sync() {
             {
                 std::lock_guard<std::mutex> lock(sync_state_.mutex);
                 if (current_batch.empty()) {
-                    if (sync_state_.is_full_sync || !sync_state_.pending_targets.empty()) {
+                    if (!sync_state_.cancel_requested && (sync_state_.is_full_sync || !sync_state_.pending_targets.empty())) {
                         continue;
                     }
                     auto res = publish_sync_result_locked();
@@ -3374,6 +3424,12 @@ json ModelManager::execute_sync() {
             for (const auto& model_name : current_batch) {
                 {
                     std::lock_guard<std::mutex> lock(sync_state_.mutex);
+                    if (sync_state_.cancel_requested) {
+                        sync_state_.terminal_error = "Model synchronization cancelled";
+                        auto result = publish_sync_result_locked();
+                        guard.active = false;
+                        return result;
+                    }
                     sync_state_.active_targets.insert(model_name);
                 }
 
@@ -3420,6 +3476,7 @@ json ModelManager::execute_sync() {
 }
 
 json ModelManager::sync_models(const std::vector<std::string>& target_models, bool dry_run, bool attach_if_running) {
+    auto operation = resource_admission_ ? resource_admission_->write_scope("model-sync-request") : ResourceAdmission::WriteScope{};
     auto admission = admit_acquisition("model-sync-request");
     if (dry_run) {
         LOG(INFO, "ModelManager") << "Checking models for sync/update (dry-run)..." << std::endl;
@@ -3488,7 +3545,7 @@ json ModelManager::sync_models(const std::vector<std::string>& target_models, bo
         return get_sync_status(target_gen);
     }
 
-    return execute_sync();
+    return execute_sync(target_gen);
 }
 
 static void load_checkpoints(ModelInfo& info, json& model_json) {

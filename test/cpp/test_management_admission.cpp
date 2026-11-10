@@ -274,10 +274,16 @@ static void native_owners() {
         check(rejected([&] { models.check_for_model_updates(); }), "background update checks reject before remote metadata acquisition");
         router.configure_admission({{"mode", "legacy"}});
         const auto queued_sync = models.enqueue_sync({"asset"});
-        router.configure_admission({{"mode", "protected"}});
-        const auto sync_result = models.execute_sync();
+        bool queued_change_rejected = false;
+        try { router.configure_admission({{"mode", "protected"}}); }
+        catch (const AdmissionError& error) { queued_change_rejected = error.code == "admission_configuration_busy"; }
+        check(queued_change_rejected, "queued synchronization retains its accepted writer before dispatch");
+        router.pause_admission(true);
+        const auto sync_result = models.execute_sync(queued_sync.sync_id);
         check(sync_result.value("status", "") == "failed" && models.get_sync_status(queued_sync.sync_id).value("status", "") == "failed",
-              "unadmitted queued sync reaches a terminal failure after an admission policy change");
+              "paused queued sync reaches a generation-specific terminal failure without dispatch");
+        router.pause_admission(false);
+        router.configure_admission({{"mode", "protected"}});
         bool ready = false;
         runtime_manager.install_backend("llamacpp", "cpu", false, [&](const auto&) { ready = true; return true; });
         check(ready && fs::is_regular_file(engine), "protected loading reuses its installed runtime without an update");

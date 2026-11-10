@@ -92,6 +92,7 @@ void ModelManager::guard_native_helper_mutation(const std::string& model) {
 
 int ModelManager::finish_flm_helper_locked(bool interrupted, const std::function<void()>& publish_success) {
     auto& helper = *flm_helper_;
+    auto operation = helper.writer.enter();
     if (!helper.process && !helper.result) throw AdmissionError("helper_recovery_required", "Previous FLM helper termination requires recovery", 409);
     helper.finish_attempted = true;
     helper.interrupted |= interrupted;
@@ -130,6 +131,7 @@ int ModelManager::run_flm_helper(const std::string& model, const std::string& op
     const std::string& executable, const std::vector<std::string>& args,
     utils::OutputLineCallback on_line, int timeout_seconds, std::function<bool()> cancelled, FlmHelperPublication publication) {
     if (!resource_admission_) throw AdmissionError("operation_unqualified", "Native helper requires a bound management owner", 503);
+    auto writer = resource_admission_->write_scope("native-flm-helper");
     if (model.empty() || model.size() > maximum_model_bytes || operation.empty() || operation.size() > maximum_operation_bytes)
         throw AdmissionError("helper_identity_invalid", "Native helper model and operation must fit their journal bounds", 400);
     if (publication.id.size() > 64 || (publication.id.empty() != !bool(publication.commit)) ||
@@ -159,6 +161,7 @@ int ModelManager::run_flm_helper(const std::string& model, const std::string& op
         throw AdmissionError("helper_recovery_required", "Previous FLM helper termination requires recovery before another command", 409);
     if (!accepted) accepted = resource_admission_->acquire_management("flm:npu", "runtime-reference");
     auto helper = std::make_unique<FlmHelper>();
+    helper->writer = writer.continuation();
     helper->admission = std::move(accepted);
     helper->process = std::make_unique<AdoptedHelperProcess>();
     helper->intent = {{"model", model}, {"operation", operation}, {"fingerprint", fingerprint},

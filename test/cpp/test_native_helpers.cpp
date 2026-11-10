@@ -365,9 +365,37 @@ int main(int argc, char** argv) {
             catch (const AdmissionError& error) { uninstall_guarded = error.code == "runtime_reference_busy"; }
             check(install_guarded && uninstall_guarded && fs::is_regular_file(dependency),
                   "native runtime installation and removal preserve files referenced by an unconfirmed helper");
+            ledger.maintenance(true);
+            bool maintenance_rejected = false;
+            try { run("exit"); } catch (const AdmissionError& error) { maintenance_rejected = error.code == "maintenance_active"; }
+            check(maintenance_rejected && !ledger.wait_for_writes(std::chrono::milliseconds(1)),
+                  "maintenance rejects new helpers while retained uncertain cleanup owns its writer");
             ModelPublicationTestHook::stop_barrier(models, {});
             check(models.cleanup_native_helpers() && ledger.snapshot()["active"] == 0 && models.native_helper_status()["flm"]["pending"] == false,
                   "confirmed retry cleans only the retained child and commits terminal ownership");
+            check(ledger.wait_for_writes(std::chrono::milliseconds(50)),
+                  "accepted helper cleanup publishes its terminal journal during maintenance before releasing ownership");
+            ledger.maintenance(false);
+            HelperGate publishing;
+            const auto completion_count = test::make_scratch_dir("helper-maintenance") / "count";
+            auto completion = std::async(std::launch::async, [&] {
+                return models.run_flm_helper("Helper-Fixture", "remove", executable,
+                    {"--child", "count", completion_count.u8string()},
+                    [&](const auto&) { publishing.pause(); return true; }, 10, {},
+                    {"controlled-maintenance-publication", [&] {
+                        models.update_saved_model_options("Unrelated-Fixture", {{"ctx_size", 512}});
+                    }});
+            });
+            const bool attached = publishing.await(); ledger.maintenance(true);
+            check(attached && !ledger.wait_for_writes(std::chrono::milliseconds(1)),
+                  "an attached helper retains its accepted writer through caller publication");
+            publishing.open();
+            const int completed = completion.get();
+            int dispatched = 0; { std::ifstream input(completion_count); input >> dispatched; }
+            check(completed == 0 && dispatched == 1 && models.get_saved_model_options("Unrelated-Fixture")["ctx_size"] == 512 &&
+                  ledger.wait_for_writes(std::chrono::milliseconds(100)),
+                  "helper completion enters native model publication during maintenance before final release");
+            ledger.maintenance(false);
             ledger.pause(true); bool paused = false;
             try { run("exit"); } catch (const AdmissionError& error) { paused = error.code == "admission_paused"; }
             ledger.pause(false); ledger.configure({{"mode", "protected"}}); bool protected_mode = false;
@@ -383,6 +411,10 @@ int main(int argc, char** argv) {
             denied.reset();
             check(publication_failed && ledger.snapshot()["active"] == 1 && models.native_helper_status()["flm"]["pending"] == true,
                   "failed terminal publication retains the collected command result and ticket");
+            ledger.maintenance(true);
+            check(!ledger.wait_for_writes(std::chrono::milliseconds(1)),
+                  "a collected helper result retains writer ownership after failed terminal publication");
+            ledger.maintenance(false);
             const int result = models.run_flm_helper("Helper-Fixture", "fixture", executable, {"--child", "count", counter.u8string()});
             int count = 0; { std::ifstream input(counter); input >> count; }
             check(result == 0 && count == 1 && ledger.snapshot()["active"] == 0,

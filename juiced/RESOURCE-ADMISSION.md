@@ -691,6 +691,21 @@ can discard them or certify a prior writer stopped. Unsupported or malformed
 storage is preserved and blocks mutation. Fixed native acquisition, inference,
 media and Barista operations continue through their existing owners.
 
+Model synchronization retains one accepted writer per queued generation. Native
+workers claim that generation exactly once; stale dispatch/failure handles cannot
+consume a newer queue. Cancellation before claim publishes a terminal result with
+no metadata/process dispatch. Active cancellation retains ownership until accepted
+metadata effects finish. Startup failure and unexpected exceptions use the same
+bounded terminal-result owner. Target-name resolution occurs before the sync-state
+lock, including full-check results and failure reporting. Status inspection remains available.
+
+FLM helper ownership retains its accepted writer through process collection,
+terminal journal and caller publication. Unconfirmed cleanup or failed publication
+keeps both tickets and writer context. Trusted cleanup can finish that accepted
+operation during maintenance; new helper dispatch rejects. Caller-owned deletion
+publication still requires its matching native owner. Prior-manager ambiguity
+still requires independent recovery and never gains a fabricated continuation.
+
 Maintenance rejects new loads and user inference. An accepted native mutation may
 finish a required load or restoration through its continuation, with the same exact
 resource-profile, physical-capacity, queue and deadline checks. A continuation never

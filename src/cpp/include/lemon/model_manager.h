@@ -482,8 +482,8 @@ struct UpdateCheckResult {
     // Called only when dispatch fails before a worker starts for this generation.
     void fail_sync_start(uint64_t sync_id, const std::string& message);
 
-    // Execute background queue processing until empty.
-    json execute_sync();
+    // Claim one queued generation; zero claims the current queue synchronously.
+    json execute_sync(uint64_t generation = 0);
 
     // Trigger sync/update of specified or all outdated models.
     // When target_models is empty, targets all downloaded outdated models.
@@ -698,6 +698,7 @@ private:
     std::mutex models_cache_build_mutex_;
     uint64_t cache_revision_ = 0;
     struct FlmHelper {
+        ResourceAdmission::WriteToken writer;
         ResourceAdmission::Lease admission;
         std::unique_ptr<ServerProcess> process;
         json intent;
@@ -736,6 +737,8 @@ private:
         bool is_sync_running = false;
         bool is_full_sync = false;
         bool cancel_requested = false;
+        bool worker_claimed = false;
+        ResourceAdmission::WriteToken writer;
         uint64_t current_generation = 0;
         uint64_t completed_generation = 0;
         std::map<uint64_t, json> completed_generation_results;

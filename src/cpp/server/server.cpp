@@ -2693,6 +2693,8 @@ void Server::handle_model_update_check(const httplib::Request& req, httplib::Res
         };
 
         res.set_content(response.dump(), "application/json");
+    } catch (const AdmissionError& error) {
+        set_model_error_response(error.to_json(), res);
     } catch (const std::exception& e) {
         LOG(WARNING, "Server") << "Manual model update check failed: " << e.what() << std::endl;
         res.status = 500;
@@ -2786,6 +2788,10 @@ void Server::handle_models_sync(const httplib::Request& req, httplib::Response& 
         }
     }
 
+    ResourceAdmission::WriteToken writer;
+    try { writer = router_->admission_view().write_scope("model-sync-entry").continuation(); }
+    catch (const AdmissionError& error) { set_model_error_response(error.to_json(), res); return; }
+    auto operation = writer.enter();
     std::shared_ptr<ResourceAdmission::Lease> admission;
     try { admission = std::make_shared<ResourceAdmission::Lease>(router_->admit_management("model-sync", "model-sync-entry")); }
     catch (const AdmissionError& error) { set_model_error_response(error.to_json(), res); return; }
@@ -2834,14 +2840,16 @@ void Server::handle_models_sync(const httplib::Request& req, httplib::Response& 
             background_sync_threads_.reserve(background_sync_threads_.size() + 1);
             auto finished_flag = std::make_shared<std::atomic<bool>>(false);
             if (background_start_barrier_) background_start_barrier_("model-sync");
-            std::thread worker([this, finished_flag, admission]() {
+            std::thread worker([this, finished_flag, admission, generation = enqueue_res.sync_id]() {
                 (void)admission; // Keep accepted sync admission until its worker finishes.
                 try {
                     LOG(INFO, "Server") << "Background model sync thread started" << std::endl;
-                    const auto result = model_manager_->execute_sync();
+                    const auto result = model_manager_->execute_sync(generation);
                     LOG(INFO, "Server") << "Background model sync ended with status: " << result.value("status", "unknown") << std::endl;
                 } catch (const std::exception& e) {
                     LOG(WARNING, "Server") << "Background model sync failed: " << e.what() << std::endl;
+                } catch (...) {
+                    LOG(WARNING, "Server") << "Background model sync failed with an unknown exception" << std::endl;
                 }
                 finished_flag->store(true);
             });
@@ -2850,6 +2858,13 @@ void Server::handle_models_sync(const httplib::Request& req, httplib::Response& 
         } catch (const std::exception& error) {
             model_manager_->fail_sync_start(enqueue_res.sync_id, "Model synchronization worker could not start");
             LOG(WARNING, "Server") << "Could not start model sync worker: " << error.what() << std::endl;
+            res.status = 500;
+            res.set_content(nlohmann::json{{"error", {{"code", "worker_start_failed"},
+                {"message", "Model synchronization worker could not start"}}}}.dump(), "application/json");
+            return;
+        } catch (...) {
+            model_manager_->fail_sync_start(enqueue_res.sync_id, "Model synchronization worker could not start");
+            LOG(WARNING, "Server") << "Model sync dispatch failed with an unknown exception" << std::endl;
             res.status = 500;
             res.set_content(nlohmann::json{{"error", {{"code", "worker_start_failed"},
                 {"message", "Model synchronization worker could not start"}}}}.dump(), "application/json");
@@ -2870,6 +2885,8 @@ void Server::handle_models_sync(const httplib::Request& req, httplib::Response& 
         nlohmann::json sync_result = model_manager_->sync_models(target_models, false, attach_if_running);
         res.set_content(sync_result.dump(), "application/json");
         res.status = 200;
+    } catch (const AdmissionError& error) {
+        set_model_error_response(error.to_json(), res);
     } catch (const std::exception& e) {
         LOG(WARNING, "Server") << "Model sync failed: " << e.what() << std::endl;
         res.status = 500;

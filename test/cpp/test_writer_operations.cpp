@@ -83,6 +83,14 @@ struct StatePublicationTestHook {
         httplib::Request request; httplib::Response response; response.status = 200;
         server.handle_downloads(request, response); return response;
     }
+    static httplib::Response update_check(Server& server) {
+        httplib::Request request; request.method = "POST";
+        httplib::Response response; response.status = 200; server.handle_model_update_check(request, response); return response;
+    }
+    static httplib::Response sync(Server& server) {
+        httplib::Request request; request.method = "POST"; request.path = "/internal/models/sync"; request.body = json{{"async", true}}.dump();
+        httplib::Response response; response.status = 200; server.handle_models_sync(request, response); return response;
+    }
     static void enqueue(Server& server, const json& command) { server.juiced_->enqueue(command); }
     static bool execute_pending(Server& server) { return server.juiced_->execute_pending(); }
     static json operations(Server& server) { std::lock_guard lock(server.juiced_->mutex_); return server.juiced_->operations_; }
@@ -378,8 +386,107 @@ static void late_download_controls() {
     RuntimeConfig::set_global(nullptr);
 }
 
+static void synchronization_ownership() {
+    using Hook = StatePublicationTestHook;
+    const auto root = test::make_scratch_dir("writer-sync");
+    auto settings = ConfigFile::base_defaults();
+    settings["broadcast"] = false; settings["auto_check_model_updates"] = false; settings["offline"] = true;
+    auto config = std::make_shared<RuntimeConfig>(settings); RuntimeConfig::set_global(config.get());
+    {
+        Server server(config, root.string(), root.string()); Hook::finish_background(server);
+        auto admission = Hook::admission(server); auto& models = Hook::models(server);
+        const std::string model = "user.Sync-Owned";
+        models.register_user_model(model, {{"recipe", "llamacpp"}, {"checkpoint", "fixture/repo:Q4"}, {"labels", json::array({"chat"})}});
+        std::atomic<int> checked{0};
+        models.set_update_check_override_for_test([&](const auto&) {
+            ++checked; models.update_saved_model_options(model, {{"ctx_size", 512}});
+            ModelManager::UpdateCheckResult result; result.up_to_date_models = {model}; return result;
+        });
+        const auto queued = models.enqueue_sync();
+        admission.maintenance(true);
+        check(!admission.wait_for_writes(1ms) && models.get_sync_status(queued.sync_id)["already_in_progress"] == true,
+              "an accepted synchronization generation owns its undispatched queue");
+        check(closed([&] { models.enqueue_sync(); }) && closed([&] { models.check_for_model_updates(); }),
+              "maintenance rejects new synchronization and metadata acquisition before callbacks");
+        const auto finished = models.execute_sync(queued.sync_id);
+        check(finished["status"] == "success" && checked == 1 && models.get_saved_model_options(model)["ctx_size"] == 512 &&
+              admission.wait_for_writes(100ms), "accepted queued sync enters its continuation and finishes native metadata publication during drain");
+        admission.maintenance(false);
+        const auto cancelled = models.enqueue_sync(); admission.maintenance(true); models.cancel_sync();
+        check(models.get_sync_status(cancelled.sync_id)["status"] == "failed" && checked == 1 && admission.wait_for_writes(100ms),
+              "proven undispatched cancellation publishes its terminal generation without metadata or process acquisition");
+        admission.maintenance(false);
+        const auto current = models.enqueue_sync();
+        bool stale = false;
+        try { models.execute_sync(cancelled.sync_id); } catch (const AdmissionError& error) { stale = error.code == "sync_generation_stale"; }
+        models.fail_sync_start(cancelled.sync_id, "obsolete dispatch failure");
+        check(stale && models.get_sync_status(current.sync_id)["already_in_progress"] == true && checked == 1 &&
+              !admission.wait_for_writes(1ms), "old execution and failure handles cannot consume or release a newer queue");
+        models.execute_sync(current.sync_id);
+
+        std::promise<void> entered, release;
+        const auto released = release.get_future().share();
+        models.set_update_check_override_for_test([&](const auto&) {
+            ++checked; entered.set_value(); released.wait();
+            models.update_saved_model_options(model, {{"ctx_size", 768}});
+            return ModelManager::UpdateCheckResult{};
+        });
+        const auto active = models.enqueue_sync();
+        auto working = std::async(std::launch::async, [&] { return models.execute_sync(active.sync_id); });
+        const bool reached = entered.get_future().wait_for(5s) == std::future_status::ready;
+        admission.maintenance(true);
+        bool duplicate = false;
+        try { models.execute_sync(active.sync_id); } catch (const AdmissionError& error) { duplicate = error.code == "sync_worker_busy"; }
+        models.fail_sync_start(active.sync_id, "cannot cancel an attached worker");
+        models.cancel_sync();
+        check(reached && duplicate && models.get_sync_status(active.sync_id)["already_in_progress"] == true &&
+              !admission.wait_for_writes(1ms), "duplicate dispatch and late failure cannot steal an attached worker or discharge its cancellation");
+        release.set_value(); const auto stopped = working.get();
+        check(stopped["status"] == "failed" && stopped["terminal_error"] == "Model synchronization cancelled" &&
+              models.get_saved_model_options(model)["ctx_size"] == 768 && admission.wait_for_writes(100ms),
+              "active cancellation waits for accepted metadata effects and terminal publication before drain");
+        admission.maintenance(false);
+        models.set_update_check_override_for_test([](const auto&) { return ModelManager::UpdateCheckResult{}; });
+
+        config->set({{"offline", false}});
+        std::promise<void> prepared, failed;
+        const auto failure = failed.get_future().share();
+        Hook::start_barrier(server, [&](const auto& name) {
+            if (name == "model-sync") { prepared.set_value(); failure.wait(); throw std::runtime_error("controlled sync dispatch failure"); }
+        });
+        auto dispatching = std::async(std::launch::async, [&] { return Hook::sync(server); });
+        const bool accepted = prepared.get_future().wait_for(5s) == std::future_status::ready;
+        const auto generation = models.get_sync_status()["sync_id"].get<uint64_t>();
+        admission.maintenance(true);
+        const auto rejected = Hook::sync(server);
+        const auto metadata_rejected = Hook::update_check(server);
+        check(metadata_rejected.status == 503 && json::parse(metadata_rejected.body)["error"]["code"] == "maintenance_active" &&
+              metadata_rejected.get_header_value("Retry-After") == "1",
+              "manual metadata acquisition preserves its typed maintenance rejection");
+        check(accepted && rejected.status == 503 && !admission.wait_for_writes(1ms),
+              "Server sync ownership spans queue acceptance through delayed thread dispatch");
+        failed.set_value(); const auto response = dispatching.get(); Hook::start_barrier(server, {});
+        check(response.status == 500 && json::parse(response.body)["error"]["code"] == "worker_start_failed" &&
+              models.get_sync_status(generation)["status"] == "failed" && admission.wait_for_writes(100ms),
+              "dispatch failure finalizes the exact accepted generation while fresh mutations remain closed");
+        admission.maintenance(false);
+        Hook::start_barrier(server, [](const auto&) { throw 7; });
+        const auto unknown_start = Hook::sync(server); Hook::start_barrier(server, {});
+        check(unknown_start.status == 500 && json::parse(unknown_start.body)["error"]["code"] == "worker_start_failed" &&
+              models.get_sync_status()["status"] == "failed" && admission.wait_for_writes(100ms),
+              "unknown dispatch exceptions still finalize queued ownership without starting a worker");
+        models.set_update_check_override_for_test([](const auto&) -> ModelManager::UpdateCheckResult { throw 7; });
+        const auto unknown_worker = Hook::sync(server);
+        const auto unknown_generation = json::parse(unknown_worker.body)["sync_id"].get<uint64_t>();
+        check(unknown_worker.status == 202 && admission.wait_for_writes(5s) &&
+              models.get_sync_status(unknown_generation)["terminal_error"] == "Sync worker terminated unexpectedly",
+              "unknown background exceptions preserve manager survival and terminal generation accounting");
+    }
+    RuntimeConfig::set_global(nullptr);
+}
+
 int main() {
-    configuration_aliases(); model_publication(); server_effect_lifetime(); deferred_publication(); late_download_controls();
+    configuration_aliases(); model_publication(); server_effect_lifetime(); deferred_publication(); late_download_controls(); synchronization_ownership();
     std::fprintf(stderr, "Writer operations: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }
