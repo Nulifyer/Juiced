@@ -8,6 +8,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 #include <nlohmann/json.hpp>
 
@@ -44,6 +45,9 @@ public:
         std::function<bool()> cancelled;
         std::optional<uint64_t> config_revision;
         std::map<std::string, uint64_t> workload;
+        uint64_t request_id = 0;
+        std::vector<int> execution_slots;
+        std::optional<int> requested_slot;
     };
     struct Policy {
         uint64_t revision;
@@ -63,7 +67,9 @@ public:
         void completed();
         void retain_residency();
         bool deadline_expired() const;
+        std::chrono::steady_clock::time_point completion_deadline() const;
         bool protected_mode() const;
+        std::optional<int> execution_slot() const;
     private:
         friend class ResourceAdmission;
         Lease(std::shared_ptr<State> state, uint64_t id);

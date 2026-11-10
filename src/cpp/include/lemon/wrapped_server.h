@@ -102,6 +102,8 @@ public:
         void resources_started() { resources_.started(); }
         void resources_completed() { resources_.completed(); }
         bool deadline_expired() const { return resources_.deadline_expired(); }
+        std::optional<int> execution_slot() const { return resources_.execution_slot(); }
+        std::chrono::steady_clock::time_point completion_deadline() const { return resources_.completion_deadline(); }
         uint64_t generation() const { return server_ ? server_->get_instance_id() : 0; }
     private:
         friend class WrappedServer;

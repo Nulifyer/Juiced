@@ -33,6 +33,15 @@ limits. Unknown or unrecorded qualification is not a successful test.
 | `GET /v1/juiced/admission` | Pending work, reservations, allocations, and uncertain termination |
 | `GET /v1/juiced/requests` | Bounded request metadata for diagnostics |
 
+Admission observations include `physical_slots` for requests with an observed
+native slot inventory. Each record binds a worker generation to its inventory,
+unique claimed slot IDs and pending count. Nested cache-state and inference
+tickets share a physical claim; their memory charges remain distinct. An expired
+wait for these slots returns `execution_slots_busy`. Protected or leased paths
+reject missing inventory with `execution_slots_unknown`; conflicting observations
+use `execution_slots_changed`. Unprotected legacy requests without an inventory
+retain the backend's existing behavior and have no qualified slot claim. These observations do not qualify memory peaks or latency.
+
 URL-encode model IDs in query parameters. Request metadata is not a stored
 conversation API. The default native port for a source build is `13305`.
 The Juiced container explicitly uses `8080`.

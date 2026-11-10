@@ -243,7 +243,7 @@ public:
         WrappedServer::InferenceLease ownership;
         explicit operator bool() const { return bool(ownership) && !address.empty(); }
     };
-    WrappedServer::InferenceLease acquire_model_state_operation(const std::string& model_name) const;
+    WrappedServer::InferenceLease acquire_model_state_operation(const std::string& model_name, bool reserve_execution_slot = false) const;
     StreamingTranscriptionLease acquire_streaming_transcription(const std::string& model_name) const;
 
     json chat_completion(const json& request, std::atomic<bool>* cancel = nullptr);
@@ -341,7 +341,7 @@ private:
     ResourceAdmission::Lease admit_worker(const WrappedServer& server, ResourceAdmission::Operation operation,
         const RequestEnvelope* request = nullptr,
         std::optional<ResourceAdmission::Policy> request_policy = std::nullopt,
-        std::function<bool()> intent_cancelled = {}) const;
+        std::function<bool()> intent_cancelled = {}, bool reserve_execution_slot = false) const;
     std::shared_ptr<WrappedServer> shared_worker(WrappedServer* server) const;
 
     mutable std::mutex load_mutex_;              // Protects loading state and loaded_servers_

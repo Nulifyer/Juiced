@@ -88,7 +88,7 @@ private:
   std::string voice_signature_;
   long long voice_retry_after_ = 0;
   json voice_status_ = {{"enabled", false}, {"process_running", false}};
-  std::map<std::string, std::set<int>> active_slots_;
+  std::map<std::string, size_t> active_cache_operations_;
   std::set<std::string> active_snapshots_;
   std::filesystem::path snapshot_directory_;
   std::string cache_run_id_;

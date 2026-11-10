@@ -10,6 +10,7 @@
 #include "lemon/gguf_reader.h"
 #include "lemon/model_manager.h"
 #include <algorithm>
+#include <climits>
 #include <cctype>
 #include <filesystem>
 #include <regex>
@@ -26,6 +27,7 @@
 #include "lemon/error_types.h"
 #include "lemon/system_info.h"
 #include <algorithm>
+#include <climits>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -600,6 +602,32 @@ void LlamaCppServer::load(const std::string& model_name,
             const auto slots = positive(props.value("total_slots", json()), 4096);
             json observation = {{"source", "llamacpp:/props"}, {"per_request_tokens", per_request}, {"slots", slots},
                 {"observed_at_ms", std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count()}};
+            if (get_model_type() == ModelType::LLM) {
+                try {
+                    const auto response = utils::HttpClient::get("http://127.0.0.1:" + std::to_string(port_) + "/slots", {}, 2,
+                        utils::HttpSecurityPolicy::TrustedLoopback, current_request_cancel_context(), 1024 * 1024);
+                    const auto inventory = json::parse(response.body);
+                    std::set<int> ids;
+                    bool valid = response.status_code == 200 && inventory.is_array() &&
+                        !inventory.empty() && inventory.size() <= 4096 &&
+                        (slots.is_null() || inventory.size() == slots.get<size_t>());
+                    if (valid) for (const auto& slot : inventory) {
+                        if (!slot.is_object() || !slot.contains("id") || !slot.at("id").is_number_integer() ||
+                            slot.at("id") < 0 || slot.at("id") > INT_MAX || !ids.insert(slot.at("id").get<int>()).second) {
+                            valid = false;
+                            break;
+                        }
+                    }
+                    if (valid) {
+                        observation["slot_ids"] = ids;
+                        observation["slots"] = ids.size();
+                        observation["slot_source"] = "llamacpp:/slots";
+                    } else observation["slots"] = nullptr;
+                } catch (const std::exception&) {
+                    if (current_request_cancel_context().cancelled()) throw;
+                    LOG(WARNING, "LlamaCpp") << "Execution slot inventory is unavailable" << std::endl;
+                }
+            }
             const auto build = props.value("build_info", json());
             if (build.is_string() && build.get_ref<const std::string&>().size() <= 256) observation["engine_build"] = build;
             std::lock_guard<std::mutex> state(state_mutex_);

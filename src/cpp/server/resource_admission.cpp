@@ -85,6 +85,7 @@ struct ResourceAdmission::State {
         Charges resident_costs;
         std::string priority = "interactive";
         size_t concurrency = 0;
+        int execution_slot = -1;
         Clock::time_point queue_deadline;
         Clock::time_point completion_deadline;
         std::chrono::milliseconds completion_limit{300000};
@@ -147,7 +148,33 @@ struct ResourceAdmission::State {
         }
         return Capacity::Available;
     }
+    std::optional<int> execution_slot(const Entry& entry) const {
+        std::set<int> occupied, request_slots;
+        std::optional<int> parent;
+        for (const auto& [id, active_entry] : active) {
+            if (active_entry->work.generation != entry.work.generation ||
+                active_entry->execution_slot < 0) continue;
+            occupied.insert(active_entry->execution_slot);
+            const bool same_request = entry.work.request_id != 0 &&
+                active_entry->work.request_id == entry.work.request_id &&
+                active_entry->work.principal == entry.work.principal;
+            if (!same_request) continue;
+            if (active_entry->work.operation == Operation::Request)
+                request_slots.insert(active_entry->execution_slot);
+            if (entry.work.operation == Operation::Request &&
+                active_entry->work.operation == Operation::State && !active_entry->uncertain)
+                parent = active_entry->execution_slot;
+        }
+        if (parent && !request_slots.count(*parent) &&
+            (!entry.work.requested_slot || *entry.work.requested_slot == *parent)) return parent;
+        for (const auto slot : entry.work.execution_slots) {
+            if ((!entry.work.requested_slot || *entry.work.requested_slot == slot) &&
+                !occupied.count(slot)) return slot;
+        }
+        return std::nullopt;
+    }
     bool eligible(const Entry& entry) const {
+        if (!entry.work.execution_slots.empty() && !execution_slot(entry)) return false;
         size_t running = 0, state_running = 0, generation_running = 0;
         for (const auto& item : active) {
             if (item.second->resident || item.second->work.operation == Operation::Management ||
@@ -409,6 +436,19 @@ ResourceAdmission::Lease ResourceAdmission::acquire(Work work) {
         ++state_->admitted;
         return Lease(state_, entry->id);
     }
+    if (!entry->work.execution_slots.empty()) {
+        const std::set<int> slots(entry->work.execution_slots.begin(), entry->work.execution_slots.end());
+        if (!entry->work.generation || slots.size() != entry->work.execution_slots.size() ||
+            slots.size() > 4096 || *slots.begin() < 0)
+            reject("execution_slots_invalid", "Worker slot inventory is invalid", 503);
+        if (entry->work.requested_slot && !slots.count(*entry->work.requested_slot))
+            reject("execution_slot_unknown", "The requested slot is not in this worker's inventory", 400);
+        for (const auto& [id, active] : state_->active) {
+            if (active->execution_slot < 0 || active->work.generation != entry->work.generation) continue;
+            if (std::set<int>(active->work.execution_slots.begin(), active->work.execution_slots.end()) != slots)
+                reject("execution_slots_changed", "Worker slot inventory changed within one generation", 409);
+        }
+    }
     const auto profiles = config.value("models", json::object());
     const auto profile = profiles.find(entry->work.model);
     if (profile != profiles.end()) {
@@ -480,9 +520,15 @@ ResourceAdmission::Lease ResourceAdmission::acquire(Work work) {
             if (state_->configuration_pending) reject("admission_configuration_pending", "Admission configuration is changing", 503);
             if (state_->stopped || state_->paused) reject("admission_paused", "Runtime admission is paused", 503);
             if (entry->work.cancelled && entry->work.cancelled()) reject("request_cancelled", "Request disconnected while queued", 499);
-            if (Clock::now() >= entry->queue_deadline) reject("queue_deadline_exceeded", "Runtime queue wait deadline exceeded", 429);
+            if (Clock::now() >= entry->queue_deadline) {
+                if (!entry->work.execution_slots.empty() && !state_->execution_slot(*entry))
+                    reject("execution_slots_busy", "Worker slots stayed busy until the queue deadline", 429);
+                reject("queue_deadline_exceeded", "Runtime queue wait deadline exceeded", 429);
+            }
             if (state_->selected() == entry) {
                 entry->completion_deadline = Clock::now() + entry->completion_limit;
+                if (!entry->work.execution_slots.empty())
+                    entry->execution_slot = *state_->execution_slot(*entry);
                 entry->work.cancelled = {};
                 state_->active.emplace(entry->id, entry);
                 erase();
@@ -507,7 +553,8 @@ void ResourceAdmission::Lease::started() {
     std::lock_guard<std::mutex> lock(state_->mutex);
     auto& entry = *state_->active.at(id_);
     entry.started = !entry.costs.empty() || entry.work.operation == Operation::State ||
-        entry.work.operation == Operation::Load || entry.work.operation == Operation::Management;
+        entry.work.operation == Operation::Load || entry.work.operation == Operation::Management ||
+        entry.execution_slot >= 0;
     entry.complete = false;
 }
 void ResourceAdmission::Lease::completed() {
@@ -530,10 +577,21 @@ bool ResourceAdmission::Lease::deadline_expired() const {
     std::lock_guard<std::mutex> lock(state_->mutex);
     return Clock::now() >= state_->active.at(id_)->completion_deadline;
 }
+Clock::time_point ResourceAdmission::Lease::completion_deadline() const {
+    if (!id_) return Clock::time_point::max();
+    std::lock_guard<std::mutex> lock(state_->mutex);
+    return state_->active.at(id_)->completion_deadline;
+}
 bool ResourceAdmission::Lease::protected_mode() const {
     if (!id_) return false;
     std::lock_guard<std::mutex> lock(state_->mutex);
     return state_->active.at(id_)->protected_mode;
+}
+std::optional<int> ResourceAdmission::Lease::execution_slot() const {
+    if (!id_) return std::nullopt;
+    std::lock_guard<std::mutex> lock(state_->mutex);
+    const auto slot = state_->active.at(id_)->execution_slot;
+    return slot >= 0 ? std::optional<int>(slot) : std::nullopt;
 }
 void ResourceAdmission::Lease::release() noexcept {
     if (!id_) return;
@@ -622,6 +680,26 @@ json ResourceAdmission::snapshot() const {
         const auto limit = optional_limit(profile, "concurrency");
         model_limits[name] = limit ? json(limit) : json(nullptr);
     }
+    std::map<uint64_t, json> slot_generations;
+    std::map<uint64_t, std::set<int>> claimed_slots;
+    for (const auto& [id, entry] : state_->active) {
+        if (entry->work.execution_slots.empty()) continue;
+        slot_generations[entry->work.generation] = {{"generation", entry->work.generation},
+            {"model", entry->work.model}, {"inventory", entry->work.execution_slots}, {"pending", 0}};
+        if (entry->execution_slot >= 0) claimed_slots[entry->work.generation].insert(entry->execution_slot);
+    }
+    for (const auto& entry : state_->pending) {
+        if (entry->work.execution_slots.empty()) continue;
+        auto& generation = slot_generations[entry->work.generation];
+        if (generation.is_null()) generation = {{"generation", entry->work.generation},
+            {"model", entry->work.model}, {"inventory", entry->work.execution_slots}, {"pending", 0}};
+        generation["pending"] = generation["pending"].get<size_t>() + 1;
+    }
+    json physical_slots = json::array();
+    for (auto& [generation, observation] : slot_generations) {
+        observation["claimed"] = claimed_slots[generation];
+        physical_slots.push_back(std::move(observation));
+    }
     return {{"ingress", {{"active", bodies}, {"reading", readers}, {"control_reading", control_readers},
                         {"control_reserved_bytes", ingress_control_reserve(ingress)}, {"reserved_body_bytes", body_bytes},
                         {"reserved_host_bytes", host_bytes}, {"physical_pool", "host"},
@@ -637,7 +715,8 @@ json ResourceAdmission::snapshot() const {
             {"principal_pending_limit", principal_limit ? json(principal_limit) : json(nullptr)},
             {"model_concurrency", model_limits}}},
         {"configuration_pending", state_->configuration_pending}, {"pending", state_->pending.size()}, {"active", running},
-        {"resident", resident}, {"uncertain", uncertain}, {"pools", pools}, {"latency_qualified", false},
+        {"resident", resident}, {"uncertain", uncertain}, {"pools", pools},
+        {"physical_slots", physical_slots}, {"latency_qualified", false},
         {"admitted_total", state_->admitted}, {"rejected_total", state_->rejected}};
 }
 } // namespace lemon

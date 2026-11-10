@@ -53,6 +53,34 @@ extension. It does not establish model fit, successful concurrent serving,
 useful cache reuse or device/quality qualification. Other backends retain explicit
 unknown observations until their native reporting contracts are implemented.
 
+## Physical execution slots
+
+llama.cpp also reads `/slots` during owned startup with the same two-second and
+1-MiB bounds. Unique nonnegative IDs become a generation-bound inventory; an
+available `/props` count must agree. IDs are not inferred from a configured thread
+limit. Router uses this inventory for native text requests and manual slot mutation.
+
+The existing ResourceAdmission queue owns physical claims, FIFO eligibility,
+priorities, shared bounds, cancellation and deadlines. The trusted native request
+ID permits an inference ticket to share its own cache-state ticket's slot. Parallel
+child inference cannot share that slot, nor can another principal or generation.
+State and request byte charges remain independent. The public `physical_slots`
+projection counts unique physical claims rather than logical tickets.
+
+Cache operations retain policy/session ownership separately from physical slots.
+There is no second slot queue or active-slot registry. Deferred providers restore
+native identity and deadlines. A settled stream finalizes its snapshot and releases
+its state lease before publishing the terminal event. Unresolved work retains its
+claim; idle inference still cannot discharge an uncertain state writer.
+
+Protected or leased paths reject an unknown inventory. Unprotected legacy requests
+without one retain backend behavior and remain unqualified for native slot control.
+No launch argument, context setting, principal quota or model quota is invented by
+slot admission. A one-slot worker can queue many conversations; an explicit
+multi-slot profile must provide its intended per-request context and resource budget.
+Functional one/two-slot serving does not establish automatic parallel tuning,
+physical/UMA peak bounds, accelerator termination or essential-service latency.
+
 ## Admission controls
 
 `GET /v1/juiced/admission` reports pending work, active reservations, resident worker
@@ -81,8 +109,9 @@ The admission snapshot advertises `optional_limits.schema_version: 1` with the
 effective optional caps. Clients must inspect this support before sending null
 to an older server. Global active/pending bounds, per-service pending bounds,
 physical reservations, deadlines and fairness still apply when quotas are unset.
-This does not yet qualify actual backend/cache-slot scheduling or five concurrent
-served chat requests; those require the separate slot and resource acceptance.
+For observed llama.cpp inventories, Router joins actual inference and cache-state
+slots to this queue. Functional slot tests remain separate from full resource and
+essential-service qualification.
 
 Queue wait defaults are 2, 10 and 30 seconds respectively. These bound queue
 waiting; model profiles declare a separate completion deadline. FIFO applies within

@@ -164,6 +164,11 @@ int main() {
                   "invalid runtime observations never become advertised positive serving limits");
         }
         worker->context(json::object());
+        json unknown_request = {{"model", worker->get_model_name()}, {"messages", json::array()}, {"max_tokens", 32}};
+        auto unknown = router.chat_completion(unknown_request);
+        check(unknown.contains("error") && unknown["error"]["details"]["code"] == "execution_slots_unknown" && worker->calls == 0,
+              "protected inference requires an observed slot inventory before provider dispatch");
+        worker->context({{"slot_ids", json::array({0})}});
         std::atomic<bool> allowed{true};
         router.set_model_access_policy([&](const std::string&) { return allowed.load(); });
         json request = {{"model", worker->get_model_name()}, {"messages", json::array()}, {"max_tokens", 32}, {"priority", "essential"}};
@@ -215,7 +220,7 @@ int main() {
         check(inspection.wait_for(100ms) == std::future_status::ready && inspection.get().size() == 1,
               "queue waiting does not hold the Router lifecycle mutex");
         result = queued.get();
-        check(result.contains("error") && result["error"]["details"]["code"] == "queue_deadline_exceeded" && worker->calls == 2,
+        check(result.contains("error") && result["error"]["details"]["code"] == "execution_slots_busy" && worker->calls == 2,
               "client-supplied priority cannot bypass the declared queue bound");
         worker->hold = false;
         check(!first.get().contains("error"), "first provider completes normally");

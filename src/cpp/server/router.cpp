@@ -20,6 +20,7 @@
 #include "lemon/auto_tune.h"
 #include "telemetry.h"
 #include <algorithm>
+#include <climits>
 #include <condition_variable>
 #include <iostream>
 #include <mutex>
@@ -192,7 +193,7 @@ std::shared_ptr<WrappedServer> Router::shared_worker(WrappedServer* server) cons
     return server ? server->shared_from_this() : nullptr;
 }
 
-ResourceAdmission::Lease Router::admit_worker(const WrappedServer& server, ResourceAdmission::Operation operation, const RequestEnvelope* request, std::optional<ResourceAdmission::Policy> request_policy, std::function<bool()> intent_cancelled) const {
+ResourceAdmission::Lease Router::admit_worker(const WrappedServer& server, ResourceAdmission::Operation operation, const RequestEnvelope* request, std::optional<ResourceAdmission::Policy> request_policy, std::function<bool()> intent_cancelled, bool reserve_execution_slot) const {
     const auto policy = request_policy ? *request_policy : admission_.policy();
     const auto protected_mode = policy.protected_mode;
     if (protected_mode && operation == ResourceAdmission::Operation::Load &&
@@ -240,7 +241,32 @@ ResourceAdmission::Lease Router::admit_worker(const WrappedServer& server, Resou
     work.options = server.get_recipe_options().to_json();
     work.options.erase("pinned");
     work.operation = operation;
+    const bool manual_slot = operation == ResourceAdmission::Operation::State && request && request->body.contains("id_slot");
+    if (server.get_model_type() == ModelType::LLM && dynamic_cast<const ISlotsServer*>(&server) &&
+        server.get_recipe_options().get_recipe() == "llamacpp" &&
+        (operation == ResourceAdmission::Operation::Request || manual_slot || reserve_execution_slot)) {
+        const auto snapshot = server.execution_snapshot();
+        const auto& observation = snapshot.at("context");
+        if (observation.contains("slot_ids") && observation.at("slot_ids").is_array())
+            work.execution_slots = observation.at("slot_ids").get<std::vector<int>>();
+        if (work.execution_slots.empty() && (protected_mode || manual_slot))
+            throw AdmissionError("execution_slots_unknown", "The worker has no observed execution slot inventory");
+        if (!work.execution_slots.empty() && request) {
+            if (request->body.contains("id_slot")) {
+                const auto& slot = request->body.at("id_slot");
+                if (!slot.is_number_integer() || slot < -1 || slot > INT_MAX)
+                    throw AdmissionError("execution_slot_invalid", "id_slot must be -1 or an observed slot ID", 400);
+                if (slot >= 0) work.requested_slot = slot.get<int>();
+            }
+            if (protected_mode && operation == ResourceAdmission::Operation::Request) {
+                auto body = request->body;
+                body["id_slot"] = *std::max_element(work.execution_slots.begin(), work.execution_slots.end());
+                work.workload["input_bytes"] = std::max(work.workload["input_bytes"], request_storage_ceiling(body));
+            }
+        }
+    }
     if (const auto context = current_request_context()) {
+        work.request_id = context->request_id;
         work.principal = context->identity.principal + ":" + context->identity.credential_epoch;
         work.cancelled = context->cancelled;
     } else {
@@ -1908,7 +1934,7 @@ std::string Router::get_backend_address() const {
     return (server && server->is_backend_alive()) ? server->get_address() : "";
 }
 
-WrappedServer::InferenceLease Router::acquire_model_state_operation(const std::string& model_name) const {
+WrappedServer::InferenceLease Router::acquire_model_state_operation(const std::string& model_name, bool reserve_execution_slot) const {
     if (!model_access_allowed(model_name)) return {};
     std::shared_ptr<WrappedServer> server;
     WrappedServer::InferenceLease reference;
@@ -1918,7 +1944,12 @@ WrappedServer::InferenceLease Router::acquire_model_state_operation(const std::s
         if (!server || !server->is_backend_alive()) return {};
         reference = server->try_acquire_ready_state_operation();
     }
-    if (reference) reference.attach_resources(admit_worker(*server, ResourceAdmission::Operation::State));
+    if (reference) {
+        auto resources = admit_worker(*server, ResourceAdmission::Operation::State, nullptr, std::nullopt, {}, reserve_execution_slot);
+        if (!model_access_allowed(model_name))
+            throw AdmissionError("model_disabled", "Model was disabled while waiting for state admission", 403);
+        reference.attach_resources(std::move(resources));
+    }
     return reference;
 }
 
@@ -1995,6 +2026,8 @@ json Router::execute_inference(const json& request, InferenceOperation request_o
                 const auto policy = admission_.policy();
                 prepared = lifetime->resolve_request(request_operation, request, policy.protected_mode);
                 auto resources = admit_worker(*lifetime, operation, &prepared, policy);
+                if (const auto slot = resources.execution_slot(); slot && operation == ResourceAdmission::Operation::Request)
+                    prepared.body["id_slot"] = *slot;
                 if (!model_access_allowed(requested_model))
                     throw AdmissionError("model_disabled", "Model was disabled while waiting for admission", 403);
                 const auto prior = WrappedServer::current_request_cancel_context();
@@ -2150,6 +2183,7 @@ void Router::execute_streaming(const std::string& request_body, httplib::DataSin
                 const auto policy = admission_.policy();
                 prepared = lifetime->resolve_request(request_operation, request, policy.protected_mode);
                 auto resources = admit_worker(*lifetime, ResourceAdmission::Operation::Request, &prepared, policy);
+                if (const auto slot = resources.execution_slot()) prepared.body["id_slot"] = *slot;
                 if (!model_access_allowed(requested_model))
                     throw AdmissionError("model_disabled", "Model was disabled while waiting for admission", 403);
                 const auto prior = WrappedServer::current_request_cancel_context();
@@ -2607,6 +2641,7 @@ json Router::slots_action(int slot_id, const std::string& action, const json& re
                           const std::function<json(const std::string&, const std::function<json()>&)>& guard) {
     auto request = request_body;
     request["model"] = request_body.value("model", get_loaded_model());
+    request["id_slot"] = slot_id;
     return execute_inference(request, InferenceOperation::State, [&](WrappedServer* server, const json& request) {
         auto* slots = dynamic_cast<ISlotsServer*>(server);
         return slots ? guard(model_manager_->get_public_model_name(server->get_model_name()),

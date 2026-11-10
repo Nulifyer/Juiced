@@ -17,6 +17,7 @@ public:
     GatewayWorker(ModelManager& models, const std::string& name, ModelType type, int context)
         : LlamaCppServer("error", &models, nullptr) {
         set_model_metadata(name, "fixture/checkpoint", type, DEVICE_CPU, RecipeOptions("llamacpp", {{"ctx_size", context}}));
+        context_observation_ = {{"slot_ids", json::array({0})}};
         set_state(ModelState::READY);
     }
     bool is_backend_alive() const override { return get_state() != ModelState::UNLOADED; }
@@ -116,7 +117,7 @@ int main() {
             }
             for (const auto& item : cases) {
                 const bool targets_embedding = item.second.at("model") == "GatewayEmbedding";
-                if (targets_embedding == use_embedding) call(item.first, item.second, 429, "queue_deadline_exceeded", true);
+                if (targets_embedding == use_embedding) call(item.first, item.second, 429, use_embedding ? "queue_deadline_exceeded" : "execution_slots_busy", true);
             }
             worker->released.set_value();
             check(!held.get().contains("error") && router.admission_snapshot()["active"] == 0,

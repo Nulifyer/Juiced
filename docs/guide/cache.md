@@ -32,6 +32,12 @@ identity. Use Memory for Ollama, Anthropic, Responses, and MCP inference when a
 persistent deployment rejects their request path. Browser service tests use
 memory reuse.
 
+Consumer conversations can outnumber the engine's physical slots. For an observed
+llama.cpp slot inventory, active requests wait in Juiced's shared bounded queue;
+idle sessions keep no live slot. A qualified persistent session restores its
+snapshot when its turn arrives. Queue deadlines and resource pressure can still
+return overload errors. Juiced does not shrink the model's context while waiting.
+
 ## Connect a client with persistent session reuse
 
 For qualified OpenAI Chat Completions, send the full current message history

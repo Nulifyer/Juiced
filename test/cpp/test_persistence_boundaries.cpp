@@ -72,14 +72,22 @@ public:
     bool is_backend_alive() const override { return get_state() != ModelState::UNLOADED; }
     json chat_completion(const json&) override { return json::object(); }
 };
-class CacheBoundaryWorker : public PolicyWorker {
+class CacheBoundaryWorker : public PolicyWorker, public ISlotsServer {
 public:
     CacheBoundaryWorker(const std::string& name, int port, const std::filesystem::path& directory) : PolicyWorker(name) {
         port_ = port;
+        context_observation_ = {{"slot_ids", json::array({0})}};
         set_model_metadata(name, "fixture", ModelType::LLM, DEVICE_CPU, RecipeOptions("llamacpp", {
             {"ctx_size", 2048}, {"llamacpp_backend", "cpu"}, {"llamacpp_args", "--slot-save-path \"" + directory.string() + "\""}}));
     }
+    bool observes_inference_completion() const override { return true; }
+    json get_slots() override { return forward_get_request("/slots"); }
+    json slots_action(int slot, const std::string& action, const json& body) override {
+        return forward_request("/slots/" + std::to_string(slot) + "?action=" + action, body);
+    }
     json chat_completion(const json&) override {
+        note_request_started();
+        note_request_completed();
         return {{"id", "fixture"}, {"choices", json::array({{{"index", 0}, {"message", {{"role", "assistant"}, {"content", "ok"}}}, {"finish_reason", "stop"}}})}};
     }
 };

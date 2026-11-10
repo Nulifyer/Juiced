@@ -44,14 +44,17 @@ class Fixture:
         self.api, self.admin = "", ""
         for name in ("config", "cache", "run", "snapshots"):
             (root / name).mkdir()
-        with socket.socket() as sock:
+        with socket.socket() as sock, socket.socket() as websocket:
             sock.bind(("127.0.0.1", 0))
+            websocket.bind(("127.0.0.1", 0))
             self.port = sock.getsockname()[1]
+            self.websocket_port = websocket.getsockname()[1]
         self.url = f"http://127.0.0.1:{self.port}"
         (root / "config/config.json").write_text(
             json.dumps(
                 {
                     "broadcast": False,
+                    "websocket_port": self.websocket_port,
                     "auto_check_model_updates": False,
                     "disable_model_filtering": True,
                     "llamacpp": {"cpu_bin": str(args.engine)},
@@ -166,7 +169,13 @@ class Fixture:
                             assert "error" not in value, value
                             chunks.append(value)
                 assert done and chunks, "Incomplete SSE response"
-                data = chunks[-1]
+                data = dict(chunks[-1])
+                data["stream_content"] = "".join(
+                    choice.get("delta", {}).get("content", "")
+                    for chunk in chunks
+                    for choice in chunk.get("choices", [])
+                    if isinstance(choice.get("delta", {}).get("content", ""), str)
+                )
             else:
                 data = json.load(response)
             return response.status, dict(response.headers), data
@@ -332,37 +341,221 @@ def acceptance(args):
             proof["implicit_protected_target_rejected"] = 4
             profile = fixture.ok("/v1/juiced/cache/profile", {"model": MODEL})
 
-            def processing():
+            def slot_inventory():
                 with urllib.request.urlopen(
                     profile["address"] + "/slots", timeout=10
                 ) as response:
-                    return any(
-                        slot.get("is_processing") for slot in json.load(response)
-                    )
+                    return json.load(response)
 
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                running = executor.submit(
-                    fixture.ask, "concurrent-lease", max_tokens=4096
+            def processing_count():
+                return sum(bool(slot.get("is_processing")) for slot in slot_inventory())
+
+            context_before = next(
+                m["context"]
+                for m in fixture.ok("/v1/juiced/catalog")["data"]
+                if m["id"] == MODEL
+            )
+
+            def has_output(response):
+                if "stream_content" in response:
+                    return bool(response["stream_content"].strip())
+                return any(
+                    choice.get("message", {}).get("content", "").strip()
+                    for choice in response.get("choices", [])
                 )
-                for _ in range(300):
-                    if processing():
-                        break
+
+            def concurrent_requests(slot_count, persistent):
+                with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+                    running = [
+                        executor.submit(
+                            fixture.ask, f"concurrent-{slot_count}-{i}", max_tokens=1024
+                        )
+                        for i in range(slot_count)
+                    ]
+                    until = time.monotonic() + 5
+                    while processing_count() < slot_count:
+                        assert (
+                            not any(task.done() for task in running)
+                            and time.monotonic() < until
+                        ), "Engine concurrency was not observed"
+                        time.sleep(0.005)
+                    queued = [
+                        executor.submit(
+                            fixture.ask,
+                            f"queued-{slot_count}-{i}",
+                            streaming=bool(i % 2),
+                        )
+                        for i in range(5 - slot_count)
+                    ]
+                    while True:
+                        observation = fixture.ok("/v1/juiced/admission")
+                        if observation["pending"] >= 5 - slot_count:
+                            break
+                        assert (
+                            not any(task.done() for task in running)
+                            and time.monotonic() < until
+                        ), observation
+                        time.sleep(0.005)
                     assert (
-                        not running.done()
-                    ), "Fixture finished before concurrency could be observed"
-                    time.sleep(0.01)
-                else:
-                    raise AssertionError("Fixture never entered the engine")
-                assert fixture.ask("concurrent-lease")[0] in (409, 429)
-                assert (
-                    fixture.call(
-                        "/v1/juiced/cache", {"mode": "memory", "model_modes": {}}
-                    )[0]
-                    == 409
+                        observation["optional_limits"]["principal_pending_limit"]
+                        is None
+                    ), observation
+                    assert any(
+                        len(group["claimed"]) == slot_count
+                        and group["pending"] >= 5 - slot_count
+                        for group in observation["physical_slots"]
+                    ), observation
+                    if persistent:
+                        assert (
+                            fixture.call(
+                                "/v1/juiced/cache",
+                                {"mode": "memory", "model_modes": {}},
+                            )[0]
+                            == 409
+                        )
+                    responses = [
+                        future.result(timeout=120) for future in running + queued
+                    ]
+                    assert all(
+                        response[0] == 200 and has_output(response[2])
+                        for response in responses
+                    ), responses
+                    return observation
+
+            observation = concurrent_requests(1, True)
+            idle_sessions = [f"over-slot-{i}" for i in range(8)]
+            for session in idle_sessions:
+                status, headers, _ = fixture.ask(session)
+                assert status == 200 and headers.get("X-Juiced-Cache") == "cold", (
+                    status,
+                    headers,
                 )
-                assert running.result(timeout=120)[0] == 200
-            assert fixture.ask("after-concurrency")[0] == 200
-            proof["observed_concurrent_slot_exclusion"] = True
+            with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+                responses = list(
+                    executor.map(
+                        lambda item: fixture.ask(item[1], streaming=bool(item[0] % 2)),
+                        enumerate(idle_sessions),
+                    )
+                )
+            assert all(
+                status == 200
+                and headers.get("X-Juiced-Cache") == "restored"
+                and has_output(data)
+                for status, headers, data in responses
+            ), responses
+            assert not any(
+                group["claimed"] or group["pending"]
+                for group in fixture.ok("/v1/juiced/admission")["physical_slots"]
+            )
+            context_after = next(
+                m["context"]
+                for m in fixture.ok("/v1/juiced/catalog")["data"]
+                if m["id"] == MODEL
+            )
+            for field in (
+                "configured_tokens",
+                "applied_tokens",
+                "observed_per_request_tokens",
+                "observed_slots",
+            ):
+                assert context_after[field] == context_before[field], (
+                    field,
+                    context_before,
+                    context_after,
+                )
+            proof["physical_slot_fairness"] = {
+                "simultaneous_requests": 5,
+                "formats": ["JSON", "SSE"],
+                "all_responses_nonempty": True,
+                "observed_pending": observation["pending"],
+                "idle_and_resumed_sessions": 8,
+                "resumed_from_disk": 8,
+                "context_unchanged": True,
+                "principal_limit_unset": True,
+                "configured_context": context_after["configured_tokens"],
+                "observed_context": context_after["observed_per_request_tokens"],
+                "observed_slots": context_after["observed_slots"],
+            }
+            saved = fixture.ok(f"/v1/models/{MODEL}/options")["saved"]
+            parallel_args = saved["llamacpp_args"].replace(
+                "--parallel 1", "--parallel 2"
+            )
+            assert parallel_args != saved["llamacpp_args"], saved
+            fixture.ok("/v1/juiced/cache", {"mode": "memory", "model_modes": {}})
+            fixture.ok(
+                f"/v1/models/{MODEL}/options",
+                {"ctx_size": 256, "llamacpp_args": parallel_args},
+            )
+            fixture.reload()
+            profile = fixture.ok("/v1/juiced/cache/profile", {"model": MODEL})
+            two_before = next(
+                m["context"]
+                for m in fixture.ok("/v1/juiced/catalog")["data"]
+                if m["id"] == MODEL
+            )
+            assert (
+                two_before["configured_tokens"] == 256
+                and two_before["observed_per_request_tokens"] == 128
+                and two_before["observed_slots"] == 2
+            ), two_before
+            two_observation = concurrent_requests(2, False)
+            status, _, choices = fixture.ask("memory-two-choices", n=2)
+            assert status == 200 and len(choices["choices"]) == 2, (status, choices)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+                fixed = executor.submit(
+                    fixture.ask, "fixed-slot-one", id_slot=1, max_tokens=1024
+                )
+                until = time.monotonic() + 5
+                while True:
+                    processing_ids = [
+                        slot["id"]
+                        for slot in slot_inventory()
+                        if slot.get("is_processing")
+                    ]
+                    if processing_ids:
+                        break
+                    assert not fixed.done() and time.monotonic() < until
+                    time.sleep(0.005)
+                assert processing_ids == [1], processing_ids
+                mutation = executor.submit(
+                    fixture.call, "/v1/slots/1?action=erase", {"model": MODEL}
+                )
+                while fixture.ok("/v1/juiced/admission")["pending"] < 1:
+                    assert not fixed.done() and time.monotonic() < until
+                    time.sleep(0.005)
+                assert (
+                    not mutation.done()
+                ), "Manual mutation bypassed the owned physical slot"
+                assert fixed.result(timeout=120)[0] == 200
+                status, _, result = mutation.result(timeout=120)
+                assert status == 200, (status, result)
+            two_after = next(
+                m["context"]
+                for m in fixture.ok("/v1/juiced/catalog")["data"]
+                if m["id"] == MODEL
+            )
+            assert two_after == two_before, (two_before, two_after)
+            proof["memory_slot_fairness"] = {
+                "simultaneous_requests": 5,
+                "observed_running_slots": 2,
+                "observed_pending": two_observation["pending"],
+                "formats": ["JSON", "SSE"],
+                "all_responses_nonempty": True,
+                "configured_total_context": 256,
+                "observed_per_request_context": 128,
+                "context_unchanged": True,
+                "explicit_test_profile": True,
+                "explicit_slot_binding": True,
+                "manual_mutation_waits": True,
+                "multiple_choices": 2,
+            }
+            fixture.ok(f"/v1/models/{MODEL}/options", saved)
+            fixture.reload()
+            fixture.ok(
+                "/v1/juiced/cache",
+                {"mode": "memory", "model_modes": {MODEL: "persistent"}},
+            )
+            profile = fixture.ok("/v1/juiced/cache/profile", {"model": MODEL})
             cancel = urllib.request.Request(
                 fixture.url + "/v1/chat/completions",
                 data=json.dumps({**BODY, "stream": True, "max_tokens": 8192}).encode(),
@@ -374,7 +567,7 @@ def acceptance(args):
             with urllib.request.urlopen(cancel, timeout=120) as response:
                 assert response.read(128), "Expected actual output before disconnect"
             for _ in range(300):
-                if not processing():
+                if not processing_count():
                     break
                 time.sleep(0.05)
             else:
@@ -571,6 +764,9 @@ def acceptance(args):
         finally:
             fixture.stop()
             fixture.log.close()
+            args.out.with_suffix(".server.log").write_bytes(
+                (fixture.root / "server.log").read_bytes()
+            )
     args.out.write_text(json.dumps(proof, indent=2) + "\n")
     print(
         "PASS: real-engine name/mode admission, failure cleanup and authenticated restart isolation"

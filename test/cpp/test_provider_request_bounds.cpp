@@ -16,6 +16,7 @@ public:
         port_ = port;
         set_model_metadata("provider-bounds", "fixture", ModelType::LLM, DEVICE_CPU,
                            RecipeOptions("llamacpp", {{"ctx_size", 2048}}));
+        context_observation_ = {{"slot_ids", json::array({0})}};
         set_state(ModelState::READY);
     }
     bool is_backend_alive() const override { return get_state() != ModelState::UNLOADED; }
@@ -104,6 +105,7 @@ int main() {
                     const auto before = count();
                     check(run(valid) && count() == before + 1, "qualified request reaches its actual provider exactly once");
                     std::lock_guard<std::mutex> lock(mutex);
+                    if (received.size() != before + 1) continue;
                     const auto& actual = received.back();
                     const auto ceiling = operation == InferenceOperation::Responses ? "max_output_tokens" : "max_tokens";
                     check(actual.at(ceiling) == 8 && actual.at("n_cmpl") == 2 && actual.at("n_probs") == 0 &&

@@ -622,6 +622,92 @@ int main() {
               error([&] { references.acquire_management("flm:npu", "runtime-uninstall"); }, "runtime_reference_busy"),
               "destroying an unresolved runtime owner does not authorize reclamation");
     }
+    {
+        ResourceAdmission slots;
+        slots.configure({{"interactive_wait_ms", 100}});
+        auto physical = [](uint64_t request_id, uint64_t generation = 900) {
+            ResourceAdmission::Work w;
+            w.model = "physical"; w.service = "chat"; w.generation = generation;
+            w.request_id = request_id; w.execution_slots = {7};
+            return w;
+        };
+        auto parent_work = physical(1); parent_work.operation = ResourceAdmission::Operation::State;
+        auto parent = slots.acquire(parent_work);
+        check(parent.execution_slot() == 7, "state request reserves the actual nonzero slot ID");
+        {
+            auto inference = slots.acquire(physical(1));
+            check(inference.execution_slot() == parent.execution_slot(), "nested inference shares its own state slot");
+            check(slots.snapshot()["physical_slots"][0]["claimed"] == json::array({7}),
+                  "nested tickets count one physical claim");
+            check(error([&] { slots.acquire(physical(1)); }, "execution_slots_busy"),
+                  "parallel child requests cannot both borrow the same state slot");
+            check(error([&] { slots.acquire(physical(2)); }, "execution_slots_busy"),
+                  "another request waits for physical capacity and returns a specific deadline reason");
+        }
+        auto wrong_principal = physical(1); wrong_principal.principal = "different";
+        check(error([&] { slots.acquire(wrong_principal); }, "execution_slots_busy"),
+              "matching request ID cannot borrow another principal's state slot");
+        auto requested = physical(2); requested.requested_slot = 11;
+        check(error([&] { slots.acquire(requested); }, "execution_slot_unknown"),
+              "a requested slot must belong to the observed inventory");
+        auto changed = physical(2); changed.execution_slots = {7, 11};
+        check(error([&] { slots.acquire(changed); }, "execution_slots_changed"),
+              "one generation cannot publish conflicting slot inventories");
+        auto other_generation = slots.acquire(physical(2, 901));
+        check(other_generation.execution_slot() == 7, "slot identity includes the exact worker generation");
+        std::atomic<bool> cancelled{false};
+        auto waiting = physical(3); waiting.cancelled = [&] { return cancelled.load(); };
+        auto cancellation = run_thread([&] { return error([&] { slots.acquire(waiting); }, "request_cancelled"); });
+        const auto cancel_until = std::chrono::steady_clock::now() + 5s;
+        while (slots.snapshot()["pending"] != 1 && std::chrono::steady_clock::now() < cancel_until)
+            std::this_thread::sleep_for(1ms);
+        cancelled = true;
+        check(cancellation.get() && slots.snapshot()["pending"] == 0,
+              "cancelled physical wait removes only its queued claim");
+        parent = {};
+        other_generation = {};
+        slots.configure({{"interactive_wait_ms", 10000}});
+        {
+            auto two = physical(8); two.execution_slots = {7, 11};
+            auto left = slots.acquire(two);
+            two.request_id = 9;
+            auto right = slots.acquire(two);
+            check(left.execution_slot() == 7 && right.execution_slot() == 11,
+                  "two concurrent requests reserve distinct observed slot IDs");
+        }
+        auto first = slots.acquire(physical(10));
+        std::mutex order_mutex; std::vector<int> order;
+        std::vector<ThreadTask<int>> waiters;
+        for (int i = 1; i <= 5; ++i) {
+            waiters.push_back(run_thread([&, i] {
+                auto next = slots.acquire(physical(10 + i));
+                std::lock_guard<std::mutex> owner(order_mutex);
+                order.push_back(i);
+                return next.execution_slot().value_or(-1);
+            }));
+            const auto until = std::chrono::steady_clock::now() + 5s;
+            while (slots.snapshot()["pending"] != i && std::chrono::steady_clock::now() < until)
+                std::this_thread::sleep_for(1ms);
+            check(slots.snapshot()["pending"] == i, "additional sessions join the existing bounded queue");
+        }
+        first = {};
+        bool all_served = true;
+        for (auto& waiter : waiters) all_served &= waiter.get() == 7;
+        check(all_served && order == std::vector<int>({1, 2, 3, 4, 5}),
+              "five requests from the same principal receive one physical slot in FIFO order");
+        check(slots.snapshot()["pending"] == 0 && slots.snapshot()["physical_slots"].empty(),
+              "completed physical claims leave no slot reservations");
+        slots.configure({{"interactive_wait_ms", 30}});
+        auto uncertain = slots.acquire(physical(30)); uncertain.started(); uncertain = {};
+        check(slots.snapshot()["uncertain"] == 1, "legacy dispatch still retains an unresolved physical claim");
+        check(error([&] { slots.acquire(physical(31)); }, "execution_slots_busy"),
+              "uncertain work cannot return a physical slot to another request");
+        slots.reconcile_idle_requests(901);
+        check(slots.snapshot()["uncertain"] == 1, "idle observation for another generation cannot release the slot");
+        slots.reconcile_idle_requests(900);
+        check(slots.snapshot()["uncertain"] == 0 && bool(slots.acquire(physical(32))),
+              "confirmed idle request observation restores the exact generation's slot");
+    }
     std::printf("Resource admission: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

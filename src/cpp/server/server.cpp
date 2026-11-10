@@ -4196,10 +4196,12 @@ void Server::handle_chat_completions(const httplib::Request& req, httplib::Respo
     nlohmann::json request_json;
     if (!parse_required_json_body(req, res, request_json)) return;
 
+    const auto inherited_cancel = WrappedServer::current_request_cancel_context();
     utils::RequestCancelToken cancel_token;
-    if (req.is_connection_closed) {
-        cancel_token.should_cancel = [is_closed = req.is_connection_closed]() { return is_closed && is_closed(); };
-    }
+    cancel_token.flag = inherited_cancel.flag;
+    cancel_token.should_cancel = [inherited_cancel, is_closed = req.is_connection_closed] {
+        return inherited_cancel.cancelled() || (is_closed && is_closed());
+    };
     WrappedServer::RequestCancelScope cancel_scope(cancel_token);
 
     try {

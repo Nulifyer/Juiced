@@ -42,3 +42,10 @@ exclusive accelerator access.
 
 If a request waits or returns a capacity error, inspect the active workload
 before increasing limits. See [troubleshooting](troubleshooting.md).
+
+There is no default per-user conversation quota. The engine's observed execution
+slots, available resources and the shared queue bound active work. For supported
+llama.cpp profiles, queued JSON and streaming requests use the same slot owner.
+Operators can set explicit limits. A fixed one-slot engine can serve many threads
+in turn; changing slot count requires a compatible, resource-qualified load profile
+and enough context memory per request.

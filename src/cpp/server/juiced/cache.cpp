@@ -21,29 +21,31 @@ long long timestamp() {
 }
 struct PromptStateClaim {
   std::mutex &mutex;
-  std::map<std::string, std::set<int>> &slots;
+  std::map<std::string, size_t> &operations;
   std::set<std::string> &snapshots;
-  const std::string model, key;
-  int slot = -1;
-  bool session_claimed = false;
+  const std::string model;
+  std::string key;
+  bool model_claimed = false, session_claimed = false;
   std::atomic<bool> released{false};
 
-  PromptStateClaim(std::mutex &m, std::map<std::string, std::set<int>> &s,
+  PromptStateClaim(std::mutex &m, std::map<std::string, size_t> &active,
                    std::set<std::string> &sessions, std::string name,
                    std::string snapshot)
-      : mutex(m), slots(s), snapshots(sessions), model(std::move(name)),
+      : mutex(m), operations(active), snapshots(sessions), model(std::move(name)),
         key(std::move(snapshot)) {}
-  void release() {
-    if (released.exchange(true)) return;
+  bool release() {
+    if (released.exchange(true)) return false;
     std::lock_guard<std::mutex> lock(mutex);
-    if (slot >= 0) {
-      auto it = slots.find(model);
-      if (it != slots.end()) it->second.erase(slot);
+    if (model_claimed) {
+      const auto it = operations.find(model);
+      if (it != operations.end() && --it->second == 0) operations.erase(it);
     }
     if (session_claimed) snapshots.erase(key);
+    return true;
   }
   ~PromptStateClaim() { release(); }
 };
+
 std::string digest(const std::string &data) {
   unsigned char out[32];
   if (mbedtls_md(mbedtls_md_info_from_type(MBEDTLS_MD_SHA256),
@@ -133,13 +135,13 @@ std::string JuicedService::file_digest(const std::filesystem::path &file) {
 }
 JuicedService::json JuicedService::mutate_prompt_slot(
     const std::string& model, int slot, const std::function<json()>& invoke) {
-  auto claim = std::make_shared<PromptStateClaim>(mutex_, active_slots_, active_snapshots_, model, "");
+  auto claim = std::make_shared<PromptStateClaim>(mutex_, active_cache_operations_, active_snapshots_, model, "");
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (slot < 0 || cache_mode_locked(model) == "persistent" || active_slots_[model].count(slot))
+    if (slot < 0 || cache_mode_locked(model) == "persistent")
       throw AdmissionError("prompt_state_busy", "Manual slot mutation is unavailable while persistent caching owns slots", 409);
-    active_slots_[model].insert(slot);
-    claim->slot = slot;
+    ++active_cache_operations_[model];
+    claim->model_claimed = true;
   }
   return invoke();
 }
@@ -641,8 +643,8 @@ void JuicedService::cache_api(const httplib::Request &req,
     if (mode != "memory" && mode != "off" && mode != "persistent")
       throw std::invalid_argument("Invalid cache mode");
     if (mode != state_["cache"].value("mode", "memory")) {
-      for (const auto &[model, slots] : active_slots_)
-        if (!slots.empty()) {
+      for (const auto &[model, count] : active_cache_operations_)
+        if (count > 0) {
           output(
               res,
               {{"error",
@@ -652,9 +654,9 @@ void JuicedService::cache_api(const httplib::Request &req,
         }
     }
     if (body.contains("model_modes")) {
-      for (const auto &[model, slots] : active_slots_) {
+      for (const auto &[model, count] : active_cache_operations_) {
         const auto next = body["model_modes"].value(model, mode);
-        if (!slots.empty() && next != cache_mode_locked(model)) {
+        if (count > 0 && next != cache_mode_locked(model)) {
           output(res,
                  {{"error", "Finish or stop active requests before changing model cache mode"}},
                  409);
@@ -717,6 +719,9 @@ void JuicedService::cache_api(const httplib::Request &req,
 }
 void JuicedService::chat(const httplib::Request &original,
                          httplib::Response &res) {
+  std::optional<RequestContextScope> native_context;
+  if (!current_request_context()) native_context.emplace(make_request_context(
+      original, server_.api_key_, server_.admin_api_key_, server_.authentication_epoch_));
   json request;
   httplib::Request normalized = original;
   std::string model_name;
@@ -757,19 +762,40 @@ void JuicedService::chat(const httplib::Request &original,
       return;
     }
     server_.auto_load_model_if_needed(requested_model);
-    auto ownership = server_.router_->acquire_model_state_operation(requested_model);
+    auto ownership = server_.router_->acquire_model_state_operation(requested_model, true);
     if (!ownership) throw std::runtime_error("The prompt-state worker is not ready");
     auto worker = std::make_shared<WrappedServer::InferenceLease>(std::move(ownership));
     const auto request_context = current_request_context();
     const auto disconnected = request_context ? request_context->cancelled : std::function<bool()>{};
-    const auto cancelled = [worker, disconnected] {
-      return worker->deadline_expired() || (disconnected && disconnected());
+    const auto deadline = worker->completion_deadline();
+    const auto cancelled = [deadline, disconnected] {
+      return std::chrono::steady_clock::now() >= deadline || (disconnected && disconnected());
     };
+    auto guard = std::make_shared<PromptStateClaim>(
+        mutex_, active_cache_operations_, active_snapshots_, requested_model, "");
+    const auto prior_cancel = WrappedServer::current_request_cancel_context();
+    WrappedServer::RequestCancelScope state_deadline({prior_cancel.flag, [prior_cancel, cancelled] {
+      return prior_cancel.cancelled() || cancelled();
+    }});
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      persistent = cache_mode_locked(requested_model) == "persistent";
+      if (persistent) {
+        ++active_cache_operations_[requested_model];
+        guard->model_claimed = true;
+      }
+    }
+    if (!persistent) {
+      worker->release();
+      server_.handle_chat_completions(normalized, res);
+      return;
+    }
     auto profile = cache_profile(requested_model, *worker);
     if (cancelled()) throw AdmissionError("state_operation_cancelled", "State inspection was cancelled", 499);
     const auto model = profile.at("model").get<std::string>();
     if (!profile.value("qualified", false)) {
       res.set_header("X-Juiced-Cache", "unqualified-profile");
+      guard->release();
       worker->release();
       server_.handle_chat_completions(normalized, res);
       return;
@@ -802,32 +828,18 @@ void JuicedService::chat(const httplib::Request &original,
     const auto key = digest(
         json::array({identity, thread, profile.at("fingerprint"), semantics})
             .dump());
-    auto guard = std::make_shared<PromptStateClaim>(
-        mutex_, active_slots_, active_snapshots_, model, key);
-    auto release = [guard] { guard->release(); };
-    int slot = -1;
-    {
-      std::lock_guard<std::mutex> lock(mutex_);
-      for (const auto &s : slots) {
-        int id = s.at("id").get<int>();
-        if (!active_slots_[model].count(id) &&
-            !s.value("is_processing", false)) {
-          slot = id;
-          active_slots_[model].insert(id);
-          guard->slot = id;
-          break;
-        }
-      }
-    }
-    if (slot < 0) {
-      res.set_header("Retry-After", "1");
-      output(res,
-             {{"error",
-               {{"message", "All prompt-state slots are busy; retry shortly"},
-                {"type", "capacity_exceeded"}}}},
-             429);
-      return;
-    }
+    guard->key = key;
+    auto release = [guard, worker] {
+      if (guard->release()) worker->release();
+    };
+    const auto reserved_slot = worker->execution_slot();
+    if (!reserved_slot) throw AdmissionError("execution_slots_unknown", "The cache operation has no physical slot lease");
+    const int slot = *reserved_slot;
+    const auto candidate = std::find_if(slots.begin(), slots.end(), [slot](const auto& item) {
+      return item.is_object() && item.contains("id") && item.at("id") == slot;
+    });
+    if (candidate == slots.end() || candidate->value("is_processing", true))
+      throw AdmissionError("execution_slot_unavailable", "The reserved backend slot is not idle; retry after reconciliation");
     json saved;
     {
       std::lock_guard<std::mutex> lock(mutex_);
@@ -971,9 +983,14 @@ void JuicedService::chat(const httplib::Request &original,
       };
       auto status = std::make_shared<StreamStatus>();
       auto provider = std::move(res.content_provider_);
-      res.content_provider_ = [provider, status, finish,
+      res.content_provider_ = [provider, status, finish, request_context, prior_cancel, cancelled,
                                release](size_t offset, size_t length,
                                         httplib::DataSink &sink) {
+        std::optional<RequestContextScope> context;
+        if (request_context) context.emplace(*request_context);
+        WrappedServer::RequestCancelScope deadline_scope({prior_cancel.flag, [prior_cancel, cancelled] {
+          return prior_cancel.cancelled() || cancelled();
+        }});
         httplib::DataSink observed;
         observed.write = [&sink, status](const char *data, size_t size) {
           status->pending.append(data, size);
