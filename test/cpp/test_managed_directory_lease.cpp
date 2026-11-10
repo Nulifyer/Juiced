@@ -7,6 +7,10 @@
 #include <future>
 #include <string>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 namespace fs = std::filesystem;
 using Lease = lemon::utils::ManagedDirectoryLease;
 
@@ -103,6 +107,64 @@ int main() {
         fs::permissions(control, fs::perms::owner_write | fs::perms::group_write | fs::perms::others_write, fs::perm_options::remove);
         { Lease read_only_control({b}); check(busy(b), "an existing read-only control file still provides exclusive ownership"); }
         fs::permissions(control, permissions);
+        {
+            const auto live = root / "replaced-live-root", moved = root / "retained-moved-root";
+            const auto source = live / "source.txt";
+            Lease owner({});
+            auto retained = owner.claim(live);
+            auto alias = owner.claim(live / ".");
+            { std::ofstream stream(source); stream << "retained source\n"; }
+            std::error_code rename_error;
+            fs::rename(live, moved, rename_error);
+            if (rename_error) {
+#ifdef _WIN32
+                check(rename_error == std::error_code(ERROR_ACCESS_DENIED, std::system_category()) ||
+                      rename_error == std::error_code(ERROR_SHARING_VIOLATION, std::system_category()),
+                      "the platform explicitly denies the controlled live-root rename");
+                std::fprintf(stderr, "SKIP: live-root replacement requires directory rename capability: %s\n",
+                             rename_error.message().c_str());
+                auto reused = owner.claim(live / ".");
+                check(reused && busy(live) && fs::is_regular_file(source),
+                      "a denied rename preserves retained ownership and the source file");
+#else
+                throw fs::filesystem_error("Controlled live-root rename failed", live, moved, rename_error);
+#endif
+            } else {
+                check(!fs::exists(live) && fs::is_regular_file(moved / "source.txt"),
+                      "the controlled rename moves the retained directory before replacement");
+                Lease replacement({live});
+                { std::ofstream stream(live / "source.txt"); stream << "replacement source\n"; }
+                check(busy(live), "an independent owner holds the replacement directory");
+                bool rejected = false;
+                try { auto stale = owner.claim(live); }
+                catch (const std::exception& error) {
+                    rejected = std::string(error.what()) == "Managed directory identity changed: " + live.u8string();
+                }
+                check(rejected, "exact-root reuse rejects a replacement inode with the fixed identity diagnostic");
+#ifndef _WIN32
+                const auto child = live / "uncreated-child";
+                rejected = false;
+                try { auto stale = owner.claim(child); }
+                catch (const std::exception& error) {
+                    rejected = std::string(error.what()) == "Managed directory identity changed: " + live.u8string();
+                }
+                check(rejected && !fs::exists(child),
+                      "a stale ancestor cannot authorize descendant creation in the replacement directory");
+#endif
+                auto replacement_alias = replacement.claim(live / ".");
+                check(replacement_alias && busy(live), "stale-owner rejection preserves healthy replacement ownership");
+                check(busy(moved), "the moved original inode remains excluded by its retained directory handle");
+                retained = {};
+                check(busy(moved), "a retained alias keeps the moved original inode excluded");
+                alias = {};
+                check(!busy(moved) && busy(live), "the last old claim releases only the moved original inode");
+                std::string old_text, replacement_text;
+                { std::ifstream stream(moved / "source.txt"); std::getline(stream, old_text); }
+                { std::ifstream stream(live / "source.txt"); std::getline(stream, replacement_text); }
+                check(old_text == "retained source" && replacement_text == "replacement source",
+                      "replacement rejection and old-claim release preserve both source files");
+            }
+        }
 #ifndef _WIN32
         const auto hierarchy = root / "hierarchy";
         {

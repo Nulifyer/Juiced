@@ -12,6 +12,7 @@
 #else
 #include <fcntl.h>
 #include <sys/file.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #endif
 
@@ -31,11 +32,14 @@ struct ManagedDirectoryLease::File {
     bool locked = false;
 #ifdef _WIN32
     HANDLE handle = INVALID_HANDLE_VALUE;
+    HANDLE directory_handle = INVALID_HANDLE_VALUE;
     ~File() {
-        if (handle == INVALID_HANDLE_VALUE) return;
-        OVERLAPPED offset{};
-        if (locked) UnlockFileEx(handle, 0, 1, 0, &offset);
-        CloseHandle(handle);
+        if (handle != INVALID_HANDLE_VALUE) {
+            OVERLAPPED offset{};
+            if (locked) UnlockFileEx(handle, 0, 1, 0, &offset);
+            CloseHandle(handle);
+        }
+        if (directory_handle != INVALID_HANDLE_VALUE) CloseHandle(directory_handle);
     }
 #else
     int fd = -1;
@@ -51,6 +55,32 @@ struct ManagedDirectoryLease::File {
         for (const auto ancestor : ancestor_fds) if (ancestor >= 0) close(ancestor);
     }
 #endif
+    void validate_identity() const {
+        bool matches = false;
+#ifdef _WIN32
+        const auto current = CreateFileW(root.c_str(), FILE_READ_ATTRIBUTES,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+            OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+        if (current != INVALID_HANDLE_VALUE) {
+            FILE_ID_INFO retained_info{}, current_info{};
+            matches = GetFileInformationByHandleEx(directory_handle, FileIdInfo, &retained_info, sizeof(retained_info)) &&
+                GetFileInformationByHandleEx(current, FileIdInfo, &current_info, sizeof(current_info)) &&
+                retained_info.VolumeSerialNumber == current_info.VolumeSerialNumber &&
+                std::equal(std::begin(retained_info.FileId.Identifier), std::end(retained_info.FileId.Identifier),
+                           std::begin(current_info.FileId.Identifier));
+            CloseHandle(current);
+        }
+#else
+        const auto current = open(root.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+        if (current >= 0) {
+            struct stat retained_info{}, current_info{};
+            matches = fstat(directory_fd, &retained_info) == 0 && fstat(current, &current_info) == 0 &&
+                retained_info.st_dev == current_info.st_dev && retained_info.st_ino == current_info.st_ino;
+            close(current);
+        }
+#endif
+        if (!matches) throw std::runtime_error("Managed directory identity changed: " + path_to_utf8(root));
+    }
 };
 
 fs::path ManagedDirectoryLease::resolve_root(const fs::path& root) {
@@ -87,22 +117,27 @@ void ManagedDirectoryLease::protect(const fs::path& root) {
 }
 
 ManagedDirectoryLease::Claim ManagedDirectoryLease::claim(const fs::path& root) {
-    const auto candidate = resolve_root(root);
-#ifdef _WIN32
-    fs::create_directories(candidate);
-    const auto canonical = fs::canonical(candidate);
-#else
-    const auto& canonical = candidate;
-#endif
+    const auto canonical = resolve_root(root);
     std::lock_guard lock(mutex_);
     files_.erase(std::remove_if(files_.begin(), files_.end(), [](const auto& file) { return file.expired(); }), files_.end());
-    for (const auto& weak : files_)
-        if (auto file = weak.lock(); file && fs::exists(canonical) && fs::equivalent(canonical, file->root)) return Claim(std::move(file));
+    for (const auto& weak : files_) {
+        if (auto file = weak.lock(); file && (canonical == file->root ||
+            (fs::exists(canonical) && fs::equivalent(canonical, file->root)))) {
+            file->validate_identity();
+            return Claim(std::move(file));
+        }
+    }
     auto file = std::make_shared<File>();
     file->root = canonical;
     const auto path = canonical / file_name;
     const auto label = path_to_utf8(canonical);
 #ifdef _WIN32
+    fs::create_directories(canonical);
+    file->directory_handle = CreateFileW(canonical.c_str(), FILE_READ_ATTRIBUTES,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+        OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    if (file->directory_handle == INVALID_HANDLE_VALUE)
+        throw std::system_error(GetLastError(), std::system_category(), "Could not open managed directory: " + label);
     file->handle = CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE,
         FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (file->handle == INVALID_HANDLE_VALUE &&
@@ -123,8 +158,10 @@ ManagedDirectoryLease::Claim ManagedDirectoryLease::claim(const fs::path& root) 
 #else
     for (const auto& weak : files_) {
         const auto owned = weak.lock();
-        if (owned && owned->root != canonical && contains(owned->root, canonical) &&
-            (!file->parent || contains(file->parent->root, owned->root))) file->parent = owned;
+        if (owned && owned->root != canonical && contains(owned->root, canonical)) {
+            owned->validate_identity();
+            if (!file->parent || contains(file->parent->root, owned->root)) file->parent = owned;
+        }
     }
     if (!file->parent) for (const auto& weak : files_) {
         if (const auto owned = weak.lock(); owned && contains(canonical, owned->root))

@@ -2,6 +2,7 @@
 #include "lemon/utils/content_hash.h"
 
 #include <algorithm>
+#include <array>
 #include <cerrno>
 #include <istream>
 #include <map>
@@ -49,9 +50,10 @@ struct InvalidStructure {};
 
 struct FileStamp {
     uint64_t bytes = 0, device = 0, inode = 0;
+    std::array<unsigned char, 16> file_id{};
     uint64_t modified = 0, modified_fraction = 0, changed = 0, changed_fraction = 0;
     bool same_identity(const FileStamp& other) const {
-        return device == other.device && inode == other.inode;
+        return device == other.device && inode == other.inode && file_id == other.file_id;
     }
     bool operator==(const FileStamp& other) const {
         return same_identity(other) && bytes == other.bytes && modified == other.modified &&
@@ -67,14 +69,16 @@ void close_input(InputHandle value) { if (value != invalid_input) CloseHandle(va
 bool input_stamp(InputHandle input, bool directory, FileStamp& result) {
     BY_HANDLE_FILE_INFORMATION info{};
     FILE_BASIC_INFO basic{};
+    FILE_ID_INFO identity{};
     if (GetFileType(input) != FILE_TYPE_DISK || !GetFileInformationByHandle(input, &info) ||
         !GetFileInformationByHandleEx(input, FileBasicInfo, &basic, sizeof(basic)) ||
+        !GetFileInformationByHandleEx(input, FileIdInfo, &identity, sizeof(identity)) ||
         (info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) ||
-        bool(info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != directory || (!directory && info.nNumberOfLinks != 1) ||
-        (!info.nFileIndexHigh && !info.nFileIndexLow)) return false;
+        bool(info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != directory || (!directory && info.nNumberOfLinks != 1)) return false;
     result.bytes = (uint64_t(info.nFileSizeHigh) << 32) | info.nFileSizeLow;
-    result.device = info.dwVolumeSerialNumber;
-    result.inode = (uint64_t(info.nFileIndexHigh) << 32) | info.nFileIndexLow;
+    result.device = identity.VolumeSerialNumber;
+    result.inode = 0;
+    std::copy_n(identity.FileId.Identifier, result.file_id.size(), result.file_id.begin());
     result.modified = (uint64_t(info.ftLastWriteTime.dwHighDateTime) << 32) | info.ftLastWriteTime.dwLowDateTime;
     result.changed = static_cast<uint64_t>(basic.ChangeTime.QuadPart);
     return true;

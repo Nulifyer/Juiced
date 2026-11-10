@@ -610,6 +610,13 @@ would require dropping a live narrower lock. There is no non-atomic lock upgrade
 or temporary loss of protection. Root/ancestor readability is required. This
 does not pin pathnames against external moves. Windows hierarchy exclusion remains
 unimplemented; its existing exact-root control-file ownership stays separate.
+Before reusing an exact claim or inheriting a POSIX ancestor claim, the owner
+compares its retained directory identity with the current path. A completed
+replacement fails with `Managed directory identity changed` before descendant
+creation. The old claim remains held until its final view releases. This check
+does not prevent movement after validation or anchor ordinary path-based writes.
+Windows compares the volume and full 128-bit `FileIdInfo`, failing closed when
+that query is unavailable. Its directory handle does not add hierarchy exclusion.
 The same native root resolver normalizes trailing separators and dot aliases for
 preflight, acquisition and snapshot-store binding before creating missing roots.
 A read-only managed root without an existing usable control file cannot acquire
@@ -661,6 +668,9 @@ leaf handles permit delete sharing so ordinary replacement can proceed; retained
 ancestor handles restrict directory changes. Use that platform's inspector offline
 from known writers. These [Win32 sharing rules](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilew)
 remain in effect until handle close and are not an all-writer maintenance fence.
+Windows file observations compare the volume and full 128-bit file identifier.
+The older [64-bit file index can be nonunique on ReFS](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/ns-fileapi-by_handle_file_information),
+so an unavailable `FileIdInfo` query leaves the observation unverified.
 
 
 Router host admission and CPU/NPU automatic sizing consume the native

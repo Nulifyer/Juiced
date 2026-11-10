@@ -95,6 +95,19 @@ bool has(const json& result, const std::string& code) {
     for (const auto& row : result["issues"]) if (row["code"] == code) return true;
     return false;
 }
+void replacement_check(bool condition, const std::string& name, const json& detail) {
+    check(condition, name);
+    if (!condition) std::fprintf(stderr, "REPLACEMENT DETAIL: %s\n", detail.dump().c_str());
+}
+json replacement_paths(const fs::path& current, const fs::path& retained) {
+    std::error_code current_error, retained_error, equivalent_error;
+    const auto current_status = fs::symlink_status(current, current_error);
+    const auto retained_status = fs::symlink_status(retained, retained_error);
+    const auto equivalent = fs::equivalent(current, retained, equivalent_error);
+    return {{"current_type", int(current_status.type())}, {"current_error", current_error.value()},
+        {"retained_type", int(retained_status.type())}, {"retained_error", retained_error.value()},
+        {"equivalent", equivalent}, {"equivalent_error", equivalent_error.value()}};
+}
 using Configure = std::function<void(Fixture&)>;
 using Verify = std::function<void(const json&)>;
 void run_case(const fs::path& parent, const std::string& name, const Configure& configure = {},
@@ -320,27 +333,32 @@ int main() {
             check(has(SnapshotRecovery::inspect_file(f.state_file, f.root, probe), "hash_budget_exhausted"), name + " calibrates snapshot input seam");
             size_t callbacks = 0;
             bool invoked = false, denied = false;
+            std::error_code rename_error;
+            const auto target_callback = after_open ? before_hash + 1 : before_hash - 1;
             SnapshotInspectionOptions options;
             options.cancelled = [&] {
-                if (++callbacks == (after_open ? before_hash + 1 : before_hash - 1)) {
+                if (++callbacks == target_callback) {
                     invoked = true;
-                    std::error_code error;
-                    fs::rename(path, f.base / "retained-original", error);
-                    if (error) denied = true;
+                    fs::rename(path, f.base / "retained-original", rename_error);
+                    if (rename_error) denied = true;
                     else replace(f, path);
                 }
                 return false;
             };
             const auto started = std::chrono::steady_clock::now();
             const auto result = SnapshotRecovery::inspect_file(f.state_file, f.root, options);
-            check(invoked, name + " replacement seam invoked");
+            const json detail = {{"fixture", name}, {"after_open", after_open}, {"probe_callbacks", before_hash},
+                {"target_callback", target_callback}, {"observed_callbacks", callbacks}, {"invoked", invoked},
+                {"rename_denied", denied}, {"rename_error", rename_error.value()}, {"rename_category", rename_error.category().name()},
+                {"paths", replacement_paths(path, f.base / "retained-original")}, {"result", result}};
+            replacement_check(invoked, name + " replacement seam invoked", detail);
 #ifdef _WIN32
             if (after_open && denied) {
-                check(result["validation_complete"] == true && fs::is_regular_file(path), name + " retained read sharing denies replacement");
+                replacement_check(result["validation_complete"] == true && fs::is_regular_file(path), name + " retained read sharing denies replacement", detail);
             } else
 #endif
             {
-                check(!denied && result["validation_complete"] == false && has(result, "snapshot_changed_during_inspection"), name + " rejects replacement");
+                replacement_check(!denied && result["validation_complete"] == false && has(result, "snapshot_changed_during_inspection"), name + " rejects replacement", detail);
             }
             check(std::chrono::steady_clock::now() - started < std::chrono::seconds(2), name + " avoids a blocking replacement open");
             check(result["application_authorized"] == false && result["writer_termination_verified"] == false, name + " remains unauthorized");
@@ -376,14 +394,25 @@ int main() {
             options.cancelled = [&] {
                 if (++callbacks == before_open) {
                     invoked = true;
-                    fs::rename(f.state_file, f.base / "retained-state");
+                    std::error_code error;
+                    fs::rename(f.state_file, f.base / "retained-state", error);
+                    if (error) {
+                        const json detail = {{"fixture", name}, {"probe_callbacks", before_open}, {"target_callback", before_open},
+                            {"observed_callbacks", callbacks}, {"invoked", invoked}, {"rename_error", error.value()},
+                            {"rename_category", error.category().name()}, {"paths", replacement_paths(f.state_file, f.base / "retained-state")}};
+                        std::fprintf(stderr, "REPLACEMENT DETAIL: %s\n", detail.dump().c_str());
+                        throw fs::filesystem_error("State replacement fixture rename failed", error);
+                    }
                     replace(f);
                 }
                 return false;
             };
             const auto started = std::chrono::steady_clock::now();
             const auto result = SnapshotRecovery::inspect_file(f.state_file, f.root, options);
-            check(invoked && result["validation_complete"] == false && has(result, "state_changed_during_inspection"), name + " rejects state substitution");
+            const json detail = {{"fixture", name}, {"probe_callbacks", before_open}, {"target_callback", before_open},
+                {"observed_callbacks", callbacks}, {"invoked", invoked},
+                {"paths", replacement_paths(f.state_file, f.base / "retained-state")}, {"result", result}};
+            replacement_check(invoked && result["validation_complete"] == false && has(result, "state_changed_during_inspection"), name + " rejects state substitution", detail);
             check(std::chrono::steady_clock::now() - started < std::chrono::seconds(2), name + " avoids blocked state open");
             check(result["application_authorized"] == false && result["writer_termination_verified"] == false, name + " never authorizes recovery");
         };
