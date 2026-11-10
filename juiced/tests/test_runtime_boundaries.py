@@ -104,6 +104,24 @@ def acceptance(args):
             assert headers.get("Retry-After") == "1", headers
         return status
 
+    def resident_publication_rejection(settings, response):
+        deadline = time.monotonic() + 10
+        attempts = []
+        while True:
+            status = publication_status(response)
+            attempts.append(status)
+            assert status in (409, 429), response
+            if status == 409:
+                return attempts
+            remaining = deadline - time.monotonic()
+            assert remaining > 0, ("Resident rejection retry deadline", attempts)
+            time.sleep(min(float(response[1]["Retry-After"]), remaining))
+            remaining = deadline - time.monotonic()
+            assert remaining > 0, ("Resident rejection retry deadline", attempts)
+            response = fixture.call(
+                "/internal/set", {"admission": settings}, timeout=remaining
+            )
+
     with tempfile.TemporaryDirectory(prefix="juiced-runtime-boundaries-") as directory:
         root = Path(directory)
         fixture = Fixture(args, root)
@@ -136,11 +154,13 @@ def acceptance(args):
                         )
                         for value in settings
                     ]
-                    statuses = [
-                        publication_status(future.result()) for future in futures
-                    ]
+                    responses = [future.result() for future in futures]
+                    statuses = [publication_status(response) for response in responses]
                     if index == 0:
-                        assert statuses == [409, 409], statuses
+                        resident_rejections = [
+                            resident_publication_rejection(value, response)
+                            for value, response in zip(settings, responses)
+                        ]
                         fixture.ok("/v1/unload", {})
                         assert fixture.ok("/v1/juiced/admission")["resident"] == 0
                         fixture.ok(
@@ -233,6 +253,7 @@ def acceptance(args):
             proof["concurrent_durable_configuration"] = {
                 "paired_updates": transitions,
                 "resident_busy_pair_then_successful_publication": True,
+                "resident_rejection_attempts": resident_rejections,
                 "write_failure_preserves_old_state": True,
                 "restart_readback_matches": True,
             }
