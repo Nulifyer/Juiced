@@ -268,9 +268,37 @@ def resume_session(fixture, item):
         time.sleep(min(max(0.01, delay), remaining))
 
 
+def forget_session(fixture, session):
+    started = time.monotonic()
+    deadline = started + 10
+    attempts = []
+    while True:
+        remaining = deadline - time.monotonic()
+        assert remaining > 0, ("Snapshot finalization did not drain", attempts)
+        status, _, data = fixture.call(
+            "/v1/juiced/cache/forget", {"session": session}, timeout=remaining
+        )
+        attempts.append({"status": status, "error": data.get("error")})
+        if status == 200:
+            assert data["forgotten"] > 0, data
+            return {
+                "attempts": attempts,
+                "elapsed_seconds": time.monotonic() - started,
+                "cleanup_pending": data["cleanup_pending"],
+            }
+        assert status == 409 and data.get("error") in (
+            "Snapshot publication requires recovery before mutation",
+            "Session cache is in use; retry after generation finishes",
+        ), (status, data)
+        remaining = deadline - time.monotonic()
+        assert remaining > 0, ("Snapshot finalization did not drain", attempts)
+        time.sleep(min(0.05, remaining))
+
+
 def acceptance(args):
     proof = {
-        "scope": "isolated real CPU engine; no production services or model quality claim"
+        "scope": "isolated real CPU engine; no production services or model quality claim",
+        "snapshot_forget_attempts": [],
     }
     with tempfile.TemporaryDirectory(prefix="juiced-cache-admission-") as directory:
         fixture = Fixture(args, Path(directory))
@@ -335,8 +363,8 @@ def acceptance(args):
                                     status == 200
                                     and headers.get("X-Juiced-Cache") == "restored"
                                 ), headers
-                                fixture.ok(
-                                    "/v1/juiced/cache/forget", {"session": session}
+                                proof["snapshot_forget_attempts"].append(
+                                    forget_session(fixture, session)
                                 )
                             else:
                                 assert cache is None, headers
