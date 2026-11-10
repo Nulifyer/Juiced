@@ -777,6 +777,7 @@ protected:
     int port_;
     std::string host_ = "127.0.0.1";
     json capture_runtime_inputs(const std::function<bool()>& cancelled);
+    std::pair<std::map<std::string, std::string>, std::string> runtime_environment() const;
     std::unique_ptr<ServerProcess> process_;
     std::optional<utils::ProcessImageFiles> runtime_image_files_;
     std::vector<std::unique_ptr<ServerProcess>> unconfirmed_processes_;

@@ -91,6 +91,7 @@ public:
     using WrappedServer::start_server;
     using WrappedServer::stop_server;
     using WrappedServer::capture_runtime_inputs;
+    using WrappedServer::runtime_environment;
 };
 
 template<class T> class DerivedWorker : public T {
@@ -390,6 +391,7 @@ int main(int argc, char** argv) {
         owned.program = std::filesystem::absolute(argv[0]).string();
         owned.port = lemon::utils::ProcessManager::find_free_port(8001);
         owned.args = {"--listener-server-child", std::to_string(owned.port)};
+        owned.env = {{"LLAMA_ARG_THREADS", "3"}, {"JUICED_PRIVATE_TEST", "private-sentinel"}};
 #ifdef __linux__
         const auto image_file = std::filesystem::temp_directory_path() /
             ("juiced-owned-image-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
@@ -405,6 +407,10 @@ int main(int argc, char** argv) {
         const auto image = worker.capture_runtime_inputs({});
         check("native image capture binds the actual executable and loaded modules", image.at("executable").at("path") == std::filesystem::canonical(argv[0]).string() &&
             image.at("executable").at("sha256").get<std::string>().size() == 64 && !image.at("modules").empty() && worker.runtime_inputs_current());
+        const auto [environment, directory] = worker.runtime_environment();
+        check("native image owner captures the actual exec environment privately", environment.at("LLAMA_ARG_THREADS") == "3" &&
+            environment.at("JUICED_PRIVATE_TEST") == "private-sentinel" && directory == std::filesystem::current_path().string() &&
+            image.dump().find("private-sentinel") == std::string::npos);
         bool cancelled = false;
         try { worker.capture_runtime_inputs([] { return true; }); }
         catch (const std::exception&) { cancelled = true; }

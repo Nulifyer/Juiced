@@ -786,8 +786,8 @@ declared definition, artifact and supported argument-file content, resolved
 options, context layout, launch executable and reported engine build. Earlier
 receipts and snapshots remain retained and require requalification. This does
 not qualify adapter, speculative or vision continuation merely by hashing files.
-Loaded shared libraries, physical devices, inherited environment inputs and
-complete request/state semantics remain explicit open P1 requirements.
+Complete loaded-runtime and physical-device identity, runtime environment
+mutation and complete request/state semantics remain open P1 requirements.
 
 A worker's declared recipe, model type, checkpoint roles and resolved paths freeze
 at publication. Registration changes cannot relabel that generation. Companion-only
@@ -836,6 +836,34 @@ continues. Their image capture and real-device acceptance remain required work.
 The [kernel procfs contract](https://docs.kernel.org/filesystems/proc.html) documents
 mapping-read and process-lifetime limitations. Portable metadata is not proof of
 shared-library or device execution on another platform.
+
+### Owned initial execution environment
+
+On Linux, the process owner reads the actual child's initial exec environment
+with cancellation, a 2 MiB byte ceiling, 4,096 entries and bounded names/values.
+It never iterates the manager's mutable environment. Raw values stay private;
+credentials and unrelated variables never enter public identity or digests.
+Before/after inventories include the initial environment and current child working
+directory. Missing or ambiguous observations prevent persistent qualification.
+
+The llama.cpp owner interprets a bounded set of numeric and enum controls and
+the observed library search path. An environment-selected template resolves
+against the actual child directory. Its content digest must equal the template
+reported by the ready engine. A file changed before capture or overridden by a
+different applied template therefore cannot receive a misleading qualification.
+Other relevant backend, loader and accelerator controls remain unqualified until
+their semantics are supported. Diagnostics omit their supplied names and values.
+Ordinary inference remains independent of opportunistic persistent saving.
+
+Identity schema4 includes this supported environment projection. Unchanged manager
+restart preserves it; changed supported values or template content require new
+useful-reuse qualification. Existing snapshots remain under their original
+fingerprints. This is not complete environment or device qualification:
+[/proc/PID/environ](https://man7.org/linux/man-pages/man5/proc_pid_environ.5.html)
+reports initial exec inputs, not subsequent environment changes inside the worker.
+The [pinned argument parser](https://github.com/ggml-org/llama.cpp/blob/dde879bc4f954b809892fd0d660515f42536394a/common/arg.cpp)
+defines the supported engine's environment semantics. A different engine version
+needs its own acceptance; launch labels alone cannot establish behavior.
 
 ### Native listener association
 

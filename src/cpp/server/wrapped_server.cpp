@@ -319,6 +319,12 @@ json WrappedServer::capture_runtime_inputs(const std::function<bool()>& cancelle
     return {{"association", before->method}, {"executable", captured.at(before->executable).at(0)}, {"modules", modules}};
 }
 
+std::pair<std::map<std::string, std::string>, std::string> WrappedServer::runtime_environment() const {
+    std::lock_guard<std::mutex> owner(process_mutex_);
+    if (!runtime_image_files_) throw std::runtime_error("Runtime environment association is unavailable");
+    return {runtime_image_files_->environment, runtime_image_files_->working_directory};
+}
+
 bool WrappedServer::runtime_inputs_current(const std::function<bool()>& cancelled) const {
     std::lock_guard<std::mutex> owner(process_mutex_);
     if (!process_ || !runtime_image_files_) return false;

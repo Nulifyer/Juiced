@@ -64,13 +64,14 @@ qualification; older snapshots remain retained under their original identity.
 The current fingerprint schema also records supported template, LoRA and
 control-vector files, the launch executable and reported engine build. Linux also
 captures the actual child executable and loaded executable-library files. Unknown
-custom argument semantics prevent persistent qualification and provide a reason
-in the cache profile. Ordinary model serving remains available.
+custom argument or relevant backend-environment semantics prevent persistent
+qualification and provide a reason in the cache profile. Ordinary model serving remains available.
 
 Content identity does not qualify every adapter, speculative or vision cache
-operation. Complete loaded-library, physical-device, environment and request/state
-identity remain unfinished. Changed or newly loaded runtime modules prevent
-qualification until the model reloads and passes useful-reuse checks. The frozen
+operation. Linux also binds supported initial backend environment inputs and verifies
+environment-selected template content against the ready engine. Physical-device,
+runtime environment mutation and complete request/state identity remain unfinished.
+Changed or newly loaded runtime modules prevent qualification until the model reloads and passes useful-reuse checks. The frozen
 profile remains visible, and ordinary serving can continue without persistent reuse.
 The Linux image has a separate CPU runtime default. An older explicit binary
 override can still select the combined Vulkan package. Saved overrides remain

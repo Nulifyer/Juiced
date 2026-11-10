@@ -20,8 +20,11 @@ struct ProcessImageFiles {
     std::string executable;
     std::map<std::string, std::string> files;
     std::string namespace_identity;
+    // Private verification facts; never serialize the raw exec environment.
+    std::map<std::string, std::string> environment;
+    std::string working_directory;
     bool operator==(const ProcessImageFiles& other) const {
-        return method == other.method && executable == other.executable && files == other.files && namespace_identity == other.namespace_identity;
+        return method == other.method && executable == other.executable && files == other.files && namespace_identity == other.namespace_identity && environment == other.environment && working_directory == other.working_directory;
     }
 };
 

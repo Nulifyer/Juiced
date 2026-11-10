@@ -6,7 +6,7 @@ not model quality. The model file must already be present in the server namespac
 """
 import argparse,json,shlex,subprocess,time,urllib.request,urllib.error
 from pathlib import Path
-p=argparse.ArgumentParser();p.add_argument('--url',required=True);p.add_argument('--model-file',required=True);p.add_argument('--snapshots',required=True);p.add_argument('--container');p.add_argument('--template-file');p.add_argument('--out',required=True);a=p.parse_args();base=a.url.rstrip('/')+'/v1/';model='Stories15M-Q4_0'
+p=argparse.ArgumentParser();p.add_argument('--url',required=True);p.add_argument('--model-file',required=True);p.add_argument('--snapshots',required=True);p.add_argument('--container');p.add_argument('--template-file');p.add_argument('--environment-template',action='store_true');p.add_argument('--out',required=True);a=p.parse_args();base=a.url.rstrip('/')+'/v1/';model='Stories15M-Q4_0'
 def call(path,body=None):
  q=urllib.request.Request(base+path,data=None if body is None else json.dumps(body).encode(),headers={'Content-Type':'application/json'})
  try:
@@ -40,7 +40,7 @@ if prior and prior['loaded']:
 if prior:
  assert prior['checkpoints']['main']==a.model_file, 'Use an isolated fixture server'
 else:call('juiced/import/server',{'path':a.model_file,'name':model,'recipe':'llamacpp'})
-call('models/'+model+'/options',{'llamacpp_backend':'cpu','ctx_size':128,'llamacpp_args':'-t 2 --parallel 1 '+('--chat-template-file '+shlex.quote(a.template_file) if a.template_file else '--chat-template chatml')+' --slot-save-path '+shlex.quote(a.snapshots)+' --cache-ram 256'})
+call('models/'+model+'/options',{'llamacpp_backend':'cpu','ctx_size':128,'llamacpp_args':'-t 2 --parallel 1 '+('--chat-template-file '+shlex.quote(a.template_file) if a.template_file else '' if a.environment_template else '--chat-template chatml')+' --slot-save-path '+shlex.quote(a.snapshots)+' --cache-ram 256'})
 call('juiced/policy',{'model':model,'policy':'on-demand'})
 call('juiced/operation',{'model':model,'action':'load'});wait_loaded(True)
 profile=call('juiced/cache/profile',{'model':model});assert profile['configured'],profile;address=profile['address'];proof={'profile':profile}

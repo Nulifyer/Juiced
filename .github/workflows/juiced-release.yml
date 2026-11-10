@@ -134,6 +134,10 @@ jobs:
           docker exec juiced-smoke python3 /tmp/test_runtime_modules.py --binary /opt/lemonade/lemond --runtime-dir /opt/juiced/llama-cpu/bin --model-file /library/stories15M-q4_0.gguf --out /tmp/runtime-modules-proof.json
           docker cp juiced-smoke:/tmp/runtime-modules-proof.json runtime-modules-proof.json
           docker cp juiced-smoke:/tmp/runtime-modules-proof.server.log runtime-modules-proof.server.log
+          docker cp juiced/tests/test_runtime_environment.py juiced-smoke:/tmp/test_runtime_environment.py
+          docker exec juiced-smoke python3 /tmp/test_runtime_environment.py --binary /opt/lemonade/lemond --engine /opt/juiced/llama-cpu/llama-server --model-file /library/stories15M-q4_0.gguf --out /tmp/runtime-environment-proof.json
+          docker cp juiced-smoke:/tmp/runtime-environment-proof.json runtime-environment-proof.json
+          docker cp juiced-smoke:/tmp/runtime-environment-proof.server.log runtime-environment-proof.server.log
           docker cp juiced/tests/test_runtime_defaults.py juiced-smoke:/tmp/test_runtime_defaults.py
           docker exec juiced-smoke python3 /tmp/test_runtime_defaults.py --binary /opt/lemonade/lemond --cpu-runtime /opt/juiced/llama-cpu --defaults-file /opt/juiced/defaults.json --model-file /library/stories15M-q4_0.gguf --out /tmp/runtime-defaults-proof.json
           docker cp juiced-smoke:/tmp/runtime-defaults-proof.json runtime-defaults-proof.json
@@ -208,6 +212,8 @@ jobs:
             execution-inputs-proof.server.log
             runtime-modules-proof.json
             runtime-modules-proof.server.log
+            runtime-environment-proof.json
+            runtime-environment-proof.server.log
             runtime-defaults-proof.json
             runtime-defaults-proof.server.log
             model-context-proof.json

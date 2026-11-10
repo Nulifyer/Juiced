@@ -13,6 +13,9 @@
 namespace lemon::backends {
 struct LlamaCppInputIdentityTestHook {
     static json parse(const std::string& args) { return LlamaCppServer::execution_argument_inputs(args); }
+    static json environment(const std::map<std::string, std::string>& values, const std::string& directory) {
+        return LlamaCppServer::execution_environment_inputs(values, directory);
+    }
 };
 }
 
@@ -205,6 +208,22 @@ int main() {
 
     {
         using Hook = lemon::backends::LlamaCppInputIdentityTestHook;
+        const auto env = Hook::environment({{"LLAMA_ARG_CHAT_TEMPLATE_FILE", "template.jinja"}, {"OMP_NUM_THREADS", "2"},
+            {"LLAMA_ARG_ROPE_FREQ_SCALE", "-1.2e-3"}, {"LEMONADE_API_KEY", "credential-sentinel"}}, base_dir.string());
+        check("environment files resolve against the actual child directory", env.at("files").at("LLAMA_ARG_CHAT_TEMPLATE_FILE") == (base_dir / "template.jinja").string());
+        check("known numeric environment controls retain values without credentials", !env.at("unresolved").get<bool>() &&
+            env.at("scalars").at("OMP_NUM_THREADS") == "2" && env.dump().find("credential-sentinel") == std::string::npos);
+        for (const auto& values : std::vector<std::map<std::string, std::string>>{
+                {{"LLAMA_ARG_FUTURE_INPUT", "secret-sentinel"}}, {{"LLAMA_API_KEY", "secret-sentinel"}},
+                {{"LLAMA_ARG_THREADS", "secret-sentinel"}}, {{"LLAMA_ARG_THREADS", std::string(65, '1')}},
+                {{"LLAMA_ARG_MODEL", "unobserved.gguf"}}, {{"LD_PRELOAD", "unresolved-library"}},
+                {{"LLAMA_ARG_CHAT_TEMPLATE_FILE", ""}}, {{"LLAMA_ARG_CACHE_TYPE_K", "unknown"}}}) {
+            const auto unsupported = Hook::environment(values, base_dir.string());
+            check("unsupported environment inputs refuse capture without exposing their values", unsupported.at("unresolved").get<bool>() &&
+                unsupported.dump().find("secret-sentinel") == std::string::npos);
+        }
+        check("observed runtime text uses the same content digest as files", lemon::utils::string_sha256("abc") ==
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
         const auto template_args = Hook::parse("--chat-template-file='a template,custom.jinja' --parallel=2 -t 2 --cache-ram 256");
         check("quoted equals template keeps spaces and comma", template_args.at("unknown").empty() &&
             template_args.at("files").at("--chat-template-file:0") == "a template,custom.jinja");

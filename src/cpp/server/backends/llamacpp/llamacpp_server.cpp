@@ -21,6 +21,7 @@
 #include "lemon/backend_manager.h"
 #include "lemon/runtime_config.h"
 #include "lemon/utils/custom_args.h"
+#include "lemon/utils/content_hash.h"
 #include "lemon/utils/recipe_arg_resolver.h"
 #include "lemon/utils/process_manager.h"
 #include "lemon/utils/json_utils.h"
@@ -278,6 +279,46 @@ InstallParams LlamaCppServer::get_install_params(const std::string& backend, con
 
 LlamaCppServer::LlamaCppServer(const std::string& log_level, ModelManager* model_manager, BackendManager* backend_manager)
     : WrappedServer("llama-server", log_level, model_manager, backend_manager) {
+}
+
+json LlamaCppServer::execution_environment_inputs(const std::map<std::string, std::string>& environment, const std::string& directory) {
+    const std::set<std::string> numeric = {
+        "LLAMA_ARG_THREADS", "LLAMA_ARG_CTX_SIZE", "LLAMA_ARG_N_PREDICT", "LLAMA_ARG_BATCH", "LLAMA_ARG_UBATCH",
+        "LLAMA_ARG_N_PARALLEL", "LLAMA_ARG_CACHE_RAM", "LLAMA_ARG_ROPE_SCALE", "LLAMA_ARG_ROPE_FREQ_BASE",
+        "LLAMA_ARG_ROPE_FREQ_SCALE", "LLAMA_ARG_YARN_ORIG_CTX", "LLAMA_ARG_YARN_EXT_FACTOR", "LLAMA_ARG_YARN_ATTN_FACTOR",
+        "LLAMA_ARG_YARN_BETA_SLOW", "LLAMA_ARG_YARN_BETA_FAST", "OMP_NUM_THREADS", "OMP_THREAD_LIMIT",
+        "OPENBLAS_NUM_THREADS", "GOTO_NUM_THREADS", "MKL_NUM_THREADS"
+    };
+    const std::map<std::string, std::set<std::string>> enums = {
+        {"LLAMA_ARG_FLASH_ATTN", {"on", "off", "auto", "0", "1"}},
+        {"LLAMA_ARG_CACHE_TYPE_K", {"f32", "f16", "bf16", "q8_0", "q4_0", "q4_1", "iq4_nl", "q5_0", "q5_1"}},
+        {"LLAMA_ARG_CACHE_TYPE_V", {"f32", "f16", "bf16", "q8_0", "q4_0", "q4_1", "iq4_nl", "q5_0", "q5_1"}},
+        {"LLAMA_ARG_ROPE_SCALING_TYPE", {"none", "linear", "yarn"}},
+        {"OMP_DYNAMIC", {"true", "false", "TRUE", "FALSE"}},
+        {"OMP_WAIT_POLICY", {"active", "passive", "ACTIVE", "PASSIVE"}}
+    };
+    const std::set<std::string> files = {"LLAMA_ARG_CHAT_TEMPLATE_FILE"};
+    const std::vector<std::string> relevant = {"LLAMA_", "GGML_", "GGUF_", "MTMD_", "OMP_", "GOMP_", "KMP_", "MKL_", "OPENBLAS_", "GOTO_", "CUDA_", "HIP_", "ROCR_", "HSA_", "SYCL_", "ZE_", "VK_", "LD_", "DYLD_"};
+    json result = {{"scalars", json::object()}, {"files", json::object()}, {"unresolved", false}};
+    static const std::regex number("[+-]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][+-]?[0-9]+)?");
+    for (const auto& [key, value] : environment) {
+        if (files.count(key)) {
+            if (value.empty()) { result["unresolved"] = true; continue; }
+            const fs::path path(value);
+            result["files"][key] = (path.is_absolute() ? path : fs::path(directory) / path).lexically_normal().string();
+        } else if (numeric.count(key)) {
+            if (value.size() > 64 || !std::regex_match(value, number)) result["unresolved"] = true;
+            else result["scalars"][key] = value;
+        } else if (const auto allowed = enums.find(key); allowed != enums.end()) {
+            if (!allowed->second.count(value)) result["unresolved"] = true;
+            else result["scalars"][key] = value;
+        } else if (key == "LD_LIBRARY_PATH") {
+            result["scalars"][key] = value;
+        } else if (std::any_of(relevant.begin(), relevant.end(), [&](const auto& prefix) { return key.rfind(prefix, 0) == 0; })) {
+            result["unresolved"] = true;
+        }
+    }
+    return result;
 }
 
 json LlamaCppServer::execution_argument_inputs(const std::string& arguments) {
@@ -649,9 +690,9 @@ void LlamaCppServer::load(const std::string& model_name,
     };
     const auto argument_inputs = execution_argument_inputs(llamacpp_args);
     const auto argument_files = argument_inputs.at("files").get<std::map<std::string, std::string>>();
-    json identity = {{"schema", 3}, {"recipe", model_info.recipe}, {"captured", false},
-        {"scope", "declared-argument-and-process-image-file-content"},
-        {"unresolved", json::array({"nonexecutable-runtime-assets", "mapped-page-immutability", "physical-device-identity", "inherited-environment-inputs"})}};
+    json identity = {{"schema", 4}, {"recipe", model_info.recipe}, {"captured", false},
+        {"scope", "declared-argument-process-image-and-initial-environment"},
+        {"unresolved", json::array({"nonexecutable-runtime-assets", "mapped-page-immutability", "physical-device-identity", "runtime-environment-mutation"})}};
     const auto executable_identity = [&] {
         return ModelManager::execution_files({{"executable", process_executable}}, identity_cancelled).at("executable").at(0);
     };
@@ -671,6 +712,7 @@ void LlamaCppServer::load(const std::string& model_name,
     start_server(
         std::make_unique<NativeProcess>(ProcessOutput{inherit_llama_output, true}, working_dir),
         command);
+    std::optional<std::string> observed_template;
     // Inspect once while startup still owns this generation. Discovery reads the
     // resulting snapshot and never sends per-model network probes under Router locks.
     try {
@@ -678,6 +720,8 @@ void LlamaCppServer::load(const std::string& model_name,
             utils::HttpSecurityPolicy::TrustedLoopback, current_request_cancel_context(), 1024 * 1024);
         if (response.status_code == 200) {
             const auto props = json::parse(response.body);
+            if (props.contains("chat_template") && props.at("chat_template").is_string())
+                observed_template = utils::string_sha256(props.at("chat_template").get_ref<const std::string&>());
             const auto positive = [](const json& value, uint64_t maximum) -> json {
                 if (!value.is_number_integer() || (value.is_number_integer() && !value.is_number_unsigned() && value.get<int64_t>() <= 0) ||
                     value.get<uint64_t>() == 0 || value.get<uint64_t>() > maximum) return nullptr;
@@ -727,6 +771,21 @@ void LlamaCppServer::load(const std::string& model_name,
     if (identity.value("captured", false)) {
         try {
             identity["runtime_image"] = capture_runtime_inputs(identity_cancelled);
+            const auto [environment, directory] = runtime_environment();
+            auto inputs = execution_environment_inputs(environment, directory);
+            if (inputs.at("unresolved").get<bool>())
+                throw std::runtime_error("Unresolved backend execution environment inputs");
+            inputs.erase("unresolved");
+            inputs["source"] = "owned-process-initial-exec-environment";
+            inputs["files"] = ModelManager::execution_files(inputs.at("files").get<std::map<std::string, std::string>>(), identity_cancelled);
+            if (inputs.at("files").contains("LLAMA_ARG_CHAT_TEMPLATE_FILE")) {
+                const auto& facts = inputs.at("files").at("LLAMA_ARG_CHAT_TEMPLATE_FILE");
+                if (!observed_template || facts.size() != 1 || facts.at(0).at("sha256") != *observed_template)
+                    throw std::runtime_error("Environment template content does not match the observed applied template");
+            }
+            if (!runtime_inputs_current(identity_cancelled))
+                throw std::runtime_error("Runtime environment changed during content capture");
+            identity["environment"] = std::move(inputs);
             const auto verified = ModelManager::execution_inputs(model_info, identity_cancelled);
             if (identity.at("files") != verified.at("files") || identity.at("launch_executable") != executable_identity() ||
                 identity.at("argument_files") != ModelManager::execution_files(argument_files, identity_cancelled))

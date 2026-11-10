@@ -702,27 +702,30 @@ std::optional<ProcessImageFiles> LinuxProcessPlatform::image_files(
         if (::stat(executable.c_str(), &executable_file) || ::stat((root / "exe").c_str(), &executable_link) ||
             !S_ISREG(executable_file.st_mode) || signature(executable_file) != signature(executable_link)) return std::nullopt;
 
-        struct FileDescriptor {
-            int value;
-            ~FileDescriptor() { if (value >= 0) ::close(value); }
-        } descriptor{::open((root / "maps").c_str(), O_RDONLY | O_CLOEXEC)};
-        if (descriptor.value < 0) return std::nullopt;
-        // procfs can return short reads. Complete the bounded walk; callers
-        // compare independent inventories around hashing and state exchanges.
-        constexpr size_t maximum_maps_bytes = 4 * 1024 * 1024;
-        std::string contents;
-        contents.reserve(maximum_maps_bytes);
-        char block[65536];
-        for (;;) {
-            check_cancelled();
-            const auto count = ::read(descriptor.value, block, sizeof(block));
-            if (count < 0 && errno == EINTR) continue;
-            if (count < 0) return std::nullopt;
-            if (!count) break;
-            if (static_cast<size_t>(count) > maximum_maps_bytes - contents.size()) return std::nullopt;
-            contents.append(block, static_cast<size_t>(count));
-        }
-        if (contents.empty()) return std::nullopt;
+        const auto read_proc = [&](const char* name, size_t maximum) -> std::optional<std::string> {
+            struct FileDescriptor {
+                int value;
+                ~FileDescriptor() { if (value >= 0) ::close(value); }
+            } descriptor{::open((root / name).c_str(), O_RDONLY | O_CLOEXEC)};
+            if (descriptor.value < 0) return std::nullopt;
+            std::string contents;
+            char block[65536];
+            for (;;) {
+                check_cancelled();
+                const auto count = ::read(descriptor.value, block, sizeof(block));
+                if (count < 0 && errno == EINTR) continue;
+                if (count < 0) return std::nullopt;
+                if (!count) break;
+                if (static_cast<size_t>(count) > maximum - contents.size()) return std::nullopt;
+                contents.append(block, static_cast<size_t>(count));
+            }
+            return contents;
+        };
+        // procfs reads can be short. Inventory comparisons still cannot make
+        // independently read mappings and initial exec environment atomic.
+        const auto contents = read_proc("maps", 4 * 1024 * 1024);
+        const auto environment = read_proc("environ", 2 * 1024 * 1024);
+        if (!contents || contents->empty() || !environment) return std::nullopt;
 
         struct Mount { std::string path, type; unsigned long device_major, device_minor; };
         std::vector<Mount> mounts;
@@ -776,7 +779,21 @@ std::optional<ProcessImageFiles> LinuxProcessPlatform::image_files(
         result.executable = std::filesystem::canonical(executable).string();
         result.namespace_identity = mount_namespace.string() + ':' + std::to_string(child_root.st_dev) + ':' + std::to_string(child_root.st_ino);
         std::map<std::string, std::string> file_signatures;
-        std::istringstream input(contents);
+        const auto directory = std::filesystem::read_symlink(root / "cwd");
+        if (!valid_path(directory)) return std::nullopt;
+        result.working_directory = std::filesystem::canonical(directory).string();
+        size_t begin = 0;
+        while (begin < environment->size()) {
+            check_cancelled();
+            const auto end = environment->find('\0', begin);
+            const auto entry = environment->substr(begin, end == std::string::npos ? end : end - begin);
+            const auto equals = entry.find('=');
+            if (equals == std::string::npos || equals == 0 || equals > 256 || entry.size() > 65536 || result.environment.size() >= 4096 ||
+                !result.environment.emplace(entry.substr(0, equals), entry.substr(equals + 1)).second) return std::nullopt;
+            if (end == std::string::npos) break;
+            begin = end + 1;
+        }
+        std::istringstream input(*contents);
         std::string line;
         size_t rows = 0;
         while (std::getline(input, line)) {
