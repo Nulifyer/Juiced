@@ -131,6 +131,7 @@ if(WIN32)
 
     # Link with networking and system libraries
     target_link_libraries(lemonade PRIVATE
+        iphlpapi
         ws2_32
         wsock32
     )
