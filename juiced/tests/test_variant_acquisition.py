@@ -137,7 +137,7 @@ def acceptance(args):
     bundle.write_bytes(system_ca.read_bytes() + b"\n" + certificate.read_bytes())
     wrapper = root / "native-with-private-trust"
     command = [
-        "bwrap",
+        os.environ.get("JUICED_TEST_BWRAP", "bwrap"),
         "--die-with-parent",
         "--ro-bind",
         "/",

@@ -35,7 +35,7 @@ cmake --build build --config Release --parallel 4 --target lemond
 
 The build fetches pinned native dependencies. The Juiced Dockerfile declares the
 Linux build prerequisites. A native build alone does not bundle the console,
-speech helpers, or preparation environment from the release image.
+speech helpers, or CPU/Vulkan runtime trees from the release image.
 
 Run a development server with dedicated writable cache and config directories.
 Keep development work separate from production state and device owners.
@@ -58,6 +58,13 @@ Set `JUICED_DEV_API` to an isolated test manager when needed.
 Choose checks for the behavior you changed. Release CI in
 `.github/workflows/juiced-release.yml` owns the portable native suite, UI workflows,
 and actual-container acceptance.
+
+The Linux synthetic HTTPS registry test uses Bubblewrap to mount a private CA
+bundle without changing host trust. CI permits user namespaces for a private
+helper copy when Ubuntu AppArmor requires a profile, then checks isolation before
+compilation. `JUICED_TEST_BWRAP` selects that test helper. A failed namespace setup
+fails acceptance. The native job has a 60-minute outer budget for compilation and
+serial tests. Individual test deadlines remain separate.
 
 ```bash
 python3 juiced/tests/test_api.py build/lemond

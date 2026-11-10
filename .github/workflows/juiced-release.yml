@@ -39,12 +39,25 @@ jobs:
       matrix:
         os: [ubuntu-24.04, windows-2025, macos-15]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 40
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - name: Install Linux native build prerequisites
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libdrm-dev libssl-dev bubblewrap libcurl4-openssl-dev openssl
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libdrm-dev libssl-dev apparmor bubblewrap libcurl4-openssl-dev openssl
+      - name: Check synthetic registry namespace isolation
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          juiced_ci_bwrap="$(command -v bwrap)"
+          if [ "$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null || true)" = 1 ]; then
+            juiced_ci_bwrap="$RUNNER_TEMP/juiced-ci-bwrap"
+            install -m 0755 "$(command -v bwrap)" "$juiced_ci_bwrap"
+            printf 'abi <abi/4.0>,\ninclude <tunables/global>\nprofile juiced-ci-bwrap "%s" flags=(unconfined) {\n  userns,\n}\n' "$juiced_ci_bwrap" > "$RUNNER_TEMP/juiced-ci-bwrap.apparmor"
+            sudo apparmor_parser --replace "$RUNNER_TEMP/juiced-ci-bwrap.apparmor"
+          fi
+          printf 'JUICED_TEST_BWRAP=%s\n' "$juiced_ci_bwrap" >> "$GITHUB_ENV"
+          "$juiced_ci_bwrap" --die-with-parent --ro-bind / / --dev /dev -- /bin/true
       - name: Configure native core without desktop or web packaging
         run: |
           python -c "from pathlib import Path; Path('.version').write_text('2026.44.1-juiced\n')"
