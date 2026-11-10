@@ -222,6 +222,7 @@ class Fixture:
         prefix="/v1/",
         streaming=False,
         headers=None,
+        timeout=120,
         **options,
     ):
         return self.call(
@@ -235,7 +236,36 @@ class Fixture:
             },
             headers={"X-Juiced-Session-Id": session, **(headers or {})},
             stream=streaming,
+            timeout=timeout,
         )
+
+
+def resume_session(fixture, item):
+    started = time.monotonic()
+    deadline = started + 120
+    attempts = []
+    index, session = item
+    while True:
+        remaining = deadline - time.monotonic()
+        assert remaining > 0, ("Ingress did not become available", session, attempts)
+        response = fixture.ask(session, streaming=bool(index % 2), timeout=remaining)
+        status, headers, data = response
+        code = data.get("error", {}).get("details", {}).get("code")
+        attempts.append({"status": status, "code": code})
+        remaining = deadline - time.monotonic()
+        assert remaining > 0, (
+            "Session restore exceeded its deadline",
+            session,
+            attempts,
+        )
+        if status != 429 or code != "ingress_capacity_exceeded":
+            return response, {
+                "session": session,
+                "attempts": attempts,
+                "elapsed_seconds": time.monotonic() - started,
+            }
+        delay = float(headers.get("Retry-After", 1))
+        time.sleep(min(max(0.01, delay), remaining))
 
 
 def acceptance(args):
@@ -439,12 +469,13 @@ def acceptance(args):
                     headers,
                 )
             with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
-                responses = list(
+                resumed = list(
                     executor.map(
-                        lambda item: fixture.ask(item[1], streaming=bool(item[0] % 2)),
+                        lambda item: resume_session(fixture, item),
                         enumerate(idle_sessions),
                     )
                 )
+            responses = [response for response, _ in resumed]
             assert all(
                 status == 200
                 and headers.get("X-Juiced-Cache") == "restored"
@@ -478,6 +509,7 @@ def acceptance(args):
                 "observed_pending": observation["pending"],
                 "idle_and_resumed_sessions": 8,
                 "resumed_from_disk": 8,
+                "ingress_attempts": [attempts for _, attempts in resumed],
                 "context_unchanged": True,
                 "principal_limit_unset": True,
                 "configured_context": context_after["configured_tokens"],
