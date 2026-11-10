@@ -349,20 +349,23 @@ WrappedServer* Router::get_most_recent_server() const {
     return most_recent_in_class(ResidencyClass::RoutingHelper);
 }
 
-void Router::prune_unavailable_servers_locked() {
-    std::vector<WrappedServer*> unavailable;
+void Router::prune_unavailable_servers_locked(std::unique_lock<std::mutex>& lock) {
+    std::vector<RetirementSelection> unavailable;
     for (const auto& server : loaded_servers_) {
         if (!server->is_backend_alive() && !server->cleanup_pending()) {
-            unavailable.push_back(server.get());
+            unavailable.push_back(select_retirement_locked(server.get()));
         }
     }
 
-    for (auto* server : unavailable) {
+    for (const auto& selected : unavailable) {
+        const auto& server = selected.server;
+        if (std::find(loaded_servers_.begin(), loaded_servers_.end(), server) == loaded_servers_.end() ||
+            server->cleanup_pending() || server->is_backend_alive()) continue;
         LOG(WARNING, "Router") << "Pruning unavailable backend for model: "
                                 << server->get_model_name()
                                 << " (state=" << server->get_backend_health_state() << ")"
                                 << std::endl;
-        evict_server(server);
+        evict_server(lock, selected);
     }
 }
 
@@ -443,6 +446,21 @@ static bool is_unmetered_recipe(const std::string& recipe) {
     return slot_policy_for_recipe(recipe) == SlotPolicy::Unmetered;
 }
 
+static bool occupies_residency(const WrappedServer& server) {
+    return server.cleanup_pending() || server.is_backend_alive();
+}
+
+void Router::start_loading_locked(const std::string& model) {
+    loading_model_ = model;
+    is_loading_ = true;
+}
+
+void Router::finish_loading_locked() {
+    is_loading_ = false;
+    loading_model_.clear();
+    load_cv_.notify_all();
+}
+
 int Router::count_servers_in_pool(ModelType type,
                                   ResidencyClass residency_class,
                                   const std::string& model_name) const {
@@ -453,7 +471,7 @@ int Router::count_servers_in_pool(ModelType type,
         if (is_unmetered_recipe(server->get_recipe_options().get_recipe())) {
             continue;
         }
-        if (server->is_backend_alive() &&
+        if (occupies_residency(*server) &&
             same_residency_pool(server->get_model_type(),
                                 server->get_residency_class(),
                                 server->get_model_name(),
@@ -478,7 +496,7 @@ WrappedServer* Router::find_lru_server_in_pool(
         if (is_unmetered_recipe(server->get_recipe_options().get_recipe())) {
             continue;
         }
-        if (server->is_backend_alive() &&
+        if (!server->cleanup_pending() && server->is_backend_alive() &&
             same_residency_pool(server->get_model_type(),
                                 server->get_residency_class(),
                                 server->get_model_name(),
@@ -497,7 +515,7 @@ WrappedServer* Router::find_lru_server_in_pool(
     return lru;
 }
 
-void Router::ensure_residency_capacity(
+void Router::ensure_residency_capacity(std::unique_lock<std::mutex>& lock,
     ModelType type,
     ResidencyClass residency_class,
     const std::string& model_name) {
@@ -508,30 +526,46 @@ void Router::ensure_residency_capacity(
 
     WrappedServer* lru = find_lru_server_in_pool(type, residency_class, model_name);
     if (!lru) {
+        for (const auto& server : loaded_servers_)
+            if (server->cleanup_pending() && same_residency_pool(server->get_model_type(),
+                    server->get_residency_class(), server->get_model_name(), type, residency_class, model_name))
+                throw AdmissionError("worker_cleanup_pending", "Confirm worker cleanup before reusing its residency slot", 503);
         throw SlotsPinnedException(residency_pool_to_string(type, residency_class));
     }
 
     LOG(INFO, "Router") << "Slot limit reached for pool "
                          << residency_pool_to_string(type, residency_class)
                          << ", evicting LRU: " << lru->get_model_name() << std::endl;
-    evict_server(lru);
+    evict_server(lock, lru);
 }
 
-void Router::transition_server_residency_locked(
+void Router::transition_server_residency_locked(std::unique_lock<std::mutex>& lock,
     WrappedServer* server,
     ResidencyClass requested_residency_class) {
     if (!server || server->get_residency_class() == requested_residency_class) {
         return;
     }
 
+    const auto member = std::find_if(loaded_servers_.begin(), loaded_servers_.end(),
+        [server](const auto& current) { return current.get() == server; });
+    if (member == loaded_servers_.end())
+        throw RouterResidencyConflictException("residency", "residency", "the selected generation changed");
+    const auto lifetime = *member;
     if (!is_unmetered_recipe(server->get_recipe_options().get_recipe())) {
         // Admit into the destination pool before changing the live role. Standard
         // admission remains type-wide; helper admission is keyed by model name.
-        ensure_residency_capacity(
+        ensure_residency_capacity(lock,
             server->get_model_type(), requested_residency_class,
             server->get_model_name());
     }
 
+    if (std::find(loaded_servers_.begin(), loaded_servers_.end(), lifetime) == loaded_servers_.end() ||
+        server->cleanup_pending())
+        throw RouterResidencyConflictException(server->get_model_name(), server->get_model_name(),
+            "the selected generation changed during residency admission");
+    if (requested_residency_class == ResidencyClass::RoutingHelper &&
+        server->get_residency_class() != ResidencyClass::RoutingHelper &&
+        !is_needed_helper_locked(server->get_model_name())) return;
     const ResidencyClass previous = server->get_residency_class();
     server->set_residency_class(requested_residency_class);
 
@@ -557,11 +591,27 @@ bool Router::ensure_loaded_model_residency_canonical(
         residency_class_for_load_purpose(load_purpose);
 
     std::unique_lock<std::mutex> lock(load_mutex_);
+    if (!is_loading_ || (!loading_model_.empty() && loading_model_ != canonical_model_name)) {
+        auto* existing = find_server_by_model_name(canonical_model_name);
+        if (existing && !existing->cleanup_pending() && existing->is_backend_alive() &&
+            existing->get_residency_class() == requested_residency_class) {
+            const auto state = existing->get_state();
+            if (state == ModelState::READY || state == ModelState::IN_USE || state == ModelState::EVICTING) {
+                existing->update_access_time();
+                return true;
+            }
+        }
+    }
     load_cv_.wait(lock, [&] {
         return !is_loading_;
     });
 
-    prune_unavailable_servers_locked();
+    struct ReleaseSlot {
+        std::function<void()> release;
+        ~ReleaseSlot() { release(); }
+    } release_slot{[this] { finish_loading_locked(); }};
+    start_loading_locked(canonical_model_name);
+    prune_unavailable_servers_locked(lock);
 
     WrappedServer* existing =
         find_server_by_model_name(canonical_model_name);
@@ -587,7 +637,7 @@ bool Router::ensure_loaded_model_residency_canonical(
         return true;
     }
 
-    transition_server_residency_locked(
+    transition_server_residency_locked(lock,
         existing, requested_residency_class);
     existing->update_access_time();
     return true;
@@ -625,32 +675,36 @@ void Router::apply_routing_helper_reconcile(std::set<std::string> needed, uint64
     // commit an already-obsolete helper.
     needed_helper_models_ = std::move(needed);
 
-    // Only the eviction pass must wait for a quiet slot: evict_server mutates
-    // loaded_servers_ and blocks on request drain, neither of which is safe to
-    // interleave with an in-flight load.
+    // Select stale helpers after the current load resolves its residency role.
+    // Each stop revalidates selection after temporarily releasing the registry owner.
     load_cv_.wait(lock, [&] {
         return !is_loading_;
     });
-    prune_stale_routing_helpers_locked();
+    prune_stale_routing_helpers_locked(lock);
 }
 
-void Router::prune_stale_routing_helpers_locked() {
+void Router::prune_stale_routing_helpers_locked(std::unique_lock<std::mutex>& lock) {
     // Collect first; evict_server mutates loaded_servers_.
-    std::vector<WrappedServer*> stale;
+    std::vector<RetirementSelection> stale;
     for (const auto& server : loaded_servers_) {
         if (!server->is_backend_alive() ||
             server->get_residency_class() != ResidencyClass::RoutingHelper) {
             continue;
         }
         if (reclaim_or_defer_helper_locked(server.get())) {
-            stale.push_back(server.get());
+            stale.push_back(select_retirement_locked(server.get()));
         }
     }
 
-    for (auto* server : stale) {
+    for (const auto& selected : stale) {
+        const auto& server = selected.server;
+        if (std::find(loaded_servers_.begin(), loaded_servers_.end(), server) == loaded_servers_.end() ||
+            server->cleanup_pending() || !server->is_backend_alive() ||
+            server->get_residency_class() != ResidencyClass::RoutingHelper ||
+            !reclaim_or_defer_helper_locked(server.get())) continue;
         LOG(INFO, "Router") << "Routing helper " << server->get_model_name()
                             << " referenced by no active policy, evicting" << std::endl;
-        evict_server(server);
+        evict_server(lock, selected);
     }
 }
 
@@ -706,7 +760,7 @@ void Router::reclaim_stale_helper_if_idle(const std::string& model_name) {
             LOG(INFO, "Router") << "Routing helper " << model_name
                                 << " released and referenced by no active policy, evicting"
                                 << std::endl;
-            evict_server(server);
+            evict_server(lock, server);
             return;
         }
 
@@ -748,7 +802,7 @@ bool Router::routing_helper_no_longer_needed(const std::string& canonical_model_
 
 bool Router::has_npu_server() const {
     for (const auto& server : loaded_servers_) {
-        if (server->is_backend_alive() && (server->get_device_type() & DEVICE_NPU)) {
+        if (occupies_residency(*server) && (server->get_device_type() & DEVICE_NPU)) {
             return true;
         }
     }
@@ -757,7 +811,7 @@ bool Router::has_npu_server() const {
 
 WrappedServer* Router::find_npu_server() const {
     for (const auto& server : loaded_servers_) {
-        if (server->is_backend_alive() && (server->get_device_type() & DEVICE_NPU)) {
+        if (occupies_residency(*server) && (server->get_device_type() & DEVICE_NPU)) {
             return server.get();
         }
     }
@@ -766,7 +820,7 @@ WrappedServer* Router::find_npu_server() const {
 
 WrappedServer* Router::find_npu_server_by_recipe(const std::string& recipe) const {
     for (const auto& server : loaded_servers_) {
-        if (server->is_backend_alive() &&
+        if (occupies_residency(*server) &&
             (server->get_device_type() & DEVICE_NPU) &&
             server->get_recipe_options().get_recipe() == recipe) {
             return server.get();
@@ -777,7 +831,7 @@ WrappedServer* Router::find_npu_server_by_recipe(const std::string& recipe) cons
 
 WrappedServer* Router::find_coexisting_server_by_type(ModelType type) const {
     for (const auto& server : loaded_servers_) {
-        if (server->is_backend_alive() &&
+        if (occupies_residency(*server) &&
             server->effective_slot_policy(server->get_recipe_options()) ==
                 SlotPolicy::CoexistByType &&
             server->get_model_type() == type) {
@@ -787,27 +841,57 @@ WrappedServer* Router::find_coexisting_server_by_type(ModelType type) const {
     return nullptr;
 }
 
-// Helper: Evict all NPU servers
-void Router::evict_all_npu_servers() {
-    std::vector<WrappedServer*> npu_servers;
+void Router::evict_all_npu_servers(std::unique_lock<std::mutex>& lock,
+                                   ResidencyClass requester, const std::function<void()>& validate_intent) {
+    std::vector<RetirementSelection> npu_servers;
     for (const auto& server : loaded_servers_) {
-        if (server->is_backend_alive() && (server->get_device_type() & DEVICE_NPU)) {
-            npu_servers.push_back(server.get());
+        if (occupies_residency(*server) && (server->get_device_type() & DEVICE_NPU)) {
+            if (server->cleanup_pending())
+                throw AdmissionError("worker_cleanup_pending", "Confirm worker cleanup before reusing the NPU", 503);
+            if (server->is_pinned() || should_reject_residency_displacement(requester, server->get_residency_class()))
+                throw RouterResidencyConflictException(server->get_model_name(), server->get_model_name(), "the NPU worker is protected from replacement");
+            npu_servers.push_back(select_retirement_locked(server.get()));
         }
     }
-    for (auto* server : npu_servers) {
+    for (const auto& selected : npu_servers) {
+        const auto& server = selected.server;
+        validate_intent();
+        if (std::find(loaded_servers_.begin(), loaded_servers_.end(), server) == loaded_servers_.end()) continue;
+        if (server->is_pinned() || should_reject_residency_displacement(requester, server->get_residency_class()))
+            throw RouterResidencyConflictException(server->get_model_name(), server->get_model_name(), "the NPU worker is protected from replacement");
         LOG(INFO, "Router") << "Evicting NPU server: " << server->get_model_name() << std::endl;
-        evict_server(server);
+        evict_server(lock, selected);
+        validate_intent();
     }
 }
 
-void Router::evict_server(WrappedServer* server) {
-    if (!server) return;
+Router::RetirementSelection Router::select_retirement_locked(WrappedServer* server) const {
     const auto member = std::find_if(loaded_servers_.begin(), loaded_servers_.end(),
-        [server](const auto& candidate) { return candidate.get() == server; });
+        [server](const auto& current) { return current.get() == server; });
     if (member == loaded_servers_.end())
         throw std::runtime_error("The selected worker generation is no longer registered");
-    const auto lifetime = *member;
+    const auto policy = residency_policies_.find(server->get_model_name());
+    return {*member, server->is_pinned(), policy == residency_policies_.end() ? 0 : policy->second.revision};
+}
+
+void Router::evict_server(std::unique_lock<std::mutex>& lock, WrappedServer* server) {
+    if (!lock.owns_lock() || lock.mutex() != &load_mutex_)
+        throw std::logic_error("Worker retirement requires the Router registry owner");
+    if (server) evict_server(lock, select_retirement_locked(server));
+}
+
+void Router::evict_server(std::unique_lock<std::mutex>& lock, const RetirementSelection& selected) {
+    if (!lock.owns_lock() || lock.mutex() != &load_mutex_)
+        throw std::logic_error("Worker retirement requires the Router registry owner");
+    const auto lifetime = selected.server;
+    auto* server = lifetime.get();
+    if (!server || std::find(loaded_servers_.begin(), loaded_servers_.end(), lifetime) == loaded_servers_.end())
+        throw std::runtime_error("The selected worker generation is no longer registered");
+    const auto policy = residency_policies_.find(server->get_model_name());
+    const auto revision = policy == residency_policies_.end() ? 0 : policy->second.revision;
+    if (server->is_pinned() && (!selected.pinned || revision != selected.policy_revision))
+        throw RouterResidencyConflictException(server->get_model_name(), server->get_model_name(),
+            "the selected worker has newer keep-resident intent");
 
     std::string model_name = server->get_model_name();
     LOG(INFO, "Router") << "Evicting model: " << model_name << std::endl;
@@ -815,8 +899,24 @@ void Router::evict_server(WrappedServer* server) {
     if (!server->try_evict_if_idle())
         throw RouterResidencyConflictException(model_name, model_name, "the worker has active operations or transitions");
 
+    if (!server->try_begin_retirement())
+        throw RouterResidencyConflictException(model_name, model_name, "worker retirement is already owned");
+    struct ReleaseRetirement {
+        WrappedServer& worker;
+        ~ReleaseRetirement() { worker.cancel_retirement(); }
+    } release_retirement{*server};
+    server->set_cleanup_pending(true);
+    lock.unlock();
     try { server->unload(); }
-    catch (...) { server->set_cleanup_pending(true); throw; }
+    catch (...) {
+        lock.lock();
+        throw;
+    }
+    lock.lock();
+    if (std::find(loaded_servers_.begin(), loaded_servers_.end(), lifetime) == loaded_servers_.end())
+        throw RouterResidencyConflictException(model_name, model_name, "the retiring generation left the registry");
+    if (!server->commit_retirement())
+        throw RouterResidencyConflictException(model_name, model_name, "worker retirement changed during cleanup");
     server->set_cleanup_pending(false);
     admission_.reconcile_stopped_generation(server->get_instance_id());
     server->release_resource_residency();
@@ -833,17 +933,18 @@ void Router::evict_server(WrappedServer* server) {
     LOG(INFO, "Router") << "Evicted model: " << model_name << std::endl;
 }
 
-void Router::evict_all_servers() {
+void Router::evict_all_servers(std::unique_lock<std::mutex>& lock) {
     LOG(INFO, "Router") << "Evicting all models (" << loaded_servers_.size() << " total)" << std::endl;
 
-    std::vector<WrappedServer*> servers;
+    std::vector<RetirementSelection> servers;
     servers.reserve(loaded_servers_.size());
     for (const auto& server : loaded_servers_) {
-        servers.push_back(server.get());
+        servers.push_back(select_retirement_locked(server.get()));
     }
 
-    for (auto* server : servers) {
-        evict_server(server);
+    for (const auto& selected : servers) {
+        if (std::find(loaded_servers_.begin(), loaded_servers_.end(), selected.server) == loaded_servers_.end()) continue;
+        evict_server(lock, selected);
     }
 
     LOG(INFO, "Router") << "Evict all completed. Remaining tombstoned models: "
@@ -936,7 +1037,7 @@ void Router::load_model(const std::string& model_name,
     const auto require_intent = [&] {
         if (intent_cancelled()) throw AdmissionError("policy_intent_changed", "Automatic Hot load was superseded", 409);
     };
-    is_loading_ = true;
+    start_loading_locked(canonical_model_name);
 
     LOG(DEBUG, "Router") << "Loading model: " << canonical_model_name
             << " (checkpoint: " << model_info.checkpoint()
@@ -958,12 +1059,13 @@ void Router::load_model(const std::string& model_name,
         }
 
         final_pinned = residency_pinned_locked(canonical_model_name, final_pinned);
-        prune_unavailable_servers_locked();
+        require_intent();
+        prune_unavailable_servers_locked(lock);
+        require_intent();
 
-        // Reclaim any idle routing helper a policy change already dropped from
-        // the needed set (e.g. one that was busy during the triggering
-        // reconcile). Cheap and non-blocking; runs before every load path.
-        prune_stale_routing_helpers_locked();
+        // Reclaim unused helper residency before reserving this load's capacity.
+        prune_stale_routing_helpers_locked(lock);
+        require_intent();
 
         // If this load is itself for a routing helper the active policies no
         // longer reference, abandon it now — before any destructive side effect
@@ -974,8 +1076,7 @@ void Router::load_model(const std::string& model_name,
             LOG(INFO, "Router") << "Skipping load of routing helper "
                                 << canonical_model_name
                                 << "; referenced by no active policy" << std::endl;
-            is_loading_ = false;
-            load_cv_.notify_all();
+            finish_loading_locked();
             return;
         }
 
@@ -988,7 +1089,9 @@ void Router::load_model(const std::string& model_name,
         if (existing && (!existing->is_backend_alive() || existing->was_watchdog_triggered())) {
             LOG(WARNING, "Router") << "Existing backend for " << canonical_model_name
                                     << " is unavailable or watchdog triggered, evicting before reload" << std::endl;
-            evict_server(existing);
+            require_intent();
+            evict_server(lock, existing);
+            require_intent();
             existing = nullptr;
         }
         if (existing) {
@@ -1014,14 +1117,13 @@ void Router::load_model(const std::string& model_name,
                 // Residency follows the current use of the live process. Promotion
                 // and demotion both reuse the process and obey destination-pool
                 // admission and pinning rules.
-                transition_server_residency_locked(
+                transition_server_residency_locked(lock,
                     existing, requested_residency_class);
                 LOG(DEBUG, "Router") << "Model already loaded, updating access time and pinned status" << std::endl;
                 require_intent();
                 existing->set_pinned(residency_pinned_locked(canonical_model_name, final_pinned));
                 existing->update_access_time();
-                is_loading_ = false;
-                load_cv_.notify_all();
+                finish_loading_locked();
                 return;
             }
         }
@@ -1040,7 +1142,9 @@ void Router::load_model(const std::string& model_name,
             if (find_server_by_model_name(canonical_model_name) != replace_existing.get())
                 throw RouterResidencyConflictException(canonical_model_name, canonical_model_name,
                     "the selected generation changed while waiting for admission");
-            evict_server(replace_existing.get());
+            require_intent();
+            evict_server(lock, replace_existing.get());
+            require_intent();
         }
 
         // NPU EXCLUSIVITY CHECK — driven by the backend's slot policy (descriptor).
@@ -1055,11 +1159,13 @@ void Router::load_model(const std::string& model_name,
                 // alternate a router helper and its candidate across the same NPU:
                 // reject the cross-residency combination deterministically instead.
                 for (const auto& server : loaded_servers_) {
+                    if (server->cleanup_pending() && (server->get_device_type() & DEVICE_NPU))
+                        throw AdmissionError("worker_cleanup_pending", "Confirm worker cleanup before reusing the NPU", 503);
                     if (!model_info.extra<std::string>("execution_profile", "").empty() &&
-                        server->is_backend_alive() && (server->get_device_type() & DEVICE_NPU) &&
+                        occupies_residency(*server) && (server->get_device_type() & DEVICE_NPU) &&
                         (server->is_pinned() || server->is_busy()))
                         throw std::runtime_error("The NPU is occupied by " + server->get_model_name() + "; finish requests and unload that NPU model before trying this profile");
-                    if (server->is_backend_alive() &&
+                    if (occupies_residency(*server) &&
                         (server->get_device_type() & DEVICE_NPU) &&
                         should_reject_residency_displacement(
                             requested_residency_class,
@@ -1073,7 +1179,7 @@ void Router::load_model(const std::string& model_name,
                 if (has_npu_server()) {
                     LOG(INFO, "Router") << model_info.recipe
                               << " requires exclusive NPU access, evicting all NPU servers..." << std::endl;
-                    evict_all_npu_servers();
+                    evict_all_npu_servers(lock, requested_residency_class, require_intent);
                 }
                 break;
             }
@@ -1081,9 +1187,9 @@ void Router::load_model(const std::string& model_name,
                 // 1. Evict every NPU holder that is not itself a coexisting (FLM)
                 //    backend — i.e. exclusive-NPU peers like ryzenai-llm and
                 //    whisper-on-npu. Collect first; evict_server mutates loaded_servers_.
-                std::vector<WrappedServer*> exclusive_peers;
+                std::vector<RetirementSelection> exclusive_peers;
                 for (const auto& server : loaded_servers_) {
-                    if (server->is_backend_alive() && (server->get_device_type() & DEVICE_NPU) &&
+                    if (occupies_residency(*server) && (server->get_device_type() & DEVICE_NPU) &&
                         server->effective_slot_policy(server->get_recipe_options()) !=
                             SlotPolicy::CoexistByType) {
                         if (should_reject_residency_displacement(
@@ -1094,18 +1200,35 @@ void Router::load_model(const std::string& model_name,
                                 server->get_model_name(),
                                 "FLM cannot coexist with the resident exclusive-NPU backend");
                         }
-                        exclusive_peers.push_back(server.get());
+                        if (server->cleanup_pending())
+                            throw AdmissionError("worker_cleanup_pending", "Confirm worker cleanup before reusing the NPU", 503);
+                        if (server->is_pinned())
+                            throw RouterResidencyConflictException(canonical_model_name, server->get_model_name(), "the NPU worker is protected from replacement");
+                        exclusive_peers.push_back(select_retirement_locked(server.get()));
                     }
                 }
-                for (auto* peer : exclusive_peers) {
+                for (const auto& selected : exclusive_peers) {
+                    const auto& peer = selected.server;
+                    require_intent();
+                    if (std::find(loaded_servers_.begin(), loaded_servers_.end(), peer) == loaded_servers_.end()) continue;
+                    if (peer->cleanup_pending())
+                        throw AdmissionError("worker_cleanup_pending", "Confirm worker cleanup before reusing the NPU", 503);
+                    if (peer->is_pinned() || should_reject_residency_displacement(requested_residency_class, peer->get_residency_class()))
+                        throw RouterResidencyConflictException(canonical_model_name, peer->get_model_name(), "the NPU worker is protected from replacement");
                     LOG(INFO, "Router") << "FLM cannot coexist with "
                               << peer->get_recipe_options().get_recipe()
                               << ", evicting: " << peer->get_model_name() << std::endl;
-                    evict_server(peer);
+                    require_intent();
+                    evict_server(lock, selected);
+                    require_intent();
                 }
                 // 2. Evict FLM of the SAME model type (max 1 per type: 1 LLM, 1 transcription, 1 embed)
                 WrappedServer* same_type_flm = find_coexisting_server_by_type(model_type);
                 if (same_type_flm) {
+                    if (same_type_flm->cleanup_pending())
+                        throw AdmissionError("worker_cleanup_pending", "Confirm worker cleanup before reusing the NPU", 503);
+                    if (same_type_flm->is_pinned())
+                        throw RouterResidencyConflictException(canonical_model_name, same_type_flm->get_model_name(), "the NPU worker is protected from replacement");
                     if (should_reject_residency_displacement(
                             requested_residency_class,
                             same_type_flm->get_residency_class())) {
@@ -1117,7 +1240,9 @@ void Router::load_model(const std::string& model_name,
                     LOG(INFO, "Router") << "FLM " << model_type_to_string(model_type)
                               << " slot occupied by: " << same_type_flm->get_model_name()
                               << ", evicting..." << std::endl;
-                    evict_server(same_type_flm);
+                    require_intent();
+                    evict_server(lock, same_type_flm);
+                    require_intent();
                 }
                 break;
             }
@@ -1131,9 +1256,10 @@ void Router::load_model(const std::string& model_name,
         // slot of the same ModelType. Cloud remains unmetered and outside both pools.
         const bool is_unmetered_load = is_unmetered_recipe(model_info.recipe);
         if (!is_unmetered_load) {
-            ensure_residency_capacity(model_type, requested_residency_class,
+            ensure_residency_capacity(lock, model_type, requested_residency_class,
                                       canonical_model_name);
         }
+        require_intent();
 
         // Auto-tune: resolve ctx_size = -1 → computed from memory + arch metadata
         // Done AFTER eviction so that freed VRAM/RAM is visible to the memory query.
@@ -1273,8 +1399,7 @@ void Router::load_model(const std::string& model_name,
                           << " no longer referenced by any active policy; "
                           << "discarding freshly loaded backend" << std::endl;
                 new_server->unload();
-                is_loading_ = false;
-                load_cv_.notify_all();
+                finish_loading_locked();
                 return;
             }
 
@@ -1289,8 +1414,7 @@ void Router::load_model(const std::string& model_name,
             install_reclaim_notifier(new_server.get());
             loaded_servers_.push_back(std::move(new_server));
 
-            is_loading_ = false;
-            load_cv_.notify_all();
+            finish_loading_locked();
 
             LOG(INFO, "Router") << "Model loaded successfully. Total loaded: "
                       << loaded_servers_.size() << std::endl;
@@ -1301,8 +1425,7 @@ void Router::load_model(const std::string& model_name,
                                      error_message.find("does not exist") != std::string::npos ||
                                      error_message.find("No such file") != std::string::npos);
 
-            is_loading_ = false;
-            load_cv_.notify_all();
+            finish_loading_locked();
 
             if (load_admission_error) throw *load_admission_error;
 
@@ -1338,7 +1461,6 @@ void Router::load_model(const std::string& model_name,
                 LOG(INFO, "Router") << "Routing helper " << canonical_model_name
                           << " no longer referenced by any active policy; "
                           << "abandoning nuclear retry" << std::endl;
-                load_cv_.notify_all();
                 return;
             }
 
@@ -1346,7 +1468,7 @@ void Router::load_model(const std::string& model_name,
             load_resources = {};
 
             // Mark loading again for retry
-            is_loading_ = true;
+            start_loading_locked(canonical_model_name);
 
             // Create new server for retry
             std::unique_ptr<WrappedServer> retry_server = create_backend_server(model_info);
@@ -1387,8 +1509,7 @@ void Router::load_model(const std::string& model_name,
                               << " no longer referenced by any active policy; "
                               << "discarding freshly loaded backend" << std::endl;
                     retry_server->unload();
-                    is_loading_ = false;
-                    load_cv_.notify_all();
+                    finish_loading_locked();
                     return;
                 }
 
@@ -1402,14 +1523,12 @@ void Router::load_model(const std::string& model_name,
                 const auto retry_duration_ms = retry_server->get_load_duration_ms();
                 install_reclaim_notifier(retry_server.get());
                 loaded_servers_.push_back(std::move(retry_server));
-                is_loading_ = false;
-                load_cv_.notify_all();
+                finish_loading_locked();
 
                 LOG(DEBUG, "Router") << "Retry successful in " << retry_duration_ms << "ms!" << std::endl;
             } catch (const std::exception& retry_error) {
                 if (!lock.owns_lock()) lock.lock();
-                is_loading_ = false;
-                load_cv_.notify_all();
+                finish_loading_locked();
 
                 LOG(ERROR, "Router") << "Retry also failed: " << retry_error.what() << std::endl;
                 throw;
@@ -1422,8 +1541,7 @@ void Router::load_model(const std::string& model_name,
         if (!lock.owns_lock()) {
             lock.lock();
         }
-        is_loading_ = false;
-        load_cv_.notify_all();
+        finish_loading_locked();
 
         throw;
     }
@@ -1446,15 +1564,16 @@ void Router::update_backend(const std::string& recipe, const std::function<void(
 
 void Router::unload_model(const std::string& model_name) {
     std::unique_lock<std::mutex> lock(load_mutex_);
-    std::vector<std::shared_ptr<WrappedServer>> targets;
+    std::vector<RetirementSelection> targets;
     const auto canonical = model_name.empty() ? "" : resolve_model_name(model_name);
     for (const auto& server : loaded_servers_)
-        if (canonical.empty() || server->get_model_name() == canonical) targets.push_back(server);
+        if (canonical.empty() || server->get_model_name() == canonical) targets.push_back(select_retirement_locked(server.get()));
     if (!canonical.empty() && targets.empty())
         throw ModelNotLoadedException(model_name);
     lock.unlock();
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(EVICTION_TIMEOUT);
-    for (const auto& server : targets) {
+    for (const auto& selected : targets) {
+        const auto& server = selected.server;
         const auto remaining = std::chrono::ceil<std::chrono::seconds>(deadline - std::chrono::steady_clock::now()).count();
         if (!server->wait_until_not_busy(static_cast<int>((std::max)(int64_t(0), int64_t(remaining)))))
             throw RouterResidencyConflictException(server->get_model_name(), server->get_model_name(),
@@ -1463,14 +1582,14 @@ void Router::unload_model(const std::string& model_name) {
     lock.lock();
     for (const auto& current : loaded_servers_) {
         if (!canonical.empty() && current->get_model_name() != canonical) continue;
-        const bool retained = std::find(targets.begin(), targets.end(), current) != targets.end();
+        const bool retained = std::any_of(targets.begin(), targets.end(), [&](const auto& selected) { return selected.server == current; });
         if (!retained || current->is_busy())
             throw RouterResidencyConflictException(current->get_model_name(), current->get_model_name(),
                                                    "the worker generation or activity changed during drain");
     }
-    for (const auto& server : targets)
-        if (std::find(loaded_servers_.begin(), loaded_servers_.end(), server) != loaded_servers_.end())
-            evict_server(server.get());
+    for (const auto& selected : targets)
+        if (std::find(loaded_servers_.begin(), loaded_servers_.end(), selected.server) != loaded_servers_.end())
+            evict_server(lock, selected);
 }
 
 json Router::uninstall_cloud_provider(const std::string& provider, const std::function<bool()>& publish) {
@@ -1485,11 +1604,12 @@ json Router::uninstall_cloud_provider(const std::string& provider, const std::fu
             targets.push_back(worker);
         }
         const bool removed = publish();
+        for (const auto& worker : targets) worker->set_cleanup_pending(true);
         json result = {{"removed", removed}, {"workers_removed", 0}, {"cleanup_pending", json::array()}};
         for (const auto& worker : targets) {
             try {
                 if (!worker->commit_retirement()) throw std::runtime_error("Worker retirement changed during publication");
-                evict_server(worker.get());
+                evict_server(lock, worker.get());
                 result["workers_removed"] = result["workers_removed"].get<int>() + 1;
             } catch (const std::exception& error) {
                 result["cleanup_pending"].push_back(worker->get_model_name());
@@ -1504,7 +1624,7 @@ json Router::uninstall_cloud_provider(const std::string& provider, const std::fu
 }
 
 void Router::evict_if_committed(const std::string& model_name, uint64_t expected_generation) {
-    std::lock_guard<std::mutex> lock(load_mutex_);
+    std::unique_lock<std::mutex> lock(load_mutex_);
 
     WrappedServer* server = find_server_by_model_name(model_name);
     if (!server || (expected_generation && server->get_instance_id() != expected_generation)) {
@@ -1512,7 +1632,7 @@ void Router::evict_if_committed(const std::string& model_name, uint64_t expected
     }
 
     if (server->cleanup_pending()) {
-        evict_server(server);
+        evict_server(lock, server);
         return;
     }
 
@@ -1531,7 +1651,7 @@ void Router::evict_if_committed(const std::string& model_name, uint64_t expected
         return;
     }
 
-    evict_server(server);
+    evict_server(lock, server);
 }
 
 std::string Router::get_loaded_model() const {
@@ -3310,7 +3430,7 @@ int Router::count_pinned_servers_in_pool(
         if (is_unmetered_recipe(server->get_recipe_options().get_recipe())) {
             continue;
         }
-        if (server->is_backend_alive() &&
+        if (occupies_residency(*server) &&
             server->get_model_type() == type &&
             server->get_residency_class() == residency_class &&
             server->is_pinned()) {
@@ -3385,7 +3505,7 @@ bool Router::apply_model_policy(const std::string& model_name, uint64_t generati
     worker->set_pinned(current_pinned);
     if (unload) {
         if (worker->is_busy()) return false;
-        evict_server(worker);
+        evict_server(lock, worker);
     }
     return true;
 }

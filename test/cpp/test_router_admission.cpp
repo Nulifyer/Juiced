@@ -66,8 +66,8 @@ struct RoutingHelperTestHook {
         return std::find(router.loaded_servers_.begin(), router.loaded_servers_.end(), worker) != router.loaded_servers_.end();
     }
     static void retire(Router& router, const std::shared_ptr<AdmissionWorker>& worker) {
-        std::lock_guard<std::mutex> lock(router.load_mutex_);
-        router.evict_server(worker.get());
+        std::unique_lock<std::mutex> lock(router.load_mutex_);
+        router.evict_server(lock, worker.get());
     }
     static void add(Router& router, const std::shared_ptr<AdmissionWorker>& worker) {
         std::lock_guard<std::mutex> lock(router.load_mutex_);

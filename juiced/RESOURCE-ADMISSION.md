@@ -745,6 +745,20 @@ cleanup failures retain ownership and report failure without escaping their thre
 A failed worker destructor retains uncertain residency in the live admission ledger.
 Dispatched loads retain logical uncertainty even when their legacy estimate is zero.
 
+Registered-worker retirement claims the exact generation under Router's registry
+lock, marks cleanup pending, then releases that lock for process stop. Completion
+rechecks the same shared worker before removal and ledger reconciliation. Failed
+stop keeps the generation and its charge available for cleanup retry. A detached
+process still occupies its pool and exclusive-device boundary while cleanup is
+pending. It cannot be selected as a replacement victim.
+
+Deferred replacement and idle-retirement candidates recheck generation, current
+pin/policy and request state after each unlocked stop. Role changes retain the existing load slot across
+capacity reclamation. Normal readiness can reuse an eligible, same-role worker
+during a known different-model load. Same-model reload and unknown load targets
+keep their serialization gate. Fresh, unregistered startup/retry disposal retains
+separate cleanup-ownership and lock-release requirements.
+
 Derived worker destruction contains stop failures. Whisper temporary audio and
 vLLM startup shims remain on disk while exit is unconfirmed. Automatic eviction
 retains the failed generation as `cleanup_pending`, preserves its reservation and

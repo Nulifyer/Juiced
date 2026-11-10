@@ -276,11 +276,9 @@ public:
         return true;
     }
 
-    // Called by the eviction engine (under the router lock) to atomically decide
-    // whether a model marked EVICTING may actually be unloaded. Returns true only
-    // if the model is still idle and EVICTING (commit -> transition to UNLOADED so
-    // later acquires reload). Returns false if a request rescued it (state changed
-    // to IN_USE) or it is otherwise busy, reverting it to READY.
+    // Commit eligibility under the router lock before claiming retirement.
+    // A rescued or busy generation stays available. Process stop follows outside
+    // the router lock while the retirement claim prevents new requests.
     bool try_commit_eviction() {
         std::lock_guard<std::mutex> lock(state_mutex_);
         if (!retirement_pending_ && state_ == ModelState::EVICTING && active_request_count_ == 0) {
@@ -296,12 +294,8 @@ public:
         return false;
     }
 
-    // Single-step eviction commit for the synchronous routing-helper reclaim,
-    // which already holds the router lock and unloads inline. Under one state
-    // lock: if the model is idle (no requests, no maintenance downsize), transition
-    // straight to UNLOADED and return true; otherwise leave the state untouched
-    // and return false so the caller re-arms. Unlike the tentative EVICTING mark
-    // used by the async engine, this never clobbers an IN_USE / DOWNSIZING state.
+    // Idle eligibility must not clobber IN_USE or DOWNSIZING. Moving to UNLOADED
+    // precedes the separate retirement claim and does not confirm process exit.
     bool try_evict_if_idle() {
         std::lock_guard<std::mutex> lock(state_mutex_);
         if (active_request_count_ == 0 && !maintenance_in_progress_ && !retirement_pending_ &&

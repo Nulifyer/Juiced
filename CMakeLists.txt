@@ -3440,6 +3440,11 @@ if(BUILD_TESTING)
     add_cpp_ci_test(RouterAdmissionTest CI ON COMMAND test_router_admission)
     set_tests_properties(RouterAdmissionTest PROPERTIES TIMEOUT 30)
 
+    add_executable(test_router_retirement test/cpp/test_router_retirement.cpp)
+    target_link_libraries(test_router_retirement PRIVATE lemonade-server-core)
+    add_cpp_ci_test(RouterRetirementTest CI ON COMMAND test_router_retirement)
+    set_tests_properties(RouterRetirementTest PROPERTIES TIMEOUT 90)
+
     add_executable(test_gateway_admission test/cpp/test_gateway_admission.cpp)
     target_link_libraries(test_gateway_admission PRIVATE lemonade-server-core)
     add_cpp_ci_test(GatewayAdmissionTest CI ON COMMAND test_gateway_admission)

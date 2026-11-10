@@ -371,9 +371,11 @@ private:
     std::shared_ptr<RoutingHelperReclaimExecutor> reclaim_executor_;
 
     // Helper methods for multi-model management
+    void start_loading_locked(const std::string& model);
+    void finish_loading_locked();
     WrappedServer* find_server_by_model_name(const std::string& model_name) const;
     WrappedServer* get_most_recent_server() const;
-    void prune_unavailable_servers_locked();
+    void prune_unavailable_servers_locked(std::unique_lock<std::mutex>& lock);
     bool reload_model_after_watchdog_reset(const std::string& requested_model, const RecipeOptions& options, uint64_t failed_instance_id = 0);
     bool is_watchdog_reset_response(const json& response) const;
     int count_servers_in_pool(ModelType type, ResidencyClass residency_class,
@@ -382,9 +384,9 @@ private:
                                       ResidencyClass residency_class) const;
     WrappedServer* find_lru_server_in_pool(ModelType type, ResidencyClass residency_class,
                                                   const std::string& model_name) const;
-    void ensure_residency_capacity(ModelType type, ResidencyClass residency_class,
+    void ensure_residency_capacity(std::unique_lock<std::mutex>& lock, ModelType type, ResidencyClass residency_class,
                                    const std::string& model_name);
-    void transition_server_residency_locked(
+    void transition_server_residency_locked(std::unique_lock<std::mutex>& lock,
         WrappedServer* server,
         ResidencyClass requested_residency_class);
     bool ensure_loaded_model_residency_canonical(
@@ -394,9 +396,18 @@ private:
     WrappedServer* find_npu_server() const;
     WrappedServer* find_npu_server_by_recipe(const std::string& recipe) const;
     WrappedServer* find_coexisting_server_by_type(ModelType type) const;
-    void evict_all_npu_servers();
-    void evict_server(WrappedServer* server);
-    void evict_all_servers();
+    // Keep generation and residency intent while stop releases registry ownership.
+    struct RetirementSelection {
+        std::shared_ptr<WrappedServer> server;
+        bool pinned;
+        uint64_t policy_revision;
+    };
+    RetirementSelection select_retirement_locked(WrappedServer* server) const;
+    void evict_all_npu_servers(std::unique_lock<std::mutex>& lock,
+                               ResidencyClass requester, const std::function<void()>& validate_intent);
+    void evict_server(std::unique_lock<std::mutex>& lock, WrappedServer* server);
+    void evict_server(std::unique_lock<std::mutex>& lock, const RetirementSelection& selected);
+    void evict_all_servers(std::unique_lock<std::mutex>& lock);
     // Publish the (already-canonicalized) needed-helper set under load_mutex_,
     // then defer the eviction pass until no load holds the slot. Split out from
     // reconcile_routing_helpers so the set is visible to a mid-load helper's
@@ -406,7 +417,7 @@ private:
     // needed_helper_models_. A busy not-needed helper is marked pending-stale so
     // it self-reclaims on its final release instead of blocking this pass on an
     // eviction timeout. Caller holds load_mutex_.
-    void prune_stale_routing_helpers_locked();
+    void prune_stale_routing_helpers_locked(std::unique_lock<std::mutex>& lock);
     // Shared decision for a live routing helper (caller holds load_mutex_): if it
     // is still needed or pinned, cancel any pending reclaim and return false; if
     // it is stale but busy, arm the release-triggered reclaim and return false;
@@ -453,6 +464,8 @@ private:
 
     template<typename Func>
     void execute_streaming(const std::string& request_body, httplib::DataSink& sink, InferenceOperation request_operation, Func&& streaming_func, std::shared_ptr<telemetry::InferenceSpan> span = nullptr);
+    std::string loading_model_;
+
 };
 
 } // namespace lemon
