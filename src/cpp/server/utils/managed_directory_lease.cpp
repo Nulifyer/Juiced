@@ -105,6 +105,12 @@ ManagedDirectoryLease::ManagedDirectoryLease(const std::vector<fs::path>& roots)
 
 ManagedDirectoryLease::~ManagedDirectoryLease() = default;
 
+void ManagedDirectoryLease::validate() {
+    std::lock_guard lock(mutex_);
+    for (const auto& weak : files_)
+        if (const auto file = weak.lock()) file->validate_identity();
+}
+
 fs::path ManagedDirectoryLease::Claim::root() const {
     return file_ ? file_->root : fs::path{};
 }

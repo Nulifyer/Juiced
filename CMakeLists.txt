@@ -3493,6 +3493,10 @@ if(BUILD_TESTING)
         ${CMAKE_CURRENT_SOURCE_DIR}/juiced/tests/test_store_ownership.py --binary $<TARGET_FILE:${EXECUTABLE_NAME}>
         --aliases --out ${CMAKE_CURRENT_BINARY_DIR}/store-directory-aliases-proof.json DEPENDS ${EXECUTABLE_NAME})
     set_tests_properties(StoreDirectoryAliasesTest PROPERTIES TIMEOUT 150)
+    add_cpp_ci_test(StoreRootSubstitutionTest CI ON COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/juiced/tests/test_store_ownership.py --binary $<TARGET_FILE:${EXECUTABLE_NAME}>
+        --substitution --out ${CMAKE_CURRENT_BINARY_DIR}/store-root-substitution-proof.json DEPENDS ${EXECUTABLE_NAME})
+    set_tests_properties(StoreRootSubstitutionTest PROPERTIES TIMEOUT 150)
     if(NOT WIN32)
         add_cpp_ci_test(StoreHierarchyEntrypointsTest CI ON COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/juiced/tests/test_store_ownership.py --binary $<TARGET_FILE:${EXECUTABLE_NAME}>

@@ -615,10 +615,28 @@ compares its retained directory identity with the current path. A completed
 replacement fails with `Managed directory identity changed` before descendant
 creation. The old claim remains held until its final view releases. This check
 does not prevent movement after validation or anchor ordinary path-based writes.
+
+The native writer gate also validates every live directory claim before new or
+nested mutation admission. Completed replacement reports HTTP503
+`storage_root_unavailable`. Directory checks run outside the admission mutex.
+
+Deferred sync, downloads and snapshot saves revalidate before resuming effects.
+State and FLM helper terminal publication validate before writing their journals.
+Snapshot reclamation and legacy preparation staging cleanup also validate before
+filesystem effects. A preparation child can retire before validation rejects cleanup.
+
+Restoring a continuation itself remains nonthrowing so process retirement can
+finish after a storage rejection. Failed publication retains existing ownership.
+These checks do not prevent root movement after an accepted operation begins,
+anchor child path traversal, or establish a complete all-writer maintenance fence.
+
 Windows compares the volume and full 128-bit `FileIdInfo`, failing closed when
 that query is unavailable. Its directory handle does not add hierarchy exclusion.
 The same native root resolver normalizes trailing separators and dot aliases for
 preflight, acquisition and snapshot-store binding before creating missing roots.
+Both native startup entrypoints replace cache/config input aliases with the
+claimed canonical paths before migration, configuration loading and Server setup.
+Retargeting an input symlink then leaves publication attached to the original store.
 A read-only managed root without an existing usable control file cannot acquire
 ownership. Ordinary read-only external source directories remain outside writable
 store claims and are not modified. Their external consistency still needs validation.

@@ -114,6 +114,7 @@ struct ResourceAdmission::State {
     mutable std::mutex mutex;
     std::condition_variable changed;
     Headroom headroom;
+    std::function<void()> validate_storage;
     json config = json::object();
     std::map<std::string, Pool> pools;
     std::deque<std::shared_ptr<Entry>> pending;
@@ -123,6 +124,16 @@ struct ResourceAdmission::State {
     size_t essential_streak = 0;
     bool paused = false, stopped = false, configuration_pending = false, maintenance = false;
     uint64_t revision = 0;
+
+    void validate_storage_roots() const {
+        std::function<void()> validate;
+        {
+            std::lock_guard lock(mutex);
+            validate = validate_storage;
+        }
+        // Filesystem identity checks must not block admission or retirement owners.
+        if (validate) validate();
+    }
 
     void prune_writes() {
         for (auto item = active.begin(); item != active.end();) {
@@ -245,9 +256,26 @@ ResourceAdmission::WriteScope::~WriteScope() {
     if (record_) writer_context_ = previous_;
 }
 ResourceAdmission::WriteToken ResourceAdmission::WriteScope::continuation() const { return WriteToken(record_); }
+// Context restoration must remain available when storage rejects final publication.
 ResourceAdmission::WriteScope ResourceAdmission::WriteToken::enter() const { return WriteScope(record_); }
 
+void ResourceAdmission::WriteScope::validate_storage() const {
+    if (record_) record_->state->validate_storage_roots();
+}
+
+void ResourceAdmission::set_storage_validator(std::function<void()> validate) {
+    if (!validate) throw std::invalid_argument("Storage validation must have an owner");
+    std::lock_guard lock(state_->mutex);
+    if (state_->validate_storage) throw std::logic_error("Storage validation is already bound");
+    state_->validate_storage = std::move(validate);
+}
+
+void ResourceAdmission::validate_storage() const {
+    state_->validate_storage_roots();
+}
+
 ResourceAdmission::WriteScope ResourceAdmission::write_scope(const std::string& owner) const {
+    validate_storage();
     const auto inherited = writer_context_.lock();
     std::unique_lock<std::mutex> lock(state_->mutex);
     state_->prune_writes();

@@ -791,6 +791,38 @@ int main() {
         accepted_mutation = {};
         check(restoration.wait_for_writes(100ms), "terminal accepted restoration releases its writer and queue ownership");
         ResourceAdmission writes;
+        {
+            ResourceAdmission storage;
+            bool valid = true;
+            int validations = 0;
+            storage.set_storage_validator([&] {
+                ++validations;
+                storage.snapshot();
+                if (!valid) throw lemon::AdmissionError("storage_root_unavailable", "fixture", 503);
+            });
+            ResourceAdmission::WriteToken retained;
+            {
+                auto writer = storage.write_scope("accepted-before-replacement");
+                retained = writer.continuation();
+                valid = false;
+                check(error([&] { storage.write_scope("nested-after-replacement"); }, "storage_root_unavailable"),
+                      "nested mutation revalidates storage outside the ledger mutex");
+            }
+            check(error([&] { storage.write_scope("new-after-replacement"); }, "storage_root_unavailable"),
+                  "new mutation rejects completed root replacement");
+            auto publication = retained.enter();
+            check(error([&] { publication.validate_storage(); }, "storage_root_unavailable") &&
+                  !storage.wait_for_writes(1ms),
+                  "deferred publication rejects changed storage without dropping its operation owner");
+            auto process = storage.acquire_management("fixture", "cleanup");
+            process.started(); process.completed(); process = {};
+            check(storage.snapshot()["uncertain"] == 0 && validations == 4,
+                  "storage rejection leaves process retirement available and does not inspect roots under ledger locks");
+            valid = true;
+            publication.validate_storage();
+            { auto resumed = storage.write_scope("restored-original-root"); }
+            check(validations == 6, "restoring original root identity permits publication and new mutation");
+        }
         writes.configure({{"active_limit", 1}});
         ResourceAdmission::WriteToken deferred;
         {

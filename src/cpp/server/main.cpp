@@ -175,6 +175,8 @@ int main(int argc, char** argv) {
             AixLog::Log::init({early_sink});
         }
 
+        cli_config.cache_dir = utils::path_to_utf8(utils::ManagedDirectoryLease::resolve_root(utils::path_from_utf8(cli_config.cache_dir)));
+        cli_config.config_dir = utils::path_to_utf8(utils::ManagedDirectoryLease::resolve_root(utils::path_from_utf8(cli_config.config_dir)));
         auto directory_lease = std::make_shared<utils::ManagedDirectoryLease>(
             std::vector<std::filesystem::path>{utils::path_from_utf8(cli_config.cache_dir), utils::path_from_utf8(cli_config.config_dir)});
         utils::set_cache_dir(cli_config.cache_dir);

@@ -355,6 +355,7 @@ void JuicedService::publish_snapshot_write(const std::string& pending, const jso
   cleanup_snapshots_locked();
 }
 void JuicedService::cleanup_snapshot_writes_locked() {
+  server_.router_->admission_view().validate_storage();
   const auto writes = state_["snapshot_writes"];
   bool changed = false;
   for (const auto& [file, entry] : writes.items()) {
@@ -442,6 +443,7 @@ bool JuicedService::reserve_snapshot_write_locked(const std::string& pending, co
   return true;
 }
 void JuicedService::cleanup_snapshots_locked() {
+  server_.router_->admission_view().validate_storage();
   bool changed = false;
   const auto pending = state_["snapshot_cleanup"];
   for (const auto& [id, entry] : pending.items()) {
@@ -890,6 +892,7 @@ void JuicedService::chat(const httplib::Request &original,
       bool reserved = false, dispatched = false, response_valid = false;
       uint64_t budget = 0, bound = 0;
       try {
+        publication.validate_storage();
         {
           std::lock_guard<std::mutex> lock(mutex_);
           if (cache_mode_locked(model) != "persistent") return;

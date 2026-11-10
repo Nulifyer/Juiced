@@ -300,6 +300,7 @@ void JuicedService::stop() {
   finish_voice_cleanup();
 }
 JuicedService::json JuicedService::save_state_locked(json candidate) {
+  server_.router_->admission_view().validate_storage();
   candidate["revision"] = state_.value("revision", uint64_t(0)) + 1;
   auto durable_candidate = candidate;
   atomic_json(directory_ / "state.json", candidate);

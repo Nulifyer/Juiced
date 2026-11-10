@@ -109,6 +109,7 @@ bool JuicedService::finish_preparation_cleanup() {
       task.process->stop();
       if (!task.process->exited()) throw std::runtime_error("Preparation writer exit is unconfirmed");
     }
+    server_.router_->admission_view().validate_storage();
     std::filesystem::remove_all(directory_ / "prepared" / (".partial-" + id));
     {
       std::lock_guard<std::mutex> lock(mutex_);

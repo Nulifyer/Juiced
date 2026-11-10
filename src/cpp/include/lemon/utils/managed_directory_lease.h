@@ -29,6 +29,7 @@ public:
     ManagedDirectoryLease& operator=(const ManagedDirectoryLease&) = delete;
     void protect(const std::filesystem::path& root);
     Claim claim(const std::filesystem::path& root);
+    void validate();
 private:
     std::mutex mutex_;
     std::vector<std::weak_ptr<File>> files_;

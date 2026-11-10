@@ -112,6 +112,7 @@ int ModelManager::finish_flm_helper_locked(bool interrupted, const std::function
     terminal["interrupted"] = helper.interrupted;
     const bool publication = terminal.contains("publication");
     if (publication) terminal["publication_pending"] = *helper.result == 0;
+    operation.validate_storage();
     auto journal = read_journal(); journal["flm"] = terminal;
     utils::JsonUtils::save_to_file(journal, journal_path());
     if (publication && *helper.result == 0) {

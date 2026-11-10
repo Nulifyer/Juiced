@@ -262,6 +262,8 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
 
     std::shared_ptr<lemon::utils::ManagedDirectoryLease> directory_lease;
     try {
+        cli_config.cache_dir = lemon::utils::path_to_utf8(lemon::utils::ManagedDirectoryLease::resolve_root(lemon::utils::path_from_utf8(cli_config.cache_dir)));
+        cli_config.config_dir = lemon::utils::path_to_utf8(lemon::utils::ManagedDirectoryLease::resolve_root(lemon::utils::path_from_utf8(cli_config.config_dir)));
         directory_lease = std::make_shared<lemon::utils::ManagedDirectoryLease>(
             std::vector<std::filesystem::path>{lemon::utils::path_from_utf8(cli_config.cache_dir),
                                                lemon::utils::path_from_utf8(cli_config.config_dir)});

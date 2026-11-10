@@ -98,6 +98,7 @@ public:
         WriteScope(const WriteScope&) = delete;
         WriteScope& operator=(const WriteScope&) = delete;
         WriteToken continuation() const;
+        void validate_storage() const;
     private:
         friend class ResourceAdmission;
         friend class WriteToken;
@@ -106,6 +107,8 @@ public:
         std::weak_ptr<WriterRecord> previous_;
     };
     WriteScope write_scope(const std::string& owner) const;
+    void set_storage_validator(std::function<void()> validate);
+    void validate_storage() const;
     void reserve_model_cache_change(const std::set<std::string>& roots) const;
     void maintenance(bool requested);
     // Drained participating operations do not prove that idle workers or external

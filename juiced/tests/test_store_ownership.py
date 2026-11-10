@@ -20,7 +20,14 @@ def free_port():
         return sock.getsockname()[1]
 
 
-def run(binary, output, binding_only=False, hierarchy_only=False, aliases_only=False):
+def run(
+    binary,
+    output,
+    binding_only=False,
+    hierarchy_only=False,
+    aliases_only=False,
+    substitution_only=False,
+):
     checks = []
 
     def check(condition, label):
@@ -251,6 +258,136 @@ def run(binary, output, binding_only=False, hierarchy_only=False, aliases_only=F
                         "the applied root becomes available after confirmed owner release",
                     )
                     check(stop(peer, peer_port) == 0, "runtime alias peer drains")
+
+        def alias_retarget_contract():
+            for kind in ("cache", "config"):
+                base = root / ("alias-retarget-" + kind)
+                base.mkdir()
+                owned = {
+                    name: base / name
+                    for name in ("cache", "config", "models", "snapshots")
+                }
+                owned[kind].mkdir()
+                owned["config"].mkdir(exist_ok=True)
+                (owned["config"] / "config.json").write_text(json.dumps(settings))
+                alias = base / "startup-alias"
+                try:
+                    alias.symlink_to(owned[kind], target_is_directory=True)
+                except OSError as error:
+                    if os.name != "nt" or error.winerror not in (5, 1314):
+                        raise
+                    configuration_attempts.append(
+                        {
+                            "kind": kind,
+                            "capability_skip": "startup directory symlink denied",
+                            "winerror": error.winerror,
+                        }
+                    )
+                    continue
+                supplied = {**owned, kind: alias}
+                first_port = free_port()
+                first, _ = start(
+                    supplied["cache"],
+                    supplied["config"],
+                    first_port,
+                    owned["models"],
+                    owned["snapshots"],
+                )
+                ready(first, first_port)
+                check(
+                    call(
+                        first_port,
+                        "/internal/aliases",
+                        {"alias": "owner-a", "target": "Target-A"},
+                    )[0]
+                    == 200,
+                    kind + " startup alias initially writes to its claimed directory",
+                )
+                peer = {name: base / ("peer-" + name) for name in owned}
+                peer[kind].mkdir()
+                peer["config"].mkdir(exist_ok=True)
+                (peer["config"] / "config.json").write_text(json.dumps(settings))
+                alias.unlink()
+                alias.symlink_to(peer[kind], target_is_directory=True)
+                second_port = free_port()
+                second, _ = start(
+                    peer["cache"],
+                    peer["config"],
+                    second_port,
+                    peer["models"],
+                    peer["snapshots"],
+                )
+                ready(second, second_port)
+                check(
+                    call(
+                        second_port,
+                        "/internal/aliases",
+                        {"alias": "owner-b", "target": "Target-B"},
+                    )[0]
+                    == 200,
+                    kind + " retargeted alias resolves to a separately owned store",
+                )
+                before = {
+                    path: path.read_bytes()
+                    for path in (
+                        peer["cache"] / "aliases.json",
+                        peer["config"] / "config.json",
+                        peer["config"] / "juiced/state.json",
+                    )
+                }
+                check(
+                    call(
+                        first_port,
+                        "/internal/aliases",
+                        {"alias": "still-a", "target": "Target-A2"},
+                    )[0]
+                    == 200,
+                    kind + " alias edits continue against the original claimed store",
+                )
+                check(
+                    call(first_port, "/internal/set", {"log_level": "debug"})[0] == 200,
+                    kind
+                    + " configuration edits continue against the original claimed store",
+                )
+                check(
+                    json.loads((owned["cache"] / "aliases.json").read_text()).get(
+                        "still-a"
+                    )
+                    == "Target-A2"
+                    and json.loads((owned["config"] / "config.json").read_text()).get(
+                        "log_level"
+                    )
+                    == "debug",
+                    kind
+                    + " both mutations publish to the canonical startup directories",
+                )
+                check(
+                    all(
+                        path.read_bytes() == contents
+                        for path, contents in before.items()
+                    ),
+                    kind
+                    + " startup alias retarget preserves the other owner's metadata",
+                )
+                check(
+                    call(first_port)[0] == 200 and call(second_port)[0] == 200,
+                    kind + " both owners remain usable after alias retarget",
+                )
+                check(
+                    stop(first, first_port) == 0,
+                    kind + " pinned startup owner shuts down normally",
+                )
+                check(
+                    all(
+                        path.read_bytes() == contents
+                        for path, contents in before.items()
+                    ),
+                    kind + " pinned shutdown preserves the retargeted store",
+                )
+                check(
+                    stop(second, second_port) == 0,
+                    kind + " retargeted store owner shuts down normally",
+                )
 
         def hierarchy_contract():
             for label in ("parent-first", "child-first", "siblings"):
@@ -523,6 +660,151 @@ def run(binary, output, binding_only=False, hierarchy_only=False, aliases_only=F
             )
 
         try:
+            if substitution_only:
+                for kind in ("cache", "config", "models", "snapshots"):
+                    base = root / ("replacement-" + kind)
+                    base.mkdir()
+                    roots = {
+                        name: base / name
+                        for name in ("cache", "config", "models", "snapshots")
+                    }
+                    roots["config"].mkdir()
+                    (roots["config"] / "config.json").write_text(json.dumps(settings))
+                    first_port = free_port()
+                    first, _ = start(
+                        roots["cache"],
+                        roots["config"],
+                        first_port,
+                        roots["models"],
+                        roots["snapshots"],
+                    )
+                    ready(first, first_port)
+                    check(
+                        call(
+                            first_port,
+                            "/internal/aliases",
+                            {"alias": "owner-a", "target": "Target-A"},
+                        )[0]
+                        == 200,
+                        kind + " original manager publishes its own metadata",
+                    )
+                    original = roots[kind]
+                    (original / "retained.data").write_bytes(b"retained source fixture")
+                    moved = base / ("retained-" + kind)
+                    try:
+                        original.rename(moved)
+                    except PermissionError as error:
+                        if os.name != "nt" or error.winerror not in (5, 32):
+                            raise
+                        configuration_attempts.append(
+                            {
+                                "kind": kind,
+                                "capability_skip": "live directory rename denied",
+                                "winerror": error.winerror,
+                            }
+                        )
+                        check(
+                            stop(first, first_port) == 0,
+                            kind + " denied rename preserves safe shutdown",
+                        )
+                        continue
+                    peer = {
+                        name: (original if name == kind else base / ("peer-" + name))
+                        for name in roots
+                    }
+                    peer["config"].mkdir(exist_ok=True)
+                    (peer["config"] / "config.json").write_text(json.dumps(settings))
+                    second_port = free_port()
+                    second, _ = start(
+                        peer["cache"],
+                        peer["config"],
+                        second_port,
+                        peer["models"],
+                        peer["snapshots"],
+                    )
+                    ready(second, second_port)
+                    check(
+                        call(
+                            second_port,
+                            "/internal/aliases",
+                            {"alias": "owner-b", "target": "Target-B"},
+                        )[0]
+                        == 200,
+                        kind + " replacement manager owns the new pathname",
+                    )
+                    owned_files = [
+                        peer["cache"] / "aliases.json",
+                        peer["config"] / "config.json",
+                        peer["config"] / "juiced/state.json",
+                    ]
+                    before = {path: path.read_bytes() for path in owned_files}
+                    old_files = [
+                        moved / path.relative_to(original)
+                        for path in owned_files
+                        if path.is_relative_to(original)
+                    ]
+                    old_before = {path: path.read_bytes() for path in old_files}
+                    old_before[moved / "retained.data"] = b"retained source fixture"
+                    for path, body in (
+                        (
+                            "/internal/aliases",
+                            {"alias": "stale-a", "target": "Unexpected-A"},
+                        ),
+                        ("/internal/set", {"log_level": "debug"}),
+                    ):
+                        try:
+                            status, data = call(first_port, path, body)
+                        except urllib.error.HTTPError as error:
+                            status, data = error.code, json.load(error)
+                        error_data = data.get("error", {})
+                        code = error_data.get(
+                            "code", error_data.get("details", {}).get("code")
+                        )
+                        configuration_attempts.append(
+                            {"kind": kind, "path": path, "status": status, "code": code}
+                        )
+                        check(
+                            status == 503 and code == "storage_root_unavailable",
+                            kind
+                            + " old manager rejects mutation after completed root replacement",
+                        )
+                    check(
+                        all(
+                            path.read_bytes() == contents
+                            for path, contents in before.items()
+                        ),
+                        kind + " rejected writes preserve replacement-owner metadata",
+                    )
+                    check(
+                        all(
+                            path.read_bytes() == contents
+                            for path, contents in old_before.items()
+                        ),
+                        kind + " rejected writes preserve the moved original metadata",
+                    )
+                    check(
+                        call(second_port)[0] == 200 and first.poll() is None,
+                        kind + " both managers survive storage rejection",
+                    )
+                    check(
+                        stop(first, first_port) == 0,
+                        kind
+                        + " stale manager can shut down without publishing into replacement storage",
+                    )
+                    check(
+                        all(
+                            path.read_bytes() == contents
+                            for path, contents in before.items()
+                        ),
+                        kind + " stale shutdown preserves replacement metadata",
+                    )
+                    check(
+                        stop(second, second_port) == 0,
+                        kind + " replacement manager shuts down normally",
+                    )
+                alias_retarget_contract()
+                completed = True
+                return
             if aliases_only:
                 aliases_contract()
                 completed = True
@@ -789,9 +1071,17 @@ if __name__ == "__main__":
     modes.add_argument("--binding", action="store_true")
     modes.add_argument("--hierarchy", action="store_true")
     modes.add_argument("--aliases", action="store_true")
+    modes.add_argument("--substitution", action="store_true")
     args = parser.parse_args()
     if args.hierarchy and os.name == "nt":
         parser.error(
             "Hierarchy acceptance currently requires the POSIX lease implementation"
         )
-    run(args.binary.resolve(), args.out, args.binding, args.hierarchy, args.aliases)
+    run(
+        args.binary.resolve(),
+        args.out,
+        args.binding,
+        args.hierarchy,
+        args.aliases,
+        args.substitution,
+    )

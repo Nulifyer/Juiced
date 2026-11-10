@@ -3238,6 +3238,7 @@ json ModelManager::execute_sync(uint64_t generation) {
     std::unordered_map<std::string, ModelCheckOutcome> checked_canonicals_in_job;
 
     try {
+        operation.validate_storage();
         auto admission = admit_acquisition("model-sync");
         while (true) {
             {

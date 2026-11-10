@@ -496,6 +496,14 @@ Server::Server(std::shared_ptr<RuntimeConfig> config,
                                        model_manager_.get(),
                                        backend_manager_.get());
     router_->set_cloud_registry(cloud_registry_.get());
+    if (storage_owner_) {
+        router_->admission_view().set_storage_validator([owner = storage_owner_] {
+            try { owner->validate(); }
+            catch (const std::exception& error) {
+                throw AdmissionError("storage_root_unavailable", error.what(), 503);
+            }
+        });
+    }
     alias_manager_->set_resource_admission(router_->admission_view());
 
     // When a router collection is added, edited, or removed (via the API or an
@@ -6721,6 +6729,8 @@ void Server::handle_aliases_add(const httplib::Request& req, httplib::Response& 
             {"target", target}
         };
         res.set_content(response.dump(), "application/json");
+    } catch (const AdmissionError& error) {
+        set_model_error_response(error.to_json(), res);
     } catch (const nlohmann::json::exception& e) {
         res.status = 400;
         res.set_content(create_alias_error(e.what(), "invalid_request").dump(), "application/json");
@@ -6743,6 +6753,8 @@ void Server::handle_aliases_remove(const httplib::Request& req, httplib::Respons
             {"alias", alias}
         };
         res.set_content(response.dump(), "application/json");
+    } catch (const AdmissionError& error) {
+        set_model_error_response(error.to_json(), res);
     } catch (const std::exception& e) {
         res.status = 500;
         res.set_content(create_alias_error(e.what(), "internal_error", "server_error").dump(), "application/json");
@@ -7701,6 +7713,7 @@ std::shared_ptr<Server::DownloadJob> Server::start_download_job(
     auto run = [this, job, operation = std::move(operation), continuation = writer.continuation()]() mutable {
         auto publication = continuation.enter();
         try {
+            publication.validate_storage();
             DownloadProgressCallback progress_cb = [this, job](const DownloadProgress& p) -> bool {
                 std::lock_guard<std::mutex> lock(downloads_mutex_);
                 // Completion wins over a very late pause/cancel request. If the
@@ -7851,6 +7864,7 @@ void Server::stream_download_operation(
             }
 
             try {
+                publication.validate_storage();
                 // Create progress callback that emits SSE events
                 bool complete_sent = false;
                 DownloadProgressCallback progress_cb = [&sink, &complete_sent](const DownloadProgress& p) -> bool {

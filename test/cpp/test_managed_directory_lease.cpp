@@ -113,6 +113,7 @@ int main() {
             Lease owner({});
             auto retained = owner.claim(live);
             auto alias = owner.claim(live / ".");
+            owner.validate();
             { std::ofstream stream(source); stream << "retained source\n"; }
             std::error_code rename_error;
             fs::rename(live, moved, rename_error);
@@ -135,6 +136,11 @@ int main() {
                 Lease replacement({live});
                 { std::ofstream stream(live / "source.txt"); stream << "replacement source\n"; }
                 check(busy(live), "an independent owner holds the replacement directory");
+                bool invalid = false;
+                try { owner.validate(); }
+                catch (const std::exception&) { invalid = true; }
+                check(invalid, "validation rejects a completed replacement without reacquiring the stale root");
+                replacement.validate();
                 bool rejected = false;
                 try { auto stale = owner.claim(live); }
                 catch (const std::exception& error) {

@@ -291,6 +291,30 @@ static void deferred_publication() {
         check(Hook::download(server, [&](auto) { ++calls; }) == "completed" && calls == 3 && admission.wait_for_writes(100ms),
               "the same native download identifier retries after dispatch failure");
 
+        const auto storage_valid = std::make_shared<std::atomic<bool>>(true);
+        admission.set_storage_validator([storage_valid] {
+            if (!*storage_valid)
+                throw AdmissionError("storage_root_unavailable", "controlled storage identity change", 503);
+        });
+        Hook::stream(server, stream, [&](auto) { ++calls; });
+        *storage_valid = false;
+        std::string stream_error;
+        httplib::DataSink sink;
+        sink.write = [&](const char* data, size_t size) { stream_error.append(data, size); return true; };
+        sink.is_writable = [] { return true; }; sink.done = [] {};
+        stream.content_provider_(0, 0, sink); stream.content_provider_ = nullptr;
+        check(calls == 3 && stream_error.find("controlled storage identity change") != std::string::npos &&
+              admission.wait_for_writes(100ms),
+              "deferred SSE storage rejection emits failure without dispatch or leaked ownership");
+        *storage_valid = true;
+        Hook::start_barrier(server, [storage_valid](const auto&) { *storage_valid = false; });
+        const auto storage_failure = Hook::download(server, [&](auto) { ++calls; });
+        check(storage_failure == "error" && calls == 3 && admission.wait_for_writes(100ms),
+              "queued native download rejects changed storage inside its worker failure boundary");
+        *storage_valid = true; Hook::start_barrier(server, {});
+        check(Hook::download(server, [&](auto) { ++calls; }) == "completed" && calls == 4 && admission.wait_for_writes(100ms),
+              "restored storage permits a failed deferred download to retry once");
+
         auto& models = Hook::models(server);
         const std::string model = "user.Writer-Queued";
         models.register_user_model(model, {{"recipe", "llamacpp"}, {"checkpoint", "fixture/repo:Q4_K_M"}});
