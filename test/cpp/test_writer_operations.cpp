@@ -8,6 +8,7 @@
 #include "lemon/server.h"
 #include "support/test_state_isolation.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
@@ -67,7 +68,7 @@ struct StatePublicationTestHook {
         server.join_download_job(job);
         if (expired) {
             std::lock_guard lock(server.downloads_mutex_);
-            job->terminal_since = std::chrono::steady_clock::now() - 1h;
+            job->terminal_since = std::min(std::chrono::steady_clock::now(), std::chrono::steady_clock::time_point{}) - 1h;
         }
         return std::unique_lock(job->worker_mutex);
     }

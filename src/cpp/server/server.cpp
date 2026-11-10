@@ -7579,7 +7579,7 @@ bool Server::is_download_job_visible(const std::shared_ptr<DownloadJob>& job) co
         return true;
     }
     if (job->status == "completed") {
-        return job->terminal_since.time_since_epoch().count() > 0 &&
+        return job->terminal_since != std::chrono::steady_clock::time_point{} &&
                std::chrono::steady_clock::now() - job->terminal_since < DOWNLOAD_TERMINAL_VISIBILITY;
     }
     return false;
@@ -7876,7 +7876,7 @@ void Server::handle_downloads(const httplib::Request&, httplib::Response& res) {
             for (auto it = download_jobs_.begin(); it != download_jobs_.end();) {
                 const auto& job = it->second;
                 if (job && !job->running && job->status == "completed" &&
-                    job->terminal_since.time_since_epoch().count() > 0 &&
+                    job->terminal_since != std::chrono::steady_clock::time_point{} &&
                     now - job->terminal_since >= DOWNLOAD_TERMINAL_VISIBILITY) {
                     expired.push_back(job);
                     it = download_jobs_.erase(it);

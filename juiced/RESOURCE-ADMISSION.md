@@ -677,7 +677,9 @@ Background reconciliation takes a fresh operation scope before changing native s
 Download controls retain their own accepted mutation scope through the final worker
 join. Read-only download inspection defers history expiry when maintenance closes
 writers, then permits normal expiry after reopening. Control acknowledgements do
-not establish that a still-running downloader stopped.
+not establish that a still-running downloader stopped. Completion timestamps use the
+explicit empty time point as their unset marker. Initialized negative steady-clock
+values remain valid for elapsed-time expiry; the visibility interval is unchanged.
 
 Historical JobManager records have no executor or model-operation callbacks.
 Metadata deletion enters the same admission owner before locking the record store,
