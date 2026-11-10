@@ -60,6 +60,8 @@ int main() {
         bool failed = false;
         try { Lease unusable({invalid}); } catch (const std::exception&) { failed = true; }
         check(failed && fs::is_directory(invalid / Lease::file_name), "unusable lease files fail closed without deleting them");
+        fs::remove(invalid / Lease::file_name);
+        { Lease recovered({invalid}); check(busy(invalid), "failed control-file acquisition releases partial ownership for retry"); }
         failed = false;
         try { Lease empty({fs::path{}}); } catch (const std::exception&) { failed = true; }
         check(failed, "empty managed roots never silently select a default store");
@@ -98,6 +100,27 @@ int main() {
         fs::permissions(control, fs::perms::owner_write | fs::perms::group_write | fs::perms::others_write, fs::perm_options::remove);
         { Lease read_only_control({b}); check(busy(b), "an existing read-only control file still provides exclusive ownership"); }
         fs::permissions(control, permissions);
+#ifndef _WIN32
+        const auto removed_control_root = root / "removed-control";
+        {
+            Lease owner({removed_control_root});
+            const auto removed_control = removed_control_root / Lease::file_name;
+            check(fs::remove(removed_control), "the controlled fault removes a live control-file inode");
+            check(busy(removed_control_root), "control-file removal cannot admit another owner of the live directory");
+            check(!fs::exists(removed_control), "a rejected contender cannot publish a replacement control file");
+            owner.protect(removed_control_root);
+            check(busy(removed_control_root), "the original owner retains its directory anchor after control-file removal");
+        }
+        {
+            Lease recovered({removed_control_root});
+            check(fs::is_regular_file(removed_control_root / Lease::file_name) && busy(removed_control_root),
+                  "confirmed owner release permits control-file recreation under a new directory anchor");
+        }
+        const auto root_permissions = fs::status(b).permissions();
+        fs::permissions(b, fs::perms::owner_write | fs::perms::group_write | fs::perms::others_write, fs::perm_options::remove);
+        { Lease read_only_root({b}); check(busy(b), "an existing read-only directory supports the inode anchor without writes"); }
+        fs::permissions(b, root_permissions);
+#endif
     } catch (const std::exception& error) {
         std::fprintf(stderr, "Unexpected directory lease failure: %s\n", error.what());
         return 1;

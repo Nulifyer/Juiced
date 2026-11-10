@@ -27,6 +27,9 @@ an isolated copy before replacing a release that created such data.
 
 Juiced protects its managed cache, configuration, model-cache and snapshot roots
 against another participating manager. Keep `.juiced-store.lock` files in place.
+On POSIX systems, Juiced also locks the directory inode so removing that control
+file cannot release a running manager's ownership. Moving or replacing whole
+directories and nested-root exclusion still require separate protection.
 A directory change must finish active work and acquire the destination before it
 can apply. Failed application can retain both roots until retry or shutdown.
 

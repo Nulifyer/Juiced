@@ -593,10 +593,15 @@ that a surviving backend or helper stopped.
 The empty `.juiced-store.lock` control file remains in place and must not be removed
 while a manager is running. Directory aliases share ownership within the existing
 owner. Fixed startup and migration roots remain protected for the entry-point
-lifetime. Scoped claims share the same native file handle and release when their
-last view finishes. Temporary directory candidates do not accumulate live handles.
+lifetime. Scoped claims share the same native lease object and release its handles
+when their last view finishes. Temporary directory candidates do not accumulate live handles.
 An existing read-only control file can be opened for locking without rewriting it.
 Windows permits this through a read-capable [LockFileEx handle](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-lockfileex).
+POSIX claims also retain a close-on-exec, read-only directory descriptor with an
+exclusive `flock`, acquired before opening the control file. Removing or replacing
+the control file cannot admit another participating owner of that same directory
+inode. Failure to acquire the control file releases the directory descriptor.
+This does not lock parent/child roots or pin pathnames against external moves.
 A read-only managed root without an existing usable control file cannot acquire
 ownership. Ordinary read-only external source directories remain outside writable
 store claims and are not modified. Their external consistency still needs validation.
@@ -617,8 +622,11 @@ roots, failed activation cleanup, independent roots, directory handoff, normal
 restart and process termination. The independent managers share an external source
 directory without claiming or modifying it. Unicode model/snapshot roots are included.
 Windows recovery permits bounded retries because OS lock release can lag process exit.
-These checks do not establish nested-root exclusion, moved/deleted control-inode
-recovery, network filesystem locking, foreign/older-manager exclusion, prior-manager
+Local Linux regression acceptance additionally removes a live model root's control
+file and verifies that a second isolated native manager is rejected. The first
+manager remains usable. Source changes and Linux checks do not qualify macOS or
+network filesystem behavior. These checks do not establish nested-root exclusion,
+moved-directory recovery, network filesystem locking, foreign/older-manager exclusion, prior-manager
 writer termination, whole-store backup consistency or host-crash durability.
 Backend, helper, device and remote writers retain their P1 termination gates.
 

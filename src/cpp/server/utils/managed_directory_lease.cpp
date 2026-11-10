@@ -30,10 +30,13 @@ struct ManagedDirectoryLease::File {
     }
 #else
     int fd = -1;
+    int directory_fd = -1;
     ~File() {
-        if (fd < 0) return;
-        if (locked) flock(fd, LOCK_UN);
-        close(fd);
+        if (fd >= 0) {
+            if (locked) flock(fd, LOCK_UN);
+            close(fd);
+        }
+        if (directory_fd >= 0) close(directory_fd);
     }
 #endif
 };
@@ -86,6 +89,23 @@ ManagedDirectoryLease::Claim ManagedDirectoryLease::claim(const fs::path& root) 
         throw std::system_error(error, std::system_category(), "Could not lock managed directory: " + label);
     }
 #else
+    const auto lock_fd = [&](int fd) {
+        int result;
+        do { result = flock(fd, LOCK_EX | LOCK_NB); } while (result != 0 && errno == EINTR);
+        if (result != 0) {
+            const auto error = errno;
+            if (error == EWOULDBLOCK || error == EAGAIN)
+                throw std::runtime_error("Managed directory is already in use: " + label);
+            throw std::system_error(error, std::generic_category(), "Could not lock managed directory: " + label);
+        }
+    };
+    // A lock on the directory survives replacement of its control-file inode.
+    file->directory_fd = open(canonical.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    if (file->directory_fd < 0) {
+        const auto error = errno;
+        throw std::system_error(error, std::generic_category(), "Could not open managed directory: " + label);
+    }
+    lock_fd(file->directory_fd);
     file->fd = open(path.c_str(), O_CREAT | O_RDWR | O_CLOEXEC, 0600);
     if (file->fd < 0 && (errno == EACCES || errno == EROFS))
         file->fd = open(path.c_str(), O_RDONLY | O_CLOEXEC);
@@ -93,14 +113,7 @@ ManagedDirectoryLease::Claim ManagedDirectoryLease::claim(const fs::path& root) 
         const auto error = errno;
         throw std::system_error(error, std::generic_category(), "Could not open managed directory lease: " + label);
     }
-    int result;
-    do { result = flock(file->fd, LOCK_EX | LOCK_NB); } while (result != 0 && errno == EINTR);
-    if (result != 0) {
-        const auto error = errno;
-        if (error == EWOULDBLOCK || error == EAGAIN)
-            throw std::runtime_error("Managed directory is already in use: " + label);
-        throw std::system_error(error, std::generic_category(), "Could not lock managed directory: " + label);
-    }
+    lock_fd(file->fd);
 #endif
     file->locked = true;
     files_.push_back(file);
