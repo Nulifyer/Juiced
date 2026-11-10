@@ -454,13 +454,18 @@ static const json MIME_TYPES = {
 
 Server::Server(std::shared_ptr<RuntimeConfig> config,
                const std::string& cache_dir,
-               const std::string& config_dir)
-    : config_(config),
+               const std::string& config_dir,
+               std::shared_ptr<utils::ManagedDirectoryLease> storage_owner)
+    : storage_owner_(std::move(storage_owner)), config_(config),
       cache_dir_(cache_dir),
       config_dir_(config_dir),
       port_(config->port()), running_(false), udp_beacon_(),
       metrics_platform_(create_metrics_platform()) {
     try {
+    if (storage_owner_) {
+        model_root_claim_ = storage_owner_->claim(utils::path_from_utf8(utils::get_hf_cache_dir()));
+        utils::set_models_dir(utils::path_to_utf8(model_root_claim_.root()));
+    }
     // Set global HttpClient timeout
     utils::HttpClient::set_default_timeout(config->global_timeout());
 
@@ -6791,12 +6796,19 @@ json Server::publish_config(std::function<json()> read_changes) {
     if (has_effects) effects.lock();
     const auto storage = changes.contains("models_dir") ? changes.at("models_dir") :
         has_effects ? pending_config_effects_.value("models_dir", json()) : json();
+    utils::ManagedDirectoryLease::Claim proposed_root;
     if (changes.contains("models_dir") || !storage.is_null()) {
         if (!storage.is_string()) throw std::invalid_argument("models_dir must be a string");
         const auto current = model_manager_->model_cache_root();
         const auto next = utils::path_to_utf8(fs::weakly_canonical(utils::path_from_utf8(
             utils::resolve_models_dir(storage.get<std::string>()))));
         if (next != current) router_->admission_view().reserve_model_cache_change({current, next});
+        if (storage_owner_) {
+            try { proposed_root = storage_owner_->claim(utils::path_from_utf8(next)); }
+            catch (const std::runtime_error& error) { throw AdmissionError("storage_root_unavailable", error.what(), 503); }
+            if (utils::path_to_utf8(proposed_root.root()) != next)
+                throw AdmissionError("storage_root_changed", "The selected storage root changed during acquisition; retry it", 503);
+        }
     }
     auto result = config_->update_persisted([&] { return changes; }, [this](const json& updated) {
         if (config_dir_.empty()) return;
@@ -6805,9 +6817,10 @@ json Server::publish_config(std::function<json()> read_changes) {
         if (updated.contains("admission")) user_cfg["admission"] = updated["admission"];
         utils::JsonUtils::prune_matching(user_cfg, ConfigFile::get_defaults());
         ConfigFile::save(config_dir_, user_cfg);
-    }, [this, has_effects](const json& applied) {
+    }, [this, has_effects, proposed_root](const json& applied) {
         if (!has_effects) return;
         pending_config_effects_ = utils::JsonUtils::merge(pending_config_effects_, applied);
+        if (proposed_root) pending_model_root_claim_ = proposed_root;
     });
     if (has_effects && !pending_config_effects_.empty()) {
         try {
@@ -7520,8 +7533,11 @@ void Server::apply_config_side_effects(const json& applied_changes) {
         } else if (key == "models_dir") {
             std::string dir = config_->models_dir();
             LOG(INFO, "Server") << "Models dir changed to: " << dir << std::endl;
-            utils::set_models_dir(dir);
-            model_manager_->invalidate_models_cache();
+            model_manager_->set_model_cache_directory(pending_model_root_claim_ ? utils::path_to_utf8(pending_model_root_claim_.root()) : dir);
+            if (pending_model_root_claim_) {
+                model_root_claim_ = std::move(pending_model_root_claim_);
+                pending_model_root_claim_ = {};
+            }
         } else if (key == "telemetry") {
             if (value.is_object()) {
                 if (value.contains("enabled")) {

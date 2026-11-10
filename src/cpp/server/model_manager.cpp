@@ -4213,8 +4213,10 @@ void ModelManager::rebuild_models_cache_locked(std::vector<ModelInfo> dynamic_mo
         }
     }
 
+    const auto selected_cache_root = model_cache_root();
     for (auto& [name, info] : all_models) {
         populate_model_metadata(info);
+        info.model_cache_root = selected_cache_root;
         if (info.downloaded && !backend_self_manages_downloads(info.recipe)) {
             refresh_on_disk_size(info);
         }
@@ -4389,6 +4391,7 @@ void ModelManager::add_model_to_cache(const std::string& model_name) {
     }
 
     populate_model_metadata(info);
+    info.model_cache_root = model_cache_root();
     models_cache_[model_name] = info;
     rebuild_public_model_aliases_locked();
     LOG(INFO, "ModelManager") << "Added '" << model_name << "' to cache (downloaded=" << info.downloaded << ")" << std::endl;
@@ -7596,6 +7599,16 @@ std::string ModelManager::model_cache_root() const {
     return path_to_utf8(fs::weakly_canonical(path_from_utf8(get_hf_cache_dir())));
 }
 
+void ModelManager::set_model_cache_directory(const std::string& directory) {
+    auto operation = resource_admission_ ? resource_admission_->write_scope("model-cache-directory") : ResourceAdmission::WriteScope{};
+    const auto current = model_cache_root();
+    const auto next = path_to_utf8(fs::weakly_canonical(path_from_utf8(utils::resolve_models_dir(directory))));
+    if (resource_admission_ && next != current) resource_admission_->reserve_model_cache_change({current, next});
+    std::lock_guard lock(models_cache_mutex_);
+    utils::set_models_dir(directory);
+    invalidate_models_cache_locked();
+}
+
 json ModelManager::cleanup_orphaned_cache(bool dry_run) {
     if (!resource_admission_)
         throw AdmissionError("admission_unavailable", "Model cache cleanup requires native resource ownership", 503);
@@ -8058,6 +8071,7 @@ ModelInfo ModelManager::get_model_info_unfiltered(const std::string& model_name)
 
     parse_extras(info, *model_json);
 
+    info.model_cache_root = model_cache_root();
     return info;
 }
 

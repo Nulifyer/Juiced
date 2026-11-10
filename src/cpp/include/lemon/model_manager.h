@@ -105,6 +105,7 @@ struct ModelInfo {
     std::string registry_key;
     std::map<std::string, std::string> checkpoints;
     std::map<std::string, std::string> resolved_paths; // Absolute path to model file/directory on disk
+    std::string model_cache_root;  // Internal root selection captured with resolved paths.
     std::string recipe;
     std::vector<std::string> labels;
     std::vector<std::string> components;
@@ -356,6 +357,7 @@ public:
     // Clean up orphaned files from multi-repo models downloaded in old layout
     nlohmann::json cleanup_orphaned_cache(bool dry_run);
     std::string model_cache_root() const;
+    void set_model_cache_directory(const std::string& directory);
 
     // Get model info by name
     ModelInfo get_model_info(const std::string& model_name);

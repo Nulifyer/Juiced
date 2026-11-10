@@ -333,7 +333,8 @@ private:
     ResourceAdmission::Lease admit_worker(const WrappedServer& server, ResourceAdmission::Operation operation,
         const RequestEnvelope* request = nullptr,
         std::optional<ResourceAdmission::Policy> request_policy = std::nullopt,
-        std::function<bool()> intent_cancelled = {}, bool reserve_execution_slot = false) const;
+        std::function<bool()> intent_cancelled = {}, bool reserve_execution_slot = false,
+        const std::string& model_cache_root = {}) const;
     std::shared_ptr<WrappedServer> shared_worker(WrappedServer* server) const;
 
     mutable std::mutex load_mutex_;              // Protects loading state and loaded_servers_

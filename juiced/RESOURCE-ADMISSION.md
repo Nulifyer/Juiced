@@ -571,20 +571,44 @@ or whole-store maintenance.
 
 `lemond` and the Windows embedded server acquire an exclusive OS lease for each
 canonical cache/config directory before configuration loading or migration.
-Startup fails immediately if another participating process owns either root.
-Normal teardown retains ownership until the Server and its owned work have drained.
-The OS releases ownership when the process exits. The empty `.juiced-store.lock`
-control file remains in place and must not be removed while a manager is running.
-Directory aliases share ownership. Legacy-cache migration protects its source
-before mutation and leaves the held control file at that source.
+They pass that same owner into Server. Startup claims the selected model-cache
+root before ModelManager construction and the snapshot root before snapshot writes.
+Normal teardown retains these claims through member/process-owner destruction.
+Constructor failure releases its partial claims after owned cleanup. The OS releases
+locks when the process exits. Neither release nor shutdown acknowledgement proves
+that a surviving backend or helper stopped.
 
-Local process acceptance covers competing roots, independent model-free managers,
-normal restart and recovery after terminating a model-free manager. Windows test
-recovery allows bounded retries because OS lock release can lag process exit.
-Production startup remains nonblocking. These checks do not establish network
-filesystem locking, whole-store backup consistency or host-crash durability.
-External model/snapshot directories, older nonparticipating binaries, and backend,
-helper, device or remote writes still require their P1 maintenance/termination gates.
+The empty `.juiced-store.lock` control file remains in place and must not be removed
+while a manager is running. Directory aliases share ownership within the existing
+owner. Fixed startup and migration roots remain protected for the entry-point
+lifetime. Scoped claims share the same native file handle and release when their
+last view finishes. Temporary directory candidates do not accumulate live handles.
+An existing read-only control file can be opened for locking without rewriting it.
+Windows permits this through a read-capable [LockFileEx handle](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-lockfileex).
+A read-only managed root without an existing usable control file cannot acquire
+ownership. Ordinary read-only external source directories remain outside writable
+store claims and are not modified. Their external consistency still needs validation.
+
+Model-directory changes first retain current-ledger exclusion and acquire the
+candidate process claim, then persist. Failed persistence releases the candidate.
+Failed application retains current and pending claims. Successful application
+pins filesystem resolution to the claimed canonical directory and releases the
+previous claim. Returning to a former directory requires fresh acquisition.
+ModelManager publishes the directory and cache invalidation under its cache owner.
+Model selections retain their resolved root. Router rejects obsolete selections
+before dispatch, after serialization waits and after load admission. Canonical path
+resolution stays outside Router's lifecycle lock. Snapshot paths also pin the claimed
+canonical directory, with UTF-8 environment paths supported by native path utilities.
+
+Local model-free process acceptance covers conflicting cache/config/model/snapshot
+roots, failed activation cleanup, independent roots, directory handoff, normal
+restart and process termination. The independent managers share an external source
+directory without claiming or modifying it. Unicode model/snapshot roots are included.
+Windows recovery permits bounded retries because OS lock release can lag process exit.
+These checks do not establish nested-root exclusion, moved/deleted control-inode
+recovery, network filesystem locking, foreign/older-manager exclusion, prior-manager
+writer termination, whole-store backup consistency or host-crash durability.
+Backend, helper, device and remote writers retain their P1 termination gates.
 
 
 Router host admission and CPU/NPU automatic sizing consume the native

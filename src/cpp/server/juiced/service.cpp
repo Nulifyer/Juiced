@@ -140,7 +140,11 @@ JuicedService::JuicedService(Server &server)
     }
   const char *snapshots = std::getenv("JUICED_SNAPSHOT_DIR");
   snapshot_directory_ =
-      snapshots ? std::filesystem::path(snapshots) : directory_ / "snapshots";
+      snapshots ? utils::path_from_utf8(utils::get_environment_variable_utf8("JUICED_SNAPSHOT_DIR")) : directory_ / "snapshots";
+  if (server_.storage_owner_) {
+    server_.snapshot_root_claim_ = server_.storage_owner_->claim(snapshot_directory_);
+    snapshot_directory_ = server_.snapshot_root_claim_.root();
+  }
   std::filesystem::create_directories(snapshot_directory_);
   if (!state_.contains("snapshots"))
     state_["snapshots"] = json::object();

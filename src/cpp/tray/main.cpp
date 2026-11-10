@@ -150,8 +150,8 @@ static bool wait_for_server(const std::string& clean_host, int clean_port, bool 
 
 static int run_embedded_server(std::shared_ptr<lemon::RuntimeConfig> config,
                                const std::string& cache_dir, const std::string& config_dir,
-                               bool silent) {
-    lemon::Server server(config, cache_dir, config_dir);
+                               bool silent, std::shared_ptr<lemon::utils::ManagedDirectoryLease> storage_owner) {
+    lemon::Server server(config, cache_dir, config_dir, std::move(storage_owner));
     // The UI must be destroyed on its creating thread, after RunGuard joins.
     std::unique_ptr<lemon_tray::TrayUI> tray;
     std::atomic<lemon_tray::TrayUI*> active_tray{nullptr};
@@ -260,9 +260,9 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
     }
     auto cli_config = parser.get_config();
 
-    std::unique_ptr<lemon::utils::ManagedDirectoryLease> directory_lease;
+    std::shared_ptr<lemon::utils::ManagedDirectoryLease> directory_lease;
     try {
-        directory_lease = std::make_unique<lemon::utils::ManagedDirectoryLease>(
+        directory_lease = std::make_shared<lemon::utils::ManagedDirectoryLease>(
             std::vector<std::filesystem::path>{lemon::utils::path_from_utf8(cli_config.cache_dir),
                                                lemon::utils::path_from_utf8(cli_config.config_dir)});
     } catch (const std::exception& error) {
@@ -318,7 +318,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
 
     int result = 1;
     try {
-        result = run_embedded_server(runtime_config, cli_config.cache_dir, cli_config.config_dir, silent);
+        result = run_embedded_server(runtime_config, cli_config.cache_dir, cli_config.config_dir, silent, directory_lease);
     } catch (const std::exception& error) {
         LOG(ERROR, "Tray") << "Embedded server failed: " << error.what() << std::endl;
         if (!silent) MessageBoxA(nullptr, error.what(), "Lemonade Server Error", MB_OK | MB_ICONERROR);

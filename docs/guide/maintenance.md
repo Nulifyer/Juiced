@@ -18,6 +18,15 @@ inside `/data/config`. Backing up all of `/data` covers either default storage
 or a snapshot directory configured inside that mount. Include a separate snapshot
 mount in the backup if you configured one.
 
+Juiced protects its managed cache, configuration, model-cache and snapshot roots
+against another participating manager. Keep `.juiced-store.lock` files in place.
+A directory change must finish active work and acquire the destination before it
+can apply. Failed application can retain both roots until retry or shutdown.
+
+Use external read-only source mounts for original weights. A managed read-only
+cache needs an existing usable control file to acquire ownership. Root locks do
+not prove that older binaries, surviving helpers or external tools stopped.
+
 ## Make a consistent backup
 
 1. Record the current image tag or digest and deployment definition.

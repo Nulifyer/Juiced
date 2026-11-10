@@ -29,6 +29,7 @@
 #include "upgradable_http_server.h"
 #include "websocket_server.h"
 #include "lemon/utils/network_beacon.h"
+#include "lemon/utils/managed_directory_lease.h"
 #include "lemon/system_metrics_platform.h"
 
 namespace lemon {
@@ -54,7 +55,8 @@ class Server {
 public:
     Server(std::shared_ptr<RuntimeConfig> config,
            const std::string& cache_dir,
-           const std::string& config_dir);
+           const std::string& config_dir,
+           std::shared_ptr<utils::ManagedDirectoryLease> storage_owner = {});
 
     ~Server();
 
@@ -352,6 +354,8 @@ private:
     double get_cpu_usage();
     double get_npu_utilization();
 
+    std::shared_ptr<utils::ManagedDirectoryLease> storage_owner_;
+    utils::ManagedDirectoryLease::Claim model_root_claim_, pending_model_root_claim_, snapshot_root_claim_;
     std::shared_ptr<RuntimeConfig> config_;
     std::string cache_dir_;  // Lemonade cache dir; persistent JSON may live in sibling .config dir
     std::string config_dir_;

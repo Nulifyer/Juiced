@@ -111,7 +111,13 @@ def acceptance(args):
             fixture.start("fixture-inference", "fixture-admin")
             transitions = []
             with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-                for index in range(10):
+                for index in range(11):
+                    if index == 0:
+                        fixture.ok(
+                            "/v1/juiced/policy", {"model": MODEL, "policy": "on-demand"}
+                        )
+                        fixture.load()
+                        assert fixture.ok("/v1/juiced/admission")["resident"] == 1
                     settings = [
                         {
                             "mode": "legacy",
@@ -133,14 +139,23 @@ def acceptance(args):
                     statuses = [
                         publication_status(future.result()) for future in futures
                     ]
-                    assert 200 in statuses, statuses
+                    if index == 0:
+                        assert statuses == [409, 409], statuses
+                        fixture.ok("/v1/unload", {})
+                        assert fixture.ok("/v1/juiced/admission")["resident"] == 0
+                        fixture.ok(
+                            "/v1/juiced/policy", {"model": MODEL, "policy": "disabled"}
+                        )
+                    if 200 not in statuses:
+                        fixture.configure_admission(settings[-1])
                     runtime = fixture.ok("/internal/config")["admission"]
                     disk = json.loads((root / "config/config.json").read_text())[
                         "admission"
                     ]
                     ledger = fixture.ok("/v1/juiced/admission")
                     assert (
-                        runtime == disk
+                        runtime in settings
+                        and runtime == disk
                         and ledger["pools"]["host"]["capacity_bytes"]
                         == disk["pools"]["host"]["capacity_bytes"]
                     )
@@ -217,6 +232,7 @@ def acceptance(args):
             fixture.configure_admission({})
             proof["concurrent_durable_configuration"] = {
                 "paired_updates": transitions,
+                "resident_busy_pair_then_successful_publication": True,
                 "write_failure_preserves_old_state": True,
                 "restart_readback_matches": True,
             }

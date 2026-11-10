@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <string>
 
 namespace fs = std::filesystem;
@@ -62,6 +63,41 @@ int main() {
         failed = false;
         try { Lease empty({fs::path{}}); } catch (const std::exception&) { failed = true; }
         check(failed, "empty managed roots never silently select a default store");
+        {
+            Lease owner({a});
+            auto first = owner.claim(b);
+            auto second = owner.claim(b / ".");
+            check(first.root() == fs::canonical(b) && busy(b), "scoped claims share canonical ownership within one owner");
+            first = {};
+            check(busy(b), "one released view cannot drop another live claim");
+            second = {};
+            check(!busy(b), "the final scoped view releases its control handle");
+            auto fixed = owner.claim(a); fixed = {};
+            check(busy(a), "a scoped alias cannot release fixed startup ownership");
+            bool released = true;
+            for (int i = 0; i < 40; ++i) {
+                const auto temporary = root / ("candidate-" + std::to_string(i));
+                { auto claim = owner.claim(temporary); }
+                released = released && !busy(temporary);
+            }
+            check(released, "forty discarded directory candidates retain no live handles");
+            auto concurrent = std::async(std::launch::async, [&] { return owner.claim(c); });
+            auto local = owner.claim(c);
+            auto remote = concurrent.get(); local = {};
+            check(busy(c), "concurrent claims retain one shared lock through their final view");
+            remote = {};
+            check(!busy(c), "concurrent completion releases only its scoped root");
+        }
+        Lease::Claim retained;
+        { Lease transient({}); retained = transient.claim(b); }
+        check(busy(b), "a retained claim survives its original owner container");
+        retained = {};
+        check(!busy(b), "retained claim teardown finally reopens its directory");
+        const auto control = b / Lease::file_name;
+        const auto permissions = fs::status(control).permissions();
+        fs::permissions(control, fs::perms::owner_write | fs::perms::group_write | fs::perms::others_write, fs::perm_options::remove);
+        { Lease read_only_control({b}); check(busy(b), "an existing read-only control file still provides exclusive ownership"); }
+        fs::permissions(control, permissions);
     } catch (const std::exception& error) {
         std::fprintf(stderr, "Unexpected directory lease failure: %s\n", error.what());
         return 1;

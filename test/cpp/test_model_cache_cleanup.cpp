@@ -224,7 +224,11 @@ static void file_references(Server& server, const CacheFiles& paths) {
         models.unregister_user_model("Cleanup-Linked"); fs::remove(linked);
     } else std::fprintf(stderr, "SKIP: hard links unavailable on this fixture filesystem\n");
     fs::remove(paths.companion); fs::remove(paths.blob); Hook::invalidate(models);
-    check(models.get_model_info("Cleanup-Origin").resolved_path("mmproj") == paths.legacy.string() && models.cleanup_orphaned_cache(true)["orphaned_files"].empty(),
+    const auto fallback = models.get_model_info("Cleanup-Origin").resolved_path("mmproj");
+    std::error_code fallback_error;
+    check(fs::equivalent(utils::path_from_utf8(fallback), paths.legacy, fallback_error) && !fallback_error,
+          "the fallback resolves to the retained file independent of path spelling");
+    check(models.cleanup_orphaned_cache(true)["orphaned_files"].empty(),
           "cleanup preserves the legacy companion when it remains the usable fallback");
     file(paths.companion); file(paths.blob); Hook::invalidate(models);
     check(fs::exists(paths.blob) && fs::exists(paths.backup) && models.cleanup_orphaned_cache(true)["orphaned_files"].size() == 1,
@@ -308,6 +312,12 @@ static void shard_references(Server& server, const CacheFiles& paths) {
 
 static void root_transition(Server& server, const CacheFiles& paths) {
     using Hook = StatePublicationTestHook; auto& models = Hook::models(server);
+    const auto busy = [](const fs::path& path) {
+        try { utils::ManagedDirectoryLease other({path}); return false; }
+        catch (const std::exception& error) { return std::string(error.what()).find("already in use") != std::string::npos; }
+    };
+    const auto old_root = fs::path(models.model_cache_root());
+    const auto stale = models.get_model_info("Cleanup-Origin");
     const auto previous = Hook::models_dir(server); const auto next = test::make_scratch_dir("other-model-cache");
     std::promise<void> entered, release; const auto released = release.get_future().share(); std::atomic<bool> first{true};
     ModelPublicationTestHook::barrier(models, [&](const auto& phase) {
@@ -323,13 +333,14 @@ static void root_transition(Server& server, const CacheFiles& paths) {
     const auto before = Hook::saved_config(server);
     fs::create_directory(Hook::config_staging(server));
     check(Hook::configure(server, {{"models_dir", next.string()}}).status == 500 && Hook::saved_config(server) == before &&
-          Hook::admission(server).snapshot()["model_cache"]["root_changes"] == 0,
+          Hook::admission(server).snapshot()["model_cache"]["root_changes"] == 0 && !busy(next) && busy(old_root),
           "failed root persistence preserves the committed configuration and releases logical ownership");
     fs::remove(Hook::config_staging(server)); Hook::effect_failure(server, true);
     const auto effect = Hook::configure(server, {{"models_dir", next.string()}});
     check(effect.status == 503 && json::parse(effect.body)["saved"] == true && json::parse(effect.body)["applied"] == false &&
           fs::path(models.model_cache_root()) != fs::weakly_canonical(next),
           "failed root application reports saved intent without inventing an applied storage transition");
+    check(busy(old_root) && busy(next), "failed application retains both current and pending process-root claims");
     Hook::effect_failure(server, false);
     {
         auto reference = Hook::admission(server).acquire_management("retained-cache", "model-acquisition", models.model_cache_root());
@@ -340,8 +351,13 @@ static void root_transition(Server& server, const CacheFiles& paths) {
     }
     check(Hook::configure(server, {{"models_dir", next.string()}}).status == 200 && models.cleanup_orphaned_cache(true)["orphaned_files"].empty() && fs::exists(paths.legacy),
           "a cold root transition preserves the previous root and publishes its new reference namespace");
+    check(!busy(old_root) && busy(next), "successful application releases the previous process claim without retaining a root history");
+    auto control = std::make_shared<WorkerControl>(); RoutingHelperTestHook::factory(Hook::router(server), control);
+    check(rejected([&] { Hook::router(server).load_model("Cleanup-Origin", stale, stale.recipe_options, true); }, "model_cache_changed") && control->starts == 0,
+          "a delayed selection from the former root cannot dispatch a backend after ownership transfers");
     check(Hook::configure(server, {{"models_dir", previous}}).status == 200 && models.cleanup_orphaned_cache(true)["orphaned_files"].size() == 1,
           "returning to the previous root preserves its files and reference decision");
+    check(busy(old_root) && !busy(next), "returning roots transfers one current claim rather than accumulating handles");
 }
 
 static void cleanup_overlap(Server& server, const CacheFiles& paths) {
@@ -407,8 +423,9 @@ int main() {
         defaults["auto_evict"] = false; defaults["auto_check_model_updates"] = false; defaults["disable_model_filtering"] = true;
         auto config = std::make_shared<RuntimeConfig>(defaults); RuntimeConfig::set_global(config.get());
         const auto root = test::make_scratch_dir("model-cache-cleanup");
+        auto storage_owner = std::make_shared<utils::ManagedDirectoryLease>(std::vector<fs::path>{root});
         {
-            Server server(config, root.string(), root.string()); StatePublicationTestHook::settle(server);
+            Server server(config, root.string(), root.string(), storage_owner); StatePublicationTestHook::settle(server);
             CacheFiles paths(StatePublicationTestHook::models(server));
             file_references(server, paths); option_references(server, paths); shard_references(server, paths); root_transition(server, paths);
             worker_ownership(server, paths); cleanup_overlap(server, paths); failure_retry(server, paths);
@@ -419,7 +436,7 @@ int main() {
                   "unresolved prior preparation protects cache-wide cleanup even after source registration changes");
         }
         {
-            Server restarted(config, root.string(), root.string()); StatePublicationTestHook::settle(restarted);
+            Server restarted(config, root.string(), root.string(), storage_owner); StatePublicationTestHook::settle(restarted);
             check(StatePublicationTestHook::models(restarted).cleanup_orphaned_cache(true)["orphaned_files"].size() == 1 && StatePublicationTestHook::models(restarted).is_model_downloaded("Cleanup-Origin") &&
                   StatePublicationTestHook::cleanup(restarted, {{"dry_run", false}}).status == 409,
                   "manager restart preserves registration, useful companions and prior-writer cleanup quarantine");

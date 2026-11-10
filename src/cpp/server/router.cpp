@@ -194,7 +194,7 @@ std::shared_ptr<WrappedServer> Router::shared_worker(WrappedServer* server) cons
     return server ? server->shared_from_this() : nullptr;
 }
 
-ResourceAdmission::Lease Router::admit_worker(const WrappedServer& server, ResourceAdmission::Operation operation, const RequestEnvelope* request, std::optional<ResourceAdmission::Policy> request_policy, std::function<bool()> intent_cancelled, bool reserve_execution_slot) const {
+ResourceAdmission::Lease Router::admit_worker(const WrappedServer& server, ResourceAdmission::Operation operation, const RequestEnvelope* request, std::optional<ResourceAdmission::Policy> request_policy, std::function<bool()> intent_cancelled, bool reserve_execution_slot, const std::string& model_cache_root) const {
     const auto policy = request_policy ? *request_policy : admission_.policy();
     const auto protected_mode = policy.protected_mode;
     if (protected_mode && operation == ResourceAdmission::Operation::Load &&
@@ -233,7 +233,7 @@ ResourceAdmission::Lease Router::admit_worker(const WrappedServer& server, Resou
     ResourceAdmission::Work work;
     work.config_revision = policy.revision;
     if (operation == ResourceAdmission::Operation::Load)
-        work.model_cache_root = model_manager_->model_cache_root();
+        work.model_cache_root = model_cache_root.empty() ? model_manager_->model_cache_root() : model_cache_root;
     if (protected_mode && request) work.workload = request->workload;
     else if (protected_mode && operation == ResourceAdmission::Operation::Request)
         throw AdmissionError("workload_unqualified", "Protected requests require a resolved provider envelope");
@@ -899,6 +899,11 @@ void Router::load_model(const std::string& model_name,
                         std::atomic<bool>* cancel_flag,
                         std::optional<uint64_t> policy_revision) {
     if (load_entry_barrier_) load_entry_barrier_();
+    const auto require_root = [&] {
+        if (!model_info.model_cache_root.empty() && model_info.model_cache_root != model_manager_->model_cache_root())
+            throw AdmissionError("model_cache_changed", "Model cache storage changed after model selection; retry against its current root", 503);
+    };
+    require_root();
     const std::string canonical_model_name = resolve_model_name(model_name);
     const ResidencyClass requested_residency_class =
         residency_class_for_load_purpose(load_purpose);
@@ -907,9 +912,13 @@ void Router::load_model(const std::string& model_name,
     // LOAD SERIALIZATION STRATEGY (from spec: point #2 in Additional Considerations)
     std::unique_lock<std::mutex> lock(load_mutex_);
 
-    load_cv_.wait(lock, [&] {
-        return !is_loading_;
-    });
+    for (;;) {
+        load_cv_.wait(lock, [&] { return !is_loading_; });
+        lock.unlock();
+        require_root();
+        lock.lock();
+        if (!is_loading_) break;
+    }
 
     if (pending_backend_updates_.count(model_info.recipe))
         throw AdmissionError("backend_update_pending", "Finish applying the saved runtime change before loading this recipe", 503);
@@ -1023,7 +1032,7 @@ void Router::load_model(const std::string& model_name,
         DeviceType device_type = new_server->effective_device(effective_options);
         new_server->set_model_metadata(canonical_model_name, model_info.checkpoint(), model_type, device_type, effective_options);
         lock.unlock();
-        auto load_resources = admit_worker(*new_server, ResourceAdmission::Operation::Load, nullptr, std::nullopt, intent_cancelled);
+        auto load_resources = admit_worker(*new_server, ResourceAdmission::Operation::Load, nullptr, std::nullopt, intent_cancelled, false, model_info.model_cache_root);
         const bool protected_admission = load_resources.protected_mode();
         lock.lock();
         require_intent();
@@ -1350,7 +1359,7 @@ void Router::load_model(const std::string& model_name,
 
             LOG(DEBUG, "Router") << "Retrying backend load..." << std::endl;
             try {
-                auto retry_resources = admit_worker(*retry_server, ResourceAdmission::Operation::Load, nullptr, std::nullopt, intent_cancelled);
+                auto retry_resources = admit_worker(*retry_server, ResourceAdmission::Operation::Load, nullptr, std::nullopt, intent_cancelled, false, model_info.model_cache_root);
                 try {
                     load_generation(*retry_server, retry_resources);
                     retry_resources.retain_residency();

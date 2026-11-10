@@ -31,7 +31,7 @@ class ApiContract(unittest.TestCase):
   for name in cls.long_models:definitions[name]=dict(definitions['ZZExecution-F16'])
   (cls.root/'config/user_models.json').write_text(json.dumps(definitions))
   cls.legacy_jobs=cls.root/'config/jobs.json';cls.legacy_jobs.write_text(json.dumps({'jobs':[{'id':'legacy-fixture','name':'preserved graph','status':'queued','steps':[{'id':'first','op':'invalid-fixture-operation','when':'true','branch':[{'when':'true','goto':'first'}]}]}]}));cls.legacy_jobs_bytes=cls.legacy_jobs.read_bytes()
-  cls.log=open(cls.root/'server.log','w');cls.process=subprocess.Popen([BINARY,str(cls.root/'cache'),str(cls.root/'config'),'--host','127.0.0.1','--port',str(cls.port)],stdout=cls.log,stderr=cls.log,env={**os.environ,'HOME':str(cls.root),'XDG_RUNTIME_DIR':str(cls.root/'run'),'HF_HUB_CACHE':str(cls.root/'hf')})
+  cls.log=open(cls.root/'server.log','w');cls.process=subprocess.Popen([BINARY,str(cls.root/'cache'),str(cls.root/'config'),'--host','127.0.0.1','--port',str(cls.port)],stdout=cls.log,stderr=cls.log,env={**os.environ,'HOME':str(cls.root),'XDG_RUNTIME_DIR':str(cls.root/'run'),'HF_HUB_CACHE':str(cls.root/'hf'),'JUICED_SNAPSHOT_DIR':str(cls.root/'config/juiced/snapshots')})
   for _ in range(150):
    try:
     status,x=cls.request('juiced/catalog')
@@ -165,7 +165,7 @@ class ApiContract(unittest.TestCase):
    (root/'config/recipe_options.json').write_text(json.dumps({'user.'+model:{'ctx_size':256,'llamacpp_backend':'cpu'}}))
    (root/'config/juiced/state.json').write_text(json.dumps({'version':1,'revision':0,'policies':{},'imports':{},'cache':{},'execution_trials':{model:{'previous':previous,'was_loaded':False}}}))
    with (root/'server.log').open('w') as log:
-    process=subprocess.Popen([BINARY,str(root/'cache'),str(root/'config'),'--host','127.0.0.1','--port',str(port)],stdout=log,stderr=log,env={**os.environ,'HOME':str(root),'XDG_RUNTIME_DIR':str(root/'run')})
+    process=subprocess.Popen([BINARY,str(root/'cache'),str(root/'config'),'--host','127.0.0.1','--port',str(port)],stdout=log,stderr=log,env={**os.environ,'HOME':str(root),'XDG_RUNTIME_DIR':str(root/'run'),'HF_HUB_CACHE':str(root/'hf'),'JUICED_SNAPSHOT_DIR':str(root/'config/juiced/snapshots')})
     try:
      for _ in range(150):
       try:
@@ -254,7 +254,7 @@ class ApiContract(unittest.TestCase):
    (root/'config/config.json').write_text(json.dumps({'port':port,'broadcast':False,'auto_check_model_updates':False}))
    (root/'config/jobs.json').write_text(json.dumps({'version':1,'jobs':[{'id':'history-'+str(i),'status':'completed'} for i in range(4)]+[{'id':'pending-cleanup','deleted':True,'status':'interrupted'}]}))
    with open(root/'server.log','w') as log:
-    process=subprocess.Popen([BINARY,str(root/'cache'),str(root/'config'),'--host','127.0.0.1','--port',str(port)],stdout=log,stderr=log,env={**os.environ,'HOME':str(root),'XDG_RUNTIME_DIR':str(root/'run'),'LEMONADE_API_KEY':'fixture-regular','LEMONADE_ADMIN_API_KEY':'fixture-admin'})
+    process=subprocess.Popen([BINARY,str(root/'cache'),str(root/'config'),'--host','127.0.0.1','--port',str(port)],stdout=log,stderr=log,env={**os.environ,'HOME':str(root),'XDG_RUNTIME_DIR':str(root/'run'),'HF_HUB_CACHE':str(root/'hf'),'JUICED_SNAPSHOT_DIR':str(root/'config/juiced/snapshots'),'LEMONADE_API_KEY':'fixture-regular','LEMONADE_ADMIN_API_KEY':'fixture-admin'})
     def request(path,headers=None,body=None,method=None):
      q=urllib.request.Request(f'http://127.0.0.1:{port}'+path,headers=headers or {},data=None if body is None else json.dumps(body).encode(),method=method)
      try:
@@ -320,7 +320,7 @@ class ApiContract(unittest.TestCase):
    previous_epoch=None
    for api,admin in [('fixture-regular',None),('fixture-regular',''),('','fixture-admin'),('','')]:
     env={k:v for k,v in os.environ.items() if k not in ['LEMONADE_API_KEY','LEMONADE_ADMIN_API_KEY']}
-    env.update(HOME=str(root),XDG_RUNTIME_DIR=str(root/'run'),LEMONADE_API_KEY=api)
+    env.update(HOME=str(root),XDG_RUNTIME_DIR=str(root/'run'),HF_HUB_CACHE=str(root/'hf'),JUICED_SNAPSHOT_DIR=str(root/'config/juiced/snapshots'),LEMONADE_API_KEY=api)
     if admin is not None:env['LEMONADE_ADMIN_API_KEY']=admin
     with open(root/'server.log','w') as log:
      process=subprocess.Popen([BINARY,str(root/'cache'),str(root/'config'),'--host','127.0.0.1','--port',str(port)],stdout=log,stderr=log,env=env)

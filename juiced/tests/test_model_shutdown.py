@@ -33,6 +33,8 @@ def launch(binary, root, port, embedded=False):
         **os.environ,
         "HOME": str(root),
         "XDG_RUNTIME_DIR": str(root / "run"),
+        "HF_HUB_CACHE": str(root / "hf"),
+        "JUICED_SNAPSHOT_DIR": str(root / "config/juiced/snapshots"),
         "LEMONADE_API_KEY": "",
         "LEMONADE_ADMIN_API_KEY": "",
     }

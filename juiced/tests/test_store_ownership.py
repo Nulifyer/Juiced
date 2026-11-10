@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Model-free process acceptance for exclusive cache/config ownership."""
+"""Model-free process acceptance for exclusive native cache/config/model/snapshot ownership."""
 
 import argparse
 import hashlib
@@ -31,12 +31,20 @@ def run(binary, output):
         root = Path(directory)
         for name in ("cache", "config", "other-cache", "other-config", "run"):
             (root / name).mkdir()
+        shared_source = root / "shared-source"
+        shared_source.mkdir()
+        (shared_source / "retained.data").write_bytes(
+            b"private retained source fixture"
+        )
+        other_model_root = root / "model cache-é-模型"
+        other_snapshot_root = root / "snapshot cache-é-模型"
         settings = {
             "offline": True,
             "broadcast": False,
             "disable_model_filtering": True,
             "auto_check_model_updates": False,
             "no_fetch_executables": True,
+            "extra_models_dir": str(shared_source),
         }
         for name in ("config", "other-config"):
             (root / name / "config.json").write_text(json.dumps(settings))
@@ -44,14 +52,15 @@ def run(binary, output):
         logs = []
         completed = False
 
-        def start(cache, config, port):
+        def start(cache, config, port, model_root=None, snapshot_root=None):
             log = (root / f"process-{len(logs)}.log").open("w")
             logs.append(log)
             env = {
                 **os.environ,
                 "HOME": str(root),
                 "XDG_RUNTIME_DIR": str(root / "run"),
-                "HF_HUB_CACHE": str(root / "hf"),
+                "HF_HUB_CACHE": str(model_root or root / "hf"),
+                "JUICED_SNAPSHOT_DIR": str(snapshot_root or root / "snapshots"),
                 "LEMONADE_API_KEY": "",
                 "LEMONADE_ADMIN_API_KEY": "",
             }
@@ -146,9 +155,56 @@ def run(binary, output):
                 digest(root / "other-config/config.json") == other_before,
                 "cache conflict rejects before unrelated configuration migration",
             )
+            (root / "snapshots/retained.bin").write_bytes(
+                b"retained private snapshot fixture"
+            )
+            retained = digest(root / "snapshots/retained.bin")
+            for model_root, snapshot_root, label in (
+                (root / "hf", root / "separate-snapshots", "model cache"),
+                (root / "separate-hf", root / "snapshots", "snapshot"),
+            ):
+                contender, log = start(
+                    root / "other-cache",
+                    root / "other-config",
+                    free_port(),
+                    model_root,
+                    snapshot_root,
+                )
+                check(
+                    contender.wait(timeout=15) == 1,
+                    f"shared external {label} rejects a competing process",
+                )
+                log.flush()
+                check(
+                    "Managed directory is already in use"
+                    in Path(log.name).read_text(errors="replace"),
+                    f"shared external {label} reports native ownership",
+                )
+                check(
+                    call(port)[0] == 200
+                    and digest(root / "snapshots/retained.bin") == retained,
+                    f"failed external {label} activation preserves the owning service and retained snapshot",
+                )
+            recovered_root_port = free_port()
+            recovered_root, _ = start(
+                root / "other-cache",
+                root / "other-config",
+                recovered_root_port,
+                root / "separate-hf",
+                root / "separate-snapshots",
+            )
+            ready(recovered_root, recovered_root_port)
+            check(
+                stop(recovered_root, recovered_root_port) == 0,
+                "failed snapshot activation releases its partially acquired model root",
+            )
             independent_port = free_port()
             independent, _ = start(
-                root / "other-cache", root / "other-config", independent_port
+                root / "other-cache",
+                root / "other-config",
+                independent_port,
+                other_model_root,
+                other_snapshot_root,
             )
             ready(independent, independent_port)
             check(
@@ -156,8 +212,53 @@ def run(binary, output):
                 "independent metadata roots can serve separate model-free HTTP instances",
             )
             check(
+                not (shared_source / ".juiced-store.lock").exists()
+                and (shared_source / "retained.data").read_bytes()
+                == b"private retained source fixture",
+                "independent managers do not claim or modify the shared external source directory",
+            )
+            original = (root / "config/config.json").read_bytes()
+            try:
+                call(port, "/internal/set", {"models_dir": str(other_model_root)})
+                raise AssertionError("busy external root update unexpectedly succeeded")
+            except urllib.error.HTTPError as error:
+                data = json.load(error)
+                check(
+                    error.code == 503
+                    and data["error"]["details"]["code"] == "storage_root_unavailable",
+                    "a directory change rejects an external owner before persistence",
+                )
+            check(
+                (root / "config/config.json").read_bytes() == original,
+                "failed external-root acquisition preserves committed settings",
+            )
+            check(
                 stop(independent, independent_port) == 0,
                 "independent owner drains normally",
+            )
+            check(
+                call(port, "/internal/set", {"models_dir": str(other_model_root)})[0]
+                == 200,
+                "a released external root can be applied without restarting its new owner",
+            )
+            (root / "other-config/config.json").write_text(
+                json.dumps({**settings, "models_dir": str(root / "hf")})
+            )
+            previous_owner, _ = start(
+                root / "other-cache",
+                root / "other-config",
+                independent_port,
+                root / "hf",
+                other_snapshot_root,
+            )
+            ready(previous_owner, independent_port)
+            check(
+                call(port)[0] == 200 and call(independent_port)[0] == 200,
+                "a successful directory change releases the old model root to another manager",
+            )
+            check(
+                stop(previous_owner, independent_port) == 0,
+                "the former-root owner shuts down normally",
             )
             check(
                 stop(first, port) == 0,
@@ -214,10 +315,12 @@ def run(binary, output):
                         process.wait(timeout=10)
             for log in logs:
                 log.close()
+            if os.name != "nt":
+                shared_source.chmod(0o755)
             output.write_text(
                 json.dumps(
                     {
-                        "scope": "Model-free local process/cache/config ownership; no backend termination or whole-store snapshot qualification",
+                        "scope": "Model-free local cache/config/external model/snapshot root ownership; no backend termination, nested-root, foreign-writer or whole-store snapshot qualification",
                         "completed": completed,
                         "recovery_attempts": recovery_attempts if completed else None,
                         "checks": checks,
