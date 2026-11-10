@@ -104,6 +104,73 @@ class CpuRuntimeStaging(unittest.TestCase):
             with self.assertRaises(ValueError):
                 stager.stage(source, root / "relative-test", Path("relative"))
 
+    def test_source_launcher_and_manifest_aliases_cannot_mutate_inputs(self):
+        with tempfile.TemporaryDirectory(
+            prefix="juiced-cpu-source-alias-"
+        ) as directory:
+            root = Path(directory)
+            source, output = root / "source", root / "output"
+            (source / "bin").mkdir(parents=True)
+            binary = source / "bin/llama-server"
+            binary.write_text("original executable content")
+            (source / "bin/libllama-server-impl.so").write_text("server library")
+            marker = source / "source-metadata"
+            marker.write_text("original metadata")
+            (source / "llama-server").symlink_to(binary)
+            (source / "variant.json").symlink_to(marker)
+            stager.stage(source, output, output)
+            self.assertEqual(binary.read_text(), "original executable content")
+            self.assertEqual(marker.read_text(), "original metadata")
+            self.assertFalse((output / "llama-server").is_symlink())
+            self.assertFalse((output / "variant.json").is_symlink())
+
+    def test_linked_or_external_runtime_inputs_are_rejected_before_copy(self):
+        with tempfile.TemporaryDirectory(prefix="juiced-cpu-linked-bin-") as directory:
+            root = Path(directory)
+            source, external, output = (
+                root / "source",
+                root / "external",
+                root / "output",
+            )
+            source.mkdir()
+            external.mkdir()
+            (external / "llama-server").write_text("original binary")
+            (external / "libllama-server-impl.so").write_text("server library")
+            gpu = external / "libggml-vulkan.so"
+            gpu.write_text("source plugin")
+            (source / "bin").symlink_to(external, target_is_directory=True)
+            with self.assertRaises(ValueError):
+                stager.stage(source, output, output)
+            self.assertEqual(gpu.read_text(), "source plugin")
+            self.assertFalse(output.exists())
+
+    def test_internal_absolute_file_aliases_are_rebased_and_external_aliases_refuse_staging(
+        self,
+    ):
+        with tempfile.TemporaryDirectory(prefix="juiced-cpu-file-alias-") as directory:
+            root = Path(directory)
+            source, output = root / "source", root / "output"
+            (source / "bin").mkdir(parents=True)
+            (source / "bin/llama-server").write_text("binary")
+            (source / "bin/libllama-server-impl.so").write_text("library")
+            target = source / "bin/cpu-implementation.so"
+            target.write_text("CPU code")
+            alias = source / "bin/libggml-cpu-fixture.so"
+            alias.symlink_to(target)
+            stager.stage(source, output, output)
+            copied = output / alias.relative_to(source)
+            self.assertFalse(copied.readlink().is_absolute())
+            self.assertTrue(copied.resolve().is_relative_to(output))
+            self.assertEqual(copied.read_text(), "CPU code")
+            self.assertEqual(alias.readlink(), target)
+            outside = root / "outside"
+            outside.write_text("external data")
+            (source / "external-reference").symlink_to(outside)
+            with self.assertRaises(ValueError):
+                stager.stage(source, root / "rejected", root / "rejected")
+            self.assertFalse((root / "rejected").exists())
+            self.assertEqual(outside.read_text(), "external data")
+
     def test_incomplete_input_never_creates_a_destination(self):
         with tempfile.TemporaryDirectory(prefix="juiced-cpu-incomplete-") as directory:
             root = Path(directory)

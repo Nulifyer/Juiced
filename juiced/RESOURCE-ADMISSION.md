@@ -817,8 +817,10 @@ requires confirmed termination.
 The Linux image supplies separate CPU and Vulkan runtime trees from the same
 verified published release. The CPU tree omits unselected GGML accelerator/RPC
 components, retains CPU/core libraries and licenses, and has a hashed file inventory.
-Its launcher preserves native arguments. Image defaults select that tree for CPU;
-saved executable overrides remain authoritative. The Vulkan tree is unchanged.
+Its launcher preserves native arguments. Staging rejects linked directories and
+external file aliases, rebases internal file aliases, and materializes generated
+launchers/inventories without following copied links into source files. Image
+defaults select that tree for CPU; saved executable overrides remain authoritative. The Vulkan tree is unchanged.
 This prevents a CPU default from initializing unselected accelerator libraries.
 An explicit override can still be unqualified if its mapped code is writable or
 otherwise unverifiable. This is runtime packaging, not weight conversion or a
