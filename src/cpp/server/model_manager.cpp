@@ -1460,9 +1460,12 @@ ModelManager::ModelManager(const std::string& extra_models_dir)
     server_models_ = load_server_models();
     user_models_ = load_optional_json(get_user_models_file());
     recipe_options_ = load_optional_json(get_recipe_options_file());
-    execution_profiles_ = load_optional_json(path_to_utf8(
-        path_from_utf8(get_recipe_options_file()).parent_path() / "execution_profiles.json"));
-    if (!execution_profiles_.is_object()) execution_profiles_ = json::object();
+    const auto profiles_path = get_execution_profiles_file();
+    execution_profiles_ = fs::exists(path_from_utf8(profiles_path))
+        ? JsonUtils::load_from_file(profiles_path) : json::object();
+    if (!execution_profiles_.is_object())
+        throw AdmissionError("model_settings_recovery_required", "Stored model settings are not an object; preserve files and restore compatible settings", 409);
+    for (const auto& [id, state] : execution_profiles_.items()) owns_saved_options_locked(id);
     architecture_defaults_ = load_architecture_defaults();
 
     // One-shot migration of recipe_options.json: older Lemonade keyed built-in
@@ -1519,6 +1522,10 @@ std::string ModelManager::get_user_models_file() {
 
 std::string ModelManager::get_recipe_options_file() {
     return get_config_dir() + "/recipe_options.json";
+}
+
+std::string ModelManager::get_execution_profiles_file() {
+    return path_to_utf8(path_from_utf8(get_config_dir()) / "execution_profiles.json");
 }
 
 std::string ModelManager::get_hf_cache_dir() const {
@@ -2359,6 +2366,58 @@ ModelManager::OptionsWriteSnapshot ModelManager::begin_options_write(const std::
     }
 }
 
+bool ModelManager::owns_saved_options_locked(const std::string& id) const {
+    const auto state = execution_profiles_.find(id);
+    if (state == execution_profiles_.end()) return false;
+    if (!state->is_object())
+        throw AdmissionError("model_settings_recovery_required", "Stored model profile is not an object; preserve files and restore compatible settings", 409);
+    if (!state->contains("settings")) return false;
+    const auto& settings = state->at("settings");
+    bool complete = settings.is_object() && settings.contains("version") && settings.at("version").is_number_integer() &&
+        settings.at("version") == 1 && settings.contains("saved_options") && settings.at("saved_options").is_object() &&
+        state->contains("selected") && state->at("selected").is_string() && !state->at("selected").get<std::string>().empty() &&
+        state->contains("profiles") && state->at("profiles").is_object() &&
+        state->at("profiles").contains(state->at("selected").get<std::string>());
+    if (complete) {
+        const auto& selected = state->at("profiles").at(state->at("selected").get<std::string>());
+        complete = selected.is_object() && selected.contains("recipe") && selected.at("recipe").is_string() &&
+            !selected.at("recipe").get<std::string>().empty();
+    }
+    if (!complete)
+        throw AdmissionError("model_settings_recovery_required", "Stored model settings require a supported complete version; preserve files and restore compatible settings", 409);
+    return true;
+}
+
+json ModelManager::saved_options_locked(const std::string& id) const {
+    if (owns_saved_options_locked(id)) return execution_profiles_.at(id).at("settings").at("saved_options");
+    if (recipe_options_.contains(id) && recipe_options_.at(id).is_object()) return recipe_options_.at(id);
+    return json::object();
+}
+
+void ModelManager::publish_saved_options(const std::string& id, const json& saved, std::optional<ModelInfo> info) {
+    json snapshot;
+    bool profile_owned;
+    {
+        std::lock_guard<std::mutex> lock(models_cache_mutex_);
+        profile_owned = owns_saved_options_locked(id);
+        snapshot = profile_owned ? execution_profiles_ : recipe_options_;
+        if (profile_owned) snapshot[id]["settings"]["saved_options"] = saved;
+        else if (saved.empty()) snapshot.erase(id);
+        else snapshot[id] = saved;
+    }
+    if (options_persistence_barrier_) options_persistence_barrier_();
+    if (resource_admission_) resource_admission_->validate_storage();
+    JsonUtils::save_to_file(snapshot, profile_owned ? get_execution_profiles_file() : get_recipe_options_file());
+    if (settings_publication_barrier_) settings_publication_barrier_();
+    {
+        std::lock_guard<std::mutex> lock(models_cache_mutex_);
+        if (profile_owned) execution_profiles_.swap(snapshot);
+        else recipe_options_.swap(snapshot);
+        if (info) update_model_options_in_cache_locked(std::move(*info));
+        else invalidate_models_cache_locked();
+    }
+}
+
 void ModelManager::save_model_options(const ModelInfo& info) {
     auto operation = resource_admission_ ? resource_admission_->write_scope("model-save-model-options") : ResourceAdmission::WriteScope{};
     LOG(INFO, "ModelManager") << "Saving options for model: " << info.model_name << std::endl;
@@ -2373,29 +2432,15 @@ void ModelManager::save_model_options(const ModelInfo& info) {
     const auto& id = write.id;
     current.model_name = key;
     current.recipe_options = RecipeOptions(current.recipe, info.recipe_options.to_json());
-    json snapshot;
-    {
-        std::lock_guard<std::mutex> lock(models_cache_mutex_);
-        snapshot = recipe_options_;
-        snapshot[id] = current.recipe_options.to_json();
-    }
-    if (options_persistence_barrier_) options_persistence_barrier_();
-    JsonUtils::save_to_file(snapshot, get_recipe_options_file());
-    {
-        std::lock_guard<std::mutex> lock(models_cache_mutex_);
-        recipe_options_.swap(snapshot);
-        update_model_options_in_cache_locked(current);
-    }
+    const auto saved = current.recipe_options.to_json();
+    publish_saved_options(id, saved, std::move(current));
 }
 
 json ModelManager::get_saved_model_options(const std::string& model_name) {
     const std::string id = cache_key_to_canonical_id(resolve_model_name(model_name));
 
     std::lock_guard<std::mutex> lock(models_cache_mutex_);
-    if (recipe_options_.contains(id) && recipe_options_[id].is_object()) {
-        return recipe_options_[id];
-    }
-    return json::object();
+    return saved_options_locked(id);
 }
 
 ModelManager::ModelOptionsSnapshot ModelManager::get_model_options_snapshot(const std::string& model_name) {
@@ -2408,7 +2453,7 @@ ModelManager::ModelOptionsSnapshot ModelManager::get_model_options_snapshot(cons
     auto info = apply_execution_profile_locked(key, found->second);
     const auto defaults = build_recipe_options(info, registry_recipe_options_locked(key), "", json::object());
     const auto profile = execution_profiles_.value(id, json::object()).value("selected", "registered");
-    return {std::move(info), recipe_options_.value(id, json::object()), defaults, profile};
+    return {std::move(info), saved_options_locked(id), defaults, profile};
 }
 
 RecipeOptions ModelManager::preview_saved_model_options(const ModelOptionsSnapshot& snapshot, const json& changes) {
@@ -2463,13 +2508,10 @@ json ModelManager::update_saved_model_options(const std::string& model_name, con
     return write_saved_model_options(model_name, changes, /*merge=*/true, expected_recipe);
 }
 
-// Read-modify-write of one model's recipe_options.json entry.
-//
-// recipe_options_write_mutex_ orders the whole-file rewrites, so two writers
-// can't land their snapshots out of order; models_cache_mutex_ covers the merge
-// and the matching cache update together, so the cache can never end up holding
-// an older option set than the file. Only the first is held across disk I/O —
-// every request thread contends on the cache mutex.
+// The serialized writer resolves the committed recipe and its options authority.
+// Once a profile owns settings, both selection and later option edits publish in
+// execution_profiles.json; unprofiled models retain recipe_options.json. Disk I/O
+// precedes cache publication and runs without models_cache_mutex_.
 json ModelManager::write_saved_model_options(const std::string& model_name,
                                              const json& options, bool merge, const std::string& expected_recipe) {
     auto operation = resource_admission_ ? resource_admission_->write_scope("model-write-saved-model-options") : ResourceAdmission::WriteScope{};
@@ -2485,40 +2527,19 @@ json ModelManager::write_saved_model_options(const std::string& model_name,
     info.model_name = cache_key;
 
     json saved;
-    json snapshot;
     {
         std::lock_guard<std::mutex> lock(models_cache_mutex_);
-        saved = merge && recipe_options_.contains(id) && recipe_options_[id].is_object()
-                    ? recipe_options_[id]
-                    : json::object();
+        saved = merge ? saved_options_locked(id) : json::object();
         if (merge) {
             for (const auto& [key, value] : options.items()) {
-                if (value.is_null()) {
-                    saved.erase(key);
-                } else {
-                    saved[key] = value;
-                }
+                if (value.is_null()) saved.erase(key);
+                else saved[key] = value;
             }
-        } else if (options.is_object()) {
-            saved = options;
-        }
-
-        snapshot = recipe_options_;
-        if (saved.empty()) snapshot.erase(id);
-        else snapshot[id] = saved;
+        } else if (options.is_object()) saved = options;
     }
-    if (options_persistence_barrier_) options_persistence_barrier_();
-    JsonUtils::save_to_file(snapshot, get_recipe_options_file());
-    {
-        std::lock_guard<std::mutex> lock(models_cache_mutex_);
-        recipe_options_.swap(snapshot);
-
-        if (have_info) {
-            info.recipe_options = build_recipe_options(
-                info, write.registry_options, id, json{{id, saved}});
-            update_model_options_in_cache_locked(info);
-        } else invalidate_models_cache_locked();
-    }
+    if (have_info) info.recipe_options = build_recipe_options(
+        info, write.registry_options, id, json{{id, saved}});
+    publish_saved_options(id, saved, have_info ? std::optional<ModelInfo>(std::move(info)) : std::nullopt);
 
     return saved;
 }
@@ -2538,7 +2559,7 @@ ModelInfo ModelManager::apply_execution_profile_locked(const std::string& cache_
         info.extras["gguf_import"] = true;
         info.extras["tokenizer"] = profile.value("tokenizer", "");
     }
-    json options = recipe_options_.value(id, json::object());
+    json options = saved_options_locked(id);
     info.recipe_options = RecipeOptions(info.recipe, options);
     if (const auto* descriptor = backends::descriptor_for(info.recipe)) info.device = descriptor->default_device;
     return info;
@@ -2548,7 +2569,9 @@ json ModelManager::get_execution_profiles(const std::string& model_name) {
     const auto key = resolve_model_name(model_name);
     std::lock_guard<std::mutex> lock(models_cache_mutex_);
     const auto id = cache_key_to_canonical_id(key);
-    return execution_profiles_.value(id, json{{"selected", "registered"}, {"profiles", json::object()}});
+    auto state = execution_profiles_.value(id, json{{"selected", "registered"}, {"profiles", json::object()}});
+    if (owns_saved_options_locked(id)) state.erase("settings");
+    return state;
 }
 
 void ModelManager::select_execution_profile(const std::string& model_name, const json& profile) {
@@ -2563,15 +2586,12 @@ void ModelManager::select_execution_profile(const std::string& model_name, const
     const auto& current = *write.info;
     const auto current_options = current.recipe_options.to_json();
     json previous_saved;
-    json previous_profiles, next_profiles, previous_options, next_options;
+    json next_profiles;
     {
         std::lock_guard<std::mutex> lock(models_cache_mutex_);
-        previous_profiles = execution_profiles_;
-        previous_options = recipe_options_;
-        previous_saved = recipe_options_.value(id, json::object());
+        next_profiles = execution_profiles_;
+        previous_saved = saved_options_locked(id);
     }
-    next_profiles = previous_profiles;
-    next_options = previous_options;
     auto& state = next_profiles[id];
     if (!state.is_object()) state = json{{"selected", "registered"}, {"profiles", json::object()}};
     const auto selected = state.value("selected", "registered");
@@ -2584,28 +2604,15 @@ void ModelManager::select_execution_profile(const std::string& model_name, const
     auto saved = profile_id == "registered" ? target.value("saved_options", target.value("options", json::object()))
                                             : target.value("options", json::object());
     saved["pinned"] = current_options.value("pinned", false);
-    next_options[id] = saved;
+    state["settings"] = {{"version", 1}, {"saved_options", saved}};
     RecipeOptions(target.at("recipe").get<std::string>(), saved);
-    const auto profiles_path = path_to_utf8(path_from_utf8(get_recipe_options_file()).parent_path() / "execution_profiles.json");
-    bool profiles_saved = false;
     if (profile_persistence_barrier_) profile_persistence_barrier_();
-    try {
-        JsonUtils::save_to_file(next_profiles, profiles_path);
-        profiles_saved = true;
-        JsonUtils::save_to_file(next_options, get_recipe_options_file());
-    } catch (...) {
-        if (profiles_saved) {
-            try { JsonUtils::save_to_file(previous_profiles, profiles_path); }
-            catch (const std::exception& error) {
-                LOG(ERROR, "ModelManager") << "Execution-profile rollback requires recovery: " << error.what() << std::endl;
-            }
-        }
-        throw;
-    }
+    if (resource_admission_) resource_admission_->validate_storage();
+    JsonUtils::save_to_file(next_profiles, get_execution_profiles_file());
+    if (settings_publication_barrier_) settings_publication_barrier_();
     {
         std::lock_guard<std::mutex> lock(models_cache_mutex_);
         execution_profiles_.swap(next_profiles);
-        recipe_options_.swap(next_options);
         invalidate_models_cache_locked();
     }
 }
@@ -4151,7 +4158,8 @@ void ModelManager::rebuild_models_cache_locked(std::vector<ModelInfo> dynamic_mo
     // we translate before lookup.
     for (auto& [name, info] : all_models) {
         json jro = json_recipe_options.count(name) ? json_recipe_options[name] : json(nullptr);
-        info.recipe_options = build_recipe_options(info, jro, cache_key_to_canonical_id(name), recipe_options_);
+        const auto saved_id = cache_key_to_canonical_id(name);
+        info.recipe_options = build_recipe_options(info, jro, saved_id, json{{saved_id, saved_options_locked(saved_id)}});
         if (info.recipe_options.to_json().contains("auto_update") &&
             info.recipe_options.to_json()["auto_update"].is_boolean()) {
             info.auto_update = info.recipe_options.to_json()["auto_update"].get<bool>();
@@ -4347,7 +4355,8 @@ void ModelManager::add_model_to_cache(const std::string& model_name) {
     parse_extras(info, *model_json);
     json jro = (model_json->contains("recipe_options") && (*model_json)["recipe_options"].is_object())
         ? (*model_json)["recipe_options"] : json(nullptr);
-    info.recipe_options = build_recipe_options(info, jro, cache_key_to_canonical_id(model_name), recipe_options_);
+    const auto saved_id = cache_key_to_canonical_id(model_name);
+    info.recipe_options = build_recipe_options(info, jro, saved_id, json{{saved_id, saved_options_locked(saved_id)}});
 
     info.suggested = JsonUtils::get_or_default<bool>(*model_json, "suggested", is_user_model);
     parse_model_source_fields(info, *model_json);
@@ -4399,14 +4408,14 @@ void ModelManager::add_model_to_cache(const std::string& model_name) {
     LOG(INFO, "ModelManager") << "Added '" << model_name << "' to cache (downloaded=" << info.downloaded << ")" << std::endl;
 }
 
-void ModelManager::update_model_options_in_cache_locked(const ModelInfo& info) {
+void ModelManager::update_model_options_in_cache_locked(ModelInfo info) {
     if (!cache_valid_) {
         return; // Will rebuild on next access
     }
 
     auto it = models_cache_.find(info.model_name);
     if (it != models_cache_.end()) {
-        it->second.recipe_options = info.recipe_options;
+        it->second.recipe_options = std::move(info.recipe_options);
     } else {
         LOG(WARNING, "ModelManager") << "'" << info.model_name << "' not found in cache" << std::endl;
     }
@@ -7645,7 +7654,7 @@ json ModelManager::cleanup_orphaned_cache(bool dry_run) {
             }
             for (auto& [name, info] : models) {
                 const auto id = cache_key_to_canonical_id(name);
-                info.recipe_options = build_recipe_options(info, registry_recipe_options_locked(name), id, recipe_options_);
+                info.recipe_options = build_recipe_options(info, registry_recipe_options_locked(name), id, json{{id, saved_options_locked(id)}});
                 option_sets.push_back(info.recipe_options);
                 option_sets.push_back(apply_execution_profile_locked(name, info).recipe_options);
             }
@@ -7653,6 +7662,10 @@ json ModelManager::cleanup_orphaned_cache(bool dry_run) {
                 const auto profiles = state.value("profiles", json::object());
                 for (const auto& [id, profile] : profiles.items())
                     option_sets.emplace_back(profile.at("recipe").get<std::string>(), profile.value("options", json::object()));
+                if (owns_saved_options_locked(name)) {
+                    const auto& selected = profiles.at(state.at("selected").get<std::string>());
+                    option_sets.emplace_back(selected.at("recipe").get<std::string>(), saved_options_locked(name));
+                }
             }
         }
         size_t visited = 0;

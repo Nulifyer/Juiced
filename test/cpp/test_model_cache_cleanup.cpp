@@ -279,6 +279,13 @@ static void option_references(Server& server, const CacheFiles& paths) {
               "opaque or relative argument dependencies cannot authorize destructive cleanup");
     }
     models.update_saved_model_options("Cleanup-Origin", {{"llamacpp_args", nullptr}});
+    models.register_user_model("Cleanup-Settings-Reference", paths.local(paths.main));
+    models.select_execution_profile("Cleanup-Settings-Reference", {{"id", "registered"}});
+    models.update_saved_model_options("Cleanup-Settings-Reference", {{"llamacpp_args", argument}});
+    models.unregister_user_model("Cleanup-Settings-Reference");
+    check(models.cleanup_orphaned_cache(true)["orphaned_files"].empty(),
+          "active saved settings retain argument inputs even when their model registration is removed");
+    models.update_saved_model_options("user.Cleanup-Settings-Reference", {{"llamacpp_args", nullptr}});
     TemplateEnvironment::set(paths.legacy.string());
     check(models.cleanup_orphaned_cache(true)["orphaned_files"].empty(), "the declared template environment input retains its file");
     TemplateEnvironment::set("");

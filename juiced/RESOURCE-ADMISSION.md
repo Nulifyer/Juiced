@@ -204,7 +204,31 @@ Profile selection and saved options share ModelManager's writer. Option writers
 resolve the committed recipe inside that transaction. Native option APIs reject a
 recipe change since validation. Final readers recheck cache validity under their
 read lock. Direct, supported and downloaded model views apply the same selected
-profile. This does not establish crash-consistent P3 multi-file promotion.
+profile.
+
+A model without profile-owned settings keeps its saved options in
+`recipe_options.json`. The first successful profile selection atomically publishes
+its selection, definitions and active saved options in one `execution_profiles.json`
+row. That row contains `settings: {"version": 1, "saved_options": {...}}`.
+All subsequent saved-option edits for that model publish through the same file.
+The profile API omits this internal storage field. Its existing profile definitions
+and selection fields remain unchanged.
+
+Legacy rows without `settings` still read active options from `recipe_options.json`.
+Selection transfers authority once, without rewriting the preserved legacy entry.
+Merged option edits retain unknown saved keys. Unsupported settings versions,
+incomplete owned rows and malformed profile files reject activation without
+resetting storage.
+Cache cleanup includes active saved-option file references even when their model
+registration has been removed.
+
+With filesystem contents retained, interruption before or after the single atomic
+replacement leaves a complete old or new settings version for manager restart.
+This does not repair an already inconsistent legacy pair or establish power-loss
+durability. Restoring an older executable requires its matching complete settings
+backup. Copying an old `recipe_options.json` over profile-owned settings cannot
+roll back the active options. P3 complete-model and runtime-bundle promotion remain
+separate obligations.
 
 Cloud forwarding and discovery use one per-provider snapshot of endpoint, credential,
 auth header, plaintext permission, wire format and revision. Existing requests retain
@@ -893,9 +917,9 @@ This is operation accounting, not whole-server maintenance acceptance. No public
 maintenance-ready endpoint is exposed. Remaining helper/metadata writers,
 external roots, idle-worker stop and prior-manager recovery still need
 complete integration and evidence. Empty participating-operation counts cannot
-prove storage consistency or that another process stopped writing. Synchronous
-profile rollback evidence still does not establish crash-consistent multi-file
-recovery or rollback-write failure recovery.
+prove storage consistency or that another process stopped writing. Single-file
+model-settings publication does not establish consistent recovery across all
+configuration, registration, import and snapshot owners.
 
 Preparation retains its process, accepted management tickets and staging reference
 through cancellation or shutdown until cleanup confirms direct-child exit. A

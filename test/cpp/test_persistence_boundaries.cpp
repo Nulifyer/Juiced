@@ -594,8 +594,9 @@ static void model_files() {
         models.register_user_model("user.Persistence", definition);
         auto info = models.get_model_info("user.Persistence");
         models.save_model_options(info);
-        models.select_execution_profile("user.Persistence", {{"id", "registered"}});
         const auto root = lemon::utils::get_config_dir();
+        const auto profiles_path = fs::path(root) / "execution_profiles.json";
+        if (!fs::exists(profiles_path)) lemon::utils::JsonUtils::save_to_file(json::object(), profiles_path.string());
         for (const auto& name : {"user_models.json", "recipe_options.json", "execution_profiles.json"}) {
             auto target = fs::path(root) / name;
             const auto before = read(target);
@@ -660,16 +661,32 @@ static void profile_concurrency() {
         const auto options_path = config_root / "recipe_options.json";
         const auto profiles_path = config_root / "execution_profiles.json";
         const auto committed_profiles = read(profiles_path);
-        fs::rename(options_path, config_root / "recipe_options.backup");
-        fs::create_directory(options_path);
-        bool second_failed = false;
-        try { models.select_execution_profile("user.Persistence", {{"id", "registered"}}); }
-        catch (const std::exception&) { second_failed = true; }
-        fs::remove(options_path);
-        fs::rename(config_root / "recipe_options.backup", options_path);
-        check(second_failed && read(profiles_path) == committed_profiles && models.get_model_info("user.Persistence").recipe == "vllm" &&
+        bool failed = false;
+        {
+            BlockReplacement block(profiles_path);
+            try { models.select_execution_profile("user.Persistence", {{"id", "registered"}}); }
+            catch (const std::exception&) { failed = true; }
+        }
+        check(failed && read(profiles_path) == committed_profiles && models.get_model_info("user.Persistence").recipe == "vllm" &&
               models.get_model_info("user.Persistence").recipe_options.get_option("ctx_size") == 4096,
-              "second-file publication failure restores the profile file without exposing a mixed selection");
+              "failed authoritative settings publication preserves selection and options together");
+        // Block only the legacy pathname. POSIX BlockReplacement protects the
+        // whole parent and would also prohibit this positive profile write.
+        const auto held_options = config_root / "recipe_options.backup";
+        fs::rename(options_path, held_options);
+        fs::create_directory(options_path);
+        bool selected_registered = false;
+        try {
+            models.select_execution_profile("user.Persistence", {{"id", "registered"}});
+            selected_registered = models.get_model_info("user.Persistence").recipe == "llamacpp" &&
+                models.get_model_info("user.Persistence").recipe_options.get_option("ctx_size") == 8192;
+        } catch (const std::exception& error) {
+            std::fprintf(stderr, "Unexpected profile publication failure: %s\n", error.what());
+        }
+        fs::remove(options_path);
+        fs::rename(held_options, options_path);
+        check(selected_registered, "profile-owned publication is independent of the preserved legacy options file");
+        models.select_execution_profile("user.Persistence", {{"id", "changed"}, {"recipe", "vllm"}, {"options", {{"ctx_size", 4096}}}});
         lemon::ModelManager accepted;
         check(accepted.get_model_info("user.Persistence").recipe == "vllm" && accepted.get_model_info("user.Persistence").recipe_options.get_option("ctx_size") == 4096,
               "changed profile and matching options survive restart together");

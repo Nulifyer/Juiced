@@ -3529,6 +3529,11 @@ if(BUILD_TESTING)
     add_cpp_ci_test(WriterOperationMaintenanceTest CI ON COMMAND test_writer_operations)
     set_tests_properties(WriterOperationMaintenanceTest PROPERTIES TIMEOUT 90)
 
+    add_executable(test_model_settings_publication test/cpp/test_model_settings_publication.cpp)
+    target_link_libraries(test_model_settings_publication PRIVATE lemonade-server-core)
+    add_cpp_ci_test(ModelSettingsPublicationTest CI ON COMMAND test_model_settings_publication)
+    set_tests_properties(ModelSettingsPublicationTest PROPERTIES TIMEOUT 90)
+
     add_executable(test_persistence_boundaries test/cpp/test_persistence_boundaries.cpp)
     target_link_libraries(test_persistence_boundaries PRIVATE lemonade-server-core)
     add_cpp_ci_test(PersistenceBoundariesTest CI ON COMMAND test_persistence_boundaries)

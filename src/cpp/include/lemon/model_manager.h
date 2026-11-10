@@ -527,8 +527,8 @@ struct UpdateCheckResult {
 
     void save_model_options(const ModelInfo& info);
 
-    // The model's own entry in recipe_options.json, i.e. only what the user
-    // explicitly saved. Empty object when the model has no entry.
+    // Only the model's explicitly saved overrides, from its current settings owner.
+    // Empty object when the model has no overrides.
     json get_saved_model_options(const std::string& model_name);
     struct ModelOptionsSnapshot {
         ModelInfo info;
@@ -539,16 +539,16 @@ struct UpdateCheckResult {
     ModelOptionsSnapshot get_model_options_snapshot(const std::string& model_name);
     RecipeOptions preview_saved_model_options(const ModelOptionsSnapshot& snapshot, const json& changes);
 
-    // What the model would resolve to with its recipe_options.json entry
-    // removed: image_defaults plus the registry JSON's own recipe_options.
+    // What the model would resolve to without saved overrides:
+    // image_defaults plus the registry JSON's own recipe_options.
     RecipeOptions get_model_default_options(const ModelInfo& info);
 
-    // Replace the model's recipe_options.json entry, returning the new entry.
-    // An empty object erases the entry rather than persisting `{}`.
+    // Replace the model's saved overrides, returning the committed value.
+    // An empty object clears all overrides through the current settings owner.
     json set_saved_model_options(const std::string& model_name, const json& saved, const std::string& expected_recipe = "");
 
-    // Merge changes into the model's recipe_options.json entry and return the
-    // new entry. A null value erases that key. Atomic with respect to other
+    // Merge changes into the model's saved overrides and return the
+    // committed value. A null value erases that key. Atomic with respect to other
     // writers of the same entry.
     json update_saved_model_options(const std::string& model_name, const json& changes, const std::string& expected_recipe = "");
 
@@ -629,6 +629,10 @@ private:
     };
     void notify_after_mutation(ModelMutation& mutation) noexcept;
     OptionsWriteSnapshot begin_options_write(const std::string& model_name);
+    bool owns_saved_options_locked(const std::string& id) const;
+    json saved_options_locked(const std::string& id) const;
+    static std::string get_execution_profiles_file();
+    void publish_saved_options(const std::string& id, const json& saved, std::optional<ModelInfo> info);
     std::vector<ModelInfo> discover_dynamic_models();
     json discovery_observations_ = json::object();
     void rebuild_models_cache_locked(std::vector<ModelInfo> dynamic_models);
@@ -639,7 +643,7 @@ private:
     std::unique_lock<std::mutex> lock_current_models_cache();
     void add_model_to_cache(const std::string& model_name);
     // Caller must hold models_cache_mutex_.
-    void update_model_options_in_cache_locked(const ModelInfo& info);
+    void update_model_options_in_cache_locked(ModelInfo info);
     void update_model_in_cache(const std::string& model_name, bool downloaded);
     void remove_model_from_cache(const std::string& model_name);
 
@@ -673,6 +677,7 @@ private:
     json recipe_options_;
     json execution_profiles_ = json::object();
     std::function<void()> profile_persistence_barrier_;
+    std::function<void()> settings_publication_barrier_;
     std::function<void()> cache_read_barrier_, options_write_barrier_, options_persistence_barrier_;
     ModelInfo apply_execution_profile_locked(const std::string& cache_key, ModelInfo info) const;
     json architecture_defaults_;  // Per-architecture recipe option overlays (from resources)
@@ -721,7 +726,7 @@ private:
     std::function<void(const std::string&)> removal_publication_barrier_;
     std::function<void(const json&)> user_models_save_override_;
     std::function<void(const std::string&)> model_removal_guard_;
-    // Orders recipe_options.json rewrites without holding models_cache_mutex_
+    // Orders profile/settings file rewrites without holding models_cache_mutex_
     // (which every request thread contends on) across disk I/O.
     std::mutex recipe_options_write_mutex_;
 

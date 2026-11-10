@@ -77,6 +77,15 @@ reserves no capacity and does not enable the model or qualify its output quality
 Keep the exact public model ID when configuring clients. Quant variants are
 separate registrations and can have different runtime settings and loading policies.
 
+## Preserve settings when restoring a backup
+
+Back up the complete Juiced configuration before upgrading or restoring an older
+version. Runtime selection and its active saved options can share an
+`execution_profiles.json` entry. The older `recipe_options.json` entry remains
+preserved, but it no longer controls that model after profile selection. Restore
+the complete matching configuration with the older executable. Replacing only
+`recipe_options.json` does not restore profile-owned settings.
+
 ## Remove a model
 
 1. Open its details and select **Manage**.

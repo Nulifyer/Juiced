@@ -41,7 +41,7 @@ struct AliasPublicationTestHook {
     }
 };
 struct ModelPublicationTestHook {
-    static fs::path options_path(ModelManager& models) { return models.get_recipe_options_file(); }
+    static fs::path settings_path(ModelManager& models) { return models.get_execution_profiles_file(); }
     static void before_options(ModelManager& models, std::function<void()> callback) { models.options_persistence_barrier_ = std::move(callback); }
 };
 struct StatePublicationTestHook {
@@ -187,7 +187,8 @@ static void model_publication() {
           models.get_model_info("user.Writer-Maintenance").recipe_options.get_option("ctx_size") == 512,
           "an accepted model write finishes coherently and releases its operation");
     admission.maintenance(false);
-    const auto target = ModelPublicationTestHook::options_path(models);
+    models.select_execution_profile("user.Writer-Maintenance", {{"id", "registered"}});
+    const auto target = ModelPublicationTestHook::settings_path(models);
     const auto before = read(target);
     const auto held = target.string() + ".held";
     fs::rename(target, held);
@@ -200,7 +201,7 @@ static void model_publication() {
     fs::rename(held, target);
     check(failed && admission.wait_for_writes(50ms) && read(target) == before &&
           models.get_model_info("user.Writer-Maintenance").recipe == "llamacpp",
-          "controlled profile failure completes synchronous rollback before writer release");
+          "failed authoritative profile publication preserves state through writer release");
     admission.maintenance(true);
     check(closed([&] { models.unregister_user_model("user.Writer-Maintenance"); }) &&
           models.get_model_info("user.Writer-Maintenance").recipe == "llamacpp", "maintenance blocks unregistration without dropping the registration");
