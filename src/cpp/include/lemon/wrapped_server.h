@@ -104,6 +104,7 @@ public:
         bool deadline_expired() const { return resources_.deadline_expired(); }
         std::optional<int> execution_slot() const { return resources_.execution_slot(); }
         std::chrono::steady_clock::time_point completion_deadline() const { return resources_.completion_deadline(); }
+        bool endpoint_owned() const { return server_ && server_->endpoint_owned(); }
         json execution_snapshot() const { return server_ ? server_->execution_snapshot() : json::object(); }
         uint64_t generation() const { return server_ ? server_->get_instance_id() : 0; }
     private:
@@ -524,6 +525,7 @@ public:
         std::lock_guard<std::mutex> lock(state_mutex_);
         return ctx_size_auto_;
     }
+    virtual bool endpoint_owned() const;
     int get_process_id() const;
     std::vector<std::string> get_launch_command() const;
     int get_backend_port() const;

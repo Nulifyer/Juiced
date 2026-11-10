@@ -65,6 +65,10 @@ bool ServerProcess::running() const {
     return has_handle(handle_) && ProcessManager::is_running(handle_);
 }
 
+bool ServerProcess::owns_loopback_listener(int port) const {
+    return running() && ProcessManager::owns_loopback_listener(handle_, port);
+}
+
 std::string NativeProcess::start(const ServerCommand& command) {
     std::vector<std::string> command_line = {command.program};
     command_line.insert(command_line.end(), command.args.begin(), command.args.end());

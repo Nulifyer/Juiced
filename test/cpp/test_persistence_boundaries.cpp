@@ -81,6 +81,8 @@ public:
         set_model_metadata(name, "fixture", ModelType::LLM, DEVICE_CPU, RecipeOptions("llamacpp", {
             {"ctx_size", 2048}, {"llamacpp_backend", "cpu"}, {"llamacpp_args", "--slot-save-path \"" + directory.string() + "\""}}));
     }
+    std::atomic<bool> owns_endpoint{true};
+    bool endpoint_owned() const override { return owns_endpoint.load(); }
     bool observes_inference_completion() const override { return true; }
     json get_slots() override { return forward_get_request("/slots"); }
     json slots_action(int slot, const std::string& action, const json& body) override {
@@ -139,6 +141,10 @@ struct StatePublicationTestHook {
     static void cache_worker(Server& server, const std::string& name, int port) {
         std::lock_guard<std::mutex> lock(server.router_->load_mutex_);
         server.router_->loaded_servers_.push_back(std::make_shared<CacheBoundaryWorker>(name, port, server.juiced_->snapshot_directory_));
+    }
+    static void endpoint_owner(Server& server, const std::string& name, bool owned) {
+        std::lock_guard<std::mutex> lock(server.router_->load_mutex_);
+        dynamic_cast<CacheBoundaryWorker*>(server.router_->find_server_by_model_name(name))->owns_endpoint = owned;
     }
     static void cache_arguments(Server& server, const std::string& name, const std::string& args) {
         std::lock_guard<std::mutex> lock(server.router_->load_mutex_);
@@ -1377,9 +1383,9 @@ static void cache_pre_dispatch() {
         const auto root = lemon::test::make_scratch_dir("save\\pre dispatch");
 #endif
         const auto snapshots = root / "juiced/snapshots";
-        std::atomic<int> saves{0};
+        std::atomic<int> saves{0}, inspections{0};
         httplib::Server engine;
-        engine.Get("/props", [](const auto&, auto& response) { response.set_content(R"({"build_info":"dde879b-controlled-save-boundary"})", "application/json"); });
+        engine.Get("/props", [&](const auto&, auto& response) { ++inspections; response.set_content(R"({"build_info":"dde879b-controlled-save-boundary"})", "application/json"); });
         engine.Get("/slots", [](const auto&, auto& response) { response.set_content(R"([{"id":0,"is_processing":false}])", "application/json"); });
         engine.Post("/slots/0", [&](const auto& request, auto& response) {
             const auto body = json::parse(request.body);
@@ -1414,6 +1420,13 @@ static void cache_pre_dispatch() {
             const auto profile_response = Hook::cache(server, {{"model", name}}, "cache/profile");
             if (profile_response.status != 200) throw std::runtime_error(profile_response.body);
             const auto profile = json::parse(profile_response.body);
+            const auto inspected = inspections.load();
+            Hook::endpoint_owner(server, name, false);
+            const auto foreign = Hook::cache(server, {{"model", name}}, "cache/profile");
+            check(foreign.status == 503 && foreign.body.find("backend_listener_unverified") != std::string::npos && inspections == inspected,
+                  "lost listener ownership rejects inspection before any backend exchange");
+            Hook::endpoint_owner(server, name, true);
+
             check(Hook::cache(server, {{"model", name}, {"fingerprint", profile.at("fingerprint")}, {"evidence", "Controlled pre-dispatch ownership fixture only"}}, "cache/qualify").status == 200,
                   ("controlled save boundary qualifies only the fixture profile: " + profile.dump()).c_str());
             check(Hook::cache(server, {{"mode", "persistent"}, {"disk_budget_gib", 1}}).status == 200, "full-budget legacy snapshot reservation is enabled for the boundary fixture");
@@ -1427,6 +1440,17 @@ static void cache_pre_dispatch() {
             const auto next = Hook::cache_chat(server, name, "next-session", stream, closed);
             check(next.status == 200 && saves == 1 && Hook::state(server).at("snapshot_writes").empty() && Hook::disk(server).at("saved_bytes") == 3,
                   "another JSON/SSE session saves on the same worker without unload after pre-dispatch cancellation");
+            Hook::save_barrier(server, [&] { Hook::endpoint_owner(server, name, false); });
+            const auto lost = Hook::cache_chat(server, name, "lost-before-save", stream, closed);
+            Hook::save_barrier(server, {});
+            check(lost.status == 200 && saves == 1 && Hook::state(server).at("snapshot_writes").empty() &&
+                  Hook::disk(server).at("reserved_write_bytes") == 0,
+                  "lost listener before save preserves inference and durably releases undispatched write credit");
+            Hook::endpoint_owner(server, name, true);
+            const auto recovered = Hook::cache_chat(server, name, "owner-restored", stream, closed);
+            check(recovered.status == 200 && saves == 2,
+                  "restored listener ownership permits a later save without unloading the worker");
+
         }
         lemon::RuntimeConfig::set_global(nullptr);
     }

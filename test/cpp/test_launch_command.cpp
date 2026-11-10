@@ -45,8 +45,8 @@ struct SystemInfoCacheTestHook {
 // so the test controls liveness and never signals a real process.
 class FakeProcess : public ServerProcess {
 public:
-    explicit FakeProcess(int pid, bool* fail_stop = nullptr, std::function<void()> before_stop = {}, std::function<void()> after_start = {})
-        : ServerProcess(ProcessOutput{}), pid_(pid), fail_stop_(fail_stop), before_stop_(std::move(before_stop)), after_start_(std::move(after_start)) {}
+    explicit FakeProcess(int pid, bool* fail_stop = nullptr, std::function<void()> before_stop = {}, std::function<void()> after_start = {}, bool listener_owned = true)
+        : ServerProcess(ProcessOutput{}), pid_(pid), fail_stop_(fail_stop), before_stop_(std::move(before_stop)), after_start_(std::move(after_start)), listener_owned_(listener_owned) {}
     ~FakeProcess() override { handle_ = {nullptr, 0}; }
 
     std::string start(const ServerCommand& command) override {
@@ -63,6 +63,7 @@ public:
         handle_ = {nullptr, 0};
     }
 
+    bool owns_loopback_listener(int) const override { return listener_owned_ && running(); }
     bool running() const override { return handle_.pid != 0; }
     bool exited() const override { return !running(); }
 
@@ -71,6 +72,7 @@ private:
     bool* fail_stop_;
     std::function<void()> before_stop_;
     std::function<void()> after_start_;
+    bool listener_owned_;
 };
 
 // Minimal WrappedServer that runs whatever ServerProcess the test hands it.
@@ -177,6 +179,7 @@ public:
         if (control_->fail_stop) throw std::runtime_error("controlled designer stop remains unknown");
         stop_http(); handle_ = {nullptr, 0}; control_->running = false;
     }
+    bool owns_loopback_listener(int) const override { return running(); }
     bool running() const override { return handle_.pid != 0; }
     bool exited() const override { return !running(); }
 private:
@@ -286,7 +289,7 @@ void vllm_load_boundaries(const std::string& executable) {
         bool fail_stop = true; std::atomic<bool> cancel{false}; int starts = 0;
         lemon::DerivedWorker<lemon::backends::VLLMServer> worker(&models, &runtimes);
         worker.set_load_cancel_flag(&cancel);
-        worker.process_factory = [&](auto) { ++starts; return std::make_unique<lemon::FakeProcess>(909, &fail_stop, std::function<void()>{}, [&] { cancel = cancelled; }); };
+        worker.process_factory = [&](auto) { ++starts; return std::make_unique<lemon::FakeProcess>(909, &fail_stop, std::function<void()>{}, [&] { cancel = cancelled; }, false); };
         lemon::ResourceAdmission::Work work; work.model = "vllm-caller"; work.operation = lemon::ResourceAdmission::Operation::Load; work.generation = worker.get_instance_id();
         auto residency = ledger.acquire(work); residency.started(); residency.retain_residency(); worker.retain_resource_residency(std::move(residency));
         bool rejected = false;
@@ -309,7 +312,27 @@ void vllm_load_boundaries(const std::string& executable) {
 } // namespace
 
 int main(int argc, char** argv) {
-    (void)argc;
+    if (argc > 1 && std::string(argv[1]) == "--listener-sleep-child") {
+        std::this_thread::sleep_for(std::chrono::seconds(30));
+        return 0;
+    }
+    if (argc > 2 && (std::string(argv[1]) == "--listener-server-child" ||
+        std::string(argv[1]) == "--listener-slow-child" || std::string(argv[1]) == "--listener-large-child" ||
+        std::string(argv[1]) == "--listener-relinquish-child")) {
+        const auto mode = std::string(argv[1]);
+        httplib::Server server;
+        server.Get("/health", [&](const auto&, auto& response) {
+            if (mode == "--listener-slow-child") std::this_thread::sleep_for(std::chrono::seconds(5));
+            response.set_content(mode == "--listener-large-child" ? std::string(128 * 1024, 'x') : "{}", "application/json");
+        });
+        server.Get("/relinquish", [&](const auto&, auto& response) {
+            response.set_content("{}", "application/json");
+            std::thread([&] { std::this_thread::sleep_for(std::chrono::milliseconds(50)); server.stop(); }).detach();
+        });
+        const auto served = server.listen("127.0.0.1", std::stoi(argv[2]));
+        if (mode == "--listener-relinquish-child") std::this_thread::sleep_for(std::chrono::seconds(30));
+        return served ? 0 : 1;
+    }
     httplib::Server health;
     health.Get("/health", [](const httplib::Request&, httplib::Response& res) {
         res.set_content("{}", "application/json");
@@ -325,6 +348,76 @@ int main(int argc, char** argv) {
     lemon::ServerCommand command;
     command.program = "llama-server.exe";
     command.port = port;
+
+    {
+        lemon::StubWrappedServer worker;
+        lemon::ServerCommand foreign;
+        foreign.program = std::filesystem::absolute(argv[0]).string();
+        foreign.args = {"--listener-sleep-child"};
+        foreign.port = port;
+        bool rejected = false;
+        try { worker.start_server(std::make_unique<lemon::NativeProcess>(lemon::ProcessOutput{}), foreign, 1); }
+        catch (const std::runtime_error&) { rejected = true; }
+        check("a healthy foreign listener cannot make an unrelated native child ready", rejected);
+        worker.stop_server();
+        check("foreign-listener rejection leaves the unrelated service running", lemon::utils::HttpClient::is_reachable(
+            "http://127.0.0.1:" + std::to_string(port) + "/health", 1, lemon::utils::HttpSecurityPolicy::TrustedLoopback));
+    }
+
+    {
+        lemon::StubWrappedServer worker;
+        lemon::ServerCommand owned;
+        owned.program = std::filesystem::absolute(argv[0]).string();
+        owned.port = lemon::utils::ProcessManager::find_free_port(8001);
+        owned.args = {"--listener-server-child", std::to_string(owned.port)};
+        auto process = std::make_unique<lemon::NativeProcess>(lemon::ProcessOutput{});
+        const auto* child = process.get();
+        worker.start_server(std::move(process), owned, 5);
+        check("an actual child owning the healthy listener reaches readiness", worker.endpoint_owned());
+        check("an owned child does not own the manager's foreign listener", !child->owns_loopback_listener(port));
+        worker.stop_server();
+        check("confirmed retirement clears endpoint ownership", !worker.endpoint_owned());
+    }
+
+    {
+        lemon::StubWrappedServer worker;
+        lemon::ServerCommand command;
+        command.program = std::filesystem::absolute(argv[0]).string();
+        command.port = lemon::utils::ProcessManager::find_free_port(8001);
+        command.args = {"--listener-relinquish-child", std::to_string(command.port)};
+        worker.start_server(std::make_unique<lemon::NativeProcess>(lemon::ProcessOutput{}), command, 5);
+        (void)lemon::utils::HttpClient::get("http://127.0.0.1:" + std::to_string(command.port) + "/relinquish", {}, 1,
+            lemon::utils::HttpSecurityPolicy::TrustedLoopback);
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        while (worker.endpoint_owned() && std::chrono::steady_clock::now() < deadline)
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        httplib::Server replacement;
+        replacement.Get("/health", [](const auto&, auto& response) { response.set_content("{}", "application/json"); });
+        const bool bound = replacement.bind_to_port("127.0.0.1", command.port);
+        std::thread listener;
+        if (bound) { listener = std::thread([&] { replacement.listen_after_bind(); }); replacement.wait_until_ready(); }
+        check("a live child cannot inherit the identity of a replacement listener",
+              bound && worker.is_backend_alive() && !worker.endpoint_owned());
+        worker.stop_server();
+        check("retiring that child preserves the replacement listener", bound && lemon::utils::HttpClient::is_reachable(
+            "http://127.0.0.1:" + std::to_string(command.port) + "/health", 1, lemon::utils::HttpSecurityPolicy::TrustedLoopback));
+        replacement.stop(); if (listener.joinable()) listener.join();
+    }
+
+    for (const auto& mode : {"--listener-slow-child", "--listener-large-child"}) {
+        lemon::StubWrappedServer worker;
+        lemon::ServerCommand command;
+        command.program = std::filesystem::absolute(argv[0]).string();
+        command.port = lemon::utils::ProcessManager::find_free_port(8001);
+        command.args = {mode, std::to_string(command.port)};
+        bool rejected = false;
+        const auto started = std::chrono::steady_clock::now();
+        try { worker.start_server(std::make_unique<lemon::NativeProcess>(lemon::ProcessOutput{}), command, 1); }
+        catch (const std::runtime_error&) { rejected = true; }
+        const auto elapsed = std::chrono::steady_clock::now() - started;
+        check(mode == std::string("--listener-slow-child") ? "slow health cannot extend the startup polling deadline" :
+            "an oversized health response cannot publish readiness", rejected && elapsed < std::chrono::seconds(6));
+    }
 
     {
         lemon::StubWrappedServer server;

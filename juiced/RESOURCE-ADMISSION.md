@@ -783,3 +783,27 @@ build. Old schema1 receipts and snapshots are retained and require requalificati
 This is the declared-input/launch-executable identity subset. Loaded shared-library,
 actual physical-device and complete external-input identity remain explicit open
 P1 requirements, rather than an implied immutable runtime-bundle guarantee.
+
+### Native listener association
+
+A live child and a reachable URL are separate observations. Native startup now
+requires the owned process to hold the IPv4 loopback/wildcard TCP listener before
+and after a successful bounded health response. Active-request watchdog probes
+use the same association check. Linux joins owned socket file
+descriptors to procfs TCP entries in the manager's network namespace. Windows uses the TCP listener owner table.
+macOS inspects the child's socket descriptors through libproc. Query failure or
+an unconfirmed association cannot publish readiness. Controlled process adapters
+must explicitly declare their simulated listener ownership.
+
+Startup health polling uses an elapsed deadline, inherited cancellation and a
+64-KiB response ceiling. Stop/collection time remains separate. The listener query
+is serialized by the process owner, without a shared Router/configuration lock
+across the network exchange. Enumeration is bounded, but kernel/filesystem query
+latency still needs the end-to-end termination/interference gates.
+
+Persistent-cache inspection and save/restore/erase exchanges recheck that same
+held worker before dispatch and after response. A missing association returns
+`backend_listener_unverified`; an unused save reservation remains distinguishable
+from an unresolved dispatched exchange. This covers direct-child IPv4 listeners,
+not general descendant listeners, shared-port authentication, remote computation,
+all protocol forwarding paths or complete runtime/device identity.

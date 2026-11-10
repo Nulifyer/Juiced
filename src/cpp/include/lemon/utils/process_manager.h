@@ -56,6 +56,7 @@ public:
     // Must be non-mutating: on POSIX it must not reap the child, because
     // status/health checks may call this frequently.
     static bool is_running(ProcessHandle handle);
+    static bool owns_loopback_listener(ProcessHandle handle, int port);
 
     // POSIX callers should prefer reap_process() when they intentionally own
     // cleanup of an exited child.

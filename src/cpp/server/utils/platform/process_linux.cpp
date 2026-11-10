@@ -6,6 +6,9 @@
 #include <exception>
 #include <iostream>
 #include <fstream>
+#include <filesystem>
+#include <set>
+#include <sstream>
 
 #include <unistd.h>
 #include <sys/types.h>
@@ -108,6 +111,7 @@ public:
     bool terminate(ProcessHandle handle) override;
     bool has_exited(ProcessHandle handle) override { return detail::owned_child_has_exited(handle.pid); }
     bool is_running(ProcessHandle handle) override;
+    bool owns_loopback_listener(ProcessHandle handle, int port) override;
     int get_exit_code(ProcessHandle handle) override;
     int wait_for_exit(ProcessHandle handle, int timeout_seconds) override;
     int reap(ProcessHandle handle) override;
@@ -621,6 +625,44 @@ int LinuxProcessPlatform::run_with_output(
     }
 
     return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+}
+
+bool LinuxProcessPlatform::owns_loopback_listener(ProcessHandle handle, int port) {
+    if (!is_running(handle)) return false;
+    try {
+        const auto root = std::filesystem::path("/proc") / std::to_string(handle.pid);
+        if (std::filesystem::read_symlink(root / "ns/net") !=
+            std::filesystem::read_symlink("/proc/self/ns/net")) return false;
+        std::set<std::string> sockets;
+        size_t descriptors = 0;
+        for (const auto& entry : std::filesystem::directory_iterator(root / "fd")) {
+            if (++descriptors > 65536) return false;
+            std::error_code error;
+            const auto link = std::filesystem::read_symlink(entry.path(), error).string();
+            if (!error && link.rfind("socket:[", 0) == 0 && link.back() == ']')
+                sockets.insert(link.substr(8, link.size() - 9));
+        }
+        std::ifstream table(root / "net/tcp");
+        if (!table) return false;
+        std::string line;
+        size_t bytes = 0;
+        bool owned = false;
+        std::getline(table, line);
+        while (std::getline(table, line)) {
+            bytes += line.size();
+            if (bytes > 16 * 1024 * 1024) return false;
+            std::istringstream row(line);
+            std::string index, local, remote, state, queues, timer, retransmits, uid, timeout, inode;
+            if (!(row >> index >> local >> remote >> state >> queues >> timer >> retransmits >> uid >> timeout >> inode)) return false;
+            const auto colon = local.find(':');
+            if (state != "0A" || colon == std::string::npos || std::stoul(local.substr(colon + 1), nullptr, 16) != unsigned(port)) continue;
+            const auto address = std::stoul(local.substr(0, colon), nullptr, 16);
+            if (address != INADDR_ANY && address != htonl(INADDR_LOOPBACK)) continue;
+            if (!sockets.count(inode)) return false;
+            owned = true;
+        }
+        return table.eof() && owned && is_running(handle);
+    } catch (const std::exception&) { return false; }
 }
 
 int LinuxProcessPlatform::find_free_port(int start_port) {

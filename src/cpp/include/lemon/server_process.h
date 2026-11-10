@@ -38,6 +38,7 @@ public:
     // already exited. Does nothing when it never started.
     virtual void stop();
     virtual bool running() const;
+    virtual bool owns_loopback_listener(int port) const;
     virtual bool exited() const;
     virtual std::optional<int> collect_exit();
 

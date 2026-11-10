@@ -32,6 +32,10 @@ bool ProcessManager::is_running(ProcessHandle handle) {
     return platform->is_running(handle);
 }
 
+bool ProcessManager::owns_loopback_listener(ProcessHandle handle, int port) {
+    return port > 0 && port <= 65535 && create_process_platform()->owns_loopback_listener(handle, port);
+}
+
 int ProcessManager::get_exit_code(ProcessHandle handle) {
     auto platform = create_process_platform();
     return platform->get_exit_code(handle);

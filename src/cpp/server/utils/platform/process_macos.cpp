@@ -16,6 +16,8 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <spawn.h>
+#include <libproc.h>
+#include <sys/proc_info.h>
 #include <cstring>
 #include <thread>
 #include <chrono>
@@ -67,6 +69,7 @@ public:
     bool terminate(ProcessHandle handle) override;
     bool has_exited(ProcessHandle handle) override { return detail::owned_child_has_exited(handle.pid); }
     bool is_running(ProcessHandle handle) override;
+    bool owns_loopback_listener(ProcessHandle handle, int port) override;
     int get_exit_code(ProcessHandle handle) override;
     int wait_for_exit(ProcessHandle handle, int timeout_seconds) override;
     int reap(ProcessHandle handle) override;
@@ -575,6 +578,28 @@ int MacOSProcessPlatform::run_with_output(
     }
 
     return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+}
+
+bool MacOSProcessPlatform::owns_loopback_listener(ProcessHandle handle, int port) {
+    if (!is_running(handle)) return false;
+    const int needed = proc_pidinfo(handle.pid, PROC_PIDLISTFDS, 0, nullptr, 0);
+    if (needed <= 0 || needed > int(65520 * sizeof(proc_fdinfo))) return false;
+    std::vector<proc_fdinfo> descriptors(needed / sizeof(proc_fdinfo) + 16);
+    const auto capacity = int(descriptors.size() * sizeof(proc_fdinfo));
+    const int bytes = proc_pidinfo(handle.pid, PROC_PIDLISTFDS, 0, descriptors.data(), capacity);
+    if (bytes <= 0 || bytes >= capacity || bytes % sizeof(proc_fdinfo) != 0) return false;
+    for (size_t i = 0; i < size_t(bytes) / sizeof(proc_fdinfo); ++i) {
+        const auto& descriptor = descriptors[i];
+        if (descriptor.proc_fdtype != PROX_FDTYPE_SOCKET) continue;
+        socket_fdinfo socket{};
+        if (proc_pidfdinfo(handle.pid, descriptor.proc_fd, PROC_PIDFDSOCKETINFO, &socket, sizeof(socket)) != sizeof(socket)) continue;
+        if (socket.psi.soi_kind != SOCKINFO_TCP || socket.psi.soi_family != AF_INET) continue;
+        const auto& tcp = socket.psi.soi_proto.pri_tcp;
+        const auto address = tcp.tcpsi_ini.insi_laddr.ina_46.i46a_addr4.s_addr;
+        if (tcp.tcpsi_state == TSI_S_LISTEN && ntohs(uint16_t(tcp.tcpsi_ini.insi_lport)) == port &&
+            (address == INADDR_ANY || address == htonl(INADDR_LOOPBACK))) return is_running(handle);
+    }
+    return false;
 }
 
 int MacOSProcessPlatform::find_free_port(int start_port) {

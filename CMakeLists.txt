@@ -1326,6 +1326,7 @@ if(WIN32)
     target_link_libraries(lemonade-server-core PUBLIC
         ws2_32
         wsock32
+        iphlpapi
         wbemuuid
         ole32
         oleaut32
@@ -1335,6 +1336,7 @@ if(WIN32)
     )
 elseif(APPLE)
     target_link_libraries(lemonade-server-core PUBLIC
+        proc
         "-framework Metal"
         "-framework Foundation"
         "-framework CoreServices"

@@ -9,6 +9,7 @@
 #define NOMINMAX
 #include <winsock2.h>
 #include <windows.h>
+#include <iphlpapi.h>
 #include <processenv.h>
 #pragma comment(lib, "ws2_32.lib")
 // Un-define ERROR to avoid conflict with LOG(ERROR, ...) / SEVERITY::ERROR
@@ -676,6 +677,26 @@ public:
         CloseHandle(pi.hProcess);
 
         return killed_by_callback ? -1 : static_cast<int>(exit_code);
+    }
+
+    bool owns_loopback_listener(ProcessHandle handle, int port) override {
+        if (!is_running(handle) || GetProcessId(static_cast<HANDLE>(handle.handle)) != DWORD(handle.pid)) return false;
+        DWORD bytes = 0;
+        if (GetExtendedTcpTable(nullptr, &bytes, FALSE, AF_INET, TCP_TABLE_OWNER_PID_LISTENER, 0) != ERROR_INSUFFICIENT_BUFFER ||
+            bytes > 16 * 1024 * 1024 || bytes < sizeof(MIB_TCPTABLE_OWNER_PID)) return false;
+        std::vector<unsigned char> buffer(bytes);
+        if (GetExtendedTcpTable(buffer.data(), &bytes, FALSE, AF_INET, TCP_TABLE_OWNER_PID_LISTENER, 0) != NO_ERROR) return false;
+        const auto* table = reinterpret_cast<const MIB_TCPTABLE_OWNER_PID*>(buffer.data());
+        if (table->dwNumEntries > (buffer.size() - offsetof(MIB_TCPTABLE_OWNER_PID, table)) / sizeof(MIB_TCPROW_OWNER_PID)) return false;
+        bool owned = false;
+        for (DWORD i = 0; i < table->dwNumEntries; ++i) {
+            const auto& row = table->table[i];
+            if (ntohs(static_cast<u_short>(row.dwLocalPort)) != port ||
+                (row.dwLocalAddr != INADDR_ANY && row.dwLocalAddr != htonl(INADDR_LOOPBACK))) continue;
+            if (row.dwOwningPid != DWORD(handle.pid)) return false;
+            owned = true;
+        }
+        return owned && is_running(handle);
     }
 
     int find_free_port(int start_port) override {

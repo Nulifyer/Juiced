@@ -68,6 +68,8 @@ json post_engine(const std::string &address, const std::string &path,
                  const std::function<bool()>& disconnected, bool* dispatched = nullptr) {
   if (worker.deadline_expired() || (disconnected && disconnected()))
     throw AdmissionError("state_operation_cancelled", "State operation was cancelled before dispatch", 499);
+  if (!worker.endpoint_owned())
+    throw AdmissionError("backend_listener_unverified", "The state worker no longer owns its listener", 503);
   const auto payload = body.dump();
   worker.resources_started();
   utils::HttpResponse r;
@@ -81,6 +83,8 @@ json post_engine(const std::string &address, const std::string &path,
     throw AdmissionError("state_operation_unresolved", "Engine state operation termination could not be confirmed");
   }
   worker.resources_completed();
+  if (!worker.endpoint_owned())
+    throw AdmissionError("backend_listener_unverified", "State response listener ownership could not be verified", 503);
   if (r.status_code != 200)
     throw std::runtime_error("Engine state operation failed (" +
                              std::to_string(r.status_code) +
@@ -185,11 +189,15 @@ json JuicedService::cache_profile(const std::string &requested, WrappedServer::I
         address.size() -
         3); // Backend inference base includes /v1; state APIs are at its root.
   if (cancelled()) throw AdmissionError("state_operation_cancelled", "State inspection was cancelled before dispatch", 499);
+  if (!worker.endpoint_owned())
+    throw AdmissionError("backend_listener_unverified", "The inspected worker no longer owns its listener", 503);
   worker.resources_started();
   auto props = utils::HttpClient::get(
       address + "/props", {}, 10, utils::HttpSecurityPolicy::TrustedLoopback, {nullptr, cancelled});
   worker.resources_completed();
   if (cancelled()) throw AdmissionError("state_operation_cancelled", "State inspection was cancelled", 499);
+  if (!worker.endpoint_owned())
+    throw AdmissionError("backend_listener_unverified", "Inspection response listener ownership could not be verified", 503);
   if (props.status_code != 200)
     throw std::runtime_error("Cannot inspect the engine state format");
   const auto observed_build = json::parse(props.body).value("build_info", std::string("unknown"));

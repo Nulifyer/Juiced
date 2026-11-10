@@ -292,6 +292,11 @@ std::unique_ptr<ServerProcess> WrappedServer::take_process() {
     return std::move(process_);
 }
 
+bool WrappedServer::endpoint_owned() const {
+    std::lock_guard<std::mutex> owner(process_mutex_);
+    return process_ && process_->owns_loopback_listener(port_);
+}
+
 bool WrappedServer::process_running() const {
     std::lock_guard<std::mutex> lock(process_mutex_);
     return process_ && process_->running();
@@ -644,10 +649,10 @@ void WrappedServer::backend_watchdog_loop() {
             break;
         }
 
-        const bool reachable = utils::HttpClient::is_reachable(
+        const bool reachable = endpoint_owned() && utils::HttpClient::is_reachable(
             health_url,
             probe_timeout_seconds,
-            utils::HttpSecurityPolicy::TrustedLoopback);
+            utils::HttpSecurityPolicy::TrustedLoopback) && endpoint_owned();
         if (reachable) {
             consecutive_failures = 0;
             note_backend_activity();
@@ -697,36 +702,30 @@ bool WrappedServer::wait_for_ready(const std::string& endpoint, long timeout_sec
     std::cout << "Waiting for " + server_name_ + " to be ready (timeout: " << timeout_seconds << "s)..." << std::endl;
     LOG(DEBUG, "WrappedServer") << "Waiting for " + server_name_ + " to be ready..." << std::endl;
 
-    const long max_attempts = (timeout_seconds * 1000) / poll_interval_ms;
-
-    for (long i = 0; i < max_attempts; i++) {
-        if (load_cancel_ && load_cancel_->load()) {
-            LOG(WARNING, "WrappedServer") << server_name_ << " load cancelled" << std::endl;
-            return false;
-        }
-
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeout_seconds);
+    const auto inherited = current_request_cancel_context();
+    const auto cancelled = [&] {
+        return (load_cancel_ && load_cancel_->load()) || inherited.cancelled() ||
+            std::chrono::steady_clock::now() >= deadline;
+    };
+    while (!cancelled()) {
         if (!process_running()) {
-            LOG(ERROR, "WrappedServer") << server_name_ << " process has terminated" << std::endl;
-            LOG(ERROR, "WrappedServer") << "This usually means:" << std::endl;
-            LOG(ERROR, "WrappedServer") << "  - Missing required drivers or dependencies" << std::endl;
-            LOG(ERROR, "WrappedServer") << "  - Incompatible model file" << std::endl;
-            LOG(ERROR, "WrappedServer") << "  - Try running the server manually to see the actual error" << std::endl;
+            LOG(ERROR, "WrappedServer") << server_name_ << " process has terminated before readiness" << std::endl;
             return false;
         }
-
-        // Try health endpoint
-        if (utils::HttpClient::is_reachable(
-                health_url, 1, utils::HttpSecurityPolicy::TrustedLoopback)) {
-            LOG(INFO, "WrappedServer") << server_name_ << " is ready at " << get_base_url() << std::endl;
-            return true;
+        if (endpoint_owned()) {
+            try {
+                const auto response = utils::HttpClient::get(health_url, {}, 1,
+                    utils::HttpSecurityPolicy::TrustedLoopback, {nullptr, cancelled}, 65536);
+                if (response.status_code == 200 && !cancelled() && endpoint_owned()) {
+                    LOG(INFO, "WrappedServer") << server_name_ << " is ready at " << get_base_url() << std::endl;
+                    return true;
+                }
+            } catch (const std::exception&) {
+                if (cancelled()) return false;
+            }
         }
-
-        std::this_thread::sleep_for(std::chrono::milliseconds(poll_interval_ms));
-
-        // Print progress every 10 seconds
-        if (i % 100 == 0 && i > 0) {
-            LOG(DEBUG, "WrappedServer") << "Still waiting for " + server_name_ + "..." << std::endl;
-        }
+        if (!cancelled()) std::this_thread::sleep_for(std::chrono::milliseconds(poll_interval_ms));
     }
 
     LOG(ERROR, "WrappedServer") << server_name_ + " failed to start within timeout" << std::endl;
