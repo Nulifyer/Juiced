@@ -650,9 +650,12 @@ def run(binary, output, binding_only=False, hierarchy_only=False, aliases_only=F
                 raise AssertionError("busy external root update unexpectedly succeeded")
             except urllib.error.HTTPError as error:
                 data = json.load(error)
+                code = data.get("error", {}).get("details", {}).get("code")
+                configuration_attempts.append(
+                    {"operation": "external-owner", "status": error.code, "code": code}
+                )
                 check(
-                    error.code == 503
-                    and data["error"]["details"]["code"] == "storage_root_unavailable",
+                    error.code == 503 and code == "storage_root_unavailable",
                     "a directory change rejects an external owner before persistence",
                 )
             check(

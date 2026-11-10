@@ -138,7 +138,7 @@ int main() {
                 bool rejected = false;
                 try { auto stale = owner.claim(live); }
                 catch (const std::exception& error) {
-                    rejected = std::string(error.what()) == "Managed directory identity changed: " + live.u8string();
+                    rejected = std::string(error.what()) == "Managed directory identity changed: " + retained.root().u8string();
                 }
                 check(rejected, "exact-root reuse rejects a replacement inode with the fixed identity diagnostic");
 #ifndef _WIN32
@@ -146,7 +146,7 @@ int main() {
                 rejected = false;
                 try { auto stale = owner.claim(child); }
                 catch (const std::exception& error) {
-                    rejected = std::string(error.what()) == "Managed directory identity changed: " + live.u8string();
+                    rejected = std::string(error.what()) == "Managed directory identity changed: " + retained.root().u8string();
                 }
                 check(rejected && !fs::exists(child),
                       "a stale ancestor cannot authorize descendant creation in the replacement directory");
