@@ -42,6 +42,7 @@ class Fixture:
         self.args, self.root = args, root
         self.process = None
         self.api, self.admin = "", ""
+        self.admission_transitions = []
         for name in ("config", "cache", "run", "snapshots"):
             (root / name).mkdir()
         with socket.socket() as sock, socket.socket() as websocket:
@@ -139,7 +140,9 @@ class Fixture:
             self.process.wait()
         self.process = None
 
-    def call(self, path, body=None, headers=None, method=None, stream=False):
+    def call(
+        self, path, body=None, headers=None, method=None, stream=False, timeout=120
+    ):
         credential = {"Authorization": "Bearer " + self.admin} if self.admin else {}
         request = urllib.request.Request(
             self.url + path,
@@ -152,7 +155,7 @@ class Fixture:
             },
         )
         try:
-            response = urllib.request.urlopen(request, timeout=120)
+            response = urllib.request.urlopen(request, timeout=timeout)
         except urllib.error.HTTPError as response:
             with response:
                 return response.code, dict(response.headers), json.load(response)
@@ -184,6 +187,42 @@ class Fixture:
         status, _, data = self.call(path, body, **kwargs)
         assert 200 <= status < 300, (path, status, data)
         return data
+
+    def configure_admission(self, settings):
+        started = time.monotonic()
+        deadline = started + 10
+        attempts = 0
+        while True:
+            remaining = deadline - time.monotonic()
+            assert remaining > 0, ("Admission transition did not drain", attempts)
+            status, headers, data = self.call(
+                "/internal/set", {"admission": settings}, timeout=remaining
+            )
+            attempts += 1
+            if 200 <= status < 300:
+                self.admission_transitions.append(
+                    {
+                        "attempts": attempts,
+                        "busy_rejections": attempts - 1,
+                        "elapsed_seconds": time.monotonic() - started,
+                    }
+                )
+                return data
+            error = data.get("error", {})
+            details = error.get("details", {}) if isinstance(error, dict) else {}
+            code = (
+                error.get("code", details.get("code"))
+                if isinstance(error, dict)
+                else None
+            )
+            assert status == 409 and code == "admission_configuration_busy", (
+                status,
+                data,
+            )
+            remaining = deadline - time.monotonic()
+            assert remaining > 0, ("Admission transition did not drain", attempts, data)
+            delay = float(headers.get("Retry-After", details.get("retry_after", 1)))
+            time.sleep(min(max(0.01, delay), remaining))
 
     def load(self):
         self.ok("/v1/juiced/operation", {"model": MODEL, "action": "load"})

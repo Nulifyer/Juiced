@@ -101,20 +101,17 @@ def acceptance(args):
                     "resident_bytes": {"host": 8 * 1024**2},
                     "state_bytes": {"host": 1024},
                 }
-                fixture.ok(
-                    "/internal/set",
+                fixture.configure_admission(
                     {
-                        "admission": {
-                            "mode": "legacy",
-                            "pools": {
-                                "host": {
-                                    "capacity_bytes": 1024**3,
-                                    "source": "synthetic host ceiling",
-                                }
-                            },
-                            "models": {MODEL: profile},
-                        }
-                    },
+                        "mode": "legacy",
+                        "pools": {
+                            "host": {
+                                "capacity_bytes": 1024**3,
+                                "source": "synthetic host ceiling",
+                            }
+                        },
+                        "models": {MODEL: profile},
+                    }
                 )
                 fixture.load()
                 for _ in range(200):
@@ -216,6 +213,7 @@ def acceptance(args):
             print((root / "server.log").read_text()[-10000:], file=sys.stderr)
             raise
         finally:
+            proof["admission_transitions"] = fixture.admission_transitions
             fixture.stop()
             fixture.log.close()
     return proof
@@ -298,30 +296,27 @@ def save_failure_acceptance(args):
             options = dict(loaded["recipe_options"])
             options.pop("pinned", None)
             fixture.ok("/v1/unload", {})
-            fixture.ok(
-                "/internal/set",
+            fixture.configure_admission(
                 {
-                    "admission": {
-                        "mode": "legacy",
-                        "pools": {
-                            "host": {
-                                "capacity_bytes": 1024**3,
-                                "source": "controlled test pool",
-                            }
-                        },
-                        "models": {
-                            MODEL: {
-                                "checkpoint": loaded["checkpoint"],
-                                "options": options,
-                                "completion_ms": 2000,
-                                "source": "mock save failure",
-                                "load_bytes": {"host": 16 * 1024**2},
-                                "resident_bytes": {"host": 8 * 1024**2},
-                                "state_bytes": {"host": 1024},
-                            }
-                        },
-                    }
-                },
+                    "mode": "legacy",
+                    "pools": {
+                        "host": {
+                            "capacity_bytes": 1024**3,
+                            "source": "controlled test pool",
+                        }
+                    },
+                    "models": {
+                        MODEL: {
+                            "checkpoint": loaded["checkpoint"],
+                            "options": options,
+                            "completion_ms": 2000,
+                            "source": "mock save failure",
+                            "load_bytes": {"host": 16 * 1024**2},
+                            "resident_bytes": {"host": 8 * 1024**2},
+                            "state_bytes": {"host": 1024},
+                        }
+                    },
+                }
             )
             fixture.ok("/v1/load", {"model_name": MODEL, "llamacpp_backend": "cpu"})
             matrix = []
@@ -412,6 +407,7 @@ def save_failure_acceptance(args):
                 )
             proof["failures"] = matrix
         finally:
+            proof["admission_transitions"] = fixture.admission_transitions
             fixture.stop()
             fixture.log.flush()
             args.out.with_suffix(".save-failures.server.log").write_text(
