@@ -46,6 +46,34 @@ Use external read-only source mounts for original weights. A managed read-only
 cache needs an existing usable control file to acquire ownership. Root locks do
 not prove that older binaries, surviving helpers or external tools stopped.
 
+## Inspect snapshot storage before startup
+
+Use the server executable to inspect snapshot state when ordinary startup requires
+recovery:
+
+```bash
+lemond /data/cache /data/config --inspect-snapshot-store
+```
+
+The command uses the default snapshot directory or the existing
+`JUICED_SNAPSHOT_DIR` environment setting. It prints one JSON report. Exit status
+0 means the inspected metadata and files passed these checks. Status 2 means
+inspection found an issue or reached a limit. Serving and logging options cannot
+be combined with this command.
+
+Inspection starts no workers, claims no writable roots and changes no source
+files or directories. Reads can update filesystem access times. The report
+checks snapshot binding, files, checksums, publication records and retained writer
+metadata. It does not inspect every import, runtime package or historical job.
+
+`application_authorized` and `writer_termination_verified` remain false in every
+report. A successful inspection never authorizes migration, releases retained
+charges or proves a consistent backup. Concurrent writers can change storage
+after it is observed. Preserve the state and files when an issue remains.
+On Windows, run inspection after stopping known writers. Retained directory
+handles can temporarily deny directory changes while the command reads files.
+This sharing restriction does not stop file-content writers or establish quiescence.
+
 ## Make a consistent backup
 
 1. Record the current image tag or digest and deployment definition.

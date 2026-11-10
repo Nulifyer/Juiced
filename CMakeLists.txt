@@ -1039,6 +1039,7 @@ set(SOURCES_CORE
     src/cpp/server/memory_budget.cpp
     src/cpp/server/resource_admission.cpp
     src/cpp/server/juiced/service.cpp
+    src/cpp/server/juiced/snapshot_recovery.cpp
     src/cpp/server/juiced/capabilities.cpp
     src/cpp/server/juiced/compatibility.cpp
     src/cpp/server/juiced/execution.cpp
@@ -3553,6 +3554,16 @@ if(BUILD_TESTING)
     target_link_libraries(test_resource_suitability PRIVATE nlohmann_json::nlohmann_json Threads::Threads)
     add_cpp_ci_test(ResourceSuitabilityTest CI ON COMMAND test_resource_suitability)
     set_tests_properties(ResourceSuitabilityTest PROPERTIES TIMEOUT 30)
+
+    add_executable(test_snapshot_recovery test/cpp/test_snapshot_recovery.cpp src/cpp/server/juiced/snapshot_recovery.cpp)
+    target_include_directories(test_snapshot_recovery PRIVATE src/cpp/include)
+    target_link_libraries(test_snapshot_recovery PRIVATE nlohmann_json::nlohmann_json lemonade-digest-crypto Threads::Threads)
+    add_cpp_ci_test(SnapshotRecoveryInspectionTest CI ON COMMAND test_snapshot_recovery)
+    set_tests_properties(SnapshotRecoveryInspectionTest PROPERTIES TIMEOUT 30)
+    add_cpp_ci_test(SnapshotStoreInspectionTest CI ON COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/juiced/tests/test_snapshot_inspection.py --binary $<TARGET_FILE:${EXECUTABLE_NAME}>
+        --out ${CMAKE_CURRENT_BINARY_DIR}/snapshot-store-inspection-proof.json DEPENDS ${EXECUTABLE_NAME})
+    set_tests_properties(SnapshotStoreInspectionTest PROPERTIES TIMEOUT 60)
 
     add_executable(test_request_identity test/cpp/test_request_identity.cpp)
     target_link_libraries(test_request_identity PRIVATE lemonade-server-core)

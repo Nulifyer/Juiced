@@ -2,6 +2,7 @@
 
 #include <lemon/cli_parser.h>
 #include <lemon/config_file.h>
+#include <lemon/juiced/snapshot_recovery.h>
 #include <lemon/logging_config.h>
 #include <lemon/system_info.h>
 #include <lemon/utils/aixlog.hpp>
@@ -16,11 +17,11 @@
 #include <cerrno>
 #include <chrono>
 #include <csignal>
+#include <cstdlib>
 #include <iostream>
 #include <thread>
 
 #if defined(__GLIBC__)
-#include <cstdlib>
 #include <malloc.h>
 #include <string_view>
 #endif
@@ -127,20 +128,14 @@ void signal_handler(int signal) {
 }
 
 int main(int argc, char** argv) {
-#if defined(__GLIBC__)
-    // mallopt() is process-wide and MT-Unsafe. Apply it before initializing
-    // telemetry or constructing Server, both of which start worker threads.
-    if (!configure_glibc_mmap_threshold()) {
-        std::cerr << "Warning: failed to set glibc M_MMAP_THRESHOLD; "
-                  << "memory from large requests may not be released promptly"
-                  << std::endl;
-    }
-#endif
-
-    telemetry::initialize();
-
     try {
         CLIParser parser;
+        bool inspect_snapshot_store = false;
+        auto inspection = parser.add_flag("--inspect-snapshot-store", inspect_snapshot_store,
+            "Inspect snapshot metadata and files without starting workers or authorizing recovery");
+        for (const auto* option : {"--port", "--host", "--broadcast", "--log-file",
+                "--log-max-size-mb", "--log-max-files", "--watchdog-fd"})
+            inspection->excludes(option);
         parser.parse(argc, argv);
 
         if (!parser.should_continue()) {
@@ -148,6 +143,26 @@ int main(int argc, char** argv) {
         }
 
         auto cli_config = parser.get_config();
+        if (inspect_snapshot_store) {
+            const auto directory = utils::path_from_utf8(cli_config.config_dir) / "juiced";
+            const auto configured = utils::get_environment_variable_utf8("JUICED_SNAPSHOT_DIR");
+            const auto snapshots = std::getenv("JUICED_SNAPSHOT_DIR") ? utils::path_from_utf8(configured) : directory / "snapshots";
+            const auto report = SnapshotRecovery::inspect_file(directory / "state.json", snapshots);
+            std::cout << report.dump() << std::endl;
+            return report.value("validation_complete", false) ? 0 : 2;
+        }
+
+#if defined(__GLIBC__)
+        // mallopt() is process-wide and MT-Unsafe. Apply it before initializing
+        // telemetry or constructing Server, both of which start worker threads.
+        if (!configure_glibc_mmap_threshold()) {
+            std::cerr << "Warning: failed to set glibc M_MMAP_THRESHOLD; "
+                      << "memory from large requests may not be released promptly"
+                      << std::endl;
+        }
+#endif
+
+        telemetry::initialize();
 
 #ifndef _WIN32
         start_parent_watchdog(cli_config.watchdog_fd);

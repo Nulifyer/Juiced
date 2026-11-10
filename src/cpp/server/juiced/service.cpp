@@ -1,4 +1,5 @@
 #include "lemon/juiced/service.h"
+#include "lemon/juiced/snapshot_recovery.h"
 #include "lemon/config_file.h"
 #include "lemon/gguf_reader.h"
 #include "lemon/model_manager.h"
@@ -231,13 +232,11 @@ void JuicedService::bind_snapshot_storage() {
   bool ready = false;
   if (bound) {
     binding = state_["snapshot_store"];
-    if (!binding.is_object() || !binding.contains("ready") || !binding["ready"].is_boolean()) recovery();
+    if (!snapshot_metadata::valid_binding(binding)) recovery();
     ready = binding["ready"].get<bool>();
     binding.erase("ready");
-    if (binding.size() != 4 || binding.value("version", json()) != 1 ||
-        binding.value("state_directory", json()) != state_directory ||
-        binding.value("directory", json()) != snapshot_directory ||
-        !binding.contains("id") || !binding["id"].is_string() || binding["id"].get_ref<const std::string&>().empty()) recovery();
+    if (binding.value("state_directory", json()) != state_directory ||
+        binding.value("directory", json()) != snapshot_directory) recovery();
     if (!ready)
       for (const auto* field : {"snapshots", "snapshot_cleanup", "snapshot_writes"})
         if (!state_[field].empty()) recovery();

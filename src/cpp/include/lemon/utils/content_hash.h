@@ -4,6 +4,7 @@
 #include <fstream>
 #include <functional>
 #include <iomanip>
+#include <istream>
 #include <mbedtls/md.h>
 #include <sstream>
 #include <stdexcept>
@@ -20,7 +21,7 @@ inline std::string string_sha256(std::string_view text) {
     return result.str();
 }
 
-inline std::string content_sha256(const std::filesystem::path& file,
+inline std::string content_sha256(std::istream& input,
                                   const std::function<bool()>& cancelled = {}) {
     mbedtls_md_context_t context;
     mbedtls_md_init(&context);
@@ -31,7 +32,6 @@ inline std::string content_sha256(const std::filesystem::path& file,
     if (mbedtls_md_setup(&context, mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), 0) != 0 ||
         mbedtls_md_starts(&context) != 0)
         throw std::runtime_error("Cannot initialize file checksum");
-    std::ifstream input(file, std::ios::binary);
     char block[65536];
     while (input) {
         if (cancelled && cancelled()) throw std::runtime_error("File checksum cancelled");
@@ -47,5 +47,11 @@ inline std::string content_sha256(const std::filesystem::path& file,
     std::ostringstream result;
     for (auto byte : digest) result << std::hex << std::setw(2) << std::setfill('0') << int(byte);
     return result.str();
+}
+
+inline std::string content_sha256(const std::filesystem::path& file,
+                                  const std::function<bool()>& cancelled = {}) {
+    std::ifstream input(file, std::ios::binary);
+    return content_sha256(input, cancelled);
 }
 }

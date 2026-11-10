@@ -644,6 +644,24 @@ network filesystem locking, foreign/older-manager exclusion, prior-manager
 writer termination, whole-store backup consistency or host-crash durability.
 Backend, helper, device and remote writers retain their P1 termination gates.
 
+The standalone `lemond --inspect-snapshot-store` path runs before telemetry,
+directory claims, migration or worker startup. It reads Juiced snapshot state and
+the selected default/environment snapshot root, with bounded parsing, records,
+file inventory, checksums and redacted diagnostics. Binding schema validation is
+shared with startup. Other journal checks are diagnostic predicates, not proof
+that an incomplete record owns a terminated writer.
+
+Inspection has no mutation, cleanup, migration or termination authority. Its
+report always leaves `application_authorized` and `writer_termination_verified`
+false. Exit status0 describes completed metadata/file validation only; status2
+reports issues or an exhausted inspection budget. No result establishes a writer
+fence, an atomic filesystem snapshot or the consistency of other store families.
+Reads use retained regular-file handles beneath anchored directories. Windows
+leaf handles permit delete sharing so ordinary replacement can proceed; retained
+ancestor handles restrict directory changes. Use that platform's inspector offline
+from known writers. These [Win32 sharing rules](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilew)
+remain in effect until handle close and are not an all-writer maintenance fence.
+
 
 Router host admission and CPU/NPU automatic sizing consume the native
 SystemMetricsPlatform memory budget. GPU discovery metadata no longer supplies
