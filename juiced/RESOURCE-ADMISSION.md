@@ -226,6 +226,18 @@ Filesystem cleanup failures remain retryable across restart and do not advertise
 forgotten snapshots. Pending cleanup blocks writes to that snapshot key. Inference can execute cold
 while opportunistic saving skips unavailable disk capacity. Source weights and consumer messages are unaffected.
 
+Snapshot startup binds `state.json` to the canonical state and snapshot directories
+and a shared store identifier. The snapshot root retains
+`.juiced-snapshot-store.json`; the state owner commits an unfinished binding before
+publishing that marker, then commits readiness before starting its workers.
+Only an empty snapshot root and empty inventories can initialize a new binding.
+A matching unfinished binding can finish publication. Root changes, copied or
+missing state, missing or mismatched committed markers, unbound legacy inventories
+and ambiguous temporary files require recovery without replaying snapshot journals.
+There is no automatic migration or reassignment. This binds cooperating state/root
+selection across restart, not immutable filesystem identity, nested-root exclusion,
+prior-worker termination, whole-store consistency or power-loss durability.
+
 Router keeps a revisioned runtime projection of Juiced's durable residency policy.
 Native load reuse, fresh publication, retry and restoration apply that projection.
 Policy-generated Hot commands bind their revision before admission and revalidate

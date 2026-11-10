@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import socket
 import subprocess
 import tempfile
@@ -19,7 +20,7 @@ def free_port():
         return sock.getsockname()[1]
 
 
-def run(binary, output):
+def run(binary, output, binding_only=False):
     checks = []
 
     def check(condition, label):
@@ -46,11 +47,13 @@ def run(binary, output):
             "no_fetch_executables": True,
             "extra_models_dir": str(shared_source),
         }
-        for name in ("config", "other-config"):
+        for name in ("config", "other-config", "independent-config"):
+            (root / name).mkdir(exist_ok=True)
             (root / name / "config.json").write_text(json.dumps(settings))
         children = []
         logs = []
         completed = False
+        recovery_attempts = None
 
         def start(cache, config, port, model_root=None, snapshot_root=None):
             log = (root / f"process-{len(logs)}.log").open("w")
@@ -110,7 +113,215 @@ def run(binary, output):
         def digest(path):
             return hashlib.sha256(path.read_bytes()).hexdigest()
 
+        def binding_contract():
+            config = root / "config"
+            snapshots = root / "snapshots"
+            state_file = config / "juiced/state.json"
+            marker = snapshots / ".juiced-snapshot-store.json"
+
+            def boot(config=config, snapshots=snapshots):
+                port = free_port()
+                process, _ = start(
+                    root / "cache", config, port, snapshot_root=snapshots
+                )
+                ready(process, port)
+                check(
+                    stop(process, port) == 0, "bound snapshot manager drains normally"
+                )
+
+            def rejected(label, config=config, snapshots=snapshots):
+                state_path = config / "juiced/state.json"
+                before = state_path.read_bytes() if state_path.exists() else None
+                process, log = start(
+                    root / "cache", config, free_port(), snapshot_root=snapshots
+                )
+                check(process.wait(timeout=20) == 1, label)
+                log.flush()
+                check(
+                    "Snapshot storage binding requires recovery"
+                    in Path(log.name).read_text(errors="replace"),
+                    label + " reports the recovery boundary",
+                )
+                check(
+                    (state_path.read_bytes() if state_path.exists() else None)
+                    == before,
+                    label + " preserves state bytes",
+                )
+
+            boot()
+            initial = json.loads(state_file.read_text())
+            binding = initial["snapshot_store"]
+            marker_bytes = marker.read_bytes()
+            check(
+                binding["ready"]
+                and {k: v for k, v in binding.items() if k != "ready"}
+                == json.loads(marker_bytes)
+                and binding["directory"] == str(snapshots.resolve())
+                and binding["state_directory"] == str(state_file.parent.resolve()),
+                "committed state and canonical root retain the same store identity",
+            )
+            boot()
+            check(
+                json.loads(state_file.read_text())["snapshot_store"] == binding,
+                "normal restart retains the existing store identity",
+            )
+            moved = root / "temporarily-moved-snapshots"
+            snapshots.rename(moved)
+            rejected("a missing committed root is never reinitialized")
+            check(not snapshots.exists(), "missing bound storage remains absent")
+            moved.rename(snapshots)
+            if os.name != "nt":
+                alias = root / "snapshot-alias"
+                alias.symlink_to(snapshots, target_is_directory=True)
+                boot(snapshots=alias)
+                check(
+                    marker.read_bytes() == marker_bytes,
+                    "canonical snapshot aliases retain the binding",
+                )
+
+            state = json.loads(state_file.read_text())
+            state["snapshot_cleanup"] = {"retained": {"bytes": 7}}
+            state["snapshot_writes"] = {
+                "pending": {"state": "cleanup", "files": {"other.bin": 5}}
+            }
+            state_file.write_text(json.dumps(state))
+            retained = snapshots / "retained.bin"
+            retained.write_bytes(b"retain!")
+            other = root / "changed-snapshots"
+            other.mkdir()
+            (other / "retained.bin").write_bytes(b"foreign")
+            (other / "other.bin").write_bytes(b"other")
+            rejected("changed snapshot root rejects old journals", snapshots=other)
+            check(
+                retained.read_bytes() == b"retain!"
+                and (other / "retained.bin").read_bytes() == b"foreign"
+                and (other / "other.bin").read_bytes() == b"other"
+                and not (other / ".juiced-store.lock").exists(),
+                "root mismatch rejects before target acquisition or journal effects",
+            )
+            absent = root / "absent-snapshots"
+            rejected("changed absent root is not initialized", snapshots=absent)
+            check(not absent.exists(), "mismatched root is never created")
+            rejected(
+                "another state directory cannot adopt a released snapshot store",
+                config=root / "other-config",
+            )
+            check(
+                marker.read_bytes() == marker_bytes
+                and retained.read_bytes() == b"retain!",
+                "foreign adoption preserves marker and private snapshot",
+            )
+
+            state_file.write_text(json.dumps(initial))
+            marker.unlink()
+            rejected("a committed binding cannot silently recreate a missing marker")
+            marker.write_bytes(b"{malformed")
+            rejected("a malformed marker requires recovery")
+            marker.write_text(json.dumps({**json.loads(marker_bytes), "id": "foreign"}))
+            rejected("a different store identity requires recovery")
+            marker.write_bytes(marker_bytes)
+            copied = root / "copied-config"
+            shutil.copytree(config, copied)
+            rejected(
+                "copied state cannot migrate its snapshot authority", config=copied
+            )
+
+            saved_state = state_file.read_bytes()
+            state_file.unlink()
+            rejected("missing state cannot adopt an existing store marker")
+            state_file.write_bytes(saved_state)
+            retained.unlink()
+            pending = {**initial, "snapshot_store": {**binding, "ready": False}}
+            state_file.write_text(json.dumps(pending))
+            boot()
+            check(
+                json.loads(state_file.read_text())["snapshot_store"] == binding,
+                "interrupted final state publication completes with its matching marker",
+            )
+            state_file.write_text(json.dumps(pending))
+            marker.unlink()
+            boot()
+            check(
+                marker.read_bytes() == marker_bytes,
+                "interrupted initial bind recreates only its recorded marker in an empty root",
+            )
+            state_file.write_text(json.dumps(pending))
+            temporary = snapshots / ".juiced-snapshot-store.json.tmp"
+            temporary.write_bytes(b"ambiguous interrupted write")
+            rejected("ambiguous marker temporary remains quarantined")
+            check(
+                temporary.read_bytes() == b"ambiguous interrupted write",
+                "recovery never overwrites an unresolved temporary",
+            )
+            temporary.unlink()
+            state_file.write_text(
+                json.dumps({**pending, "snapshot_cleanup": {"retained": {}}})
+            )
+            rejected("an unfinished binding cannot inherit cleanup intent")
+
+            for field in ("snapshots", "snapshot_cleanup", "snapshot_writes"):
+                legacy = {
+                    "version": 1,
+                    "revision": 0,
+                    field: {"retained": {"unknown": "preserve"}},
+                }
+                state_file.write_text(json.dumps(legacy))
+                rejected(
+                    "unbound legacy " + field + " requires explicit migration",
+                    snapshots=absent,
+                )
+                check(
+                    not absent.exists(),
+                    "legacy journals cannot initialize a replacement root",
+                )
+            state_file.write_text(json.dumps({"version": 1, "snapshots": []}))
+            rejected(
+                "malformed snapshot inventories require recovery", snapshots=absent
+            )
+            state_file.write_text(json.dumps({"version": 1, "revision": 0}))
+            rejected("unbound nonempty root is never adopted", snapshots=other)
+            check(
+                (other / "other.bin").read_bytes() == b"other",
+                "unowned snapshot payloads are retained",
+            )
+
+            unchanged = state_file.read_bytes()
+            blocked = state_file.with_name("state.json.tmp")
+            blocked.mkdir()
+            process, log = start(
+                root / "cache", config, free_port(), snapshot_root=absent
+            )
+            check(
+                process.wait(timeout=20) == 1,
+                "initial state commit failure rejects startup",
+            )
+            log.flush()
+            check(
+                "Could not save state" in Path(log.name).read_text(errors="replace")
+                and state_file.read_bytes() == unchanged
+                and not (absent / ".juiced-snapshot-store.json").exists(),
+                "a failed binding intent cannot publish a marker or change state",
+            )
+            blocked.rmdir()
+            boot(snapshots=absent)
+            check(
+                json.loads(state_file.read_text())["snapshot_store"]["ready"],
+                "initial binding retries after state storage recovers",
+            )
+
+            state_file.write_text(json.dumps(initial))
+            boot()
+            check(
+                marker.read_bytes() == marker_bytes,
+                "restoring the original state and root restores service without reassignment",
+            )
+
         try:
+            if binding_only:
+                binding_contract()
+                completed = True
+                print(f"Snapshot store binding: {len(checks)} checks passed")
+                return
             port = free_port()
             first, _ = start(root / "cache", root / "config", port)
             ready(first, port)
@@ -201,7 +412,7 @@ def run(binary, output):
             independent_port = free_port()
             independent, _ = start(
                 root / "other-cache",
-                root / "other-config",
+                root / "independent-config",
                 independent_port,
                 other_model_root,
                 other_snapshot_root,
@@ -241,12 +452,12 @@ def run(binary, output):
                 == 200,
                 "a released external root can be applied without restarting its new owner",
             )
-            (root / "other-config/config.json").write_text(
+            (root / "independent-config/config.json").write_text(
                 json.dumps({**settings, "models_dir": str(root / "hf")})
             )
             previous_owner, _ = start(
                 root / "other-cache",
-                root / "other-config",
+                root / "independent-config",
                 independent_port,
                 root / "hf",
                 other_snapshot_root,
@@ -320,7 +531,11 @@ def run(binary, output):
             output.write_text(
                 json.dumps(
                     {
-                        "scope": "Model-free local cache/config/external model/snapshot root ownership; no backend termination, nested-root, foreign-writer or whole-store snapshot qualification",
+                        "scope": (
+                            "Snapshot state/root binding and conservative startup recovery"
+                            if binding_only
+                            else "Model-free local cache/config/external model/snapshot root ownership; no backend termination, nested-root, foreign-writer or whole-store snapshot qualification"
+                        ),
                         "completed": completed,
                         "recovery_attempts": recovery_attempts if completed else None,
                         "checks": checks,
@@ -342,5 +557,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--binding", action="store_true")
     args = parser.parse_args()
-    run(args.binary.resolve(), args.out)
+    run(args.binary.resolve(), args.out, args.binding)

@@ -131,6 +131,7 @@ JuicedService::JuicedService(Server &server)
        {"cache",
         {{"mode", "memory"}, {"retention_days", 7}, {"disk_budget_gib", 8}}},
        {"imports", json::object()}});
+  bind_snapshot_storage();
   if (!state_.contains("transfers"))
     state_["transfers"] = json::object();
   for (auto &[id, j] : state_["transfers"].items())
@@ -138,18 +139,6 @@ JuicedService::JuicedService(Server &server)
       j["running"] = false;
       j["status"] = "interrupted";
     }
-  const char *snapshots = std::getenv("JUICED_SNAPSHOT_DIR");
-  snapshot_directory_ =
-      snapshots ? utils::path_from_utf8(utils::get_environment_variable_utf8("JUICED_SNAPSHOT_DIR")) : directory_ / "snapshots";
-  if (server_.storage_owner_) {
-    server_.snapshot_root_claim_ = server_.storage_owner_->claim(snapshot_directory_);
-    snapshot_directory_ = server_.snapshot_root_claim_.root();
-  }
-  std::filesystem::create_directories(snapshot_directory_);
-  if (!state_.contains("snapshots"))
-    state_["snapshots"] = json::object();
-  if (!state_.contains("snapshot_cleanup")) state_["snapshot_cleanup"] = json::object();
-  if (!state_.contains("snapshot_writes")) state_["snapshot_writes"] = json::object();
   cache_run_id_ = identifier();
   voice_recovery_required_locked();
   if (!state_.contains("qualified_profiles"))
@@ -222,6 +211,77 @@ JuicedService::JuicedService(Server &server)
   preparation_worker_ = std::thread([this] { preparation_run(); });
 }
 JuicedService::~JuicedService() { stop(); }
+void JuicedService::bind_snapshot_storage() {
+  namespace fs = std::filesystem;
+  const auto recovery = [] {
+    throw std::runtime_error("Snapshot storage binding requires recovery; preserve state and snapshot directories");
+  };
+  if (!state_.is_object()) recovery();
+  const auto configured = utils::get_environment_variable_utf8("JUICED_SNAPSHOT_DIR");
+  if (std::getenv("JUICED_SNAPSHOT_DIR") && configured.empty()) recovery();
+  snapshot_directory_ = fs::weakly_canonical(configured.empty() ? directory_ / "snapshots" : utils::path_from_utf8(configured));
+  const auto state_directory = utils::path_to_utf8(fs::canonical(directory_));
+  const auto snapshot_directory = utils::path_to_utf8(snapshot_directory_);
+  for (const auto* field : {"snapshots", "snapshot_cleanup", "snapshot_writes"}) {
+    if (!state_.contains(field)) state_[field] = json::object();
+    if (!state_[field].is_object()) recovery();
+  }
+  const bool bound = state_.contains("snapshot_store");
+  json binding;
+  bool ready = false;
+  if (bound) {
+    binding = state_["snapshot_store"];
+    if (!binding.is_object() || !binding.contains("ready") || !binding["ready"].is_boolean()) recovery();
+    ready = binding["ready"].get<bool>();
+    binding.erase("ready");
+    if (binding.size() != 4 || binding.value("version", json()) != 1 ||
+        binding.value("state_directory", json()) != state_directory ||
+        binding.value("directory", json()) != snapshot_directory ||
+        !binding.contains("id") || !binding["id"].is_string() || binding["id"].get_ref<const std::string&>().empty()) recovery();
+    if (!ready)
+      for (const auto* field : {"snapshots", "snapshot_cleanup", "snapshot_writes"})
+        if (!state_[field].empty()) recovery();
+  } else {
+    for (const auto* field : {"snapshots", "snapshot_cleanup", "snapshot_writes"})
+      if (!state_[field].empty()) recovery();
+    binding = {{"version", 1}, {"state_directory", state_directory},
+               {"directory", snapshot_directory}, {"id", identifier()}};
+  }
+  if (ready && !fs::is_directory(snapshot_directory_)) recovery();
+  if (server_.storage_owner_) {
+    server_.snapshot_root_claim_ = server_.storage_owner_->claim(snapshot_directory_);
+    if (server_.snapshot_root_claim_.root() != snapshot_directory_) recovery();
+  } else {
+    fs::create_directories(snapshot_directory_);
+  }
+  const auto marker = snapshot_directory_ / ".juiced-snapshot-store.json";
+  const auto status = fs::symlink_status(marker);
+  if (fs::exists(status)) {
+    if (!bound || !fs::is_regular_file(status)) recovery();
+    try { if (read_json(marker, json()) != binding) recovery(); }
+    catch (const json::exception&) { recovery(); }
+  } else {
+    if (ready) recovery();
+    for (const auto& entry : fs::directory_iterator(snapshot_directory_))
+      if (entry.path().filename() != utils::ManagedDirectoryLease::file_name) recovery();
+    if (!bound) {
+      auto candidate = state_;
+      candidate["snapshot_store"] = binding;
+      candidate["snapshot_store"]["ready"] = false;
+      state_ = save_state_locked(std::move(candidate));
+    }
+    // Persist the intent before the marker so an interrupted first bind is retryable.
+    atomic_json(marker, binding);
+  }
+  if (!ready) {
+    for (const auto& entry : fs::directory_iterator(snapshot_directory_))
+      if (entry.path() != marker && entry.path().filename() != utils::ManagedDirectoryLease::file_name) recovery();
+    auto candidate = state_;
+    candidate["snapshot_store"] = binding;
+    candidate["snapshot_store"]["ready"] = true;
+    state_ = save_state_locked(std::move(candidate));
+  }
+}
 void JuicedService::stop() {
   stopping_ = true;
   wake_.notify_all();

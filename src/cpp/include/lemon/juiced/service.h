@@ -121,6 +121,7 @@ private:
   std::function<void()> snapshot_publication_barrier_, snapshot_save_barrier_, snapshot_verification_barrier_;
   void cleanup_snapshot_writes_locked();
   void reconcile_snapshot_writes();
+  void bind_snapshot_storage();
   json save_state_locked(json candidate);
   void persist_locked();
   void set_policy_locked(const std::string& model, const std::string& policy);

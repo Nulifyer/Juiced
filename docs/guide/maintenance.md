@@ -18,6 +18,13 @@ inside `/data/config`. Backing up all of `/data` covers either default storage
 or a snapshot directory configured inside that mount. Include a separate snapshot
 mount in the backup if you configured one.
 
+Preserve the snapshot root's `.juiced-snapshot-store.json` with `juiced/state.json`
+and its files. The binding records both canonical directory paths. Restore them
+at their original paths. A different path, lost marker or copied state requires
+explicit migration; this version does not provide that operation. Unbound legacy
+snapshot inventories or nonempty roots also block startup. Rehearse an update on
+an isolated copy before replacing a release that created such data.
+
 Juiced protects its managed cache, configuration, model-cache and snapshot roots
 against another participating manager. Keep `.juiced-store.lock` files in place.
 A directory change must finish active work and acquire the destination before it

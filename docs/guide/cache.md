@@ -100,6 +100,17 @@ separate from downloaded source weights and prompt snapshots.
 
 Use [backup and restore](maintenance.md) before moving persistent data.
 
+Snapshot storage stays bound to its original state directory and canonical root.
+Keep `juiced/state.json`, the snapshot files and `.juiced-snapshot-store.json`
+together in backups. Changing `JUICED_SNAPSHOT_DIR` or copying state to another
+directory requires an explicit migration. Startup rejects a mismatched binding
+before it can apply old snapshot journals to another directory.
+
+An older store with snapshot records or files but no binding also requires
+recovery before this version can start. Preserve both directories and restore the
+previous release if needed. Do not delete the binding marker or edit journal
+paths to force startup. Automatic migration is not available.
+
 ## Clean misplaced companion files
 
 The CLI command `lemonade cleanup-cache --dry-run` previews legacy companion files

@@ -3463,6 +3463,10 @@ if(BUILD_TESTING)
         ${CMAKE_CURRENT_SOURCE_DIR}/juiced/tests/test_store_ownership.py --binary $<TARGET_FILE:${EXECUTABLE_NAME}>
         --out ${CMAKE_CURRENT_BINARY_DIR}/store-ownership-proof.json DEPENDS ${EXECUTABLE_NAME})
     set_tests_properties(StoreOwnershipEntrypointsTest PROPERTIES TIMEOUT 150)
+    add_cpp_ci_test(SnapshotStoreBindingTest CI ON COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/juiced/tests/test_store_ownership.py --binary $<TARGET_FILE:${EXECUTABLE_NAME}>
+        --binding --out ${CMAKE_CURRENT_BINARY_DIR}/snapshot-store-binding-proof.json DEPENDS ${EXECUTABLE_NAME})
+    set_tests_properties(SnapshotStoreBindingTest PROPERTIES TIMEOUT 300)
     if(WIN32 AND TARGET LemonadeServer)
         add_cpp_ci_test(EmbeddedServerShutdownTest CI ON COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/juiced/tests/test_model_shutdown.py --binary $<TARGET_FILE:LemonadeServer>
