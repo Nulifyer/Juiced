@@ -134,6 +134,38 @@ test('an explicit published quant and projector download their exact files with 
   expect(runtime.writes).toEqual([{ path: 'pull', body: { model_name: 'user.Ornith-1.5-35B-A3B-GGUF-Q8_0', stream: true, subscribe: false, recipe: 'llamacpp', source: 'huggingface', checkpoints: { main: `${repo}:${file}`, mmproj: `${repo}:${projector}` }, labels: ['tool-calling', 'vision'] } }]);
 });
 
+test('nested projector choices preserve review, acquisition and installed identity', async ({ page, runtime }) => {
+  const repo = 'Publisher/Projection-GGUF', file = 'Model-Q4_K_M.gguf';
+  const first = 'vision-a/mmproj.gguf', selected = 'vision-b/mmproj.gguf';
+  runtime.models.push({ id: 'Installed-A', recipe: 'llamacpp', service: 'Chat', labels: ['vision'],
+    registry_source: 'huggingface', checkpoints: { main: `${repo}:${file}`, mmproj: `${repo}:${first}` },
+    downloaded: true, loaded: false, state: 'unloaded', policy: 'disabled', available: true });
+  await page.route('**/v1/pull/variants?**', route => route.fulfill({ json: {
+    checkpoint: repo, source: 'huggingface', recipe: 'llamacpp', suggested_name: 'Projection-GGUF',
+    variants: [{ name: 'Q4_K_M', primary_file: file, files: [file], size_bytes: 4096 }],
+    mmproj_files: ['mmproj.gguf', first, selected], suggested_labels: ['vision'],
+  } }));
+  await library(page);
+  const query = 'https://huggingface.co/' + repo;
+  await page.getByLabel('Search models').fill(query); await searchButton(page).click();
+  const review = page.getByRole('dialog');
+  await review.getByRole('radio', { name: /Q4_K_M/ }).check();
+  await expect(review.getByRole('option', { name: first, exact: true })).toHaveCount(1);
+  await expect(review.getByRole('option', { name: selected, exact: true })).toHaveCount(1);
+  await review.getByLabel('Vision projector').selectOption(first);
+  await expect(review.getByRole('button', { name: 'Open installed variant', exact: true })).toBeEnabled();
+  await review.getByLabel('Vision projector').selectOption(selected);
+  await expect(review.locator('.download-file-list')).toContainText(selected);
+  await expect(review.locator('.download-file-list')).not.toContainText(first);
+  await review.getByRole('button', { name: 'Download Q4_K_M', exact: true }).click();
+  await expect(page.getByLabel('Search models')).toHaveValue(query);
+  expect(runtime.writes).toEqual([{ path: 'pull', body: {
+    model_name: 'user.Projection-GGUF-Q4_K_M', stream: true, subscribe: false,
+    recipe: 'llamacpp', source: 'huggingface',
+    checkpoints: { main: `${repo}:Q4_K_M`, mmproj: `${repo}:${selected}` }, labels: ['vision'],
+  } }]);
+});
+
 test('catalog details can be reviewed before download without implying it can already run', async ({ page, runtime }) => {
   seed(runtime); await library(page);
   await page.getByRole('button', { name: 'Gemma-4-26B-GGUF', exact: true }).click();

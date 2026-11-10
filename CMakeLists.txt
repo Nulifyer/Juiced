@@ -3349,6 +3349,14 @@ if(BUILD_TESTING AND EXISTS "${_HF_VARIANTS_TEST_SRC}")
     add_executable(test_hf_variants test/cpp/test_hf_variants.cpp)
     target_link_libraries(test_hf_variants PRIVATE lemonade-server-core)
     add_cpp_ci_test(HfVariantsTest CI ON COMMAND test_hf_variants)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_cpp_ci_test(PublishedVariantAcquisitionTest CI ON COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/juiced/tests/test_variant_acquisition.py
+            --binary $<TARGET_FILE:${EXECUTABLE_NAME}>
+            --out ${CMAKE_CURRENT_BINARY_DIR}/published-variant-acquisition-proof
+            DEPENDS ${EXECUTABLE_NAME})
+        set_tests_properties(PublishedVariantAcquisitionTest PROPERTIES TIMEOUT 90)
+    endif()
 endif()
 
 # vLLM CDNA gating: the vllm descriptor support row + asset-family resolution for

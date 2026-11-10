@@ -25,6 +25,10 @@ Smaller quants usually reduce storage and memory, with a precision tradeoff.
 Juiced downloads published variants; it does not convert or quantize weights.
 A vision model may require a matching projector. Selecting text only does not
 qualify vision service.
+Projector choices retain their repository folder, such as `vision/mmproj.gguf`.
+Files with the same name in different folders are distinct choices. If the
+selected file disappears, review the publisher's files again. Juiced does not
+substitute another projector with the same filename.
 
 The runtime filter also finds vLLM and FastFlowLM candidates. **Review files** opens
 the publisher's package; this GGUF download flow does not import every format in

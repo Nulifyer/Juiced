@@ -250,6 +250,44 @@ int main() {
 
     {
         auto set = lemon::enumerate_gguf_variants({
+            "Model-Q4_K_M.gguf",
+            "vision/mmproj-BF16.gguf",
+        });
+        result.expect("nested projector retains repository-relative path",
+                      set.mmproj_files == std::vector<std::string>{"vision/mmproj-BF16.gguf"},
+                      "mmproj_files=" + nlohmann::json(set.mmproj_files).dump());
+        result.expect("nested projector is excluded from main variants",
+                      set.variants.size() == 1 &&
+                          set.variants[0].primary_file == "Model-Q4_K_M.gguf",
+                      "got " + join_names(set));
+    }
+
+    {
+        auto set = lemon::enumerate_gguf_variants({
+            "Model-Q4_K_M.gguf",
+            "vision/mmproj-BF16.gguf",
+            "mmproj-BF16.gguf",
+        });
+        result.expect("root and nested projectors with the same basename stay distinct",
+                      set.mmproj_files == std::vector<std::string>{
+                          "mmproj-BF16.gguf", "vision/mmproj-BF16.gguf"},
+                      "mmproj_files=" + nlohmann::json(set.mmproj_files).dump());
+    }
+
+    {
+        auto set = lemon::enumerate_gguf_variants({
+            "Model-Q4_K_M.gguf",
+            "vision-b/mmproj-BF16.gguf",
+            "vision-a/mmproj-BF16.gguf",
+        });
+        result.expect("nested projectors with the same basename retain sorted identities",
+                      set.mmproj_files == std::vector<std::string>{
+                          "vision-a/mmproj-BF16.gguf", "vision-b/mmproj-BF16.gguf"},
+                      "mmproj_files=" + nlohmann::json(set.mmproj_files).dump());
+    }
+
+    {
+        auto set = lemon::enumerate_gguf_variants({
             "model.gguf",
             "dflash-kquant.gguf",
         });

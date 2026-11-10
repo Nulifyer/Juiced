@@ -221,7 +221,7 @@ GgufVariantSet enumerate_gguf_variants(
         size_t slash = f.find_last_of('/');
         std::string bare = slash == std::string::npos ? f : f.substr(slash + 1);
         if (f_lower.find("mmproj") != std::string::npos) {
-            result.mmproj_files.push_back(bare);
+            result.mmproj_files.push_back(f);
         } else if (is_draft_companion(f)) {
             result.draft_files.push_back(bare);
             draft_paths.push_back(f);

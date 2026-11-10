@@ -112,3 +112,22 @@ test('an equal checkpoint in another registry is a distinct installed variant', 
   expect(existingVariant([hf, ms], 'Owner/Model', { name: 'Q6_K' }, 'llamacpp', '', 'huggingface')).toBe(hf);
   expect(catalogEntries([hf, ms])).toEqual([hf, ms]);
 });
+
+test('nested projector paths distinguish installed companions with the same basename', () => {
+  const repo = 'Publisher/Projection-GGUF';
+  const variant = { name: 'Q4_K_M', primary_file: 'Model-Q4_K_M.gguf' };
+  for (const source of ['huggingface', 'modelscope'] as const) {
+    const projectors = ['mmproj.gguf', 'vision-a/mmproj.gguf', 'vision-b/mmproj.gguf'];
+    const models = projectors.map((projector, index) => ({
+      id: 'Installed-' + index,
+      recipe: 'llamacpp',
+      registry_source: source,
+      checkpoints: { main: `${repo}:${variant.primary_file}`, mmproj: `${repo}:${projector}` },
+    }));
+    for (const [index, projector] of projectors.entries()) {
+      expect(existingVariant(models, repo, variant, 'llamacpp', projector, source)).toBe(models[index]);
+    }
+    expect(existingVariant(models, repo, variant, 'llamacpp', 'vision-c/mmproj.gguf', source)).toBeUndefined();
+    expect(existingVariant(models, repo, variant, 'llamacpp', '', source)).toBeUndefined();
+  }
+});

@@ -70,6 +70,9 @@ bun run test:e2e
 Browser tests require Playwright Chromium. `JUICED_TEST_CHROMIUM` can select an
 installed test browser. Native contract tests require building their targets
 before running `ctest`. Use the release workflow's target list and test selection.
+On Linux, `PublishedVariantAcquisitionTest` also needs `bubblewrap`, OpenSSL and
+`curl-config`. It mounts test-only TLS trust inside the child namespace and uses
+synthetic files without loading a model or contacting a publisher.
 
 Real-engine, cache, concurrency, retirement, and runtime-image checks live under
 `juiced/tests/`. Read each command's `--help` and prerequisites before running it.
