@@ -506,10 +506,15 @@ public:
         std::lock_guard<std::mutex> lock(state_mutex_);
         return recipe_options_;
     }
+    void set_execution_definition(json definition) {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        if (!execution_definition_.empty()) throw std::logic_error("The worker definition is already frozen");
+        execution_definition_ = std::move(definition);
+    }
     json execution_snapshot() const {
         std::lock_guard<std::mutex> lock(state_mutex_);
         return {{"options", recipe_options_.to_resolved_json()}, {"context", context_observation_},
-                {"model", model_name_}, {"address", get_address()}, {"identity", execution_identity_},
+                {"model", model_name_}, {"address", get_address()}, {"identity", execution_identity_}, {"definition", execution_definition_},
                 {"context_automatic", ctx_size_auto_}, {"state", model_state_to_string(state_)},
                 {"worker_generation", get_instance_id()}};
     }
@@ -789,6 +794,7 @@ protected:
     RecipeOptions recipe_options_;
     json context_observation_ = json::object();
     json execution_identity_ = json::object();
+    json execution_definition_ = json::object();
     bool ctx_size_auto_ = false;
 
     // Busy state tracking (for safe eviction)

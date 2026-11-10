@@ -63,6 +63,9 @@ public:
     json count_anthropic_tokens(const json& request) override;
 
 private:
+    friend struct LlamaCppInputIdentityTestHook;
+    static json execution_argument_inputs(const std::string& arguments);
+
     // llama-server echoes the local .gguf path it was launched with (`-m <path>`)
     // in the OpenAI `model` field. Rewrite it to the client-facing model id so
     // responses don't leak absolute filesystem paths (and usernames).

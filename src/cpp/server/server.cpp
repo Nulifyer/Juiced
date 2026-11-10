@@ -6569,9 +6569,7 @@ void Server::handle_load(const httplib::Request& req, httplib::Response& res) {
             };
             res.set_content(response.dump(), "application/json");
         } else {
-            // Load model with optional per-model settings (declarative: no-op
-            // if already loaded with matching options, reload only if options
-            // differ)
+            // Reuse a worker only when its options and loaded definition match.
             router_->load_model(model_name, info, options, true,
                                 /*allow_reload_on_option_change=*/true,
                                 juiced_ ? std::optional<bool>(juiced_->hot(model_name)) : pinned_opt);

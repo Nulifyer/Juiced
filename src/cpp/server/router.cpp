@@ -984,6 +984,14 @@ std::string Router::canonical_model_name(const std::string& model_name) const {
     return resolve_model_name(model_name);
 }
 
+static bool loaded_definition_matches(const WrappedServer& worker, const ModelInfo& info) {
+    const auto snapshot = worker.execution_snapshot();
+    const auto& definition = snapshot.at("definition");
+    if (!definition.empty()) return definition == ModelManager::execution_definition(info);
+    return worker.get_checkpoint() == info.checkpoint() && worker.get_model_type() == info.type &&
+        worker.get_recipe_options().get_recipe() == info.recipe;
+}
+
 void Router::load_model(const std::string& model_name,
                         const ModelInfo& model_info,
                         RecipeOptions options,
@@ -1094,8 +1102,8 @@ void Router::load_model(const std::string& model_name,
                 existing_opts.erase("ctx_size");
                 requested_opts.erase("ctx_size");
             }
-            if (allow_reload_on_option_change && existing_opts != requested_opts) {
-                LOG(INFO, "Router") << "Options changed, reloading model: " << canonical_model_name << std::endl;
+            if (allow_reload_on_option_change && (existing_opts != requested_opts || !loaded_definition_matches(*existing, model_info))) {
+                LOG(INFO, "Router") << "Options or model definition changed, reloading model: " << canonical_model_name << std::endl;
                 replace_existing = shared_worker(existing);
             } else {
                 // Residency follows the current use of the live process. Promotion
@@ -1302,6 +1310,7 @@ void Router::load_model(const std::string& model_name,
                 if ((cancel_flag && cancel_flag->load()) || resources.deadline_expired()) abort_load = true;
                 if (abort_load.load()) throw std::runtime_error("load cancelled before startup");
                 worker.load(canonical_model_name, model_info, effective_options, do_not_upgrade);
+                worker.set_execution_definition(ModelManager::execution_definition(model_info));
                 stop_timer();
                 require_intent();
                 if (abort_load.load() || resources.deadline_expired())
@@ -1887,8 +1896,7 @@ json Router::model_discovery_snapshot(const ModelInfo& info) const {
         if (result["configured_automatic"] == true && snapshot.at("context_automatic") == true) {
             expected.erase("ctx_size"); running.erase("ctx_size");
         }
-        result["settings_pending"] = expected != running || worker->get_checkpoint() != info.checkpoint() ||
-            worker->get_recipe_options().get_recipe() != info.recipe;
+        result["settings_pending"] = expected != running || !loaded_definition_matches(*worker, info);
         discovery["runtime"]["settings_pending"] = result.at("settings_pending");
         if (!usable || !text_context) break;
         const auto& observation = snapshot.at("context");

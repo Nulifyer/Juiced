@@ -317,6 +317,8 @@ public:
     };
     ModelMutation model_mutation(const std::string& model_name, bool wait = true);
     static json execution_inputs(const ModelInfo& info, const std::function<bool()>& cancelled);
+    static json execution_files(const std::map<std::string, std::string>& inputs, const std::function<bool()>& cancelled);
+    static json execution_definition(const ModelInfo& info);
     json user_model_definition(const std::string& model_name);
     bool artifact_referenced(const std::string& model_name, const std::filesystem::path& file);
     void remove_uploaded_model(const std::string& model_name, const json& expected_definition);

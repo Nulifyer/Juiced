@@ -54,14 +54,21 @@ a cold rebuild. Clients without usable session affinity retain the memory fallba
 
 A running worker keeps the input identity captured when it started. Registering
 another checkpoint under the same model name does not relabel that worker's saved
-computation. The replacement takes effect after unloading and loading the model.
+computation. Changed checkpoint, companion or model-type settings appear as
+pending. Loading the model explicitly applies the changed definition through
+worker replacement.
 Checkpoint and companion content hashes distinguish changes even when file size
 and modification time stay the same. A changed profile requires fresh useful-reuse
 qualification; older snapshots remain retained under their original identity.
 
-The current fingerprint schema also records the launch executable and reported
-engine build. It does not yet establish complete loaded-library, physical-device
-or external-input identity. Existing qualification receipts cover only their named
+The current fingerprint schema also records supported template, LoRA and
+control-vector files, the launch executable and reported engine build. Unknown
+custom argument semantics prevent persistent qualification and provide a reason
+in the cache profile. Ordinary model serving remains available.
+
+Content identity does not qualify every adapter, speculative or vision cache
+operation. Complete loaded-library, physical-device, environment and request/state
+identity remain unfinished. Existing qualification receipts cover only their named
 model/runtime combinations.
 
 ## Retain or forget a snapshot

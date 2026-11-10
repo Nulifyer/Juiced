@@ -176,7 +176,8 @@ json JuicedService::cache_profile(const std::string &requested, WrappedServer::I
   if (identity.empty() || identity.value("recipe", "") != "llamacpp")
     throw std::invalid_argument("Persistent prompt state requires a captured llama.cpp execution identity");
   const auto name = server_.model_manager_->get_public_model_name(loaded.at("model").get<std::string>());
-  identity["profile_schema"] = 2;
+  identity["profile_schema"] = 3;
+  identity["definition"] = loaded.at("definition");
   identity["model"] = name;
   identity["options"] = loaded.at("options");
   identity["options"].erase("pinned");
@@ -214,6 +215,10 @@ json JuicedService::cache_profile(const std::string &requested, WrappedServer::I
         std::filesystem::path(directory->second.front().front()), snapshot_directory_, ec) && !ec;
   }
   const bool configured = identity.value("captured", false) && correct_directory && identity["engine"].get<std::string>().find("dde879b") != std::string::npos;
+  const std::string configuration_reason = configured ? "" : !identity.value("captured", false)
+      ? identity.value("reason", "Execution inputs could not be captured")
+      : !correct_directory ? "Load options must use the Juiced snapshot directory"
+      : "This engine build has no qualified prompt-state format";
   auto fingerprint = digest(identity.dump());
   bool qualified;
   {
@@ -223,7 +228,7 @@ json JuicedService::cache_profile(const std::string &requested, WrappedServer::I
   }
   return {{"model", name},          {"fingerprint", fingerprint},
           {"address", address},     {"configured", configured},
-          {"qualified", qualified}, {"identity", identity}, {"worker_generation", worker.generation()}};
+          {"qualified", qualified}, {"configuration_reason", configuration_reason}, {"identity", identity}, {"worker_generation", worker.generation()}};
 }
 JuicedService::json JuicedService::cache_disk_usage_locked() const {
   uint64_t saved = 0, cleanup = 0, writes = 0;
@@ -518,8 +523,7 @@ void JuicedService::cache_api(const httplib::Request &req,
     auto profile = cache_profile(body.at("model").get<std::string>(), ownership);
     if (op == "cache/qualify") {
       if (!profile.value("configured", false))
-        throw std::invalid_argument(
-            "Load options must use the Juiced snapshot directory");
+        throw std::invalid_argument(profile.at("configuration_reason").get<std::string>());
       if (body.value("fingerprint", "") != profile.value("fingerprint", ""))
         throw std::invalid_argument(
             "The tested profile changed; repeat acceptance");

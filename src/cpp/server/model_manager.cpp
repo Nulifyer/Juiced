@@ -395,14 +395,10 @@ static void insert_shard_family(const fs::path& shard, std::set<fs::path>& out) 
     }
 }
 
-json ModelManager::execution_inputs(const ModelInfo& info, const std::function<bool()>& cancelled) {
+json ModelManager::execution_files(const std::map<std::string, std::string>& inputs, const std::function<bool()>& cancelled) {
+    if (inputs.size() > 4096) throw std::runtime_error("Execution identity has too many file roles");
     json files = json::object();
-    if (info.resolved_paths.empty() || info.extra<bool>("hf_load", false))
-        throw std::runtime_error("Loaded artifact content is not locally resolved");
-    for (const auto& [role, checkpoint] : info.checkpoints)
-        if (!checkpoint.empty() && (!info.resolved_paths.count(role) || info.resolved_paths.at(role).empty()))
-            throw std::runtime_error("An execution companion is not locally resolved");
-    for (const auto& [role, pathname] : info.resolved_paths) {
+    for (const auto& [role, pathname] : inputs) {
         if (cancelled && cancelled()) throw std::runtime_error("Execution identity cancelled");
         const auto declared = path_from_utf8(pathname);
         const auto path = fs::canonical(declared);
@@ -436,7 +432,21 @@ json ModelManager::execution_inputs(const ModelInfo& info, const std::function<b
             files[role].push_back({{"path", path_to_utf8(file)}, {"bytes", size}, {"sha256", checksum}});
         }
     }
-    return {{"recipe", info.recipe}, {"checkpoints", info.checkpoints}, {"files", files}};
+    return files;
+}
+
+json ModelManager::execution_definition(const ModelInfo& info) {
+    return {{"recipe", info.recipe}, {"checkpoints", info.checkpoints}, {"paths", info.resolved_paths},
+        {"model_type", model_type_to_string(info.type)}, {"source", info.source}, {"registry_source", info.registry_source}};
+}
+
+json ModelManager::execution_inputs(const ModelInfo& info, const std::function<bool()>& cancelled) {
+    if (info.resolved_paths.empty() || info.extra<bool>("hf_load", false))
+        throw std::runtime_error("Loaded artifact content is not locally resolved");
+    for (const auto& [role, checkpoint] : info.checkpoints)
+        if (!checkpoint.empty() && (!info.resolved_paths.count(role) || info.resolved_paths.at(role).empty()))
+            throw std::runtime_error("An execution companion is not locally resolved");
+    return {{"recipe", info.recipe}, {"checkpoints", info.checkpoints}, {"files", execution_files(info.resolved_paths, cancelled)}};
 }
 
 static std::set<fs::path> repo_occupant_paths(const std::string& repo_id,

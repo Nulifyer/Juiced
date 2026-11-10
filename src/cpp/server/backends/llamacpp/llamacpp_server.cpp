@@ -2,7 +2,6 @@
 #include "lemon/backends/llamacpp/llamacpp.h"
 #include "lemon/backends/llamacpp/llamacpp_gguf.h"
 #include "lemon/backends/llamacpp/llamacpp_request.h"
-#include "lemon/utils/content_hash.h"
 #include "llamacpp_system_utils.h"
 #include "lemon/backends/backend_registry.h"
 #include "lemon/backends/backend_ops.h"
@@ -12,6 +11,7 @@
 #include "lemon/model_manager.h"
 #include <algorithm>
 #include <climits>
+#include <cmath>
 #include <cctype>
 #include <filesystem>
 #include <regex>
@@ -278,6 +278,65 @@ InstallParams LlamaCppServer::get_install_params(const std::string& backend, con
 
 LlamaCppServer::LlamaCppServer(const std::string& log_level, ModelManager* model_manager, BackendManager* backend_manager)
     : WrappedServer("llama-server", log_level, model_manager, backend_manager) {
+}
+
+json LlamaCppServer::execution_argument_inputs(const std::string& arguments) {
+    const auto tokens = utils::parse_custom_args(arguments);
+    const auto controls = utils::build_custom_args_map(tokens);
+    const std::map<std::string, size_t> scalar = {
+        {"--parallel", 1}, {"-np", 1}, {"--slot-save-path", 1},
+        {"--threads", 1}, {"-t", 1}, {"--threads-batch", 1}, {"-tb", 1},
+        {"--batch-size", 1}, {"-b", 1}, {"--ubatch-size", 1}, {"-ub", 1},
+        {"--cache-ram", 1}, {"-cram", 1}, {"--cache-type-k", 1}, {"-ctk", 1}, {"--cache-type-v", 1}, {"-ctv", 1},
+        {"--flash-attn", 1}, {"-fa", 1}, {"--seed", 1}, {"-s", 1},
+        {"--n-predict", 1}, {"-n", 1}, {"--rope-scaling", 1},
+        {"--rope-freq-base", 1}, {"--rope-freq-scale", 1}, {"--spec-type", 1},
+        {"--chat-template", 1}, {"--control-vector-layer-range", 2}
+    };
+    const std::set<std::string> switches = {"--mmap", "--no-mmap", "--mlock",
+        "--warmup", "--no-warmup", "--context-shift", "--no-context-shift",
+        "--cont-batching", "--no-cont-batching"};
+    const std::set<std::string> file_flags = {"--chat-template-file", "--lora", "--lora-scaled",
+        "--control-vector", "--control-vector-scaled"};
+    std::map<std::string, std::string> files;
+    std::set<std::string> unknown;
+    if (!tokens.empty() && tokens.front().front() != '-') unknown.insert("positional-arguments");
+    for (const auto& [flag, occurrences] : controls) {
+        if (file_flags.count(flag)) {
+            size_t index = 0;
+            for (const auto& values : occurrences) {
+                if (values.size() != 1) { unknown.insert(flag); continue; }
+                const bool list = flag != "--chat-template-file";
+                const bool scaled = flag == "--lora-scaled" || flag == "--control-vector-scaled";
+                size_t begin = 0;
+                do {
+                    const auto end = list ? values.front().find(',', begin) : std::string::npos;
+                    auto path = values.front().substr(begin, end == std::string::npos ? end : end - begin);
+                    if (scaled) {
+                        const auto colon = path.rfind(':');
+                        bool valid = colon != std::string::npos && colon > 0 && colon + 1 < path.size();
+                        if (valid) try {
+                            size_t read = 0;
+                            const auto scale = std::stod(path.substr(colon + 1), &read);
+                            valid = read == path.size() - colon - 1 && std::isfinite(scale);
+                        } catch (const std::exception&) { valid = false; }
+                        if (!valid) { unknown.insert(flag); break; }
+                        path.resize(colon);
+                    }
+                    if (path.empty() || files.size() >= 4096) { unknown.insert(flag); break; }
+                    files[flag + ":" + std::to_string(index++)] = std::move(path);
+                    if (end == std::string::npos) break;
+                    begin = end + 1;
+                } while (begin <= values.front().size());
+            }
+        } else {
+            const auto entry = scalar.find(flag);
+            const auto arity = entry == scalar.end() ? size_t(0) : entry->second;
+            if (entry == scalar.end() && !switches.count(flag)) { unknown.insert(flag); continue; }
+            for (const auto& values : occurrences) if (values.size() != arity) unknown.insert(flag);
+        }
+    }
+    return {{"files", files}, {"unknown", unknown}};
 }
 
 void LlamaCppServer::load(const std::string& model_name,
@@ -588,21 +647,20 @@ void LlamaCppServer::load(const std::string& model_name,
         return load_cancelled() || current_request_cancel_context().cancelled() ||
             std::chrono::steady_clock::now() >= identity_deadline;
     };
-    json identity = {{"schema", 1}, {"recipe", model_info.recipe}, {"captured", false},
-        {"scope", "declared-artifact-content-and-launch-executable"},
-        {"unresolved", json::array({"loaded-runtime-modules", "physical-device-identity", "external-input-audit"})}};
+    const auto argument_inputs = execution_argument_inputs(llamacpp_args);
+    const auto argument_files = argument_inputs.at("files").get<std::map<std::string, std::string>>();
+    json identity = {{"schema", 2}, {"recipe", model_info.recipe}, {"captured", false},
+        {"scope", "declared-and-argument-input-content-and-launch-executable"},
+        {"unresolved", json::array({"loaded-runtime-modules", "physical-device-identity", "inherited-environment-inputs"})}};
     const auto executable_identity = [&] {
-        const auto path = fs::canonical(utils::path_from_utf8(process_executable));
-        const auto bytes = fs::file_size(path);
-        const auto modified = fs::last_write_time(path);
-        const auto checksum = utils::content_sha256(path, identity_cancelled);
-        if (bytes != fs::file_size(path) || modified != fs::last_write_time(path))
-            throw std::runtime_error("Launch executable changed during identity capture");
-        return json{{"path", utils::path_to_utf8(path)}, {"bytes", bytes}, {"sha256", checksum}};
+        return ModelManager::execution_files({{"executable", process_executable}}, identity_cancelled).at("executable").at(0);
     };
     try {
+        if (!argument_inputs.at("unknown").empty())
+            throw std::runtime_error("Unresolved execution argument inputs: " + argument_inputs.at("unknown").dump());
         identity.update(ModelManager::execution_inputs(model_info, identity_cancelled));
         identity["launch_executable"] = executable_identity();
+        identity["argument_files"] = ModelManager::execution_files(argument_files, identity_cancelled);
         identity["captured"] = true;
     } catch (const std::exception& error) {
         if (load_cancelled() || current_request_cancel_context().cancelled())
@@ -669,7 +727,8 @@ void LlamaCppServer::load(const std::string& model_name,
     if (identity.value("captured", false)) {
         try {
             const auto verified = ModelManager::execution_inputs(model_info, identity_cancelled);
-            if (identity.at("files") != verified.at("files") || identity.at("launch_executable") != executable_identity())
+            if (identity.at("files") != verified.at("files") || identity.at("launch_executable") != executable_identity() ||
+                identity.at("argument_files") != ModelManager::execution_files(argument_files, identity_cancelled))
                 throw AdmissionError("execution_inputs_changed", "Loaded input content changed during backend startup", 409);
         } catch (const AdmissionError&) { throw; }
         catch (const std::exception& error) {

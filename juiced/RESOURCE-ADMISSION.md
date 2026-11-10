@@ -771,18 +771,30 @@ context. Cache inspection does not pair a newer registration's files with an
 older worker. For local llama.cpp loads, ModelManager enumerates each declared
 checkpoint/companion and complete GGUF shard family. Startup hashes their content
 and the launch executable, then verifies those inputs again after readiness.
+Supported custom template, LoRA and control-vector file arguments use that same
+content resolver. Scaled/list arguments retain their file roles. Unknown argument
+semantics disable persistent qualification with a visible `configuration_reason`.
+Ordinary serving remains independent of that qualification decision.
 Cancellation is checked between 64-KiB reads; identity work also has a 120-second
 elapsed-time bound inside the accepted load deadline. Blocking filesystem calls
 are not an end-to-end I/O deadline guarantee. Directory-backed or remotely resolved
 inputs remain uncaptured and cannot qualify this persistent-cache path.
 
-Profile schema2 excludes generation, listener port and observation timestamps so
+Profile schema3 excludes generation, listener port and observation timestamps so
 unchanged worker reloads/restarts preserve compatibility. It includes the frozen
-artifact content/provenance, resolved options, context layout and reported engine
-build. Old schema1 receipts and snapshots are retained and require requalification.
-This is the declared-input/launch-executable identity subset. Loaded shared-library,
-actual physical-device and complete external-input identity remain explicit open
-P1 requirements, rather than an implied immutable runtime-bundle guarantee.
+declared definition, artifact and supported argument-file content, resolved
+options, context layout, launch executable and reported engine build. Earlier
+receipts and snapshots remain retained and require requalification. This does
+not qualify adapter, speculative or vision continuation merely by hashing files.
+Loaded shared libraries, physical devices, inherited environment inputs and
+complete request/state semantics remain explicit open P1 requirements.
+
+A worker's declared recipe, model type, checkpoint roles and resolved paths freeze
+at publication. Registration changes cannot relabel that generation. Companion-only
+and path changes report `settings_pending` in native discovery and the catalog.
+An explicit native load applies changed definitions through normal worker
+replacement. A matching repeated load reuses its existing generation. Definition
+comparison performs no filesystem work under Router's shared lock.
 
 ### Native listener association
 

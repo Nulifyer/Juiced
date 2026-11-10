@@ -60,7 +60,7 @@ def acceptance(args):
 
             before = profile()
             assert (
-                before["qualified"] and before["identity"]["profile_schema"] == 2
+                before["qualified"] and before["identity"]["profile_schema"] == 3
             ), before
             expected = hashlib.sha256(original.read_bytes()).hexdigest()
             assert before["identity"]["files"]["main"][0]["sha256"] == expected

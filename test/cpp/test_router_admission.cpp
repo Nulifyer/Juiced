@@ -131,7 +131,34 @@ int main() {
         ModelInfo discovery_info;
         discovery_info.model_name = worker->get_model_name(); discovery_info.recipe = "llamacpp";
         discovery_info.recipe_options = worker->get_recipe_options(); discovery_info.max_context_window = 128;
+        discovery_info.checkpoints = {{"main", worker->get_checkpoint()}, {"draft", "fixture-draft-a"}};
+        discovery_info.resolved_paths = {{"main", "fixture-main"}, {"draft", "fixture-draft-a"}};
+        const auto frozen_definition = ModelManager::execution_definition(discovery_info);
+        const auto fixture_options = worker->get_recipe_options();
+        worker->set_model_metadata(worker->get_model_name(), worker->get_checkpoint(), worker->get_model_type(), DEVICE_CPU,
+            router.resolve_effective_options(discovery_info, RecipeOptions("llamacpp", json::object())));
+        worker->set_execution_definition(frozen_definition);
         auto metadata = router.model_discovery_snapshot(discovery_info);
+        check(metadata["runtime"]["settings_pending"] == false, "matching complete loaded definition reports no pending change");
+        discovery_info.checkpoints["draft"] = "fixture-draft-b";
+        metadata = router.model_discovery_snapshot(discovery_info);
+        check(metadata["runtime"]["settings_pending"] == true, "companion-only changes report pending while the old generation serves");
+        discovery_info.checkpoints["draft"] = "fixture-draft-a";
+        discovery_info.resolved_paths["draft"] = "fixture-new-path";
+        metadata = router.model_discovery_snapshot(discovery_info);
+        check(metadata["runtime"]["settings_pending"] == true, "resolved companion path changes report pending");
+        discovery_info.resolved_paths["draft"] = "fixture-draft-a";
+        discovery_info.type = ModelType::TRANSCRIPTION;
+        metadata = router.model_discovery_snapshot(discovery_info);
+        check(metadata["runtime"]["settings_pending"] == true, "model type changes report pending");
+        discovery_info.type = ModelType::LLM;
+        bool refreeze_rejected = false;
+        try { worker->set_execution_definition(json{{"recipe", "replacement"}}); }
+        catch (const std::logic_error&) { refreeze_rejected = true; }
+        check(refreeze_rejected && worker->execution_snapshot()["definition"] == frozen_definition,
+              "loaded definition freezes once and cannot be relabeled by another registration");
+        worker->set_model_metadata(worker->get_model_name(), worker->get_checkpoint(), worker->get_model_type(), DEVICE_CPU, fixture_options);
+        metadata = router.model_discovery_snapshot(discovery_info);
         check(metadata["context"]["configured_tokens"] == 2048 && metadata["context"]["declared_tokens"] == 128 &&
               metadata["context"]["observed_per_request_tokens"].is_null() && metadata["context"]["advertised_source"] == "applied_options",
               "discovery distinguishes declared, configured and applied context without inventing a runtime observation");

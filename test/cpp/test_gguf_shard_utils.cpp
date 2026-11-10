@@ -1,4 +1,5 @@
 #include "lemon/gguf_shard_utils.h"
+#include "lemon/backends/llamacpp/llamacpp_server.h"
 #include "lemon/model_manager.h"
 #include "lemon/utils/content_hash.h"
 
@@ -8,6 +9,12 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+
+namespace lemon::backends {
+struct LlamaCppInputIdentityTestHook {
+    static json parse(const std::string& args) { return LlamaCppServer::execution_argument_inputs(args); }
+};
+}
 
 namespace fs = std::filesystem;
 
@@ -193,6 +200,61 @@ int main() {
         bool duplicate = false;
         try { lemon::ModelManager::execution_inputs(info, {}); } catch (const std::exception&) { duplicate = true; }
         check("duplicate shard indices cannot disguise missing content", duplicate);
+    }
+
+
+    {
+        using Hook = lemon::backends::LlamaCppInputIdentityTestHook;
+        const auto template_args = Hook::parse("--chat-template-file='a template,custom.jinja' --parallel=2 -t 2 --cache-ram 256");
+        check("quoted equals template keeps spaces and comma", template_args.at("unknown").empty() &&
+            template_args.at("files").at("--chat-template-file:0") == "a template,custom.jinja");
+        const auto adapters = Hook::parse("--lora a.gguf,b.gguf --lora c.gguf --control-vector v.gguf --control-vector-layer-range 1 12");
+        check("repeated adapter lists retain every input", adapters.at("unknown").empty() && adapters.at("files").size() == 4 &&
+            adapters.at("files").at("--lora:2") == "c.gguf" && adapters.at("files").at("--control-vector:0") == "v.gguf");
+        const auto scaled = Hook::parse(R"(--lora-scaled 'C:\models\adapter.gguf:0.5,second.gguf:-1e-2' --control-vector-scaled vector.gguf:2)");
+        check("scaled files preserve drive colons and finite signed exponents", scaled.at("unknown").empty() &&
+            scaled.at("files").at("--lora-scaled:0") == R"(C:\models\adapter.gguf)" &&
+            scaled.at("files").at("--lora-scaled:1") == "second.gguf");
+        for (const auto& input : {"--chat-template-file", "--lora a.gguf,", "--lora-scaled a.gguf:nan",
+                "--lora-scaled a.gguf:inf", "--lora-scaled a.gguf:1suffix", "--lora-scaled a.gguf:",
+                "--control-vector-layer-range 1", "positional --parallel 1"}) {
+            check("ambiguous input cannot qualify an execution capture", !Hook::parse(input).at("unknown").empty());
+        }
+        const auto unknown = Hook::parse("--future-input secret-canary --threads 2");
+        check("unknown argument diagnostics exclude supplied values", unknown.at("unknown").size() == 1 &&
+            unknown.at("unknown")[0] == "--future-input" && unknown.dump().find("secret-canary") == std::string::npos);
+        check("ordinary scalar and switch arguments add no external files",
+            Hook::parse("-t 2 --parallel 1 --no-mmap --seed -1 --chat-template chatml").at("files").empty() &&
+            Hook::parse("-t 2 --parallel 1 --no-mmap --seed -1 --chat-template chatml").at("unknown").empty());
+        check("empty external input set needs no filesystem access", lemon::ModelManager::execution_files({}, {}).empty());
+        const auto template_path = base_dir / "template.jinja";
+        { std::ofstream file(template_path); file << "template A"; }
+        const auto before = lemon::ModelManager::execution_files({{"template", template_path.string()}}, {});
+        { std::ofstream file(template_path); file << "template B"; }
+        check("external file content changes its identity", before != lemon::ModelManager::execution_files({{"template", template_path.string()}}, {}));
+        bool cancelled = false;
+        try { lemon::ModelManager::execution_files({{"template", template_path.string()}}, [] { return true; }); }
+        catch (const std::exception&) { cancelled = true; }
+        check("external file identity honors cancellation", cancelled);
+        std::map<std::string, std::string> excessive;
+        for (int i = 0; i < 4097; ++i) excessive[std::to_string(i)] = "missing-file";
+        bool bounded = false;
+        try { lemon::ModelManager::execution_files(excessive, {}); }
+        catch (const std::exception& error) { bounded = std::string(error.what()).find("too many file roles") != std::string::npos; }
+        check("external file roles are bounded before filesystem access", bounded);
+        lemon::ModelInfo info;
+        info.recipe = "llamacpp";
+        info.checkpoints = {{"main", "missing-main"}, {"draft", "missing-draft-a"}};
+        info.resolved_paths = {{"main", "missing-path-a"}};
+        const auto definition = lemon::ModelManager::execution_definition(info);
+        info.checkpoints["draft"] = "missing-draft-b";
+        check("value-only definition detects companion changes without file reads", definition != lemon::ModelManager::execution_definition(info));
+        info.checkpoints["draft"] = "missing-draft-a";
+        info.type = lemon::ModelType::TRANSCRIPTION;
+        check("value-only definition detects model type changes", definition != lemon::ModelManager::execution_definition(info));
+        info.type = lemon::ModelType::LLM;
+        info.resolved_paths["main"] = "missing-path-b";
+        check("value-only definition detects resolved path changes", definition != lemon::ModelManager::execution_definition(info));
     }
 
     fs::remove_all(base_dir, ec);
