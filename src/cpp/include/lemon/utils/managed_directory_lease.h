@@ -22,6 +22,7 @@ public:
         std::shared_ptr<File> file_;
     };
     static constexpr const char* file_name = ".juiced-store.lock";
+    static std::filesystem::path resolve_root(const std::filesystem::path& root);
     explicit ManagedDirectoryLease(const std::vector<std::filesystem::path>& roots);
     ~ManagedDirectoryLease();
     ManagedDirectoryLease(const ManagedDirectoryLease&) = delete;

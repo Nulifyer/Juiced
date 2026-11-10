@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <iterator>
 #include <stdexcept>
 #include <system_error>
 
@@ -16,6 +17,14 @@
 
 namespace lemon::utils {
 namespace fs = std::filesystem;
+
+#ifndef _WIN32
+namespace {
+bool contains(const fs::path& parent, const fs::path& child) {
+    return std::mismatch(parent.begin(), parent.end(), child.begin(), child.end()).first == parent.end();
+}
+}
+#endif
 
 struct ManagedDirectoryLease::File {
     fs::path root;
@@ -31,18 +40,37 @@ struct ManagedDirectoryLease::File {
 #else
     int fd = -1;
     int directory_fd = -1;
+    std::vector<int> ancestor_fds;
+    std::shared_ptr<File> parent;
     ~File() {
         if (fd >= 0) {
             if (locked) flock(fd, LOCK_UN);
             close(fd);
         }
         if (directory_fd >= 0) close(directory_fd);
+        for (const auto ancestor : ancestor_fds) if (ancestor >= 0) close(ancestor);
     }
 #endif
 };
 
+fs::path ManagedDirectoryLease::resolve_root(const fs::path& root) {
+    if (root.empty()) throw std::invalid_argument("Managed directories must be explicit");
+    auto resolved = fs::weakly_canonical(fs::absolute(root));
+    while (resolved.has_relative_path() && resolved.filename().empty()) resolved = resolved.parent_path();
+    return resolved;
+}
+
 ManagedDirectoryLease::ManagedDirectoryLease(const std::vector<fs::path>& roots) {
+#ifdef _WIN32
     for (const auto& root : roots) protect(root);
+#else
+    std::vector<fs::path> ordered;
+    for (const auto& root : roots) ordered.push_back(resolve_root(root));
+    std::stable_sort(ordered.begin(), ordered.end(), [](const auto& left, const auto& right) {
+        return std::distance(left.begin(), left.end()) < std::distance(right.begin(), right.end());
+    });
+    for (const auto& root : ordered) protect(root);
+#endif
 }
 
 ManagedDirectoryLease::~ManagedDirectoryLease() = default;
@@ -59,13 +87,17 @@ void ManagedDirectoryLease::protect(const fs::path& root) {
 }
 
 ManagedDirectoryLease::Claim ManagedDirectoryLease::claim(const fs::path& root) {
-    if (root.empty()) throw std::invalid_argument("Managed directories must be explicit");
-    fs::create_directories(root);
-    const auto canonical = fs::canonical(root);
+    const auto candidate = resolve_root(root);
+#ifdef _WIN32
+    fs::create_directories(candidate);
+    const auto canonical = fs::canonical(candidate);
+#else
+    const auto& canonical = candidate;
+#endif
     std::lock_guard lock(mutex_);
     files_.erase(std::remove_if(files_.begin(), files_.end(), [](const auto& file) { return file.expired(); }), files_.end());
     for (const auto& weak : files_)
-        if (auto file = weak.lock(); file && fs::equivalent(canonical, file->root)) return Claim(std::move(file));
+        if (auto file = weak.lock(); file && fs::exists(canonical) && fs::equivalent(canonical, file->root)) return Claim(std::move(file));
     auto file = std::make_shared<File>();
     file->root = canonical;
     const auto path = canonical / file_name;
@@ -89,9 +121,18 @@ ManagedDirectoryLease::Claim ManagedDirectoryLease::claim(const fs::path& root) 
         throw std::system_error(error, std::system_category(), "Could not lock managed directory: " + label);
     }
 #else
-    const auto lock_fd = [&](int fd) {
+    for (const auto& weak : files_) {
+        const auto owned = weak.lock();
+        if (owned && owned->root != canonical && contains(owned->root, canonical) &&
+            (!file->parent || contains(file->parent->root, owned->root))) file->parent = owned;
+    }
+    if (!file->parent) for (const auto& weak : files_) {
+        if (const auto owned = weak.lock(); owned && contains(canonical, owned->root))
+            throw std::runtime_error("Managed directory is already in use by a narrower claim: " + label);
+    }
+    const auto lock_fd = [&](int fd, int mode) {
         int result;
-        do { result = flock(fd, LOCK_EX | LOCK_NB); } while (result != 0 && errno == EINTR);
+        do { result = flock(fd, mode | LOCK_NB); } while (result != 0 && errno == EINTR);
         if (result != 0) {
             const auto error = errno;
             if (error == EWOULDBLOCK || error == EAGAIN)
@@ -99,13 +140,32 @@ ManagedDirectoryLease::Claim ManagedDirectoryLease::claim(const fs::path& root) 
             throw std::system_error(error, std::generic_category(), "Could not lock managed directory: " + label);
         }
     };
+    if (file->parent) {
+        fs::create_directories(canonical);
+    } else {
+        // A missing descendant must not be created before its parent intent is held.
+        fs::path ancestor;
+        for (const auto& component : canonical) {
+            ancestor /= component;
+            if (ancestor == canonical) break;
+            if (!fs::is_directory(ancestor)) fs::create_directory(ancestor);
+            file->ancestor_fds.push_back(-1);
+            auto& fd = file->ancestor_fds.back();
+            fd = open(ancestor.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+            if (fd < 0) throw std::system_error(errno, std::generic_category(), "Could not open managed directory ancestor: " + label);
+            lock_fd(fd, LOCK_SH);
+        }
+        if (!fs::is_directory(canonical)) fs::create_directory(canonical);
+    }
+    if (fs::canonical(canonical) != canonical)
+        throw std::runtime_error("Managed directory changed during acquisition: " + label);
     // A lock on the directory survives replacement of its control-file inode.
     file->directory_fd = open(canonical.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
     if (file->directory_fd < 0) {
         const auto error = errno;
         throw std::system_error(error, std::generic_category(), "Could not open managed directory: " + label);
     }
-    lock_fd(file->directory_fd);
+    lock_fd(file->directory_fd, LOCK_EX);
     file->fd = open(path.c_str(), O_CREAT | O_RDWR | O_CLOEXEC, 0600);
     if (file->fd < 0 && (errno == EACCES || errno == EROFS))
         file->fd = open(path.c_str(), O_RDONLY | O_CLOEXEC);
@@ -113,7 +173,7 @@ ManagedDirectoryLease::Claim ManagedDirectoryLease::claim(const fs::path& root) 
         const auto error = errno;
         throw std::system_error(error, std::generic_category(), "Could not open managed directory lease: " + label);
     }
-    lock_fd(file->fd);
+    lock_fd(file->fd, LOCK_EX);
 #endif
     file->locked = true;
     files_.push_back(file);

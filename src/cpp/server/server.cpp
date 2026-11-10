@@ -6800,7 +6800,7 @@ json Server::publish_config(std::function<json()> read_changes) {
     if (changes.contains("models_dir") || !storage.is_null()) {
         if (!storage.is_string()) throw std::invalid_argument("models_dir must be a string");
         const auto current = model_manager_->model_cache_root();
-        const auto next = utils::path_to_utf8(fs::weakly_canonical(utils::path_from_utf8(
+        const auto next = utils::path_to_utf8(utils::ManagedDirectoryLease::resolve_root(utils::path_from_utf8(
             utils::resolve_models_dir(storage.get<std::string>()))));
         if (next != current) router_->admission_view().reserve_model_cache_change({current, next});
         if (storage_owner_) {

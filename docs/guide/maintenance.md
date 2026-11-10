@@ -27,9 +27,18 @@ an isolated copy before replacing a release that created such data.
 
 Juiced protects its managed cache, configuration, model-cache and snapshot roots
 against another participating manager. Keep `.juiced-store.lock` files in place.
-On POSIX systems, Juiced also locks the directory inode so removing that control
-file cannot release a running manager's ownership. Moving or replacing whole
-directories and nested-root exclusion still require separate protection.
+On POSIX systems, Juiced also locks directory inodes. Removing a control file
+cannot release a running manager's ownership. Separate managers cannot own
+overlapping parent/child roots. Independent sibling roots can run together.
+Managed roots and their ancestors must be readable for these locks.
+Trailing separators and `/.` aliases resolve to the same root before startup or
+configuration changes. A normal-path restart keeps the same snapshot-store identity.
+
+A manager can retain nested roots beneath an ancestor it already owns. A later
+request for a broader root rejects if it would drop live narrower ownership.
+Layouts requiring that expansion need a separate storage migration. Moving or
+replacing whole directories remains outside this protection. Windows currently
+protects exact configured roots; parent/child exclusion is not implemented there.
 A directory change must finish active work and acquire the destination before it
 can apply. Failed application can retain both roots until retry or shutdown.
 

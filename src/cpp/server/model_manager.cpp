@@ -8,6 +8,7 @@
 #include <lemon/utils/http_client.h>
 #include <lemon/utils/process_manager.h>
 #include <lemon/utils/path_utils.h>
+#include <lemon/utils/managed_directory_lease.h>
 #include <lemon/system_info.h>
 #include <lemon/backends/backend_descriptor_registry.h>
 #include <lemon/backends/backend_registry.h>
@@ -7596,13 +7597,13 @@ void ModelManager::delete_model(const std::string& model_name) {
 }
 
 std::string ModelManager::model_cache_root() const {
-    return path_to_utf8(fs::weakly_canonical(path_from_utf8(get_hf_cache_dir())));
+    return path_to_utf8(utils::ManagedDirectoryLease::resolve_root(path_from_utf8(get_hf_cache_dir())));
 }
 
 void ModelManager::set_model_cache_directory(const std::string& directory) {
     auto operation = resource_admission_ ? resource_admission_->write_scope("model-cache-directory") : ResourceAdmission::WriteScope{};
     const auto current = model_cache_root();
-    const auto next = path_to_utf8(fs::weakly_canonical(path_from_utf8(utils::resolve_models_dir(directory))));
+    const auto next = path_to_utf8(utils::ManagedDirectoryLease::resolve_root(path_from_utf8(utils::resolve_models_dir(directory))));
     if (resource_admission_ && next != current) resource_admission_->reserve_model_cache_change({current, next});
     std::lock_guard lock(models_cache_mutex_);
     utils::set_models_dir(directory);

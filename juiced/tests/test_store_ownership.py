@@ -20,7 +20,7 @@ def free_port():
         return sock.getsockname()[1]
 
 
-def run(binary, output, binding_only=False):
+def run(binary, output, binding_only=False, hierarchy_only=False, aliases_only=False):
     checks = []
 
     def check(condition, label):
@@ -54,6 +54,7 @@ def run(binary, output, binding_only=False):
         logs = []
         completed = False
         recovery_attempts = None
+        configuration_attempts = []
 
         def start(cache, config, port, model_root=None, snapshot_root=None):
             log = (root / f"process-{len(logs)}.log").open("w")
@@ -84,13 +85,13 @@ def run(binary, output, binding_only=False):
             children.append((process, port))
             return process, log
 
-        def call(port, path="/v1/health", body=None):
+        def call(port, path="/v1/health", body=None, timeout=5):
             request = urllib.request.Request(
                 f"http://127.0.0.1:{port}{path}",
                 data=None if body is None else json.dumps(body).encode(),
                 headers={"Content-Type": "application/json"},
             )
-            with urllib.request.urlopen(request, timeout=5) as response:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
                 return response.status, json.load(response)
 
         def ready(process, port):
@@ -112,6 +113,211 @@ def run(binary, output, binding_only=False):
 
         def digest(path):
             return hashlib.sha256(path.read_bytes()).hexdigest()
+
+        def aliases_contract():
+            for variant in ("cache", "models", "snapshots"):
+                config = root / (variant + "-alias-config")
+                config.mkdir()
+                (config / "config.json").write_text(json.dumps(settings))
+                cache = root / (variant + "-alias-cache")
+                models = root / (variant + "-alias-models")
+                snapshots = root / (variant + "-alias-snapshots")
+                port = free_port()
+                process, _ = start(
+                    str(cache) + os.sep if variant == "cache" else cache,
+                    config,
+                    port,
+                    model_root=(
+                        str(models) + os.sep + "." if variant == "models" else models
+                    ),
+                    snapshot_root=(
+                        str(snapshots) + os.sep if variant == "snapshots" else snapshots
+                    ),
+                )
+                ready(process, port)
+                check(
+                    call(port)[0] == 200,
+                    variant + " accepts a new directory alias on its first boot",
+                )
+                state_file = config / "juiced/state.json"
+                binding = json.loads(state_file.read_text())["snapshot_store"]
+                check(
+                    Path(binding["directory"]).resolve() == snapshots.resolve(),
+                    variant + " binds the actual snapshot directory",
+                )
+                check(stop(process, port) == 0, variant + " alias owner drains")
+                restarted, _ = start(cache, config, port, models, snapshots)
+                ready(restarted, port)
+                check(
+                    json.loads(state_file.read_text())["snapshot_store"] == binding,
+                    variant + " normal-path restart retains the same store identity",
+                )
+                if variant == "models":
+                    next_root = root / "runtime-alias-models"
+                    requested = str(next_root) + os.sep + "."
+                    deadline = time.monotonic() + 15
+                    while True:
+                        remaining = deadline - time.monotonic()
+                        check(
+                            remaining > 0,
+                            "startup metadata permits root application within the deadline",
+                        )
+                        try:
+                            status, _ = call(
+                                port,
+                                "/internal/set",
+                                {"models_dir": requested},
+                                timeout=min(5, remaining),
+                            )
+                            configuration_attempts.append(
+                                {"status": status, "code": None}
+                            )
+                            check(
+                                status == 200,
+                                "configuration preflight and acquisition agree on a new directory alias",
+                            )
+                            break
+                        except urllib.error.HTTPError as error:
+                            data = json.load(error)
+                            error_data = data.get("error", {})
+                            code = error_data.get(
+                                "code", error_data.get("details", {}).get("code")
+                            )
+                            configuration_attempts.append(
+                                {"status": error.code, "code": code}
+                            )
+                            if error.code != 503 or code != "model_cache_busy":
+                                raise AssertionError(
+                                    {"runtime_alias": data, "status": error.code}
+                                ) from error
+                            remaining = deadline - time.monotonic()
+                            check(
+                                remaining > 0,
+                                "startup metadata releases its root claim within the deadline",
+                            )
+                            time.sleep(min(1, remaining))
+                    check(
+                        next_root.is_dir()
+                        and (next_root / ".juiced-store.lock").is_file(),
+                        "the applied alias creates its canonical root control file",
+                    )
+                    check(
+                        call(port, "/internal/config")[1]["models_dir"] == requested
+                        and json.loads((config / "config.json").read_text())[
+                            "models_dir"
+                        ]
+                        == requested,
+                        "runtime and durable configuration retain the requested alias",
+                    )
+                    peer_config = root / "runtime-alias-peer-config"
+                    peer_config.mkdir()
+                    (peer_config / "config.json").write_text(json.dumps(settings))
+                    peer_port = free_port()
+                    peer, peer_log = start(
+                        root / "runtime-alias-peer-cache",
+                        peer_config,
+                        peer_port,
+                        next_root,
+                        root / "runtime-alias-peer-snapshots",
+                    )
+                    check(
+                        peer.wait(timeout=20) == 1,
+                        "a competing manager cannot acquire the applied canonical root",
+                    )
+                    peer_log.flush()
+                    check(
+                        "Managed directory is already in use"
+                        in Path(peer_log.name).read_text(errors="replace"),
+                        "the competing manager reports the native ownership conflict",
+                    )
+                    check(
+                        call(port)[0] == 200,
+                        "the runtime alias owner remains healthy after peer rejection",
+                    )
+                check(
+                    stop(restarted, port) == 0, variant + " normal-path restart drains"
+                )
+                if variant == "models":
+                    peer, _ = start(
+                        root / "runtime-alias-peer-cache",
+                        peer_config,
+                        peer_port,
+                        next_root,
+                        root / "runtime-alias-peer-snapshots",
+                    )
+                    ready(peer, peer_port)
+                    check(
+                        call(peer_port)[0] == 200,
+                        "the applied root becomes available after confirmed owner release",
+                    )
+                    check(stop(peer, peer_port) == 0, "runtime alias peer drains")
+
+        def hierarchy_contract():
+            for label in ("parent-first", "child-first", "siblings"):
+                parent = root / ("tree-" + label) / "parent"
+                first_root = parent if label == "parent-first" else parent / "child"
+                second_root = (
+                    parent / "new-child"
+                    if label == "parent-first"
+                    else parent if label == "child-first" else parent / "sibling"
+                )
+
+                def launch(suffix, model_root):
+                    config = root / (label + "-" + suffix + "-config")
+                    config.mkdir(exist_ok=True)
+                    (config / "config.json").write_text(json.dumps(settings))
+                    port = free_port()
+                    process, log = start(
+                        root / (label + "-" + suffix + "-cache"),
+                        config,
+                        port,
+                        model_root=model_root,
+                        snapshot_root=root / (label + "-" + suffix + "-snapshots"),
+                    )
+                    return process, port, log
+
+                first, port, _ = launch("first", first_root)
+                ready(first, port)
+                second, second_port, log = launch("second", second_root)
+                if label == "siblings":
+                    ready(second, second_port)
+                    check(
+                        call(second_port)[0] == 200,
+                        "independent sibling stores remain available concurrently",
+                    )
+                    check(stop(second, second_port) == 0, "sibling owner drains")
+                else:
+                    check(
+                        second.wait(timeout=20) == 1,
+                        label + " excludes overlapping native ownership",
+                    )
+                    log.flush()
+                    check(
+                        "Managed directory is already in use"
+                        in Path(log.name).read_text(errors="replace"),
+                        label + " reports the exact root ownership conflict",
+                    )
+                    check(
+                        (
+                            not second_root.exists()
+                            if label == "parent-first"
+                            else not (second_root / ".juiced-store.lock").exists()
+                        ),
+                        label + " rejects before mutating the accepted store",
+                    )
+                check(
+                    call(port)[0] == 200,
+                    label + " preserves the original manager's responsiveness",
+                )
+                check(stop(first, port) == 0, label + " original owner drains")
+                if label != "siblings":
+                    retry, retry_port, _ = launch("second", second_root)
+                    ready(retry, retry_port)
+                    check(
+                        call(retry_port)[0] == 200,
+                        label + " permits acquisition after confirmed release",
+                    )
+                    check(stop(retry, retry_port) == 0, label + " retry drains")
 
         def binding_contract():
             config = root / "config"
@@ -317,6 +523,16 @@ def run(binary, output, binding_only=False):
             )
 
         try:
+            if aliases_only:
+                aliases_contract()
+                completed = True
+                print(f"Store directory aliases: {len(checks)} checks passed")
+                return
+            if hierarchy_only:
+                hierarchy_contract()
+                completed = True
+                print(f"Store hierarchy: {len(checks)} checks passed")
+                return
             if binding_only:
                 binding_contract()
                 completed = True
@@ -532,12 +748,21 @@ def run(binary, output, binding_only=False):
                 json.dumps(
                     {
                         "scope": (
-                            "Snapshot state/root binding and conservative startup recovery"
-                            if binding_only
-                            else "Model-free local cache/config/external model/snapshot root ownership; no backend termination, nested-root, foreign-writer or whole-store snapshot qualification"
+                            "Native first-boot directory aliases, coherent snapshot binding and configuration preflight"
+                            if aliases_only
+                            else (
+                                "POSIX native parent/child exclusion, sibling independence and confirmed-release retry"
+                                if hierarchy_only
+                                else (
+                                    "Snapshot state/root binding and conservative startup recovery"
+                                    if binding_only
+                                    else "Model-free local cache/config/external model/snapshot root ownership; no backend termination, nested-root, foreign-writer or whole-store snapshot qualification"
+                                )
+                            )
                         ),
                         "completed": completed,
                         "recovery_attempts": recovery_attempts if completed else None,
+                        "configuration_attempts": configuration_attempts,
                         "checks": checks,
                     },
                     indent=2,
@@ -557,6 +782,13 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
-    parser.add_argument("--binding", action="store_true")
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument("--binding", action="store_true")
+    modes.add_argument("--hierarchy", action="store_true")
+    modes.add_argument("--aliases", action="store_true")
     args = parser.parse_args()
-    run(args.binary.resolve(), args.out, args.binding)
+    if args.hierarchy and os.name == "nt":
+        parser.error(
+            "Hierarchy acceptance currently requires the POSIX lease implementation"
+        )
+    run(args.binary.resolve(), args.out, args.binding, args.hierarchy, args.aliases)

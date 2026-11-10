@@ -219,7 +219,7 @@ void JuicedService::bind_snapshot_storage() {
   if (!state_.is_object()) recovery();
   const auto configured = utils::get_environment_variable_utf8("JUICED_SNAPSHOT_DIR");
   if (std::getenv("JUICED_SNAPSHOT_DIR") && configured.empty()) recovery();
-  snapshot_directory_ = fs::weakly_canonical(configured.empty() ? directory_ / "snapshots" : utils::path_from_utf8(configured));
+  snapshot_directory_ = utils::ManagedDirectoryLease::resolve_root(configured.empty() ? directory_ / "snapshots" : utils::path_from_utf8(configured));
   const auto state_directory = utils::path_to_utf8(fs::canonical(directory_));
   const auto snapshot_directory = utils::path_to_utf8(snapshot_directory_);
   for (const auto* field : {"snapshots", "snapshot_cleanup", "snapshot_writes"}) {

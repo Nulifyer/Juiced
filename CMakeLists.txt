@@ -3463,6 +3463,16 @@ if(BUILD_TESTING)
         ${CMAKE_CURRENT_SOURCE_DIR}/juiced/tests/test_store_ownership.py --binary $<TARGET_FILE:${EXECUTABLE_NAME}>
         --out ${CMAKE_CURRENT_BINARY_DIR}/store-ownership-proof.json DEPENDS ${EXECUTABLE_NAME})
     set_tests_properties(StoreOwnershipEntrypointsTest PROPERTIES TIMEOUT 150)
+    add_cpp_ci_test(StoreDirectoryAliasesTest CI ON COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/juiced/tests/test_store_ownership.py --binary $<TARGET_FILE:${EXECUTABLE_NAME}>
+        --aliases --out ${CMAKE_CURRENT_BINARY_DIR}/store-directory-aliases-proof.json DEPENDS ${EXECUTABLE_NAME})
+    set_tests_properties(StoreDirectoryAliasesTest PROPERTIES TIMEOUT 150)
+    if(NOT WIN32)
+        add_cpp_ci_test(StoreHierarchyEntrypointsTest CI ON COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/juiced/tests/test_store_ownership.py --binary $<TARGET_FILE:${EXECUTABLE_NAME}>
+            --hierarchy --out ${CMAKE_CURRENT_BINARY_DIR}/store-hierarchy-proof.json DEPENDS ${EXECUTABLE_NAME})
+        set_tests_properties(StoreHierarchyEntrypointsTest PROPERTIES TIMEOUT 150)
+    endif()
     add_cpp_ci_test(SnapshotStoreBindingTest CI ON COMMAND ${Python3_EXECUTABLE}
         ${CMAKE_CURRENT_SOURCE_DIR}/juiced/tests/test_store_ownership.py --binary $<TARGET_FILE:${EXECUTABLE_NAME}>
         --binding --out ${CMAKE_CURRENT_BINARY_DIR}/snapshot-store-binding-proof.json DEPENDS ${EXECUTABLE_NAME})

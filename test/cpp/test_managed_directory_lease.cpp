@@ -65,6 +65,9 @@ int main() {
         failed = false;
         try { Lease empty({fs::path{}}); } catch (const std::exception&) { failed = true; }
         check(failed, "empty managed roots never silently select a default store");
+        const auto preview = root / "uncreated-root-preview";
+        check(Lease::resolve_root(preview / ".") == fs::canonical(root) / preview.filename() && !fs::exists(preview),
+              "root preflight normalizes missing aliases without creating directories");
         {
             Lease owner({a});
             auto first = owner.claim(b);
@@ -101,6 +104,61 @@ int main() {
         { Lease read_only_control({b}); check(busy(b), "an existing read-only control file still provides exclusive ownership"); }
         fs::permissions(control, permissions);
 #ifndef _WIN32
+        const auto hierarchy = root / "hierarchy";
+        {
+            Lease parent({hierarchy});
+            check(busy(hierarchy / "new-child"), "another owner cannot acquire a descendant root");
+            check(!fs::exists(hierarchy / "new-child"), "rejected descendant acquisition performs no directory creation");
+            auto child = parent.claim(hierarchy / "own-child");
+            check(busy(hierarchy / "own-child"), "the same owner can retain a nested root under its ancestor");
+        }
+        {
+            Lease child({hierarchy / "child-first"});
+            check(busy(hierarchy), "another owner cannot acquire an ancestor root");
+            Lease sibling({hierarchy / "independent-sibling"});
+            check(busy(hierarchy / "independent-sibling"), "independent siblings share ancestor intent locks");
+        }
+        {
+            Lease nested({hierarchy / "constructor-child", hierarchy});
+            check(busy(hierarchy) && busy(hierarchy / "constructor-child"), "startup roots acquire broad ownership before nested claims");
+        }
+        {
+            const auto parent = root / "new-trailing-startup";
+            Lease nested({parent / "child", parent / ""});
+            check(busy(parent) && busy(parent / "child"), "new parent aliases normalize before startup ownership ordering");
+        }
+        {
+            Lease owner({});
+            const auto trailing = root / "new-trailing-claim", dot = root / "new-dot-claim";
+            auto first = owner.claim(trailing / "");
+            check(first.root() == fs::canonical(trailing) && busy(trailing), "a new trailing-separator claim resolves to the actual directory");
+            auto second = owner.claim(dot / ".");
+            check(second.root() == fs::canonical(dot) && busy(dot), "a new dot alias cannot acquire its target as an ancestor intent");
+        }
+        {
+            Lease first({root / "prefix"});
+            Lease sibling({root / "prefix-sibling"});
+            check(busy(root / "prefix") && busy(root / "prefix-sibling"), "similar directory names do not imply an ancestor relationship");
+        }
+        {
+            Lease owner({});
+            auto child = owner.claim(hierarchy / "upgrade-child");
+            bool rejected = false;
+            try { auto broader = owner.claim(hierarchy); } catch (const std::exception&) { rejected = true; }
+            check(rejected && busy(hierarchy / "upgrade-child"), "a broader claim cannot drop a live narrower ownership lock");
+            child = {};
+            auto broader = owner.claim(hierarchy);
+            check(busy(hierarchy), "a broader claim succeeds after narrower ownership is released");
+        }
+        {
+            Lease owner({});
+            auto parent = owner.claim(hierarchy);
+            auto child = owner.claim(hierarchy / "retained-child");
+            parent = {};
+            check(busy(hierarchy), "a child claim retains the ancestor that authorizes it");
+            child = {};
+            check(!busy(hierarchy), "the last descendant view releases its inherited ancestor ownership");
+        }
         const auto removed_control_root = root / "removed-control";
         {
             Lease owner({removed_control_root});
