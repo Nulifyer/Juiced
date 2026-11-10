@@ -1,5 +1,7 @@
 #pragma once
 
+#include "lemon/resource_admission.h"
+
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -24,6 +26,7 @@ class RuntimeConfig {
 public:
     /// Construct from a full nested config JSON (loaded from config.json).
     explicit RuntimeConfig(const json& config);
+    void set_resource_admission(const ResourceAdmission& admission) { resource_admission_ = admission; }
 
     // --- Thread-safe typed getters (shared lock) ---
     // Top-level server settings
@@ -149,6 +152,7 @@ public:
                                   const std::string& value);
 
 private:
+    std::optional<ResourceAdmission> resource_admission_;
     // Validate a single key/value pair. Throws std::invalid_argument on failure.
     void validate(const std::string& key, const json& value) const;
 

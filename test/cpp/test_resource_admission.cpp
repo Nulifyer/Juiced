@@ -598,6 +598,28 @@ int main() {
               "unresolved helper ownership blocks configuration promotion");
     }
     {
+        for (const std::string operation : {"runtime-install", "runtime-uninstall"}) {
+            ResourceAdmission mutations;
+            {
+                auto accepted = mutations.acquire_management("llamacpp:cpu", operation);
+                check(error([&] { mutations.acquire_management("llamacpp:cpu", "runtime-install"); }, "runtime_reference_busy") &&
+                      error([&] { mutations.acquire_management("llamacpp:cpu", "runtime-uninstall"); }, "runtime_reference_busy"),
+                      "accepted package mutations exclude install and uninstall through their whole operation");
+                auto other = mutations.acquire_management("llamacpp:vulkan", "runtime-install");
+                check(bool(other), "package mutation exclusion is scoped to the affected runtime");
+            }
+            auto retry = mutations.acquire_management("llamacpp:cpu", operation);
+            check(bool(retry), "terminal synchronous package mutation releases matching retry");
+            retry.started();
+        }
+        ResourceAdmission uncertain;
+        { auto accepted = uncertain.acquire_management("llamacpp:cpu", "runtime-install"); accepted.started(); }
+        check(uncertain.snapshot()["uncertain"] == 1 &&
+              error([&] { uncertain.acquire_management("llamacpp:cpu", "runtime-install"); }, "runtime_reference_busy") &&
+              error([&] { uncertain.acquire_management("llamacpp:cpu", "runtime-uninstall"); }, "runtime_reference_busy"),
+              "unconfirmed package mutation retains exclusion after its initiating owner disappears");
+    }
+    {
         ResourceAdmission references;
         {
             auto runtime = references.acquire_management("flm:npu", "runtime-reference"); runtime.started();
@@ -707,6 +729,84 @@ int main() {
         slots.reconcile_idle_requests(900);
         check(slots.snapshot()["uncertain"] == 0 && bool(slots.acquire(physical(32))),
               "confirmed idle request observation restores the exact generation's slot");
+    }
+    {
+        ResourceAdmission running;
+        ResourceAdmission::Work request;
+        request.model = "terminal-publication";
+        auto accepted_request = running.acquire(request);
+        accepted_request.started(); accepted_request.completed();
+        running.maintenance(true);
+        check(!running.wait_for_writes(1ms), "completed device work cannot hide a still-owned request finalizer from draining");
+        accepted_request = {};
+        check(running.wait_for_writes(100ms), "terminal request release completes its participating operation");
+        ResourceAdmission cancellation;
+        ResourceAdmission::WriteToken cancelled_writer;
+        { auto writer = cancellation.write_scope("cancelled-deferred"); cancelled_writer = writer.continuation(); }
+        ResourceAdmission::Work cancelled_work;
+        cancelled_work.cancelled = [token = std::move(cancelled_writer)]() mutable { token = {}; return true; };
+        check(error([&] { cancellation.acquire(std::move(cancelled_work)); }, "request_cancelled") &&
+              cancellation.wait_for_writes(50ms), "cancellation releases the final continuation without reentering the ledger mutex");
+        ResourceAdmission::WriteToken terminal_writer;
+        { auto writer = cancellation.write_scope("terminal-deferred"); terminal_writer = writer.continuation(); }
+        ResourceAdmission::Work terminal;
+        terminal.operation = ResourceAdmission::Operation::Management;
+        terminal.cancelled = [token = std::move(terminal_writer)] { return false; };
+        auto terminal_lease = cancellation.acquire(std::move(terminal));
+        terminal_lease.started(); terminal_lease.completed(); terminal_lease = {};
+        check(cancellation.wait_for_writes(50ms) && cancellation.snapshot()["writes"]["active_operations"] == 0,
+              "terminal ledger cleanup can release its continuation while holding the ledger mutex");
+        ResourceAdmission writes;
+        writes.configure({{"active_limit", 1}});
+        ResourceAdmission::WriteToken deferred;
+        {
+            auto operation = writes.write_scope("configuration");
+            auto nested = writes.write_scope("aliases");
+            check(writes.snapshot()["writes"]["active_operations"] == 1,
+                  "nested native writers retain one accepted operation");
+            ResourceAdmission::Work work; work.model = "independent";
+            auto inference = writes.acquire(work);
+            check(writes.snapshot()["active"] == 1 && writes.snapshot()["pending"] == 0,
+                  "metadata lifetimes consume no inference slot or user quota");
+            deferred = nested.continuation();
+        }
+        writes.maintenance(true);
+        check(!writes.wait_for_writes(1ms) && writes.snapshot()["writes"]["active_operations"] == 1,
+              "a deferred writer retains accepted ownership after its initiating stack returns");
+        check(error([&] { writes.write_scope("new-mutation"); }, "maintenance_active"),
+              "closed writer admission rejects fresh native mutations");
+        auto resumed = run_thread([token = deferred, &writes]() mutable {
+            auto continued = token.enter();
+            auto publication = writes.write_scope("deferred-publication");
+            return writes.snapshot()["writes"]["active_operations"] == 1;
+        });
+        check(resumed.get(), "explicit continuation authorizes terminal publication on another thread during drain");
+        deferred = {};
+        check(writes.wait_for_writes(100ms) && writes.snapshot()["writes"]["active_operations"] == 0,
+              "only final continuation release completes writer draining");
+        writes.pause(false);
+        check(error([&] { ResourceAdmission::Work work; writes.acquire(work); }, "maintenance_active"),
+              "ordinary admission resume cannot bypass writer maintenance");
+        writes.maintenance(false);
+        {
+            auto operation = writes.write_scope("failed-metadata");
+            try { auto nested = writes.write_scope("nested-failure"); throw std::runtime_error("fixture"); }
+            catch (const std::runtime_error&) {}
+            check(writes.snapshot()["writes"]["active_operations"] == 1,
+                  "failed nested publication cannot release its still-running outer operation");
+        }
+        check(writes.wait_for_writes(100ms), "synchronous writer failure leaves no active thread context");
+        {
+            auto operation = writes.write_scope("configuration");
+            writes.configure({{"active_limit", 2}});
+            check(writes.snapshot()["writes"]["active_operations"] == 1,
+                  "admission configuration publishes inside its own accepted writer operation");
+            auto other = run_thread([&] { return error([&] { writes.configure({{"active_limit", 3}}); }, "admission_configuration_busy"); });
+            check(other.get(), "configuration cannot cross another active writer operation");
+        }
+        { auto helper = writes.acquire_management("unknown", "helper"); helper.started(); }
+        writes.maintenance(true);
+        check(!writes.wait_for_writes(1ms), "uncertain helper ownership prevents a false drained-writer result");
     }
     std::printf("Resource admission: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

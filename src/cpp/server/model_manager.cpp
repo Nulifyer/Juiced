@@ -2357,6 +2357,7 @@ ModelManager::OptionsWriteSnapshot ModelManager::begin_options_write(const std::
 }
 
 void ModelManager::save_model_options(const ModelInfo& info) {
+    auto operation = resource_admission_ ? resource_admission_->write_scope("model-save-model-options") : ResourceAdmission::WriteScope{};
     LOG(INFO, "ModelManager") << "Saving options for model: " << info.model_name << std::endl;
     // Persist under canonical ID (built-ins are keyed bare in cache but
     // recipe_options.json stores them as builtin.<name>).
@@ -2468,6 +2469,7 @@ json ModelManager::update_saved_model_options(const std::string& model_name, con
 // every request thread contends on the cache mutex.
 json ModelManager::write_saved_model_options(const std::string& model_name,
                                              const json& options, bool merge, const std::string& expected_recipe) {
+    auto operation = resource_admission_ ? resource_admission_->write_scope("model-write-saved-model-options") : ResourceAdmission::WriteScope{};
     if (options_write_barrier_) options_write_barrier_();
     auto write = begin_options_write(model_name);
     const auto& cache_key = write.key;
@@ -2547,6 +2549,7 @@ json ModelManager::get_execution_profiles(const std::string& model_name) {
 }
 
 void ModelManager::select_execution_profile(const std::string& model_name, const json& profile) {
+    auto operation = resource_admission_ ? resource_admission_->write_scope("model-select-execution-profile") : ResourceAdmission::WriteScope{};
     const auto profile_id = profile.at("id").get<std::string>();
     if (profile_id.empty() || profile_id.size() > 160) throw std::invalid_argument("Invalid execution profile identifier");
     if (profile_id != "registered" && !backends::descriptor_for(profile.at("recipe").get<std::string>()))
@@ -4968,6 +4971,7 @@ void ModelManager::register_user_model(const std::string& model_name,
                                       const json& model_data,
                                       const std::string& source, bool replace_existing,
                                       const std::string& publication_id) {
+    auto operation = resource_admission_ ? resource_admission_->write_scope("model-register-user-model") : ResourceAdmission::WriteScope{};
     auto mutation = model_mutation(model_name);
     guard_native_helper_mutation(model_name);
     const std::string recipe = model_data.value("recipe", std::string());
@@ -5072,6 +5076,7 @@ void ModelManager::register_user_model(const std::string& model_name,
 }
 
 void ModelManager::unregister_user_model(const std::string& model_name) {
+    auto operation = resource_admission_ ? resource_admission_->write_scope("model-unregister-user-model") : ResourceAdmission::WriteScope{};
     auto mutation = model_mutation(model_name);
     guard_native_helper_mutation(model_name);
     std::lock_guard<std::recursive_mutex> references(model_references_mutex_);
@@ -5138,6 +5143,7 @@ ResourceAdmission::Lease ModelManager::admit_acquisition(const std::string& mode
 }
 
 void ModelManager::download_registered_model(const ModelInfo& info, bool do_not_upgrade, DownloadProgressCallback progress_callback) {
+    auto operation = resource_admission_ ? resource_admission_->write_scope("model-download-registered-model") : ResourceAdmission::WriteScope{};
     auto admission = admit_acquisition(info.model_name);
     download_registered_model_impl(info, do_not_upgrade, std::move(progress_callback));
 }
@@ -5509,6 +5515,7 @@ void ModelManager::register_model(const std::string& model_name,
                                  const json& model_data,
                                  bool allow_missing_checkpoint,
                                  bool replace_existing) {
+    auto operation = resource_admission_ ? resource_admission_->write_scope("model-register-model") : ResourceAdmission::WriteScope{};
     auto admission = admit_acquisition(model_name);
     std::set<std::string> visited;
     download_model(model_name, model_data, true, nullptr, visited,
@@ -5519,6 +5526,7 @@ void ModelManager::download_model(const std::string& model_name,
                                  const json& model_data,
                                  bool do_not_upgrade,
                                  DownloadProgressCallback progress_callback) {
+    auto operation = resource_admission_ ? resource_admission_->write_scope("model-download-model") : ResourceAdmission::WriteScope{};
     auto admission = admit_acquisition(model_name);
     if (download_model_override_) {
         download_model_override_(model_name, model_data, do_not_upgrade, progress_callback);
@@ -7196,6 +7204,7 @@ void ModelManager::remove_flm_model(const std::string& model, json expected_defi
 }
 
 void ModelManager::delete_model(const std::string& model_name) {
+    auto operation = resource_admission_ ? resource_admission_->write_scope("model-delete-model") : ResourceAdmission::WriteScope{};
     auto admission = admit_acquisition(model_name);
     auto definition = user_model_definition(model_name);
     if (definition.is_object() && definition.contains("juiced_removal")) {

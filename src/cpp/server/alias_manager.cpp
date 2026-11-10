@@ -24,6 +24,7 @@ AliasManager::AliasManager(std::string cache_dir)
 }
 
 void AliasManager::set_cache_dir(const std::string& cache_dir) {
+    auto operation = resource_admission_ ? resource_admission_->write_scope("aliases") : ResourceAdmission::WriteScope{};
     std::unique_lock writer(write_mutex_);
     auto candidate = read_aliases(cache_dir);
     std::unique_lock lock(mutex_);
@@ -37,6 +38,7 @@ std::string AliasManager::get_cache_dir() const {
 }
 
 bool AliasManager::set_alias(const std::string& alias, const std::string& target, std::string& err_msg) {
+    auto operation = resource_admission_ ? resource_admission_->write_scope("aliases") : ResourceAdmission::WriteScope{};
     std::string clean_alias = utils::normalize_model_name(alias);
     std::string clean_target = utils::normalize_model_name(target);
 
@@ -89,6 +91,7 @@ bool AliasManager::set_alias(const std::string& alias, const std::string& target
 }
 
 bool AliasManager::remove_alias(const std::string& alias) {
+    auto operation = resource_admission_ ? resource_admission_->write_scope("aliases") : ResourceAdmission::WriteScope{};
     const auto clean_alias = utils::normalize_model_name(alias);
     std::unique_lock writer(write_mutex_);
     auto candidate = get_all_aliases();
@@ -144,6 +147,7 @@ std::unordered_map<std::string, std::string> AliasManager::get_all_aliases() con
 }
 
 void AliasManager::load() {
+    auto operation = resource_admission_ ? resource_admission_->write_scope("aliases") : ResourceAdmission::WriteScope{};
     std::unique_lock writer(write_mutex_);
     auto candidate = read_aliases(get_cache_dir());
     std::unique_lock lock(mutex_);
@@ -237,6 +241,7 @@ std::unordered_map<std::string, std::string> AliasManager::read_aliases(const st
 }
 
 void AliasManager::save() {
+    auto operation = resource_admission_ ? resource_admission_->write_scope("aliases") : ResourceAdmission::WriteScope{};
     std::unique_lock writer(write_mutex_);
     save_locked(get_all_aliases());
 }

@@ -1339,6 +1339,7 @@ json RuntimeConfig::set_persisted(const json& changes,
 json RuntimeConfig::update_persisted(std::function<json()> read_changes,
                                      std::function<void(const json&)> persist,
                                      ConfigSideEffectCallback side_effect_cb) {
+    auto operation = resource_admission_ ? resource_admission_->write_scope("configuration") : ResourceAdmission::WriteScope{};
     std::unique_lock writer(write_mutex_);
     const auto changes = read_changes();
     if (!changes.is_object() || changes.empty())

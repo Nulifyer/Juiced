@@ -491,6 +491,7 @@ Server::Server(std::shared_ptr<RuntimeConfig> config,
                                        model_manager_.get(),
                                        backend_manager_.get());
     router_->set_cloud_registry(cloud_registry_.get());
+    alias_manager_->set_resource_admission(router_->admission_view());
 
     // When a router collection is added, edited, or removed (via the API or an
     // on-disk edit), reclaim any routing helper no remaining policy references.
@@ -6989,6 +6990,7 @@ public:
 }
 
 json Server::publish_config(std::function<json()> read_changes) {
+    auto operation = router_->admission_view().write_scope("configuration-effects");
     const auto changes = read_changes();
     const bool has_effects = !changes.contains("admission") && !changes.contains("cloud_providers");
     std::unique_lock<std::mutex> effects(config_effect_mutex_, std::defer_lock);

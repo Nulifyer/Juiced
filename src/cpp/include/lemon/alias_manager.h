@@ -1,5 +1,7 @@
 #pragma once
 
+#include "lemon/resource_admission.h"
+
 #include <filesystem>
 #include <functional>
 #include <mutex>
@@ -17,6 +19,7 @@ public:
     static constexpr size_t MAX_ALIAS_CHAIN_DEPTH = 10;
 
     explicit AliasManager(std::string cache_dir = "");
+    void set_resource_admission(const ResourceAdmission& admission) { resource_admission_ = admission; }
 
     void set_cache_dir(const std::string& cache_dir);
     std::string get_cache_dir() const;
@@ -62,6 +65,7 @@ public:
 
 private:
     friend struct AliasPublicationTestHook;
+    std::optional<ResourceAdmission> resource_admission_;
     static std::unordered_map<std::string, std::string> read_aliases(const std::string& cache_dir);
     void save_locked(const std::unordered_map<std::string, std::string>& aliases);
     std::function<void(const std::string&, const std::unordered_map<std::string, std::string>&)> persist_override_;

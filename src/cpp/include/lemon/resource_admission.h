@@ -32,8 +32,10 @@ public:
 
 class ResourceAdmission {
     struct State;
+    struct WriterRecord;
+    static thread_local std::weak_ptr<WriterRecord> writer_context_;
 public:
-    enum class Operation { Load, Request, State, Realtime, Management, Ingress };
+    enum class Operation { Load, Request, State, Realtime, Management, Ingress, Write };
     struct Work {
         std::string model;
         std::string service;
@@ -77,6 +79,36 @@ public:
         std::shared_ptr<State> state_;
         uint64_t id_ = 0;
     };
+    class WriteScope;
+    class WriteToken {
+    public:
+        WriteToken() = default;
+        WriteScope enter() const;
+    private:
+        friend class WriteScope;
+        explicit WriteToken(std::shared_ptr<WriterRecord> record) : record_(std::move(record)) {}
+        std::shared_ptr<WriterRecord> record_;
+    };
+    class WriteScope {
+    public:
+        WriteScope() = default;
+        ~WriteScope();
+        WriteScope(const WriteScope&) = delete;
+        WriteScope& operator=(const WriteScope&) = delete;
+        WriteToken continuation() const;
+    private:
+        friend class ResourceAdmission;
+        friend class WriteToken;
+        explicit WriteScope(std::shared_ptr<WriterRecord> record);
+        std::shared_ptr<WriterRecord> record_;
+        std::weak_ptr<WriterRecord> previous_;
+    };
+    WriteScope write_scope(const std::string& owner) const;
+    void maintenance(bool requested);
+    // Drained participating operations do not prove that idle workers or external
+    // and prior-manager writers stopped; maintenance must validate those owners.
+    bool wait_for_writes(std::chrono::milliseconds timeout) const;
+
     using Headroom = std::function<std::optional<uint64_t>(const std::string&)>;
 
     explicit ResourceAdmission(Headroom headroom = {});

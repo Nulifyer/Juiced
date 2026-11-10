@@ -154,6 +154,10 @@ struct StatePublicationTestHook {
         });
         handler(request, response); return response;
     }
+    static void finish_background(Server& server) {
+        server.juiced_->stop();
+        if (server.model_cache_warmup_thread_.joinable()) server.model_cache_warmup_thread_.join();
+    }
     static void pause(Server& server, bool paused) { server.router_->pause_admission(paused); }
     static void configure(Server& server, const json& config) { server.router_->configure_admission(config); }
     static json admission(Server& server) { return server.router_->admission_snapshot(); }
@@ -210,6 +214,35 @@ static void native_owners() {
     ModelManager models; BackendManager runtime_manager;
     {
         Router router(&config, &models, &runtime_manager);
+        {
+            std::promise<void> entered_install, release_install;
+            auto released_install = release_install.get_future().share();
+            std::atomic<bool> observed{false};
+            auto installation = std::async(std::launch::async, [&] {
+                runtime_manager.install_backend("llamacpp", "cpu", false, [&](const auto&) {
+                    if (!observed.exchange(true)) { entered_install.set_value(); released_install.wait(); }
+                    return true;
+                });
+            });
+            const bool entered = entered_install.get_future().wait_for(std::chrono::seconds(5)) == std::future_status::ready;
+            bool second_install_blocked = false, removal_blocked = false;
+            try { runtime_manager.install_backend("llamacpp", "cpu", false); }
+            catch (const AdmissionError& error) { second_install_blocked = error.status == 409 && error.code == "runtime_reference_busy"; }
+            try { runtime_manager.uninstall_backend("llamacpp", "cpu"); }
+            catch (const AdmissionError& error) { removal_blocked = error.status == 409 && error.code == "runtime_reference_busy"; }
+            check(entered && second_install_blocked && removal_blocked && fs::is_regular_file(retained_runtime),
+                  "native installation retains package exclusion through its ready callback without deleting runtime files");
+            release_install.set_value(); installation.get();
+            runtime_manager.uninstall_backend("llamacpp", "cpu");
+            check(!fs::exists(retained_runtime) && router.admission_snapshot()["active"] == 0,
+                  "native removal retries successfully only after the accepted installation returns");
+            fs::create_directories(runtime_dir); std::ofstream(retained_runtime) << "preserve";
+            bool failed_callback = false;
+            try { runtime_manager.install_backend("llamacpp", "cpu", false, [&](const auto&) -> bool { throw std::runtime_error("controlled ready callback failure"); }); }
+            catch (const std::runtime_error&) { failed_callback = true; }
+            check(failed_callback && router.admission_snapshot()["active"] == 0 && fs::is_regular_file(retained_runtime),
+                  "a synchronous ready callback failure preserves files and releases its package operation");
+        }
         std::promise<void> entered, release; auto released = release.get_future().share();
         std::atomic<int> dispatches{0}; std::atomic<bool> nested{false};
         models.set_download_model_override_for_test([&](const auto&, const auto&, bool, auto) {
@@ -289,6 +322,7 @@ static void entry_boundaries() {
     auto config = std::make_shared<RuntimeConfig>(defaults); RuntimeConfig::set_global(config.get());
     {
         Server server(config, root.string(), root.string());
+        StatePublicationTestHook::finish_background(server);
         auto worker = std::make_shared<ManagementWorker>(); StatePublicationTestHook::add(server, worker);
         for (bool paused : {false, true}) {
             StatePublicationTestHook::pause(server, paused);
@@ -338,11 +372,8 @@ static void entry_boundaries() {
             check(response.status == 200 && response.content_provider_ && dispatched == 0 && conflict,
                   "an accepted deferred stream retains admission before its download provider starts");
         }
-        const auto idle_until = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-        while (StatePublicationTestHook::admission(server)["active"] != 0 && std::chrono::steady_clock::now() < idle_until)
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        check(StatePublicationTestHook::admission(server)["active"] == 0,
-              "discarding a proven undispatched stream releases its transition ticket after other native work drains");
+        check(StatePublicationTestHook::admission(server)["active"] == 0 && dispatched == 0,
+              "discarding a proven undispatched stream releases its ticket without waiting for other native work");
         config->set({{"offline", true}});
         StatePublicationTestHook::configure(server, {{"mode", "legacy"}});
         for (const std::string action : {"", "start", "plan", "resume", "convert", "quantize"}) {

@@ -641,6 +641,39 @@ promotion and reclamation. Pending reloads survive an application retry in this
 manager process. Complete bundle manifests, references and restart recovery
 remain P3 requirements. These controls do not qualify arbitrary package writers.
 
+BackendManager install and uninstall operations exclude another mutation for the
+same normalized recipe/backend key while their native operation ticket remains
+held. This includes progress callbacks and terminal publication. Runtime helper
+references can share that key, but exclude replacement in both directions.
+Unrelated keys remain independent. An unresolved dispatched ticket continues to
+block matching replacement after its initiating scope ends. These checks do not
+establish cross-recipe dependency identity, all-worker bundle references or
+all-writer maintenance; those remain separate lifecycle obligations.
+
+Participating native writers now acquire an operation scope through the existing
+ResourceAdmission owner before taking publication locks. Configuration scopes span
+saved intent and Server effects. Alias scopes cover ordinary edits, reload
+quarantine and directory changes. Model scopes cover options/profile transactions,
+registration, acquisition and deletion through their final native publication.
+Nested synchronous writes share the accepted operation. Opaque continuation tokens
+retain it across a deferred boundary and restore its context on another thread.
+Tokens are internal lifetime handles, not client-provided authorization.
+
+Internal writer maintenance closes new mutation scopes and new execution work;
+it differs from ordinary inference admission pause. Accepted continuations can
+finish their state/helper effects during drain. Writer records consume no physical
+inference slot or per-user quota. A wait includes participating nonresident work
+through final owner release, even after device work reports completion. Active or
+uncertain helper tickets also prevent that drain from completing.
+
+This is operation accounting, not whole-server maintenance acceptance. No public
+maintenance-ready endpoint is exposed. Queued/deferred Juiced/import/snapshot/job
+writers, external roots, idle-worker stop and prior-manager recovery still need
+complete integration and evidence. Empty participating-operation counts cannot
+prove storage consistency or that another process stopped writing. Synchronous
+profile rollback evidence still does not establish crash-consistent multi-file
+recovery or rollback-write failure recovery.
+
 Preparation retains its process, accepted management tickets and staging reference
 through cancellation or shutdown until cleanup confirms direct-child exit. A
 failed stop leaves `cleanup_pending:true` and a pending job. The owning worker

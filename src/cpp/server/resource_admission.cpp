@@ -71,6 +71,7 @@ std::string operation_name(ResourceAdmission::Operation operation) {
         case ResourceAdmission::Operation::Realtime: return "realtime";
         case ResourceAdmission::Operation::Management: return "management";
         case ResourceAdmission::Operation::Ingress: return "ingress";
+        case ResourceAdmission::Operation::Write: return "write";
         default: return "request";
     }
 }
@@ -94,6 +95,7 @@ struct ResourceAdmission::State {
         bool resident = false;
         bool uncertain = false;
         bool protected_mode = false;
+        std::weak_ptr<WriterRecord> writer;
     };
     mutable std::mutex mutex;
     std::condition_variable changed;
@@ -105,9 +107,15 @@ struct ResourceAdmission::State {
     std::set<uint64_t> stopped_generations;
     uint64_t next_id = 0, rejected = 0, admitted = 0;
     size_t essential_streak = 0;
-    bool paused = false, stopped = false, configuration_pending = false;
+    bool paused = false, stopped = false, configuration_pending = false, maintenance = false;
     uint64_t revision = 0;
 
+    void prune_writes() {
+        for (auto item = active.begin(); item != active.end();) {
+            if (item->second->work.operation == Operation::Write && item->second->writer.expired()) item = active.erase(item);
+            else ++item;
+        }
+    }
     Charges reserved() const {
         Charges result;
         for (const auto& item : active) for (const auto& cost : item.second->costs) result[cost.first] += cost.second;
@@ -178,7 +186,7 @@ struct ResourceAdmission::State {
         size_t running = 0, state_running = 0, generation_running = 0;
         for (const auto& item : active) {
             if (item.second->resident || item.second->work.operation == Operation::Management ||
-                item.second->work.operation == Operation::Ingress) continue;
+                item.second->work.operation == Operation::Ingress || item.second->work.operation == Operation::Write) continue;
             if (item.second->uncertain && item.second->work.generation == entry.work.generation &&
                 item.second->work.operation != Operation::Request) return false;
             if (item.second->work.operation == Operation::State) { ++state_running; continue; }
@@ -203,6 +211,72 @@ struct ResourceAdmission::State {
         return essential && (essential_streak < 8 || !ordinary) ? essential : ordinary;
     }
 };
+
+struct ResourceAdmission::WriterRecord {
+    std::shared_ptr<State> state;
+    uint64_t id = 0;
+    ~WriterRecord() {
+        // Cancellation may release the final token while the ledger is locked.
+        if (state) state->changed.notify_all();
+    }
+};
+thread_local std::weak_ptr<ResourceAdmission::WriterRecord> ResourceAdmission::writer_context_;
+
+ResourceAdmission::WriteScope::WriteScope(std::shared_ptr<WriterRecord> record)
+    : record_(std::move(record)), previous_(writer_context_) {
+    if (record_) writer_context_ = record_;
+}
+ResourceAdmission::WriteScope::~WriteScope() {
+    if (record_) writer_context_ = previous_;
+}
+ResourceAdmission::WriteToken ResourceAdmission::WriteScope::continuation() const { return WriteToken(record_); }
+ResourceAdmission::WriteScope ResourceAdmission::WriteToken::enter() const { return WriteScope(record_); }
+
+ResourceAdmission::WriteScope ResourceAdmission::write_scope(const std::string& owner) const {
+    const auto inherited = writer_context_.lock();
+    std::unique_lock<std::mutex> lock(state_->mutex);
+    state_->prune_writes();
+    if (inherited && inherited->state == state_) {
+        lock.unlock();
+        return WriteScope(inherited);
+    }
+    if (state_->configuration_pending)
+        throw AdmissionError("admission_configuration_busy", "Admission configuration is changing; retry the state mutation", 409);
+    if (state_->stopped)
+        throw AdmissionError("admission_paused", "Runtime admission is stopped", 503);
+    if (state_->maintenance)
+        throw AdmissionError("maintenance_active", "New state mutations are closed; finish maintenance before retrying", 503);
+    auto record = std::make_shared<WriterRecord>();
+    record->state = state_;
+    auto entry = std::make_shared<State::Entry>();
+    entry->id = ++state_->next_id;
+    entry->work.operation = Operation::Write;
+    entry->work.service = owner;
+    entry->writer = record;
+    state_->active.emplace(entry->id, entry);
+    record->id = entry->id;
+    lock.unlock();
+    return WriteScope(std::move(record));
+}
+void ResourceAdmission::maintenance(bool requested) {
+    std::lock_guard<std::mutex> lock(state_->mutex);
+    state_->maintenance = requested;
+    state_->changed.notify_all();
+}
+bool ResourceAdmission::wait_for_writes(std::chrono::milliseconds timeout) const {
+    const auto deadline = Clock::now() + timeout;
+    std::unique_lock<std::mutex> lock(state_->mutex);
+    for (;;) {
+        state_->prune_writes();
+        if (std::none_of(state_->active.begin(), state_->active.end(), [](const auto& item) {
+                return item.second->work.operation != Operation::Ingress &&
+                    (!item.second->resident || item.second->uncertain);
+            })) return true;
+        if (Clock::now() >= deadline) return false;
+        // Token completion need not take the lock, so bound a missed notification.
+        state_->changed.wait_until(lock, std::min(deadline, Clock::now() + std::chrono::milliseconds(10)));
+    }
+}
 
 ResourceAdmission::ResourceAdmission(Headroom headroom) : state_(std::make_shared<State>()) {
     state_->headroom = std::move(headroom);
@@ -277,6 +351,7 @@ void ResourceAdmission::validate_config(const json& config) {
 }
 
 void ResourceAdmission::configure(const json& config, std::function<void()> publish) {
+    auto operation = write_scope("admission-configuration");
     validate_config(config);
     json next = config;
     std::map<std::string, State::Pool> pools;
@@ -295,7 +370,9 @@ void ResourceAdmission::configure(const json& config, std::function<void()> publ
     if (state_->config == config && !publish) return;
     const auto ingress = config.value("ingress", json::object());
     uint64_t body_bytes = 0, regular_bytes = 0, readers = 0, control_readers = 0;
+    const auto writer = writer_context_.lock();
     for (const auto& item : state_->active) {
+        if (writer && writer->state == state_ && writer->id == item.first && item.second->work.operation == Operation::Write) continue;
         if (item.second->work.operation != Operation::Ingress)
             throw AdmissionError("admission_configuration_busy", "Drain work and unload models before changing admission settings", 409);
         const auto bytes = item.second->work.workload.at("body_bytes");
@@ -347,7 +424,7 @@ void ResourceAdmission::configure(const json& config, std::function<void()> publ
 ResourceAdmission::Policy ResourceAdmission::policy() const {
     std::lock_guard<std::mutex> lock(state_->mutex);
     return {state_->revision, state_->config.value("mode", std::string("legacy")) == "protected",
-            state_->paused || state_->stopped || state_->configuration_pending};
+            state_->paused || state_->stopped || state_->configuration_pending || state_->maintenance};
 }
 
 ResourceAdmission::Lease ResourceAdmission::acquire_ingress(uint64_t bytes, bool control) {
@@ -364,7 +441,9 @@ ResourceAdmission::Lease ResourceAdmission::acquire_management(const std::string
 ResourceAdmission::Lease ResourceAdmission::acquire(Work work) {
     auto entry = std::make_shared<State::Entry>();
     entry->work = std::move(work);
+    if (entry->work.operation == Operation::Write) throw std::invalid_argument("Native writer operations require write_scope");
     std::unique_lock<std::mutex> lock(state_->mutex);
+    state_->prune_writes();
     auto reject = [&](const char* code, const char* message, int status) -> void {
         ++state_->rejected;
         throw AdmissionError(code, message, status);
@@ -409,6 +488,10 @@ ResourceAdmission::Lease ResourceAdmission::acquire(Work work) {
         state_->active.emplace(entry->id, entry);
         return Lease(state_, entry->id);
     }
+    const auto writer = writer_context_.lock();
+    const bool continuing = writer && writer->state == state_ &&
+        (entry->work.operation == Operation::Management || entry->work.operation == Operation::State);
+    if (state_->maintenance && !continuing) reject("maintenance_active", "Runtime maintenance is rejecting new work", 503);
     if (state_->stopped || state_->paused) reject("admission_paused", "Runtime admission is paused", 503);
     if (entry->work.cancelled && entry->work.cancelled()) reject("request_cancelled", "Request disconnected before admission", 499);
     const auto& config = state_->config;
@@ -422,7 +505,7 @@ ResourceAdmission::Lease ResourceAdmission::acquire(Work work) {
                 if (active->work.operation != Operation::Management || active->work.model != entry->work.model) continue;
                 const bool held_reference = active->work.service == "runtime-reference";
                 const bool held_mutation = active->work.service == "runtime-install" || active->work.service == "runtime-uninstall";
-                if ((mutating_runtime && held_reference) || (referencing && held_mutation))
+                if ((mutating_runtime && (held_reference || held_mutation)) || (referencing && held_mutation))
                     reject("runtime_reference_busy", "Runtime files are held by an accepted helper or mutation; finish cleanup before replacement", 409);
             }
         }
@@ -518,6 +601,7 @@ ResourceAdmission::Lease ResourceAdmission::acquire(Work work) {
     try {
         while (true) {
             if (state_->configuration_pending) reject("admission_configuration_pending", "Admission configuration is changing", 503);
+            if (state_->maintenance) reject("maintenance_active", "Runtime maintenance is rejecting queued work", 503);
             if (state_->stopped || state_->paused) reject("admission_paused", "Runtime admission is paused", 503);
             if (entry->work.cancelled && entry->work.cancelled()) reject("request_cancelled", "Request disconnected while queued", 499);
             if (Clock::now() >= entry->queue_deadline) {
@@ -646,6 +730,7 @@ bool ResourceAdmission::has_uncertain_generation(uint64_t generation) const {
 }
 json ResourceAdmission::snapshot() const {
     std::lock_guard<std::mutex> lock(state_->mutex);
+    state_->prune_writes();
     json pools = json::object();
     const auto used = state_->reserved();
     for (const auto& pool : state_->pools) {
@@ -659,8 +744,13 @@ json ResourceAdmission::snapshot() const {
             {"source", "native available-byte sampler"}, {"configured", false},
             {"limit_kind", "sampled-headroom"}, {"essential_headroom_bytes", 0}};
     size_t running = 0, resident = 0, uncertain = 0, bodies = 0, readers = 0, control_readers = 0;
+    json writers = json::array();
     uint64_t body_bytes = 0, host_bytes = 0;
     for (const auto& item : state_->active) {
+        if (item.second->work.operation == Operation::Write) {
+            writers.push_back({{"id", item.first}, {"owner", item.second->work.service}});
+            continue;
+        }
         if (item.second->work.operation == Operation::Ingress) {
             ++bodies; body_bytes += item.second->work.workload.at("body_bytes");
             host_bytes += item.second->costs.at("host");
@@ -711,6 +801,7 @@ json ResourceAdmission::snapshot() const {
                         {"active_limit", natural(ingress, "active_limit", 4)}}},
         {"mode", state_->config.value("mode", std::string("legacy"))}, {"paused", state_->paused},
         {"stopped", state_->stopped}, {"configuration_revision", state_->revision},
+        {"writes", {{"maintenance_requested", state_->maintenance}, {"active_operations", writers.size()}, {"operations", writers}}},
         {"optional_limits", {{"schema_version", 1},
             {"principal_pending_limit", principal_limit ? json(principal_limit) : json(nullptr)},
             {"model_concurrency", model_limits}}},

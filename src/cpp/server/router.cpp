@@ -114,6 +114,7 @@ Router::Router(RuntimeConfig* config, ModelManager* model_manager, BackendManage
           return metrics ? metrics->get_memory_budget().available_bytes() : std::nullopt;
       }) {
     admission_.configure(config_->snapshot().value("admission", json::object()));
+    if (config_) config_->set_resource_admission(admission_);
     if (model_manager_) model_manager_->set_resource_admission(admission_);
     if (backend_manager_) backend_manager_->set_resource_admission(admission_);
 

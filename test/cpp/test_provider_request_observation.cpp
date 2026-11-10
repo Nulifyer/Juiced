@@ -92,8 +92,8 @@ int main() {
     {
         auto defaults = ConfigFile::base_defaults();
         defaults["auto_evict"] = false; defaults["disable_model_filtering"] = true; defaults["auto_check_model_updates"] = false;
-        RuntimeConfig config(defaults); RuntimeConfig::set_global(&config); ModelManager models;
         for (const auto& recipe : {"asr4all", "whispercpp"}) {
+            RuntimeConfig config(defaults); RuntimeConfig::set_global(&config); ModelManager models;
             SpeechProtocolFixture engine;
             std::shared_ptr<WrappedServer> worker;
             if (std::string(recipe) == "asr4all")
