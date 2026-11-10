@@ -809,7 +809,18 @@ std::optional<ProcessImageFiles> LinuxProcessPlatform::image_files(
                 return std::nullopt;
             }
             if (permissions[1] == 'w' || result.files.size() >= 4096) return std::nullopt;
-            const auto link = std::filesystem::read_symlink(root / "map_files" / range);
+            const auto separator = range.find('-');
+            if (separator == std::string::npos || separator == 0 || separator + 1 == range.size() ||
+                range.substr(0, separator).find_first_not_of("0123456789abcdefABCDEF") != std::string::npos ||
+                range.substr(separator + 1).find_first_not_of("0123456789abcdefABCDEF") != std::string::npos) return std::nullopt;
+            const auto first = std::stoull(range.substr(0, separator), nullptr, 16);
+            const auto last = std::stoull(range.substr(separator + 1), nullptr, 16);
+            if (first >= last) return std::nullopt;
+            // maps pads low addresses; map_files requires unpadded hex names.
+            std::ostringstream mapping_name;
+            mapping_name << std::hex << first << '-' << last;
+            const auto mapping_file = root / "map_files" / mapping_name.str();
+            const auto link = std::filesystem::read_symlink(mapping_file);
             if (!valid_path(link)) return std::nullopt;
             const auto path = std::filesystem::canonical(link);
             struct stat file{};
@@ -826,7 +837,7 @@ std::optional<ProcessImageFiles> LinuxProcessPlatform::image_files(
             file_signatures[name] = observed;
             result.files[name] += observed + '|' + range + '|' + permissions + '|' + offset + '|' + device + '|' + inode + '|' + link.string() + '\n';
             // The pathname came from the owned mapping, not a caller's file list.
-            if (std::filesystem::read_symlink(root / "map_files" / range) != link) return std::nullopt;
+            if (std::filesystem::read_symlink(mapping_file) != link) return std::nullopt;
         }
         if (result.files.empty() || !result.files.count(result.executable) || !is_running(handle) ||
             std::filesystem::read_symlink(root / "ns/mnt") != mount_namespace ||

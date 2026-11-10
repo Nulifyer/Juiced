@@ -833,6 +833,14 @@ from complete immutable runtime bundles and all-writer/root maintenance. Windows
 and macOS currently report process-image association unavailable, so this new
 persistent-cache qualification path remains unqualified there. Ordinary serving
 continues. Their image capture and real-device acceptance remain required work.
+Mapping lookup parses the address range before constructing its kernel pathname.
+Linux prints low addresses with leading zeros in
+[maps](https://github.com/torvalds/linux/blob/master/fs/proc/task_mmu.c), while
+[map_files](https://github.com/torvalds/linux/blob/master/fs/proc/base.c) names omit
+that padding. Normalizing the range supports non-PIE executable mappings without
+relaxing inode, device, path, namespace or writable-code checks. The Linux native
+launch fixture uses a non-PIE child to exercise this boundary.
+
 The [kernel procfs contract](https://docs.kernel.org/filesystems/proc.html) documents
 mapping-read and process-lifetime limitations. Portable metadata is not proof of
 shared-library or device execution on another platform.
