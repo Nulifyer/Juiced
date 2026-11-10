@@ -15,6 +15,8 @@ import time
 import urllib.error
 import urllib.request
 
+from admission_fixture import configure_admission
+
 MODEL = "Stories15M-Q4_0"
 ALIAS = "Stories-Cache-Alias"
 ROUTE = "Stories-Cache-Route"
@@ -189,40 +191,7 @@ class Fixture:
         return data
 
     def configure_admission(self, settings):
-        started = time.monotonic()
-        deadline = started + 10
-        attempts = 0
-        while True:
-            remaining = deadline - time.monotonic()
-            assert remaining > 0, ("Admission transition did not drain", attempts)
-            status, headers, data = self.call(
-                "/internal/set", {"admission": settings}, timeout=remaining
-            )
-            attempts += 1
-            if 200 <= status < 300:
-                self.admission_transitions.append(
-                    {
-                        "attempts": attempts,
-                        "busy_rejections": attempts - 1,
-                        "elapsed_seconds": time.monotonic() - started,
-                    }
-                )
-                return data
-            error = data.get("error", {})
-            details = error.get("details", {}) if isinstance(error, dict) else {}
-            code = (
-                error.get("code", details.get("code"))
-                if isinstance(error, dict)
-                else None
-            )
-            assert status == 409 and code == "admission_configuration_busy", (
-                status,
-                data,
-            )
-            remaining = deadline - time.monotonic()
-            assert remaining > 0, ("Admission transition did not drain", attempts, data)
-            delay = float(headers.get("Retry-After", details.get("retry_after", 1)))
-            time.sleep(min(max(0.01, delay), remaining))
+        return configure_admission(self.call, settings, self.admission_transitions)
 
     def load(self):
         self.ok("/v1/juiced/operation", {"model": MODEL, "action": "load"})

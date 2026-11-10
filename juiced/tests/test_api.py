@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """Model-free contract tests against the actual compiled manager."""
 import struct,json,os,pathlib,socket,subprocess,sys,tempfile,time,unittest,urllib.request,urllib.error
+from unittest import mock
+from admission_fixture import configure_admission
 BINARY=str(pathlib.Path(sys.argv.pop(1)).resolve())
 class ApiContract(unittest.TestCase):
  @classmethod
  def setUpClass(cls):
+  cls.admission_transitions=[]
   cls.temp=tempfile.TemporaryDirectory(prefix='juiced-test-');cls.root=pathlib.Path(cls.temp.name);(cls.root/'config').mkdir();(cls.root/'cache').mkdir();(cls.root/'run').mkdir()
   with socket.socket() as s:s.bind(('127.0.0.1',0));cls.port=s.getsockname()[1]
   cls.probe_dir=cls.root/'fake-cuda';cls.probe_dir.mkdir()
@@ -42,15 +45,39 @@ class ApiContract(unittest.TestCase):
   cls.process.terminate()
   try:cls.process.wait(timeout=20)
   except subprocess.TimeoutExpired:cls.process.kill();cls.process.wait()
+  print('Admission transitions:',json.dumps(cls.admission_transitions),flush=True)
   cls.log.close();cls.temp.cleanup()
  @classmethod
- def request(cls,path,body=None,raw=False,headers=None,method=None):
+ def exchange(cls,path,body=None,raw=False,headers=None,method=None,timeout=15):
   data=body if raw else None if body is None else json.dumps(body).encode()
   q=urllib.request.Request(f'http://127.0.0.1:{cls.port}'+(path if path.startswith('/') else '/v1/'+path),data=data,headers={'Content-Type':'application/octet-stream' if raw else 'application/json',**(headers or {})},method=method)
   try:
-   with urllib.request.urlopen(q,timeout=15) as r:return r.status,json.load(r)
+   with urllib.request.urlopen(q,timeout=timeout) as r:return r.status,dict(r.headers),json.load(r)
   except urllib.error.HTTPError as r:
-   with r:return r.code,json.load(r)
+   with r:return r.code,dict(r.headers),json.load(r)
+ @classmethod
+ def request(cls,path,body=None,raw=False,headers=None,method=None):
+  status,_,data=cls.exchange(path,body,raw,headers,method)
+  return status,data
+ def configure_admission(self,settings):
+  return configure_admission(self.exchange,settings,self.admission_transitions)
+ def test_admission_transition_retry_bounds(self):
+  clock=[0.0];calls=[];observations=[]
+  busy={'error':{'code':'admission_configuration_busy'}}
+  def send(path,body,timeout):
+   calls.append((path,body,timeout))
+   return (409,{'Retry-After':'0.25'},busy) if len(calls)==1 else (200,{}, {'saved':True})
+  with mock.patch('admission_fixture.time.monotonic',side_effect=lambda:clock[0]),mock.patch('admission_fixture.time.sleep',side_effect=lambda seconds:clock.__setitem__(0,clock[0]+seconds)):
+   self.assertEqual(configure_admission(send,{'mode':'protected'},observations),{'saved':True})
+   self.assertEqual(len(calls),2);self.assertEqual(observations,[{'attempts':2,'busy_rejections':1,'elapsed_seconds':0.25}])
+   self.assertEqual(calls[1][2],9.75)
+   for status,data in [(409,{'error':{'code':'other'}}),(400,busy),(503,busy),(409,{'error':'invalid'}),(409,None)]:
+    rejected=mock.Mock(return_value=(status,{},data))
+    with self.assertRaises(AssertionError):configure_admission(rejected,{},[])
+    self.assertEqual(rejected.call_count,1)
+   forever=mock.Mock(return_value=(409,{'Retry-After':'4'},busy));clock[0]=0.0
+   with self.assertRaises(AssertionError):configure_admission(forever,{},[])
+   self.assertEqual(clock[0],10);self.assertEqual(forever.call_count,3)
  def test_long_model_ids_keep_native_routes(self):
   for prefix in ['/v1/','/v0/','/api/v1/','/api/v0/']:
    for model in self.long_models:
@@ -331,13 +358,13 @@ class ApiContract(unittest.TestCase):
   for config in [{'mode':'unknown'},{'mode':42},{'pending_limit':-1},{'pools':{'host':{'source':42}}}]:
    self.assertEqual(self.request('/internal/set',{'admission':config})[0],400)
   self.assertEqual(self.request('/internal/set',{'admission':{},'port':1234})[0],400)
-  status,_=self.request('/internal/set',{'admission':{'mode':'protected'}});self.assertEqual(status,200)
+  self.configure_admission({'mode':'protected'})
   for limit in [3,None]:
-   self.assertEqual(self.request('/internal/set',{'admission':{'principal_pending_limit':limit}})[0],200)
+   self.configure_admission({'principal_pending_limit':limit})
    for prefix in ['/v1/','/v0/','/api/v1/','/api/v0/']:
     status,state=self.request(prefix+'juiced/admission');self.assertEqual(status,200);self.assertEqual(state['optional_limits']['principal_pending_limit'],limit)
    saved=json.loads((self.root/'config/config.json').read_text());self.assertEqual(saved['admission'],{'principal_pending_limit':limit})
-  self.assertEqual(self.request('/internal/set',{'admission':{}})[0],200)
+  self.configure_admission({})
   saved=json.loads((self.root/'config/config.json').read_text());self.assertEqual(saved['admission'],{})
  def test_context_metadata_sources(self):
   model='ZZExecution-F16'

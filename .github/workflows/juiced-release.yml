@@ -119,6 +119,7 @@ jobs:
           python3 juiced/tests/test_engine_cache.py --url http://127.0.0.1:18080 --container juiced-smoke --model-file /library/stories15M-q4_0.gguf --snapshots /data/prompt-state --out engine-cache-proof.json
           python3 -c 'import json; p=json.load(open("engine-cache-proof.json"))["profile"]; assert p["identity"]["runtime_image"]["executable"]["path"] == "/opt/juiced/llama-cpu/bin/llama-server", p'
           docker cp juiced/tests/test_engine_cache.py juiced-smoke:/tmp/test_engine_cache.py
+          docker cp juiced/tests/admission_fixture.py juiced-smoke:/tmp/admission_fixture.py
           docker cp juiced/tests/test_cache_admission.py juiced-smoke:/tmp/test_cache_admission.py
           docker exec juiced-smoke python3 /tmp/test_cache_admission.py --binary /opt/lemonade/lemond --engine /opt/juiced/llama-cpu/llama-server --model-file /library/stories15M-q4_0.gguf --out /tmp/cache-admission-proof.json
           docker cp juiced-smoke:/tmp/cache-admission-proof.json cache-admission-proof.json
