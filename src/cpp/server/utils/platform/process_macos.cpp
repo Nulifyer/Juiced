@@ -468,22 +468,18 @@ int MacOSProcessPlatform::run_with_output(
 
     auto start_time = std::chrono::steady_clock::now();
 
-    int flags = fcntl(stdout_pipe[0], F_GETFL, 0);
-    fcntl(stdout_pipe[0], F_SETFL, flags | O_NONBLOCK);
-
     std::exception_ptr failure;
     try {
         if (lifecycle) lifecycle->attach({nullptr, static_cast<int>(pid)});
+        const int flags = fcntl(stdout_pipe[0], F_GETFL, 0);
+        if (flags < 0 || fcntl(stdout_pipe[0], F_SETFL, flags | O_NONBLOCK) < 0)
+            throw std::runtime_error("Failed to make helper output nonblocking");
         while (true) {
             if (lifecycle && lifecycle->cancelled && lifecycle->cancelled()) { killed_by_callback = true; break; }
-            if (timeout_seconds > 0) {
-                auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
-                    std::chrono::steady_clock::now() - start_time).count();
-                if (elapsed > timeout_seconds) {
-                    if (!lifecycle) ::kill(pid, SIGKILL);
-                    killed_by_callback = true;
-                    break;
-                }
+            if (timeout_seconds > 0 && std::chrono::steady_clock::now() - start_time >=
+                                           std::chrono::seconds(timeout_seconds)) {
+                killed_by_callback = true;
+                break;
             }
 
             bytes_read = read(stdout_pipe[0], buffer, sizeof(buffer) - 1);
@@ -524,7 +520,6 @@ int MacOSProcessPlatform::run_with_output(
                     }
 
                     if (on_line && !on_line(line)) {
-                        if (!lifecycle) ::kill(pid, SIGKILL);
                         killed_by_callback = true;
                         break;
                     }
@@ -532,7 +527,12 @@ int MacOSProcessPlatform::run_with_output(
 
                 if (killed_by_callback) break;
             } else if (bytes_read == 0) {
-                if (!lifecycle || has_exited({nullptr, static_cast<int>(pid)})) break;
+                if (!line_buffer.empty()) {
+                    const std::string trailing = std::move(line_buffer);
+                    line_buffer.clear();
+                    if (on_line && !on_line(trailing)) { killed_by_callback = true; break; }
+                }
+                if (has_exited({nullptr, static_cast<int>(pid)})) break;
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
             } else {
                 if (errno == EAGAIN || errno == EWOULDBLOCK) {
@@ -568,14 +568,16 @@ int MacOSProcessPlatform::run_with_output(
             throw std::runtime_error("Helper output failed and direct-child cleanup remains unconfirmed");
         std::rethrow_exception(failure);
     }
-    int status = 0;
-    pid_t collected;
-    do { collected = waitpid(pid, &status, 0); } while (collected < 0 && errno == EINTR);
-    if (collected != pid) return -1;
-
     if (killed_by_callback) {
+        terminate_without_cleanup({nullptr, static_cast<int>(pid)});
+        if (wait_for_exit({nullptr, static_cast<int>(pid)}, 5) < 0)
+            throw std::runtime_error("Cancelled helper direct-child cleanup remains unconfirmed");
         return -1;
     }
+    int status = 0;
+    pid_t collected;
+    do { collected = waitpid(pid, &status, WNOHANG); } while (collected < 0 && errno == EINTR);
+    if (collected != pid) return -1;
 
     return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
 }

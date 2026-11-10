@@ -1,9 +1,12 @@
 #include "lemon/server_process.h"
 
+#include <cerrno>
 #include <chrono>
+#include <csignal>
 #include <cstdio>
 #include <exception>
 #include <filesystem>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #ifdef _WIN32
@@ -13,6 +16,19 @@
 #endif
 
 int main(int argc, char** argv) {
+#ifndef _WIN32
+    if (argc > 1 && std::string(argv[1]).find("--output-") == 0) {
+        const std::string mode = argv[1];
+        std::printf("%d\n", static_cast<int>(getpid()));
+        if (mode.find("--output-tail") == 0) std::printf("tail");
+        std::fflush(stdout);
+        std::fclose(stdout);
+        std::fclose(stderr);
+        std::this_thread::sleep_for(std::chrono::milliseconds(
+            mode == "--output-short" || mode == "--output-tail-short" ? 250 : 4000));
+        return 7;
+    }
+#endif
     if (argc > 1 && std::string(argv[1]) == "--child") {
         std::this_thread::sleep_for(std::chrono::seconds(30));
         return 0;
@@ -59,6 +75,47 @@ int main(int argc, char** argv) {
         lemon::utils::ProcessHandle unowned{nullptr, static_cast<int>(getpid())};
         check(!ProcessManager::has_exited(unowned) && !ProcessManager::stop_process(unowned),
               "a nonchild PID cannot be signaled or certified as stopped");
+        const auto output_case = [&](const std::string& mode, int timeout, bool cancel_tail, bool throw_tail) {
+            int child_pid = 0;
+            int tail_calls = 0;
+            bool callback_failed = false;
+            int result = 0;
+            const auto started = std::chrono::steady_clock::now();
+            try {
+                result = ProcessManager::run_process_with_output(executable, {mode}, [&](const auto& line) {
+                    if (line != "tail") { child_pid = std::stoi(line); return true; }
+                    ++tail_calls;
+                    if (throw_tail) throw std::runtime_error("controlled trailing callback failure");
+                    return !cancel_tail;
+                }, "", timeout);
+            } catch (const std::runtime_error& error) {
+                callback_failed = std::string(error.what()) == "controlled trailing callback failure";
+            }
+            const auto elapsed = std::chrono::steady_clock::now() - started;
+            const bool collected = child_pid > 0 && ::kill(child_pid, 0) < 0 && errno == ESRCH;
+            std::fprintf(stderr, "Output case %s: %lld ms, result %d, collected %s\n", mode.c_str(),
+                         static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count()),
+                         result, collected ? "true" : "false");
+            if (mode == "--output-short" || mode == "--output-tail-short") {
+                check(result == 7 && elapsed >= std::chrono::milliseconds(200),
+                      "closed output preserves the eventual direct-child status");
+                if (mode == "--output-tail-short")
+                    check(tail_calls == 1, "closed output delivers an accepted trailing line exactly once");
+            } else if (throw_tail) {
+                check(tail_calls == 1 && callback_failed, "trailing callback failure remains observable");
+            } else {
+                check(result == -1 && elapsed < std::chrono::seconds(3),
+                      cancel_tail ? "trailing callback cancellation stops a live closed-output child" :
+                                    "closed output cannot bypass the process deadline");
+                if (cancel_tail) check(tail_calls == 1, "the trailing output callback runs before process exit");
+            }
+            check(collected, "output exchange collects its direct child before returning");
+        };
+        output_case("--output-short", 2, false, false);
+        output_case("--output-tail-short", 2, false, false);
+        output_case("--output-closed", 1, false, false);
+        output_case("--output-tail", -1, true, false);
+        output_case("--output-tail", 2, false, true);
 #endif
     } catch (const std::exception& error) {
         ++failures;
