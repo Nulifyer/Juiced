@@ -2,7 +2,7 @@
 """Model-free contract tests against the actual compiled manager."""
 import struct,json,os,pathlib,socket,subprocess,sys,tempfile,time,unittest,urllib.request,urllib.error
 from unittest import mock
-from admission_fixture import configure_admission
+from admission_fixture import configure_admission, publish_with_admission_retry
 BINARY=str(pathlib.Path(sys.argv.pop(1)).resolve())
 class ApiContract(unittest.TestCase):
  @classmethod
@@ -71,6 +71,12 @@ class ApiContract(unittest.TestCase):
    self.assertEqual(configure_admission(send,{'mode':'protected'},observations),{'saved':True})
    self.assertEqual(len(calls),2);self.assertEqual(observations,[{'attempts':2,'busy_rejections':1,'elapsed_seconds':0.25}])
    self.assertEqual(calls[1][2],9.75)
+   provider_calls=[];provider={'backend':'cloud','provider':'fixture'};provider_observations=[]
+   def publish_provider(path,body,timeout):
+    provider_calls.append((path,body,timeout))
+    return (409,{}, {'error':{'details':{'code':'admission_configuration_busy','retry_after':0.25}}}) if len(provider_calls)==1 else (200,{}, {'installed':True})
+   self.assertEqual(publish_with_admission_retry(publish_provider,'/v1/install',provider,provider_observations),{'installed':True})
+   self.assertEqual(provider_calls[1],('/v1/install',provider,9.75));self.assertEqual(provider_observations,[{'attempts':2,'busy_rejections':1,'elapsed_seconds':0.25}])
    for status,data in [(409,{'error':{'code':'other'}}),(400,busy),(503,busy),(409,{'error':'invalid'}),(409,None)]:
     rejected=mock.Mock(return_value=(status,{},data))
     with self.assertRaises(AssertionError):configure_admission(rejected,{},[])

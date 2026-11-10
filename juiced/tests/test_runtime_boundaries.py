@@ -16,6 +16,7 @@ import tempfile
 import time
 
 from test_cache_admission import Fixture, MODEL, PREFIXES
+from admission_fixture import publish_with_admission_retry
 
 
 class WebSocket:
@@ -87,6 +88,12 @@ def acceptance(args):
     def publication_status(response):
         status, headers, body = response
         assert status in (200, 409, 429, 503), response
+        if status == 409:
+            error = body.get("error", {})
+            assert (
+                error.get("code", error.get("details", {}).get("code"))
+                == "admission_configuration_busy"
+            ), response
         if status in (429, 503):
             expected = (
                 "ingress_capacity_exceeded"
@@ -139,6 +146,7 @@ def acceptance(args):
                     )
                     transitions.append(statuses)
             cloud_races = []
+            cloud_retries = []
             with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
                 for index in range(10):
                     admission = {
@@ -163,11 +171,13 @@ def acceptance(args):
                         publication_status(updated.result()),
                         publication_status(installed.result()),
                     ]
-                    if statuses[1] in (429, 503):
-                        assert fixture.call("/v1/install", provider)[0] == 200
-                    else:
-                        assert statuses[1] == 200, statuses
+                    if statuses[1] != 200:
+                        publish_with_admission_retry(
+                            fixture.call, "/v1/install", provider, cloud_retries
+                        )
                     runtime = fixture.ok("/internal/config")
+                    names = {record["name"] for record in runtime["cloud_providers"]}
+                    assert provider["provider"] in names, names
                     persisted = json.loads((root / "config/config.json").read_text())
                     ledger = fixture.ok("/v1/juiced/admission")
                     assert runtime["admission"] == persisted["admission"]
@@ -181,6 +191,7 @@ def acceptance(args):
             proof["cloud_admission_publication"] = {
                 "paired_updates": cloud_races,
                 "providers_preserved": len(runtime["cloud_providers"]),
+                "publication_retries": cloud_retries,
             }
             old_revision = ledger["configuration_revision"]
             (root / "config/config.json.tmp").mkdir()
@@ -203,7 +214,7 @@ def acceptance(args):
                 fixture.ok("/v1/juiced/admission")["pools"]["host"]["capacity_bytes"]
                 == disk["pools"]["host"]["capacity_bytes"]
             )
-            fixture.ok("/internal/set", {"admission": {}})
+            fixture.configure_admission({})
             proof["concurrent_durable_configuration"] = {
                 "paired_updates": transitions,
                 "write_failure_preserves_old_state": True,
@@ -230,7 +241,7 @@ def acceptance(args):
                 if mode == "paused":
                     fixture.ok("/v1/juiced/admission", {"paused": True})
                 else:
-                    fixture.ok("/internal/set", {"admission": {"mode": "protected"}})
+                    fixture.configure_admission({"mode": "protected"})
                 for port in (fixture.port, ws_port):
                     for model in ("Whisper-Tiny", "Moonshine-Tiny-Streaming"):
                         connection = WebSocket(port, model, fixture.api)
@@ -261,7 +272,7 @@ def acceptance(args):
                         finally:
                             connection.close()
                 fixture.ok("/v1/juiced/admission", {"paused": False})
-            fixture.ok("/internal/set", {"admission": {}})
+            fixture.configure_admission({})
             connection = WebSocket(fixture.port, MODEL, fixture.api)
             try:
                 assert connection.receive()["type"] == "session.created"
@@ -353,20 +364,17 @@ def acceptance(args):
                 "load_bytes": {"host": 512 * 1024**2},
                 "resident_bytes": {"host": 128 * 1024**2},
             }
-            fixture.ok(
-                "/internal/set",
+            fixture.configure_admission(
                 {
-                    "admission": {
-                        "mode": "legacy",
-                        "pools": {
-                            "host": {
-                                "capacity_bytes": 2 * 1024**3,
-                                "source": "fixture ceiling",
-                            }
-                        },
-                        "models": {second_model: profile},
-                    }
-                },
+                    "mode": "legacy",
+                    "pools": {
+                        "host": {
+                            "capacity_bytes": 2 * 1024**3,
+                            "source": "fixture ceiling",
+                        }
+                    },
+                    "models": {second_model: profile},
+                }
             )
             slow.touch()
             started = time.monotonic()
@@ -490,6 +498,7 @@ def acceptance(args):
                             }
                         )
             proof["gateway_automatic_load_errors"] = gateways
+            proof["positive_admission_publication"] = fixture.admission_transitions
 
         except Exception:
             fixture.log.flush()

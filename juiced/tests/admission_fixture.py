@@ -1,18 +1,16 @@
-"""Bounded admission configuration for isolated native-server fixtures."""
+"""Bounded publication across admission changes for isolated server fixtures."""
 
 import time
 
 
-def configure_admission(call, settings, observations):
+def publish_with_admission_retry(call, path, body, observations):
     started = time.monotonic()
     deadline = started + 10
     attempts = 0
     while True:
         remaining = deadline - time.monotonic()
         assert remaining > 0, ("Admission transition did not drain", attempts)
-        status, headers, data = call(
-            "/internal/set", {"admission": settings}, timeout=remaining
-        )
+        status, headers, data = call(path, body, timeout=remaining)
         attempts += 1
         if status == 200:
             observations.append(
@@ -33,3 +31,9 @@ def configure_admission(call, settings, observations):
         assert remaining > 0, ("Admission transition did not drain", attempts, data)
         delay = float(headers.get("Retry-After", details.get("retry_after", 1)))
         time.sleep(min(max(0.01, delay), remaining))
+
+
+def configure_admission(call, settings, observations):
+    return publish_with_admission_retry(
+        call, "/internal/set", {"admission": settings}, observations
+    )
