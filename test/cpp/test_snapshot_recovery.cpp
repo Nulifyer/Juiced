@@ -10,8 +10,11 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <vector>
 
-#ifndef _WIN32
+#ifdef _WIN32
+#include <windows.h>
+#else
 #include <sys/stat.h>
 #endif
 
@@ -108,6 +111,81 @@ json replacement_paths(const fs::path& current, const fs::path& retained) {
         {"retained_type", int(retained_status.type())}, {"retained_error", retained_error.value()},
         {"equivalent", equivalent}, {"equivalent_error", equivalent_error.value()}};
 }
+#ifdef _WIN32
+struct ProbeHandle {
+    HANDLE value;
+    explicit ProbeHandle(HANDLE handle) : value(handle) {}
+    ~ProbeHandle() { if (valid()) CloseHandle(value); }
+    ProbeHandle(const ProbeHandle&) = delete;
+    ProbeHandle(ProbeHandle&& other) noexcept : value(other.value) { other.value = INVALID_HANDLE_VALUE; }
+    bool valid() const { return value != INVALID_HANDLE_VALUE; }
+};
+json delete_access_probe(const fs::path& file) {
+    // DELETE access alone does not delete or rename the fixture. Close the
+    // probe before the actual rename so it cannot change the sharing outcome.
+    ProbeHandle handle(CreateFileW(file.c_str(), DELETE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+        OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+    const auto error = handle.valid() ? ERROR_SUCCESS : GetLastError();
+    return {{"delete_open_ok", handle.valid()}, {"delete_open_error", error}};
+}
+void windows_replacement_controls(const fs::path& parent) {
+    // Diagnostic controls only. The inspector's replacement assertions below
+    // remain unchanged. Repeat each sharing mode on three independent files.
+    wchar_t filesystem_name[64]{};
+    const auto volume = fs::absolute(parent).root_path();
+    const bool volume_observed = GetVolumeInformationW(volume.c_str(), nullptr, 0,
+        nullptr, nullptr, nullptr, filesystem_name, 64);
+    const auto volume_error = volume_observed ? ERROR_SUCCESS : GetLastError();
+    std::fprintf(stderr, "WINDOWS SHARING REFERENCE: %s\n", json{
+        {"filesystem", volume_observed ? json(fs::path(filesystem_name).u8string()) : json(nullptr)},
+        {"query_error", volume_error}, {"repetitions", 3}}.dump().c_str());
+    check(volume_observed, "Windows sharing controls identify their filesystem");
+    for (int repeat = 0; repeat < 3; ++repeat) {
+        for (const DWORD sharing : {DWORD(0), DWORD(FILE_SHARE_READ),
+                DWORD(FILE_SHARE_READ | FILE_SHARE_WRITE),
+                DWORD(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)}) {
+            Fixture f(parent);
+            const auto source = f.root / "sharing-control.bin", destination = f.base / "retained-control.bin";
+            write(source, "controlled sharing input");
+            std::error_code rename_error;
+            DWORD ancestor_error = 0;
+            size_t held_ancestors = 0;
+            json access;
+            {
+                std::vector<ProbeHandle> ancestors;
+                if (sharing) {
+                    for (auto path = fs::absolute(f.root); !path.empty();) {
+                        ProbeHandle handle(CreateFileW(path.c_str(), FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES,
+                            sharing, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+                        if (!handle.valid()) { ancestor_error = GetLastError(); break; }
+                        ancestors.push_back(std::move(handle));
+                        const auto parent_path = path.parent_path();
+                        if (parent_path == path) break;
+                        path = parent_path;
+                    }
+                }
+                held_ancestors = ancestors.size();
+                access = delete_access_probe(source);
+                fs::rename(source, destination, rename_error);
+            }
+            const bool source_present = fs::is_regular_file(source), destination_present = fs::is_regular_file(destination);
+            const bool consistent = source_present != destination_present && destination_present == !rename_error;
+            const json detail = {{"repeat", repeat}, {"directory_share", sharing},
+                {"ancestor_open_error", ancestor_error}, {"held_ancestors", held_ancestors},
+                {"delete_access", access}, {"rename_error", rename_error.value()},
+                {"rename_category", rename_error.category().name()}, {"source_present", source_present},
+                {"destination_present", destination_present}, {"namespace_consistent", consistent}};
+            std::fprintf(stderr, "WINDOWS SHARING CONTROL: %s\n", detail.dump().c_str());
+            replacement_check(!ancestor_error && consistent,
+                "Windows sharing control retains coherent owned files", detail);
+            if (!sharing) replacement_check(!rename_error, "unrestricted Windows rename control succeeds", detail);
+            if (sharing & FILE_SHARE_WRITE)
+                replacement_check(!rename_error, "write-shared ancestry permits child-file publication", detail);
+        }
+    }
+}
+#endif
 using Configure = std::function<void(Fixture&)>;
 using Verify = std::function<void(const json&)>;
 void run_case(const fs::path& parent, const std::string& name, const Configure& configure = {},
@@ -145,6 +223,9 @@ int main() {
         ~Cleanup() { std::error_code error; fs::remove_all(path, error); }
     } cleanup{parent};
     try {
+#ifdef _WIN32
+        windows_replacement_controls(parent);
+#endif
         run_case(parent, "empty bound inventory");
         run_case(parent, "empty legacy state", [](auto& f) { f.state.erase("snapshot_store"); fs::remove(f.root / ".juiced-snapshot-store.json"); });
         run_case(parent, "saved snapshot", [](auto& f) { f.save(); }, {}, [](const auto& r) { check(r["saved_snapshots"] == 1, "saved count"); });
@@ -334,11 +415,15 @@ int main() {
             size_t callbacks = 0;
             bool invoked = false, denied = false;
             std::error_code rename_error;
+            json access;
             const auto target_callback = after_open ? before_hash + 1 : before_hash - 1;
             SnapshotInspectionOptions options;
             options.cancelled = [&] {
                 if (++callbacks == target_callback) {
                     invoked = true;
+#ifdef _WIN32
+                    access = delete_access_probe(path);
+#endif
                     fs::rename(path, f.base / "retained-original", rename_error);
                     if (rename_error) denied = true;
                     else replace(f, path);
@@ -350,7 +435,10 @@ int main() {
             const json detail = {{"fixture", name}, {"after_open", after_open}, {"probe_callbacks", before_hash},
                 {"target_callback", target_callback}, {"observed_callbacks", callbacks}, {"invoked", invoked},
                 {"rename_denied", denied}, {"rename_error", rename_error.value()}, {"rename_category", rename_error.category().name()},
-                {"paths", replacement_paths(path, f.base / "retained-original")}, {"result", result}};
+                {"paths", replacement_paths(path, f.base / "retained-original")}, {"delete_access", access}, {"result", result}};
+#ifdef _WIN32
+            std::fprintf(stderr, "WINDOWS REPLACEMENT OBSERVATION: %s\n", detail.dump().c_str());
+#endif
             replacement_check(invoked, name + " replacement seam invoked", detail);
 #ifdef _WIN32
             if (after_open && denied) {
@@ -390,16 +478,20 @@ int main() {
             write(f.state_file, f.state.dump());
             size_t callbacks = 0;
             bool invoked = false;
+            json access;
             SnapshotInspectionOptions options;
             options.cancelled = [&] {
                 if (++callbacks == before_open) {
                     invoked = true;
+#ifdef _WIN32
+                    access = delete_access_probe(f.state_file);
+#endif
                     std::error_code error;
                     fs::rename(f.state_file, f.base / "retained-state", error);
                     if (error) {
                         const json detail = {{"fixture", name}, {"probe_callbacks", before_open}, {"target_callback", before_open},
                             {"observed_callbacks", callbacks}, {"invoked", invoked}, {"rename_error", error.value()},
-                            {"rename_category", error.category().name()}, {"paths", replacement_paths(f.state_file, f.base / "retained-state")}};
+                            {"rename_category", error.category().name()}, {"delete_access", access}, {"paths", replacement_paths(f.state_file, f.base / "retained-state")}};
                         std::fprintf(stderr, "REPLACEMENT DETAIL: %s\n", detail.dump().c_str());
                         throw fs::filesystem_error("State replacement fixture rename failed", error);
                     }
@@ -411,7 +503,10 @@ int main() {
             const auto result = SnapshotRecovery::inspect_file(f.state_file, f.root, options);
             const json detail = {{"fixture", name}, {"probe_callbacks", before_open}, {"target_callback", before_open},
                 {"observed_callbacks", callbacks}, {"invoked", invoked},
-                {"paths", replacement_paths(f.state_file, f.base / "retained-state")}, {"result", result}};
+                {"paths", replacement_paths(f.state_file, f.base / "retained-state")}, {"delete_access", access}, {"result", result}};
+#ifdef _WIN32
+            std::fprintf(stderr, "WINDOWS REPLACEMENT OBSERVATION: %s\n", detail.dump().c_str());
+#endif
             replacement_check(invoked && result["validation_complete"] == false && has(result, "state_changed_during_inspection"), name + " rejects state substitution", detail);
             check(std::chrono::steady_clock::now() - started < std::chrono::seconds(2), name + " avoids blocked state open");
             check(result["application_authorized"] == false && result["writer_termination_verified"] == false, name + " never authorizes recovery");

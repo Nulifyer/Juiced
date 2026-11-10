@@ -247,7 +247,7 @@ public:
             if (!input_stamp(level.handle.value, true, retained) || !retained.same_identity(level.stamp)) return false;
 #ifdef _WIN32
             RetainedInput handle(CreateFileW(level.path.c_str(), FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES,
-                FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
                 FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
             if (handle.value == invalid_input || !input_stamp(handle.value, true, current)) return false;
 #else
@@ -309,8 +309,9 @@ private:
     bool append(const fs::path& path, const fs::path& name, const InputHandle* parent) {
 #ifdef _WIN32
         (void)parent;
+        // Anchor ancestor names without excluding publication of child files.
         const auto handle = CreateFileW(path.c_str(), FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES,
-            FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+            FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
             FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
 #else
         const auto handle = parent ? ::openat(*parent, name.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC) :
