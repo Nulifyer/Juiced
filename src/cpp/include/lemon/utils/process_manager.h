@@ -5,6 +5,7 @@
 #include <vector>
 #include <functional>
 #include <optional>
+#include <map>
 
 namespace lemon {
 namespace utils {
@@ -12,6 +13,16 @@ namespace utils {
 struct ProcessHandle {
     void* handle;
     int pid;
+};
+
+struct ProcessImageFiles {
+    std::string method;
+    std::string executable;
+    std::map<std::string, std::string> files;
+    std::string namespace_identity;
+    bool operator==(const ProcessImageFiles& other) const {
+        return method == other.method && executable == other.executable && files == other.files && namespace_identity == other.namespace_identity;
+    }
 };
 
 // Returns true to continue, false to kill the process
@@ -57,6 +68,7 @@ public:
     // status/health checks may call this frequently.
     static bool is_running(ProcessHandle handle);
     static bool owns_loopback_listener(ProcessHandle handle, int port);
+    static std::optional<ProcessImageFiles> image_files(ProcessHandle handle, const std::function<bool()>& cancelled = {});
 
     // POSIX callers should prefer reap_process() when they intentionally own
     // cleanup of an exited child.

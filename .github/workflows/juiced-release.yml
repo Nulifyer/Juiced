@@ -117,39 +117,48 @@ jobs:
           echo '66967fbece6dbe97886593fdbb73589584927e29119ec31f08090732d1861739  stories15M-q4_0.gguf' | sha256sum -c -
           docker cp stories15M-q4_0.gguf juiced-smoke:/library/stories15M-q4_0.gguf
           python3 juiced/tests/test_engine_cache.py --url http://127.0.0.1:18080 --container juiced-smoke --model-file /library/stories15M-q4_0.gguf --snapshots /data/prompt-state --out engine-cache-proof.json
+          python3 -c 'import json; p=json.load(open("engine-cache-proof.json"))["profile"]; assert p["identity"]["runtime_image"]["executable"]["path"] == "/opt/juiced/llama-cpu/bin/llama-server", p'
           docker cp juiced/tests/test_engine_cache.py juiced-smoke:/tmp/test_engine_cache.py
           docker cp juiced/tests/test_cache_admission.py juiced-smoke:/tmp/test_cache_admission.py
-          docker exec juiced-smoke python3 /tmp/test_cache_admission.py --binary /opt/lemonade/lemond --engine /opt/juiced/llama/llama-server --model-file /library/stories15M-q4_0.gguf --out /tmp/cache-admission-proof.json
+          docker exec juiced-smoke python3 /tmp/test_cache_admission.py --binary /opt/lemonade/lemond --engine /opt/juiced/llama-cpu/llama-server --model-file /library/stories15M-q4_0.gguf --out /tmp/cache-admission-proof.json
           docker cp juiced-smoke:/tmp/cache-admission-proof.json cache-admission-proof.json
           docker cp juiced/tests/test_execution_identity.py juiced-smoke:/tmp/test_execution_identity.py
-          docker exec juiced-smoke python3 /tmp/test_execution_identity.py --binary /opt/lemonade/lemond --engine /opt/juiced/llama/llama-server --model-file /library/stories15M-q4_0.gguf --out /tmp/execution-identity-proof.json
+          docker exec juiced-smoke python3 /tmp/test_execution_identity.py --binary /opt/lemonade/lemond --engine /opt/juiced/llama-cpu/llama-server --model-file /library/stories15M-q4_0.gguf --out /tmp/execution-identity-proof.json
           docker cp juiced-smoke:/tmp/execution-identity-proof.json execution-identity-proof.json
           docker cp juiced-smoke:/tmp/execution-identity-proof.server.log execution-identity-proof.server.log
           docker cp juiced/tests/test_execution_inputs.py juiced-smoke:/tmp/test_execution_inputs.py
-          docker exec juiced-smoke python3 /tmp/test_execution_inputs.py --binary /opt/lemonade/lemond --engine /opt/juiced/llama/llama-server --model-file /library/stories15M-q4_0.gguf --out /tmp/execution-inputs-proof.json
+          docker exec juiced-smoke python3 /tmp/test_execution_inputs.py --binary /opt/lemonade/lemond --engine /opt/juiced/llama-cpu/llama-server --model-file /library/stories15M-q4_0.gguf --out /tmp/execution-inputs-proof.json
           docker cp juiced-smoke:/tmp/execution-inputs-proof.json execution-inputs-proof.json
           docker cp juiced-smoke:/tmp/execution-inputs-proof.server.log execution-inputs-proof.server.log
+          docker cp juiced/tests/test_runtime_modules.py juiced-smoke:/tmp/test_runtime_modules.py
+          docker exec juiced-smoke python3 /tmp/test_runtime_modules.py --binary /opt/lemonade/lemond --runtime-dir /opt/juiced/llama-cpu/bin --model-file /library/stories15M-q4_0.gguf --out /tmp/runtime-modules-proof.json
+          docker cp juiced-smoke:/tmp/runtime-modules-proof.json runtime-modules-proof.json
+          docker cp juiced-smoke:/tmp/runtime-modules-proof.server.log runtime-modules-proof.server.log
+          docker cp juiced/tests/test_runtime_defaults.py juiced-smoke:/tmp/test_runtime_defaults.py
+          docker exec juiced-smoke python3 /tmp/test_runtime_defaults.py --binary /opt/lemonade/lemond --cpu-runtime /opt/juiced/llama-cpu --defaults-file /opt/juiced/defaults.json --model-file /library/stories15M-q4_0.gguf --out /tmp/runtime-defaults-proof.json
+          docker cp juiced-smoke:/tmp/runtime-defaults-proof.json runtime-defaults-proof.json
+          docker cp juiced-smoke:/tmp/runtime-defaults-proof.server.log runtime-defaults-proof.server.log
           docker cp juiced/tests/test_model_context.py juiced-smoke:/tmp/test_model_context.py
-          docker exec juiced-smoke python3 /tmp/test_model_context.py --binary /opt/lemonade/lemond --engine /opt/juiced/llama/llama-server --model-file /library/stories15M-q4_0.gguf --out /tmp/model-context-proof.json
+          docker exec juiced-smoke python3 /tmp/test_model_context.py --binary /opt/lemonade/lemond --engine /opt/juiced/llama-cpu/llama-server --model-file /library/stories15M-q4_0.gguf --out /tmp/model-context-proof.json
           docker cp juiced-smoke:/tmp/model-context-proof.json model-context-proof.json
           docker cp juiced-smoke:/tmp/model-context-proof.server.log model-context-proof.server.log
           docker cp juiced/tests/test_cache_disk_budget.py juiced-smoke:/tmp/test_cache_disk_budget.py
-          docker exec juiced-smoke python3 /tmp/test_cache_disk_budget.py --binary /opt/lemonade/lemond --engine /opt/juiced/llama/llama-server --model-file /library/stories15M-q4_0.gguf --out /tmp/cache-disk-proof.json
+          docker exec juiced-smoke python3 /tmp/test_cache_disk_budget.py --binary /opt/lemonade/lemond --engine /opt/juiced/llama-cpu/llama-server --model-file /library/stories15M-q4_0.gguf --out /tmp/cache-disk-proof.json
           docker cp juiced-smoke:/tmp/cache-disk-proof.json cache-disk-proof.json
           docker cp juiced/tests/test_resource_admission.py juiced-smoke:/tmp/test_resource_admission.py
-          docker exec juiced-smoke python3 /tmp/test_resource_admission.py --binary /opt/lemonade/lemond --engine /opt/juiced/llama/llama-server --model-file /library/stories15M-q4_0.gguf --out /tmp/resource-admission-proof.json
+          docker exec juiced-smoke python3 /tmp/test_resource_admission.py --binary /opt/lemonade/lemond --engine /opt/juiced/llama-cpu/llama-server --model-file /library/stories15M-q4_0.gguf --out /tmp/resource-admission-proof.json
           docker cp juiced-smoke:/tmp/resource-admission-proof.json resource-admission-proof.json
           docker cp juiced/tests/test_runtime_boundaries.py juiced-smoke:/tmp/test_runtime_boundaries.py
-          docker exec juiced-smoke python3 /tmp/test_runtime_boundaries.py --binary /opt/lemonade/lemond --engine /opt/juiced/llama/llama-server --model-file /library/stories15M-q4_0.gguf --out /tmp/runtime-boundaries-proof.json
+          docker exec juiced-smoke python3 /tmp/test_runtime_boundaries.py --binary /opt/lemonade/lemond --engine /opt/juiced/llama-cpu/llama-server --model-file /library/stories15M-q4_0.gguf --out /tmp/runtime-boundaries-proof.json
           docker cp juiced-smoke:/tmp/runtime-boundaries-proof.json runtime-boundaries-proof.json
           docker cp juiced/tests/test_cloud_publication.py juiced-smoke:/tmp/test_cloud_publication.py
-          docker exec juiced-smoke python3 /tmp/test_cloud_publication.py --binary /opt/lemonade/lemond --engine /opt/juiced/llama/llama-server --model-file /library/stories15M-q4_0.gguf --out /tmp/cloud-publication-proof.json
+          docker exec juiced-smoke python3 /tmp/test_cloud_publication.py --binary /opt/lemonade/lemond --engine /opt/juiced/llama-cpu/llama-server --model-file /library/stories15M-q4_0.gguf --out /tmp/cloud-publication-proof.json
           docker cp juiced-smoke:/tmp/cloud-publication-proof.json cloud-publication-proof.json
           docker cp juiced/tests/test_cloud_lifecycle.py juiced-smoke:/tmp/test_cloud_lifecycle.py
-          docker exec juiced-smoke python3 /tmp/test_cloud_lifecycle.py --binary /opt/lemonade/lemond --engine /opt/juiced/llama/llama-server --model-file /library/stories15M-q4_0.gguf --out /tmp/cloud-lifecycle-proof.json
+          docker exec juiced-smoke python3 /tmp/test_cloud_lifecycle.py --binary /opt/lemonade/lemond --engine /opt/juiced/llama-cpu/llama-server --model-file /library/stories15M-q4_0.gguf --out /tmp/cloud-lifecycle-proof.json
           docker cp juiced-smoke:/tmp/cloud-lifecycle-proof.json cloud-lifecycle-proof.json
           docker cp juiced/tests/test_cache_inspection.py juiced-smoke:/tmp/test_cache_inspection.py
-          docker exec juiced-smoke python3 /tmp/test_cache_inspection.py --binary /opt/lemonade/lemond --engine /opt/juiced/llama/llama-server --model-file /library/stories15M-q4_0.gguf --out /tmp/cache-inspection-proof.json
+          docker exec juiced-smoke python3 /tmp/test_cache_inspection.py --binary /opt/lemonade/lemond --engine /opt/juiced/llama-cpu/llama-server --model-file /library/stories15M-q4_0.gguf --out /tmp/cache-inspection-proof.json
           docker cp juiced-smoke:/tmp/cache-inspection-proof.json cache-inspection-proof.json
           docker cp juiced/tests/test_preparation.py juiced-smoke:/tmp/test_preparation.py
           docker exec juiced-smoke python3 /tmp/test_preparation.py --url http://127.0.0.1:8080 --runtime-root /opt/juiced --out /tmp/preparation-retirement-proof.json
@@ -197,6 +206,10 @@ jobs:
             execution-identity-proof.server.log
             execution-inputs-proof.json
             execution-inputs-proof.server.log
+            runtime-modules-proof.json
+            runtime-modules-proof.server.log
+            runtime-defaults-proof.json
+            runtime-defaults-proof.server.log
             model-context-proof.json
             model-context-proof.server.log
             cache-disk-proof.json

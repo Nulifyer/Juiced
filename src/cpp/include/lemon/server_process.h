@@ -39,6 +39,7 @@ public:
     virtual void stop();
     virtual bool running() const;
     virtual bool owns_loopback_listener(int port) const;
+    virtual std::optional<utils::ProcessImageFiles> image_files(const std::function<bool()>& cancelled = {}) const;
     virtual bool exited() const;
     virtual std::optional<int> collect_exit();
 

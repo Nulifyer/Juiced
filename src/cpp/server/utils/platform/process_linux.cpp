@@ -26,6 +26,10 @@
 #include <cctype>
 
 #include <sys/prctl.h>
+#include <sys/stat.h>
+#include <sys/statfs.h>
+#include <sys/sysmacros.h>
+#include <linux/magic.h>
 
 #ifdef HAVE_LIBCAP
 #include <sys/capability.h>
@@ -112,6 +116,7 @@ public:
     bool has_exited(ProcessHandle handle) override { return detail::owned_child_has_exited(handle.pid); }
     bool is_running(ProcessHandle handle) override;
     bool owns_loopback_listener(ProcessHandle handle, int port) override;
+    std::optional<ProcessImageFiles> image_files(ProcessHandle handle, const std::function<bool()>& cancelled) override;
     int get_exit_code(ProcessHandle handle) override;
     int wait_for_exit(ProcessHandle handle, int timeout_seconds) override;
     int reap(ProcessHandle handle) override;
@@ -663,6 +668,155 @@ bool LinuxProcessPlatform::owns_loopback_listener(ProcessHandle handle, int port
         }
         return table.eof() && owned && is_running(handle);
     } catch (const std::exception&) { return false; }
+}
+
+std::optional<ProcessImageFiles> LinuxProcessPlatform::image_files(
+    ProcessHandle handle, const std::function<bool()>& cancelled) {
+    if (!is_running(handle)) return std::nullopt;
+    try {
+        const auto check_cancelled = [&] {
+            if (cancelled && cancelled()) throw std::runtime_error("Runtime image inspection cancelled");
+        };
+        check_cancelled();
+        const auto root = std::filesystem::path("/proc") / std::to_string(handle.pid);
+        const auto mount_namespace = std::filesystem::read_symlink(root / "ns/mnt");
+        if (mount_namespace != std::filesystem::read_symlink("/proc/self/ns/mnt")) return std::nullopt;
+        struct stat child_root{}, manager_root{};
+        if (::stat((root / "root").c_str(), &child_root) || ::stat("/", &manager_root) ||
+            child_root.st_dev != manager_root.st_dev || child_root.st_ino != manager_root.st_ino) return std::nullopt;
+        const auto signature = [](const struct stat& file) {
+            std::ostringstream value;
+            value << file.st_dev << ':' << file.st_ino << ':' << file.st_size << ':'
+                  << file.st_mtim.tv_sec << ':' << file.st_mtim.tv_nsec << ':'
+                  << file.st_ctim.tv_sec << ':' << file.st_ctim.tv_nsec;
+            return value.str();
+        };
+        const auto executable = std::filesystem::read_symlink(root / "exe");
+        const auto valid_path = [](const std::filesystem::path& path) {
+            const auto text = path.string();
+            return path.is_absolute() && text.size() <= 16384 &&
+                (text.size() < 10 || text.compare(text.size() - 10, 10, " (deleted)"));
+        };
+        if (!valid_path(executable)) return std::nullopt;
+        struct stat executable_file{}, executable_link{};
+        if (::stat(executable.c_str(), &executable_file) || ::stat((root / "exe").c_str(), &executable_link) ||
+            !S_ISREG(executable_file.st_mode) || signature(executable_file) != signature(executable_link)) return std::nullopt;
+
+        struct FileDescriptor {
+            int value;
+            ~FileDescriptor() { if (value >= 0) ::close(value); }
+        } descriptor{::open((root / "maps").c_str(), O_RDONLY | O_CLOEXEC)};
+        if (descriptor.value < 0) return std::nullopt;
+        // procfs can return short reads. Complete the bounded walk; callers
+        // compare independent inventories around hashing and state exchanges.
+        constexpr size_t maximum_maps_bytes = 4 * 1024 * 1024;
+        std::string contents;
+        contents.reserve(maximum_maps_bytes);
+        char block[65536];
+        for (;;) {
+            check_cancelled();
+            const auto count = ::read(descriptor.value, block, sizeof(block));
+            if (count < 0 && errno == EINTR) continue;
+            if (count < 0) return std::nullopt;
+            if (!count) break;
+            if (static_cast<size_t>(count) > maximum_maps_bytes - contents.size()) return std::nullopt;
+            contents.append(block, static_cast<size_t>(count));
+        }
+        if (contents.empty()) return std::nullopt;
+
+        struct Mount { std::string path, type; unsigned long device_major, device_minor; };
+        std::vector<Mount> mounts;
+        bool mounts_loaded = false, used_btrfs = false;
+        const auto mount_path = [](const std::string& encoded) {
+            std::string decoded;
+            for (size_t i = 0; i < encoded.size(); ++i) {
+                if (encoded[i] == '\\' && i + 3 < encoded.size() && encoded[i + 1] >= '0' && encoded[i + 1] <= '7' &&
+                    encoded[i + 2] >= '0' && encoded[i + 2] <= '7' && encoded[i + 3] >= '0' && encoded[i + 3] <= '7') {
+                    decoded += char((encoded[i + 1] - '0') * 64 + (encoded[i + 2] - '0') * 8 + encoded[i + 3] - '0');
+                    i += 3;
+                } else decoded += encoded[i];
+            }
+            return decoded;
+        };
+        const auto btrfs_device_matches = [&](const std::string& path, unsigned long dev_major, unsigned long dev_minor) {
+            struct statfs filesystem{};
+            if (::statfs(path.c_str(), &filesystem) || filesystem.f_type != BTRFS_SUPER_MAGIC) return false;
+            if (!mounts_loaded) {
+                mounts_loaded = true;
+                std::ifstream input("/proc/self/mountinfo");
+                std::string line;
+                size_t bytes = 0;
+                while (std::getline(input, line)) {
+                    check_cancelled();
+                    bytes += line.size();
+                    if (bytes > 1024 * 1024 || mounts.size() >= 4096) return false;
+                    std::istringstream row(line);
+                    std::string id, parent, device, origin, point, options, field;
+                    if (!(row >> id >> parent >> device >> origin >> point >> options)) return false;
+                    while (row >> field && field != "-") {}
+                    std::string type;
+                    if (field != "-" || !(row >> type)) return false;
+                    const auto colon = device.find(':');
+                    if (colon == std::string::npos) return false;
+                    mounts.push_back({mount_path(point), type, std::stoul(device.substr(0, colon)), std::stoul(device.substr(colon + 1))});
+                }
+                if (!input.eof()) return false;
+            }
+            const Mount* governing = nullptr;
+            for (const auto& mount : mounts) {
+                if ((mount.path == "/" || path == mount.path || path.rfind(mount.path + "/", 0) == 0) &&
+                    (!governing || mount.path.size() > governing->path.size())) governing = &mount;
+            }
+            if (!governing || governing->type != "btrfs" || governing->device_major != dev_major || governing->device_minor != dev_minor) return false;
+            used_btrfs = true;
+            return true;
+        };
+
+        ProcessImageFiles result;
+        result.executable = std::filesystem::canonical(executable).string();
+        result.namespace_identity = mount_namespace.string() + ':' + std::to_string(child_root.st_dev) + ':' + std::to_string(child_root.st_ino);
+        std::map<std::string, std::string> file_signatures;
+        std::istringstream input(contents);
+        std::string line;
+        size_t rows = 0;
+        while (std::getline(input, line)) {
+            check_cancelled();
+            if (++rows > 65536) return std::nullopt;
+            std::istringstream row(line);
+            std::string range, permissions, offset, device, inode, pathname;
+            if (!(row >> range >> permissions >> offset >> device >> inode)) return std::nullopt;
+            if (permissions.size() != 4 || permissions[2] != 'x') continue;
+            std::getline(row >> std::ws, pathname);
+            if (inode == "0") {
+                if (pathname == "[vdso]" || pathname == "[vsyscall]") continue;
+                return std::nullopt;
+            }
+            if (permissions[1] == 'w' || result.files.size() >= 4096) return std::nullopt;
+            const auto link = std::filesystem::read_symlink(root / "map_files" / range);
+            if (!valid_path(link)) return std::nullopt;
+            const auto path = std::filesystem::canonical(link);
+            struct stat file{};
+            if (::stat(path.c_str(), &file) || !S_ISREG(file.st_mode) || file.st_ino != std::stoull(inode)) return std::nullopt;
+            const auto colon = device.find(':');
+            if (colon == std::string::npos) return std::nullopt;
+            const auto dev_major = std::stoul(device.substr(0, colon), nullptr, 16);
+            const auto dev_minor = std::stoul(device.substr(colon + 1), nullptr, 16);
+            if ((major(file.st_dev) != dev_major || minor(file.st_dev) != dev_minor) &&
+                !btrfs_device_matches(path.string(), dev_major, dev_minor)) return std::nullopt;
+            const auto observed = signature(file);
+            const auto name = path.string();
+            if (file_signatures.count(name) && file_signatures.at(name) != observed) return std::nullopt;
+            file_signatures[name] = observed;
+            result.files[name] += observed + '|' + range + '|' + permissions + '|' + offset + '|' + device + '|' + inode + '|' + link.string() + '\n';
+            // The pathname came from the owned mapping, not a caller's file list.
+            if (std::filesystem::read_symlink(root / "map_files" / range) != link) return std::nullopt;
+        }
+        if (result.files.empty() || !result.files.count(result.executable) || !is_running(handle) ||
+            std::filesystem::read_symlink(root / "ns/mnt") != mount_namespace ||
+            std::filesystem::read_symlink(root / "exe") != executable) return std::nullopt;
+        result.method = used_btrfs ? "linux-procfs-map-files+btrfs-mount-v1" : "linux-procfs-map-files-v1";
+        return result;
+    } catch (const std::exception&) { return std::nullopt; }
 }
 
 int LinuxProcessPlatform::find_free_port(int start_port) {

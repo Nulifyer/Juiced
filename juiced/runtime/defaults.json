@@ -10,6 +10,6 @@
   "max_loaded_models": 4,
   "llamacpp": {
     "vulkan_bin": "/opt/juiced/llama",
-    "cpu_bin": "/opt/juiced/llama"
+    "cpu_bin": "/opt/juiced/llama-cpu"
   }
 }

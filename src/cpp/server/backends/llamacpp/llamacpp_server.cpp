@@ -649,9 +649,9 @@ void LlamaCppServer::load(const std::string& model_name,
     };
     const auto argument_inputs = execution_argument_inputs(llamacpp_args);
     const auto argument_files = argument_inputs.at("files").get<std::map<std::string, std::string>>();
-    json identity = {{"schema", 2}, {"recipe", model_info.recipe}, {"captured", false},
-        {"scope", "declared-and-argument-input-content-and-launch-executable"},
-        {"unresolved", json::array({"loaded-runtime-modules", "physical-device-identity", "inherited-environment-inputs"})}};
+    json identity = {{"schema", 3}, {"recipe", model_info.recipe}, {"captured", false},
+        {"scope", "declared-argument-and-process-image-file-content"},
+        {"unresolved", json::array({"nonexecutable-runtime-assets", "mapped-page-immutability", "physical-device-identity", "inherited-environment-inputs"})}};
     const auto executable_identity = [&] {
         return ModelManager::execution_files({{"executable", process_executable}}, identity_cancelled).at("executable").at(0);
     };
@@ -726,6 +726,7 @@ void LlamaCppServer::load(const std::string& model_name,
     }
     if (identity.value("captured", false)) {
         try {
+            identity["runtime_image"] = capture_runtime_inputs(identity_cancelled);
             const auto verified = ModelManager::execution_inputs(model_info, identity_cancelled);
             if (identity.at("files") != verified.at("files") || identity.at("launch_executable") != executable_identity() ||
                 identity.at("argument_files") != ModelManager::execution_files(argument_files, identity_cancelled))

@@ -24,6 +24,11 @@
 #include <string>
 #include <thread>
 #include <vector>
+#ifdef __linux__
+#include <sys/mman.h>
+#include <fcntl.h>
+#include <unistd.h>
+#endif
 
 namespace {
 
@@ -85,6 +90,7 @@ public:
 
     using WrappedServer::start_server;
     using WrappedServer::stop_server;
+    using WrappedServer::capture_runtime_inputs;
 };
 
 template<class T> class DerivedWorker : public T {
@@ -321,6 +327,20 @@ int main(int argc, char** argv) {
         std::string(argv[1]) == "--listener-relinquish-child")) {
         const auto mode = std::string(argv[1]);
         httplib::Server server;
+#ifdef __linux__
+        std::vector<void*> image_mappings;
+        server.Get("/map-image", [&](const auto& request, auto& response) {
+            if (argc < 4) { response.status = 400; return; }
+            const int descriptor = ::open(argv[3], O_RDONLY | O_CLOEXEC);
+            if (descriptor < 0) { response.status = 500; return; }
+            const auto flags = PROT_READ | PROT_EXEC | (request.has_param("writable") ? PROT_WRITE : 0);
+            void* mapping = ::mmap(nullptr, 4096, flags, MAP_PRIVATE, descriptor, 0);
+            ::close(descriptor);
+            if (mapping == MAP_FAILED) { response.status = 500; return; }
+            image_mappings.push_back(mapping);
+            response.set_content("{}", "application/json");
+        });
+#endif
         server.Get("/health", [&](const auto&, auto& response) {
             if (mode == "--listener-slow-child") std::this_thread::sleep_for(std::chrono::seconds(5));
             response.set_content(mode == "--listener-large-child" ? std::string(128 * 1024, 'x') : "{}", "application/json");
@@ -370,13 +390,46 @@ int main(int argc, char** argv) {
         owned.program = std::filesystem::absolute(argv[0]).string();
         owned.port = lemon::utils::ProcessManager::find_free_port(8001);
         owned.args = {"--listener-server-child", std::to_string(owned.port)};
+#ifdef __linux__
+        const auto image_file = std::filesystem::temp_directory_path() /
+            ("juiced-owned-image-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        { std::ofstream file(image_file, std::ios::binary); file << std::string(4096, '\0'); }
+        owned.args.push_back(image_file.string());
+#endif
         auto process = std::make_unique<lemon::NativeProcess>(lemon::ProcessOutput{});
         const auto* child = process.get();
         worker.start_server(std::move(process), owned, 5);
         check("an actual child owning the healthy listener reaches readiness", worker.endpoint_owned());
         check("an owned child does not own the manager's foreign listener", !child->owns_loopback_listener(port));
+#ifdef __linux__
+        const auto image = worker.capture_runtime_inputs({});
+        check("native image capture binds the actual executable and loaded modules", image.at("executable").at("path") == std::filesystem::canonical(argv[0]).string() &&
+            image.at("executable").at("sha256").get<std::string>().size() == 64 && !image.at("modules").empty() && worker.runtime_inputs_current());
+        bool cancelled = false;
+        try { worker.capture_runtime_inputs([] { return true; }); }
+        catch (const std::exception&) { cancelled = true; }
+        check("cancelled image capture cannot retain a prior qualification projection", cancelled && !worker.runtime_inputs_current());
+        worker.capture_runtime_inputs({});
+        const auto address = "http://127.0.0.1:" + std::to_string(owned.port);
+        const auto added = lemon::utils::HttpClient::get(address + "/map-image", {}, 2, lemon::utils::HttpSecurityPolicy::TrustedLoopback);
+        check("late executable mapping invalidates the frozen runtime projection", added.status_code == 200 && !worker.runtime_inputs_current());
+        const auto extended = worker.capture_runtime_inputs({});
+        check("a freshly captured read-only mapping binds its exact content", worker.runtime_inputs_current() &&
+            std::any_of(extended.at("modules").begin(), extended.at("modules").end(), [&](const auto& fact) { return fact.at("path") == image_file.string(); }));
+        const auto mutable_image = lemon::utils::HttpClient::get(address + "/map-image?writable=1", {}, 2, lemon::utils::HttpSecurityPolicy::TrustedLoopback);
+        bool mutable_rejected = false;
+        try { worker.capture_runtime_inputs({}); } catch (const std::exception&) { mutable_rejected = true; }
+        check("writable executable mappings refuse qualification while the owned service remains alive", mutable_image.status_code == 200 && mutable_rejected &&
+            !worker.runtime_inputs_current() && worker.endpoint_owned());
+#else
+        check("unsupported native image association is explicit", !child->image_files().has_value());
+#endif
         worker.stop_server();
+        check("confirmed retirement clears runtime input association", !worker.runtime_inputs_current());
         check("confirmed retirement clears endpoint ownership", !worker.endpoint_owned());
+#ifdef __linux__
+        std::filesystem::remove(image_file);
+#endif
     }
 
     {

@@ -70,6 +70,8 @@ json post_engine(const std::string &address, const std::string &path,
     throw AdmissionError("state_operation_cancelled", "State operation was cancelled before dispatch", 499);
   if (!worker.endpoint_owned())
     throw AdmissionError("backend_listener_unverified", "The state worker no longer owns its listener", 503);
+  if (!worker.runtime_inputs_current())
+    throw AdmissionError("runtime_inputs_unverified", "The state worker runtime files no longer match its captured inputs", 503);
   const auto payload = body.dump();
   worker.resources_started();
   utils::HttpResponse r;
@@ -85,6 +87,8 @@ json post_engine(const std::string &address, const std::string &path,
   worker.resources_completed();
   if (!worker.endpoint_owned())
     throw AdmissionError("backend_listener_unverified", "State response listener ownership could not be verified", 503);
+  if (!worker.runtime_inputs_current())
+    throw AdmissionError("runtime_inputs_unverified", "State response runtime-file association could not be verified", 503);
   if (r.status_code != 200)
     throw std::runtime_error("Engine state operation failed (" +
                              std::to_string(r.status_code) +
@@ -176,7 +180,7 @@ json JuicedService::cache_profile(const std::string &requested, WrappedServer::I
   if (identity.empty() || identity.value("recipe", "") != "llamacpp")
     throw std::invalid_argument("Persistent prompt state requires a captured llama.cpp execution identity");
   const auto name = server_.model_manager_->get_public_model_name(loaded.at("model").get<std::string>());
-  identity["profile_schema"] = 3;
+  identity["profile_schema"] = 4;
   identity["definition"] = loaded.at("definition");
   identity["model"] = name;
   identity["options"] = loaded.at("options");
@@ -214,9 +218,12 @@ json JuicedService::cache_profile(const std::string &requested, WrappedServer::I
     correct_directory = std::filesystem::equivalent(
         std::filesystem::path(directory->second.front().front()), snapshot_directory_, ec) && !ec;
   }
-  const bool configured = identity.value("captured", false) && correct_directory && identity["engine"].get<std::string>().find("dde879b") != std::string::npos;
+  const bool runtime_current = worker.runtime_inputs_current();
+  if (cancelled()) throw AdmissionError("state_operation_cancelled", "Runtime image inspection was cancelled", 499);
+  const bool configured = identity.value("captured", false) && runtime_current && correct_directory && identity["engine"].get<std::string>().find("dde879b") != std::string::npos;
   const std::string configuration_reason = configured ? "" : !identity.value("captured", false)
       ? identity.value("reason", "Execution inputs could not be captured")
+      : !runtime_current ? "Runtime executable or loaded-module association changed; reload before qualifying prompt state"
       : !correct_directory ? "Load options must use the Juiced snapshot directory"
       : "This engine build has no qualified prompt-state format";
   auto fingerprint = digest(identity.dump());

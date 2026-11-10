@@ -780,7 +780,7 @@ elapsed-time bound inside the accepted load deadline. Blocking filesystem calls
 are not an end-to-end I/O deadline guarantee. Directory-backed or remotely resolved
 inputs remain uncaptured and cannot qualify this persistent-cache path.
 
-Profile schema3 excludes generation, listener port and observation timestamps so
+Profile schema4 excludes generation, listener port and observation timestamps so
 unchanged worker reloads/restarts preserve compatibility. It includes the frozen
 declared definition, artifact and supported argument-file content, resolved
 options, context layout, launch executable and reported engine build. Earlier
@@ -795,6 +795,45 @@ and path changes report `settings_pending` in native discovery and the catalog.
 An explicit native load applies changed definitions through normal worker
 replacement. A matching repeated load reuses its existing generation. Definition
 comparison performs no filesystem work under Router's shared lock.
+
+Linux process-image capture also records the actual child executable and regular
+files backing executable mappings. It joins procfs mapping links, file metadata,
+mount/root namespace and filesystem identity. Btrfs uses its governing mount device
+when its subvolume `stat` device differs. Missing/deleted files, writable or unknown
+executable mappings, unresolved association and bounded-query failure prevent
+persistent qualification. Kernel vDSO/vsyscall mappings are outside this file-content
+subset. Reads check cancellation and cap mapping data at 4 MiB, 65,536 rows and
+4,096 distinct files. These bounds do not prove end-to-end filesystem latency.
+
+Startup hashes mapped files and revalidates their association through the existing
+process owner. Procfs short reads are consumed through a bounded complete walk.
+Repeated inventory checks do not make the kernel mapping view atomic. Mapping addresses, inode numbers and timestamps remain transient
+verification facts. They do not enter compatibility fingerprints. Cache profiles
+and state exchanges revalidate the captured file association. Changed or late-loaded
+modules disable qualification without relabeling the frozen generation. A rejected
+pre-dispatch save releases unused credit. An unresolved dispatched operation still
+requires confirmed termination.
+
+The Linux image supplies separate CPU and Vulkan runtime trees from the same
+verified published release. The CPU tree omits unselected GGML accelerator/RPC
+components, retains CPU/core libraries and licenses, and has a hashed file inventory.
+Its launcher preserves native arguments. Image defaults select that tree for CPU;
+saved executable overrides remain authoritative. The Vulkan tree is unchanged.
+This prevents a CPU default from initializing unselected accelerator libraries.
+An explicit override can still be unqualified if its mapped code is writable or
+otherwise unverifiable. This is runtime packaging, not weight conversion or a
+claim of complete runtime-bundle promotion/rollback.
+
+The process mutex owns these checks and content reads. Router/model/configuration
+locks remain released. File-backed mapping identity does not prove mapped-page
+immutability or include every nonexecutable runtime asset. This remains distinct
+from complete immutable runtime bundles and all-writer/root maintenance. Windows
+and macOS currently report process-image association unavailable, so this new
+persistent-cache qualification path remains unqualified there. Ordinary serving
+continues. Their image capture and real-device acceptance remain required work.
+The [kernel procfs contract](https://docs.kernel.org/filesystems/proc.html) documents
+mapping-read and process-lifetime limitations. Portable metadata is not proof of
+shared-library or device execution on another platform.
 
 ### Native listener association
 

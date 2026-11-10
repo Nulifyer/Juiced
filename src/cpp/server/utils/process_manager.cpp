@@ -36,6 +36,10 @@ bool ProcessManager::owns_loopback_listener(ProcessHandle handle, int port) {
     return port > 0 && port <= 65535 && create_process_platform()->owns_loopback_listener(handle, port);
 }
 
+std::optional<ProcessImageFiles> ProcessManager::image_files(ProcessHandle handle, const std::function<bool()>& cancelled) {
+    return create_process_platform()->image_files(handle, cancelled);
+}
+
 int ProcessManager::get_exit_code(ProcessHandle handle) {
     auto platform = create_process_platform();
     return platform->get_exit_code(handle);

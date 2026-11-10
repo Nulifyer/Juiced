@@ -105,6 +105,7 @@ public:
         std::optional<int> execution_slot() const { return resources_.execution_slot(); }
         std::chrono::steady_clock::time_point completion_deadline() const { return resources_.completion_deadline(); }
         bool endpoint_owned() const { return server_ && server_->endpoint_owned(); }
+        bool runtime_inputs_current() const { return server_ && server_->runtime_inputs_current([this] { return deadline_expired() || WrappedServer::current_request_cancel_context().cancelled(); }); }
         json execution_snapshot() const { return server_ ? server_->execution_snapshot() : json::object(); }
         uint64_t generation() const { return server_ ? server_->get_instance_id() : 0; }
     private:
@@ -531,6 +532,7 @@ public:
         return ctx_size_auto_;
     }
     virtual bool endpoint_owned() const;
+    virtual bool runtime_inputs_current(const std::function<bool()>& cancelled = {}) const;
     int get_process_id() const;
     std::vector<std::string> get_launch_command() const;
     int get_backend_port() const;
@@ -774,7 +776,9 @@ protected:
     std::string server_name_;
     int port_;
     std::string host_ = "127.0.0.1";
+    json capture_runtime_inputs(const std::function<bool()>& cancelled);
     std::unique_ptr<ServerProcess> process_;
+    std::optional<utils::ProcessImageFiles> runtime_image_files_;
     std::vector<std::unique_ptr<ServerProcess>> unconfirmed_processes_;
     std::size_t process_stops_in_progress_ = 0;
     mutable std::mutex process_mutex_;

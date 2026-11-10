@@ -83,6 +83,8 @@ public:
     }
     std::atomic<bool> owns_endpoint{true};
     bool endpoint_owned() const override { return owns_endpoint.load(); }
+    std::atomic<bool> owns_runtime{true};
+    bool runtime_inputs_current(const std::function<bool()>& cancelled = {}) const override { return owns_runtime.load() && !(cancelled && cancelled()); }
     bool observes_inference_completion() const override { return true; }
     json get_slots() override { return forward_get_request("/slots"); }
     json slots_action(int slot, const std::string& action, const json& body) override {
@@ -145,6 +147,10 @@ struct StatePublicationTestHook {
     static void endpoint_owner(Server& server, const std::string& name, bool owned) {
         std::lock_guard<std::mutex> lock(server.router_->load_mutex_);
         dynamic_cast<CacheBoundaryWorker*>(server.router_->find_server_by_model_name(name))->owns_endpoint = owned;
+    }
+    static void runtime_owner(Server& server, const std::string& name, bool owned) {
+        std::lock_guard<std::mutex> lock(server.router_->load_mutex_);
+        dynamic_cast<CacheBoundaryWorker*>(server.router_->find_server_by_model_name(name))->owns_runtime = owned;
     }
     static void cache_arguments(Server& server, const std::string& name, const std::string& args) {
         std::lock_guard<std::mutex> lock(server.router_->load_mutex_);
@@ -1426,6 +1432,14 @@ static void cache_pre_dispatch() {
             check(foreign.status == 503 && foreign.body.find("backend_listener_unverified") != std::string::npos && inspections == inspected,
                   "lost listener ownership rejects inspection before any backend exchange");
             Hook::endpoint_owner(server, name, true);
+            Hook::runtime_owner(server, name, false);
+            const auto stale_image_response = Hook::cache(server, {{"model", name}}, "cache/profile");
+            const auto stale_image = json::parse(stale_image_response.body);
+            check(stale_image_response.status == 200 && stale_image.at("fingerprint") == profile.at("fingerprint") &&
+                  stale_image.at("configured") == false && stale_image.at("qualified") == false &&
+                  stale_image.at("configuration_reason").get<std::string>().find("Runtime executable") != std::string::npos,
+                  "changed runtime association keeps the frozen profile but refuses persistent qualification");
+            Hook::runtime_owner(server, name, true);
 
             check(Hook::cache(server, {{"model", name}, {"fingerprint", profile.at("fingerprint")}, {"evidence", "Controlled pre-dispatch ownership fixture only"}}, "cache/qualify").status == 200,
                   ("controlled save boundary qualifies only the fixture profile: " + profile.dump()).c_str());
@@ -1450,6 +1464,16 @@ static void cache_pre_dispatch() {
             const auto recovered = Hook::cache_chat(server, name, "owner-restored", stream, closed);
             check(recovered.status == 200 && saves == 2,
                   "restored listener ownership permits a later save without unloading the worker");
+            Hook::save_barrier(server, [&] { Hook::runtime_owner(server, name, false); });
+            const auto lost_image = Hook::cache_chat(server, name, "runtime-lost-before-save", stream, closed);
+            Hook::save_barrier(server, {});
+            check(lost_image.status == 200 && saves == 2 && Hook::state(server).at("snapshot_writes").empty() &&
+                  Hook::disk(server).at("reserved_write_bytes") == 0,
+                  "lost runtime association before save preserves inference and releases undispatched disk credit");
+            Hook::runtime_owner(server, name, true);
+            const auto image_recovered = Hook::cache_chat(server, name, "runtime-owner-restored", stream, closed);
+            check(image_recovered.status == 200 && saves == 3,
+                  "verified runtime association permits another JSON/SSE save without unloading");
 
         }
         lemon::RuntimeConfig::set_global(nullptr);

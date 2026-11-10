@@ -6,7 +6,7 @@ FROM toolchain AS manager
 WORKDIR /src
 COPY . .
 RUN printf '2026.44.1-juiced\n' > .version && cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_WEB_APP=OFF -DBUILD_TAURI_APP=OFF -DBUILD_TESTING=ON && cmake --build build -j4 --target lemond lemonade test_backend_mode_contract test_model_delete_shared_repo test_process_manager test_request_identity test_memory_budget test_inference_lease test_realtime_worker_lease test_routing_helper_reconcile test_live_throughput && ctest --test-dir build --output-on-failure -R '^(BackendModeContractTest|ModelDeleteSharedRepoTest|ProcessManagerTest|RequestIdentityTest|MemoryBudgetTest|InferenceLeaseTest|RealtimeWorkerLeaseTest|RoutingHelperReconcileTest|LiveThroughputTest)$'
-RUN python3 juiced/tests/test_api.py build/lemond
+RUN python3 juiced/tests/test_api.py build/lemond && python3 juiced/tests/test_stage_llama_cpu.py
 RUN mkdir -p /out/licenses && cd /src/build/_deps && find . -maxdepth 2 -type f \( -iname 'license*' -o -iname 'copying*' -o -iname 'notice*' \) -exec cp --parents '{}' /out/licenses/ ';'
 
 FROM oven/bun:1.4.3 AS bun
@@ -38,6 +38,9 @@ FROM toolchain AS llama
 RUN mkdir -p /out/llama/bin /out/llama/licenses && curl --fail --location --retry 3 https://github.com/ggml-org/llama.cpp/releases/download/b12032/llama-b12032-bin-ubuntu-vulkan-x64.tar.gz -o /tmp/llama.tar.gz && echo 'f75e7107f9450034c5467492c41e9ed91816e2d815fc4b802c6bd58de7d5b126  /tmp/llama.tar.gz' | sha256sum -c - && tar -xzf /tmp/llama.tar.gz --strip-components=1 -C /out/llama/bin && cp /out/llama/bin/LICENSE /out/llama/licenses/llama.txt && rm /tmp/llama.tar.gz
 RUN find /out/llama/bin -maxdepth 1 \( -name 'llama-*' ! -name 'llama-server' -o -name 'llama' -o -name 'libllama-quantize-impl.so*' \) -delete
 RUN printf '#!/bin/sh\nexport LD_LIBRARY_PATH=/opt/juiced/llama/bin\nexec /opt/juiced/llama/bin/llama-server "$@"\n' > /out/llama/llama-server && chmod 755 /out/llama/llama-server && printf 'b12032 dde879bc4f954b809892fd0d660515f42536394a\n' > /out/llama/source-revision
+
+COPY juiced/runtime/stage_llama_cpu.py /tmp/stage_llama_cpu.py
+RUN python3 /tmp/stage_llama_cpu.py --source /out/llama --destination /out/llama-cpu --installed-root /opt/juiced/llama-cpu
 
 FROM toolchain AS voice
 RUN apt-get update && apt-get install -y --no-install-recommends python3-venv && rm -rf /var/lib/apt/lists/*

@@ -69,6 +69,10 @@ bool ServerProcess::owns_loopback_listener(int port) const {
     return running() && ProcessManager::owns_loopback_listener(handle_, port);
 }
 
+std::optional<utils::ProcessImageFiles> ServerProcess::image_files(const std::function<bool()>& cancelled) const {
+    return running() ? ProcessManager::image_files(handle_, cancelled) : std::nullopt;
+}
+
 std::string NativeProcess::start(const ServerCommand& command) {
     std::vector<std::string> command_line = {command.program};
     command_line.insert(command_line.end(), command.args.begin(), command.args.end());

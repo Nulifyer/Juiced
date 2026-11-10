@@ -289,12 +289,41 @@ std::unique_ptr<ServerProcess> WrappedServer::take_process() {
     if (process_) ++process_stops_in_progress_;
     port_ = 0;
     host_ = "127.0.0.1";
+    runtime_image_files_.reset();
     return std::move(process_);
 }
 
 bool WrappedServer::endpoint_owned() const {
     std::lock_guard<std::mutex> owner(process_mutex_);
     return process_ && process_->owns_loopback_listener(port_);
+}
+
+json WrappedServer::capture_runtime_inputs(const std::function<bool()>& cancelled) {
+    std::lock_guard<std::mutex> owner(process_mutex_);
+    runtime_image_files_.reset();
+    if (!process_) throw std::runtime_error("Runtime image process is unavailable");
+    const auto before = process_->image_files(cancelled);
+    if (!before) throw std::runtime_error("Actual executable and mapped-library association is unavailable on this platform or filesystem");
+    std::map<std::string, std::string> inputs;
+    for (const auto& [path, verification] : before->files) inputs[path] = path;
+    const auto captured = ModelManager::execution_files(inputs, cancelled);
+    const auto after = process_->image_files(cancelled);
+    if (!after || !(*before == *after)) throw std::runtime_error("Runtime image files changed during content capture");
+    json modules = json::array();
+    for (const auto& [path, facts] : captured.items()) {
+        if (facts.size() != 1 || facts.at(0).at("path") != path)
+            throw std::runtime_error("A mapped runtime input does not resolve to exactly one observed image file");
+        if (path != before->executable) modules.push_back(facts.at(0));
+    }
+    runtime_image_files_ = *after;
+    return {{"association", before->method}, {"executable", captured.at(before->executable).at(0)}, {"modules", modules}};
+}
+
+bool WrappedServer::runtime_inputs_current(const std::function<bool()>& cancelled) const {
+    std::lock_guard<std::mutex> owner(process_mutex_);
+    if (!process_ || !runtime_image_files_) return false;
+    const auto current = process_->image_files(cancelled);
+    return current && *current == *runtime_image_files_;
 }
 
 bool WrappedServer::process_running() const {
