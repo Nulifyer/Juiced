@@ -171,6 +171,7 @@ struct StatePublicationTestHook {
             sink.write = [](const char*, size_t) { return true; }; sink.is_writable = [] { return true; }; sink.done = [] {};
             response.content_provider_(0, 0, sink);
             if (response.content_provider_resource_releaser_) { response.content_provider_resource_releaser_(true); response.content_provider_resource_releaser_ = nullptr; }
+            response.content_provider_ = nullptr;
         }
         return response;
     }
@@ -219,6 +220,7 @@ struct StatePublicationTestHook {
         } catch (const AdmissionError& error) { return {{"status", error.status}, {"code", error.code}}; }
     }
     static json admission(Server& server) { return server.router_->admission_snapshot(); }
+    static lemon::ResourceAdmission writer_admission(Server& server) { return server.router_->admission_view(); }
     static void idle_options(Server& server, const std::string& name, int idle = 0) {
         std::lock_guard<std::mutex> lock(server.router_->load_mutex_);
         auto* worker = server.router_->find_server_by_model_name(name);
@@ -314,7 +316,7 @@ struct StatePublicationTestHook {
     static json take_command(Server& server) {
         std::lock_guard<std::mutex> lock(server.juiced_->mutex_);
         if (server.juiced_->pending_.empty()) return json::object();
-        auto cmd = server.juiced_->pending_.front(); server.juiced_->pending_.pop_front(); return cmd;
+        auto cmd = std::move(server.juiced_->pending_.front()); server.juiced_->pending_.pop_front(); return cmd.command;
     }
     static void execute(Server& server, const json& command) { server.juiced_->execute(command); }
     static void execute_live(Server& server, const json& command) {
@@ -1474,6 +1476,21 @@ static void cache_pre_dispatch() {
             const auto image_recovered = Hook::cache_chat(server, name, "runtime-owner-restored", stream, closed);
             check(image_recovered.status == 200 && saves == 3,
                   "verified runtime association permits another JSON/SSE save without unloading");
+            auto admission = Hook::writer_admission(server);
+            bool held = false;
+            Hook::save_barrier(server, [&] {
+                admission.maintenance(true);
+                held = !admission.wait_for_writes(std::chrono::milliseconds(1));
+                const auto denied = std::async(std::launch::async, [&] { return Hook::cache(server, {{"mode", "memory"}}); }).get();
+                held = held && denied.status == 503 && Hook::state(server)["cache"]["mode"] == "persistent";
+            });
+            const auto continued = Hook::cache_chat(server, name, "maintenance-finalizer", stream, closed);
+            Hook::save_barrier(server, {});
+            check(held && continued.status == 200 && saves == 4 && Hook::state(server)["snapshot_writes"].empty(),
+                  "accepted JSON/SSE finalizer retains writer ownership and publishes its snapshot after maintenance closes new work");
+            check(admission.wait_for_writes(std::chrono::milliseconds(100)) && Hook::disk(server)["reserved_write_bytes"] == 0,
+                  "terminal JSON/SSE snapshot publication releases its writer only after coherent file and metadata effects");
+            admission.maintenance(false);
 
         }
         lemon::RuntimeConfig::set_global(nullptr);

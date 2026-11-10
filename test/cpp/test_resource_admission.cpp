@@ -758,6 +758,38 @@ int main() {
         terminal_lease.started(); terminal_lease.completed(); terminal_lease = {};
         check(cancellation.wait_for_writes(50ms) && cancellation.snapshot()["writes"]["active_operations"] == 0,
               "terminal ledger cleanup can release its continuation while holding the ledger mutex");
+        ResourceAdmission restoration;
+        auto restore_config = config; restore_config["interactive_wait_ms"] = 10000;
+        restoration.configure(restore_config);
+        auto load_work = work(701); load_work.operation = ResourceAdmission::Operation::Load;
+        auto occupied = restoration.acquire(load_work);
+        ResourceAdmission::WriteToken accepted_mutation;
+        { auto operation = restoration.write_scope("profile-reload"); accepted_mutation = operation.continuation(); }
+        auto restoring = run_thread([&, token = accepted_mutation] {
+            auto publication = token.enter();
+            auto second = load_work; second.generation = 702;
+            auto loaded = restoration.acquire(second);
+            return loaded.execution_slot() == std::nullopt;
+        });
+        const auto waiting_until = std::chrono::steady_clock::now() + 5s;
+        while (restoration.snapshot()["pending"] != 1 && std::chrono::steady_clock::now() < waiting_until)
+            std::this_thread::sleep_for(1ms);
+        restoration.maintenance(true);
+        check(restoration.snapshot()["pending"] == 1 && error([&] { restoration.acquire(load_work); }, "maintenance_active"),
+              "maintenance preserves a qualified accepted mutation's queued load while rejecting a fresh load");
+        occupied = {};
+        check(restoring.get(), "accepted restoration still obeys the physical queue and completes after capacity returns");
+        {
+            auto publication = accepted_mutation.enter();
+            auto inference = work(703);
+            check(error([&] { restoration.acquire(inference); }, "maintenance_active"),
+                  "a native writer continuation cannot authorize fresh user inference during maintenance");
+            load_work.options = {{"ctx_size", 4096}};
+            check(error([&] { restoration.acquire(load_work); }, "admission_profile_mismatch"),
+                  "accepted reload continuation cannot bypass committed resource profile identity");
+        }
+        accepted_mutation = {};
+        check(restoration.wait_for_writes(100ms), "terminal accepted restoration releases its writer and queue ownership");
         ResourceAdmission writes;
         writes.configure({{"active_limit", 1}});
         ResourceAdmission::WriteToken deferred;

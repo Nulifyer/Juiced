@@ -50,6 +50,7 @@ void JuicedService::guard_model_removal_locked(const std::string& model) const {
   }
 }
 void JuicedService::with_model_removal(const std::string& model, const std::function<void()>& remove) {
+  auto writer = server_.router_->admission_view().write_scope("model-removal");
   auto mutation = server_.model_manager_->model_mutation(model, false);
   if (!mutation.owns_lock()) throw AdmissionError("model_mutation_busy", "Wait for model publication to finish", 409);
   {

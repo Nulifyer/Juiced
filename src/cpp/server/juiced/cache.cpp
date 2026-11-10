@@ -284,6 +284,7 @@ void JuicedService::stage_snapshot_publication_locked(const std::string& pending
   persist_locked();
 }
 void JuicedService::publish_snapshot_write(const std::string& pending, const json& intent) {
+  auto writer = server_.router_->admission_view().write_scope("snapshot-publication");
   MutationClaim claim(mutex_, active_snapshot_publications_);
   if (!claim.acquire(pending)) return;
   {
@@ -379,6 +380,7 @@ void JuicedService::cleanup_snapshot_writes_locked() {
   }
 }
 void JuicedService::reconcile_snapshot_writes() {
+  auto writer = server_.router_->admission_view().write_scope("snapshot-reconciliation");
   json writes;
   { std::lock_guard<std::mutex> lock(mutex_); writes = state_["snapshot_writes"]; }
   for (const auto& [file, entry] : writes.items()) {
@@ -503,6 +505,8 @@ void JuicedService::prune_cache_locked() {
 }
 void JuicedService::cache_api(const httplib::Request &req,
                               httplib::Response &res, const std::string &op) {
+  auto writer = req.method == "GET" || op == "cache/profile" ? ResourceAdmission::WriteScope{} :
+      server_.router_->admission_view().write_scope("cache-mutation");
   auto body = req.body.empty() ? json::object() : json::parse(req.body);
   if (body.contains("model_modes")) {
     if (!body["model_modes"].is_object())
@@ -733,6 +737,7 @@ void JuicedService::chat(const httplib::Request &original,
     server_.handle_chat_completions(normalized, res);
     return;
   }
+  auto writer = server_.router_->admission_view().write_scope("persistent-chat");
   bool inference_started = false;
   try {
     const auto requested_model = model_name;
@@ -876,7 +881,8 @@ void JuicedService::chat(const httplib::Request &original,
     auto req = std::make_shared<httplib::Request>(original);
     req->body = request.dump();
     auto finish = [this, guard, worker, identified, key, thread, model, profile,
-                   address, slot, messages, disconnected](bool success) {
+                   address, slot, messages, disconnected, continuation = writer.continuation()](bool success) {
+      auto publication = continuation.enter();
       if (!success || !identified)
         return;
       const auto pending = key + ".pending";

@@ -65,7 +65,11 @@ private:
   std::condition_variable wake_;
   json committed_state_;
   json state_, catalog_ = json::array(), operations_ = json::object();
-  std::deque<json> pending_;
+  struct QueuedCommand {
+    json command;
+    ResourceAdmission::WriteToken writer;
+  };
+  std::deque<QueuedCommand> pending_;
   std::mutex requests_mutex_;
   std::deque<json> requests_;
   unsigned long long request_sequence_ = 0;
@@ -141,6 +145,7 @@ private:
   std::string image_model(const std::string &requested);
   void refresh();
   void execute(const json &command);
+  bool execute_pending();
   void enqueue(const json &command);
   void run();
   void handle(const httplib::Request &, httplib::Response &,

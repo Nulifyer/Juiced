@@ -666,8 +666,23 @@ inference slot or per-user quota. A wait includes participating nonresident work
 through final owner release, even after device work reports completion. Active or
 uncertain helper tickets also prevent that drain from completing.
 
+Server-owned downloads and SSE providers retain their writer continuation before
+deferring execution. Queued Juiced model commands retain it through profile journals,
+model publication and terminal status. Shutdown cancels proven undispatched commands
+before releasing their queue ownership. Import operations span file replacement,
+registration and final journal publication. Persistent-chat finalizers retain their
+accepted context through snapshot save, cleanup and file/metadata publication.
+Background reconciliation takes a fresh operation scope before changing native state.
+
+Maintenance rejects new loads and user inference. An accepted native mutation may
+finish a required load or restoration through its continuation, with the same exact
+resource-profile, physical-capacity, queue and deadline checks. A continuation never
+authorizes new user inference. Ordinary pause and shutdown still reject acquisition.
+Draining waits for queued admission entries as well as active owners and finalizers.
+Read-only native state inspection remains available without opening a writer.
+
 This is operation accounting, not whole-server maintenance acceptance. No public
-maintenance-ready endpoint is exposed. Queued/deferred Juiced/import/snapshot/job
+maintenance-ready endpoint is exposed. Retained-job cleanup, remaining helper/metadata
 writers, external roots, idle-worker stop and prior-manager recovery still need
 complete integration and evidence. Empty participating-operation counts cannot
 prove storage consistency or that another process stopped writing. Synchronous

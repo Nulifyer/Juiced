@@ -268,7 +268,7 @@ bool ResourceAdmission::wait_for_writes(std::chrono::milliseconds timeout) const
     std::unique_lock<std::mutex> lock(state_->mutex);
     for (;;) {
         state_->prune_writes();
-        if (std::none_of(state_->active.begin(), state_->active.end(), [](const auto& item) {
+        if (state_->pending.empty() && std::none_of(state_->active.begin(), state_->active.end(), [](const auto& item) {
                 return item.second->work.operation != Operation::Ingress &&
                     (!item.second->resident || item.second->uncertain);
             })) return true;
@@ -490,7 +490,8 @@ ResourceAdmission::Lease ResourceAdmission::acquire(Work work) {
     }
     const auto writer = writer_context_.lock();
     const bool continuing = writer && writer->state == state_ &&
-        (entry->work.operation == Operation::Management || entry->work.operation == Operation::State);
+        (entry->work.operation == Operation::Management || entry->work.operation == Operation::State ||
+         entry->work.operation == Operation::Load);
     if (state_->maintenance && !continuing) reject("maintenance_active", "Runtime maintenance is rejecting new work", 503);
     if (state_->stopped || state_->paused) reject("admission_paused", "Runtime admission is paused", 503);
     if (entry->work.cancelled && entry->work.cancelled()) reject("request_cancelled", "Request disconnected before admission", 499);
@@ -601,7 +602,7 @@ ResourceAdmission::Lease ResourceAdmission::acquire(Work work) {
     try {
         while (true) {
             if (state_->configuration_pending) reject("admission_configuration_pending", "Admission configuration is changing", 503);
-            if (state_->maintenance) reject("maintenance_active", "Runtime maintenance is rejecting queued work", 503);
+            if (state_->maintenance && !continuing) reject("maintenance_active", "Runtime maintenance is rejecting queued work", 503);
             if (state_->stopped || state_->paused) reject("admission_paused", "Runtime admission is paused", 503);
             if (entry->work.cancelled && entry->work.cancelled()) reject("request_cancelled", "Request disconnected while queued", 499);
             if (Clock::now() >= entry->queue_deadline) {

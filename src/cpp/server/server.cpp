@@ -7880,6 +7880,7 @@ std::shared_ptr<Server::DownloadJob> Server::start_download_job(
     const std::string& display_name,
     std::function<void(DownloadProgressCallback)> operation) {
 
+    auto writer = router_->admission_view().write_scope("deferred-download");
     std::shared_ptr<DownloadJob> old_job;
     auto job = std::make_shared<DownloadJob>();
     job->id = download_id;
@@ -7919,7 +7920,8 @@ std::shared_ptr<Server::DownloadJob> Server::start_download_job(
         download_jobs_[download_id] = job;
     }
 
-    auto run = [this, job, operation = std::move(operation)]() mutable {
+    auto run = [this, job, operation = std::move(operation), continuation = writer.continuation()]() mutable {
+        auto publication = continuation.enter();
         try {
             DownloadProgressCallback progress_cb = [this, job](const DownloadProgress& p) -> bool {
                 std::lock_guard<std::mutex> lock(downloads_mutex_);
@@ -8057,13 +8059,15 @@ void Server::stream_download_operation(
     httplib::Response& res,
     std::function<void(DownloadProgressCallback)> operation) {
 
+    auto writer = router_->admission_view().write_scope("deferred-download");
     res.set_header("Cache-Control", "no-cache");
     res.set_header("Connection", "keep-alive");
     res.set_header("X-Accel-Buffering", "no");
 
     res.set_chunked_content_provider(
         "text/event-stream",
-        [operation = std::move(operation)](size_t offset, httplib::DataSink& sink) {
+        [operation = std::move(operation), continuation = writer.continuation()](size_t offset, httplib::DataSink& sink) {
+            auto publication = continuation.enter();
             if (offset > 0) {
                 return false; // Already sent everything
             }

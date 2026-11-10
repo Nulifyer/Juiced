@@ -140,6 +140,8 @@ void JuicedService::image_compatibility(const httplib::Request &req,
                                         httplib::Response &res,
                                         const std::string &op) {
   try {
+    auto writer = req.method == "POST" && op == "options" ?
+        server_.router_->admission_view().write_scope("image-selection") : ResourceAdmission::WriteScope{};
     auto body = req.body.empty() ? json::object() : json::parse(req.body);
     if (!body.is_object())
       throw std::invalid_argument("Expected a JSON object");
@@ -286,6 +288,9 @@ void JuicedService::image_compatibility(const httplib::Request &req,
             (op == "progress" ? "?skip_current_image=true" : ""),
         {}, 10, utils::HttpSecurityPolicy::TrustedLoopback);
     respond(res, json::parse(response.body), response.status_code);
+  } catch (const AdmissionError &e) {
+    if (e.retry_after()) res.set_header("Retry-After", std::to_string(e.retry_after()));
+    respond(res, e.to_json(), e.status);
   } catch (const json::exception &) {
     respond(res, {{"error", "Invalid SD API request"}}, 400);
   } catch (const std::invalid_argument &e) {

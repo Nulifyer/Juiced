@@ -10,6 +10,7 @@
 #include <string>
 
 #include <lemon/config_file.h>
+#include <lemon/juiced/service.h>
 #include <lemon/server.h>
 #include <lemon/utils/json_utils.h>
 #include <lemon/utils/path_utils.h>
@@ -24,6 +25,15 @@ using lemon::ConfigFile;
 using lemon::RuntimeConfig;
 using lemon::Server;
 using lemon::utils::JsonUtils;
+
+namespace lemon {
+struct StatePublicationTestHook {
+    static void finish_background(Server& server) {
+        server.juiced_->stop();
+        if (server.model_cache_warmup_thread_.joinable()) server.model_cache_warmup_thread_.join();
+    }
+};
+}
 
 static int passed = 0;
 static int failures = 0;
@@ -687,11 +697,13 @@ static void test_durable_publication() {
     auto runtime = std::make_shared<RuntimeConfig>(defaults);
     RuntimeConfig::set_global(runtime.get());
     Server server(runtime, temp.string(), temp.string());
+    lemon::StatePublicationTestHook::finish_background(server);
     fs::create_directory(temp.path() / "config.json.tmp");
     httplib::Request request; request.method = "POST"; request.path = "/internal/set";
     request.body = json{{"admission", {{"mode", "legacy"}, {"interactive_wait_ms", 123}}}}.dump();
     httplib::Response response;
     server.handle_config_set(request, response);
+    if (response.status != 500) std::fprintf(stderr, "Unexpected persistence response: %d %s\n", response.status, response.body.c_str());
     check(response.status == 500 && runtime->snapshot().value("admission", json::object()) == defaults.value("admission", json::object()),
           "real persistence failure returns an error without publishing admission settings");
     fs::remove(temp.path() / "config.json.tmp");

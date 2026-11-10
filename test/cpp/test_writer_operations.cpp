@@ -1,5 +1,6 @@
 #include "lemon/alias_manager.h"
 #include "lemon/config_file.h"
+#include "lemon/juiced/service.h"
 #include "lemon/model_manager.h"
 #include "lemon/resource_admission.h"
 #include "lemon/router.h"
@@ -7,12 +8,14 @@
 #include "lemon/server.h"
 #include "support/test_state_isolation.h"
 
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <functional>
 #include <future>
+#include <sstream>
 #include <stdexcept>
 
 using namespace lemon;
@@ -41,10 +44,40 @@ struct ModelPublicationTestHook {
     static void before_options(ModelManager& models, std::function<void()> callback) { models.options_persistence_barrier_ = std::move(callback); }
 };
 struct StatePublicationTestHook {
+    static ModelManager& models(Server& server) { return *server.model_manager_; }
     static ResourceAdmission admission(Server& server) { return server.router_->admission_view(); }
     static void effects(Server& server, std::function<void()> callback) { server.config_effect_barrier_ = std::move(callback); }
     static json publish(Server& server, const json& changes) { return server.publish_config([&] { return changes; }); }
     static bool effects_complete(Server& server) { return server.pending_config_effects_.empty(); }
+    static void finish_background(Server& server) {
+        server.juiced_->stop();
+        if (server.model_cache_warmup_thread_.joinable()) server.model_cache_warmup_thread_.join();
+    }
+    static void stream(Server& server, httplib::Response& response, std::function<void(DownloadProgressCallback)> action) {
+        server.stream_download_operation(response, std::move(action));
+    }
+    static void start_barrier(Server& server, std::function<void(const std::string&)> callback) { server.background_start_barrier_ = std::move(callback); }
+    static std::string download(Server& server, std::function<void(DownloadProgressCallback)> action) {
+        auto job = server.start_download_job("writer-job", "model", "writer-job", std::move(action));
+        server.join_download_job(job);
+        return job->status;
+    }
+    static void enqueue(Server& server, const json& command) { server.juiced_->enqueue(command); }
+    static bool execute_pending(Server& server) { return server.juiced_->execute_pending(); }
+    static json operations(Server& server) { std::lock_guard lock(server.juiced_->mutex_); return server.juiced_->operations_; }
+    static json state(Server& server) { std::lock_guard lock(server.juiced_->mutex_); return server.juiced_->state_; }
+    static void import_barrier(Server& server, std::function<void(const std::string&)> callback) { server.juiced_->import_publication_barrier_ = std::move(callback); }
+    static httplib::Response import(Server& server, const std::string& action, const json& body, const std::string& bytes = "") {
+        httplib::Request request; request.method = "POST"; request.body = body.dump();
+        if (action == "chunk") {
+            request.params.emplace("id", body.at("id").get<std::string>()); request.params.emplace("offset", "0"); request.body = bytes;
+        }
+        httplib::Response response; server.juiced_->import_file(request, response, action); return response;
+    }
+    static httplib::Response api(Server& server, const std::string& action, const json& body, const std::string& method = "POST") {
+        httplib::Request request; request.method = method; request.body = body.dump();
+        httplib::Response response; server.juiced_->handle(request, response, action); return response;
+    }
 };
 }
 
@@ -175,8 +208,118 @@ static void server_effect_lifetime() {
     RuntimeConfig::set_global(nullptr);
 }
 
+
+static void deferred_publication() {
+    using Hook = StatePublicationTestHook;
+    const auto root = test::make_scratch_dir("writer-deferred");
+    auto settings = ConfigFile::base_defaults();
+    settings["broadcast"] = false; settings["auto_check_model_updates"] = false; settings["offline"] = true;
+    auto config = std::make_shared<RuntimeConfig>(settings); RuntimeConfig::set_global(config.get());
+    {
+        Server server(config, root.string(), root.string()); Hook::finish_background(server);
+        auto admission = Hook::admission(server);
+        std::atomic<int> calls{0};
+        httplib::Response stream;
+        Hook::stream(server, stream, [&](auto) { ++calls; Hook::publish(server, {{"global_timeout", 311}}); });
+        admission.maintenance(true);
+        check(calls == 0 && !admission.wait_for_writes(1ms), "an undispatched native stream retains its accepted writer");
+        httplib::Response rejected;
+        check(closed([&] { Hook::stream(server, rejected, [&](auto) { ++calls; }); }) && !rejected.content_provider_,
+              "maintenance rejects a fresh stream before registering a content provider");
+        auto exchange = std::async(std::launch::async, [&] {
+            httplib::DataSink sink;
+            sink.write = [](const char*, size_t) { return true; }; sink.is_writable = [] { return true; }; sink.done = [] {};
+            stream.content_provider_(0, 0, sink);
+        });
+        exchange.get(); stream.content_provider_ = nullptr;
+        check(calls == 1 && read(root / "config.json")["global_timeout"] == 311 && admission.wait_for_writes(100ms),
+              "accepted SSE work enters its continuation on another thread and publishes through maintenance");
+        admission.maintenance(false);
+        Hook::stream(server, stream, [&](auto) { ++calls; });
+        admission.maintenance(true); stream.content_provider_ = nullptr;
+        check(calls == 1 && admission.wait_for_writes(100ms), "discarding a proven undispatched stream releases only its writer");
+        admission.maintenance(false);
+
+        std::promise<void> accepted, release;
+        const auto released = release.get_future().share();
+        Hook::start_barrier(server, [&](const auto&) { accepted.set_value(); released.wait(); });
+        auto download = std::async(std::launch::async, [&] {
+            return Hook::download(server, [&](auto) { ++calls; Hook::publish(server, {{"global_timeout", 312}}); });
+        });
+        const bool reached = accepted.get_future().wait_for(5s) == std::future_status::ready;
+        admission.maintenance(true);
+        check(reached && !admission.wait_for_writes(1ms) && closed([&] { Hook::download(server, [](auto) {}); }),
+              "a queued download owns publication before thread dispatch and rejects a fresh job during drain");
+        release.set_value(); const auto status = download.get(); Hook::start_barrier(server, {});
+        check(status == "completed" && calls == 2 && read(root / "config.json")["global_timeout"] == 312 && admission.wait_for_writes(100ms),
+              "accepted server-owned download completes publication after its initiating thread enters maintenance");
+        admission.maintenance(false);
+        Hook::start_barrier(server, [](const auto&) { throw std::runtime_error("controlled deferred dispatch failure"); });
+        bool failed = false;
+        try { Hook::download(server, [&](auto) { ++calls; }); } catch (const std::runtime_error&) { failed = true; }
+        check(failed && calls == 2 && admission.wait_for_writes(100ms), "failed worker construction releases an undispatched continuation without invoking work");
+        Hook::start_barrier(server, {});
+        check(Hook::download(server, [&](auto) { ++calls; }) == "completed" && calls == 3 && admission.wait_for_writes(100ms),
+              "the same native download identifier retries after dispatch failure");
+
+        auto& models = Hook::models(server);
+        const std::string model = "user.Writer-Queued";
+        models.register_user_model(model, {{"recipe", "llamacpp"}, {"checkpoint", "fixture/repo:Q4_K_M"}});
+        const json command = {{"model", model}, {"action", "select"},
+            {"profile", {{"id", "alternate"}, {"recipe", "vllm"}, {"options", {{"ctx_size", 640}}}}}};
+        Hook::enqueue(server, command);
+        admission.maintenance(true);
+        check(!admission.wait_for_writes(1ms) && closed([&] { Hook::enqueue(server, command); }),
+              "a queued model command retains one accepted writer and rejects a new command during maintenance");
+        check(Hook::execute_pending(server) && models.get_model_info(model).recipe == "vllm" &&
+              Hook::state(server)["execution_trials"].empty() && Hook::operations(server).empty() && admission.wait_for_writes(100ms),
+              "queued profile selection resumes accepted ownership through journal, options and terminal publication");
+        const auto before = Hook::state(server);
+        const auto denied = Hook::api(server, "policy", {{"model", model}, {"policy", "hot"}});
+        const auto inspected = Hook::api(server, "imports", json::object(), "GET");
+        check(denied.status == 503 && denied.get_header_value("Retry-After") == "1" &&
+              json::parse(denied.body)["error"]["code"] == "maintenance_active" &&
+              Hook::state(server) == before && inspected.status == 200,
+              "maintenance rejects state mutation before publication and preserves read-only inspection");
+        admission.maintenance(false);
+        Hook::enqueue(server, command); Hook::finish_background(server);
+        check(admission.wait_for_writes(100ms) && Hook::operations(server)[model]["state"] == "cancelled",
+              "shutdown cancels proven undispatched commands and releases their queued writer ownership");
+
+        std::ostringstream payload;
+        const auto number = [&](auto value) { payload.write(reinterpret_cast<const char*>(&value), sizeof(value)); };
+        const auto string = [&](const std::string& value) { number(uint64_t(value.size())); payload << value; };
+        payload << "GGUF"; number(uint32_t(3)); number(uint64_t(0)); number(uint64_t(1));
+        string("general.architecture"); number(uint32_t(8)); string("llama");
+        const auto started = Hook::import(server, "start", {{"filename", "writer.gguf"}, {"size", payload.str().size()}});
+        if (started.status != 201) throw std::runtime_error(started.body);
+        const auto id = json::parse(started.body).at("id").get<std::string>();
+        const auto chunked = Hook::import(server, "chunk", {{"id", id}}, payload.str());
+        if (chunked.status != 200) throw std::runtime_error(chunked.body);
+        std::promise<void> registered, complete;
+        const auto completed = complete.get_future().share();
+        Hook::import_barrier(server, [&](const auto& phase) { if (phase == "registered") { registered.set_value(); completed.wait(); } });
+        auto importing = std::async(std::launch::async, [&] { return Hook::import(server, "finish", {{"id", id}, {"name", "Writer-Import"}}); });
+        const bool published = registered.get_future().wait_for(5s) == std::future_status::ready;
+        admission.maintenance(true);
+        const auto journal = Hook::state(server)["imports"][id];
+        const auto path = journal.at("publication").at("destination").get<std::string>();
+        check(published && journal["status"] == "publishing" && fs::is_regular_file(path) && !admission.wait_for_writes(1ms),
+              "import ownership spans renamed file and registration through its pending final status");
+        const auto cancelled = Hook::import(server, "cancel", {{"id", id}});
+        check(cancelled.status == 503 && cancelled.get_header_value("Retry-After") == "1" && fs::is_regular_file(path),
+              "a fresh cancellation cannot mutate an import after maintenance closes writers");
+        complete.set_value(); const auto imported = importing.get(); Hook::import_barrier(server, {});
+        check(imported.status == 201 && Hook::state(server)["imports"][id]["status"] == "complete" &&
+              models.model_exists("Writer-Import") && admission.wait_for_writes(100ms),
+              "accepted import finishes coherent registration and journal publication during maintenance");
+        admission.maintenance(false);
+    }
+    RuntimeConfig::set_global(nullptr);
+}
+
 int main() {
-    configuration_aliases(); model_publication(); server_effect_lifetime();
+    configuration_aliases(); model_publication(); server_effect_lifetime(); deferred_publication();
     std::fprintf(stderr, "Writer operations: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

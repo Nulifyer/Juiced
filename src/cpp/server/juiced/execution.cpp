@@ -109,6 +109,8 @@ JuicedService::execution_plan(const std::string &requested) {
 void JuicedService::execution_api(const httplib::Request &req,
                                   httplib::Response &res) {
   try {
+    auto writer = req.method == "POST" ? server_.router_->admission_view().write_scope("execution-selection") :
+        ResourceAdmission::WriteScope{};
     const auto body =
         req.method == "POST" ? json::parse(req.body) : json::object();
     const auto requested = req.method == "POST"
@@ -223,6 +225,10 @@ void JuicedService::execution_api(const httplib::Request &req,
       res.set_content(json{{"accepted", true}, {"profile", id}}.dump(),
                       "application/json");
     }
+  } catch (const AdmissionError &e) {
+    res.status = e.status;
+    if (e.retry_after()) res.set_header("Retry-After", std::to_string(e.retry_after()));
+    res.set_content(e.to_json().dump(), "application/json");
   } catch (const std::exception &e) {
     res.status = 400;
     res.set_content(json{{"error", e.what()}}.dump(), "application/json");

@@ -223,6 +223,15 @@ void JuicedService::stop() {
   wake_.notify_all();
   if (worker_.joinable())
     worker_.join();
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (const auto& accepted : pending_) {
+      const auto model = accepted.command.at("model").get<std::string>();
+      operations_[model] = {{"pending", false}, {"state", "cancelled"},
+                            {"error", "Server stopped before command execution"}, {"updated", now()}};
+    }
+    pending_.clear();
+  }
   if (preparation_worker_.joinable()) preparation_worker_.join();
   finish_preparation_cleanup();
   finish_voice_cleanup();
@@ -287,6 +296,7 @@ bool JuicedService::hot(const std::string &requested) const {
   return state_["policies"].value(model, "disabled") == "hot";
 }
 void JuicedService::set_hot(const std::string &requested, bool pinned) {
+  auto writer = server_.router_->admission_view().write_scope("model-pin");
   auto model = server_.model_manager_->get_public_model_name(
       server_.model_manager_->resolve_model_name(requested));
   if (is_omni_collection_recipe(server_.model_manager_->get_model_info(model).recipe))
@@ -362,11 +372,12 @@ bool JuicedService::inference_guard(const httplib::Request &req,
   return false;
 }
 void JuicedService::enqueue(const json &command) {
+  auto writer = server_.router_->admission_view().write_scope("queued-model-command");
   std::lock_guard<std::mutex> lock(mutex_);
   auto m = command.at("model").get<std::string>();
   if (operations_.contains(m) && operations_[m].value("pending", false))
     throw std::invalid_argument("A model operation is already pending");
-  pending_.push_back(command);
+  pending_.push_back({command, writer.continuation()});
   operations_[m] = {
       {"state", command.value("action", "") == "load" ? "queued" : "draining"},
       {"pending", true},
@@ -374,6 +385,7 @@ void JuicedService::enqueue(const json &command) {
   wake_.notify_all();
 }
 void JuicedService::refresh() {
+  auto writer = server_.router_->admission_view().write_scope("catalog-reconciliation");
   auto all = server_.model_manager_->get_supported_models();
   json result = json::array();
   for (const auto &[id, info] : all) {
@@ -433,6 +445,7 @@ void JuicedService::refresh() {
     persist_locked();
 }
 void JuicedService::execute(const json &command) {
+  auto writer = server_.router_->admission_view().write_scope("model-command");
   const auto name = command.at("model").get<std::string>();
   const auto action = command.at("action").get<std::string>();
   json previous_profile;
@@ -571,6 +584,7 @@ void JuicedService::execute(const json &command) {
   }
 }
 void JuicedService::reconcile() {
+  auto writer = server_.router_->admission_view().write_scope("policy-reconciliation");
   json policies, revisions, catalog, interrupted;
   {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -629,19 +643,23 @@ void JuicedService::reconcile() {
       enqueue({{"model", name}, {"action", "unload"}, {"policy_revision", revision}, {"worker_generation", generation}});
   }
 }
+bool JuicedService::execute_pending() {
+  QueuedCommand accepted;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (pending_.empty()) return false;
+    accepted = std::move(pending_.front());
+    pending_.pop_front();
+  }
+  auto publication = accepted.writer.enter();
+  execute(accepted.command);
+  return true;
+}
 void JuicedService::run() {
   while (!stopping_) {
     try {
-      json cmd;
-      {
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (!pending_.empty()) {
-          cmd = pending_.front();
-          pending_.pop_front();
-        }
-      }
-      if (!cmd.is_null())
-        execute(cmd);
+      execute_pending();
+      auto writer = server_.router_->admission_view().write_scope("juiced-reconciliation");
       refresh();
       reconcile_imports();
       reconcile_snapshot_writes();
@@ -798,6 +816,8 @@ void JuicedService::routes(httplib::Server &http) {
 void JuicedService::handle(const httplib::Request &req, httplib::Response &res,
                            const std::string &op) {
   try {
+    auto writer = req.method == "GET" ? ResourceAdmission::WriteScope{} :
+        server_.router_->admission_view().write_scope("juiced-mutation");
     if (op == "requests") {
       std::lock_guard<std::mutex> lock(requests_mutex_);
       json records = json::array();
@@ -978,6 +998,7 @@ void JuicedService::handle(const httplib::Request &req, httplib::Response &res,
     }
     reply(res, {{"error", "Unknown operation"}}, 404);
   } catch (const AdmissionError& e) {
+    if (e.retry_after()) res.set_header("Retry-After", std::to_string(e.retry_after()));
     reply(res, e.to_json(), e.status);
   } catch (const json::exception &e) {
     reply(res, {{"error", e.what()}}, 400);
@@ -988,6 +1009,7 @@ void JuicedService::handle(const httplib::Request &req, httplib::Response &res,
   }
 }
 void JuicedService::publish_import(const std::string& id) {
+  auto writer = server_.router_->admission_view().write_scope("import-publication");
   auto admission = server_.router_->admit_management(id, "import-publication");
   json job;
   { std::lock_guard<std::mutex> lock(mutex_); job = state_["imports"].at(id); }
@@ -1052,6 +1074,7 @@ void JuicedService::import_file(const httplib::Request &req,
     reply(res, {{"model", name}, {"policy", policy}, {"loaded", server_.router_->is_model_loaded(name)}, {"path", path}}, 201);
   };
   try {
+    auto writer = server_.router_->admission_view().write_scope("import-" + op);
     ResourceAdmission::Lease admission;
     if (op != "cancel") admission = server_.router_->admit_management("import", "import-" + op);
     if (op == "chunk") {
@@ -1205,7 +1228,10 @@ void JuicedService::import_file(const httplib::Request &req,
     } else server_.model_manager_->register_user_model(name, definition, "local_path", false);
     wake_.notify_all();
     published_response(name, destination.string());
-  } catch (const AdmissionError& error) { reply(res, error.to_json(), error.status); }
+  } catch (const AdmissionError& error) {
+      if (error.retry_after()) res.set_header("Retry-After", std::to_string(error.retry_after()));
+      reply(res, error.to_json(), error.status);
+    }
     catch (const ModelRegistrationConflict& error) { reply(res, {{"error", error.what()}, {"retry", "Choose a distinct model name when finishing this import"}}, 409); }
     catch (const std::invalid_argument& error) { reply(res, {{"error", error.what()}}, 400); }
     catch (const json::exception& error) { reply(res, {{"error", error.what()}}, 400); }

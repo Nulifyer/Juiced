@@ -44,6 +44,7 @@ void JuicedService::preparation_api(const httplib::Request &req,
       const auto action = body.value("action", "");
       if (action != "cancel" && action != "delete_cache")
         throw AdmissionError("feature_retired", "Local model conversion and quantization are retired; find an existing published variant in Library", 410);
+      auto writer = server_.router_->admission_view().write_scope("legacy-preparation-control");
       ResourceAdmission::Lease mutation;
       if (action == "delete_cache")
         mutation = server_.router_->admit_management(body.value("id", std::string()), "legacy-artifact-cleanup");
