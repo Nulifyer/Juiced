@@ -346,6 +346,8 @@ private:
     // Runtime projection only: Juiced's durable policy remains authoritative.
     std::map<std::string, ResidencyPolicy> residency_policies_;
     bool residency_pinned_locked(const std::string& model, bool fallback) const;
+    void publish_residency_policy_locked(std::unique_lock<std::mutex>& lock, const std::string& model,
+                                         uint64_t revision, bool pinned, uint64_t generation);
     bool is_loading_ = false;                    // True when a load operation is in progress
     std::condition_variable load_cv_;            // Signals when load completes
 
@@ -406,7 +408,7 @@ private:
     void evict_all_npu_servers(std::unique_lock<std::mutex>& lock,
                                ResidencyClass requester, const std::function<void()>& validate_intent);
     void evict_server(std::unique_lock<std::mutex>& lock, WrappedServer* server);
-    void evict_server(std::unique_lock<std::mutex>& lock, const RetirementSelection& selected);
+    void evict_server(std::unique_lock<std::mutex>& lock, RetirementSelection& selected);
     void evict_all_servers(std::unique_lock<std::mutex>& lock);
     // Publish the (already-canonicalized) needed-helper set under load_mutex_,
     // then defer the eviction pass until no load holds the slot. Split out from

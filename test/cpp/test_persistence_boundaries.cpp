@@ -1055,7 +1055,12 @@ static void native_load_publication() {
         in_progress.open(); const auto rejected = automatic.get();
         check(begun && rejected.at("status") == 409 && rejected.at("code") == "policy_intent_changed" && Hook::generation(server, name) == 0,
               "automatic startup revalidates away-and-back policy changes before worker publication");
-        check(Hook::admission(server).at("resident") == 0 && Hook::admission(server).at("active") == 0,
+        const auto superseded_ledger = Hook::admission(server);
+        const bool superseded_released = superseded_ledger.at("resident") == 0 && superseded_ledger.at("active") == 0 &&
+            superseded_ledger.at("uncertain") == 0 && superseded_ledger.at("model_cache").at("references") == 0;
+        if (!superseded_released)
+            std::fprintf(stderr, "Superseded automatic ledger: %s\n", superseded_ledger.dump().c_str());
+        check(superseded_released,
               "superseded automatic generation releases residency and active reservations after confirmed stop");
         TestGate queued_start; Hook::factory(server, [&] { queued_start.pause(); });
         const auto current = Hook::state(server).at("policy_revisions").at(public_name);

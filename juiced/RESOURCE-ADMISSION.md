@@ -756,8 +756,19 @@ Deferred replacement and idle-retirement candidates recheck generation, current
 pin/policy and request state after each unlocked stop. Role changes retain the existing load slot across
 capacity reclamation. Normal readiness can reuse an eligible, same-role worker
 during a known different-model load. Same-model reload and unknown load targets
-keep their serialization gate. Fresh, unregistered startup/retry disposal retains
-separate cleanup-ownership and lock-release requirements.
+keep their serialization gate. Fresh startup and retry reserve a registry slot
+before dispatch. Failure transfers the exact worker and its original resource
+lease into the same cleanup-pending registry. Confirmed stop releases those
+references; failed stop retains them for generation-bound retry. The load slot
+remains owned through cleanup, and cancellation, deadline and policy errors keep
+their initiating status even when cleanup also fails.
+
+Captured workers remain alive through the caller's final use. After any unlocked
+role transition, callers recheck registry membership, cleanup state and liveness.
+Final references, including skipped retirement candidates and removed transition
+targets, are released outside the registry lock so backend destruction cannot
+block unrelated registry access. These contracts do not establish descendant,
+device or remote termination.
 
 Derived worker destruction contains stop failures. Whisper temporary audio and
 vLLM startup shims remain on disk while exit is unconfirmed. Automatic eviction

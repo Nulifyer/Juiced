@@ -3453,6 +3453,18 @@ if(BUILD_TESTING)
     add_cpp_ci_test(RouterRetirementTest CI ON COMMAND test_router_retirement)
     set_tests_properties(RouterRetirementTest PROPERTIES TIMEOUT 90)
 
+    add_executable(test_router_fresh_retirement test/cpp/test_router_fresh_retirement.cpp)
+    target_link_libraries(test_router_fresh_retirement PRIVATE lemonade-server-core)
+    add_cpp_ci_test(RouterFreshRetirementTest CI ON COMMAND test_router_fresh_retirement base)
+    add_cpp_ci_test(RouterFreshFailureTest CI ON COMMAND test_router_fresh_retirement faults)
+    set_tests_properties(RouterFreshRetirementTest RouterFreshFailureTest PROPERTIES TIMEOUT 90)
+
+    # Isolate the test-only global allocator override from all other contracts.
+    add_executable(test_router_publication_allocation test/cpp/test_router_publication_allocation.cpp)
+    target_link_libraries(test_router_publication_allocation PRIVATE lemonade-server-core)
+    add_cpp_ci_test(RouterPublicationAllocationTest CI ON COMMAND test_router_publication_allocation)
+    set_tests_properties(RouterPublicationAllocationTest PROPERTIES TIMEOUT 30)
+
     add_executable(test_gateway_admission test/cpp/test_gateway_admission.cpp)
     target_link_libraries(test_gateway_admission PRIVATE lemonade-server-core)
     add_cpp_ci_test(GatewayAdmissionTest CI ON COMMAND test_gateway_admission)

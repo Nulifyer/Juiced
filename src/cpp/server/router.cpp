@@ -37,6 +37,20 @@ namespace lemon {
 
 namespace {
 
+// A captured generation can leave the registry while another stop runs.
+// Release all remaining references outside its owner, including skipped victims.
+template<class References>
+struct ReleaseWorkerReferences {
+    std::unique_lock<std::mutex>& lock;
+    References& references;
+    ~ReleaseWorkerReferences() {
+        const bool owned = lock.owns_lock();
+        if (owned) lock.unlock();
+        references = References{};
+        if (owned) lock.lock();
+    }
+};
+
 // RAII: holds a suspend-inhibitor refcount for the duration of one inference,
 // but only when the feature is enabled in config. Released on scope exit so all
 // early-return/exception paths are covered.
@@ -351,13 +365,14 @@ WrappedServer* Router::get_most_recent_server() const {
 
 void Router::prune_unavailable_servers_locked(std::unique_lock<std::mutex>& lock) {
     std::vector<RetirementSelection> unavailable;
+    ReleaseWorkerReferences<decltype(unavailable)> release_unavailable{lock, unavailable};
     for (const auto& server : loaded_servers_) {
         if (!server->is_backend_alive() && !server->cleanup_pending()) {
             unavailable.push_back(select_retirement_locked(server.get()));
         }
     }
 
-    for (const auto& selected : unavailable) {
+    for (auto& selected : unavailable) {
         const auto& server = selected.server;
         if (std::find(loaded_servers_.begin(), loaded_servers_.end(), server) == loaded_servers_.end() ||
             server->cleanup_pending() || server->is_backend_alive()) continue;
@@ -550,7 +565,8 @@ void Router::transition_server_residency_locked(std::unique_lock<std::mutex>& lo
         [server](const auto& current) { return current.get() == server; });
     if (member == loaded_servers_.end())
         throw RouterResidencyConflictException("residency", "residency", "the selected generation changed");
-    const auto lifetime = *member;
+    auto lifetime = *member;
+    ReleaseWorkerReferences<decltype(lifetime)> release_lifetime{lock, lifetime};
     if (!is_unmetered_recipe(server->get_recipe_options().get_recipe())) {
         // Admit into the destination pool before changing the live role. Standard
         // admission remains type-wide; helper admission is keyed by model name.
@@ -621,6 +637,9 @@ bool Router::ensure_loaded_model_residency_canonical(
         return false;
     }
 
+    auto existing_lifetime = shared_worker(existing);
+    ReleaseWorkerReferences<decltype(existing_lifetime)> release_existing{lock, existing_lifetime};
+
     // Refuse to durably promote an already-loaded Standard model into a routing
     // helper for a policy that no longer needs it. An in-flight request can carry
     // a copy of a policy that was edited or deleted after it started; without this
@@ -639,6 +658,10 @@ bool Router::ensure_loaded_model_residency_canonical(
 
     transition_server_residency_locked(lock,
         existing, requested_residency_class);
+    if (find_server_by_model_name(canonical_model_name) != existing ||
+        existing->cleanup_pending() || !existing->is_backend_alive())
+        throw RouterResidencyConflictException(canonical_model_name, canonical_model_name,
+            "the selected generation changed during residency transition");
     existing->update_access_time();
     return true;
 }
@@ -686,6 +709,7 @@ void Router::apply_routing_helper_reconcile(std::set<std::string> needed, uint64
 void Router::prune_stale_routing_helpers_locked(std::unique_lock<std::mutex>& lock) {
     // Collect first; evict_server mutates loaded_servers_.
     std::vector<RetirementSelection> stale;
+    ReleaseWorkerReferences<decltype(stale)> release_stale{lock, stale};
     for (const auto& server : loaded_servers_) {
         if (!server->is_backend_alive() ||
             server->get_residency_class() != ResidencyClass::RoutingHelper) {
@@ -696,7 +720,7 @@ void Router::prune_stale_routing_helpers_locked(std::unique_lock<std::mutex>& lo
         }
     }
 
-    for (const auto& selected : stale) {
+    for (auto& selected : stale) {
         const auto& server = selected.server;
         if (std::find(loaded_servers_.begin(), loaded_servers_.end(), server) == loaded_servers_.end() ||
             server->cleanup_pending() || !server->is_backend_alive() ||
@@ -844,6 +868,7 @@ WrappedServer* Router::find_coexisting_server_by_type(ModelType type) const {
 void Router::evict_all_npu_servers(std::unique_lock<std::mutex>& lock,
                                    ResidencyClass requester, const std::function<void()>& validate_intent) {
     std::vector<RetirementSelection> npu_servers;
+    ReleaseWorkerReferences<decltype(npu_servers)> release_npu_servers{lock, npu_servers};
     for (const auto& server : loaded_servers_) {
         if (occupies_residency(*server) && (server->get_device_type() & DEVICE_NPU)) {
             if (server->cleanup_pending())
@@ -853,7 +878,7 @@ void Router::evict_all_npu_servers(std::unique_lock<std::mutex>& lock,
             npu_servers.push_back(select_retirement_locked(server.get()));
         }
     }
-    for (const auto& selected : npu_servers) {
+    for (auto& selected : npu_servers) {
         const auto& server = selected.server;
         validate_intent();
         if (std::find(loaded_servers_.begin(), loaded_servers_.end(), server) == loaded_servers_.end()) continue;
@@ -877,13 +902,16 @@ Router::RetirementSelection Router::select_retirement_locked(WrappedServer* serv
 void Router::evict_server(std::unique_lock<std::mutex>& lock, WrappedServer* server) {
     if (!lock.owns_lock() || lock.mutex() != &load_mutex_)
         throw std::logic_error("Worker retirement requires the Router registry owner");
-    if (server) evict_server(lock, select_retirement_locked(server));
+    if (server) {
+        auto selected = select_retirement_locked(server);
+        evict_server(lock, selected);
+    }
 }
 
-void Router::evict_server(std::unique_lock<std::mutex>& lock, const RetirementSelection& selected) {
+void Router::evict_server(std::unique_lock<std::mutex>& lock, RetirementSelection& selected) {
     if (!lock.owns_lock() || lock.mutex() != &load_mutex_)
         throw std::logic_error("Worker retirement requires the Router registry owner");
-    const auto lifetime = selected.server;
+    auto lifetime = selected.server;
     auto* server = lifetime.get();
     if (!server || std::find(loaded_servers_.begin(), loaded_servers_.end(), lifetime) == loaded_servers_.end())
         throw std::runtime_error("The selected worker generation is no longer registered");
@@ -902,9 +930,9 @@ void Router::evict_server(std::unique_lock<std::mutex>& lock, const RetirementSe
     if (!server->try_begin_retirement())
         throw RouterResidencyConflictException(model_name, model_name, "worker retirement is already owned");
     struct ReleaseRetirement {
-        WrappedServer& worker;
-        ~ReleaseRetirement() { worker.cancel_retirement(); }
-    } release_retirement{*server};
+        WrappedServer* worker;
+        ~ReleaseRetirement() { if (worker) worker->cancel_retirement(); }
+    } release_retirement{server};
     server->set_cleanup_pending(true);
     lock.unlock();
     try { server->unload(); }
@@ -917,9 +945,12 @@ void Router::evict_server(std::unique_lock<std::mutex>& lock, const RetirementSe
         throw RouterResidencyConflictException(model_name, model_name, "the retiring generation left the registry");
     if (!server->commit_retirement())
         throw RouterResidencyConflictException(model_name, model_name, "worker retirement changed during cleanup");
+    release_retirement.worker = nullptr;
     server->set_cleanup_pending(false);
-    admission_.reconcile_stopped_generation(server->get_instance_id());
+    // Dropping a dispatched, unfinished load lease can mark it uncertain.
+    // Reconcile after that final release, once unload and retirement succeeded.
     server->release_resource_residency();
+    admission_.reconcile_stopped_generation(server->get_instance_id());
 
     // Remove from vector
     loaded_servers_.erase(
@@ -930,6 +961,10 @@ void Router::evict_server(std::unique_lock<std::mutex>& lock, const RetirementSe
         loaded_servers_.end()
     );
 
+    selected.server.reset();
+    lock.unlock();
+    lifetime.reset();
+    lock.lock();
     LOG(INFO, "Router") << "Evicted model: " << model_name << std::endl;
 }
 
@@ -937,12 +972,13 @@ void Router::evict_all_servers(std::unique_lock<std::mutex>& lock) {
     LOG(INFO, "Router") << "Evicting all models (" << loaded_servers_.size() << " total)" << std::endl;
 
     std::vector<RetirementSelection> servers;
+    ReleaseWorkerReferences<decltype(servers)> release_servers{lock, servers};
     servers.reserve(loaded_servers_.size());
     for (const auto& server : loaded_servers_) {
         servers.push_back(select_retirement_locked(server.get()));
     }
 
-    for (const auto& selected : servers) {
+    for (auto& selected : servers) {
         if (std::find(loaded_servers_.begin(), loaded_servers_.end(), selected.server) == loaded_servers_.end()) continue;
         evict_server(lock, selected);
     }
@@ -1038,6 +1074,14 @@ void Router::load_model(const std::string& model_name,
         if (intent_cancelled()) throw AdmissionError("policy_intent_changed", "Automatic Hot load was superseded", 409);
     };
     start_loading_locked(canonical_model_name);
+    const auto release_loading = [&] {
+        if (!lock.owns_lock()) lock.lock();
+        finish_loading_locked();
+    };
+    struct ReleaseLoading {
+        const decltype(release_loading)& release;
+        ~ReleaseLoading() { release(); }
+    } release_loading_slot{release_loading};
 
     LOG(DEBUG, "Router") << "Loading model: " << canonical_model_name
             << " (checkpoint: " << model_info.checkpoint()
@@ -1076,7 +1120,7 @@ void Router::load_model(const std::string& model_name,
             LOG(INFO, "Router") << "Skipping load of routing helper "
                                 << canonical_model_name
                                 << "; referenced by no active policy" << std::endl;
-            finish_loading_locked();
+
             return;
         }
 
@@ -1084,6 +1128,7 @@ void Router::load_model(const std::string& model_name,
         // entries are evicted first so auto-load performs a real lazy restart.
         WrappedServer* existing = find_server_by_model_name(canonical_model_name);
         std::shared_ptr<WrappedServer> replace_existing;
+        ReleaseWorkerReferences<decltype(replace_existing)> release_existing{lock, replace_existing};
         if (existing && existing->cleanup_pending())
             throw AdmissionError("worker_cleanup_pending", "Confirm retirement of the previous worker before loading this model", 503);
         if (existing && (!existing->is_backend_alive() || existing->was_watchdog_triggered())) {
@@ -1095,6 +1140,8 @@ void Router::load_model(const std::string& model_name,
             existing = nullptr;
         }
         if (existing) {
+            auto existing_lifetime = shared_worker(existing);
+            ReleaseWorkerReferences<decltype(existing_lifetime)> release_lifetime{lock, existing_lifetime};
             // Compare resolved rather than stored sets: a request that spells
             // out an option the running process left to its default (e.g. a
             // replayed `effective` from /v1/models/{id}/options) is the same
@@ -1119,22 +1166,86 @@ void Router::load_model(const std::string& model_name,
                 // admission and pinning rules.
                 transition_server_residency_locked(lock,
                     existing, requested_residency_class);
+                if (find_server_by_model_name(canonical_model_name) != existing ||
+                    existing->cleanup_pending() || !existing->is_backend_alive())
+                    throw RouterResidencyConflictException(canonical_model_name, canonical_model_name,
+                        "the selected generation changed during residency transition");
                 LOG(DEBUG, "Router") << "Model already loaded, updating access time and pinned status" << std::endl;
                 require_intent();
                 existing->set_pinned(residency_pinned_locked(canonical_model_name, final_pinned));
                 existing->update_access_time();
-                finish_loading_locked();
+
                 return;
             }
         }
 
+        // Reserve the cleanup publication slot before starting any new process.
+        // is_loading_ keeps another normal load from consuming it while unlocked.
+        loaded_servers_.reserve(loaded_servers_.size() + 1);
+        const auto discard_fresh = [&](std::shared_ptr<WrappedServer>& worker, ResourceAdmission::Lease& resources) {
+            if (!worker) return;
+            if (!lock.owns_lock()) lock.lock();
+            if (resources) worker->retain_resource_residency(std::move(resources));
+            worker->set_load_cancel_flag(nullptr);
+            worker->set_state(ModelState::UNLOADED);
+            worker->set_cleanup_pending(true);
+            // The existing registry owns failed retirement; never leave only a
+            // ledger entry after destroying the last process owner.
+            loaded_servers_.push_back(worker);
+            auto pending = std::move(worker);
+            std::exception_ptr failure;
+            try { evict_server(lock, pending.get()); }
+            catch (...) { failure = std::current_exception(); }
+            // Backend-specific destructor filesystem cleanup also runs unlocked.
+            lock.unlock();
+            pending.reset();
+            lock.lock();
+            if (failure) std::rethrow_exception(failure);
+        };
+        const auto cleanup_preserving_error = [&](std::shared_ptr<WrappedServer>& worker,
+                                                   ResourceAdmission::Lease& resources,
+                                                   const std::exception_ptr& initiating_error) {
+            try { discard_fresh(worker, resources); }
+            catch (...) {
+                if (initiating_error) std::rethrow_exception(initiating_error);
+                throw;
+            }
+        };
+        const auto discard_superseded = [&](std::shared_ptr<WrappedServer>& worker,
+                                             ResourceAdmission::Lease& resources) {
+            try { require_intent(); }
+            catch (...) {
+                const auto initiating_error = std::current_exception();
+                cleanup_preserving_error(worker, resources, initiating_error);
+                std::rethrow_exception(initiating_error);
+            }
+        };
+        struct FreshGeneration {
+            std::shared_ptr<WrappedServer> worker;
+            ResourceAdmission::Lease resources;
+            std::function<void(std::shared_ptr<WrappedServer>&, ResourceAdmission::Lease&)> discard;
+            ~FreshGeneration() {
+                if (!worker) return;
+                try { discard(worker, resources); }
+                catch (const std::exception& error) {
+                    LOG(WARNING, "Router") << "Fresh generation cleanup remains pending: " << error.what() << std::endl;
+                }
+                catch (...) { LOG(WARNING, "Router") << "Fresh generation cleanup remains pending" << std::endl; }
+            }
+        };
+        FreshGeneration initial{{}, {}, discard_fresh};
+        auto& new_server = initial.worker;
+        auto& load_resources = initial.resources;
+        lock.unlock();
+        new_server = create_backend_server(model_info);
+        lock.lock();
+
         // Determine model type and device
         ModelType model_type = model_info.type;
-        std::unique_ptr<WrappedServer> new_server = create_backend_server(model_info);
         DeviceType device_type = new_server->effective_device(effective_options);
         new_server->set_model_metadata(canonical_model_name, model_info.checkpoint(), model_type, device_type, effective_options);
         lock.unlock();
-        auto load_resources = admit_worker(*new_server, ResourceAdmission::Operation::Load, nullptr, std::nullopt, intent_cancelled, false, model_info.model_cache_root);
+        load_resources = admit_worker(*new_server, ResourceAdmission::Operation::Load, nullptr, std::nullopt, intent_cancelled, false, model_info.model_cache_root);
         const bool protected_admission = load_resources.protected_mode();
         lock.lock();
         require_intent();
@@ -1144,6 +1255,9 @@ void Router::load_model(const std::string& model_name,
                     "the selected generation changed while waiting for admission");
             require_intent();
             evict_server(lock, replace_existing.get());
+            lock.unlock();
+            replace_existing.reset();
+            lock.lock();
             require_intent();
         }
 
@@ -1188,6 +1302,7 @@ void Router::load_model(const std::string& model_name,
                 //    backend — i.e. exclusive-NPU peers like ryzenai-llm and
                 //    whisper-on-npu. Collect first; evict_server mutates loaded_servers_.
                 std::vector<RetirementSelection> exclusive_peers;
+                ReleaseWorkerReferences<decltype(exclusive_peers)> release_exclusive_peers{lock, exclusive_peers};
                 for (const auto& server : loaded_servers_) {
                     if (occupies_residency(*server) && (server->get_device_type() & DEVICE_NPU) &&
                         server->effective_slot_policy(server->get_recipe_options()) !=
@@ -1207,7 +1322,7 @@ void Router::load_model(const std::string& model_name,
                         exclusive_peers.push_back(select_retirement_locked(server.get()));
                     }
                 }
-                for (const auto& selected : exclusive_peers) {
+                for (auto& selected : exclusive_peers) {
                     const auto& peer = selected.server;
                     require_intent();
                     if (std::find(loaded_servers_.begin(), loaded_servers_.end(), peer) == loaded_servers_.end()) continue;
@@ -1310,6 +1425,7 @@ void Router::load_model(const std::string& model_name,
         bool unrecoverable_config = false;
         std::string error_message;
         std::optional<AdmissionError> load_admission_error;
+        std::exception_ptr load_failure;
         auto load_start = std::chrono::steady_clock::now();
 
         const auto request_context = current_request_context();
@@ -1361,12 +1477,15 @@ void Router::load_model(const std::string& model_name,
             load_generation(*new_server, load_resources);
             load_success = true;
         } catch (const AdmissionError& e) {
+            load_failure = std::current_exception();
             error_message = e.what();
             load_admission_error = e;
         } catch (const ConfigurationException& e) {
+            load_failure = std::current_exception();
             error_message = e.what();
             unrecoverable_config = true;
         } catch (const std::exception& e) {
+            load_failure = std::current_exception();
             error_message = e.what();
         }
 
@@ -1374,19 +1493,13 @@ void Router::load_model(const std::string& model_name,
             load_resources.retain_residency();
             new_server->retain_resource_residency(std::move(load_resources));
         } else {
-            new_server->unload();
-            load_resources.completed();
-            admission_.reconcile_stopped_generation(new_server->get_instance_id());
+            cleanup_preserving_error(new_server, load_resources, load_failure);
         }
 
-        lock.lock();
+        if (!lock.owns_lock()) lock.lock();
 
         if (load_success) {
-            if (intent_cancelled()) {
-                new_server->unload();
-                admission_.reconcile_stopped_generation(new_server->get_instance_id());
-                require_intent();
-            }
+            if (intent_cancelled()) discard_superseded(new_server, load_resources);
             new_server->set_pinned(residency_pinned_locked(canonical_model_name, final_pinned));
             // A policy change may have dropped this helper while its backend was
             // starting (the load ran with load_mutex_ released). Now that we hold
@@ -1398,8 +1511,8 @@ void Router::load_model(const std::string& model_name,
                 LOG(INFO, "Router") << "Routing helper " << canonical_model_name
                           << " no longer referenced by any active policy; "
                           << "discarding freshly loaded backend" << std::endl;
-                new_server->unload();
-                finish_loading_locked();
+                discard_fresh(new_server, load_resources);
+
                 return;
             }
 
@@ -1414,8 +1527,6 @@ void Router::load_model(const std::string& model_name,
             install_reclaim_notifier(new_server.get());
             loaded_servers_.push_back(std::move(new_server));
 
-            finish_loading_locked();
-
             LOG(INFO, "Router") << "Model loaded successfully. Total loaded: "
                       << loaded_servers_.size() << std::endl;
         } else {
@@ -1424,8 +1535,6 @@ void Router::load_model(const std::string& model_name,
             bool is_file_not_found = (error_message.find("not found") != std::string::npos ||
                                      error_message.find("does not exist") != std::string::npos ||
                                      error_message.find("No such file") != std::string::npos);
-
-            finish_loading_locked();
 
             if (load_admission_error) throw *load_admission_error;
 
@@ -1468,10 +1577,14 @@ void Router::load_model(const std::string& model_name,
             load_resources = {};
 
             // Mark loading again for retry
-            start_loading_locked(canonical_model_name);
 
             // Create new server for retry
-            std::unique_ptr<WrappedServer> retry_server = create_backend_server(model_info);
+            FreshGeneration retry{{}, {}, discard_fresh};
+            auto& retry_server = retry.worker;
+            auto& retry_resources = retry.resources;
+            lock.unlock();
+            retry_server = create_backend_server(model_info);
+            lock.lock();
             retry_server->set_model_metadata(canonical_model_name, model_info.checkpoint(), model_type, device_type, effective_options);
             retry_server->set_ctx_size_auto(ctx_size_auto);
             retry_server->set_residency_class(requested_residency_class);
@@ -1481,18 +1594,15 @@ void Router::load_model(const std::string& model_name,
 
             LOG(DEBUG, "Router") << "Retrying backend load..." << std::endl;
             try {
-                auto retry_resources = admit_worker(*retry_server, ResourceAdmission::Operation::Load, nullptr, std::nullopt, intent_cancelled, false, model_info.model_cache_root);
+                retry_resources = admit_worker(*retry_server, ResourceAdmission::Operation::Load, nullptr, std::nullopt, intent_cancelled, false, model_info.model_cache_root);
                 try {
                     load_generation(*retry_server, retry_resources);
                     retry_resources.retain_residency();
                     retry_server->retain_resource_residency(std::move(retry_resources));
                 } catch (...) {
-                    try {
-                        retry_server->unload();
-                        retry_resources.completed();
-                        admission_.reconcile_stopped_generation(retry_server->get_instance_id());
-                    } catch (...) {}
-                    throw;
+                    const auto initiating_error = std::current_exception();
+                    cleanup_preserving_error(retry_server, retry_resources, initiating_error);
+                    std::rethrow_exception(initiating_error);
                 }
 
                 lock.lock();
@@ -1508,27 +1618,21 @@ void Router::load_model(const std::string& model_name,
                     LOG(INFO, "Router") << "Routing helper " << canonical_model_name
                               << " no longer referenced by any active policy; "
                               << "discarding freshly loaded backend" << std::endl;
-                    retry_server->unload();
-                    finish_loading_locked();
+                    discard_fresh(retry_server, retry_resources);
+
                     return;
                 }
 
-                if (intent_cancelled()) {
-                    retry_server->unload();
-                    admission_.reconcile_stopped_generation(retry_server->get_instance_id());
-                    require_intent();
-                }
+                if (intent_cancelled()) discard_superseded(retry_server, retry_resources);
                 retry_server->set_pinned(residency_pinned_locked(canonical_model_name, final_pinned));
                 retry_server->set_state(ModelState::READY);
                 const auto retry_duration_ms = retry_server->get_load_duration_ms();
                 install_reclaim_notifier(retry_server.get());
                 loaded_servers_.push_back(std::move(retry_server));
-                finish_loading_locked();
 
                 LOG(DEBUG, "Router") << "Retry successful in " << retry_duration_ms << "ms!" << std::endl;
             } catch (const std::exception& retry_error) {
                 if (!lock.owns_lock()) lock.lock();
-                finish_loading_locked();
 
                 LOG(ERROR, "Router") << "Retry also failed: " << retry_error.what() << std::endl;
                 throw;
@@ -1541,7 +1645,6 @@ void Router::load_model(const std::string& model_name,
         if (!lock.owns_lock()) {
             lock.lock();
         }
-        finish_loading_locked();
 
         throw;
     }
@@ -1563,8 +1666,8 @@ void Router::update_backend(const std::string& recipe, const std::function<void(
 }
 
 void Router::unload_model(const std::string& model_name) {
-    std::unique_lock<std::mutex> lock(load_mutex_);
     std::vector<RetirementSelection> targets;
+    std::unique_lock<std::mutex> lock(load_mutex_);
     const auto canonical = model_name.empty() ? "" : resolve_model_name(model_name);
     for (const auto& server : loaded_servers_)
         if (canonical.empty() || server->get_model_name() == canonical) targets.push_back(select_retirement_locked(server.get()));
@@ -1572,7 +1675,7 @@ void Router::unload_model(const std::string& model_name) {
         throw ModelNotLoadedException(model_name);
     lock.unlock();
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(EVICTION_TIMEOUT);
-    for (const auto& selected : targets) {
+    for (auto& selected : targets) {
         const auto& server = selected.server;
         const auto remaining = std::chrono::ceil<std::chrono::seconds>(deadline - std::chrono::steady_clock::now()).count();
         if (!server->wait_until_not_busy(static_cast<int>((std::max)(int64_t(0), int64_t(remaining)))))
@@ -1587,15 +1690,15 @@ void Router::unload_model(const std::string& model_name) {
             throw RouterResidencyConflictException(current->get_model_name(), current->get_model_name(),
                                                    "the worker generation or activity changed during drain");
     }
-    for (const auto& selected : targets)
+    for (auto& selected : targets)
         if (std::find(loaded_servers_.begin(), loaded_servers_.end(), selected.server) != loaded_servers_.end())
             evict_server(lock, selected);
 }
 
 json Router::uninstall_cloud_provider(const std::string& provider, const std::function<bool()>& publish) {
+    std::vector<std::shared_ptr<WrappedServer>> targets;
     std::unique_lock<std::mutex> lock(load_mutex_);
     if (is_loading_) throw RouterResidencyConflictException(provider, provider, "wait for the current load before removing a provider");
-    std::vector<std::shared_ptr<WrappedServer>> targets;
     try {
         for (const auto& worker : loaded_servers_) {
             if (worker->cloud_provider() != provider) continue;
@@ -3473,8 +3576,15 @@ bool Router::residency_pinned_locked(const std::string& model, bool fallback) co
 
 void Router::publish_residency_policy(const std::string& model_name, uint64_t revision,
                                       bool pinned, uint64_t generation) {
-    std::lock_guard<std::mutex> lock(load_mutex_);
-    const auto model = resolve_model_name(model_name);
+    std::unique_lock<std::mutex> lock(load_mutex_);
+    publish_residency_policy_locked(lock, resolve_model_name(model_name), revision, pinned, generation);
+}
+
+void Router::publish_residency_policy_locked(std::unique_lock<std::mutex>& lock,
+                                             const std::string& model, uint64_t revision,
+                                             bool pinned, uint64_t generation) {
+    if (!lock.owns_lock() || lock.mutex() != &load_mutex_)
+        throw std::logic_error("Residency policy publication requires the Router registry owner");
     auto it = residency_policies_.find(model);
     if (it != residency_policies_.end() && revision < it->second.revision) return;
     if (it == residency_policies_.end()) {
