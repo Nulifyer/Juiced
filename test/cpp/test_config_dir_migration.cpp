@@ -198,6 +198,7 @@ void test_explicit_config_dir_is_honored() {
 }
 
 #ifndef _WIN32
+#if defined(__linux__)
 void test_systemd_state_directory_takes_precedence_over_home() {
     const auto unique = std::chrono::duration_cast<std::chrono::microseconds>(
                             std::chrono::steady_clock::now().time_since_epoch())
@@ -374,6 +375,8 @@ void test_explicit_cache_dir_does_not_drain_legacy() {
     fs::remove_all(root);
 }
 
+#endif // __linux__: systemd directory selection and legacy source discovery
+
 void test_xdg_cache_and_config_dirs_are_resolved_separately() {
     const auto unique = std::chrono::duration_cast<std::chrono::microseconds>(
                             std::chrono::steady_clock::now().time_since_epoch())
@@ -408,6 +411,31 @@ void test_xdg_cache_and_config_dirs_are_resolved_separately() {
 
     fs::remove_all(root);
 }
+#if defined(__APPLE__)
+void test_macos_keeps_xdg_roots_when_linux_service_variables_exist() {
+    const auto root = lemon::test::make_scratch_dir("macos-service-roots");
+    const auto cache_home = root / "xdg-cache", config_home = root / "xdg-config";
+    const auto cache = cache_home / "lemonade", config = config_home / "lemonade";
+    const auto service_cache = root / "linux-cache", service_state = root / "linux-state";
+    ScopedEnvVar home_var("HOME", (root / "home").string());
+    ScopedEnvVar cache_var("XDG_CACHE_HOME", cache_home.string());
+    ScopedEnvVar config_var("XDG_CONFIG_HOME", config_home.string());
+    ScopedEnvVar service_cache_var("CACHE_DIRECTORY", service_cache.string());
+    ScopedEnvVar service_state_var("STATE_DIRECTORY", service_state.string());
+    lemon::utils::set_cache_dir(""); lemon::utils::set_config_dir("");
+    write_text(cache / "config.json", "{\"port\":13306}\n");
+    write_text(service_cache / "config.json", "{\"unrelated\":\"cache\"}\n");
+    write_text(service_state / "config.json", "{\"unrelated\":\"state\"}\n");
+    CHECK(lemon::utils::get_cache_dir() == cache.string());
+    CHECK(lemon::utils::get_config_dir() == config.string());
+    migrate_paths(lemon::utils::get_cache_dir(), lemon::utils::get_config_dir());
+    CHECK(read_text(config / "config.json") == "{\"port\":13306}\n");
+    CHECK(read_text(cache / "config.json") == "{\"port\":13306}\n");
+    CHECK(read_text(service_cache / "config.json") == "{\"unrelated\":\"cache\"}\n");
+    CHECK(read_text(service_state / "config.json") == "{\"unrelated\":\"state\"}\n");
+    fs::remove_all(root);
+}
+#endif
 #endif
 
 int cohort_checks = 0, cohort_failures = 0;
@@ -710,12 +738,17 @@ int main(int argc, char** argv) {
     test_identical_cache_and_config_dirs_stay_put();
     test_explicit_config_dir_is_honored();
 #ifndef _WIN32
+#if defined(__linux__)
     test_systemd_state_directory_takes_precedence_over_home();
     test_systemd_cache_directory_is_used_directly();
     test_systemd_relocation_preserves_runtime_and_model_owners();
     test_relocation_preserves_existing_target_files();
     test_explicit_cache_dir_does_not_drain_legacy();
+#endif
     test_xdg_cache_and_config_dirs_are_resolved_separately();
+#if defined(__APPLE__)
+    test_macos_keeps_xdg_roots_when_linux_service_variables_exist();
+#endif
 #endif
     test_native_settings_cohort();
     generation_contracts(lemon::utils::path_from_utf8(lemon::utils::get_executable_dir()) / lemon::utils::path_from_utf8(argv[0]).filename());
