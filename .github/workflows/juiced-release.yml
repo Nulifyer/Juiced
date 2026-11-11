@@ -72,6 +72,8 @@ jobs:
       - name: Preserve initial native acceptance details
         if: always()
         run: python -c "from pathlib import Path; import shutil; source = Path('build/Testing/Temporary/LastTest.log'); shutil.copyfile(source, 'build/native-contracts.log') if source.is_file() else None"
+      - name: Repeat native process identity observation
+        run: ctest --test-dir build -C Release --verbose --output-on-failure --repeat until-fail:3 --output-log build/process-identity-repetitions.log -R "^ProcessExitObservationTest$"
       - name: Repeat admission queue and concurrency contract
         run: ctest --test-dir build -C Release --output-on-failure --repeat until-fail:20 -R "^ResourceAdmissionTest$"
       - uses: actions/upload-artifact@v4
@@ -81,6 +83,8 @@ jobs:
           path: |
             build/native-contracts.log
             build/model-shutdown-proof.json
+            build/process-identity-proof.json
+            build/process-identity-repetitions.log
             build/configuration-migration-proof.json
             build/embedded-configuration-migration-proof.json
             build/store-ownership-proof.json

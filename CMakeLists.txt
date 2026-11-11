@@ -2364,7 +2364,7 @@ if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
             ${CMAKE_CURRENT_BINARY_DIR}/include
         )
         find_package(Threads REQUIRED)
-        target_link_libraries(test_process_manager PRIVATE Threads::Threads)
+        target_link_libraries(test_process_manager PRIVATE Threads::Threads lemonade-digest-crypto)
         add_cpp_ci_test(ProcessManagerTest CI ON COMMAND test_process_manager)
     endif()
 endif()

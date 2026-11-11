@@ -1,5 +1,6 @@
 #include "process_posix_lifecycle.h"
 #include <lemon/utils/process_platform.h>
+#include <lemon/utils/content_hash.h>
 #include <lemon/utils/aixlog.hpp>
 
 #include <stdexcept>
@@ -8,6 +9,7 @@
 
 #include <unistd.h>
 #include <sys/types.h>
+#include <sys/sysctl.h>
 #include <sys/wait.h>
 #include <signal.h>
 #include <sys/socket.h>
@@ -70,6 +72,8 @@ public:
     bool has_exited(ProcessHandle handle) override { return detail::owned_child_has_exited(handle.pid); }
     bool is_running(ProcessHandle handle) override;
     bool owns_loopback_listener(ProcessHandle handle, int port) override;
+    std::optional<ProcessIdentity> process_identity(ProcessHandle handle, const std::function<bool()>& cancelled) override;
+    ProcessIdentityState observe_process_identity(const ProcessIdentity& identity, const std::function<bool()>& cancelled) override;
     int get_exit_code(ProcessHandle handle) override;
     int wait_for_exit(ProcessHandle handle, int timeout_seconds) override;
     int reap(ProcessHandle handle) override;
@@ -580,6 +584,67 @@ int MacOSProcessPlatform::run_with_output(
     if (collected != pid) return -1;
 
     return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+}
+
+namespace {
+// This libproc flavor has a fixed ABI but is omitted from public SDK headers.
+struct NativeUniqueProcessInfo {
+    uint8_t executable_uuid[16];
+    uint64_t unique_id;
+    uint64_t parent_unique_id;
+    int32_t pid_version;
+    int32_t parent_version;
+    uint64_t reserved[2];
+};
+static_assert(sizeof(NativeUniqueProcessInfo) == 56);
+
+std::optional<std::string> process_identity_domain() {
+    char uuid[37]{};
+    size_t size = sizeof(uuid);
+    if (::sysctlbyname("kern.bootsessionuuid", uuid, &size, nullptr, 0) != 0 ||
+        size != sizeof(uuid) || uuid[36] != '\0') return std::nullopt;
+    for (size_t i = 0; i < 36; ++i)
+        if ((i == 8 || i == 13 || i == 18 || i == 23) ? uuid[i] != '-' :
+            !std::isxdigit(static_cast<unsigned char>(uuid[i]))) return std::nullopt;
+    return string_sha256("darwin-proc-unique-v1\n" + std::string(uuid, 36));
+}
+
+std::optional<std::string> process_identity_token(int pid, bool& absent) {
+    NativeUniqueProcessInfo info{};
+    errno = 0;
+    const auto size = ::proc_pidinfo(pid, 17, 0, &info, sizeof(info));
+    absent = size <= 0 && errno == ESRCH;
+    if (size != sizeof(info) || !info.unique_id) return std::nullopt;
+    return string_sha256(std::to_string(info.unique_id));
+}
+}
+
+std::optional<ProcessIdentity> MacOSProcessPlatform::process_identity(
+    ProcessHandle handle, const std::function<bool()>& cancelled) {
+    try {
+        if ((cancelled && cancelled()) || !is_running(handle)) return std::nullopt;
+        const auto domain = process_identity_domain();
+        if (!domain) return std::nullopt;
+        bool absent = false;
+        const auto token = process_identity_token(handle.pid, absent);
+        if (!token || (cancelled && cancelled()) || !is_running(handle) || process_identity_domain() != domain)
+            return std::nullopt;
+        return ProcessIdentity{"darwin-proc-unique-v1", handle.pid, *domain, *token};
+    } catch (const std::exception&) { return std::nullopt; }
+}
+
+ProcessIdentityState MacOSProcessPlatform::observe_process_identity(
+    const ProcessIdentity& identity, const std::function<bool()>& cancelled) {
+    try {
+        if (!valid_identity(identity) || identity.method != "darwin-proc-unique-v1" || (cancelled && cancelled())) return ProcessIdentityState::unknown;
+        const auto domain = process_identity_domain();
+        if (!domain || *domain != identity.domain) return ProcessIdentityState::unknown;
+        bool absent = false;
+        const auto token = process_identity_token(identity.pid, absent);
+        if ((cancelled && cancelled()) || process_identity_domain() != domain) return ProcessIdentityState::unknown;
+        if (absent || (token && *token != identity.token)) return ProcessIdentityState::exited;
+        return token ? ProcessIdentityState::running : ProcessIdentityState::unknown;
+    } catch (const std::exception&) { return ProcessIdentityState::unknown; }
 }
 
 bool MacOSProcessPlatform::owns_loopback_listener(ProcessHandle handle, int port) {

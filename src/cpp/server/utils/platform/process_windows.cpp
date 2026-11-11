@@ -19,10 +19,14 @@
 #endif
 
 #include <lemon/utils/process_platform.h>
+#include <lemon/utils/content_hash.h>
 #include <lemon/utils/aixlog.hpp>
 #include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <cstdint>
+#include <cstring>
+#include <vector>
 #include <thread>
 #include <stdexcept>
 #include <exception>
@@ -171,6 +175,84 @@ static std::vector<char> build_windows_environment_block(
     }
     block.push_back('\0');
     return block;
+}
+
+namespace {
+struct TelemetryIdentity {
+    ULONG header_size;
+    ULONG pid;
+    ULONG64 start_key;
+    ULONG64 creation_data[5];
+    ULONG session;
+    ULONG boot;
+};
+static_assert(sizeof(TelemetryIdentity) == 64);
+
+std::optional<TelemetryIdentity> native_process_identity(HANDLE process) {
+    using Query = LONG(NTAPI*)(HANDLE, ULONG, void*, ULONG, ULONG*);
+    const auto module = GetModuleHandleW(L"ntdll.dll");
+    const auto query = module ? reinterpret_cast<Query>(GetProcAddress(module, "NtQueryInformationProcess")) : nullptr;
+    if (!query) return std::nullopt;
+    std::vector<unsigned char> buffer(4096);
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        ULONG size = 0;
+        const auto status = query(process, 64, buffer.data(), static_cast<ULONG>(buffer.size()), &size);
+        if (static_cast<ULONG>(status) == 0xc0000004 || static_cast<ULONG>(status) == 0xc0000023) {
+            if (size <= buffer.size() || size > 256 * 1024) return std::nullopt;
+            buffer.resize(size);
+            continue;
+        }
+        if (status < 0 || size < 96 || size > buffer.size()) return std::nullopt;
+        TelemetryIdentity identity{};
+        std::memcpy(&identity, buffer.data(), sizeof(identity));
+        if (identity.header_size != 96 || !identity.pid || identity.pid != GetProcessId(process) || !identity.start_key)
+            return std::nullopt;
+        return identity;
+    }
+    return std::nullopt;
+}
+
+std::optional<std::string> process_identity_domain() {
+    // Container PID visibility is a distinct recovery authority. A host probe
+    // must not interpret a PID hidden by a server silo as process exit.
+    BOOL in_job = FALSE;
+    if (!IsProcessInJob(GetCurrentProcess(), nullptr, &in_job)) return std::nullopt;
+    if (in_job) {
+        struct SiloInformation {
+            DWORD id, parent, processes;
+            BYTE server, reserved[3];
+        } silo{};
+        static_assert(sizeof(SiloInformation) == 16);
+        DWORD size = 0;
+        if (!QueryInformationJobObject(nullptr, static_cast<JOBOBJECTINFOCLASS>(36), &silo, sizeof(silo), &size) ||
+            size != sizeof(silo) || silo.server != FALSE) return std::nullopt;
+    }
+    const auto self = native_process_identity(GetCurrentProcess());
+    if (!self) return std::nullopt;
+    using Query = LONG(NTAPI*)(ULONG, void*, ULONG, ULONG*);
+    const auto module = GetModuleHandleW(L"ntdll.dll");
+    const auto query = module ? reinterpret_cast<Query>(GetProcAddress(module, "NtQuerySystemInformation")) : nullptr;
+    if (!query) return std::nullopt;
+    struct BootEnvironment {
+        GUID entry;
+        ULONG firmware, padding;
+        ULONG64 flags;
+    } boot{};
+    static_assert(sizeof(BootEnvironment) == 32);
+    ULONG size = 0;
+    if (query(90, &boot, sizeof(boot), &size) < 0 || size != sizeof(boot) ||
+        (boot.firmware != 1 && boot.firmware != 2)) return std::nullopt;
+    const GUID empty{};
+    if (std::memcmp(&boot.entry, &empty, sizeof(empty)) == 0) return std::nullopt;
+    const std::string entry(reinterpret_cast<const char*>(&boot.entry), sizeof(boot.entry));
+    return string_sha256("windows-start-key-host-v1\n" + entry + "\n" +
+        std::to_string(self->boot) + ":" + std::to_string(self->session));
+}
+
+struct IdentityHandle {
+    HANDLE value;
+    ~IdentityHandle() { if (value) CloseHandle(value); }
+};
 }
 
 // Windows ProcessPlatform implementation
@@ -368,6 +450,41 @@ public:
         if (GetExitCodeProcess(handle.handle, &code))
             LOG(INFO, "ProcessManager") << "Direct child PID " << handle.pid << " exit observed, code " << code << std::endl;
         return CloseHandle(handle.handle) != FALSE;
+    }
+
+    std::optional<ProcessIdentity> process_identity(ProcessHandle handle, const std::function<bool()>& cancelled) override {
+        try {
+            if ((cancelled && cancelled()) || !handle.handle || handle.pid <= 0 ||
+                GetProcessId(handle.handle) != static_cast<DWORD>(handle.pid) ||
+                WaitForSingleObject(handle.handle, 0) != WAIT_TIMEOUT) return std::nullopt;
+            const auto domain = process_identity_domain();
+            if (!domain) return std::nullopt;
+            const auto identity = native_process_identity(handle.handle);
+            if (!identity || (cancelled && cancelled()) || WaitForSingleObject(handle.handle, 0) != WAIT_TIMEOUT ||
+                process_identity_domain() != domain) return std::nullopt;
+            return ProcessIdentity{"windows-start-key-host-v1", handle.pid, *domain, string_sha256(std::to_string(identity->start_key))};
+        } catch (const std::exception&) { return std::nullopt; }
+    }
+
+    ProcessIdentityState observe_process_identity(const ProcessIdentity& identity, const std::function<bool()>& cancelled) override {
+        try {
+            if (!valid_identity(identity) || identity.method != "windows-start-key-host-v1" || (cancelled && cancelled())) return ProcessIdentityState::unknown;
+            const auto domain = process_identity_domain();
+            if (!domain || *domain != identity.domain) return ProcessIdentityState::unknown;
+            IdentityHandle process{OpenProcess(PROCESS_QUERY_INFORMATION | SYNCHRONIZE, FALSE, static_cast<DWORD>(identity.pid))};
+            if (!process.value) {
+                const auto absent = GetLastError() == ERROR_INVALID_PARAMETER;
+                return absent && !(cancelled && cancelled()) && process_identity_domain() == domain ?
+                    ProcessIdentityState::exited : ProcessIdentityState::unknown;
+            }
+            if (GetProcessId(process.value) != static_cast<DWORD>(identity.pid)) return ProcessIdentityState::unknown;
+            const auto wait = WaitForSingleObject(process.value, 0);
+            const auto current = wait == WAIT_TIMEOUT ? native_process_identity(process.value) : std::nullopt;
+            if ((cancelled && cancelled()) || process_identity_domain() != domain) return ProcessIdentityState::unknown;
+            if (wait == WAIT_OBJECT_0 || (current && string_sha256(std::to_string(current->start_key)) != identity.token))
+                return ProcessIdentityState::exited;
+            return current ? ProcessIdentityState::running : ProcessIdentityState::unknown;
+        } catch (const std::exception&) { return ProcessIdentityState::unknown; }
     }
 
     bool has_exited(ProcessHandle handle) override {

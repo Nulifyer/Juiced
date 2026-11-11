@@ -1,6 +1,7 @@
 #pragma once
 
 #include <lemon/utils/process_manager.h>
+#include <algorithm>
 #include <string>
 #include <vector>
 #include <memory>
@@ -61,6 +62,17 @@ public:
     // Utility functions
     virtual int find_free_port(int start_port) = 0;
     virtual int run_command(const std::string& command, std::string& output, int timeout_seconds) = 0;
+
+protected:
+    static bool valid_identity(const ProcessIdentity& identity) {
+        const auto tag = [](const std::string& value) {
+            return value.size() == 64 && std::all_of(value.begin(), value.end(), [](unsigned char c) {
+                return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
+            });
+        };
+        return identity.pid > 0 && !identity.method.empty() && identity.method.size() <= 64 &&
+            tag(identity.domain) && tag(identity.token);
+    }
 };
 
 // Factory function to create platform-specific implementation

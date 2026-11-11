@@ -304,17 +304,26 @@ write key, manager owner, worker generation, model, profile and declared byte bo
 A state-operation lease excludes replacement process startup. The exchange checks
 that the reserved native actor remains current before dispatch.
 
-On supported 64-bit Linux pidfs kernels, reconciliation can confirm that a captured
-prior-manager direct process exited without signaling or collecting it. The probe
-requires the original kernel boot and PID namespace, plus the kernel process-object
-identity. PID reuse cannot establish that the old process remains live. Cleanup
-first commits its outcome, then reclaims files; failed publication or deletion
-retains ownership and disk charges.
+Native identity observation is capability-checked by the existing process owner:
+
+- Linux requires full-width pidfs identity and the original boot/PID namespace.
+- macOS uses the native process-unique ID and read-only boot-session UUID. Unknown
+  libproc results remain unqualified.
+- Windows uses a native process-start key and the original host boot/session
+  context. Server silos and unverified job visibility remain unqualified. The
+  loader boot-entry GUID is combined with native boot/session IDs; it is not
+  treated as a random per-boot nonce. Unknown NT layouts fail closed.
+
+These probes do not signal or collect a process. Native support must be verified
+on the target OS; a successful unsupported-capability check is not recovery
+qualification. PID reuse cannot establish that the old process remains live.
+Cleanup first commits its outcome, then reclaims files; failed publication or
+file deletion retains ownership and disk charges.
 
 Unavailable native support, changed execution environments, invalid bindings and
 legacy writes without captured identity remain conservatively charged and visible
-in `pending_writes`. Windows/macOS recovery, cross-environment recovery and complete
-operator recovery remain P1 prerequisites before promotion. The identity binding
+in `pending_writes`. Target-native acceptance, cross-environment recovery and
+complete operator recovery remain P1 prerequisites before promotion. The identity binding
 detects mismatched metadata; it is not a signature against same-user filesystem
 edits. Malformed publication or cleanup fields also quarantine the write. Their
 unknown disk usage blocks new reservations without following untrusted paths.

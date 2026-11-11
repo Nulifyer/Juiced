@@ -6,6 +6,8 @@
 #include <cstdio>
 #include <exception>
 #include <filesystem>
+#include <fstream>
+#include <nlohmann/json.hpp>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -13,9 +15,19 @@
 #include <windows.h>
 #else
 #include <unistd.h>
+#include <sys/utsname.h>
 #endif
 
 int main(int argc, char** argv) {
+    if (argc == 7 && std::string(argv[1]) == "--identity-observer") {
+        try {
+            const lemon::utils::ProcessIdentity identity{argv[2], std::stoi(argv[3]), argv[4], argv[5]};
+            const auto state = lemon::utils::ProcessManager::observe_process_identity(identity);
+            const auto expected = std::string(argv[6]) == "running" ? lemon::utils::ProcessIdentityState::running :
+                std::string(argv[6]) == "exited" ? lemon::utils::ProcessIdentityState::exited : lemon::utils::ProcessIdentityState::unknown;
+            return state == expected ? 0 : 7;
+        } catch (const std::exception&) { return 8; }
+    }
 #ifndef _WIN32
     if (argc > 1 && std::string(argv[1]).find("--output-") == 0) {
         const std::string mode = argv[1];
@@ -34,7 +46,23 @@ int main(int argc, char** argv) {
         return 0;
     }
     if (argc > 1 && std::string(argv[1]) == "--exit") return 7;
+    std::string reference_os = "unknown";
+#ifdef _WIN32
+    using VersionQuery = LONG(WINAPI*)(OSVERSIONINFOW*);
+    const auto ntdll = GetModuleHandleW(L"ntdll.dll");
+    const auto version_query = ntdll ? reinterpret_cast<VersionQuery>(GetProcAddress(ntdll, "RtlGetVersion")) : nullptr;
+    OSVERSIONINFOW version{}; version.dwOSVersionInfoSize = sizeof(version);
+    if (version_query && version_query(&version) >= 0)
+        reference_os = "Windows " + std::to_string(version.dwMajorVersion) + "." +
+            std::to_string(version.dwMinorVersion) + "." + std::to_string(version.dwBuildNumber);
+#else
+    utsname version{};
+    if (::uname(&version) == 0) reference_os = std::string(version.sysname) + " " + version.release + " " + version.machine;
+#endif
     int checks = 0, failures = 0;
+    bool supported = false, foreign_running = false, foreign_exited = false;
+    std::string method;
+
     const auto check = [&](bool ok, const char* label) {
         ++checks;
         std::fprintf(stderr, "%s: %s\n", ok ? "PASS" : "FAIL", label);
@@ -48,7 +76,10 @@ int main(int argc, char** argv) {
         process.start({executable, {"--child"}});
         check(process.running() && !process.exited(), "a running owned child is not exit evidence");
         const auto identity = process.process_identity();
+        supported = identity.has_value();
         if (identity) {
+            method = identity->method;
+            std::fprintf(stderr, "Native identity capability: %s\n", method.c_str());
             check(ProcessManager::observe_process_identity(*identity) == lemon::utils::ProcessIdentityState::running,
                   "captured kernel identity observes the same live child");
             const auto repeated = process.process_identity();
@@ -61,10 +92,31 @@ int main(int argc, char** argv) {
                   ProcessManager::observe_process_identity(*identity, [] { return true; }) == lemon::utils::ProcessIdentityState::unknown,
                   "cancelled native identity operations remain inconclusive");
         } else {
+            std::fprintf(stderr, "Native identity capability: unavailable; prior-writer recovery remains unqualified\n");
             check(ProcessManager::observe_process_identity({}) == lemon::utils::ProcessIdentityState::unknown,
                   "unsupported native identity remains explicitly unknown");
         }
+        const auto observe_foreign = [&](const char* expected) {
+            return ProcessManager::run_process_with_output(executable,
+                {"--identity-observer", identity->method, std::to_string(identity->pid), identity->domain, identity->token, expected},
+                [](const std::string&) { return true; }, "", 5) == 0;
+        };
+        if (identity) {
+            foreign_running = observe_foreign("running");
+            check(foreign_running && process.running(), "another native process observes the live writer without signaling it");
+            auto malformed = *identity;
+            malformed.pid = 0;
+            check(ProcessManager::observe_process_identity(malformed) == lemon::utils::ProcessIdentityState::unknown,
+                  "invalid process identifiers never establish termination");
+            malformed = *identity; malformed.token = "invalid";
+            check(ProcessManager::observe_process_identity(malformed) == lemon::utils::ProcessIdentityState::unknown,
+                  "malformed persisted process tags never establish termination");
+        }
         process.stop();
+        if (identity) {
+            foreign_exited = observe_foreign("exited");
+            check(foreign_exited, "another native process observes exit after the original owner releases its handle");
+        }
         if (identity) check(ProcessManager::observe_process_identity(*identity) == lemon::utils::ProcessIdentityState::exited,
                             "persisted identity observes exit after its original handle is retired");
         check(process.exited() && !process.running() && process.handle().pid == 0,
@@ -159,6 +211,14 @@ int main(int argc, char** argv) {
         ++failures;
         std::fprintf(stderr, "Unexpected process observation failure: %s\n", error.what());
     }
+    try {
+        const nlohmann::json proof = {{"schema", 1}, {"reference_os", reference_os}, {"native_identity_supported", supported}, {"method", method},
+            {"foreign_running", foreign_running}, {"foreign_exited", foreign_exited}, {"checks", checks}, {"failures", failures},
+            {"scope", "Native direct-process identity only. Unsupported capability does not qualify prior-manager recovery; no descendant/device/remote termination proof."}};
+        std::ofstream report("process-identity-proof.json"); report << proof.dump(2) << '\n';
+        report.close();
+        if (!report) throw std::runtime_error("Cannot retain process identity proof");
+    } catch (const std::exception& error) { ++failures; std::fprintf(stderr, "Proof publication failed: %s\n", error.what()); }
     std::fprintf(stderr, "Process exit observation: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

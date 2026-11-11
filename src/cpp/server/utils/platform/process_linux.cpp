@@ -719,11 +719,6 @@ std::optional<std::string> process_identity_token(int descriptor) {
     return string_sha256(std::to_string(identity.st_dev) + ":" + std::to_string(identity.st_ino));
 }
 
-bool identity_hash(const std::string& value) {
-    return value.size() == 64 && std::all_of(value.begin(), value.end(), [](unsigned char c) {
-        return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
-    });
-}
 }
 
 std::optional<ProcessIdentity> LinuxProcessPlatform::process_identity(
@@ -747,8 +742,7 @@ ProcessIdentityState LinuxProcessPlatform::observe_process_identity(
     const ProcessIdentity& identity, const std::function<bool()>& cancelled) {
 #ifdef SYS_pidfd_open
     try {
-        if (identity.method != "linux-pidfs-64-v1" || identity.pid <= 0 || !identity_hash(identity.domain) ||
-            !identity_hash(identity.token) || (cancelled && cancelled())) return ProcessIdentityState::unknown;
+        if (!valid_identity(identity) || identity.method != "linux-pidfs-64-v1" || (cancelled && cancelled())) return ProcessIdentityState::unknown;
         const auto domain = process_identity_domain();
         if (!domain || *domain != identity.domain) return ProcessIdentityState::unknown;
         IdentityDescriptor descriptor{static_cast<int>(::syscall(SYS_pidfd_open, identity.pid, 0))};
