@@ -2259,7 +2259,8 @@ void Server::stop() {
         LOG(INFO, "Server") << "Stopping HTTP server..." << std::endl;
         udp_beacon_.stopBroadcasting();
         stop_http_listeners();
-        shutdown_requested_ = false;  // Reset for potential future use
+        // The run owner needs the request after joining to distinguish a normal
+        // stop from failed startup. Explicit lifecycle reset belongs to the caller.
 
         {
             std::lock_guard<std::mutex> lifecycle(websocket_lifecycle_mutex_);

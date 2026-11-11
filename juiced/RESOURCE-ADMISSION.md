@@ -600,6 +600,14 @@ Windows qualification requires `EmbeddedServerShutdownTest`, which builds the
 actual embedded executable and checks HTTP shutdown and occupied-port cleanup.
 Linux terminal-shutdown checks do not establish Windows execution evidence.
 
+The Server lifecycle owner retains a requested shutdown after `stop()` completes.
+Its joining caller can distinguish intentional cancellation from failed startup,
+even when its readiness probe misses the serving interval. Only an explicit
+`set_shutdown_requested(false)` clears that request. This outcome says why the
+manager run ended; it does not certify prior-manager/helper/device termination.
+The native Server fixture exercises cancellation before listener startup and
+repeated cleanup. Embedded Windows qualification remains a separate actual test.
+
 AliasManager serializes alias writers, reloads and directory changes. Candidates
 persist before live publication. File I/O runs outside its read lock, so model
 lookups retain the committed map during a staged save. Alias byte persistence

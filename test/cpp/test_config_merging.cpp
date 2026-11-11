@@ -14,6 +14,7 @@
 #include <lemon/server.h>
 #include <lemon/utils/json_utils.h>
 #include <lemon/utils/path_utils.h>
+#include <lemon/utils/process_manager.h>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -770,6 +771,45 @@ static void test_durable_publication() {
     RuntimeConfig::set_global(nullptr);
 }
 
+static void test_shutdown_request_survives_server_cleanup() {
+#ifdef _WIN32
+    WSADATA network;
+    const auto started = WSAStartup(MAKEWORD(2, 2), &network);
+    check(started == 0, "shutdown lifecycle fixture initializes Winsock");
+    if (started != 0) return;
+    struct NetworkGuard { ~NetworkGuard() { WSACleanup(); } } network_guard;
+#endif
+    ScopedTempDir temp;
+    auto settings = ConfigFile::base_defaults();
+    settings["host"] = "127.0.0.1";
+    settings["port"] = lemon::utils::ProcessManager::find_free_port(24000);
+    settings["websocket_port"] = 0;
+    settings["offline"] = true;
+    settings["broadcast"] = false;
+    settings["auto_check_model_updates"] = false;
+    settings["no_fetch_executables"] = true;
+    settings["models_dir"] = lemon::utils::path_to_utf8(temp.path() / "models");
+    auto runtime = std::make_shared<RuntimeConfig>(settings);
+    RuntimeConfig::set_global(runtime.get());
+    {
+        Server server(runtime, temp.string(), temp.string());
+        lemon::StatePublicationTestHook::finish_background(server);
+        server.set_shutdown_requested(true);
+        server.run();
+        check(!server.is_running() && !server.startup_failed(),
+              "a requested startup stop finishes the owned run without startup failure");
+        check(server.should_shutdown(),
+              "completed cleanup preserves the shutdown request for its run owner");
+        server.stop();
+        check(server.should_shutdown(),
+              "repeated cleanup cannot erase a completed shutdown request");
+        server.set_shutdown_requested(false);
+        check(!server.should_shutdown(),
+              "an explicit lifecycle caller can reset the shutdown request");
+    }
+    RuntimeConfig::set_global(nullptr);
+}
+
 int main() {
     std::puts("=== Config Merging and Sparse Lifecycle Unit Tests ===\n");
 
@@ -791,6 +831,7 @@ int main() {
     test_cli_startup_persistence_idempotent();
     test_server_handle_config_set_direct();
     test_durable_publication();
+    test_shutdown_request_survives_server_cleanup();
 
     std::printf("\n================================================\n");
     if (failures > 0) {
