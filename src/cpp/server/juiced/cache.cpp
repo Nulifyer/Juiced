@@ -1,4 +1,5 @@
 #include "lemon/juiced/service.h"
+#include "lemon/juiced/snapshot_recovery.h"
 #include "lemon/model_manager.h"
 #include "lemon/router.h"
 #include "lemon/server.h"
@@ -65,13 +66,20 @@ void output(httplib::Response &r, const json &j, int code = 200) {
 }
 json post_engine(const std::string &address, const std::string &path,
                  const json &body, WrappedServer::InferenceLease& worker,
-                 const std::function<bool()>& disconnected, bool* dispatched = nullptr) {
+                 const std::function<bool()>& disconnected, bool* dispatched = nullptr,
+                 const std::optional<utils::ProcessIdentity>& actor = std::nullopt) {
   if (worker.deadline_expired() || (disconnected && disconnected()))
     throw AdmissionError("state_operation_cancelled", "State operation was cancelled before dispatch", 499);
   if (!worker.endpoint_owned())
     throw AdmissionError("backend_listener_unverified", "The state worker no longer owns its listener", 503);
   if (!worker.runtime_inputs_current())
     throw AdmissionError("runtime_inputs_unverified", "The state worker runtime files no longer match its captured inputs", 503);
+  if (actor) {
+    const auto current = worker.process_identity(disconnected);
+    if (!current || current->method != actor->method || current->pid != actor->pid ||
+        current->domain != actor->domain || current->token != actor->token)
+      throw AdmissionError("state_writer_changed", "The reserved snapshot writer is no longer current", 503);
+  }
   const auto payload = body.dump();
   worker.resources_started();
   utils::HttpResponse r;
@@ -254,6 +262,12 @@ JuicedService::json JuicedService::cache_disk_usage_locked() const {
   for (const auto& [id, entry] : state_.at("snapshot_cleanup").items())
     cleanup += file_bytes(snapshot_directory_ / (id + ".bin"), entry.value("bytes", uint64_t(0)));
   for (const auto& [pending, entry] : state_.at("snapshot_writes").items()) {
+    if ((entry.contains("actor") || entry.contains("actor_binding")) &&
+        !snapshot_metadata::valid_actor_binding(pending, entry, state_.at("snapshot_store").at("id").get<std::string>())) {
+      known = false;
+      writes += budget + 1;
+      continue;
+    }
     const auto files = snapshot_owned_files(pending, entry);
     for (const auto& [file, declared] : files.items())
       writes += file_bytes(snapshot_directory_ / file, declared.get<uint64_t>());
@@ -290,6 +304,9 @@ void JuicedService::publish_snapshot_write(const std::string& pending, const jso
   {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!state_["snapshot_writes"].contains(pending) || state_["snapshot_writes"][pending] != intent) return;
+    if ((intent.contains("actor") || intent.contains("actor_binding")) &&
+        !snapshot_metadata::valid_actor_binding(pending, intent, state_.at("snapshot_store").at("id").get<std::string>()))
+      throw std::runtime_error("Snapshot writer identity requires recovery");
   }
   if (snapshot_verification_barrier_) snapshot_verification_barrier_();
   const auto source = snapshot_directory_ / pending;
@@ -360,6 +377,8 @@ void JuicedService::cleanup_snapshot_writes_locked() {
   bool changed = false;
   for (const auto& [file, entry] : writes.items()) {
     if (entry.value("state", "") != "cleanup") continue;
+    if ((entry.contains("actor") || entry.contains("actor_binding")) &&
+        !snapshot_metadata::valid_actor_binding(file, entry, state_.at("snapshot_store").at("id").get<std::string>())) continue;
     invalidate_snapshot_write_bound_locked(file, entry);
     // Persist disproven bounds before deleting the evidence, even after a failed response.
     if (state_ != committed_state_) persist_locked();
@@ -385,6 +404,10 @@ void JuicedService::reconcile_snapshot_writes() {
   json writes;
   { std::lock_guard<std::mutex> lock(mutex_); writes = state_["snapshot_writes"]; }
   for (const auto& [file, entry] : writes.items()) {
+    std::string store;
+    { std::lock_guard<std::mutex> lock(mutex_); store = state_.at("snapshot_store").at("id").get<std::string>(); }
+    if ((entry.contains("actor") || entry.contains("actor_binding")) &&
+        !snapshot_metadata::valid_actor_binding(file, entry, store)) continue;
     if (entry.value("state", "") == "publishing") {
       try { publish_snapshot_write(file, entry); }
       catch (const std::exception& error) {
@@ -399,8 +422,16 @@ void JuicedService::reconcile_snapshot_writes() {
         if (state_ != committed_state_) persist_locked();
       }
     }
-    if (entry.value("owner", "") != cache_run_id_ ||
-        !server_.router_->generation_was_stopped(entry.value("generation", uint64_t(0)))) continue;
+    bool stopped = entry.value("owner", "") == cache_run_id_ &&
+        server_.router_->generation_was_stopped(entry.value("generation", uint64_t(0)));
+    if (!stopped && entry.value("owner", "") != cache_run_id_ && entry.contains("actor") &&
+        snapshot_metadata::valid_actor_binding(file, entry, store)) {
+      const auto& actor = entry.at("actor");
+      const utils::ProcessIdentity identity{actor.at("method").get<std::string>(), actor.at("pid").get<int>(),
+          actor.at("domain").get<std::string>(), actor.at("token").get<std::string>()};
+      stopped = utils::ProcessManager::observe_process_identity(identity) == utils::ProcessIdentityState::exited;
+    }
+    if (!stopped) continue;
     std::lock_guard<std::mutex> lock(mutex_);
     if (state_["snapshot_writes"].contains(file) && state_["snapshot_writes"][file] == entry) {
       state_["snapshot_writes"][file]["state"] = "cleanup";
@@ -409,7 +440,14 @@ void JuicedService::reconcile_snapshot_writes() {
   }
 }
 bool JuicedService::reserve_snapshot_write_locked(const std::string& pending, const std::string& model,
-                                                  uint64_t generation, uint64_t bound, const std::string& profile) {
+                                                  uint64_t generation, uint64_t bound, const std::string& profile, const json& actor) {
+  json entry = {{"bytes", bound}, {"model", model}, {"generation", generation},
+                {"owner", cache_run_id_}, {"state", "writing"}, {"profile", profile}};
+  if (!actor.empty()) {
+    entry["actor"] = actor;
+    entry["actor_binding"] = snapshot_metadata::write_actor_binding(pending, entry, state_.at("snapshot_store").at("id").get<std::string>());
+    if (entry["actor_binding"] == "") throw std::runtime_error("Snapshot writer identity could not be bound");
+  }
   for (const auto& [file, entry] : state_["snapshot_writes"].items())
     invalidate_snapshot_write_bound_locked(file, entry);
   if (state_ != committed_state_) persist_locked();
@@ -437,8 +475,7 @@ bool JuicedService::reserve_snapshot_write_locked(const std::string& pending, co
   std::error_code space_error;
   const auto space = std::filesystem::space(snapshot_directory_, space_error);
   if (space_error || space.available < reserved + 1024ULL * 1024 * 1024) return false;
-  state_["snapshot_writes"][pending] = {{"bytes", bound}, {"model", model}, {"generation", generation},
-                                        {"owner", cache_run_id_}, {"state", "writing"}, {"profile", profile}};
+  state_["snapshot_writes"][pending] = std::move(entry);
   persist_locked();
   return true;
 }
@@ -893,6 +930,10 @@ void JuicedService::chat(const httplib::Request &original,
       uint64_t budget = 0, bound = 0;
       try {
         publication.validate_storage();
+        json actor = json::object();
+        const auto identity = worker->process_identity(disconnected);
+        if (identity)
+          actor = {{"version", 1}, {"method", identity->method}, {"pid", identity->pid}, {"domain", identity->domain}, {"token", identity->token}};
         {
           std::lock_guard<std::mutex> lock(mutex_);
           if (cache_mode_locked(model) != "persistent") return;
@@ -902,7 +943,7 @@ void JuicedService::chat(const httplib::Request &original,
           if (!bound) bound = budget;
           if (qualification.value("write_bound_invalid", false))
             throw std::runtime_error("Snapshot profile exceeded its write bound; repeat qualification before saving");
-          if (!reserve_snapshot_write_locked(pending, model, worker->generation(), bound, profile.at("fingerprint").get<std::string>()))
+          if (!reserve_snapshot_write_locked(pending, model, worker->generation(), bound, profile.at("fingerprint").get<std::string>(), actor))
             throw std::runtime_error("Snapshot save skipped: disk budget or headroom is unavailable");
           reserved = true;
         }
@@ -913,7 +954,7 @@ void JuicedService::chat(const httplib::Request &original,
         if (snapshot_save_barrier_) snapshot_save_barrier_();
         auto result = post_engine(
             address, "/slots/" + std::to_string(slot) + "?action=save",
-            {{"filename", pending}}, *worker, disconnected, &dispatched);
+            {{"filename", pending}}, *worker, disconnected, &dispatched, identity);
         response_valid = true;
         auto size = std::filesystem::file_size(file);
         if (size > bound)

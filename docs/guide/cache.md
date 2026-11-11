@@ -127,3 +127,21 @@ Preview again before retrying after a conflict or filesystem error.
 Changing the model directory also requires affected workers and accepted mutations
 to drain. If settings were saved but application failed, retry after resolving the
 reported ownership failure. Juiced preserves the old directory and its files.
+
+## Interrupted snapshot writes
+
+An interrupted save keeps its disk reservation until Juiced can establish that
+its writer stopped and reclaim the file. Cold inference can still work while
+saving is unavailable. Do not delete pending-write records to free space.
+
+New writes on supported Linux kernels retain a process identity that survives a
+manager restart. Juiced can then recognize the original direct process exiting,
+commit cleanup and release the reservation after deleting its file. A reused PID
+alone is insufficient. Unavailable platform support, changed environments and
+older writes without this identity remain pending. This does not establish that
+all descendants, device work or external writers stopped.
+
+The authenticated native `POST /v1/juiced/cache/recover` endpoint accepts `{}` and
+retries reconciliation. The same operation is available under the other native
+API prefixes. It does not accept a file path or an override claiming a writer has
+stopped. Failed metadata publication or file deletion keeps the charge for retry.

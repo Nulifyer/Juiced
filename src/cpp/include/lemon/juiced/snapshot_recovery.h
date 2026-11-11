@@ -20,6 +20,8 @@ bool valid_saved(const std::string& id, const nlohmann::json& entry);
 bool valid_cleanup_key(const std::string& key);
 // Diagnostic shape validation cannot certify any producer or writer termination.
 bool valid_write(const std::string& pending, const nlohmann::json& entry);
+std::string write_actor_binding(const std::string& pending, const nlohmann::json& entry, const std::string& store);
+bool valid_actor_binding(const std::string& pending, const nlohmann::json& entry, const std::string& store);
 }
 
 struct SnapshotInspectionOptions {

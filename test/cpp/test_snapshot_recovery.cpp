@@ -302,6 +302,48 @@ int main() {
         run_case(parent, "writer omitted pending is unexplained", [](auto& f) { f.pending("cleanup"); f.intent()["files"] = json::object(); write(f.root / (id + ".pending"), "partial"); }, "unexplained_snapshot_file");
         run_case(parent, "writer files inventory conflict", [](auto& f) { f.save(); f.pending("cleanup"); f.intent()["files"] = {{id + ".bin", 16}}; }, "write_files_conflict_with_inventory");
         run_case(parent, "writer files cleanup conflict", [](auto& f) { f.state["snapshot_cleanup"][id] = metadata("old"); f.pending("cleanup"); f.intent()["files"] = {{id + ".bin", 16}}; }, "write_files_conflict_with_inventory");
+        const auto bind_actor = [](auto& f) {
+            f.pending("uncertain");
+            f.intent()["actor"] = {{"version", 1}, {"method", "linux-pidfs-64-v1"}, {"pid", 123},
+                                    {"domain", std::string(64, 'c')}, {"token", std::string(64, 'd')}};
+            f.intent()["actor_binding"] = lemon::snapshot_metadata::write_actor_binding(id + ".pending", f.intent(), "store-identity");
+        };
+        run_case(parent, "bound cleanup mutable path", [=](auto& f) {
+            bind_actor(f); f.intent()["state"] = "cleanup";
+            f.intent()["files"] = {{"../../retained-source", 16}};
+            check(!lemon::snapshot_metadata::valid_actor_binding(id + ".pending", f.intent(), "store-identity"),
+                  "an actor binding cannot validate malformed mutable file ownership");
+        }, "write_intent_schema_invalid");
+        run_case(parent, "bound cleanup valid mutable path", [=](auto& f) {
+            bind_actor(f); f.intent()["state"] = "cleanup";
+            f.intent()["files"] = {{id + ".pending", 16}};
+            check(lemon::snapshot_metadata::valid_actor_binding(id + ".pending", f.intent(), "store-identity"),
+                  "valid cleanup transitions preserve their original actor binding");
+        });
+        run_case(parent, "bound writer remains unverified by inspection", bind_actor, {}, [](const auto& r) {
+            check(r["unverified_writers"] == 1, "native actor metadata alone is never inspection stop proof");
+        });
+        for (const auto* field : {"owner", "generation", "bytes", "model", "profile", "actor"}) {
+            run_case(parent, std::string("changed writer binding ") + field, [=](auto& f) {
+                bind_actor(f);
+                if (std::string(field) == "generation" || std::string(field) == "bytes") f.intent()[field] = 42;
+                else if (std::string(field) == "actor") f.intent()[field]["pid"] = 124;
+                else if (std::string(field) == "profile") f.intent()[field] = std::string(64, 'f');
+                else f.intent()[field] = "changed";
+            }, "writer_actor_binding_invalid");
+        }
+        run_case(parent, "changed store actor binding", [=](auto& f) {
+            bind_actor(f);
+            f.state["snapshot_store"]["id"] = "different-store";
+        }, "writer_actor_binding_invalid");
+        run_case(parent, "copied writer key actor binding", [=](auto& f) {
+            bind_actor(f);
+            f.state["snapshot_writes"][std::string(64, 'f') + ".pending"] = f.intent();
+            f.state["snapshot_writes"].erase(id + ".pending");
+        }, "writer_actor_binding_invalid");
+        run_case(parent, "partial actor binding", [=](auto& f) {
+            bind_actor(f); f.intent().erase("actor_binding");
+        }, "write_intent_schema_invalid");
         run_case(parent, "pending voice", [](auto& f) { f.state["voice_writer"] = {{"owner", "private-owner"}, {"pending", true}, {"state", "dispatching"}}; }, {}, [](const auto& r) { check(r["unverified_writers"] == 1, "voice stays unverified"); });
         run_case(parent, "stopped voice", [](auto& f) { f.state["voice_writer"] = {{"owner", "private-owner"}, {"pending", false}, {"state", "stopped"}}; });
         run_case(parent, "malformed voice", [](auto& f) { f.state["voice_writer"] = {{"pending", "false"}}; }, "voice_intent_schema_invalid", [](const auto& r) { check(r["unverified_writers"] == 1, "malformed voice stays unknown"); });

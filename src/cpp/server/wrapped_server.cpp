@@ -256,6 +256,11 @@ WrappedServer::BackendRequestScope::~BackendRequestScope() {
     server_.end_backend_request(kind_);
 }
 
+std::optional<utils::ProcessIdentity> WrappedServer::process_identity(const std::function<bool()>& cancelled) const {
+    std::lock_guard<std::mutex> lock(process_mutex_);
+    return process_ ? process_->process_identity(cancelled) : std::nullopt;
+}
+
 int WrappedServer::get_process_id() const {
     std::lock_guard<std::mutex> lock(process_mutex_);
     return process_ ? process_->handle().pid : 0;
@@ -520,6 +525,19 @@ std::unique_ptr<ServerProcess> WrappedServer::make_native_process(ProcessOutput 
 }
 
 void WrappedServer::start_owned_process(std::unique_ptr<ServerProcess> process, const ServerCommand& command) {
+    {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        if (active_state_operations_ || process_start_in_progress_)
+            throw AdmissionError("prompt_state_busy", "A state operation still owns the worker process", 409);
+        process_start_in_progress_ = true;
+    }
+    struct FinishStart {
+        WrappedServer& server;
+        ~FinishStart() {
+            std::lock_guard<std::mutex> lock(server.state_mutex_);
+            server.process_start_in_progress_ = false;
+        }
+    } finish_start{*this};
     if (load_cancelled()) throw std::runtime_error("load cancelled before process startup");
     if (!process) throw std::invalid_argument("Process startup requires an owner");
     stop_server();

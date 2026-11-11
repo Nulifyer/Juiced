@@ -73,6 +73,10 @@ std::optional<utils::ProcessImageFiles> ServerProcess::image_files(const std::fu
     return running() ? ProcessManager::image_files(handle_, cancelled) : std::nullopt;
 }
 
+std::optional<utils::ProcessIdentity> ServerProcess::process_identity(const std::function<bool()>& cancelled) const {
+    return running() ? ProcessManager::process_identity(handle_, cancelled) : std::nullopt;
+}
+
 std::string NativeProcess::start(const ServerCommand& command) {
     std::vector<std::string> command_line = {command.program};
     command_line.insert(command_line.end(), command.args.begin(), command.args.end());

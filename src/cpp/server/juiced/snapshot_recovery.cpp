@@ -387,6 +387,11 @@ public:
                 ++writers_;
                 ++effects_;
                 if (!snapshot_metadata::valid_write(pending, entry)) { issue("write_intent_schema_invalid", pending); continue; }
+                const auto store = state.value("snapshot_store", json()).is_object() ?
+                    state.at("snapshot_store").value("id", json()) : json();
+                if ((entry.contains("actor") || entry.contains("actor_binding")) &&
+                    (!store.is_string() || !snapshot_metadata::valid_actor_binding(pending, entry, store.get<std::string>())))
+                    issue("writer_actor_binding_invalid", pending);
                 const auto id = pending.substr(0, 64);
                 const auto phase = entry["state"].get<std::string>();
                 if (!entry.contains("files") || phase == "publishing") explained_.insert(pending);
@@ -728,7 +733,7 @@ bool valid_saved(const std::string& id, const json& entry) {
 bool valid_cleanup_key(const std::string& key) {
     return valid_id(key) || (key.size() == 73 && key.substr(64) == ".previous" && valid_id(key.substr(0, 64)));
 }
-bool valid_write(const std::string& pending, const json& entry) {
+static bool valid_write_identity(const std::string& pending, const json& entry) {
     if (pending.size() != 72 || pending.substr(64) != ".pending" || !valid_id(pending.substr(0, 64)) ||
         !entry.is_object() || !entry.contains("owner") || !text(entry["owner"]) ||
         !entry.contains("generation") || !natural(entry["generation"]) || entry["generation"] == 0 ||
@@ -736,6 +741,21 @@ bool valid_write(const std::string& pending, const json& entry) {
         (entry.contains("model") && !text(entry["model"], 512)) ||
         (entry.contains("profile") && (!entry["profile"].is_string() ||
             (!entry["profile"].get_ref<const std::string&>().empty() && !valid_id(entry["profile"].get_ref<const std::string&>()))))) return false;
+    return true;
+}
+static bool valid_actor(const json& actor) {
+    return actor.is_object() && actor.size() == 5 && actor.contains("version") && actor["version"].is_number_integer() && actor["version"] == 1 &&
+        actor.contains("method") && text(actor["method"], 64) &&
+        actor.contains("pid") && natural(actor["pid"]) && actor["pid"] > 0 && actor["pid"] <= INT32_MAX &&
+        actor.contains("domain") && actor["domain"].is_string() && valid_id(actor["domain"].get<std::string>()) &&
+        actor.contains("token") && actor["token"].is_string() && valid_id(actor["token"].get<std::string>());
+}
+bool valid_write(const std::string& pending, const json& entry) {
+    if (!valid_write_identity(pending, entry)) return false;
+    if (entry.contains("actor") || entry.contains("actor_binding")) {
+        if (!entry.contains("actor") || !valid_actor(entry["actor"]) || !entry.contains("actor_binding") ||
+            !entry["actor_binding"].is_string() || !valid_id(entry["actor_binding"].get<std::string>())) return false;
+    }
     const auto phase = entry.value("state", json());
     if (phase != "writing" && phase != "uncertain" && phase != "publishing" && phase != "cleanup") return false;
     const auto id = pending.substr(0, 64);
@@ -754,6 +774,15 @@ bool valid_write(const std::string& pending, const json& entry) {
             (!entry["previous"].empty() && !valid_saved(id, entry["previous"]))) return false;
     }
     return true;
+}
+std::string write_actor_binding(const std::string& pending, const json& entry, const std::string& store) {
+    if (!text(store) || !valid_write_identity(pending, entry) || !entry.contains("actor") || !valid_actor(entry["actor"])) return {};
+    return utils::string_sha256(json::array({pending, store, entry.at("owner"), entry.at("generation"),
+        entry.at("bytes"), entry.value("model", json()), entry.value("profile", json()), entry.at("actor")}).dump());
+}
+bool valid_actor_binding(const std::string& pending, const json& entry, const std::string& store) {
+    const auto expected = write_actor_binding(pending, entry, store);
+    return valid_write(pending, entry) && !expected.empty() && entry.value("actor_binding", json()) == expected;
 }
 }
 

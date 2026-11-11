@@ -26,6 +26,8 @@ public:
     virtual bool is_running(ProcessHandle handle) = 0;
     virtual bool owns_loopback_listener(ProcessHandle handle, int port) = 0;
     virtual std::optional<ProcessImageFiles> image_files(ProcessHandle, const std::function<bool()>& = {}) { return std::nullopt; }
+    virtual std::optional<ProcessIdentity> process_identity(ProcessHandle, const std::function<bool()>& = {}) { return std::nullopt; }
+    virtual ProcessIdentityState observe_process_identity(const ProcessIdentity&, const std::function<bool()>& = {}) { return ProcessIdentityState::unknown; }
     virtual int get_exit_code(ProcessHandle handle) = 0;
     virtual int wait_for_exit(ProcessHandle handle, int timeout_seconds) = 0;
     virtual void kill(ProcessHandle handle) = 0;

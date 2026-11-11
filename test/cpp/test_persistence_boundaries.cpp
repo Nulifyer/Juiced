@@ -4,6 +4,7 @@
 #include "lemon/error_types.h"
 #include "lemon/jobs/job_manager.h"
 #include "lemon/juiced/service.h"
+#include "lemon/juiced/snapshot_recovery.h"
 #include "lemon/model_manager.h"
 #include "lemon/mcp_server.h"
 #include "lemon/runtime_config.h"
@@ -74,13 +75,19 @@ public:
 };
 class CacheBoundaryWorker : public PolicyWorker, public ISlotsServer {
 public:
-    CacheBoundaryWorker(const std::string& name, int port, const std::filesystem::path& directory) : PolicyWorker(name) {
+    CacheBoundaryWorker(const std::string& name, int port, const std::filesystem::path& directory) : PolicyWorker(name), fixture_port_(port) {
         port_ = port;
         context_observation_ = {{"slot_ids", json::array({0})}};
         execution_identity_ = {{"recipe", "llamacpp"}, {"captured", true}, {"engine", "dde879b-controlled-save-boundary"}, {"scope", "controlled-test-inputs"}};
         set_model_metadata(name, "fixture", ModelType::LLM, DEVICE_CPU, RecipeOptions("llamacpp", {
             {"ctx_size", 2048}, {"llamacpp_backend", "cpu"}, {"llamacpp_args", "--slot-save-path \"" + directory.string() + "\""}}));
     }
+    std::optional<utils::ProcessIdentity> start_native(const std::string& executable) {
+        start_owned_process(std::make_unique<NativeProcess>(ProcessOutput{}), {executable, {"--writer-child"}, {}, fixture_port_});
+        return process_identity();
+    }
+    void stop_native() { stop_server(); }
+    const int fixture_port_;
     std::atomic<bool> owns_endpoint{true};
     bool endpoint_owned() const override { return owns_endpoint.load(); }
     std::atomic<bool> owns_runtime{true};
@@ -156,6 +163,10 @@ struct StatePublicationTestHook {
         std::lock_guard<std::mutex> lock(server.router_->load_mutex_);
         server.router_->find_server_by_model_name(name)->set_model_metadata(name, "fixture", ModelType::LLM, DEVICE_CPU,
             RecipeOptions("llamacpp", {{"ctx_size", 2048}, {"llamacpp_backend", "cpu"}, {"llamacpp_args", args}}));
+    }
+    static CacheBoundaryWorker* cache_native_worker(Server& server, const std::string& name) {
+        std::lock_guard<std::mutex> lock(server.router_->load_mutex_);
+        return dynamic_cast<CacheBoundaryWorker*>(server.router_->find_server_by_model_name(name));
     }
     static void save_barrier(Server& server, std::function<void()> callback) { server.juiced_->snapshot_save_barrier_ = std::move(callback); }
     static httplib::Response cache_chat(Server& server, const std::string& model, const std::string& session, bool stream, std::atomic<bool>& closed) {
@@ -241,8 +252,21 @@ struct StatePublicationTestHook {
         server.juiced_->persist_locked();
     }
     static void prune(Server& server) { std::lock_guard<std::mutex> lock(server.juiced_->mutex_); server.juiced_->prune_cache_locked(); }
-    static bool reserve_write(Server& server, const std::string& file, uint64_t bytes, uint64_t generation = 10001) {
-        std::lock_guard<std::mutex> lock(server.juiced_->mutex_); return server.juiced_->reserve_snapshot_write_locked(file, "disk-fixture", generation, bytes);
+    static bool reserve_write(Server& server, const std::string& file, uint64_t bytes, uint64_t generation = 10001,
+                              const json& actor = json::object()) {
+        std::lock_guard<std::mutex> lock(server.juiced_->mutex_);
+        return server.juiced_->reserve_snapshot_write_locked(file, "disk-fixture", generation, bytes, "", actor);
+    }
+    static void writer_budget(Server& server) {
+        std::lock_guard<std::mutex> lock(server.juiced_->mutex_);
+        server.juiced_->state_["cache"]["disk_budget_gib"] = 16.0 / (1024 * 1024 * 1024);
+        server.juiced_->persist_locked();
+    }
+    static json recover_writes(Server& server) {
+        httplib::Request request; request.method = "POST"; request.body = "{}";
+        httplib::Response response;
+        server.juiced_->cache_api(request, response, "cache/recover");
+        return json::parse(response.body);
     }
     static json stage_publication(Server& server, bool existing) {
         std::lock_guard<std::mutex> lock(server.juiced_->mutex_);
@@ -1249,6 +1273,107 @@ static void cache_disk_budget() {
     }
 }
 
+static void prior_writer_recovery(const std::string& executable, int first = 0, int last = 9) {
+    using Hook = lemon::StatePublicationTestHook;
+    lemon::NativeProcess child({false, false});
+    child.start({executable, {"--writer-child"}});
+    const auto identity = child.process_identity();
+    if (!identity) {
+        check(lemon::utils::ProcessManager::observe_process_identity({}) == lemon::utils::ProcessIdentityState::unknown,
+              "unavailable kernel identity leaves prior-writer recovery unqualified");
+        child.stop(); return;
+    }
+    child.stop();
+    const std::string pending = std::string(64, 'e') + ".pending";
+    for (int scenario = first; scenario < last; ++scenario) {
+        auto writer = std::make_unique<lemon::NativeProcess>(lemon::ProcessOutput{});
+        writer->start({executable, {"--writer-child"}});
+        const auto captured = writer->process_identity();
+        check(captured.has_value(), "each controlled native writer has independently captured ownership");
+        if (!captured) throw std::runtime_error("Native writer identity became unavailable");
+        const json actor = {{"version", 1}, {"method", captured->method}, {"pid", captured->pid},
+                            {"domain", captured->domain}, {"token", captured->token}};
+        const auto root = lemon::test::make_scratch_dir("prior-snapshot-writer");
+        auto defaults = lemon::ConfigFile::base_defaults(); defaults["offline"] = true; defaults["broadcast"] = false;
+        auto runtime = std::make_shared<lemon::RuntimeConfig>(defaults); lemon::RuntimeConfig::set_global(runtime.get());
+        {
+            lemon::Server server(runtime, root.string(), root.string()); Hook::stop(server); Hook::writer_budget(server);
+            check(Hook::reserve_write(server, pending, 16, 10001, scenario == 7 ? json::object() : actor),
+                  "native writer identity is durably reserved before the transfer");
+            Hook::uncertain_write(server, pending);
+            { std::ofstream out(root / "juiced/snapshots" / pending); out << "partial writer"; }
+        }
+        if ((scenario >= 4 && scenario < 7) || scenario == 8) {
+            auto state = read(root / "juiced/state.json");
+            auto& entry = state["snapshot_writes"][pending];
+            if (scenario == 4) entry["model"] = "changed-model";
+            if (scenario == 5) {
+                entry["actor"]["method"] = "unqualified-platform-v1";
+                entry["actor_binding"] = lemon::snapshot_metadata::write_actor_binding(pending, entry, state["snapshot_store"]["id"]);
+            }
+            if (scenario == 6) {
+                entry["actor"]["domain"] = std::string(64, 'f');
+                entry["actor_binding"] = lemon::snapshot_metadata::write_actor_binding(pending, entry, state["snapshot_store"]["id"]);
+            }
+            if (scenario == 8) {
+                entry["state"] = "cleanup";
+                entry["files"] = {{"../../retained-source", 16}};
+                { std::ofstream out(root / "retained-source"); out << "retained source"; }
+            }
+            write(root / "juiced/state.json", state);
+        }
+        {
+            lemon::Server server(runtime, root.string(), root.string()); Hook::stop(server);
+            const auto before = Hook::state(server).at("snapshot_writes");
+            Hook::recover_writes(server);
+            check(Hook::state(server).at("snapshot_writes") == before && Hook::disk(server).at("reserved_write_bytes") >= 16 &&
+                  fs::exists(root / "juiced/snapshots" / pending) && !Hook::reserve_write(server, std::string(64, 'd') + ".pending", 1),
+                  "a live, unknown, altered or legacy prior writer retains storage credit and blocks another save after reconstruction");
+            if (scenario == 8)
+                check(fs::exists(root / "retained-source") && Hook::disk(server).at("usage_known") == false,
+                      "malformed mutable file ownership cannot delete retained source or advertise known disk usage");
+            writer->stop();
+            if (scenario >= 4) {
+                Hook::recover_writes(server);
+                check(Hook::disk(server).at("reserved_write_bytes") >= 16 && fs::exists(root / "juiced/snapshots" / pending),
+                      "exit of a native child cannot discharge invalid, unsupported, changed-domain or actorless ownership");
+            } else {
+                if (scenario == 1 || scenario == 2) {
+                    const auto target = root / "juiced/state.json";
+                    std::unique_ptr<BlockReplacement> blocked;
+                    if (scenario == 1) fs::create_directory(root / "juiced/state.json.tmp");
+                    else { write(root / "juiced/state.json.tmp", json::object()); blocked = std::make_unique<BlockReplacement>(target); }
+                    bool rejected = false;
+                    try { Hook::recover_writes(server); } catch (...) { rejected = true; }
+                    check(rejected && Hook::disk(server).at("reserved_write_bytes") >= 16 &&
+                          fs::exists(root / "juiced/snapshots" / pending),
+                          "failed cleanup publication preserves the file and charge after positive native exit evidence");
+                    blocked.reset(); fs::remove_all(root / "juiced/state.json.tmp");
+                }
+                if (scenario == 3) {
+                    BlockReplacement blocked(root / "juiced/snapshots" / pending);
+                    Hook::recover_writes(server);
+                    check(Hook::state(server).at("snapshot_writes").at(pending).at("state") == "cleanup" &&
+                          Hook::disk(server).at("reserved_write_bytes") >= 16 && fs::exists(root / "juiced/snapshots" / pending),
+                          "confirmed process exit cannot release credit while file deletion remains blocked");
+                } else {
+                    Hook::recover_writes(server);
+                    check(Hook::disk(server).at("used_bytes") == 0 && !fs::exists(root / "juiced/snapshots" / pending) &&
+                          Hook::reserve_write(server, std::string(64, 'd') + ".pending", 16),
+                          "positive original-process exit permits cleanup and admission without a current worker generation");
+                }
+            }
+        }
+        if (scenario == 3) {
+            lemon::Server server(runtime, root.string(), root.string()); Hook::stop(server); Hook::recover_writes(server);
+            check(Hook::disk(server).at("used_bytes") == 0 && !fs::exists(root / "juiced/snapshots" / pending) &&
+                  Hook::reserve_write(server, std::string(64, 'd') + ".pending", 16),
+                  "a durable cleanup retry after another restart releases only reclaimed file credit");
+        }
+        lemon::RuntimeConfig::set_global(nullptr);
+    }
+}
+
 static void snapshot_publication_failures() {
     using Hook = lemon::StatePublicationTestHook;
     for (bool existing : {false, true}) for (bool staging : {false, true}) {
@@ -1404,7 +1529,7 @@ static void options_clear_parity() {
     lemon::RuntimeConfig::set_global(nullptr);
 }
 
-static void cache_pre_dispatch() {
+static void cache_pre_dispatch(const std::string& executable) {
     using Hook = lemon::StatePublicationTestHook;
     for (bool stream : {false, true}) {
 #ifdef _WIN32
@@ -1513,6 +1638,24 @@ static void cache_pre_dispatch() {
             check(admission.wait_for_writes(std::chrono::milliseconds(100)) && Hook::disk(server)["reserved_write_bytes"] == 0,
                   "terminal JSON/SSE snapshot publication releases its writer only after coherent file and metadata effects");
             admission.maintenance(false);
+            auto* native_worker = Hook::cache_native_worker(server, name);
+            const auto actor = native_worker->start_native(executable);
+            if (actor) {
+                Hook::save_barrier(server, [&] { native_worker->stop_native(); });
+                const auto changed = Hook::cache_chat(server, name, "native-actor-stopped", stream, closed);
+                Hook::save_barrier(server, {});
+                check(changed.status == 200 && saves == 4 && Hook::state(server)["snapshot_writes"].empty() &&
+                      Hook::disk(server)["reserved_write_bytes"] == 0 &&
+                      Hook::state(server)["cache"]["last_error"].get<std::string>().find("reserved snapshot writer") != std::string::npos,
+                      "JSON/SSE native writer retirement before dispatch preserves inference and releases unused credit without a save");
+                native_worker->start_native(executable);
+                const auto resumed = Hook::cache_chat(server, name, "replacement-native-actor", stream, closed);
+                if (resumed.status != 200 || saves != 5)
+                    std::fprintf(stderr, "Native actor resume: status=%d saves=%d response=%s\n", resumed.status, saves.load(), resumed.body.c_str());
+                check(resumed.status == 200 && saves == 5 && Hook::state(server)["snapshot_writes"].empty(),
+                      "a later state lease captures the replacement actor and saves without inheriting the old identity");
+            } else check(true, "native actor dispatch check is unqualified where process identity is unavailable");
+            native_worker->stop_native();
 
         }
         lemon::RuntimeConfig::set_global(nullptr);
@@ -2021,6 +2164,14 @@ static void policy_failures() {
 }
 
 int main(int argc, char** argv) {
+    if (argc > 1 && std::string(argv[1]) == "--writer-child") {
+        std::this_thread::sleep_for(std::chrono::seconds(120)); return 0;
+    }
+    if (argc > 1 && (std::string(argv[1]) == "--writer-recovery" || std::string(argv[1]) == "--writer-schema")) {
+        prior_writer_recovery(fs::absolute(argv[0]).string(), std::string(argv[1]) == "--writer-schema" ? 8 : 0);
+        std::fprintf(stderr, "Prior writer recovery: %d checks, %d failures\n", checks, failures);
+        return failures ? 1 : 0;
+    }
     if (argc > 1 && std::string(argv[1]) == "--removal-ownership") {
         artifact_removal_ownership(); prepared_reference_ownership();
     } else if (argc > 1 && std::string(argv[1]) == "--config-effects") {
@@ -2030,7 +2181,7 @@ int main(int argc, char** argv) {
     } else if (argc > 1 && std::string(argv[1]) == "--import-ownership") {
         import_removal_ownership(); import_deletion_overlap(); import_definition_replays();
     } else if (argc > 1 && std::string(argv[1]) == "--save-dispatch") {
-        cache_pre_dispatch();
+        cache_pre_dispatch(fs::absolute(argv[0]).string());
     } else if (argc > 1 && std::string(argv[1]) == "--cache-recovery") {
         terminal_snapshot_recovery(); concurrent_snapshot_recovery();
     } else if (argc > 1 && std::string(argv[1]) == "--imports") {

@@ -107,6 +107,9 @@ public:
         bool endpoint_owned() const { return server_ && server_->endpoint_owned(); }
         bool runtime_inputs_current() const { return server_ && server_->runtime_inputs_current([this] { return deadline_expired() || WrappedServer::current_request_cancel_context().cancelled(); }); }
         json execution_snapshot() const { return server_ ? server_->execution_snapshot() : json::object(); }
+        std::optional<utils::ProcessIdentity> process_identity(const std::function<bool()>& cancelled = {}) const {
+            return server_ ? server_->process_identity([&] { return deadline_expired() || (cancelled && cancelled()); }) : std::nullopt;
+        }
         uint64_t generation() const { return server_ ? server_->get_instance_id() : 0; }
     private:
         friend class WrappedServer;
@@ -142,7 +145,7 @@ public:
 
     InferenceLease try_acquire_ready_state_operation() {
         std::lock_guard<std::mutex> lock(state_mutex_);
-        if (cleanup_pending() || retirement_pending_ || maintenance_in_progress_ || (state_ != ModelState::READY &&
+        if (process_start_in_progress_ || cleanup_pending() || retirement_pending_ || maintenance_in_progress_ || (state_ != ModelState::READY &&
             state_ != ModelState::IN_USE && state_ != ModelState::EVICTING)) return {};
         ++active_request_count_;
         ++active_state_operations_;
@@ -527,6 +530,7 @@ public:
     }
     virtual bool endpoint_owned() const;
     virtual bool runtime_inputs_current(const std::function<bool()>& cancelled = {}) const;
+    std::optional<utils::ProcessIdentity> process_identity(const std::function<bool()>& cancelled = {}) const;
     int get_process_id() const;
     std::vector<std::string> get_launch_command() const;
     int get_backend_port() const;
@@ -802,6 +806,7 @@ protected:
     ModelState state_;
     int active_request_count_;
     int active_state_operations_;
+    bool process_start_in_progress_ = false;
 
     // True while the eviction engine is performing a maintenance downsize on this
     // server. Counts as "busy" so wait_until_not_busy() (and therefore

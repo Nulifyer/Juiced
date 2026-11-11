@@ -366,6 +366,27 @@ int main(int argc, char** argv) {
     std::thread health_thread([&health]() { health.listen_after_bind(); });
     health.wait_until_ready();
 
+    {
+        lemon::StubWrappedServer worker;
+        worker.set_state(lemon::ModelState::READY);
+        auto lease = worker.try_acquire_ready_state_operation();
+        bool rejected = false;
+        try { worker.start_server(std::make_unique<lemon::FakeProcess>(717), {"controlled", {}, {}, port}); }
+        catch (const lemon::AdmissionError& error) { rejected = error.code == "prompt_state_busy"; }
+        check("a state lease prevents replacement process startup before any process effect", rejected && worker.get_process_info().pid == 0);
+        std::async(std::launch::async, [lease = std::move(lease)]() mutable { lease.release(); }).get();
+        worker.start_server(std::make_unique<lemon::FakeProcess>(718), {"controlled", {}, {}, port});
+        check("cross-thread state-lease release permits one replacement startup", worker.get_process_info().pid == 718);
+        worker.stop_server();
+        auto attempted = false;
+        worker.start_server(std::make_unique<lemon::FakeProcess>(719, nullptr, std::function<void()>{}, [&] {
+            attempted = true;
+            check("a startup claim excludes new state leases without holding the worker state mutex", !worker.try_acquire_ready_state_operation());
+        }), {"controlled", {}, {}, port});
+        check("the startup versus state-lease boundary ran inside native startup", attempted);
+        worker.stop_server();
+    }
+
     lemon::ServerCommand command;
     command.program = "llama-server.exe";
     command.port = port;

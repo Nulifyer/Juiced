@@ -47,11 +47,49 @@ int main(int argc, char** argv) {
         check(process.exited(), "an unstarted native owner has no outstanding process");
         process.start({executable, {"--child"}});
         check(process.running() && !process.exited(), "a running owned child is not exit evidence");
+        const auto identity = process.process_identity();
+        if (identity) {
+            check(ProcessManager::observe_process_identity(*identity) == lemon::utils::ProcessIdentityState::running,
+                  "captured kernel identity observes the same live child");
+            const auto repeated = process.process_identity();
+            check(repeated && repeated->domain == identity->domain && repeated->token == identity->token,
+                  "reopened native process identity is stable");
+            auto changed = *identity; changed.domain[0] = changed.domain[0] == 'a' ? 'b' : 'a';
+            check(ProcessManager::observe_process_identity(changed) == lemon::utils::ProcessIdentityState::unknown,
+                  "changed execution domain cannot certify process exit");
+            check(!process.process_identity([] { return true; }) &&
+                  ProcessManager::observe_process_identity(*identity, [] { return true; }) == lemon::utils::ProcessIdentityState::unknown,
+                  "cancelled native identity operations remain inconclusive");
+        } else {
+            check(ProcessManager::observe_process_identity({}) == lemon::utils::ProcessIdentityState::unknown,
+                  "unsupported native identity remains explicitly unknown");
+        }
         process.stop();
+        if (identity) check(ProcessManager::observe_process_identity(*identity) == lemon::utils::ProcessIdentityState::exited,
+                            "persisted identity observes exit after its original handle is retired");
         check(process.exited() && !process.running() && process.handle().pid == 0,
               "confirmed native stop retires the direct child handle");
         process.stop();
         check(process.exited(), "confirmed stop is idempotent");
+        if (identity) {
+            lemon::NativeProcess observed({false, false});
+            observed.start({executable, {"--child"}});
+            const auto recorded = observed.process_identity();
+            check(recorded && recorded->token != identity->token, "a replacement child has a different kernel object identity");
+            if (recorded) {
+                ProcessManager::terminate_process(observed.handle());
+                auto result = lemon::utils::ProcessIdentityState::running;
+                const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+                while (result != lemon::utils::ProcessIdentityState::exited && std::chrono::steady_clock::now() < until) {
+                    result = ProcessManager::observe_process_identity(*recorded);
+                    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                }
+                check(result == lemon::utils::ProcessIdentityState::exited && observed.exited(),
+                      "identity observation leaves the original owner's child status unconsumed");
+                check(observed.collect_exit().has_value(), "original native owner still collects the observed exit");
+            }
+            observed.stop();
+        }
         process.start({executable, {"--exit"}});
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
         while (!process.exited() && std::chrono::steady_clock::now() < deadline)

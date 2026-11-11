@@ -40,6 +40,14 @@ std::optional<ProcessImageFiles> ProcessManager::image_files(ProcessHandle handl
     return create_process_platform()->image_files(handle, cancelled);
 }
 
+std::optional<ProcessIdentity> ProcessManager::process_identity(ProcessHandle handle, const std::function<bool()>& cancelled) {
+    return create_process_platform()->process_identity(handle, cancelled);
+}
+
+ProcessIdentityState ProcessManager::observe_process_identity(const ProcessIdentity& identity, const std::function<bool()>& cancelled) {
+    return create_process_platform()->observe_process_identity(identity, cancelled);
+}
+
 int ProcessManager::get_exit_code(ProcessHandle handle) {
     auto platform = create_process_platform();
     return platform->get_exit_code(handle);

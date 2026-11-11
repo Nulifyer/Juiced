@@ -298,10 +298,28 @@ after manager restart; unsealed writes still require termination evidence. Confl
 retain/forget operations reject until publication resolves.
 
 Aborted writes remain charged until the current manager observes exact-generation
-stop. Idle inference is insufficient. Interrupted writes from an unknown previous
-manager remain conservatively charged and visible in `pending_writes`. Complete
-operator recovery of those interrupted writes remains a P1 prerequisite before
-promotion. Snapshot restore and cold inference do not require a new opportunistic
+stop. Idle inference is insufficient. New saves can additionally capture native
+writer identity before dispatch. The durable binding covers the snapshot store,
+write key, manager owner, worker generation, model, profile and declared byte bound.
+A state-operation lease excludes replacement process startup. The exchange checks
+that the reserved native actor remains current before dispatch.
+
+On supported 64-bit Linux pidfs kernels, reconciliation can confirm that a captured
+prior-manager direct process exited without signaling or collecting it. The probe
+requires the original kernel boot and PID namespace, plus the kernel process-object
+identity. PID reuse cannot establish that the old process remains live. Cleanup
+first commits its outcome, then reclaims files; failed publication or deletion
+retains ownership and disk charges.
+
+Unavailable native support, changed execution environments, invalid bindings and
+legacy writes without captured identity remain conservatively charged and visible
+in `pending_writes`. Windows/macOS recovery, cross-environment recovery and complete
+operator recovery remain P1 prerequisites before promotion. The identity binding
+detects mismatched metadata; it is not a signature against same-user filesystem
+edits. Malformed publication or cleanup fields also quarantine the write. Their
+unknown disk usage blocks new reservations without following untrusted paths.
+Direct-process exit does not establish descendant or device termination.
+Snapshot restore and cold inference do not require a new opportunistic
 save to succeed. None of these cache controls changes source weights or stores
 consumer conversation messages.
 

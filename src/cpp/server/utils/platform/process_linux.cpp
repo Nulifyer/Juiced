@@ -1,5 +1,6 @@
 #include "process_posix_lifecycle.h"
 #include <lemon/utils/process_platform.h>
+#include <lemon/utils/content_hash.h>
 #include <lemon/utils/aixlog.hpp>
 
 #include <stdexcept>
@@ -12,6 +13,8 @@
 
 #include <unistd.h>
 #include <sys/types.h>
+#include <sys/syscall.h>
+#include <poll.h>
 #include <sys/wait.h>
 #include <signal.h>
 #include <sys/socket.h>
@@ -117,6 +120,8 @@ public:
     bool is_running(ProcessHandle handle) override;
     bool owns_loopback_listener(ProcessHandle handle, int port) override;
     std::optional<ProcessImageFiles> image_files(ProcessHandle handle, const std::function<bool()>& cancelled) override;
+    std::optional<ProcessIdentity> process_identity(ProcessHandle handle, const std::function<bool()>& cancelled) override;
+    ProcessIdentityState observe_process_identity(const ProcessIdentity& identity, const std::function<bool()>& cancelled) override;
     int get_exit_code(ProcessHandle handle) override;
     int wait_for_exit(ProcessHandle handle, int timeout_seconds) override;
     int reap(ProcessHandle handle) override;
@@ -670,6 +675,98 @@ bool LinuxProcessPlatform::owns_loopback_listener(ProcessHandle handle, int port
         }
         return table.eof() && owned && is_running(handle);
     } catch (const std::exception&) { return false; }
+}
+
+namespace {
+struct IdentityDescriptor {
+    int value;
+    explicit IdentityDescriptor(int descriptor) : value(descriptor) {}
+    IdentityDescriptor(const IdentityDescriptor&) = delete;
+    IdentityDescriptor& operator=(const IdentityDescriptor&) = delete;
+    ~IdentityDescriptor() { if (value >= 0) ::close(value); }
+};
+
+std::optional<std::string> process_identity_domain() {
+    struct statfs filesystem{};
+    if (::statfs("/proc", &filesystem) || filesystem.f_type != PROC_SUPER_MAGIC) return std::nullopt;
+    const auto self = std::filesystem::read_symlink("/proc/self").string();
+    if (self != std::to_string(::getpid())) return std::nullopt;
+    IdentityDescriptor boot{::open("/proc/sys/kernel/random/boot_id", O_RDONLY | O_CLOEXEC | O_NONBLOCK | O_NOFOLLOW)};
+    if (boot.value < 0 || ::fstatfs(boot.value, &filesystem) || filesystem.f_type != PROC_SUPER_MAGIC) return std::nullopt;
+    char bytes[128];
+    const auto count = ::read(boot.value, bytes, sizeof(bytes));
+    if (count != 37 || bytes[36] != '\n') return std::nullopt;
+    const std::string boot_id(bytes, 36);
+    for (size_t i = 0; i < boot_id.size(); ++i)
+        if ((i == 8 || i == 13 || i == 18 || i == 23) ? boot_id[i] != '-' : !std::isxdigit(static_cast<unsigned char>(boot_id[i])))
+            return std::nullopt;
+    IdentityDescriptor space{::open("/proc/self/ns/pid", O_RDONLY | O_CLOEXEC)};
+    struct stat identity{};
+    if (space.value < 0 || ::fstatfs(space.value, &filesystem) || filesystem.f_type != NSFS_MAGIC ||
+        ::fstat(space.value, &identity) || !identity.st_ino) return std::nullopt;
+    return string_sha256("linux-pidfs-64-v1\n" + boot_id + "\n" +
+        std::to_string(identity.st_dev) + ":" + std::to_string(identity.st_ino));
+}
+
+std::optional<std::string> process_identity_token(int descriptor) {
+    // pidfs gives each process a never-repeated inode within this kernel boot.
+    // Anonymous-inode pidfds and truncated 32-bit inode values cannot prove that.
+    constexpr long pidfs_magic = 0x50494446;
+    struct statfs filesystem{};
+    struct stat identity{};
+    if (sizeof(ino_t) < 8 || ::fstatfs(descriptor, &filesystem) || filesystem.f_type != pidfs_magic ||
+        ::fstat(descriptor, &identity) || !identity.st_ino) return std::nullopt;
+    return string_sha256(std::to_string(identity.st_dev) + ":" + std::to_string(identity.st_ino));
+}
+
+bool identity_hash(const std::string& value) {
+    return value.size() == 64 && std::all_of(value.begin(), value.end(), [](unsigned char c) {
+        return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
+    });
+}
+}
+
+std::optional<ProcessIdentity> LinuxProcessPlatform::process_identity(
+    ProcessHandle handle, const std::function<bool()>& cancelled) {
+#ifdef SYS_pidfd_open
+    try {
+        if ((cancelled && cancelled()) || !is_running(handle)) return std::nullopt;
+        const auto domain = process_identity_domain();
+        if (!domain) return std::nullopt;
+        IdentityDescriptor descriptor{static_cast<int>(::syscall(SYS_pidfd_open, handle.pid, 0))};
+        if (descriptor.value < 0) return std::nullopt;
+        const auto token = process_identity_token(descriptor.value);
+        if (!token || (cancelled && cancelled()) || !is_running(handle) || process_identity_domain() != domain) return std::nullopt;
+        return ProcessIdentity{"linux-pidfs-64-v1", handle.pid, *domain, *token};
+    } catch (const std::exception&) { return std::nullopt; }
+#endif
+    return std::nullopt;
+}
+
+ProcessIdentityState LinuxProcessPlatform::observe_process_identity(
+    const ProcessIdentity& identity, const std::function<bool()>& cancelled) {
+#ifdef SYS_pidfd_open
+    try {
+        if (identity.method != "linux-pidfs-64-v1" || identity.pid <= 0 || !identity_hash(identity.domain) ||
+            !identity_hash(identity.token) || (cancelled && cancelled())) return ProcessIdentityState::unknown;
+        const auto domain = process_identity_domain();
+        if (!domain || *domain != identity.domain) return ProcessIdentityState::unknown;
+        IdentityDescriptor descriptor{static_cast<int>(::syscall(SYS_pidfd_open, identity.pid, 0))};
+        if (descriptor.value < 0) {
+            const bool absent = errno == ESRCH;
+            return absent && !(cancelled && cancelled()) && process_identity_domain() == domain ?
+                ProcessIdentityState::exited : ProcessIdentityState::unknown;
+        }
+        const auto token = process_identity_token(descriptor.value);
+        if (!token) return ProcessIdentityState::unknown;
+        pollfd event{descriptor.value, POLLIN, 0};
+        if (::poll(&event, 1, 0) < 0 || (event.revents & (POLLERR | POLLNVAL))) return ProcessIdentityState::unknown;
+        const bool exited = *token != identity.token || (event.revents & (POLLIN | POLLHUP));
+        if ((cancelled && cancelled()) || process_identity_domain() != domain) return ProcessIdentityState::unknown;
+        return exited ? ProcessIdentityState::exited : ProcessIdentityState::running;
+    } catch (const std::exception&) { return ProcessIdentityState::unknown; }
+#endif
+    return ProcessIdentityState::unknown;
 }
 
 std::optional<ProcessImageFiles> LinuxProcessPlatform::image_files(

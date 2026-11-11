@@ -15,6 +15,15 @@ struct ProcessHandle {
     int pid;
 };
 
+struct ProcessIdentity {
+    std::string method;
+    int pid = 0;
+    std::string domain;
+    std::string token;
+};
+
+enum class ProcessIdentityState { unknown, running, exited };
+
 struct ProcessImageFiles {
     std::string method;
     std::string executable;
@@ -72,6 +81,13 @@ public:
     static bool is_running(ProcessHandle handle);
     static bool owns_loopback_listener(ProcessHandle handle, int port);
     static std::optional<ProcessImageFiles> image_files(ProcessHandle handle, const std::function<bool()>& cancelled = {});
+
+    // Capture only through a current native owner. Observation neither signals
+    // nor collects a process and does not establish descendant/device exit.
+    static std::optional<ProcessIdentity> process_identity(ProcessHandle handle,
+        const std::function<bool()>& cancelled = {});
+    static ProcessIdentityState observe_process_identity(const ProcessIdentity& identity,
+        const std::function<bool()>& cancelled = {});
 
     // POSIX callers should prefer reap_process() when they intentionally own
     // cleanup of an exited child.
