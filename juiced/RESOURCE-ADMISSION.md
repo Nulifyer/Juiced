@@ -608,9 +608,29 @@ files retain owner-only permissions. Windows ACL behavior remains unqualified.
 
 Failed alias storage returns HTTP500 and preserves live bindings. Invalid JSON
 and field types remain HTTP400; validation conflicts remain HTTP409. Retry and
-restart consume only committed changes. Corrupt-file recovery retains separate
-backups. These are per-owner publication contracts, not cross-process exclusion
-or whole-store maintenance.
+restart consume only committed changes. Native startup binds alias recovery to
+the existing writer and root owner before loading it.
+
+Recovery verifies a byte-exact backup before atomically replacing a damaged alias
+file. The primary pathname stays present, including in an active configuration
+migration generation. Nonobject JSON, unsupported entries and cyclic bindings
+also retain their original bytes. Supported acyclic bindings survive recovery.
+A failed replacement preserves the source, backup and prior live map. Restart
+can finish that publication without another backup. Parser diagnostics do not
+include the original document values.
+
+The first backup is `aliases.json.corrupted`. If it contains different bytes,
+recovery uses `aliases.json.corrupted.<SHA256>` and reuses an identical verified
+backup. Occupied mismatched destinations reject without overwriting them.
+Historical numbered backups remain untouched. Reads are bounded to 16 MiB,
+128 parse depth and 100000 parser events. Exceeding these bounds reports
+`alias_configuration_recovery_required`; it does not publish an empty map.
+Creating a backup requires free space for three times the source size plus 1 MiB.
+These checks do not establish a hard filesystem quota or measured parse peaks.
+
+These are per-owner publication contracts, not arbitrary external-writer
+exclusion, host-crash durability or whole-store maintenance. An already missing
+role in an active generation still requires validated recovery.
 
 
 `lemond` and the Windows embedded server acquire an exclusive OS lease for each

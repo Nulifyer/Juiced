@@ -1,6 +1,7 @@
 #include "lemon/alias_manager.h"
 #include "lemon/config_file.h"
 #include "lemon/utils/aixlog.hpp"
+#include "lemon/utils/content_hash.h"
 #include "lemon/utils/json_utils.h"
 #include "lemon/utils/model_name_utils.h"
 #include "lemon/utils/path_utils.h"
@@ -164,48 +165,42 @@ std::unordered_map<std::string, std::string> AliasManager::read_aliases(const st
         throw std::runtime_error("Alias cache must be a directory: " + current_cache_dir);
     fs::path alias_path = cache_path / "aliases.json";
 
-    if (!fs::exists(alias_path)) return {};
-
-    std::unordered_map<std::string, std::string> loaded_aliases;
-    bool parse_failed = false;
-
+    const auto status = fs::symlink_status(alias_path);
+    if (!fs::exists(status)) return {};
+    if (!fs::is_regular_file(status))
+        throw std::runtime_error("Alias configuration must be a regular file");
+    constexpr uint64_t maximum_bytes = 16 * 1024 * 1024;
+    const auto size = fs::file_size(alias_path);
+    if (size > maximum_bytes)
+        throw AdmissionError("alias_configuration_recovery_required", "Alias configuration exceeds its 16 MiB read bound; preserve it for recovery", 503);
+    std::string original(static_cast<size_t>(size), '\0');
     {
-        std::ifstream file(alias_path, std::ios::in | std::ios::binary);
-        if (!file.is_open()) {
-            throw std::runtime_error("Failed to open alias configuration: " + utils::path_to_utf8(alias_path));
-        }
-
-        try {
-            json j = json::parse(file);
-            if (j.is_object()) {
-                for (auto& [k, v] : j.items()) {
-                    if (v.is_string()) {
-                        std::string norm_k = utils::normalize_model_name(k);
-                        std::string norm_v = utils::normalize_model_name(v.get<std::string>());
-                        if (!norm_k.empty() && !norm_v.empty() && norm_k != norm_v) {
-                            loaded_aliases[norm_k] = norm_v;
-                        }
-                    }
-                }
-            }
-        } catch (const json::exception& e) {
-            parse_failed = true;
-            LOG(WARNING, "AliasManager") << "Failed to parse " << utils::path_to_utf8(alias_path)
-                                         << ": " << e.what() << std::endl;
-        }
+        std::ifstream file(alias_path, std::ios::binary);
+        if (!file || !file.read(original.data(), static_cast<std::streamsize>(size)) || file.peek() != std::char_traits<char>::eof())
+            throw std::runtime_error("Alias configuration changed or could not be read");
     }
-
-    if (parse_failed) {
-        std::error_code ec;
-        fs::path corrupted_path = cache_path / "aliases.json.corrupted";
-        size_t suffix = 0;
-        while (fs::exists(corrupted_path))
-            corrupted_path = cache_path / ("aliases.json.corrupted." + std::to_string(++suffix));
-        fs::rename(alias_path, corrupted_path, ec);
-        if (ec) throw fs::filesystem_error("Could not preserve corrupted alias configuration", alias_path, corrupted_path, ec);
-        LOG(WARNING, "AliasManager") << "Renamed corrupted aliases file to "
-                                     << utils::path_to_utf8(corrupted_path) << std::endl;
-        return {};
+    json document;
+    std::unordered_map<std::string, std::string> loaded_aliases;
+    size_t events = 0;
+    try {
+        // The parser treats a literal NUL as EOF, even with trailing bytes.
+        // JSON permits NUL only as an escaped value within a string.
+        if (original.find('\0') == std::string::npos) {
+            document = json::parse(original, [&](int depth, json::parse_event_t, json&) {
+                if (depth > 128 || ++events > 100000)
+                    throw AdmissionError("alias_configuration_recovery_required", "Alias configuration exceeds its parse bound; preserve it for recovery", 503);
+                return true;
+            });
+        }
+        if (document.is_object()) for (auto& [key, value] : document.items()) {
+            if (!value.is_string()) continue;
+            const auto alias = utils::normalize_model_name(key);
+            const auto target = utils::normalize_model_name(value.get<std::string>());
+            if (!alias.empty() && !target.empty() && alias != target) loaded_aliases[alias] = target;
+        }
+    } catch (const json::exception&) {
+        // Parser diagnostics can expose values from the damaged document.
+        document = json();
     }
 
     // Prune cyclic dependencies loaded from disk
@@ -238,6 +233,42 @@ std::unordered_map<std::string, std::string> AliasManager::read_aliases(const st
         }
     }
 
+    if (document != json(sanitized_aliases)) {
+        const auto digest = utils::string_sha256(original);
+        const auto matches = [&](const fs::path& candidate) {
+            return fs::is_regular_file(fs::symlink_status(candidate)) &&
+                fs::file_size(candidate) == size && utils::content_sha256(candidate) == digest;
+        };
+        const auto validate_source = [&] {
+            if (resource_admission_) resource_admission_->validate_storage();
+            ConfigFile::require_complete_directory(utils::get_config_dir());
+            if (!matches(alias_path))
+                throw AdmissionError("alias_configuration_recovery_required", "Alias source changed during recovery; preserve it and retry", 503);
+        };
+        validate_source();
+        auto backup = cache_path / "aliases.json.corrupted";
+        if (fs::exists(fs::symlink_status(backup)) && !matches(backup))
+            backup = cache_path / ("aliases.json.corrupted." + digest);
+        if (fs::exists(fs::symlink_status(backup))) {
+            if (!matches(backup))
+                throw AdmissionError("alias_configuration_recovery_required", "Alias recovery backup is occupied or damaged; preserve it for recovery", 503);
+        } else {
+            if (fs::space(cache_path).available < 3 * size + 1024 * 1024)
+                throw AdmissionError("alias_configuration_recovery_required", "Alias recovery needs space for its original backup and replacement", 503);
+            utils::JsonUtils::save_text_to_file(original, utils::path_to_utf8(backup), [&](const auto&) {
+                validate_source();
+                if (fs::exists(fs::symlink_status(backup)))
+                    throw std::runtime_error("Alias recovery backup appeared before publication");
+            }, fs::perms::owner_read | fs::perms::owner_write);
+            if (!matches(backup)) throw std::runtime_error("Alias recovery backup failed verification");
+        }
+        // The original pathname remains present until this single-file commit.
+        // A failed commit retains both the original and its verified backup.
+        persist_aliases_at(utils::path_to_utf8(alias_path), sanitized_aliases, validate_source);
+        LOG(WARNING, "AliasManager") << "Recovered alias configuration; original bytes retained at "
+                                     << utils::path_to_utf8(backup) << std::endl;
+    }
+
     LOG(INFO, "AliasManager") << "Loaded " << sanitized_aliases.size() << " alias binding(s) from disk." << std::endl;
     return sanitized_aliases;
 }
@@ -253,8 +284,21 @@ void AliasManager::save_locked(const std::unordered_map<std::string, std::string
     if (cache_dir.empty()) return;
     ConfigFile::require_complete_directory(utils::get_config_dir());
     const auto target = utils::path_to_utf8(utils::path_from_utf8(cache_dir) / "aliases.json");
+    persist_aliases_at(target, aliases);
+}
+
+void AliasManager::persist_aliases_at(const std::string& target,
+    const std::unordered_map<std::string, std::string>& aliases,
+    const std::function<void()>& validate_source) {
+    const auto validate = [&] {
+        if (resource_admission_) resource_admission_->validate_storage();
+        ConfigFile::require_complete_directory(utils::get_config_dir());
+        if (validate_source) validate_source();
+    };
+    validate();
     if (persist_override_) persist_override_(target, aliases);
-    else utils::JsonUtils::save_to_file(json(aliases), target, fs::perms::owner_read | fs::perms::owner_write);
+    else utils::JsonUtils::save_to_file(json(aliases), target, [&](const auto&) { validate(); },
+        fs::perms::owner_read | fs::perms::owner_write);
 }
 
 } // namespace lemon

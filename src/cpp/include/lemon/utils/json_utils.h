@@ -20,6 +20,17 @@ public:
     static void save_to_file(const json& j, const std::string& file_path,
                              std::filesystem::perms permissions);
 
+    // Revalidate caller-owned publication conditions after staging, before replacement.
+    static void save_to_file(const json& j, const std::string& file_path,
+                             const std::function<void(const std::filesystem::path&)>& before_replace,
+                             std::filesystem::perms permissions);
+
+    // Preserve unparsed JSON bytes for recovery, including original line endings.
+    // The caller owns validation and any destination no-overwrite policy.
+    static void save_text_to_file(const std::string& contents, const std::string& file_path,
+        const std::function<void(const std::filesystem::path&)>& before_replace = {},
+        std::filesystem::perms permissions = std::filesystem::perms::unknown);
+
     // Parse JSON from string
     static json parse(const std::string& json_str);
 
@@ -59,9 +70,6 @@ private:
     friend struct JsonPersistenceTestHook;
     static void save_to_file(const json& j, const std::string& file_path,
                              const std::function<void(const std::filesystem::path&)>& before_replace);
-    static void save_to_file(const json& j, const std::string& file_path,
-                             const std::function<void(const std::filesystem::path&)>& before_replace,
-                             std::filesystem::perms permissions);
 };
 
 } // namespace utils

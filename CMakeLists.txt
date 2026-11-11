@@ -3525,6 +3525,11 @@ if(BUILD_TESTING)
         --binary $<TARGET_FILE:${EXECUTABLE_NAME}> --fixture $<TARGET_FILE:test_config_dir_migration>
         --out ${CMAKE_CURRENT_BINARY_DIR}/configuration-migration-proof.json DEPENDS ${EXECUTABLE_NAME} test_config_dir_migration)
     set_tests_properties(ConfigurationMigrationEntrypointsTest PROPERTIES TIMEOUT 180)
+    add_cpp_ci_test(AliasRecoveryHTTPTest CI ON COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/juiced/tests/test_alias_recovery.py
+        --binary $<TARGET_FILE:${EXECUTABLE_NAME}> --fixture $<TARGET_FILE:test_config_dir_migration>
+        --out ${CMAKE_CURRENT_BINARY_DIR}/alias-recovery-proof.json DEPENDS ${EXECUTABLE_NAME} test_config_dir_migration)
+    set_tests_properties(AliasRecoveryHTTPTest PROPERTIES TIMEOUT 90)
     add_cpp_ci_test(IngressAdmissionTest CI ON COMMAND ${Python3_EXECUTABLE}
         ${CMAKE_CURRENT_SOURCE_DIR}/juiced/tests/test_ingress_admission.py --binary $<TARGET_FILE:${EXECUTABLE_NAME}>
         --out ${CMAKE_CURRENT_BINARY_DIR}/ingress-admission-proof.json DEPENDS ${EXECUTABLE_NAME})

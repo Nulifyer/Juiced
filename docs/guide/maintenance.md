@@ -87,6 +87,20 @@ This sharing restriction does not stop file-content writers or establish quiesce
 A live file copy can capture partially updated state. A container image alone
 contains neither your model library nor your configuration.
 
+## Alias recovery
+
+Startup preserves damaged alias files before publishing supported bindings. The
+original bytes remain in `aliases.json.corrupted` under the cache directory. If
+that name already contains different data, the backup name includes its SHA256.
+Keep these files with your recovery backup. Recovery leaves the primary
+`aliases.json` pathname present and can retry a failed publication on restart.
+
+If startup reports `alias_configuration_recovery_required`, preserve the source
+and backups. Resolve the reported size, parsing, space or ownership problem
+before retrying. Do not replace a damaged configuration with an empty file.
+A missing role in an existing configuration migration still needs validated
+recovery or restoration of the matching complete backup.
+
 ## Legacy configuration-directory upgrades
 
 Native startup can relocate legacy configuration metadata as one recoverable

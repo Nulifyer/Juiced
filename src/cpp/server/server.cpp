@@ -483,7 +483,7 @@ Server::Server(std::shared_ptr<RuntimeConfig> config,
         }
     }
 
-    alias_manager_ = std::make_unique<AliasManager>(cache_dir_);
+    alias_manager_ = std::make_unique<AliasManager>();
     model_manager_ = std::make_unique<ModelManager>(config_->extra_models_dir());
     model_manager_->set_cloud_registry(cloud_registry_.get());
     model_manager_->set_default_model_source_provider(
@@ -505,6 +505,8 @@ Server::Server(std::shared_ptr<RuntimeConfig> config,
         });
     }
     alias_manager_->set_resource_admission(router_->admission_view());
+    // Recovery can publish metadata, so bind the native writer/root owner first.
+    alias_manager_->set_cache_dir(cache_dir_);
 
     // When a router collection is added, edited, or removed (via the API or an
     // on-disk edit), reclaim any routing helper no remaining policy references.

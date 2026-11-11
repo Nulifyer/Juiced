@@ -66,8 +66,12 @@ public:
 private:
     friend struct AliasPublicationTestHook;
     std::optional<ResourceAdmission> resource_admission_;
-    static std::unordered_map<std::string, std::string> read_aliases(const std::string& cache_dir);
+    std::unordered_map<std::string, std::string> read_aliases(const std::string& cache_dir);
     void save_locked(const std::unordered_map<std::string, std::string>& aliases);
+    void persist_aliases_at(const std::string& target,
+        const std::unordered_map<std::string, std::string>& aliases,
+        const std::function<void()>& validate_source = {});
+
     std::function<void(const std::string&, const std::unordered_map<std::string, std::string>&)> persist_override_;
     std::string cache_dir_;
     std::mutex write_mutex_;

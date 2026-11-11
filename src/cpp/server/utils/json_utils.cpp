@@ -41,10 +41,9 @@ void JsonUtils::save_to_file(const json& j, const std::string& file_path,
     save_to_file(j, file_path, before_replace, std::filesystem::perms::unknown);
 }
 
-void JsonUtils::save_to_file(const json& j, const std::string& file_path,
-                            const std::function<void(const std::filesystem::path&)>& before_replace,
-                            std::filesystem::perms permissions) {
-    const auto contents = j.dump(2);
+static void save_contents(const std::string& contents, const std::string& file_path,
+                          const std::function<void(const std::filesystem::path&)>& before_replace,
+                          std::filesystem::perms permissions, bool binary) {
     const auto target = path_from_utf8(file_path);
     if (!target.parent_path().empty()) std::filesystem::create_directories(target.parent_path());
     std::error_code ec;
@@ -54,10 +53,10 @@ void JsonUtils::save_to_file(const json& j, const std::string& file_path,
     std::ostringstream suffix;
     suffix << ".tmp." << std::this_thread::get_id() << "."
            << std::chrono::steady_clock::now().time_since_epoch().count() << "."
-           << reinterpret_cast<std::uintptr_t>(&j);
+           << reinterpret_cast<std::uintptr_t>(&contents);
     auto temporary = target; temporary += suffix.str();
     try {
-        std::ofstream file(temporary, std::ios::trunc);
+        std::ofstream file(temporary, binary ? std::ios::trunc | std::ios::binary : std::ios::trunc);
         if (!file.is_open()) throw std::runtime_error("Failed to stage JSON file: " + file_path);
         if (permissions == std::filesystem::perms::unknown && std::filesystem::is_regular_file(previous))
             permissions = previous.permissions();
@@ -82,6 +81,19 @@ void JsonUtils::save_to_file(const json& j, const std::string& file_path,
         }
         std::rethrow_exception(failure);
     }
+}
+
+void JsonUtils::save_to_file(const json& j, const std::string& file_path,
+                            const std::function<void(const std::filesystem::path&)>& before_replace,
+                            std::filesystem::perms permissions) {
+    // Preserve the existing JSON writer's platform line-ending behavior.
+    save_contents(j.dump(2), file_path, before_replace, permissions, false);
+}
+
+void JsonUtils::save_text_to_file(const std::string& contents, const std::string& file_path,
+                                 const std::function<void(const std::filesystem::path&)>& before_replace,
+                                 std::filesystem::perms permissions) {
+    save_contents(contents, file_path, before_replace, permissions, true);
 }
 
 json JsonUtils::parse(const std::string& json_str) {
