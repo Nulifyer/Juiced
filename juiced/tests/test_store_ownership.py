@@ -20,6 +20,50 @@ def free_port():
         return sock.getsockname()[1]
 
 
+def set_model_root_with_retry(call, port, directory, observations, operation):
+    started = time.monotonic()
+    deadline = started + 15
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise AssertionError(
+                "Model-cache writer did not release within the fixture deadline"
+            )
+        try:
+            status, data = call(
+                port,
+                "/internal/set",
+                {"models_dir": str(directory)},
+                timeout=min(5, remaining),
+            )
+        except urllib.error.HTTPError as error:
+            with error:
+                status, data = error.code, json.load(error)
+        error_data = data.get("error", {}) if isinstance(data, dict) else {}
+        details = error_data.get("details", {}) if isinstance(error_data, dict) else {}
+        code = (
+            error_data.get("code", details.get("code"))
+            if isinstance(error_data, dict) and isinstance(details, dict)
+            else None
+        )
+        observations.append(
+            {
+                "operation": operation,
+                "status": status,
+                "code": code,
+                "elapsed_seconds": time.monotonic() - started,
+            }
+        )
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise AssertionError(
+                "Model-cache writer did not release within the fixture deadline"
+            )
+        if status != 503 or code != "model_cache_busy":
+            return status, data
+        time.sleep(min(1, remaining))
+
+
 def run(
     binary,
     output,
@@ -162,47 +206,13 @@ def run(
                 if variant == "models":
                     next_root = root / "runtime-alias-models"
                     requested = str(next_root) + os.sep + "."
-                    deadline = time.monotonic() + 15
-                    while True:
-                        remaining = deadline - time.monotonic()
-                        check(
-                            remaining > 0,
-                            "startup metadata permits root application within the deadline",
-                        )
-                        try:
-                            status, _ = call(
-                                port,
-                                "/internal/set",
-                                {"models_dir": requested},
-                                timeout=min(5, remaining),
-                            )
-                            configuration_attempts.append(
-                                {"status": status, "code": None}
-                            )
-                            check(
-                                status == 200,
-                                "configuration preflight and acquisition agree on a new directory alias",
-                            )
-                            break
-                        except urllib.error.HTTPError as error:
-                            data = json.load(error)
-                            error_data = data.get("error", {})
-                            code = error_data.get(
-                                "code", error_data.get("details", {}).get("code")
-                            )
-                            configuration_attempts.append(
-                                {"status": error.code, "code": code}
-                            )
-                            if error.code != 503 or code != "model_cache_busy":
-                                raise AssertionError(
-                                    {"runtime_alias": data, "status": error.code}
-                                ) from error
-                            remaining = deadline - time.monotonic()
-                            check(
-                                remaining > 0,
-                                "startup metadata releases its root claim within the deadline",
-                            )
-                            time.sleep(min(1, remaining))
+                    status, data = set_model_root_with_retry(
+                        call, port, requested, configuration_attempts, "runtime-alias"
+                    )
+                    check(
+                        status == 200,
+                        "configuration preflight and acquisition agree on a new directory alias",
+                    )
                     check(
                         next_root.is_dir()
                         and (next_root / ".juiced-store.lock").is_file(),
@@ -927,19 +937,15 @@ def run(
                 "independent managers do not claim or modify the shared external source directory",
             )
             original = (root / "config/config.json").read_bytes()
-            try:
-                call(port, "/internal/set", {"models_dir": str(other_model_root)})
-                raise AssertionError("busy external root update unexpectedly succeeded")
-            except urllib.error.HTTPError as error:
-                data = json.load(error)
-                code = data.get("error", {}).get("details", {}).get("code")
-                configuration_attempts.append(
-                    {"operation": "external-owner", "status": error.code, "code": code}
-                )
-                check(
-                    error.code == 503 and code == "storage_root_unavailable",
-                    "a directory change rejects an external owner before persistence",
-                )
+            status, data = set_model_root_with_retry(
+                call, port, other_model_root, configuration_attempts, "external-owner"
+            )
+            error_data = data.get("error", {})
+            code = error_data.get("code", error_data.get("details", {}).get("code"))
+            check(
+                status == 503 and code == "storage_root_unavailable",
+                "a directory change rejects an external owner before persistence",
+            )
             check(
                 (root / "config/config.json").read_bytes() == original,
                 "failed external-root acquisition preserves committed settings",
@@ -949,7 +955,13 @@ def run(
                 "independent owner drains normally",
             )
             check(
-                call(port, "/internal/set", {"models_dir": str(other_model_root)})[0]
+                set_model_root_with_retry(
+                    call,
+                    port,
+                    other_model_root,
+                    configuration_attempts,
+                    "released-owner",
+                )[0]
                 == 200,
                 "a released external root can be applied without restarting its new owner",
             )

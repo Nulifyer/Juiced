@@ -2,6 +2,7 @@
 """Model-free contract tests against the actual compiled manager."""
 import struct,json,os,pathlib,socket,subprocess,sys,tempfile,time,unittest,urllib.request,urllib.error
 from unittest import mock
+from test_store_ownership import set_model_root_with_retry
 from admission_fixture import configure_admission, publish_with_admission_retry
 BINARY=str(pathlib.Path(sys.argv.pop(1)).resolve())
 class ApiContract(unittest.TestCase):
@@ -84,6 +85,39 @@ class ApiContract(unittest.TestCase):
    forever=mock.Mock(return_value=(409,{'Retry-After':'4'},busy));clock[0]=0.0
    with self.assertRaises(AssertionError):configure_admission(forever,{},[])
    self.assertEqual(clock[0],10);self.assertEqual(forever.call_count,3)
+ def test_model_cache_root_retry_bounds(self):
+  import io
+  clock=[0.0];observations=[];calls=[]
+  def busy_error(code='model_cache_busy',status=503):
+   return urllib.error.HTTPError('http://fixture/internal/set',status,'controlled response',{},io.BytesIO(json.dumps({'error':{'details':{'code':code}}}).encode()))
+  def send(port,path,body,timeout):
+   calls.append((port,path,body,timeout))
+   if len(calls)==1:raise busy_error()
+   raise busy_error('storage_root_unavailable')
+  with mock.patch('test_store_ownership.time.monotonic',side_effect=lambda:clock[0]),mock.patch('test_store_ownership.time.sleep',side_effect=lambda seconds:clock.__setitem__(0,clock[0]+seconds)):
+   status,data=set_model_root_with_retry(send,123,'/fixture/root',observations,'external-owner')
+   self.assertEqual((status,data['error']['details']['code']),(503,'storage_root_unavailable'))
+   self.assertEqual(len(calls),2);self.assertEqual(calls[1],(123,'/internal/set',{'models_dir':'/fixture/root'},5))
+   self.assertEqual([row['code'] for row in observations],['model_cache_busy','storage_root_unavailable']);self.assertEqual(clock[0],1)
+   for status,code in [(400,'model_cache_busy'),(503,'storage_root_unavailable'),(503,'storage_root_changed'),(500,'internal_error')]:
+    rejected=mock.Mock(side_effect=busy_error(code,status));rows=[]
+    actual,data=set_model_root_with_retry(rejected,123,'/fixture/root',rows,'terminal')
+    self.assertEqual((actual,data['error']['details']['code']),(status,code));self.assertEqual(rejected.call_count,1)
+   success=mock.Mock(return_value=(200,{'saved':True}));rows=[]
+   self.assertEqual(set_model_root_with_retry(success,123,'/fixture/root',rows,'success'),(200,{'saved':True}));self.assertEqual(success.call_count,1)
+   def forever(*args,**kwargs):raise busy_error()
+   blocked=mock.Mock(side_effect=forever);rows=[];clock[0]=0.0
+   with self.assertRaises(AssertionError):set_model_root_with_retry(blocked,123,'/fixture/root',rows,'deadline')
+   self.assertEqual(clock[0],15);self.assertEqual(blocked.call_count,15);self.assertEqual(len(rows),15)
+   def expiring(port,path,body,timeout):
+    self.assertEqual(timeout,5);clock[0]=14.75;raise busy_error()
+   rows=[];clock[0]=0.0
+   with self.assertRaises(AssertionError):set_model_root_with_retry(expiring,123,'/fixture/root',rows,'slow-call')
+   self.assertEqual(clock[0],15);self.assertEqual(len(rows),1)
+   def late_success(*args,**kwargs):clock[0]=16;return (200,{'saved':True})
+   clock[0]=0.0;rows=[]
+   with self.assertRaises(AssertionError):set_model_root_with_retry(late_success,123,'/fixture/root',rows,'late-success')
+   self.assertEqual(len(rows),1);self.assertEqual(rows[0]['elapsed_seconds'],16)
  def test_long_model_ids_keep_native_routes(self):
   for prefix in ['/v1/','/v0/','/api/v1/','/api/v0/']:
    for model in self.long_models:
