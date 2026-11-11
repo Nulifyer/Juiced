@@ -229,6 +229,52 @@ def acceptance(args):
             )
             stop(process, port)
 
+            damaged_documents = [
+                (name, b'{"private-marker-for-test": "retained",', name)
+                for name in (
+                    "recipe_options.json",
+                    "user_models.json",
+                    "execution_profiles.json",
+                )
+            ]
+            damaged_documents.append(
+                (
+                    "recipe_options.json",
+                    json.dumps({CANONICAL: "private-marker-for-test"}).encode(),
+                    "malformed saved-options row",
+                )
+            )
+            for filename, damaged, label in damaged_documents:
+                target = root / "config" / filename
+                valid = target.read_bytes()
+                manifest = (root / "config" / MANIFEST).read_bytes()
+                state = (root / "config/juiced/state.json").read_bytes()
+                target.write_bytes(damaged)
+                process, _ = launch(root)
+                check(
+                    process.wait(timeout=20) != 0,
+                    label + " rejects damaged metadata before serving",
+                )
+                check(
+                    target.read_bytes() == damaged
+                    and (root / "config" / MANIFEST).read_bytes() == manifest
+                    and (root / "config/juiced/state.json").read_bytes() == state
+                    and same(root / "cache", original),
+                    filename + " preserves damaged data, state and rollback generation",
+                )
+                check(
+                    "private-marker-for-test" not in logs[-1].read_text(),
+                    label + " reports recovery without exposing parser input",
+                )
+                target.write_bytes(valid)
+            process, port = launch(root)
+            ready(process, port)
+            check(
+                call(port, f"/v1/models/{MODEL}/options")["saved"]["ctx_size"] == 8192,
+                "restored valid metadata reopens the same committed settings",
+            )
+            stop(process, port)
+
             for case in ("owned-state", "conflict"):
                 root = base / case
                 original = seed(root)

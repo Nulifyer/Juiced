@@ -77,6 +77,17 @@ reserves no capacity and does not enable the model or qualify its output quality
 Keep the exact public model ID when configuring clients. Quant variants are
 separate registrations and can have different runtime settings and loading policies.
 
+## Recover damaged model metadata
+
+If startup reports `model_settings_recovery_required`, preserve the reported file
+and the complete configuration backup. Model registrations, saved legacy options
+and execution profiles must contain valid JSON objects in regular files. Saved
+option rows for recognized models must also be JSON objects. Juiced
+rejects damaged files instead of replacing their contents with default settings.
+Restore a compatible complete document from your backup, then restart and verify
+the catalog and effective model settings. Do not delete the file to clear the
+error, because a missing optional file deliberately uses defaults.
+
 ## Preserve settings when restoring a backup
 
 Back up the complete Juiced configuration before upgrading or restoring an older

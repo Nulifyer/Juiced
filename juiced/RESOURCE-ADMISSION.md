@@ -614,6 +614,19 @@ Constructor failure releases its partial claims after owned cleanup. The OS rele
 locks when the process exits. Neither release nor shutdown acknowledgement proves
 that a surviving backend or helper stopped.
 
+ModelManager distinguishes missing optional model metadata from present damaged
+storage. Its registration, legacy options and execution-profile documents must
+be regular files containing JSON objects. Missing files use native defaults.
+Unreadable files, malformed JSON and other top-level shapes reject activation
+with `model_settings_recovery_required`. Parser input is omitted from that error.
+Recognized canonical saved-option rows and legacy built-in rows must also be
+objects. Validation precedes legacy key migration, reads and option edits. Unknown
+bare metadata is preserved without assigning model semantics to it.
+No empty replacement is published. Restore the complete compatible document and
+restart to recover. Unknown fields inside valid objects remain with their native
+schema owners. This does not qualify unbounded metadata parsing, live external
+writers or complete recovery of every legacy record.
+
 Startup metadata relocation belongs to ConfigFile. The path resolver selects the
 source and passes the same native directory owner used by the entrypoint. The
 fixed generation includes `config.json`, `jobs.json`, `recipe_options.json`,

@@ -173,12 +173,83 @@ static void invalid_versions() {
               "unsupported or incomplete stored settings reject activation without overwriting retained files");
     }
 }
+static void invalid_legacy_documents() {
+    for (const auto* filename : {"recipe_options.json", "user_models.json", "execution_profiles.json"}) {
+        for (const auto* contents : {"", "{incomplete", "null", "[]", "[1]", "7", "true", "\"invalid metadata\""}) {
+            const auto root = test::make_scratch_dir("legacy-settings-recovery"); use_root(root);
+            { ModelManager models; seed(models); }
+            const auto damaged = root / filename;
+            { std::ofstream output(damaged, std::ios::binary | std::ios::trunc); output << contents; }
+            const auto retained = bytes(damaged);
+            bool rejected = false;
+            try {
+                ModelManager active;
+                // Exercise the destructive consequence of defaulting a present
+                // damaged options document to an absent optional store.
+                if (std::string(filename) == "recipe_options.json")
+                    active.update_saved_model_options(model, {{"ctx_size", 1024}});
+            } catch (const AdmissionError& error) {
+                rejected = error.code == "model_settings_recovery_required";
+            } catch (const std::exception&) {}
+            check(rejected, "present malformed legacy metadata cannot activate as an empty optional store");
+            check(bytes(damaged) == retained, "failed activation and a later settings mutation preserve damaged bytes for recovery");
+        }
+        const auto root = test::make_scratch_dir("nonregular-settings"); use_root(root);
+        { ModelManager models; seed(models); }
+        const auto damaged = root / filename;
+        fs::remove(damaged); fs::create_directory(damaged);
+        bool rejected = false;
+        try { ModelManager active; }
+        catch (const AdmissionError& error) { rejected = error.code == "model_settings_recovery_required"; }
+        check(rejected, "a present nonregular metadata path is not an absent optional store");
+        check(fs::is_directory(damaged) && fs::is_empty(damaged), "failed activation preserves the nonregular metadata path");
+    }
+    const auto root = test::make_scratch_dir("absent-settings"); use_root(root);
+    { ModelManager active; }
+    check(!fs::exists(root / "recipe_options.json") && !fs::exists(root / "user_models.json") &&
+          !fs::exists(root / "execution_profiles.json"), "truly missing optional metadata retains normal defaults without fabricated stores");
+}
+static void invalid_saved_rows() {
+    const auto shipped = utils::JsonUtils::load_from_file(utils::get_resource_path("resources/server_models.json"));
+    const std::vector<std::string> keys = {model, shipped.begin().key(), "extra.Unregistered-Future"};
+    for (const auto& key : keys) {
+        for (const auto& invalid : {json(nullptr), json::array({1}), json(7), json(true), json("invalid options")}) {
+            const auto root = test::make_scratch_dir("invalid-saved-row"); use_root(root);
+            { ModelManager models; seed(models); }
+            const auto path = root / "recipe_options.json";
+            auto raw = json::parse(bytes(path)); raw[key] = invalid;
+            save(path, raw); const auto retained = bytes(path);
+            bool rejected = false;
+            try {
+                ModelManager active;
+                active.get_model_options_snapshot(model);
+                active.update_saved_model_options(model, {{"ctx_size", 1024}});
+            } catch (const AdmissionError& error) { rejected = error.code == "model_settings_recovery_required"; }
+            check(rejected, "recognized malformed saved rows never become effective defaults");
+            check(bytes(path) == retained, "row validation precedes option edits and automatic legacy-key publication");
+        }
+    }
+    const auto root = test::make_scratch_dir("unknown-saved-metadata"); use_root(root);
+    { ModelManager models; seed(models); }
+    const auto path = root / "recipe_options.json";
+    auto raw = json::parse(bytes(path)); const auto future = json::array({1, "retained"});
+    raw["future-nonmodel-metadata"] = future; save(path, raw);
+    ModelManager active; active.update_saved_model_options(model, {{"ctx_size", 1024}});
+    check(view(active, "llamacpp", 1024) && json::parse(bytes(path)).at("future-nonmodel-metadata") == future,
+          "valid model mutations preserve unrelated unknown metadata without interpreting or resetting it");
+}
 int main(int argc, char** argv) {
     auto defaults = ConfigFile::base_defaults();
     defaults["offline"] = true;
     defaults["no_fetch_executables"] = true;
     defaults["disable_model_filtering"] = true;
     RuntimeConfig runtime(defaults); RuntimeConfig::set_global(&runtime);
+    if (argc == 2 && std::string(argv[1]) == "--legacy-recovery-reproduction") {
+        invalid_legacy_documents(); invalid_saved_rows();
+        RuntimeConfig::set_global(nullptr);
+        std::fprintf(stderr, "Legacy metadata recovery: %d checks, %d failures\n", checks, failures);
+        return failures ? 1 : 0;
+    }
     if (argc == 4) {
         const auto isolated = test::state_dir(); use_root(utils::path_from_utf8(argv[2])); fs::remove_all(isolated);
         ModelManager models;
@@ -190,7 +261,7 @@ int main(int argc, char** argv) {
         return 2;
     }
     const auto executable = utils::path_from_utf8(utils::get_executable_dir()) / utils::path_from_utf8(argv[0]).filename();
-    interruptions(executable); failed_publication(); legacy_and_clears(); invalid_versions();
+    interruptions(executable); failed_publication(); legacy_and_clears(); invalid_versions(); invalid_legacy_documents(); invalid_saved_rows();
     RuntimeConfig::set_global(nullptr);
     std::fprintf(stderr, "Model settings publication: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

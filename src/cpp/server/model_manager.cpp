@@ -185,6 +185,13 @@ static std::string cache_key_to_canonical_id(const std::string& cache_key) {
     return canonical_id(ModelSource::Builtin, cache_key);
 }
 
+static const json& require_saved_options_object(const json& value) {
+    if (!value.is_object())
+        throw AdmissionError("model_settings_recovery_required",
+            "Stored model overrides require recovery; preserve files and restore valid option objects", 409);
+    return value;
+}
+
 // An illegal label set names the model it came from, wherever it is reported —
 // a /pull 400, a collection import refusal, a skipped entry on load.
 static std::string describe_illegal_labels(const std::string& model_name,
@@ -1462,26 +1469,18 @@ ModelManager::ModelManager(const std::string& extra_models_dir)
     server_models_ = load_server_models();
     user_models_ = load_optional_json(get_user_models_file());
     recipe_options_ = load_optional_json(get_recipe_options_file());
-    const auto profiles_path = get_execution_profiles_file();
-    execution_profiles_ = fs::exists(path_from_utf8(profiles_path))
-        ? JsonUtils::load_from_file(profiles_path) : json::object();
-    if (!execution_profiles_.is_object())
-        throw AdmissionError("model_settings_recovery_required", "Stored model settings are not an object; preserve files and restore compatible settings", 409);
+    execution_profiles_ = load_optional_json(get_execution_profiles_file());
     for (const auto& [id, state] : execution_profiles_.items()) owns_saved_options_locked(id);
+    // Validate recognized saved rows before the legacy key migration can write.
+    // Unknown bare metadata remains unchanged, including its original shape.
+    for (const auto& [id, options] : recipe_options_.items())
+        if (parse_canonical_id(id) || server_models_.contains(id)) require_saved_options_object(options);
     architecture_defaults_ = load_architecture_defaults();
 
     // One-shot migration of recipe_options.json: older Lemonade keyed built-in
     // entries by bare name; the current spec requires a canonical "builtin."
     // prefix so each source is addressable distinctly even on shadowing.
     //
-    // Normalize to an object before iterating - a corrupted file may parse as
-    // null, array, or scalar, and json::iterator::key() throws on non-objects.
-    if (!recipe_options_.is_object()) {
-        if (!recipe_options_.is_null()) {
-            LOG(WARNING, "ModelManager") << "recipe_options.json is not a JSON object; resetting to empty object" << std::endl;
-        }
-        recipe_options_ = json::object();
-    }
     {
         int migrated = 0;
         json migrated_options = json::object();
@@ -2289,16 +2288,22 @@ json ModelManager::load_server_models() {
 }
 
 json ModelManager::load_optional_json(const std::string& path) {
-    if (!fs::exists(path)) {
-        return json::object();
-    }
-
+    // Missing optional metadata has a default. A present damaged store still
+    // owns its data and must never become an empty candidate for later writes.
     try {
-        LOG(INFO, "ModelManager") << "Loading " << fs::path(path).filename() << std::endl;
-        return JsonUtils::load_from_file(path);
-    } catch (const std::exception& e) {
-        LOG(WARNING, "ModelManager") << "Could not load " << fs::path(path).filename() << ": " << e.what() << std::endl;
-        return json::object();
+        const auto native_path = path_from_utf8(path);
+        const auto status = fs::symlink_status(native_path);
+        if (!fs::exists(status)) return json::object();
+        if (!fs::is_regular_file(status)) throw std::runtime_error("not a regular metadata file");
+        LOG(INFO, "ModelManager") << "Loading " << native_path.filename() << std::endl;
+        auto document = JsonUtils::load_from_file(path);
+        if (!document.is_object()) throw std::runtime_error("metadata is not an object");
+        return document;
+    } catch (const std::exception&) {
+        // JSON parser diagnostics can contain private option or registration values.
+        throw AdmissionError("model_settings_recovery_required",
+            "Stored " + path_to_utf8(path_from_utf8(path).filename()) +
+            " requires recovery; preserve files and restore a valid JSON object", 409);
     }
 }
 
@@ -2392,7 +2397,7 @@ bool ModelManager::owns_saved_options_locked(const std::string& id) const {
 
 json ModelManager::saved_options_locked(const std::string& id) const {
     if (owns_saved_options_locked(id)) return execution_profiles_.at(id).at("settings").at("saved_options");
-    if (recipe_options_.contains(id) && recipe_options_.at(id).is_object()) return recipe_options_.at(id);
+    if (recipe_options_.contains(id)) return require_saved_options_object(recipe_options_.at(id));
     return json::object();
 }
 
