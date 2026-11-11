@@ -1,4 +1,5 @@
 #include "lemon/model_manager.h"
+#include "lemon/config_file.h"
 #include "lemon/utils/json_utils.h"
 #include "lemon/utils/path_utils.h"
 #include "lemon/utils/aixlog.hpp"
@@ -21,6 +22,7 @@ public:
 };
 std::string journal_path() { return utils::get_config_dir() + "/native_helpers.json"; }
 json read_journal() {
+    ConfigFile::require_complete_directory(utils::get_config_dir());
     const auto path = utils::path_from_utf8(journal_path());
     if (!std::filesystem::exists(path)) return {{"version", 1}};
     if (std::filesystem::file_size(path) > 65536) throw std::runtime_error("Native helper journal exceeds 64 KiB");

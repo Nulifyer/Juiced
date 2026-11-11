@@ -96,6 +96,7 @@ json ConfigFile::get_defaults() {
 }
 
 json ConfigFile::load_raw(const std::string& config_dir) {
+    require_complete_directory(config_dir);
     fs::path config_path = utils::path_from_utf8(config_dir) / "config.json";
 
     if (!fs::exists(config_path)) {
@@ -233,6 +234,7 @@ json ConfigFile::load(const std::string& cache_dir, const std::string& config_di
 }
 
 void ConfigFile::save(const std::string& config_dir, const json& config) {
+    require_complete_directory(config_dir);
     std::unique_lock lock(file_mutex_);
 
     fs::path config_dir_path = utils::path_from_utf8(config_dir);

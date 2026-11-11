@@ -267,16 +267,14 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
         directory_lease = std::make_shared<lemon::utils::ManagedDirectoryLease>(
             std::vector<std::filesystem::path>{lemon::utils::path_from_utf8(cli_config.cache_dir),
                                                lemon::utils::path_from_utf8(cli_config.config_dir)});
+        lemon::utils::set_cache_dir(cli_config.cache_dir);
+        lemon::utils::set_config_dir(cli_config.config_dir);
+        lemon::utils::migrate_legacy_paths(cli_config.cache_dir, cli_config.config_dir, *directory_lease);
     } catch (const std::exception& error) {
         std::cerr << error.what() << std::endl;
         if (!silent) MessageBoxA(nullptr, error.what(), "Lemonade Server Error", MB_OK | MB_ICONERROR);
         return 1;
     }
-
-    lemon::utils::set_cache_dir(cli_config.cache_dir);
-    lemon::utils::set_config_dir(cli_config.config_dir);
-    lemon::utils::migrate_legacy_json_files_to_config_dir(cli_config.cache_dir,
-                                                          cli_config.config_dir);
 
     auto config_json = lemon::ConfigFile::load(cli_config.cache_dir,
                                                cli_config.config_dir);

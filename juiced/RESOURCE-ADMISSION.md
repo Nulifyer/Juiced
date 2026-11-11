@@ -614,6 +614,50 @@ Constructor failure releases its partial claims after owned cleanup. The OS rele
 locks when the process exits. Neither release nor shutdown acknowledgement proves
 that a surviving backend or helper stopped.
 
+Startup metadata relocation belongs to ConfigFile. The path resolver selects the
+source and passes the same native directory owner used by the entrypoint. The
+fixed generation includes `config.json`, `jobs.json`, `recipe_options.json`,
+`user_models.json`, `execution_profiles.json` and `native_helpers.json`. When the
+cache root also changes, `aliases.json` moves to the new cache in that generation.
+A configuration-only split leaves aliases under the unchanged cache owner.
+
+`.juiced-configuration-migration.json` binds the canonical source, configuration
+and cache roots, file roles, sizes, permissions and SHA256 digests. Its version 1
+states are `staging`, `prepared` and `active`. The source remains intact. A private
+`.juiced-configuration-generation` directory retains the verified payload. Intent
+precedes staging, complete staging precedes target publication, and `active`
+commits only after complete source and target revalidation. ConfigFile,
+ModelManager, JobManager, AliasManager and helper-journal readers reject an
+incomplete or unsupported generation. Native schema interpretation remains with
+those owners. There is no second model registry or live migration executor.
+
+Retry reconstructs missing staging from the unchanged source and finishes only
+matching target files. Conflicts, unknown generation contents and changed source
+bytes require recovery. Once active, normal native writes own the target. Repeated
+startup does not replay the retained source over later edits. Missing active
+metadata blocks activation. Keep the source, target and retained generation in a
+consistent backup. Do not manually alter migration markers or path bindings.
+Older executables require their matching complete pre-migration backup.
+
+The startup transport accepts JSON objects up to 16 MiB per file and 64 MiB combined,
+a 64 KiB manifest, depth 128 and 100000 parser events. It checks a 30-second cooperative
+deadline between bounded phases. This is not a deadline for blocked filesystem
+calls. Configuration free space must cover twice the cohort plus 1 MiB. A separately
+relocated alias needs its own bytes plus 1 MiB at the cache destination. Source file
+permissions are retained. The generation directory is owner-only and its manifest
+is owner-readable and writable. Windows permissions require separate OS evidence.
+
+The former recursive cache-tree mover is retired. Runtime binaries, model weights
+and other payload remain in their source roots. BackendManager retains runtime
+installation and reference authority. A source `juiced/` directory or unrelated
+existing destination state blocks this metadata transport before publication.
+That state owns canonical snapshot bindings, imports, authentication epochs and
+unresolved writers. Its successful relocation requires separate validated recovery
+through those owners. Rejection preserves data but does not complete modern-store
+migration, all-writer maintenance or prior-manager recovery. Tests establish
+manager-process interruption with retained files and synchronous injected faults.
+They do not establish host-crash, power-loss or candidate-deployment recovery.
+
 The empty `.juiced-store.lock` control file remains in place and must not be removed
 while a manager is running. Directory aliases share ownership within the existing
 owner. Fixed startup and migration roots remain protected for the entry-point

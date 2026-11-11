@@ -1,4 +1,5 @@
 #include <lemon/model_manager.h>
+#include <lemon/config_file.h>
 #include <lemon/runtime_config.h>
 #include <lemon/hf_variants.h>
 #include <lemon/model_registry.h>
@@ -1457,6 +1458,7 @@ static GGUFFiles identify_gguf_models(
 
 ModelManager::ModelManager(const std::string& extra_models_dir)
     : extra_models_dir_(extra_models_dir) {
+    ConfigFile::require_complete_directory(get_config_dir());
     server_models_ = load_server_models();
     user_models_ = load_optional_json(get_user_models_file());
     recipe_options_ = load_optional_json(get_recipe_options_file());

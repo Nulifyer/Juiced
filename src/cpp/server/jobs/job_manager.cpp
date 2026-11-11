@@ -1,4 +1,5 @@
 #include "lemon/jobs/job_manager.h"
+#include "lemon/config_file.h"
 
 #include "lemon/utils/path_utils.h"
 
@@ -52,6 +53,7 @@ json summary(const json& job) {
 JobManager::JobManager(const std::string& config_dir, ResourceAdmission admission)
     : storage_path_(utils::path_to_utf8(utils::path_from_utf8(config_dir) / "jobs.json")),
       admission_(std::move(admission)) {
+    ConfigFile::require_complete_directory(config_dir);
     load_from_disk();
 }
 

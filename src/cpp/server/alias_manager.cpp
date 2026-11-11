@@ -1,4 +1,5 @@
 #include "lemon/alias_manager.h"
+#include "lemon/config_file.h"
 #include "lemon/utils/aixlog.hpp"
 #include "lemon/utils/json_utils.h"
 #include "lemon/utils/model_name_utils.h"
@@ -156,6 +157,7 @@ void AliasManager::load() {
 
 std::unordered_map<std::string, std::string> AliasManager::read_aliases(const std::string& current_cache_dir) {
     if (current_cache_dir.empty()) return {};
+    ConfigFile::require_complete_directory(utils::get_config_dir());
 
     fs::path cache_path = utils::path_from_utf8(current_cache_dir);
     if (fs::exists(cache_path) && !fs::is_directory(cache_path))
@@ -249,6 +251,7 @@ void AliasManager::save() {
 void AliasManager::save_locked(const std::unordered_map<std::string, std::string>& aliases) {
     const auto cache_dir = get_cache_dir();
     if (cache_dir.empty()) return;
+    ConfigFile::require_complete_directory(utils::get_config_dir());
     const auto target = utils::path_to_utf8(utils::path_from_utf8(cache_dir) / "aliases.json");
     if (persist_override_) persist_override_(target, aliases);
     else utils::JsonUtils::save_to_file(json(aliases), target, fs::perms::owner_read | fs::perms::owner_write);

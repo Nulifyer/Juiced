@@ -1054,6 +1054,7 @@ set(SOURCES_CORE
     src/cpp/server/cli_parser.cpp
     src/cpp/server/cloud_provider_registry.cpp
     src/cpp/server/config_file.cpp
+    src/cpp/server/config_directory_migration.cpp
     src/cpp/server/directory_watcher.cpp
     src/cpp/server/alias_manager.cpp
     src/cpp/server/model_manager.cpp
@@ -3166,6 +3167,7 @@ if(BUILD_TESTING AND EXISTS "${_CONFIG_DIR_MIGRATION_TEST_SRC}")
     add_executable(test_config_dir_migration test/cpp/test_config_dir_migration.cpp)
     target_link_libraries(test_config_dir_migration PRIVATE lemonade-server-core)
     add_cpp_ci_test(ConfigDirMigrationTest CI ON COMMAND test_config_dir_migration)
+    set_tests_properties(ConfigDirMigrationTest PROPERTIES TIMEOUT 90)
 endif()
 
 set(_CONFIG_MERGING_TEST_SRC "${CMAKE_CURRENT_SOURCE_DIR}/test/cpp/test_config_merging.cpp")
@@ -3512,7 +3514,17 @@ if(BUILD_TESTING)
             ${CMAKE_CURRENT_SOURCE_DIR}/juiced/tests/test_model_shutdown.py --binary $<TARGET_FILE:LemonadeServer>
             --embedded --out ${CMAKE_CURRENT_BINARY_DIR}/embedded-shutdown-proof.json DEPENDS LemonadeServer)
         set_tests_properties(EmbeddedServerShutdownTest PROPERTIES TIMEOUT 90)
+        add_cpp_ci_test(EmbeddedConfigurationMigrationTest CI ON COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/juiced/tests/test_config_directory_migration.py
+            --binary $<TARGET_FILE:LemonadeServer> --fixture $<TARGET_FILE:test_config_dir_migration>
+            --embedded --out ${CMAKE_CURRENT_BINARY_DIR}/embedded-configuration-migration-proof.json DEPENDS LemonadeServer test_config_dir_migration)
+        set_tests_properties(EmbeddedConfigurationMigrationTest PROPERTIES TIMEOUT 180)
     endif()
+    add_cpp_ci_test(ConfigurationMigrationEntrypointsTest CI ON COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/juiced/tests/test_config_directory_migration.py
+        --binary $<TARGET_FILE:${EXECUTABLE_NAME}> --fixture $<TARGET_FILE:test_config_dir_migration>
+        --out ${CMAKE_CURRENT_BINARY_DIR}/configuration-migration-proof.json DEPENDS ${EXECUTABLE_NAME} test_config_dir_migration)
+    set_tests_properties(ConfigurationMigrationEntrypointsTest PROPERTIES TIMEOUT 180)
     add_cpp_ci_test(IngressAdmissionTest CI ON COMMAND ${Python3_EXECUTABLE}
         ${CMAKE_CURRENT_SOURCE_DIR}/juiced/tests/test_ingress_admission.py --binary $<TARGET_FILE:${EXECUTABLE_NAME}>
         --out ${CMAKE_CURRENT_BINARY_DIR}/ingress-admission-proof.json DEPENDS ${EXECUTABLE_NAME})

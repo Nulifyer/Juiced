@@ -181,8 +181,7 @@ int main(int argc, char** argv) {
             std::vector<std::filesystem::path>{utils::path_from_utf8(cli_config.cache_dir), utils::path_from_utf8(cli_config.config_dir)});
         utils::set_cache_dir(cli_config.cache_dir);
         utils::set_config_dir(cli_config.config_dir);
-        utils::migrate_legacy_paths(cli_config.cache_dir, cli_config.config_dir,
-            [&](const auto& source) { directory_lease->protect(source); });
+        utils::migrate_legacy_paths(cli_config.cache_dir, cli_config.config_dir, *directory_lease);
         json config_json = ConfigFile::load(cli_config.cache_dir,
                                             cli_config.config_dir);
 

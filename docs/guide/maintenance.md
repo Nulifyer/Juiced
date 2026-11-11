@@ -87,6 +87,33 @@ This sharing restriction does not stop file-content writers or establish quiesce
 A live file copy can capture partially updated state. A container image alone
 contains neither your model library nor your configuration.
 
+## Legacy configuration-directory upgrades
+
+Native startup can relocate legacy configuration metadata as one recoverable
+set. This includes model registrations, selected profiles and saved options,
+retained jobs, configuration and pending native-helper records. If the cache root
+changes too, aliases move to the new cache. Runtime binaries and model weights
+stay in their original locations.
+
+Keep a consistent backup of the source cache, destination configuration and any
+external model or snapshot roots before changing paths. The migration retains its
+source files and a private staged generation. Restart with the same paths and
+binary to resume an interrupted publication. Later settings edits remain active
+and are not replaced by the retained source.
+
+If startup reports `configuration_migration_recovery_required`, preserve both
+stores and the migration files. Resolve the reported ownership or conflict through
+recovery before retrying. Do not delete the marker, merge individual JSON files,
+or start an older binary against a partial destination. To roll back, restore the
+complete matching backup and its original executable and paths.
+
+This legacy metadata transport does not relocate an existing `juiced/` state
+store. Snapshot path bindings, imports and unresolved writers need their own
+validated recovery. Startup rejects that case without silently creating a new
+state store. Successful modern-store relocation and current-candidate recovery
+remain qualification gates. A resumable process restart does not prove recovery
+from power loss.
+
 ## Update a Compose deployment
 
 1. Create a consistent backup.

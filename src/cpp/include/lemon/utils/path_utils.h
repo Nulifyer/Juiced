@@ -6,6 +6,7 @@
 
 namespace lemon {
 namespace utils {
+class ManagedDirectoryLease;
 
 /**
  * Get the directory where the executable is located.
@@ -95,19 +96,13 @@ std::string get_cache_dir();
 std::string get_config_dir();
 
 /**
- * Migrate legacy JSON files on first startup after FHS split (issue #3027).
- */
-void migrate_legacy_json_files_to_config_dir(const std::string& cache_dir,
-                                             const std::string& config_dir);
-
-/**
- * Recover data left behind when an upgrade relocated the cache (issue #3387).
- * Moves the pre-3028 home-based cache payload and HuggingFace models into the
- * new cache/config/model directories. No-op when nothing was relocated.
+ * Recover the supported metadata cohort when service directories relocate.
+ * Source runtime packages and model files remain with their native owners.
+ * Existing path-bound Juiced state requires explicit validated relocation.
  */
 void migrate_legacy_paths(const std::string& cache_dir,
                           const std::string& config_dir,
-                          const std::function<void(const std::filesystem::path&)>& protect_source = {});
+                          ManagedDirectoryLease& storage_owner);
 
 /**
  * Set the models directory for HuggingFace model cache.

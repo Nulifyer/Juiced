@@ -1,12 +1,14 @@
 #pragma once
 
 #include <shared_mutex>
+#include <functional>
 #include <string>
 #include <nlohmann/json.hpp>
 
 namespace lemon {
 
 using json = nlohmann::json;
+namespace utils { class ManagedDirectoryLease; }
 
 // ============================================================================
 // Config migration helpers (static inline for testability)
@@ -95,7 +97,7 @@ static inline bool config_migrate_allowed_origins_env(json& config, const char* 
 
 // ============================================================================
 
-/// Manages reading and writing config.json in the lemonade config dir.
+/// Owns config.json persistence and startup configuration-directory relocation.
 class ConfigFile {
 public:
     /// The canonical default config: resources/defaults.json (global keys) with
@@ -122,7 +124,16 @@ public:
     /// Thread-safe.
     static void save(const std::string& config_dir, const json& config);
 
+    // Startup-only metadata relocation. Both roots remain protected through use.
+    // Existing Juiced state requires its separate path-bound recovery owner.
+    static void migrate_directory(const std::string& cache_directory, const std::string& configuration_directory,
+                                  utils::ManagedDirectoryLease& storage_owner,
+                                  const std::string& legacy_cache = "");
+    static void require_complete_directory(const std::string& directory);
+
 private:
+    friend struct ConfigurationMigrationTestHook;
+    static std::function<void(const std::string&)> directory_migration_barrier_;
     static std::shared_mutex file_mutex_;
 };
 
