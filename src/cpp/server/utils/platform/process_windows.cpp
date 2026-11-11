@@ -668,10 +668,8 @@ public:
                 if (lifecycle && lifecycle->cancelled && lifecycle->cancelled()) { killed_by_callback = true; break; }
                 // Check timeout
                 if (timeout_seconds > 0) {
-                    auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
-                        std::chrono::steady_clock::now() - start_time).count();
-                    if (elapsed > timeout_seconds) {
-                        if (!lifecycle) TerminateProcess(pi.hProcess, 1);
+                    if (std::chrono::steady_clock::now() - start_time >=
+                        std::chrono::seconds(timeout_seconds)) {
                         killed_by_callback = true;
                         break;
                     }
@@ -681,8 +679,14 @@ public:
                 DWORD available = 0;
                 if (!PeekNamedPipe(stdout_read, nullptr, 0, nullptr, &available, nullptr)) {
                     const auto pipe_error = GetLastError();
-                    if (!lifecycle || WaitForSingleObject(pi.hProcess, 0) == WAIT_OBJECT_0) break;
                     if (pipe_error != ERROR_BROKEN_PIPE) throw std::runtime_error("Failed to read helper output");
+                    if (!line_buffer.empty()) {
+                        auto trailing = std::move(line_buffer);
+                        line_buffer.clear();
+                        if (trailing.back() == '\r') trailing.pop_back();
+                        if (!trailing.empty() && on_line && !on_line(trailing)) { killed_by_callback = true; break; }
+                    }
+                    if (WaitForSingleObject(pi.hProcess, 0) == WAIT_OBJECT_0) break;
                     std::this_thread::sleep_for(std::chrono::milliseconds(10));
                     continue;
                 }
@@ -731,7 +735,6 @@ public:
 
                             // Call the callback
                             if (on_line && !on_line(line)) {
-                                if (!lifecycle) TerminateProcess(pi.hProcess, 1);
                                 killed_by_callback = true;
                                 break;
                             }
@@ -776,15 +779,17 @@ public:
             if (failure) std::rethrow_exception(failure);
             return result;
         }
-        if (failure) {
+        if (failure || killed_by_callback) {
             if (!terminate({pi.hProcess, static_cast<int>(pi.dwProcessId)}))
-                throw std::runtime_error("Helper output failed and direct-child cleanup remains unconfirmed");
-            std::rethrow_exception(failure);
+                throw std::runtime_error(failure ? "Helper output failed and direct-child cleanup remains unconfirmed" :
+                    "Cancelled helper direct-child cleanup remains unconfirmed");
+            if (failure) std::rethrow_exception(failure);
+            return -1;
         }
 
         // Get exit code
         DWORD exit_code = 0;
-        if (WaitForSingleObject(pi.hProcess, 5000) != WAIT_OBJECT_0 ||
+        if (WaitForSingleObject(pi.hProcess, 0) != WAIT_OBJECT_0 ||
             !GetExitCodeProcess(pi.hProcess, &exit_code)) {
             if (!terminate({pi.hProcess, static_cast<int>(pi.dwProcessId)}))
                 throw std::runtime_error("Direct-child cleanup remains unconfirmed");
@@ -793,7 +798,7 @@ public:
 
         CloseHandle(pi.hProcess);
 
-        return killed_by_callback ? -1 : static_cast<int>(exit_code);
+        return static_cast<int>(exit_code);
     }
 
     bool owns_loopback_listener(ProcessHandle handle, int port) override {

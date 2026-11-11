@@ -940,6 +940,16 @@ monitor contain failures at their thread boundaries. Ollama unload reports a
 retryable `unload_incomplete` error for busy or unconfirmed cleanup. An absent
 worker still satisfies that protocol's unload convention.
 
+Output-pipe closure is not process-exit evidence.
+`ProcessManager::run_process_with_output` keeps its timeout and cancellation
+checks active after EOF. A trailing callback runs
+once when the pipe closes, while its child can still be running. Cancellation or
+callback failure reaches the same confirmed direct-child cleanup path. Normal
+result collection requires observed process exit. The portable fixture covers
+closed output, accepted/cancelled trailing lines and callback exceptions.
+Cleanup can outlast the requested timeout; these checks do not establish an
+end-to-end stop deadline or descendant/device/remote termination.
+
 Ordinary configuration publication and its effects serialize through Server.
 Listener readers retain a shared lifetime while one lifecycle owner replaces or
 stops the listener. Shared RuntimeConfig and Router locks are released before

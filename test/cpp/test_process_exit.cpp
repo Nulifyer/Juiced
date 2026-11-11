@@ -28,19 +28,32 @@ int main(int argc, char** argv) {
             return state == expected ? 0 : 7;
         } catch (const std::exception&) { return 8; }
     }
-#ifndef _WIN32
     if (argc > 1 && std::string(argv[1]).find("--output-") == 0) {
         const std::string mode = argv[1];
+#ifdef _WIN32
+        std::printf("%lu\n", static_cast<unsigned long>(GetCurrentProcessId()));
+#else
         std::printf("%d\n", static_cast<int>(getpid()));
+#endif
         if (mode.find("--output-tail") == 0) std::printf("tail");
         std::fflush(stdout);
+#ifdef _WIN32
+        const auto inherited_output = GetStdHandle(STD_OUTPUT_HANDLE);
+        const auto inherited_error = GetStdHandle(STD_ERROR_HANDLE);
+#endif
         std::fclose(stdout);
         std::fclose(stderr);
+#ifdef _WIN32
+        // CRT streams can retain duplicates of the inherited standard handles.
+        for (const auto handle : {inherited_output, inherited_error}) {
+            DWORD flags = 0;
+            if (handle && handle != INVALID_HANDLE_VALUE && GetHandleInformation(handle, &flags)) CloseHandle(handle);
+        }
+#endif
         std::this_thread::sleep_for(std::chrono::milliseconds(
             mode == "--output-short" || mode == "--output-tail-short" ? 250 : 4000));
         return 7;
     }
-#endif
     if (argc > 1 && std::string(argv[1]) == "--child") {
         std::this_thread::sleep_for(std::chrono::seconds(30));
         return 0;
@@ -62,6 +75,7 @@ int main(int argc, char** argv) {
     int checks = 0, failures = 0;
     bool supported = false, foreign_running = false, foreign_exited = false;
     std::string method;
+    nlohmann::json output_cases = nlohmann::json::array();
 
     const auto check = [&](bool ok, const char* label) {
         ++checks;
@@ -165,25 +179,57 @@ int main(int argc, char** argv) {
         lemon::utils::ProcessHandle unowned{nullptr, static_cast<int>(getpid())};
         check(!ProcessManager::has_exited(unowned) && !ProcessManager::stop_process(unowned),
               "a nonchild PID cannot be signaled or certified as stopped");
-        const auto output_case = [&](const std::string& mode, int timeout, bool cancel_tail, bool throw_tail) {
+#endif
+        const auto output_case = [&](const std::string& mode, int timeout, bool cancel_tail, bool throw_tail, bool owned) {
             int child_pid = 0;
+            struct Owner final : lemon::NativeProcess {
+                Owner() : NativeProcess(lemon::ProcessOutput{}) {}
+                void attach(lemon::utils::ProcessHandle value) { handle_ = value; }
+            } owner;
+            lemon::utils::OutputProcessLifecycle lifecycle;
+            lifecycle.attach = [&](auto handle) { owner.attach(handle); };
+            lifecycle.finish = [&](bool interrupted) {
+                if (interrupted) { owner.stop(); return -1; }
+                const auto code = owner.collect_exit();
+                if (!code) throw std::runtime_error("Output fixture exit was not collected");
+                return *code;
+            };
+#ifdef _WIN32
+            struct Observation {
+                HANDLE handle = nullptr;
+                ~Observation() { if (handle) CloseHandle(handle); }
+            } observation;
+#endif
             int tail_calls = 0;
             bool callback_failed = false;
             int result = 0;
             const auto started = std::chrono::steady_clock::now();
             try {
                 result = ProcessManager::run_process_with_output(executable, {mode}, [&](const auto& line) {
-                    if (line != "tail") { child_pid = std::stoi(line); return true; }
+                    if (line != "tail") {
+                        child_pid = std::stoi(line);
+#ifdef _WIN32
+                        observation.handle = OpenProcess(SYNCHRONIZE, FALSE, static_cast<DWORD>(child_pid));
+#endif
+                        return true;
+                    }
                     ++tail_calls;
                     if (throw_tail) throw std::runtime_error("controlled trailing callback failure");
                     return !cancel_tail;
-                }, "", timeout);
+                }, "", timeout, true, {}, owned ? &lifecycle : nullptr);
             } catch (const std::runtime_error& error) {
                 callback_failed = std::string(error.what()) == "controlled trailing callback failure";
             }
             const auto elapsed = std::chrono::steady_clock::now() - started;
+#ifdef _WIN32
+            const bool collected = observation.handle && WaitForSingleObject(observation.handle, 0) == WAIT_OBJECT_0;
+#else
             const bool collected = child_pid > 0 && ::kill(child_pid, 0) < 0 && errno == ESRCH;
-            std::fprintf(stderr, "Output case %s: %lld ms, result %d, collected %s\n", mode.c_str(),
+#endif
+            output_cases.push_back({{"mode", mode}, {"owned", owned}, {"timeout_seconds", timeout}, {"cancel_tail", cancel_tail},
+                {"throw_tail", throw_tail}, {"elapsed_ms", std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count()},
+                {"result", result}, {"exit_observed", collected}, {"tail_calls", tail_calls}, {"callback_failed", callback_failed}});
+            std::fprintf(stderr, "Output case %s, owned %s: %lld ms, result %d, collected %s\n", mode.c_str(), owned ? "true" : "false",
                          static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count()),
                          result, collected ? "true" : "false");
             if (mode == "--output-short" || mode == "--output-tail-short") {
@@ -194,19 +240,23 @@ int main(int argc, char** argv) {
             } else if (throw_tail) {
                 check(tail_calls == 1 && callback_failed, "trailing callback failure remains observable");
             } else {
-                check(result == -1 && elapsed < std::chrono::seconds(3),
+                // Owned POSIX stops retain the backend's two-second cooldown.
+                const auto cleanup_budget = std::chrono::seconds(owned ? 4 : 3);
+                check(result == -1 && elapsed < cleanup_budget,
                       cancel_tail ? "trailing callback cancellation stops a live closed-output child" :
                                     "closed output cannot bypass the process deadline");
                 if (cancel_tail) check(tail_calls == 1, "the trailing output callback runs before process exit");
             }
             check(collected, "output exchange collects its direct child before returning");
+            if (owned) check(owner.handle().pid == 0, "owned output completion releases only its collected process handle");
         };
-        output_case("--output-short", 2, false, false);
-        output_case("--output-tail-short", 2, false, false);
-        output_case("--output-closed", 1, false, false);
-        output_case("--output-tail", -1, true, false);
-        output_case("--output-tail", 2, false, true);
-#endif
+        for (const bool owned : {false, true}) {
+            output_case("--output-short", 2, false, false, owned);
+            output_case("--output-tail-short", 2, false, false, owned);
+            output_case("--output-closed", 1, false, false, owned);
+            output_case("--output-tail", -1, true, false, owned);
+            output_case("--output-tail", 2, false, true, owned);
+        }
     } catch (const std::exception& error) {
         ++failures;
         std::fprintf(stderr, "Unexpected process observation failure: %s\n", error.what());
@@ -214,6 +264,7 @@ int main(int argc, char** argv) {
     try {
         const nlohmann::json proof = {{"schema", 1}, {"reference_os", reference_os}, {"native_identity_supported", supported}, {"method", method},
             {"foreign_running", foreign_running}, {"foreign_exited", foreign_exited}, {"checks", checks}, {"failures", failures},
+            {"output_cases", output_cases},
             {"scope", "Native direct-process identity only. Unsupported capability does not qualify prior-manager recovery; no descendant/device/remote termination proof."}};
         std::ofstream report("process-identity-proof.json"); report << proof.dump(2) << '\n';
         report.close();
