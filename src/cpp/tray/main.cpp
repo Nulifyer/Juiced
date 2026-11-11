@@ -176,9 +176,16 @@ static int run_embedded_server(std::shared_ptr<lemon::RuntimeConfig> config,
     };
     if (!wait_for_server(config->host(), config->port(), false, 15,
                          ServerProbeMode::ready_only, finished)) {
-        LOG(ERROR, "Tray") << "Embedded server did not become ready" << std::endl;
+        // A client can request shutdown after HTTP begins serving but before
+        // this internal probe observes readiness. Preserve that normal outcome.
+        const bool requested_shutdown = server.should_shutdown();
         server.set_shutdown_requested(true);
         worker.get();
+        if (requested_shutdown && !server.startup_failed()) {
+            LOG(INFO, "Tray") << "Embedded startup stopped by shutdown request" << std::endl;
+            return 0;
+        }
+        LOG(ERROR, "Tray") << "Embedded server did not become ready" << std::endl;
         return 1;
     }
 

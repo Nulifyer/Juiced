@@ -588,6 +588,14 @@ waits for run completion. Every return or exception joins the worker and destroy
 Server before Winsock cleanup. The UI stays on its creating thread. Silent startup
 failures log and return a failure status without an error dialog.
 
+The embedded readiness probe can finish after a client requests shutdown. That
+intentional stop returns success when the owned Server run completes without a
+startup failure. Probe timeout, bind/listen failure and worker exceptions remain
+failures. A successful manager exit still does not discharge prior-manager helper
+ownership. Configuration-migration acceptance preserves its helper journal across
+shutdown and records process exit codes and native application logs. Those logs
+also participate in parser-input redaction checks.
+
 Windows qualification requires `EmbeddedServerShutdownTest`, which builds the
 actual embedded executable and checks HTTP shutdown and occupied-port cleanup.
 Linux terminal-shutdown checks do not establish Windows execution evidence.

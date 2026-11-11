@@ -83,6 +83,7 @@ def seed(root):
 
 def acceptance(args):
     checks, logs, children = [], [], []
+    application_logs = []
     completed = False
 
     def check(condition, label):
@@ -104,6 +105,9 @@ def acceptance(args):
             log_path = base / f"process-{len(logs)}.log"
             log = log_path.open("w")
             logs.append(log_path)
+            application_log = root / "manager.log"
+            if application_log not in application_logs:
+                application_logs.append(application_log)
             env = {
                 **os.environ,
                 "HOME": str(root),
@@ -162,8 +166,22 @@ def acceptance(args):
             raise AssertionError("manager did not reach catalog readiness")
 
         def stop(process, port):
+            helper = root / "config/native_helpers.json"
+            retained = helper.read_bytes()
             call(port, "/internal/shutdown", {})
-            check(process.wait(timeout=25) == 0, "owned manager shutdown completes")
+            exit_code = process.wait(timeout=25)
+            check(
+                exit_code == 0, f"owned manager shutdown completes (exit {exit_code})"
+            )
+            if args.embedded:
+                check(
+                    (root / "manager.log").is_file(),
+                    "embedded application diagnostics exist before temporary cleanup",
+                )
+            check(
+                helper.read_bytes() == retained,
+                "manager exit preserves unknown prior-helper ownership without claiming cleanup",
+            )
 
         try:
             root = base / "resume"
@@ -263,7 +281,15 @@ def acceptance(args):
                     filename + " preserves damaged data, state and rollback generation",
                 )
                 check(
-                    "private-marker-for-test" not in logs[-1].read_text(),
+                    "private-marker-for-test"
+                    not in (
+                        logs[-1].read_text()
+                        + (
+                            (root / "manager.log").read_text(errors="replace")
+                            if (root / "manager.log").is_file()
+                            else ""
+                        )
+                    ),
                     label + " reports recovery without exposing parser input",
                 )
                 target.write_bytes(valid)
@@ -313,7 +339,11 @@ def acceptance(args):
                 log.close()
             args.out.parent.mkdir(parents=True, exist_ok=True)
             args.out.with_suffix(".server.log").write_bytes(
-                b"\n".join(path.read_bytes() for path in logs if path.is_file())
+                b"\n".join(
+                    path.read_bytes()
+                    for path in [*logs, *application_logs]
+                    if path.is_file()
+                )
             )
             args.out.write_text(
                 json.dumps(
@@ -326,6 +356,13 @@ def acceptance(args):
                             args.fixture.read_bytes()
                         ).hexdigest(),
                         "embedded": args.embedded,
+                        "application_logs_captured": sum(
+                            path.is_file() for path in application_logs
+                        ),
+                        "process_exit_codes": [
+                            {"port": port, "exit_code": process.returncode}
+                            for process, _, port in children
+                        ],
                         "checks": checks,
                         "passed": completed and all(row["passed"] for row in checks),
                     },
