@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, type Client } from "./api";
-import { installEngine, type EngineJob } from "./engines";
+import { installEngine, parseEngines, type EngineJob } from "./engines";
 import { backendNames } from "./hardware";
 import { bytes } from "./domain";
 import { parseSystemInfo } from "./hardware";
@@ -24,6 +24,10 @@ function featured(quants: Quant[]): Quant[] {
 const compact = (value: number | null) => value === null ? null : value >= 1e6 ? `${(value / 1e6).toFixed(1)}M` : value >= 1e3 ? `${Math.round(value / 1e3)}k` : String(value);
 
 const searchTimeout = 45000;
+function modelId(file: string): string {
+  const name = file.split(/[\\/]/).pop() ?? file;
+  return name.replace(/\.(gguf|bin|safetensors|onnx)$/, "").trim();
+}
 type Install = { engine: string; backend: string; size: number | null };
 export function FindModels({ client, online, onRegistered, onOpenModel }: { client: Client; online: boolean; onRegistered: () => Promise<void>; onOpenModel: (id: string) => void }) {
   const [needs, setNeeds] = useState<Install | null>(null);
@@ -102,14 +106,18 @@ export function FindModels({ client, online, onRegistered, onOpenModel }: { clie
     try {
       if (install) await installEngine(client, install.engine, install.backend, setInstalling);
       setInstalling(null);
-      const response = await client.request<{ model: string | { id?: string }; backend: string }>("juiced/models/add", { artifact: item.sha256, policy: "on-demand" });
+      const response = await client.request<{ model: string | { id?: string }; backend: string }>("juiced/models/add", { artifact: item.sha256, id: modelId(item.file), policy: "on-demand" });
       const id = typeof response.model === "string" ? response.model : response.model?.id ?? "the model";
       setNeeds(null); setAdded({ model: id, backend: response.backend });
       await onRegistered();
     } catch (failure) {
       setInstalling(null);
-      const body = failure instanceof ApiError ? failure.body as { install?: { engine?: string; backend?: string; installable?: { build?: { archive_bytes?: number } } } } | undefined : undefined;
-      if (failure instanceof ApiError && failure.code === "engine_not_installed" && body?.install?.engine && body.install.backend) setNeeds({ engine: body.install.engine, backend: body.install.backend, size: body.install.installable?.build?.archive_bytes ?? null });
+      const body = failure instanceof ApiError ? failure.body as { install?: { engine?: string; backend?: string } } | undefined : undefined;
+      if (failure instanceof ApiError && failure.code === "engine_not_installed" && body?.install?.engine && body.install.backend) {
+        const { engine, backend } = body.install;
+        const listed = await client.request("juiced/engines").then(parseEngines).catch(() => null);
+        setNeeds({ engine, backend, size: listed?.installable.find((row) => row.engine === engine && row.backend === backend)?.archive_bytes ?? null });
+      }
       else setPanelError(failure instanceof ApiError && failure.code === "model_exists" ? "A model with this name is already added. Rename or remove it under Models first." : failure instanceof Error ? failure.message : "The model couldn't be added.");
     } finally { setAdding(false); }
   }

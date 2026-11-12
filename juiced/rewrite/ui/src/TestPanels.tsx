@@ -56,7 +56,7 @@ export function CompareTest({ models, client, online }: { models: Model[]; clien
   const busy = columns.some((column) => column.streaming);
   async function run() {
     const chosen = picked.filter((id, index) => id && picked.indexOf(id) === index).map((id) => ready.find((model) => model.id === id)).filter((model): model is Model => !!model);
-    if (chosen.length < 2 || !prompt.trim()) return;
+    if (busy || chosen.length < 2 || !prompt.trim()) return;
     controllers.current = chosen.map(() => new AbortController());
     setColumns(chosen.map((model) => ({ model: model.id, content: "", tokens: null, rate: null, firstToken: null, total: null, error: "", streaming: true })));
     const messages = [{ role: "user", content: prompt.trim() }];
@@ -75,7 +75,7 @@ export function CompareTest({ models, client, online }: { models: Model[]; clien
     <div className="toolbar">{[0, 1, 2].slice(0, Math.min(3, ready.length)).map((slot) => <select key={slot} aria-label={`Model ${slot + 1}`} value={picked[slot] ?? ""} disabled={busy} onChange={(event) => setPicked((current) => { const next = [...current]; next[slot] = event.target.value; return next; })}><option value="">{slot < 2 ? "Choose a model…" : "Optional third model"}</option>{ready.map((model) => <option key={model.id} value={model.id}>{model.id}</option>)}</select>)}</div>
     <form className="composer" onSubmit={(event) => { event.preventDefault(); void run(); }}>
       <textarea aria-label="Prompt" rows={2} value={prompt} placeholder="Ask all selected models the same thing" onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void run(); } }} />
-      {busy ? <Button variant="danger" onClick={() => controllers.current.forEach((controller) => controller.abort())}>Stop</Button> : <Button variant="primary" type="submit" disabled={!prompt.trim() || !online || new Set(picked.filter(Boolean)).size < 2}>Compare</Button>}
+      {busy ? <Button key="stop" type="button" variant="danger" onClick={() => controllers.current.forEach((controller) => controller.abort())}>Stop</Button> : <Button key="compare" variant="primary" type="submit" disabled={!prompt.trim() || !online || new Set(picked.filter(Boolean)).size < 2}>Compare</Button>}
     </form>
     {columns.length > 0 && <div className="compare-grid" style={{ gridTemplateColumns: `repeat(${columns.length}, minmax(0, 1fr))` }}>{columns.map((column) => <article className="panel compare-column" key={column.model} aria-label={column.model}>
       <header className="panel-head"><h3 className="break-word">{column.model}</h3></header>

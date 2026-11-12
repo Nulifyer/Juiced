@@ -58,7 +58,6 @@ test("Compare streams one prompt to two models with timings and Stop cancels bot
 });
 
 test("Compare Stop with the prompt still filled does not start another comparison", async ({ page }) => {
-  test.fail(true, "Known console defect: clicking Stop submits the Compare form and restarts both streams.");
   await open(page);
   await navigate(page, "Test services");
   await tab(page, "Test operation", "Compare").click();

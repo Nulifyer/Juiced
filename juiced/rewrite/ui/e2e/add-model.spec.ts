@@ -63,13 +63,13 @@ test("Add model downloads a quant, installs the engine when needed and serves ch
 
     const adding = page.waitForRequest((outgoing) => outgoing.method() === "POST" && new URL(outgoing.url()).pathname === "/v1/juiced/models/add");
     await detail.getByRole("button", { name: "Add model" }).click();
-    expect((await adding).postDataJSON()).toEqual({ artifact, policy: "on-demand" });
+    expect((await adding).postDataJSON()).toEqual({ artifact, id: added, policy: "on-demand" });
     const done = detail.getByRole("status").filter({ hasText: `Added ${added}. It runs on CPU and loads on its first request.` });
     if (engineReady) {
       await expect(done).toBeVisible({ timeout: 15000 });
       await expect(detail.getByRole("button", { name: "Install engine and add" })).toHaveCount(0);
     } else {
-      await expect(detail).toContainText(/This model needs the llama\.cpp CPU engine( \([^)]+ download\))?\. Juiced picked it for this machine\./);
+      await expect(detail).toContainText(/This model needs the llama\.cpp CPU engine \([^)]+ download\)\. Juiced picked it for this machine\./);
       await expect(detail.getByRole("alert")).toHaveCount(0);
       expect(await fixture.service.model(added)).toBeUndefined();
       const installing = page.waitForRequest((outgoing) => outgoing.method() === "POST" && new URL(outgoing.url()).pathname === "/v1/juiced/engines/install");
