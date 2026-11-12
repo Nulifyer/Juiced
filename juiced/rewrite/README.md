@@ -171,7 +171,7 @@ Receipts under `local/verification/speech/` retain identities, response shapes, 
 | --- | --- |
 | Native reads | Health, model list/detail/catalog, state, requests, protocols, endpoints, admission, suitability, context, model options and read-only runtime definitions/alias resolution |
 | Diagnostics | Operator-only `system-stats` sampling and bounded `juiced/logs` service/worker output |
-| Model operations | Disabled registration, policy CAS, load/unload, unloaded typed-option CAS and registration removal retaining weights |
+| Model operations | Disabled registration, policy CAS, load/unload, typed-option CAS applied on the next load or by reload, model alias CAS and registration removal retaining weights |
 | Artifact store | Inventory, bounded SHA256 pull, job inspection/pause/resume/retry/cancel, confirmed terminal-history forgetting and reference-safe weight removal |
 | Library | Operator-only catalog, Hugging Face and local search; commit-pinned one-step quant pull; pull status |
 | Slot snapshots | Explicit cache opt-in CAS, scoped inventory, save/restore/forget and bounded operator inspection |
@@ -272,6 +272,18 @@ On Linux, readiness verifies the child generation, actual executable/module hash
 
 Visual provenance remains in [T3-SOURCES.json](../ui/T3-SOURCES.json). Builds retain T3 and Inter license/source metadata. The repository's Apache-2.0 license remains in effect.
 
+
+## Model aliases
+
+An alias is a stable public name, such as `chat` or `assistant`, that points at one registered model. Clients send the alias as `model`; you can re-point it later without reconfiguring them.
+
+`GET /v1/juiced/aliases` returns `{revision, maximum, aliases:[{alias, target, target_state, target_policy, available}]}`. `POST /v1/juiced/aliases` takes `{"alias":"chat","target":"my-model","expected_revision":N}`. Send `"target":null` to delete the alias. Both routes require operator authority under all four native prefixes. A stale `expected_revision` returns `409 revision_conflict`. Alias names follow model ID rules and cannot equal a registered model ID (`409 alias_conflict`). The target must be registered (`404 unknown_model`). At most 1024 aliases are saved in the optional `aliases` configuration field; configurations without it load unchanged.
+
+OpenAI, Anthropic, Ollama and MCP inference resolve an alias to its current target before admission and use the target's policy, state, slots and cache identity. A Disabled target returns the same `model_disabled` error as the model itself. Requests already admitted keep their resolved worker when the alias changes. `/v1/models`, Ollama tags and MCP model listings show aliases of enabled, downloaded targets with `owned_by: "juiced-alias"` and `aliased_to`. Request history records the resolved `model` and the requested `alias`. Removing a model that an alias targets returns `409 alias_target`; re-point or delete the alias first.
+
+## Apply launch options with a reload
+
+`POST /v1/models/{model}/options` accepts `"apply":"next_load"` (default) or `"apply":"reload"`. With `next_load` the worker must be unloaded. With `reload` Juiced validates the options, stops the loaded worker, saves the options atomically and starts a loaded or Hot worker with them. Its policy is preserved. If the save fails, the worker restarts with its previous options. The response adds `apply` and `restarted`. Active or starting requests return `409 worker_busy` and nothing is saved. If the new worker does not start, the previous options are saved again at a newer revision and restarted when possible. That failure returns `options_reload_failed` with `cause`, `rolled_back`, `restored_revision` and `restarted`. Native-settings profiles return `501 reload_unsupported`.
 
 ## Model revision changes
 

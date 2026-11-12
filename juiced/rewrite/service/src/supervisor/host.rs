@@ -150,6 +150,7 @@ impl Manager {
 
 pub(crate) struct PreparedRequest {
     worker: Arc<Worker>,
+    alias: Option<Arc<str>>,
     revision: u64,
     operation: Operation,
     body: axum::body::Bytes,
@@ -174,7 +175,7 @@ impl Manager {
         operation: Operation,
         body: &axum::body::Bytes,
     ) -> Result<PreparedRequest, ApiError> {
-        let worker = self.worker(id)?;
+        let (worker, alias) = self.resolve_model(id)?;
         let revision = {
             let observation = worker
                 .observation
@@ -228,6 +229,7 @@ impl Manager {
         })?);
         Ok(PreparedRequest {
             worker,
+            alias,
             revision,
             operation,
             body,
@@ -258,7 +260,7 @@ impl Manager {
         };
         let (base, lease) = self
             .begin_admitted(
-                prepared.worker,
+                (prepared.worker, prepared.alias),
                 prepared.operation,
                 slot,
                 started,

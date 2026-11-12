@@ -213,6 +213,25 @@ define_routes! {
     (get, "/juiced/library/search", library_search, "operator"),
     (post, "/juiced/library/pull", library_pull, "operator"),
     (get, "/juiced/library/pulls/{pull}", library_pull_status, "operator"),
+    (get, "/juiced/aliases", aliases, "operator"),
+    (post, "/juiced/aliases", alias_set, "operator"),
+}
+async fn aliases(State(state): State<AppState>) -> Json<Value> {
+    Json(state.manager.aliases_view().await)
+}
+async fn alias_set(
+    State(state): State<AppState>,
+    ApiJson(change): ApiJson<crate::supervisor::AliasChange>,
+) -> Result<Json<Value>, ApiError> {
+    tokio::spawn(async move { state.manager.set_alias(change).await.map(Json) })
+        .await
+        .map_err(|_| {
+            ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "alias_interrupted",
+                "The alias change was interrupted. Refresh before retrying.",
+            )
+        })?
 }
 async fn library_search(
     State(state): State<AppState>,
@@ -673,26 +692,28 @@ async fn model_artifacts_set(
 struct OptionsChange {
     expected_revision: u64,
     options: crate::profiles::LaunchOptions,
+    #[serde(default)]
+    apply: crate::supervisor::OptionsApply,
 }
 async fn model_options_set(
     State(state): State<AppState>,
     Path(id): Path<String>,
     ApiJson(change): ApiJson<OptionsChange>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Json<Value>, crate::supervisor::OptionsError> {
     tokio::spawn(async move {
         state
             .manager
-            .set_options(&id, change.expected_revision, change.options)
+            .apply_options(&id, change.expected_revision, change.options, change.apply)
             .await
             .map(Json)
     })
     .await
     .map_err(|_| {
-        ApiError::new(
+        crate::supervisor::OptionsError::from(ApiError::new(
             StatusCode::INTERNAL_SERVER_ERROR,
             "options_interrupted",
             "Profile update was interrupted. Refresh before retrying.",
-        )
+        ))
     })?
 }
 
@@ -700,12 +721,14 @@ async fn model_detail(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
+    let target = state.manager.alias_target(&id);
+    let lookup = target.as_deref().unwrap_or(&id);
     let model = state
         .manager
         .catalog()
         .await
         .into_iter()
-        .find(|model| model.id == id)
+        .find(|model| model.id == lookup)
         .ok_or_else(|| {
             ApiError::new(
                 StatusCode::NOT_FOUND,
@@ -713,6 +736,11 @@ async fn model_detail(
                 "The model is not registered.",
             )
         })?;
+    if let Some(target) = target {
+        return Ok(Json(
+            json!({"id":id,"object":"model","created":0,"owned_by":"juiced-alias","aliased_to":target,"juiced":model}),
+        ));
+    }
     Ok(Json(
         json!({"id":model.id,"object":"model","created":0,"owned_by":"juiced","juiced":model}),
     ))
@@ -810,13 +838,18 @@ async fn catalog(State(state): State<AppState>) -> Json<Value> {
 }
 
 async fn models(State(state): State<AppState>) -> Json<Value> {
-    let models: Vec<_> = state
-        .manager
-        .catalog()
-        .await
+    let catalog = state.manager.catalog().await;
+    let aliases = state.manager.aliased_views(&catalog);
+    let models: Vec<_> = catalog
         .into_iter()
         .filter(|model| model.policy != Policy::Disabled && model.downloaded)
         .map(|model| json!({"id": model.id, "object": "model", "created": 0, "owned_by": "juiced"}))
+        .chain(
+            aliases
+                .into_iter()
+                .filter(|(_, model)| model.policy != Policy::Disabled && model.downloaded)
+                .map(|(alias, model)| json!({"id": alias, "object": "model", "created": 0, "owned_by": "juiced-alias", "aliased_to": model.id})),
+        )
         .collect();
     Json(json!({"object": "list", "data": models}))
 }

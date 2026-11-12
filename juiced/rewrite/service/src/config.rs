@@ -7,6 +7,26 @@ use std::{
 };
 
 pub(crate) const MAXIMUM_CONFIG_BYTES: u64 = 16 * 1024 * 1024;
+pub const MAXIMUM_ALIASES: usize = 1024;
+
+pub fn valid_model_id(id: &str) -> bool {
+    !id.trim().is_empty() && id.len() <= 256 && !id.chars().any(char::is_control)
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelAliases {
+    #[serde(default)]
+    pub revision: u64,
+    #[serde(default)]
+    pub entries: std::collections::BTreeMap<String, String>,
+}
+
+impl ModelAliases {
+    fn is_unset(&self) -> bool {
+        self.revision == 0 && self.entries.is_empty()
+    }
+}
 
 pub(crate) struct ConfigurationBinding {
     pub(crate) root: crate::storage::DirectoryLease,
@@ -293,6 +313,8 @@ pub struct Config {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub native_settings: Option<crate::native_store::descriptor::Binding>,
     pub models: Vec<ModelSpec>,
+    #[serde(default, skip_serializing_if = "ModelAliases::is_unset")]
+    pub aliases: ModelAliases,
 }
 
 #[derive(Deserialize)]
@@ -376,6 +398,8 @@ struct ConfigWire {
     #[serde(default, deserialize_with = "deserialize_native_binding")]
     native_settings: Option<Box<crate::native_store::descriptor::Binding>>,
     models: Vec<ModelWire>,
+    #[serde(default)]
+    aliases: ModelAliases,
 }
 
 fn deserialize_native_binding<'de, D: Deserializer<'de>>(
@@ -438,6 +462,7 @@ impl<'de> Deserialize<'de> for Config {
             startup_timeout_ms: wire.startup_timeout_ms,
             request_timeout_ms: wire.request_timeout_ms,
             models,
+            aliases: wire.aliases,
         })
     }
 }
@@ -567,11 +592,7 @@ impl Config {
                 }
             }
 
-            if model.id.trim().is_empty()
-                || model.id.len() > 256
-                || model.id.chars().any(char::is_control)
-                || !ids.insert(&model.id)
-            {
+            if !valid_model_id(&model.id) || !ids.insert(&model.id) {
                 return Err("Model IDs must be unique, nonempty and at most 256 bytes".into());
             }
             if model.model_file.as_os_str().is_empty() {
@@ -612,6 +633,19 @@ impl Config {
             }
             if model.operations.is_empty() {
                 return Err(format!("{} needs explicit supported operations", model.id));
+            }
+        }
+        if self.aliases.entries.len() > MAXIMUM_ALIASES {
+            return Err(format!(
+                "At most {MAXIMUM_ALIASES} model aliases are supported"
+            ));
+        }
+        for (alias, target) in &self.aliases.entries {
+            if !valid_model_id(alias) || ids.contains(alias) || !ids.contains(target) {
+                return Err(
+                    "Model aliases need a valid name distinct from every model ID and a registered target"
+                        .into(),
+                );
             }
         }
         Ok(())
@@ -718,6 +752,60 @@ mod tests {
             "placement":"unresolved"
         });
         wire
+    }
+
+    #[test]
+    fn model_aliases_are_optional_bounded_and_round_trip() {
+        let legacy: Config = serde_json::from_value(legacy_config()).unwrap();
+        assert_eq!(legacy.aliases, ModelAliases::default());
+        assert!(
+            serde_json::to_value(&legacy)
+                .unwrap()
+                .get("aliases")
+                .is_none()
+        );
+        let mut saved = serde_json::to_value(&legacy).unwrap();
+        saved["aliases"] = json!({"revision":7,"entries":{"chat":"folder/model λ"}});
+        let current: Config = serde_json::from_value(saved.clone()).unwrap();
+        current.validate().unwrap();
+        assert_eq!(current.schema_version, 2);
+        assert_eq!(current.aliases.revision, 7);
+        assert_eq!(
+            serde_json::to_value(&current).unwrap()["aliases"],
+            saved["aliases"]
+        );
+        let mut legacy_with_aliases = legacy_config();
+        legacy_with_aliases["aliases"] = saved["aliases"].clone();
+        let migrated: Config = serde_json::from_value(legacy_with_aliases).unwrap();
+        assert_eq!(migrated.aliases, current.aliases);
+        let mut cleared = current.clone();
+        cleared.aliases.entries.clear();
+        assert_eq!(
+            serde_json::to_value(&cleared).unwrap()["aliases"],
+            json!({"revision":7,"entries":{}})
+        );
+        for (alias, target) in [
+            ("folder/model λ", "folder/model λ"),
+            ("chat", "absent"),
+            ("", "folder/model λ"),
+            ("line\nbreak", "folder/model λ"),
+        ] {
+            let mut bad = current.clone();
+            bad.aliases.entries.clear();
+            bad.aliases.entries.insert(alias.into(), target.into());
+            assert!(bad.validate().is_err(), "{alias:?} -> {target:?}");
+        }
+        let mut crowded = current.clone();
+        for index in 0..=MAXIMUM_ALIASES {
+            crowded
+                .aliases
+                .entries
+                .insert(format!("alias-{index}"), "folder/model λ".into());
+        }
+        assert!(crowded.validate().is_err());
+        let mut unknown = saved;
+        unknown["aliases"]["extra"] = json!(true);
+        assert!(serde_json::from_value::<Config>(unknown).is_err());
     }
 
     #[test]

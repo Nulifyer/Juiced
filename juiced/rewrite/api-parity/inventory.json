@@ -103,7 +103,7 @@
     },
     {
       "path": "juiced/rewrite/rust-tests/tests/model_options.rs",
-      "sha256": "8c66b91a1eed28267ff6d32f0dd22f837bf04e3d7ab9288eeb03fa9fe9ec7b62",
+      "sha256": "6c9c2c79e776af2570d7772579e1a639b4cd68b0547d4418f8ad39a89857c94d",
       "hash_check": "snapshot_only"
     },
     {
@@ -118,22 +118,22 @@
     },
     {
       "path": "juiced/rewrite/rust-tests/tests/support/mod.rs",
-      "sha256": "1696480a89bf3ad66a649c3b805bbe67cdcac0b98d7637a891519a8d4668a28e",
+      "sha256": "81f3e6d59089471f33bff34c59efa782d66485596a3c606e887726ddf3736c20",
       "hash_check": "snapshot_only"
     },
     {
       "path": "juiced/rewrite/service/src/compat.rs",
-      "sha256": "c2007da6efdfecbb58ca99816accc63056abee38815707283e9e9adad387b14d",
+      "sha256": "42a03ca3b954ee16d35984a4dd01d1abfd081ba926ff280716901c8b67e3704b",
       "hash_check": "snapshot_only"
     },
     {
       "path": "juiced/rewrite/service/src/config.rs",
-      "sha256": "a2aa91096640353927ab5fec655a4bf8f49471e317efcca3a8ec90d9a0cf7807",
+      "sha256": "bd3411c0f4fb7bc5a66f1ee3a8fbc22c3d27fe12eea9e4d2d23d323760003951",
       "hash_check": "snapshot_only"
     },
     {
       "path": "juiced/rewrite/service/src/http.rs",
-      "sha256": "52986ab6e4e0892c4b69e407e3872c9ba93d7c058bade0134f713987a68a4683",
+      "sha256": "ea2f6bc7006701fd743d3e5e7bdead6d13d1d8cbffed813c342d788397591d5b",
       "hash_check": "snapshot_only"
     },
     {
@@ -199,6 +199,11 @@
     {
       "path": "juiced/rewrite/rust-tests/tests/library_pipeline.rs",
       "sha256": "40b5ff2df5514f841814fa2d2d67761b99e41ea32f00f83f4f6649cac478f732",
+      "hash_check": "snapshot_only"
+    },
+    {
+      "path": "juiced/rewrite/rust-tests/tests/model_aliases.rs",
+      "sha256": "5d8c40c6d571a10edb2fe3c4956ad21daf89bc2968ebecf4bc7bcd75fac30a14",
       "hash_check": "snapshot_only"
     }
   ],
@@ -4776,12 +4781,26 @@
         "F134"
       ],
       "rust_equivalent": {
-        "relationship": "none",
-        "routes": [],
-        "scenario_files": [],
-        "authorities": []
+        "relationship": "related_operation",
+        "routes": [
+          {
+            "method": "GET",
+            "path": "/juiced/aliases",
+            "prefix_scheme": "native_quad"
+          }
+        ],
+        "scenario_files": [
+          "juiced/rewrite/rust-tests/tests/model_aliases.rs"
+        ],
+        "authorities": [
+          {
+            "method": "GET",
+            "path": "/juiced/aliases",
+            "authority": "operator"
+          }
+        ]
       },
-      "semantic_boundary": "No Rust handler implements this native path. Add request, response, authority, persistence and failure scenarios before claiming parity.",
+      "semantic_boundary": "Rust GET /juiced/aliases is a related operator-only operation, not this native path. It returns revision, maximum and alias rows with target, target_state, target_policy and available from the schema-2 configuration. Native alias storage, response shape and authority are not implemented.",
       "documentation": "docs/api/juiced.md",
       "native_authority": "operator"
     },
@@ -4807,12 +4826,26 @@
         "F134"
       ],
       "rust_equivalent": {
-        "relationship": "none",
-        "routes": [],
-        "scenario_files": [],
-        "authorities": []
+        "relationship": "related_operation",
+        "routes": [
+          {
+            "method": "POST",
+            "path": "/juiced/aliases",
+            "prefix_scheme": "native_quad"
+          }
+        ],
+        "scenario_files": [
+          "juiced/rewrite/rust-tests/tests/model_aliases.rs"
+        ],
+        "authorities": [
+          {
+            "method": "POST",
+            "path": "/juiced/aliases",
+            "authority": "operator"
+          }
+        ]
       },
-      "semantic_boundary": "No Rust handler implements this native path. Add request, response, authority, persistence and failure scenarios before claiming parity.",
+      "semantic_boundary": "Rust POST /juiced/aliases is a related operator-only operation taking alias, target or null, and expected_revision with compare-and-swap. Aliases must differ from every registered model ID and target one. Native request fields and semantics are not implemented.",
       "documentation": "docs/api/juiced.md",
       "native_authority": "operator"
     },
@@ -4838,12 +4871,26 @@
         "F134"
       ],
       "rust_equivalent": {
-        "relationship": "none",
-        "routes": [],
-        "scenario_files": [],
-        "authorities": []
+        "relationship": "related_operation",
+        "routes": [
+          {
+            "method": "POST",
+            "path": "/juiced/aliases",
+            "prefix_scheme": "native_quad"
+          }
+        ],
+        "scenario_files": [
+          "juiced/rewrite/rust-tests/tests/model_aliases.rs"
+        ],
+        "authorities": [
+          {
+            "method": "POST",
+            "path": "/juiced/aliases",
+            "authority": "operator"
+          }
+        ]
       },
-      "semantic_boundary": "No Rust handler implements this native path. Add request, response, authority, persistence and failure scenarios before claiming parity.",
+      "semantic_boundary": "Rust deletes an alias through POST /juiced/aliases with a null target and an expected revision. No Rust handler implements this native DELETE path.",
       "documentation": "docs/api/juiced.md",
       "native_authority": "operator",
       "native_parameter_patterns": {
@@ -10561,6 +10608,46 @@
         "juiced/rewrite/rust-tests/tests/api_end_to_end.rs"
       ],
       "native_same_path": false
+    },
+    {
+      "method": "GET",
+      "path": "/juiced/aliases",
+      "prefix_scheme": "native_quad",
+      "authority": "operator",
+      "evidence": {
+        "path": "juiced/rewrite/service/src/http.rs",
+        "line": 216,
+        "text": "(get, \"/juiced/aliases\", aliases, \"operator\"),",
+        "role": "registration"
+      },
+      "native_route_ids": [
+        "http:GET:fixed:/internal/aliases"
+      ],
+      "scenario_files": [
+        "juiced/rewrite/rust-tests/tests/model_aliases.rs",
+        "juiced/rewrite/rust-tests/tests/api_end_to_end.rs"
+      ],
+      "native_same_path": false
+    },
+    {
+      "method": "POST",
+      "path": "/juiced/aliases",
+      "prefix_scheme": "native_quad",
+      "authority": "operator",
+      "evidence": {
+        "path": "juiced/rewrite/service/src/http.rs",
+        "line": 217,
+        "text": "(post, \"/juiced/aliases\", alias_set, \"operator\"),",
+        "role": "registration"
+      },
+      "native_route_ids": [
+        "http:POST:fixed:/internal/aliases"
+      ],
+      "scenario_files": [
+        "juiced/rewrite/rust-tests/tests/model_aliases.rs",
+        "juiced/rewrite/rust-tests/tests/api_end_to_end.rs"
+      ],
+      "native_same_path": false
     }
   ],
   "other_transport_boundaries": [
@@ -10575,7 +10662,7 @@
     "native_websocket_routes": 4,
     "auxiliary_http_route_families": 41,
     "native_registration_sites": 143,
-    "rust_published_routes": 67,
+    "rust_published_routes": 69,
     "rust_native_same_path_rows": 39,
     "native_http_status_counts": {
       "partial": 40,

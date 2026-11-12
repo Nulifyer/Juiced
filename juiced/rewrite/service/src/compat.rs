@@ -364,7 +364,9 @@ async fn anthropic(
         let output = if count {
             protocols::anthropic_token_count(&value)?
         } else {
-            protocols::anthropic_response(&value)?
+            let mut output = protocols::anthropic_response(&value)?;
+            output["model"] = request.body["model"].clone();
+            output
         };
         Ok::<_, CodecError>(json_response(200, output))
     }
@@ -416,12 +418,17 @@ async fn ollama(
     result.unwrap_or_else(|error| protocol_error(error, false))
 }
 async fn catalog(state: &Gateway) -> Vec<Value> {
-    state
-        .manager
-        .catalog()
-        .await
+    let models = state.manager.catalog().await;
+    let aliases = state.manager.aliased_views(&models);
+    models
         .into_iter()
         .filter_map(|model| serde_json::to_value(model).ok())
+        .chain(aliases.into_iter().filter_map(|(alias, model)| {
+            let mut value = serde_json::to_value(model).ok()?;
+            value["aliased_to"] = value["id"].take();
+            value["id"] = Value::String(alias);
+            Some(value)
+        }))
         .collect()
 }
 async fn tags(State(state): State<Gateway>) -> Response {
@@ -551,7 +558,14 @@ async fn mcp_message(
             None
         }
         McpDispatch::ListModels { id } => {
-            let models: Vec<_> = catalog(&state).await.into_iter().filter(|model| model["policy"] != "disabled" && model["downloaded"] == true).map(|model| json!({"id":model["id"],"object":"model","owned_by":"juiced","operations":model["operations"]})).collect();
+            let models: Vec<_> = catalog(&state).await.into_iter().filter(|model| model["policy"] != "disabled" && model["downloaded"] == true).map(|model| {
+                let mut entry = json!({"id":model["id"],"object":"model","owned_by":"juiced","operations":model["operations"]});
+                if let Some(target) = model.get("aliased_to") {
+                    entry["owned_by"] = json!("juiced-alias");
+                    entry["aliased_to"] = target.clone();
+                }
+                entry
+            }).collect();
             Some(protocols::mcp_result(
                 id,
                 json!({"content":[{"type":"text","text":json!({"models":models}).to_string()}],"structuredContent":{"models":models},"isError":false}),

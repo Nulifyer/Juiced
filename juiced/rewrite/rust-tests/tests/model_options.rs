@@ -297,3 +297,111 @@ async fn changing_an_unloaded_profile_rejects_queued_old_worker_before_dispatch(
     assert_eq!(status, StatusCode::OK);
     assert_eq!(result["model"], "fixture.one");
 }
+
+#[tokio::test]
+async fn reload_applies_options_to_a_loaded_hot_worker_and_rejects_busy_workers() {
+    let mut server = server(|_| {}).await;
+    let current = options(&server).await;
+    let (status, hot) = server
+        .post(
+            "juiced/policy",
+            json!({"model":"fixture.one","policy":"hot","expected_revision":current["revision"]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{hot}");
+    assert_eq!(
+        server.post("load", json!({"model":"fixture.one"})).await.0,
+        StatusCode::OK
+    );
+    let loaded = server.model("fixture.one").await;
+    let old_pid = loaded["pid"].as_u64().unwrap();
+    let (status, error) = server.post("unload", json!({"model":"fixture.one"})).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(error["error"]["code"], "worker_hot");
+    let before = options(&server).await;
+    let (status, error) = update(&server, &before["revision"], json!({"threads":3})).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(error["error"]["code"], "worker_in_use");
+
+    let requested = json!({"context_tokens":2048,"threads":3,"gpu_layers":0,"parallel_slots":1});
+    let (status, error) = server
+        .post(
+            "models/fixture.one/options",
+            json!({"expected_revision":before["revision"],"options":requested,"apply":"later"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{error}");
+    let (status, saved) = server
+        .post(
+            "models/fixture.one/options",
+            json!({"expected_revision":before["revision"],"options":requested,"apply":"reload"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    assert_eq!(saved["saved"], requested);
+    assert_eq!(saved["apply"], "reload");
+    assert_eq!(saved["restarted"], true);
+    assert_ne!(saved["revision"], before["revision"]);
+    let reloaded = server.model("fixture.one").await;
+    assert_eq!(reloaded["policy"], "hot");
+    assert_eq!(reloaded["loaded"], true);
+    let new_pid = reloaded["pid"].as_u64().unwrap();
+    assert_ne!(new_pid, old_pid);
+    assert_eq!(reloaded["revision"], saved["revision"]);
+    let observed = server.get("juiced/context?model=fixture.one").await;
+    assert_eq!(observed["applied"]["pid"], new_pid);
+    assert_eq!(observed["applied"]["launch"], requested);
+    assert_eq!(observed["observed"]["props"]["per_request_tokens"], 2048);
+    #[cfg(target_os = "linux")]
+    {
+        let arguments = std::fs::read(format!("/proc/{new_pid}/cmdline")).unwrap();
+        let arguments: Vec<_> = arguments
+            .split(|byte| *byte == 0)
+            .map(|part| String::from_utf8_lossy(part).into_owned())
+            .collect();
+        assert!(
+            arguments
+                .windows(2)
+                .any(|pair| pair[0] == "--threads" && pair[1] == "3"),
+            "{arguments:?}"
+        );
+        assert!(
+            std::fs::read(format!("/proc/{old_pid}/cmdline"))
+                .unwrap_or_default()
+                .is_empty()
+        );
+    }
+    let (status, reply) = server
+        .post("completions", json!({"model":"fixture.one"}))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{reply}");
+
+    let busy = server
+        .socket_request(
+            "completions",
+            json!({"model":"fixture.one","test_id":"busy-reload","fixture_delay_ms":1500}),
+        )
+        .await;
+    server
+        .wait_for(async || server.event("fixture.one", "busy-reload", "started"))
+        .await;
+    let disk = std::fs::read(&server.config_path).unwrap();
+    let (status, error) = server
+        .post(
+            "models/fixture.one/options",
+            json!({"expected_revision":saved["revision"],"options":{"threads":4},"apply":"reload"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(error["error"]["code"], "worker_busy");
+    assert_eq!(std::fs::read(&server.config_path).unwrap(), disk);
+    let unchanged = options(&server).await;
+    assert_eq!(unchanged["revision"], saved["revision"]);
+    assert_eq!(unchanged["saved"], requested);
+    assert_eq!(server.model("fixture.one").await["pid"], new_pid);
+    drop(busy);
+
+    server.restart().await;
+    assert_eq!(options(&server).await["saved"], requested);
+    assert_eq!(server.model("fixture.one").await["policy"], "hot");
+}

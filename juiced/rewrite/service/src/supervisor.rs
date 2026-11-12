@@ -21,6 +21,10 @@ use std::{
 };
 use tokio::sync::{Mutex as AsyncMutex, MutexGuard, watch};
 
+mod aliases;
+pub use aliases::AliasChange;
+mod options;
+pub use options::{OptionsApply, OptionsError};
 mod artifact_inventory;
 mod artifact_revision;
 mod runtime_selection;
@@ -1426,6 +1430,8 @@ pub struct ModelView {
 pub struct RequestRecord {
     pub id: u64,
     pub model: Arc<str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alias: Option<Arc<str>>,
     pub operation: &'static str,
     pub outcome: &'static str,
     pub status: Option<u16>,
@@ -1813,6 +1819,7 @@ pub struct Manager {
     workers: RwLock<BTreeMap<String, Arc<Worker>>>,
     budget: Arc<Budget>,
     config: Arc<AsyncMutex<Config>>,
+    aliases: RwLock<Arc<crate::config::ModelAliases>>,
     publications: Arc<publication::Publications>,
     config_path: PathBuf,
     config_root: Option<crate::storage::DirectoryLease>,
@@ -2119,6 +2126,7 @@ impl Manager {
             startup_timeout: Duration::from_millis(config.startup_timeout_ms),
             startup_wait: Duration::from_millis(config.admission.startup.wait_ms),
             request_timeout: Duration::from_millis(config.request_timeout_ms),
+            aliases: RwLock::new(Arc::new(config.aliases.clone())),
             config: Arc::new(AsyncMutex::new(config)),
             publications: publication::Publications::new(),
             config_path,
@@ -2403,133 +2411,6 @@ impl Manager {
         ))
     }
 
-    pub async fn set_options(
-        self: &Arc<Self>,
-        id: &str,
-        expected_revision: u64,
-        options: crate::profiles::LaunchOptions,
-    ) -> Result<serde_json::Value, ApiError> {
-        options
-            .validate()
-            .map_err(|error| ApiError::new(StatusCode::BAD_REQUEST, error.code, error.message))?;
-        let worker = self.worker(id)?;
-        let state = worker.state.clone().lock_owned().await;
-        self.ensure_registered(&worker)?;
-        if state.revision != expected_revision {
-            return Err(ApiError::new(
-                StatusCode::CONFLICT,
-                "revision_conflict",
-                "The profile changed. Refresh before saving options.",
-            ));
-        }
-        if worker.spec.execution_profile.adapter != crate::config::Provider::LlamaCpp {
-            return Err(ApiError::new(
-                StatusCode::NOT_IMPLEMENTED,
-                "typed_options_unsupported",
-                "Select an explicit llama-cpp provider before using these typed options.",
-            ));
-        }
-        if worker.spec.execution_profile.native_model_id().is_some() {
-            drop(state);
-            return self
-                .set_native_options(worker, expected_revision, options)
-                .await;
-        }
-        if state.running.is_some()
-            || worker.preparing.load(Ordering::Acquire)
-            || worker.active.load(Ordering::Acquire) != 0
-            || self.processes.snapshot(id).is_some()
-        {
-            return Err(ApiError::new(
-                StatusCode::CONFLICT,
-                "worker_in_use",
-                "Unload this worker before changing its launch profile. Saved policy is preserved.",
-            ));
-        }
-        let config = self.config.clone().lock_owned().await;
-        let mut next = config.clone();
-        next.generation = next.generation.checked_add(1).ok_or_else(|| {
-            ApiError::new(
-                StatusCode::CONFLICT,
-                "revision_exhausted",
-                "The configuration revision cannot advance.",
-            )
-        })?;
-        let spec = next
-            .models
-            .iter_mut()
-            .find(|model| model.id == id)
-            .expect("registered model");
-        spec.execution_profile
-            .set_local_options(options)
-            .map_err(|_| {
-                ApiError::new(
-                    StatusCode::CONFLICT,
-                    "native_settings_authority",
-                    "Native options must be changed through their committed settings generation.",
-                )
-            })?;
-        spec.revision = next.generation;
-        let applied = spec
-            .execution_profile
-            .resolved_arguments()
-            .map_err(|error| ApiError::new(StatusCode::BAD_REQUEST, error.code, error.message))?
-            .1
-            .expect("llama options");
-        if applied
-            .parallel_slots
-            .is_some_and(|slots| slots != spec.max_inflight)
-        {
-            return Err(ApiError::new(
-                StatusCode::CONFLICT,
-                "slot_resize_requires_registration",
-                "Changing physical slot count requires an explicit new registration.",
-            ));
-        }
-        next.validate().map_err(|_| {
-            ApiError::new(
-                StatusCode::BAD_REQUEST,
-                "invalid_profile",
-                "The saved launch profile is invalid.",
-            )
-        })?;
-        let resolved = next
-            .models
-            .iter()
-            .find(|model| model.id == id)
-            .expect("registered model")
-            .resolved(self.config_path.parent().expect("configuration parent"));
-        let resolved = self.bind_runtime(resolved).await?;
-        let replacement = Self::create_worker(
-            resolved,
-            worker._artifact.clone(),
-            &self.admission,
-            &self.processes,
-            Some(worker.slots.clone()),
-        )?;
-        let outcome = self
-            .publish_configuration(
-                config,
-                next,
-                publication::Effect::Replace {
-                    previous: worker,
-                    state,
-                    replacement,
-                },
-            )
-            .await?;
-        let warning = outcome.warning;
-        if warning {
-            self.verify_storage().await?;
-            return Err(ApiError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "configuration_durability",
-                "Options committed but directory durability is unconfirmed. Refresh before retrying.",
-            ));
-        }
-        self.options(id).await
-    }
-
     async fn check_config_size(next: Config) -> Result<Config, ApiError> {
         tokio::task::spawn_blocking(move || {
             next.check_persisted_size()
@@ -2618,6 +2499,13 @@ impl Manager {
                 "This model ID is already registered.",
             ));
         }
+        if config.aliases.entries.contains_key(&spec.id) {
+            return Err(ApiError::new(
+                StatusCode::CONFLICT,
+                "alias_conflict",
+                "This model ID is saved as an alias. Delete or rename the alias before registering it.",
+            ));
+        }
         let mut next = config.clone();
         next.generation = next.generation.checked_add(1).ok_or_else(|| {
             ApiError::new(
@@ -2699,6 +2587,24 @@ impl Manager {
             ));
         }
         let config = self.config.clone().lock_owned().await;
+        let dependents: Vec<&str> = config
+            .aliases
+            .entries
+            .iter()
+            .filter(|(_, target)| *target == id)
+            .map(|(alias, _)| alias.as_str())
+            .take(8)
+            .collect();
+        if !dependents.is_empty() {
+            return Err(ApiError::new(
+                StatusCode::CONFLICT,
+                "alias_target",
+                format!(
+                    "Re-point or delete the aliases that target this model before removing it: {}.",
+                    dependents.join(", ")
+                ),
+            ));
+        }
         let mut next = config.clone();
         self.ensure_registered(&worker)?;
         next.generation = next.generation.checked_add(1).ok_or_else(|| {
@@ -4252,7 +4158,7 @@ impl Manager {
                 "Protected inference requires its resolved bounded text envelope.",
             ));
         }
-        let worker = self.worker(id)?;
+        let (worker, alias) = self.resolve_model(id)?;
         let started = Instant::now();
         let slot = worker
             .slots
@@ -4268,7 +4174,7 @@ impl Manager {
                     ApiError::from(error)
                 }
             })?;
-        self.begin_admitted(worker, operation, slot, started, None, 0)
+        self.begin_admitted((worker, alias), operation, slot, started, None, 0)
             .await
     }
 
@@ -4285,7 +4191,7 @@ impl Manager {
                 "Protected inference requires its resolved bounded text envelope.",
             ));
         }
-        let worker = self.worker(id)?;
+        let (worker, alias) = self.resolve_model(id)?;
         let revision = {
             let observation = worker
                 .observation
@@ -4315,7 +4221,7 @@ impl Manager {
             .await
             .map_err(ApiError::from)?;
         self.begin_admitted(
-            worker,
+            (worker, alias),
             operation,
             slot,
             started,
@@ -4327,7 +4233,7 @@ impl Manager {
 
     async fn begin_admitted(
         self: &Arc<Self>,
-        worker: Arc<Worker>,
+        (worker, alias): (Arc<Worker>, Option<Arc<str>>),
         operation: Operation,
         slot: crate::admission::Slot,
         started: Instant,
@@ -4449,6 +4355,7 @@ impl Manager {
                 record: Some(RequestRecord {
                     id: self.next_request.fetch_add(1, Ordering::Relaxed),
                     model: record_model,
+                    alias,
                     operation: operation.path(),
                     outcome: "cancelled",
                     status: None,
