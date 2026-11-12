@@ -284,18 +284,7 @@ impl Hub {
     }
 
     pub fn parse_resolve_url(&self, url: &str) -> Option<(String, String, String)> {
-        let rest = url.strip_prefix(&self.base_prefix()?)?.strip_prefix('/')?;
-        let mut parts = rest.splitn(5, '/');
-        let owner = parts.next()?;
-        let name = parts.next()?;
-        if parts.next()? != "resolve" {
-            return None;
-        }
-        let revision = parts.next()?;
-        let file = parts.next()?;
-        let repo = format!("{owner}/{name}");
-        (valid_repo(&repo) && valid_revision(revision) && valid_file(file))
-            .then(|| (repo, revision.to_owned(), file.to_owned()))
+        parse_resolve(&self.base_prefix()?, url)
     }
 
     async fn fetch(&self, url: Url, maximum: usize) -> Result<(Vec<u8>, Option<String>), HubError> {
@@ -579,4 +568,19 @@ pub fn parse_info(body: &[u8], maximum_files: usize) -> Result<RepoInfo, HubErro
         files_truncated,
         summary,
     })
+}
+
+pub fn parse_resolve(prefix: &str, url: &str) -> Option<(String, String, String)> {
+    let rest = url.strip_prefix(prefix)?.strip_prefix('/')?;
+    let mut parts = rest.splitn(5, '/');
+    let owner = parts.next()?;
+    let name = parts.next()?;
+    if parts.next()? != "resolve" {
+        return None;
+    }
+    let revision = parts.next()?;
+    let file = parts.next()?;
+    let repo = format!("{owner}/{name}");
+    (valid_repo(&repo) && valid_revision(revision) && valid_file(file))
+        .then(|| (repo, revision.to_owned(), file.to_owned()))
 }

@@ -1,0 +1,23 @@
+.page-intro { margin: -4px 0 14px; font-size: .8rem; max-width: 720px; }
+.link-button { border: 0; background: none; padding: 0; color: var(--ring); font: inherit; text-decoration: underline; text-underline-offset: 2px; }
+.link-button:hover { color: var(--foreground); }
+.result-title { border: 0; background: none; padding: 0; text-align: left; min-width: 0; }
+.result-title:hover strong { text-decoration: underline; text-underline-offset: 2px; }
+.result-size { margin-left: auto; font-size: .75rem; }
+.library-total { font-size: .75rem; }
+.used-by { display: inline-flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px 10px; }
+.facts .fact-path { display: block; }
+.facts .fact-path dd { text-align: left; margin-top: 2px; }
+.facts .fact-path code { font-size: .72rem; color: var(--muted); }
+.file-list { list-style: none; margin: 4px 0 12px; padding: 0; font-size: .75rem; }
+.file-list li { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 10px; padding: 5px 0; border-top: 1px solid var(--border); }
+.delete-row { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
+.downloads { max-width: 900px; }
+.download-list { list-style: none; margin: 0; padding: 0; }
+.download-row { border-top: 1px solid var(--border); padding: 10px 0; font-size: .8rem; }
+.download-row:last-child { border-bottom: 1px solid var(--border); }
+.download-row progress { display: block; width: 100%; height: 6px; margin: 8px 0 6px; accent-color: var(--ring); }
+.download-row .inline-warning { margin-top: 6px; }
+.download-title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; min-width: 0; }
+.download-title .muted { font-size: .72rem; }
+.download-leftovers { display: flex; align-items: center; gap: 4px; }

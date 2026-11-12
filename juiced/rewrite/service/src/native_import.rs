@@ -1236,7 +1236,7 @@ fn split_checkpoint(checkpoint: &str) -> (&str, Option<&str>) {
 
 /// Completed snapshots in native search order: the preferred or `refs/main` snapshot, then the
 /// others by name. Snapshots still holding a download manifest are interrupted pulls.
-fn snapshots(repo: &Path, preferred: Option<String>) -> Vec<String> {
+pub(crate) fn snapshots(repo: &Path, preferred: Option<String>) -> Vec<String> {
     let root = repo.join("snapshots");
     let mut names: Vec<String> = std::fs::read_dir(&root)
         .map(|entries| {
@@ -1262,7 +1262,7 @@ fn snapshots(repo: &Path, preferred: Option<String>) -> Vec<String> {
     names
 }
 
-fn list_files(root: &Path, roots: &[PathBuf]) -> Vec<(String, PathBuf, u64)> {
+pub(crate) fn list_files(root: &Path, roots: &[PathBuf]) -> Vec<(String, PathBuf, u64)> {
     let mut files = Vec::new();
     let mut pending = vec![(root.to_owned(), String::new(), 0usize)];
     while let Some((directory, prefix, depth)) = pending.pop() {

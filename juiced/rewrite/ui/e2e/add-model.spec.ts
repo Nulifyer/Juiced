@@ -40,7 +40,7 @@ function library(request: APIRequestContext) {
 async function selectQuant(page: Page) {
   await open(page);
   await navigate(page, "Library");
-  await expect(tab(page, "Library view", "Find models")).toHaveAttribute("aria-selected", "true");
+  await expect(tab(page, "Library view", "Search")).toHaveAttribute("aria-selected", "true");
   await result(page).getByRole("button", { name: /Q8_0/ }).click();
   const detail = page.getByRole("complementary", { name: "Model detail" });
   await expect(detail.getByRole("heading", { name: "Tiny-Chat-GGUF" })).toBeVisible();
@@ -56,11 +56,11 @@ test("Add model downloads a quant, installs the engine when needed and serves ch
   const engineReady = !!fixture.cpuEngine(await fixture.engines());
   try {
     const detail = await selectQuant(page);
-    await expect(result(page).getByText("On this machine", { exact: true })).toHaveCount(0);
+    await expect(result(page).getByText("✓ On this machine", { exact: true })).toHaveCount(0);
     await detail.getByRole("button", { name: "Download" }).click();
     await expect(page.getByRole("status").filter({ hasText: "Downloading Tiny-Chat-GGUF Q8_0." })).toBeVisible();
     await expect(detail.getByRole("option", { name: /Q8_0/ })).toContainText("✓ downloaded", { timeout: 20000 });
-    if (await detail.getByRole("button", { name: "Back to results" }).isHidden()) await expect(result(page).getByText("On this machine", { exact: true })).toBeVisible();
+    if (await detail.getByRole("button", { name: "Back to results" }).isHidden()) await expect(result(page).getByText("✓ On this machine", { exact: true })).toBeVisible();
     await expect(detail.getByRole("button", { name: "Download" })).toHaveCount(0);
 
     await expect(detail.getByRole("radiogroup", { name: "Make available as" }).getByRole("radio", { name: "On demand" })).toHaveAttribute("aria-checked", "true");

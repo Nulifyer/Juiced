@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { ApiError, type Client } from "./api";
-import { installEngine, parseEngines, type EngineJob } from "./engines";
-import { backendNames } from "./hardware";
-import { bytes, policyNames, type Policy } from "./domain";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { Client } from "./api";
+import { bytes } from "./domain";
 import { parseSystemInfo } from "./hardware";
+import { AddModel, type AddTarget } from "./AddModel";
+import { UrlDownload } from "./UrlDownload";
 import { parseSearch, progress, tasks, type LibraryModel, type Quant, type SearchResult } from "./libraryData";
 import { Badge, Button, Empty, Icon, Menu } from "./ui";
 import { LocalProgress, ServerFolder, useLocalFile } from "./LocalFiles";
@@ -30,15 +30,9 @@ function modelId(file: string): string {
   const name = file.split(/[\\/]/).pop() ?? file;
   return name.replace(/\.(gguf|bin|safetensors|onnx)$/, "").trim();
 }
-type Install = { engine: string; backend: string; size: number | null };
-type Source = { artifact: string } | { path: string };
-export function FindModels({ client, online, onRegistered, onOpenModel }: { client: Client; online: boolean; onRegistered: () => Promise<void>; onOpenModel: (id: string) => void }) {
-  const [needs, setNeeds] = useState<Install | null>(null);
-  const [installing, setInstalling] = useState<EngineJob | null>(null);
-  const [added, setAdded] = useState<{ model: string; backend: string; policy: Policy } | null>(null);
-  const [addPolicy, setAddPolicy] = useState<Policy>("on-demand");
+export function FindModels({ client, online, onRegistered, onOpenModel, onDownloads }: { client: Client; online: boolean; onRegistered: () => Promise<void>; onOpenModel: (id: string) => void; onDownloads: () => void }) {
   const quantList = useRef<HTMLDivElement>(null);
-  const [panelError, setPanelError] = useState("");
+  const [urlOpen, setUrlOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [task, setTask] = useState<string | null>(null);
   const [result, setResult] = useState<SearchResult | null>(null);
@@ -47,11 +41,9 @@ export function FindModels({ client, online, onRegistered, onOpenModel }: { clie
   const [hubPending, setHubPending] = useState(false);
   const [selected, setSelected] = useState<{ repo: string; label: string } | null>(null);
   const [notice, setNotice] = useState("");
-  const [adding, setAdding] = useState(false);
   const local = useLocalFile(client);
   const [folderOpen, setFolderOpen] = useState(false);
   const picker = useRef<HTMLInputElement>(null);
-  useEffect(() => { setNeeds(null); setAdded(null); setPanelError(""); }, [selected?.repo, selected?.label, local.file?.name]);
   useEffect(() => {
     const list = quantList.current, option = list?.querySelector<HTMLElement>('[aria-selected="true"]');
     if (list && option) list.scrollTop = option.offsetTop - list.offsetTop - list.clientHeight / 2 + option.offsetHeight / 2;
@@ -113,36 +105,12 @@ export function FindModels({ client, online, onRegistered, onOpenModel }: { clie
       setTick((value) => value + 1);
     } catch (failure) { setError(failure instanceof Error ? failure.message : "The download didn't start."); }
   }
-  async function add(source: Source, id: string, install?: Install) {
-    setAdding(true); setPanelError("");
-    try {
-      if (install) await installEngine(client, install.engine, install.backend, setInstalling);
-      setInstalling(null);
-      const response = await client.request<{ model: string | { id?: string }; backend: string }>("juiced/models/add", { ...source, id, policy: addPolicy });
-      const created = typeof response.model === "string" ? response.model : response.model?.id ?? "the model";
-      setNeeds(null); setAdded({ model: created, backend: response.backend, policy: addPolicy });
-      await onRegistered();
-    } catch (failure) {
-      setInstalling(null);
-      const body = failure instanceof ApiError ? failure.body as { install?: { engine?: string; backend?: string } } | undefined : undefined;
-      if (failure instanceof ApiError && failure.code === "engine_not_installed" && body?.install?.engine && body.install.backend) {
-        const { engine, backend } = body.install;
-        const listed = await client.request("juiced/engines").then(parseEngines).catch(() => null);
-        setNeeds({ engine, backend, size: listed?.installable.find((row) => row.engine === engine && row.backend === backend)?.archive_bytes ?? null });
-      }
-      else setPanelError(failure instanceof ApiError && failure.code === "model_exists" ? "A model with this name is already added. Rename or remove it under Models first." : failure instanceof Error ? failure.message : "The model couldn't be added.");
-    } finally { setAdding(false); }
-  }
   const models = useMemo(() => result?.models ?? [], [result]);
   const file = local.file;
-  const target: Source | null = file ? file.artifact ? { artifact: file.artifact } : file.path ? { path: file.path } : null : quant?.sha256 ? { artifact: quant.sha256 } : null;
+  const target: AddTarget | null = file ? file.artifact ? { artifact: file.artifact } : file.path ? { path: file.path } : null : quant?.localPath ? { path: quant.localPath } : quant?.sha256 ? { artifact: quant.sha256 } : null;
   const targetId = file ? file.id.trim() : quant ? modelId(quant.file) : "";
   const ready = file ? !!target && !file.error : !!quant?.present;
-  const addControls = (fallback: ReactNode) => added ? <div className="added"><p className="inline-success" role="status">Added {added.model}. It runs on {backendNames[added.backend] ?? added.backend} and {added.policy === "hot" ? "loads now and stays loaded" : added.policy === "on-demand" ? "loads on its first request" : "stays Disabled until you enable it in Models"}.</p><div className="action-row"><Button variant="primary" onClick={() => onOpenModel(added.model)}>Open model</Button></div></div>
-    : <>{ready && <div className="add-policy"><span className="field-label" id="add-policy-label">Make available as</span><div className="segmented" role="radiogroup" aria-labelledby="add-policy-label">{(["disabled", "on-demand", "hot"] as Policy[]).map((policy) => <button key={policy} role="radio" aria-checked={addPolicy === policy} disabled={adding} onClick={() => setAddPolicy(policy)}>{policyNames[policy]}</button>)}</div></div>}
-      {needs ? <div className="needs-engine"><p className="field-help">This model needs the {needs.engine} {backendNames[needs.backend] ?? needs.backend} engine{needs.size ? ` (${bytes(needs.size)} download)` : ""}. Juiced picked it for this machine.</p>
-        {installing ? <><progress aria-label="Engine install progress" max={installing.total_bytes ?? 1} value={installing.total_bytes ? installing.downloaded_bytes : undefined} /><p className="field-help">Installing engine… {installing.state}</p></> : <Button variant="primary" disabled={!online || adding || !target} onClick={() => target && void add(target, targetId, needs)}>Install engine and add</Button>}</div>
-      : <div className="action-row wrap">{ready ? <Button variant="primary" disabled={!online || adding || !target || !targetId || (!file && (quant?.parts ?? 1) > 1)} title={!file && (quant?.parts ?? 1) > 1 ? "Split models can't be added yet" : undefined} onClick={() => target && void add(target, targetId)}>{adding ? "Adding…" : "Add model"}</Button> : fallback}</div>}</>;
+  const resetKey = file ? `file:${file.name}` : `${selected?.repo}:${selected?.label}`;
   return <div className={`find-models ${model || file ? "has-detail" : ""}`}>
     <div className="find-main">
       <div className="toolbar">
@@ -151,9 +119,11 @@ export function FindModels({ client, online, onRegistered, onOpenModel }: { clie
         <Menu label="Add a model file" trigger={<><Icon name="upload" size={14} /> Add file</>}>
           <button role="menuitem" disabled={!online} onClick={() => picker.current?.click()}>Upload from this computer…</button>
           <button role="menuitem" disabled={!online} onClick={() => setFolderOpen(true)}>Pick from the server…</button>
+          <button role="menuitem" disabled={!online} onClick={() => setUrlOpen(true)}>Download from a URL…</button>
         </Menu>
         <input ref={picker} type="file" hidden accept=".gguf,.bin,.safetensors,.onnx" aria-label="Model file" onChange={(event) => { const picked = event.target.files?.[0]; event.target.value = ""; if (picked) { setSelected(null); void local.upload(picked); } }} />
       </div>
+      {urlOpen && <UrlDownload client={client} onClose={() => setUrlOpen(false)} onStarted={() => { setUrlOpen(false); notify("Download started. Follow it under Downloading."); onDownloads(); }} />}
       {folderOpen && <ServerFolder client={client} onClose={() => setFolderOpen(false)} onPick={(entry, mode) => { setFolderOpen(false); setSelected(null); void local.pick(entry, mode); }} />}
       {error && <div className="action-row"><p className="inline-error" role="alert">{error}</p><Button onClick={() => setTick((value) => value + 1)}>Retry</Button></div>}
       {(task === null || task === "chat") && <FlmModels client={client} online={online} query={query} onAdded={onRegistered} />}
@@ -164,7 +134,7 @@ export function FindModels({ client, online, onRegistered, onOpenModel }: { clie
           <div className="result-head">
             <strong className="break-word">{item.name}</strong>
             {item.source === "catalog" && <Badge tone="good">Recommended</Badge>}
-            {item.quants.some((entry) => entry.present) && <Badge>On this machine</Badge>}
+            {item.quants.some((entry) => entry.present) && <Badge tone="good">✓ On this machine</Badge>}
             <span className="muted result-meta">{[item.publisher, item.task, compact(item.downloads) && `${compact(item.downloads)} downloads`].filter(Boolean).join(" · ")}</span>
           </div>
           <div className="quant-chips" role="group" aria-label={`${item.name} quants`}>
@@ -190,9 +160,8 @@ export function FindModels({ client, online, onRegistered, onOpenModel }: { clie
           <div><dt>This machine</dt><dd><Badge tone={fit(file.bytes, gpu, ram)[1]}>{fit(file.bytes, gpu, ram)[0]}</Badge></dd></div>
         </dl>
         <LocalProgress file={file} onCancel={local.clear} />
-        {ready && !added && <div className="add-name"><label htmlFor="local-model-id">Model name</label><input id="local-model-id" value={file.id} maxLength={128} disabled={adding} onChange={(event) => local.rename(event.target.value)} /></div>}
-        {addControls(null)}
-        {panelError && <p className="inline-error" role="alert">{panelError}</p>}
+        {ready && <div className="add-name"><label htmlFor="local-model-id">Model name</label><input id="local-model-id" value={file.id} maxLength={128} onChange={(event) => local.rename(event.target.value)} /></div>}
+        <AddModel client={client} online={online} target={target} id={targetId} ready={ready} resetKey={resetKey} onRegistered={onRegistered} onOpenModel={onOpenModel} />
       </div>
     </aside>}
     {model && quant && <aside className="inspector find-detail" aria-label="Model detail">
@@ -209,10 +178,10 @@ export function FindModels({ client, online, onRegistered, onOpenModel }: { clie
         <dl className="facts">
           <div><dt>Selected</dt><dd>{quant.label}{quant.parts > 1 ? ` · ${quant.parts} files` : ""}</dd></div>
           <div><dt>This machine</dt><dd><Badge tone={fit(quant.bytes, gpu, ram)[1]}>{fit(quant.bytes, gpu, ram)[0]}</Badge></dd></div>
+          {quant.present && <div><dt>Stored</dt><dd>{quant.localPath ? `Hugging Face cache${quant.readOnly ? " · read-only" : ""}` : "Juiced storage"}</dd></div>}
         </dl>
         {progress(quant) !== null && <><progress aria-label="Download progress" max={100} value={progress(quant)!} /><p className="field-help">Downloading… {Math.round(progress(quant)!)}%</p></>}
-        {addControls(progress(quant) === null && <Button variant="primary" disabled={!online || !quant.pullable || model.gated} onClick={() => void download(model, quant)}>Download</Button>)}
-        {panelError && <p className="inline-error" role="alert">{panelError}</p>}
+        <AddModel client={client} online={online} target={target} id={targetId} ready={ready} resetKey={resetKey} blocked={!quant.localPath && quant.parts > 1 ? "Split models can't be added yet" : undefined} onRegistered={onRegistered} onOpenModel={onOpenModel} fallback={progress(quant) === null && <Button variant="primary" disabled={!online || !quant.pullable || model.gated} onClick={() => void download(model, quant)}>Download</Button>} />
         {model.gated && !quant.present && <p className="field-help">This repository is gated on Hugging Face and can't be downloaded here yet.</p>}
       </div>
     </aside>}

@@ -36,6 +36,8 @@ mod engines;
 pub use engines::{AddModelError, EngineInstall, ModelAdd};
 mod intake;
 pub use intake::{ImportListQuery, ImportPathRequest, UploadQuery};
+mod local_library;
+pub use local_library::LocalDelete;
 mod flm;
 pub use flm::{FlmModelAdd, FlmPull};
 mod host;

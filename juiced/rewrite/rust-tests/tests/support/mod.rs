@@ -40,7 +40,7 @@ pub const READ_ROUTES: [&str; 11] = [
     "/models/{model}/options",
     "/juiced/voices",
 ];
-pub const OPERATOR_READ_ROUTES: [&str; 27] = [
+pub const OPERATOR_READ_ROUTES: [&str; 29] = [
     "/system-info",
     "/juiced/cache/inspect",
     "/juiced/cache/sessions",
@@ -61,6 +61,8 @@ pub const OPERATOR_READ_ROUTES: [&str; 27] = [
     "/juiced/logs",
     "/juiced/library/search",
     "/juiced/library/pulls/{pull}",
+    "/juiced/library/pulls",
+    "/juiced/library/local",
     "/juiced/aliases",
     "/juiced/residency",
     "/juiced/library/import-path",
@@ -69,7 +71,7 @@ pub const OPERATOR_READ_ROUTES: [&str; 27] = [
     "/juiced/access",
     "/juiced/protocols/health",
 ];
-pub const WRITE_ROUTES: [&str; 36] = [
+pub const WRITE_ROUTES: [&str; 38] = [
     "/juiced/runtime-packages/import",
     "/juiced/engines/install",
     "/juiced/models/add",
@@ -95,6 +97,8 @@ pub const WRITE_ROUTES: [&str; 36] = [
     "/juiced/artifacts/sets",
     "/juiced/artifacts/sets/remove",
     "/juiced/library/pull",
+    "/juiced/library/pulls/{pull}",
+    "/juiced/library/local/delete",
     "/juiced/aliases",
     "/juiced/residency",
     "/juiced/library/upload",

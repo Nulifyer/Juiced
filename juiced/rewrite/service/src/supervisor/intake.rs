@@ -267,7 +267,7 @@ impl Manager {
         roots
     }
 
-    async fn canonical_import_roots(&self) -> Vec<PathBuf> {
+    pub(super) async fn canonical_import_roots(&self) -> Vec<PathBuf> {
         let configured = self.configured_import_roots().await;
         tokio::task::spawn_blocking(move || {
             configured

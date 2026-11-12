@@ -1,6 +1,6 @@
-import { chmod, copyFile, lstat, mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { chmod, copyFile, lstat, mkdir, mkdtemp, readdir, rm, symlink, truncate, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { resolve } from "node:path";
+import { dirname, relative, resolve } from "node:path";
 
 const root = resolve(import.meta.dir, "../..");
 const build = Bun.spawn(["cargo", "build", "--all-features", "--locked"], { cwd: root, stdout: "inherit", stderr: "inherit" });
@@ -65,6 +65,25 @@ function hub(url: URL): Response | undefined {
   if (file && !file.declared) return new Response(slowBody(file.bytes, 0, 4096, 60), { headers: { "Content-Length": String(file.bytes.length), ETag: `"${hubDigest(file)}"` } });
   if (url.pathname.includes("/resolve/")) return new Response("Not found", { status: 404 });
 }
+type CacheFile = [path: string, bytes: number];
+const gib = 1024 ** 3, mib = 1024 ** 2;
+/** Sparse files in the `huggingface_hub` cache layout: content-named blobs behind snapshot links. */
+async function cacheRepo(hub: string, repo: string, revision: string, files: CacheFile[]) {
+  const directory = resolve(hub, `models--${repo.replace("/", "--")}`);
+  const snapshot = resolve(directory, "snapshots", revision);
+  await mkdir(resolve(directory, "blobs"), { recursive: true });
+  await mkdir(resolve(directory, "refs"), { recursive: true });
+  await writeFile(resolve(directory, "refs", "main"), revision);
+  for (const [path, size] of files) {
+    const blob = resolve(directory, "blobs", new Bun.CryptoHasher("sha256").update(`${repo}/${path}`).digest("hex"));
+    await writeFile(blob, path.endsWith(".gguf") ? metadataGguf(4096, 1024) : new Uint8Array(1024));
+    await truncate(blob, Math.round(size));
+    const link = resolve(snapshot, path);
+    await mkdir(dirname(link), { recursive: true });
+    await symlink(relative(dirname(link), blob), link);
+  }
+  return snapshot;
+}
 let source: ReturnType<typeof Bun.serve> | undefined;
 let engineArchive = new Uint8Array();
 const llamaRelease = { repository: "ggml-org/llama.cpp", tag: "b12032", asset: "llama-b12032-bin-ubuntu-x64.tar.gz" };
@@ -96,7 +115,7 @@ source = Bun.serve({
   hostname: "127.0.0.1", port: Number(process.env.JUICED_SOURCE_PORT ?? 13308),
   fetch(request) {
     const url = new URL(request.url);
-    if (url.pathname === "/fixture.json") return Response.json({ model_file: resolve(directory, "fixture.gguf"), source_url: `${url.origin}/weights.gguf`, upload_file: resolve(directory, "Upload-Sample-Q8_0.gguf"), import_root: resolve(directory, "import"), sha256, bytes: weights.length, command: executable("juiced-test-worker"), args: ["--port", "{port}", "--model", "{model}", "--events", resolve(directory, "managed.events"), "--slot-save-path", "{cache}"] });
+    if (url.pathname === "/fixture.json") return Response.json({ model_file: resolve(directory, "fixture.gguf"), source_url: `${url.origin}/weights.gguf`, upload_file: resolve(directory, "Upload-Sample-Q8_0.gguf"), import_root: resolve(directory, "import"), cache_hub: resolve(directory, "huggingface", "hub"), library_root: resolve(directory, "library"), sha256, bytes: weights.length, command: executable("juiced-test-worker"), args: ["--port", "{port}", "--model", "{model}", "--events", resolve(directory, "managed.events"), "--slot-save-path", "{cache}"] });
     if (url.pathname === "/speech-fixture.wav") return new Response(Bun.file(resolve(root, "../../test/test_speech_de.wav")));
     const releaseResponse = engineRelease(url);
     if (releaseResponse) return releaseResponse;
@@ -135,6 +154,21 @@ source = Bun.serve({
   await writeFile(resolve(oldVolume, "config", "juiced", "state.json"), JSON.stringify({ version: 1, policies: { "user.OldChat": "on-demand" } }));
   await mkdir(resolve(oldVolume, "huggingface", "hub", "models--acme--Old-Chat-GGUF", "snapshots", "abc123"), { recursive: true });
   await writeFile(resolve(oldVolume, "huggingface", "hub", "models--acme--Old-Chat-GGUF", "snapshots", "abc123", "Old-Chat-Q8_0.gguf"), metadataGguf(2048, 36 * 1024));
+  const ownedHub = resolve(directory, "huggingface", "hub");
+  const libraryRoot = resolve(directory, "library");
+  const libraryHub = resolve(libraryRoot, "huggingface", "hub");
+  const qwen4b = await cacheRepo(ownedHub, "unsloth/Qwen3-4B-Instruct-2507-GGUF", "a6f3b0d5c1e2a4b7c9d8e0f1a2b3c4d5e6f70812", [["Qwen3-4B-Instruct-2507-Q4_K_M.gguf", 2.33 * gib], ["Qwen3-4B-Instruct-2507-Q8_0.gguf", 3.99 * gib]]);
+  await cacheRepo(ownedHub, "ggml-org/gemma-3-4b-it-GGUF", "1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e", [["gemma-3-4b-it-Q4_K_M.gguf", 2.32 * gib], ["mmproj-model-f16.gguf", 811 * mib]]);
+  await cacheRepo(ownedHub, "unsloth/Qwen3-0.6B-GGUF", hubRevision, [["Qwen3-0.6B-Q8_0.gguf", 604 * mib]]);
+  await cacheRepo(ownedHub, "hexgrad/Kokoro-82M", "c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f6", [["kokoro-v1.0.onnx", 310 * mib], ["voices-v1.0.bin", 27 * mib]]);
+  const skyfall = await cacheRepo(libraryHub, "TheDrummer/Skyfall-31B-v4.2-GGUF", "d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f607", [["Skyfall-31B-v4.2-IQ4_NL.gguf", 16.6 * gib]]);
+  await cacheRepo(libraryHub, "leejet/Z-Image-Turbo-GGUF", "e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718", [["z_image_turbo-Q8_0.gguf", 6.24 * gib], ["vae/ae.safetensors", 320 * mib], ["text_encoder/Qwen3-4B-Q8_0.gguf", 3.99 * gib]]);
+  await cacheRepo(libraryHub, "unsloth/GLM-4.5-Air-GGUF", "f60718293a4b5c6d7e8f90a1b2c3d4e5f6071829", [["Q4_K_M/GLM-4.5-Air-Q4_K_M-00001-of-00002.gguf", 46.4 * gib], ["Q4_K_M/GLM-4.5-Air-Q4_K_M-00002-of-00002.gguf", 26.1 * gib]]);
+  const asr = resolve(libraryRoot, "asr", "models");
+  await mkdir(asr, { recursive: true });
+  await writeFile(resolve(asr, "asr4all-l-gptq-Q8_0.gguf"), metadataGguf(4096, 1024));
+  await truncate(resolve(asr, "asr4all-l-gptq-Q8_0.gguf"), Math.round(1.18 * gib));
+  await chmod(libraryHub, 0o555);
   const model = (id: string, policy: string, resident: number, missing = false) => ({
     id, model_file: missing ? resolve(directory, "unavailable.gguf") : file,
     command: executable("juiced-test-worker"), args: ["--port", "{port}", "--model", "{model}", "--events", resolve(directory, `${id}.events`), "--slot-save-path", "{cache}", "--report-timings"],
@@ -147,10 +181,15 @@ source = Bun.serve({
   }
   const protectedRuntime = process.env.JUICED_TEST_PROTECTED_RUNTIME_FIXTURE === "1";
   const initialConfig = {
-    schema_version: 1, artifact_source_policy: "allow-loopback-http", import_roots: [importRoot], resident_budget_bytes: 6 * 1024 ** 3, startup_timeout_ms: 15000, request_timeout_ms: 15000,
+    schema_version: 1, artifact_source_policy: "allow-loopback-http", import_roots: [importRoot, libraryRoot], resident_budget_bytes: 6 * 1024 ** 3, startup_timeout_ms: 15000, request_timeout_ms: 15000,
     admission: protectedRuntime ? { memory: { mode: "protected", capacity_bytes: 512 * 1024 ** 2, essential_headroom_bytes: 0, maximum_sample_age_ms: 5000 } } : undefined,
     models: [model("fixture.chat-small-q4", "hot", 1), model("fixture.chat-long-context-q8", "on-demand", 2), model("fixture.missing-weights", "disabled", 1, true), { id: "fixture.speech-tiny", provider: "whisper-cpp", model_file: file, command: executable("juiced-test-worker"), args: ["--host", "127.0.0.1", "--port", "{port}", "--model", "{model}", "--events", resolve(directory, "speech.events"), "--inference-delay-ms", "750", "--no-gpu"], resident_bytes: 64 * 1024 ** 2, max_inflight: 1, operations: ["audio/transcriptions"], policy: "on-demand" }, { ...model("fixture.embed-tiny", "on-demand", 0), resident_bytes: 64 * 1024 ** 2, operations: ["embeddings"] }],
   };
+  if (process.env.JUICED_FIXTURE_LIBRARY_MODELS === "1") initialConfig.models.push(
+    { ...model("Qwen3-4B-Instruct-2507-Q8_0", "on-demand", 4), model_file: resolve(qwen4b, "Qwen3-4B-Instruct-2507-Q8_0.gguf") },
+    { ...model("TheDrummer_Skyfall-31B-v4.2-GGUF-IQ4_NL", "disabled", 1), model_file: resolve(skyfall, "Skyfall-31B-v4.2-IQ4_NL.gguf") },
+    { ...model("asr4all-l-gptq-Q8_0", "disabled", 1), model_file: resolve(asr, "asr4all-l-gptq-Q8_0.gguf"), operations: ["chat/completions"] },
+  );
   if (protectedRuntime) initialConfig.models = initialConfig.models.map((model) => ({ ...model, policy: "disabled" }));
   await writeFile(config, JSON.stringify(initialConfig, null, 2));
   if (process.platform !== "win32") {
@@ -204,6 +243,7 @@ source = Bun.serve({
     await chmod(path, 0o700);
     for (const entry of await readdir(path, { withFileTypes: true })) if (entry.isDirectory()) await writable(resolve(path, entry.name));
   }
+  await chmod(resolve(directory, "library", "huggingface", "hub"), 0o755).catch(() => undefined);
   const packages = resolve(directory, "runtime-packages");
   if (await Bun.file(resolve(packages, "packages.json")).exists()) await writable(packages);
   await rm(directory, { recursive: true, force: true });

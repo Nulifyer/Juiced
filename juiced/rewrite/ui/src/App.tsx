@@ -3,18 +3,16 @@ import { Client } from "./api";
 import { normalizeBase, type Snapshot } from "./domain";
 import { Inspector, ModelList, type Mutate } from "./Models";
 import { ServiceTest, type TestMode } from "./ServiceTest";
-import { Library, type LibraryView } from "./Library";
+import { Library, libraryViews, type LibraryView } from "./Library";
 import { Cache } from "./Cache";
 import { CacheSessions } from "./CacheSessions";
 import { ServiceApis, type ConnectTab } from "./ServiceApis";
 import { RuntimeCatalog } from "./RuntimeCatalog";
 import { InstalledRuntimes } from "./InstalledRuntimes";
 import { Dashboard } from "./Dashboard";
-import { FindModels } from "./FindModels";
 import { EngineList, Hardware } from "./Backends";
 import { Diagnostics } from "./Diagnostics";
 import { Aliases } from "./Aliases";
-import { NativeImport } from "./NativeImport";
 import { IdleDefault } from "./Residency";
 import { gib, percent, rate, useSystemStats } from "./live";
 import { clearToasts, dismiss, notify, useToasts } from "./toast";
@@ -55,7 +53,7 @@ export function App() {
   const [epoch, setEpoch] = useState(0);
   const [pending, setPending] = useState<(() => void) | null>(null);
   const [testMode, setTestMode] = useState<TestMode>("try");
-  const [libraryView, setLibraryView] = useState<LibraryView>("find");
+  const [libraryView, setLibraryView] = useState<LibraryView>("search");
   const [diagnosticsTab, setDiagnosticsTab] = useState<"performance" | "requests" | "logs">("performance");
   const [backendTab, setBackendTab] = useState<"machine" | "installed" | "catalog">("machine");
   const [connectTab, setConnectTab] = useState<ConnectTab>("protocols");
@@ -135,7 +133,7 @@ export function App() {
   const tabs = screen === "models" ? <Tabs label="Models views" value={modelsTab} onChange={(value) => leave(() => { setModelsTab(value); setSelected(""); })} items={[["models", "Models"], ["aliases", "Aliases"]]} />
     : screen === "cache" ? <Tabs label="Cache views" value={cacheTab} onChange={setCacheTab} items={[["sessions", "Sessions"], ["snapshots", "Snapshots"]]} />
     : screen === "test" ? <Tabs label="Test mode" value={testMode} onChange={setTestMode} items={[["try", "Try a model"], ["compare", "Compare"]]} />
-    : screen === "library" ? <Tabs label="Library view" value={libraryView} onChange={setLibraryView} items={[["find", "Find models"], ["files", "Files on disk"], ["import", "Import"]]} />
+    : screen === "library" ? <Tabs label="Library view" value={libraryView} onChange={setLibraryView} items={libraryViews} />
     : screen === "connect" ? <Tabs label="Connect views" value={connectTab} onChange={setConnectTab} items={[["protocols", "Protocols"], ["keys", "API keys"], ["endpoints", "Endpoints"]]} />
     : screen === "backend" ? <Tabs label="Backend views" value={backendTab} onChange={setBackendTab} items={[["machine", "This machine"], ["installed", "Engines"], ["catalog", "Catalog"]]} />
     : screen === "diagnostics" ? <Tabs label="Diagnostics views" value={diagnosticsTab} onChange={setDiagnosticsTab} items={[["performance", "Performance"], ["requests", "Requests"], ["logs", "Logs"]]} />
@@ -167,9 +165,7 @@ export function App() {
         {screen === "dashboard" && <Dashboard snapshot={snapshot} stats={live.stats} history={live.history} onOpenModel={openModel} onTest={() => setScreen("test")} />}
         {modelScreen && <div className="model-workspace"><ModelList models={snapshot.models} selected={selected} onSelect={(id) => leave(() => setSelected(id))} mode={screen as "models" | "policy"} mutate={mutate} busy={busy} online={online} idleControl={screen === "policy" ? <IdleDefault client={client} online={online} /> : undefined} />{hasInspector && <Inspector key={`${model.id}:${epoch}`} model={model} busy={busy} online={online} onClose={() => leave(() => setSelected(""))} onDirty={setDirty} mutate={mutate} client={client} stopLoad={loadingModel === model.id ? stopLoad : undefined} />}</div>}
         {screen === "models" && modelsTab === "aliases" && <Aliases key={epoch} client={client} models={snapshot.models} online={online} onOpenModel={openModel} />}
-        {screen === "library" && libraryView === "find" && <FindModels key={epoch} client={client} online={online} onRegistered={refresh} onOpenModel={openModel} />}
-        {screen === "library" && libraryView === "files" && <Library key={epoch} view={libraryView} client={client} online={online} models={snapshot.models} refreshModels={refresh} onInspect={openModel} />}
-        {screen === "library" && libraryView === "import" && <NativeImport key={epoch} client={client} online={online} onImported={refresh} />}
+        {screen === "library" && <Library key={`${epoch}:${libraryView}`} view={libraryView} onView={setLibraryView} client={client} online={online} onRegistered={refresh} onOpenModel={openModel} />}
         {screen === "diagnostics" && <Diagnostics client={client} snapshot={snapshot} stats={live.stats} history={live.history} tab={diagnosticsTab} />}
         {screen === "test" && <ServiceTest key={`${epoch}:${testMode}`} mode={testMode} models={snapshot.models} client={client} online={online} />}
         {screen === "connect" && <ServiceApis key={epoch} base={base} client={client} tab={connectTab} models={snapshot.models} online={online} consoleKey={key} onAdoptKey={(next) => { adoptingKey.current = true; setKey(next); }} />}

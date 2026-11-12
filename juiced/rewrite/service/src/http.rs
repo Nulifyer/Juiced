@@ -242,6 +242,10 @@ define_routes! {
     (get, "/juiced/library/search", library_search, "operator"),
     (post, "/juiced/library/pull", library_pull, "operator"),
     (get, "/juiced/library/pulls/{pull}", library_pull_status, "operator"),
+    (post, "/juiced/library/pulls/{pull}", library_pull_dismiss, "operator"),
+    (get, "/juiced/library/pulls", library_pulls, "operator"),
+    (get, "/juiced/library/local", library_local, "operator"),
+    (post, "/juiced/library/local/delete", library_local_delete, "operator"),
     (get, "/juiced/aliases", aliases, "operator"),
     (post, "/juiced/aliases", alias_set, "operator"),
     (post, "/images/generations", image_generation, "inference"),
@@ -498,6 +502,7 @@ async fn library_search(
     ApiQuery(query): ApiQuery<crate::library::SearchQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
     let store = state.manager.artifacts().ok();
+    let _ = state.manager.local_library(false).await;
     let result = state.manager.library().search(store, query).await?;
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(result)))
 }
@@ -514,6 +519,61 @@ async fn library_pull_status(
 ) -> Result<impl IntoResponse, ApiError> {
     let view = state.manager.library().pull_view(&id)?;
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(view)))
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PullAction {
+    action: String,
+}
+async fn library_pull_dismiss(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    ApiJson(request): ApiJson<PullAction>,
+) -> Result<Json<Value>, ApiError> {
+    if request.action != "dismiss" {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_library_pull_action",
+            "The only library acquisition action is dismiss.",
+        ));
+    }
+    state.manager.library().dismiss_pull(&id).map(Json)
+}
+async fn library_pulls(State(state): State<AppState>) -> impl IntoResponse {
+    (
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(state.manager.library().pulls_view()),
+    )
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LocalQuery {
+    fresh: Option<bool>,
+}
+async fn library_local(
+    State(state): State<AppState>,
+    ApiQuery(query): ApiQuery<LocalQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    let inventory = state
+        .manager
+        .local_library(query.fresh.unwrap_or(false))
+        .await?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(inventory)))
+}
+async fn library_local_delete(
+    State(state): State<AppState>,
+    ApiJson(request): ApiJson<crate::supervisor::LocalDelete>,
+) -> Result<Json<Value>, ApiError> {
+    // A client disconnect must not interrupt a removal between its check and its effect.
+    tokio::spawn(async move { state.manager.delete_local_files(request).await.map(Json) })
+        .await
+        .map_err(|_| {
+            ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "local_delete_interrupted",
+                "Deleting the files was interrupted. Refresh the list before retrying.",
+            )
+        })?
 }
 async fn library_upload(
     State(state): State<AppState>,

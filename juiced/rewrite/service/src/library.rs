@@ -1,10 +1,16 @@
 mod catalog;
 mod hub;
+mod local;
 mod quant;
 #[cfg(test)]
 mod tests;
 
 pub use hub::{HubLimits, Token};
+pub use local::{
+    Hub as LocalHub, LocalFile as LocalInventoryFile, LocalInventory, Registered, ScanInputs,
+    Storage as LocalStorage, remove_cache_file, writable,
+};
+pub const LOCAL_STORE_LISTING: usize = local::STORE_LISTING;
 
 use crate::{
     ApiError,
@@ -33,6 +39,33 @@ const LOCAL_SOURCES: usize = 1024;
 const IMPORTER_ID: &str = "huggingface";
 const IMPORTER_VERSION: &str = "juiced-library-1";
 const PUBLISH_DEADLINE: Duration = Duration::from_secs(3600);
+const LOCAL_TTL: Duration = Duration::from_secs(30);
+
+struct CachedLocal {
+    key: u64,
+    at: Instant,
+    inventory: Arc<LocalInventory>,
+}
+
+/// Cache-only hits for search: repository-relative paths and blob digests of adopted weights.
+#[derive(Default)]
+struct CachePresence {
+    paths: BTreeMap<(String, String), (std::path::PathBuf, bool)>,
+    digests: BTreeMap<String, (std::path::PathBuf, bool)>,
+}
+
+impl CachePresence {
+    fn find(
+        &self,
+        repo: &str,
+        path: &str,
+        digest: Option<&str>,
+    ) -> Option<&(std::path::PathBuf, bool)> {
+        self.paths
+            .get(&(repo.to_owned(), path.to_owned()))
+            .or_else(|| self.digests.get(digest?))
+    }
+}
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -330,6 +363,8 @@ pub struct Library {
     policy: SourcePolicy,
     poll: Duration,
     pulls: Mutex<Vec<Arc<Mutex<PullRecord>>>>,
+    local_scan: tokio::sync::Mutex<()>,
+    local: Mutex<Option<CachedLocal>>,
 }
 
 impl Library {
@@ -360,7 +395,156 @@ impl Library {
             policy,
             poll,
             pulls: Mutex::new(Vec::new()),
+            local_scan: tokio::sync::Mutex::new(()),
+            local: Mutex::new(None),
         }
+    }
+
+    fn cached_local(&self) -> Option<Arc<LocalInventory>> {
+        self.local
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_ref()
+            .map(|cached| cached.inventory.clone())
+    }
+
+    pub fn invalidate_local(&self) {
+        *self.local.lock().unwrap_or_else(|error| error.into_inner()) = None;
+    }
+
+    /// Returns the bounded on-disk inventory, rescanning (stat only) when `key` changed, the
+    /// cached scan is older than the TTL, or `fresh` is set. Concurrent callers share one scan.
+    pub async fn local_inventory(
+        &self,
+        key: u64,
+        fresh: bool,
+        inputs: impl FnOnce() -> ScanInputs + Send + 'static,
+    ) -> Result<Arc<LocalInventory>, ApiError> {
+        let current = |allow: bool| {
+            self.local
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .as_ref()
+                .filter(|cached| allow && cached.key == key && cached.at.elapsed() < LOCAL_TTL)
+                .map(|cached| cached.inventory.clone())
+        };
+        if let Some(inventory) = current(!fresh) {
+            return Ok(inventory);
+        }
+        let started = Instant::now();
+        let _scan = self.local_scan.lock().await;
+        if let Some(inventory) = self
+            .local
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_ref()
+            .filter(|cached| cached.key == key && cached.at >= started)
+            .map(|cached| cached.inventory.clone())
+        {
+            return Ok(inventory);
+        }
+        if let Some(inventory) = current(!fresh) {
+            return Ok(inventory);
+        }
+        let prefix = self.hub.base_prefix();
+        let inventory = tokio::task::spawn_blocking(move || {
+            let inputs = inputs();
+            let parse = |url: &str| hub::parse_resolve(prefix.as_deref()?, url);
+            local::scan(&inputs, &parse)
+        })
+        .await
+        .map_err(|_| {
+            library_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "local_inventory_interrupted",
+                "Listing the files on this machine was interrupted. Retry.",
+            )
+        })?;
+        let inventory = Arc::new(inventory);
+        *self.local.lock().unwrap_or_else(|error| error.into_inner()) = Some(CachedLocal {
+            key,
+            at: Instant::now(),
+            inventory: inventory.clone(),
+        });
+        Ok(inventory)
+    }
+
+    fn cache_presence(&self) -> Option<CachePresence> {
+        let inventory = self.cached_local()?;
+        let mut presence = CachePresence::default();
+        for (repo, file) in inventory.cache_files() {
+            let hit = (file.location.clone(), file.read_only);
+            presence
+                .paths
+                .insert((repo.to_owned(), file.path.clone()), hit.clone());
+            if let Some(digest) = &file.digest {
+                presence.digests.insert(digest.clone(), hit);
+            }
+        }
+        Some(presence)
+    }
+
+    fn cache_local_files(&self) -> Vec<LocalFile> {
+        let Some(inventory) = self.cached_local() else {
+            return Vec::new();
+        };
+        inventory
+            .cache_files()
+            .filter(|(_, file)| matches!(file.role, "model" | "shard"))
+            .filter(|(_, file)| quant::is_listed_file(&file.path))
+            .take(LOCAL_SOURCES)
+            .map(|(repo, file)| LocalFile {
+                repo: repo.to_owned(),
+                revision: file.revision.clone().unwrap_or_default(),
+                file: quant::FileMeta {
+                    path: file.path.clone(),
+                    bytes: Some(file.bytes),
+                    sha256: file.digest.clone(),
+                },
+            })
+            .collect()
+    }
+
+    pub fn pulls_view(&self) -> Value {
+        let pulls = self.pulls.lock().unwrap_or_else(|error| error.into_inner());
+        let data: Vec<Value> = pulls
+            .iter()
+            .rev()
+            .map(|record| {
+                record
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .view()
+            })
+            .collect();
+        json!({"schema_version": 1, "data": data})
+    }
+
+    pub fn dismiss_pull(&self, id: &str) -> Result<Value, ApiError> {
+        let mut pulls = self.pulls.lock().unwrap_or_else(|error| error.into_inner());
+        let index = pulls
+            .iter()
+            .position(|record| record.lock().unwrap_or_else(|error| error.into_inner()).id == id)
+            .ok_or_else(|| {
+                library_error(
+                    StatusCode::NOT_FOUND,
+                    "library_pull_not_found",
+                    "No library acquisition with this identifier is retained.",
+                )
+            })?;
+        if !pulls[index]
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .terminal()
+        {
+            return Err(library_error(
+                StatusCode::CONFLICT,
+                "library_pull_active",
+                "This download is still running. Cancel or wait for it before dismissing it.",
+            ));
+        }
+        pulls.remove(index);
+        Ok(json!({"pull": id, "dismissed": true}))
     }
 
     async fn infos(&self, repos: Vec<String>) -> BTreeMap<String, Result<Arc<RepoInfo>, HubError>> {
@@ -562,9 +746,15 @@ impl Library {
             }
             entries.push(entry);
         }
-        if first_page && let Some(store) = &store {
-            attach_local(&mut entries, self.local_files(store), &terms, task, limit);
+        if first_page {
+            let mut local = store
+                .as_ref()
+                .map(|store| self.local_files(store))
+                .unwrap_or_default();
+            local.extend(self.cache_local_files());
+            attach_local(&mut entries, local, &terms, task, limit);
         }
+        let cache = self.cache_presence();
         let digests: BTreeSet<String> = entries
             .iter()
             .flat_map(|entry| entry.variants.iter().flatten())
@@ -577,7 +767,7 @@ impl Library {
         let pullable = store.is_some() && blocked.is_none();
         let data: Vec<Value> = entries
             .iter()
-            .map(|entry| entry_json(entry, presence.as_ref(), pullable))
+            .map(|entry| entry_json(entry, presence.as_ref(), cache.as_ref(), pullable))
             .collect();
         let hub_status = match hub_error {
             None if skip_hub => "skipped",
@@ -1150,6 +1340,10 @@ fn attach_local(
             continue;
         }
         let metas: Vec<quant::FileMeta> = files.iter().map(|file| file.file.clone()).collect();
+        let variants = quant::group(&metas);
+        if variants.is_empty() {
+            continue;
+        }
         entries.push(Entry {
             id: repo.clone(),
             name: repo
@@ -1166,17 +1360,22 @@ fn attach_local(
             metadata: "local",
             metadata_error: None,
             files_truncated: None,
-            variants: Some(quant::group(&metas)),
+            variants: Some(variants),
         });
     }
 }
 
-fn entry_json(entry: &Entry, presence: Option<&Presence>, pullable: bool) -> Value {
+fn entry_json(
+    entry: &Entry,
+    presence: Option<&Presence>,
+    cache: Option<&CachePresence>,
+    pullable: bool,
+) -> Value {
     let summary = entry.summary.as_ref();
     let variants = entry.variants.as_ref().map(|variants| {
         variants
             .iter()
-            .map(|variant| variant_json(entry, variant, presence, pullable))
+            .map(|variant| variant_json(entry, variant, presence, cache, pullable))
             .collect::<Vec<_>>()
     });
     json!({
@@ -1209,6 +1408,7 @@ fn variant_json(
     entry: &Entry,
     variant: &quant::Variant,
     presence: Option<&Presence>,
+    cache: Option<&CachePresence>,
     pullable: bool,
 ) -> Value {
     let files: Vec<Value> = variant
@@ -1221,23 +1421,42 @@ fn variant_json(
         .iter()
         .filter_map(|file| file.sha256.as_deref())
         .collect();
-    let local = presence.map(|presence| {
-        let present = digests
-            .iter()
-            .filter(|digest| presence.artifacts.contains_key(**digest))
-            .count();
-        let set = digests.first().and_then(|primary| {
-            presence
-                .sets
-                .get(*primary)?
+    let cached: Vec<&(std::path::PathBuf, bool)> = cache
+        .map(|cache| {
+            variant
+                .files
                 .iter()
-                .find(|_| variant.files.len() > 1)
-                .cloned()
+                .filter_map(|file| cache.find(&entry.repo, &file.path, file.sha256.as_deref()))
+                .collect()
+        })
+        .unwrap_or_default();
+    let in_cache =
+        variant.complete && !variant.files.is_empty() && cached.len() == variant.files.len();
+    let local = (presence.is_some() || cache.is_some()).then(|| {
+        let present = presence.map_or(0, |presence| {
+            digests
+                .iter()
+                .filter(|digest| presence.artifacts.contains_key(**digest))
+                .count()
         });
+        let set = presence.and_then(|presence| {
+            digests.first().and_then(|primary| {
+                presence
+                    .sets
+                    .get(*primary)?
+                    .iter()
+                    .find(|_| variant.files.len() > 1)
+                    .cloned()
+            })
+        });
+        let stored = variant.verifiable() && present == variant.files.len();
         json!({
-            "present": variant.verifiable() && present == variant.files.len(),
-            "present_files": present,
+            "present": stored || in_cache,
+            "present_files": present.max(cached.len()),
             "set": set,
+            "storage": if stored { Some("artifact_store") } else if in_cache { Some("huggingface_cache") } else { None },
+            "path": (!stored && in_cache && variant.files.len() == 1).then(|| cached[0].0.clone()),
+            "read_only": (!stored && in_cache).then(|| cached.iter().all(|hit| hit.1)),
         })
     });
     let jobs = presence.map(|presence| {
