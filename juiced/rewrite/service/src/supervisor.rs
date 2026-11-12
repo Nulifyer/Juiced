@@ -3312,10 +3312,23 @@ impl Manager {
         );
     }
 
-    pub async fn system_stats(&self) -> serde_json::Value {
+    pub async fn system_stats(self: &Arc<Self>) -> serde_json::Value {
         let sample = self.system_stats.current().await;
         let mut stats =
             crate::system_stats::projection(sample.as_deref(), self.system_stats.interval());
+        match self.hardware.latest() {
+            Some(snapshot) => {
+                crate::system_stats::name_gpus(&mut stats, &snapshot.report.devices.gpus)
+            }
+            None if self.hardware.claim_warmup() => {
+                let manager = self.clone();
+                tokio::spawn(async move {
+                    let _ = manager.hardware.snapshot().await;
+                    manager.hardware.release_warmup();
+                });
+            }
+            None => {}
+        }
         stats["active_requests"] = self.active_requests().into();
         stats["queued_requests"] = (self.admission.pending_count() as u64).into();
         stats["last_inference"] = serde_json::to_value(

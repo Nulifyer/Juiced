@@ -374,7 +374,7 @@ pub struct Gpu {
 }
 
 impl Gpu {
-    fn new(vendor: GpuVendor) -> Self {
+    pub(crate) fn new(vendor: GpuVendor) -> Self {
         Self {
             vendor,
             index: None,
@@ -572,6 +572,8 @@ pub struct Detector {
     ttl: Duration,
     budget: Duration,
     current: tokio::sync::Mutex<Option<Arc<Snapshot>>>,
+    latest: std::sync::Mutex<Option<Arc<Snapshot>>>,
+    warming: std::sync::atomic::AtomicBool,
 }
 
 impl Detector {
@@ -581,6 +583,8 @@ impl Detector {
             ttl,
             budget,
             current: tokio::sync::Mutex::new(None),
+            latest: std::sync::Mutex::new(None),
+            warming: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -602,6 +606,22 @@ impl Detector {
 
     pub fn ttl(&self) -> Duration {
         self.ttl
+    }
+
+    pub fn latest(&self) -> Option<Arc<Snapshot>> {
+        self.latest
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
+    }
+
+    pub fn claim_warmup(&self) -> bool {
+        !self.warming.swap(true, std::sync::atomic::Ordering::AcqRel)
+    }
+
+    pub fn release_warmup(&self) {
+        self.warming
+            .store(false, std::sync::atomic::Ordering::Release);
     }
 
     pub async fn snapshot(&self) -> Result<Arc<Snapshot>, DetectionError> {
@@ -632,6 +652,10 @@ impl Detector {
             Err(_) => return Err(DetectionError::Deadline),
         };
         *current = Some(snapshot.clone());
+        *self
+            .latest
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = Some(snapshot.clone());
         Ok(snapshot)
     }
 }

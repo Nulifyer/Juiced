@@ -626,6 +626,30 @@ pub fn projection(sample: Option<&Sample>, interval: Duration) -> Value {
     })
 }
 
+pub fn name_gpus(stats: &mut Value, detected: &[crate::hardware::Gpu]) {
+    let Some(gpus) = stats.get_mut("gpus").and_then(Value::as_array_mut) else {
+        return;
+    };
+    for gpu in gpus {
+        if !gpu["name"].is_null() {
+            continue;
+        }
+        let Some(slot) = gpu["id"].as_str().and_then(|id| id.strip_prefix("amdgpu:")) else {
+            continue;
+        };
+        let name = detected
+            .iter()
+            .find(|device| {
+                device.vendor == crate::hardware::GpuVendor::Amd
+                    && device.pci_slot.as_deref() == Some(slot)
+            })
+            .and_then(|device| device.name.clone());
+        if let Some(name) = name {
+            gpu["name"] = name.into();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -895,5 +919,26 @@ mod tests {
             assert_eq!(value[field], Value::Null, "{field}");
         }
         assert_eq!(value["gpus"], json!([]));
+    }
+
+    #[test]
+    fn amd_gpu_names_come_from_the_matching_detected_card() {
+        use crate::hardware::{Gpu as Detected, GpuVendor};
+        let mut radeon = Detected::new(GpuVendor::Amd);
+        radeon.pci_slot = Some("0000:c4:00.0".into());
+        radeon.name = Some("AMD Radeon 890M Graphics".into());
+        let mut other = Detected::new(GpuVendor::Amd);
+        other.pci_slot = Some("0000:03:00.0".into());
+        let mut stats = json!({"gpus": [
+            {"id": "amdgpu:0000:c4:00.0", "name": null},
+            {"id": "amdgpu:0000:03:00.0", "name": null},
+            {"id": "nvidia:GPU-a", "name": "Kept"},
+            {"id": "amdgpu:card9", "name": null},
+        ]});
+        name_gpus(&mut stats, &[other, radeon]);
+        assert_eq!(stats["gpus"][0]["name"], "AMD Radeon 890M Graphics");
+        assert_eq!(stats["gpus"][1]["name"], Value::Null);
+        assert_eq!(stats["gpus"][2]["name"], "Kept");
+        assert_eq!(stats["gpus"][3]["name"], Value::Null);
     }
 }
