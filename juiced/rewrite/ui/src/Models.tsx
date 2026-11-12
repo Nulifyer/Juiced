@@ -52,6 +52,7 @@ export function ModelList({ models, selected, onSelect, mode, mutate, busy, onli
   const [query, setQuery] = useState("");
   const [service, setService] = useState<Service | null>(null);
   const [dragging, setDragging] = useState("");
+  const dragged = useRef("");
   const visible = matchingModels(service ? models.filter((model) => offers(model, service)) : models, query);
   const chips = services.map(([id, label]) => [id, label, models.filter((model) => offers(model, id)).length] as const).filter(([, , count]) => count > 0);
   const locked = busy || !online;
@@ -62,12 +63,12 @@ export function ModelList({ models, selected, onSelect, mode, mutate, busy, onli
     </div>
     {models.length === 0 ? <Empty title="No models yet">Find a model in Library to get started.</Empty> : visible.length === 0 ? <Empty title="No matches">Try another search or filter.</Empty> : mode === "policy" ? <div className="policy-board">
       {(["hot", "on-demand", "disabled"] as Policy[]).map((policy) => <section className={`policy-lane ${dragging ? "droppable" : ""}`} key={policy} aria-label={`${policyNames[policy]} models`}
-        onDragOver={(event) => { if (dragging) event.preventDefault(); }}
-        onDrop={(event) => { event.preventDefault(); const model = models.find((item) => item.id === dragging); setDragging(""); if (model && !(policy === "disabled" && model.loaded)) setPolicy(mutate, model, policy); }}>
+        onDragOver={(event) => { if (dragged.current) event.preventDefault(); }}
+        onDrop={(event) => { event.preventDefault(); const model = models.find((item) => item.id === dragged.current); dragged.current = ""; setDragging(""); if (model && !(policy === "disabled" && model.loaded)) setPolicy(mutate, model, policy); }}>
         <header><h2>{policyNames[policy]}</h2><span className="muted">{visible.filter((model) => model.policy === policy).length}</span></header>
         <p className="muted">{policy === "hot" ? "Loaded at startup and kept ready" : policy === "on-demand" ? "Loads on the first request" : "Hidden from apps"}</p>
         {policy === "on-demand" && idleControl}
-        {visible.filter((model) => model.policy === policy).map((model) => <div key={model.id} className={`lane-model ${selected === model.id ? "selected" : ""}`} draggable={!locked} onDragStart={(event) => { setDragging(model.id); event.dataTransfer.effectAllowed = "move"; }} onDragEnd={() => setDragging("")}>
+        {visible.filter((model) => model.policy === policy).map((model) => <div key={model.id} className={`lane-model ${selected === model.id ? "selected" : ""}`} draggable={!locked} onDragStart={(event) => { dragged.current = model.id; setDragging(model.id); event.dataTransfer.effectAllowed = "move"; }} onDragEnd={() => { dragged.current = ""; setDragging(""); }}>
           <button className="lane-open" aria-pressed={selected === model.id} onClick={() => onSelect(model.id)}><strong>{model.id}</strong><span className="muted"><span className={`status-dot ${workerTone(model)}`} /> {workerState(model)} · {bytes(model.resident_bytes)}</span></button>
           <PolicySelect model={model} mutate={mutate} disabled={locked} />
         </div>)}
