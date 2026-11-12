@@ -474,16 +474,15 @@ mod linux {
             {
                 continue;
             }
-            if kernel {
-                if inode != 0
+            if kernel
+                && (inode != 0
                     || major != 0
                     || minor != 0
                     || offset != 0
                     || end - start > 65536
-                    || permissions[3] != b'p'
-                {
-                    return Err(malformed());
-                }
+                    || permissions[3] != b'p')
+            {
+                return Err(malformed());
             }
             mappings.push(Mapping {
                 start,
