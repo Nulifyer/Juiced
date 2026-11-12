@@ -3,6 +3,7 @@
 pub mod artifacts;
 pub mod cli;
 pub mod filesystem;
+pub mod huggingface;
 #[cfg(target_os = "linux")]
 pub mod llama;
 pub mod speech;
@@ -37,7 +38,7 @@ pub const READ_ROUTES: [&str; 10] = [
     "/models/{model}",
     "/models/{model}/options",
 ];
-pub const OPERATOR_READ_ROUTES: [&str; 15] = [
+pub const OPERATOR_READ_ROUTES: [&str; 17] = [
     "/system-info",
     "/juiced/cache/inspect",
     "/juiced/requests",
@@ -53,8 +54,10 @@ pub const OPERATOR_READ_ROUTES: [&str; 15] = [
     "/models/{model}/runtime",
     "/system-stats",
     "/juiced/logs",
+    "/juiced/library/search",
+    "/juiced/library/pulls/{pull}",
 ];
-pub const WRITE_ROUTES: [&str; 20] = [
+pub const WRITE_ROUTES: [&str; 21] = [
     "/juiced/runtime-packages/import",
     "/juiced/policy",
     "/load",
@@ -75,6 +78,7 @@ pub const WRITE_ROUTES: [&str; 20] = [
     "/juiced/artifacts/remove",
     "/juiced/artifacts/sets",
     "/juiced/artifacts/sets/remove",
+    "/juiced/library/pull",
 ];
 pub const INFERENCE_ROUTES: [&str; 4] = [
     "/chat/completions",
@@ -144,6 +148,12 @@ fn diagnostic_route(path: &str) -> &'static str {
             .is_some_and(|id| !id.is_empty() && !id.contains('/'))
         {
             return "/juiced/artifacts/sets/{set}";
+        }
+        if path
+            .strip_prefix("/juiced/library/pulls/")
+            .is_some_and(|id| !id.is_empty() && !id.contains('/'))
+        {
+            return "/juiced/library/pulls/{pull}";
         }
         if let Some(model) = path.strip_prefix("/models/") {
             if model
@@ -441,7 +451,9 @@ impl Server {
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .env_remove("LEMONADE_API_KEY")
-            .env_remove("LEMONADE_ADMIN_API_KEY");
+            .env_remove("LEMONADE_ADMIN_API_KEY")
+            .env("JUICED_HUGGINGFACE_URL", "http://127.0.0.1:9")
+            .env_remove("HF_TOKEN");
         for (name, value) in &self.environment {
             if let Some(value) = value {
                 command.env(name, value);

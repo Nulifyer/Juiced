@@ -1,8 +1,10 @@
 mod inventory;
+mod presence;
 #[cfg(test)]
 mod set_tests;
 mod sets;
 pub use inventory::{InventoryPage, InventoryRequest, Section as InventorySection};
+pub use presence::{Presence, PresenceJob, SourceRecord};
 pub mod inventory_bounds {
     pub use super::inventory::{
         DEFAULT_PAGE_SIZE, ERROR_PREVIEW_BYTES, MAXIMUM_PAGE_SIZE, REFERENCE_PREVIEW,
@@ -645,6 +647,9 @@ impl ArtifactStore {
     }
     pub fn source_policy(&self) -> SourcePolicy {
         self.policy
+    }
+    pub fn stopping(&self) -> bool {
+        self.stopping.load(Ordering::Acquire)
     }
 
     pub fn start_download(
@@ -1698,32 +1703,7 @@ impl ArtifactStore {
     }
 
     async fn client(&self, url: &Url) -> Result<reqwest::Client, ArtifactError> {
-        let host = url.host_str().ok_or(ArtifactError::SourcePolicy)?;
-        let port = url
-            .port_or_known_default()
-            .ok_or(ArtifactError::SourcePolicy)?;
-        let addresses: Vec<SocketAddr> = tokio::time::timeout(
-            Duration::from_secs(5),
-            tokio::net::lookup_host((host.trim_matches(['[', ']']), port)),
-        )
-        .await
-        .map_err(|_| ArtifactError::Network)?
-        .map_err(|_| ArtifactError::Network)?
-        .collect();
-        if addresses.is_empty()
-            || addresses
-                .iter()
-                .any(|address| !allowed_address(address.ip(), url.scheme(), self.policy))
-        {
-            return Err(ArtifactError::SourcePolicy);
-        }
-        reqwest::Client::builder()
-            .no_proxy()
-            .redirect(reqwest::redirect::Policy::none())
-            .connect_timeout(Duration::from_secs(5))
-            .resolve_to_addrs(host, &addresses)
-            .build()
-            .map_err(|_| ArtifactError::Network)
+        policy_client(url, self.policy).await
     }
 
     async fn checkpoint_async(
@@ -2172,6 +2152,42 @@ fn digest_valid(value: &str) -> bool {
 }
 fn reference_valid(value: &str) -> bool {
     !value.is_empty() && value.len() <= 256 && !value.chars().any(char::is_control)
+}
+
+pub(crate) async fn policy_client(
+    url: &Url,
+    policy: SourcePolicy,
+) -> Result<reqwest::Client, ArtifactError> {
+    let host = url.host_str().ok_or(ArtifactError::SourcePolicy)?;
+    let port = url
+        .port_or_known_default()
+        .ok_or(ArtifactError::SourcePolicy)?;
+    let addresses: Vec<SocketAddr> = tokio::time::timeout(
+        Duration::from_secs(5),
+        tokio::net::lookup_host((host.trim_matches(['[', ']']), port)),
+    )
+    .await
+    .map_err(|_| ArtifactError::Network)?
+    .map_err(|_| ArtifactError::Network)?
+    .collect();
+    if addresses.is_empty()
+        || addresses
+            .iter()
+            .any(|address| !allowed_address(address.ip(), url.scheme(), policy))
+    {
+        return Err(ArtifactError::SourcePolicy);
+    }
+    reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(Duration::from_secs(5))
+        .resolve_to_addrs(host, &addresses)
+        .build()
+        .map_err(|_| ArtifactError::Network)
+}
+
+pub(crate) fn policy_url(value: &str, policy: SourcePolicy) -> Result<Url, ArtifactError> {
+    source_url(value, policy, true)
 }
 
 fn source_url(value: &str, policy: SourcePolicy, redirect: bool) -> Result<Url, ArtifactError> {

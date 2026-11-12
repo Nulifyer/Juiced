@@ -326,6 +326,15 @@ impl ArtifactStore {
         Ok((held, verified))
     }
 
+    pub fn plan_set(
+        &self,
+        specification: ArtifactSetSpec,
+    ) -> Result<(ArtifactSetSpec, String), ArtifactError> {
+        let specification = specification.canonical(&self.limits)?;
+        let id = specification.identity()?;
+        Ok((specification, id))
+    }
+
     pub fn set_operation(&self, cancelled: Arc<AtomicBool>) -> SetOperation {
         SetOperation::new(
             Instant::now() + self.limits.request_timeout.min(Duration::from_secs(30)),
