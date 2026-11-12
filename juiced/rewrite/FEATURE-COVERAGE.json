@@ -523,8 +523,9 @@
       "disposition": "preserve and regression-check only where affected",
       "rewrite_phase": "R7",
       "owner": "platform delivery",
-      "rewrite_status": "planned",
-      "acceptance": "Native OS/architecture package CI and restore tests; separate real-device support receipts and actual HA/Pi client smoke tests."
+      "rewrite_status": "partial",
+      "acceptance": "Native OS/architecture package CI and restore tests; separate real-device support receipts and actual HA/Pi client smoke tests.",
+      "implementation_boundary": "The llama.cpp hybrid-rocm build (gfx1150 GPU plus XDNA2 NPU) installs, launches with the native environment and is selectable when detection finds both devices. Tested on fake hardware only."
     },
     {
       "id": "F047",
@@ -556,8 +557,9 @@
       "disposition": "preserve and regression-check only where affected",
       "rewrite_phase": "R2",
       "owner": "admission and operator workflows",
-      "rewrite_status": "planned",
-      "acceptance": "Shared-pool and actual-slot tests; five active requests and more idle threads than slots with unchanged context; fair bounded queues, explicit caps, cancellation and unified Library journey."
+      "rewrite_status": "partial",
+      "acceptance": "Shared-pool and actual-slot tests; five active requests and more idle threads than slots with unchanged context; fair bounded queues, explicit caps, cancellation and unified Library journey.",
+      "implementation_boundary": "Hybrid backends require a detected gfx1150 GPU and an XDNA2 NPU, and a finite memlock limit marks NPU backends unknown. Tested on fake hardware only."
     },
     {
       "id": "F050",
@@ -611,8 +613,9 @@
       "disposition": "preserve and regression-check only where affected",
       "rewrite_phase": "R7",
       "owner": "platform delivery",
-      "rewrite_status": "planned",
-      "acceptance": "Native OS/architecture package CI and restore tests; separate real-device support receipts and actual HA/Pi client smoke tests."
+      "rewrite_status": "partial",
+      "acceptance": "Native OS/architecture package CI and restore tests; separate real-device support receipts and actual HA/Pi client smoke tests.",
+      "implementation_boundary": "System info reports NPU firmware and driver versions, GPU targets and the memlock limit, with reasons when a backend is unavailable. Real NPU and AMD GPU hosts are unverified."
     },
     {
       "id": "F055",

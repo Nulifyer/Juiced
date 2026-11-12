@@ -649,3 +649,8 @@ a.button { color: var(--foreground); text-decoration: none; }
 .import-table input[type="checkbox"], .native-import .inline-field input[type="checkbox"] { width: 16px; height: 16px; min-height: 0; padding: 0; accent-color: var(--ring); }
 .idle-default { white-space: nowrap; }
 .idle-default select { width: auto; min-height: 28px; padding-block: 3px; }
+.flm-models { display: grid; gap: 8px; padding: 12px 14px; margin-bottom: 12px; }
+.flm-models .panel-head { display: flex; align-items: center; gap: 10px; }
+.flm-models .panel-head .inline-field { margin-left: auto; }
+.flm-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.flm-list li { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 10px; }

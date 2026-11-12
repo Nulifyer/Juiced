@@ -44,6 +44,9 @@ const gates: Record<string, { owner: string; acceptance: string }> = {
   R8: { owner: "conditional integrations", acceptance: "A named consumer/workload and separately selected family, provider/importer, hardware/resource/cancellation/privacy acceptance; no mandatory new infrastructure." },
 };
 const partial: Record<string, string> = {
+  F046: "The llama.cpp hybrid-rocm build (gfx1150 GPU plus XDNA2 NPU) installs, launches with the native environment and is selectable when detection finds both devices. Tested on fake hardware only.",
+  F049: "Hybrid backends require a detected gfx1150 GPU and an XDNA2 NPU, and a finite memlock limit marks NPU backends unknown. Tested on fake hardware only.",
+  F054: "System info reports NPU firmware and driver versions, GPU targets and the memlock limit, with reasons when a backend is unavailable. Real NPU and AMD GPU hosts are unverified.",
   F001: "Library shows a curated recommended list beside search results with task chips. Ranking and per-host recommendation tuning remain open.",
   F002: "One Library search combines the catalog, downloaded files and Hugging Face with a bounded cache and a hub-free first answer. Repository card and file-tree inspection remain open.",
   F004: "Search results group GGUF quants under one model with size and host-fit hints. Non-GGUF variant grouping remains open.",

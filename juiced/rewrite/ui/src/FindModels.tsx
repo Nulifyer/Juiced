@@ -7,6 +7,7 @@ import { parseSystemInfo } from "./hardware";
 import { parseSearch, progress, tasks, type LibraryModel, type Quant, type SearchResult } from "./libraryData";
 import { Badge, Button, Empty, Icon, Menu } from "./ui";
 import { LocalProgress, ServerFolder, useLocalFile } from "./LocalFiles";
+import { FlmModels } from "./FlmModels";
 import { notify } from "./toast";
 import { useResource } from "./useResource";
 
@@ -155,6 +156,7 @@ export function FindModels({ client, online, onRegistered, onOpenModel }: { clie
       </div>
       {folderOpen && <ServerFolder client={client} onClose={() => setFolderOpen(false)} onPick={(entry, mode) => { setFolderOpen(false); setSelected(null); void local.pick(entry, mode); }} />}
       {error && <div className="action-row"><p className="inline-error" role="alert">{error}</p><Button onClick={() => setTick((value) => value + 1)}>Retry</Button></div>}
+      {(task === null || task === "chat") && <FlmModels client={client} online={online} query={query} onAdded={onRegistered} />}
       {result && hubPending && <p className="searching muted" role="status">Searching Hugging Face…</p>}
       {result && !hubPending && result.hub !== "ok" && result.hub !== "skipped" && <p className="field-help">{result.offline ? "Offline mode: showing recommended and downloaded models only." : "Hugging Face is unreachable right now; showing recommended and downloaded models."}</p>}
       {!result ? <p className="muted" role="status">{loading ? "Searching…" : ""}</p> : models.length === 0 ? <Empty title="No models found">Try a shorter search or another task.</Empty> : <ul className={`model-results ${loading ? "stale" : ""}`} aria-label="Search results" aria-busy={loading}>
