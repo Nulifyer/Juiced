@@ -298,6 +298,7 @@ impl Manager {
         };
         let generation = next.generation;
         let old_config = std::mem::replace(&mut **guard, next);
+        self.refresh_aliases(&guard.aliases);
         let mut retired = Vec::new();
         let mut old_snapshot = None;
         {

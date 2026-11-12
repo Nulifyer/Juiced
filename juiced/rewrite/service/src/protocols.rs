@@ -816,7 +816,7 @@ pub fn ollama_models(models: &[Value], loaded_only: bool) -> Value {
         })
         .map(|model| {
             let mut item = json!({"name":model["id"],"model":model["id"]});
-            for key in ["digest", "size", "modified_at", "details"] {
+            for key in ["digest", "size", "modified_at", "details", "aliased_to"] {
                 if let Some(value) = model.get(key) {
                     item[key] = value.clone();
                 }
