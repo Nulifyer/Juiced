@@ -13,6 +13,45 @@ const executable = (name: string) => resolve(root, "target/debug", name + (proce
 const weights = Uint8Array.from({ length: 256 * 1024 }, (_, index) => index % 251);
 const sha256 = new Bun.CryptoHasher("sha256").update(weights).digest("hex");
 const failed = new Set<string>();
+const hubRevision = "0123456789abcdef0123456789abcdef01234567";
+type HubFile = { path: string; bytes: Uint8Array; declared?: number };
+const hubBytes = (seed: number, length: number) => Uint8Array.from({ length }, (_, index) => (index % 239) ^ seed);
+const hubDigest = (file: HubFile) => file.declared ? "f".repeat(64) : new Bun.CryptoHasher("sha256").update(file.bytes).digest("hex");
+const hubRepos = new Map<string, { pipeline: string; downloads: number; files: HubFile[] }>([
+  ["unsloth/Qwen3-0.6B-GGUF", { pipeline: "text-generation", downloads: 125000, files: ["Q2_K", "Q3_K_M", "Q4_0", "Q4_K_M", "Q5_K_M", "Q6_K", "Q8_0", "F16", "IQ4_NL", "IQ2_XXS"].map((label, index): HubFile => ({ path: `Qwen3-0.6B-${label}.gguf`, bytes: hubBytes(index + 1, 4096 + index * 512) })).concat([{ path: "Qwen3-0.6B-BF16.gguf", bytes: new Uint8Array(), declared: 4 * 1024 ** 4 }]) }],
+  ["fixture-labs/Tiny-Chat-GGUF", { pipeline: "text-generation", downloads: 4200, files: [{ path: "Tiny-Chat-Q4_K_M.gguf", bytes: hubBytes(31, 256 * 1024) }, { path: "Tiny-Chat-Q8_0.gguf", bytes: hubBytes(32, 300 * 1024) }] }],
+]);
+const hubFiles = new Map<string, HubFile>([...hubRepos].flatMap(([repo, entry]) => entry.files.map((file): [string, HubFile] => [`/${repo}/resolve/${hubRevision}/${file.path}`, file])));
+function slowBody(bytes: Uint8Array, start: number, chunk: number, delay: number) {
+  let position = start, cancelled = false;
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      await Bun.sleep(delay);
+      if (cancelled) return;
+      const end = Math.min(position + chunk, bytes.length);
+      controller.enqueue(bytes.subarray(position, end)); position = end;
+      if (position === bytes.length) controller.close();
+    },
+    cancel() { cancelled = true; },
+  });
+}
+function hub(url: URL): Response | undefined {
+  if (url.pathname === "/api/models") {
+    const search = (url.searchParams.get("search") ?? "").toLowerCase();
+    const pipeline = url.searchParams.get("pipeline_tag");
+    return Response.json([...hubRepos].filter(([repo, entry]) => repo.toLowerCase().includes(search) && (!pipeline || entry.pipeline === pipeline)).map(([id, entry]) => ({ id, downloads: entry.downloads, likes: 3, pipeline_tag: entry.pipeline })));
+  }
+  const info = /^\/api\/models\/([^/]+\/[^/]+)(?:\/revision\/([0-9a-f]{40}))?$/.exec(url.pathname);
+  if (info && url.searchParams.get("blobs") === "true") {
+    const entry = hubRepos.get(info[1]!);
+    if (!entry || (info[2] && info[2] !== hubRevision)) return new Response("{}", { status: 401 });
+    const siblings = entry.files.map((file) => { const size = file.declared ?? file.bytes.length; return { rfilename: file.path, size, lfs: { sha256: hubDigest(file), size, pointerSize: 134 } }; });
+    return Response.json({ id: info[1], sha: hubRevision, downloads: entry.downloads, likes: 3, pipeline_tag: entry.pipeline, cardData: { license: "apache-2.0" }, siblings: [...siblings, { rfilename: ".gitattributes", size: 1519 }] });
+  }
+  const file = hubFiles.get(url.pathname);
+  if (file && !file.declared) return new Response(slowBody(file.bytes, 0, 4096, 60), { headers: { "Content-Length": String(file.bytes.length), ETag: `"${hubDigest(file)}"` } });
+  if (url.pathname.includes("/resolve/")) return new Response("Not found", { status: 404 });
+}
 let source: ReturnType<typeof Bun.serve> | undefined;
 try {
 source = Bun.serve({
@@ -21,6 +60,8 @@ source = Bun.serve({
     const url = new URL(request.url);
     if (url.pathname === "/fixture.json") return Response.json({ model_file: resolve(directory, "fixture.gguf"), source_url: `${url.origin}/weights.gguf`, sha256, bytes: weights.length, command: executable("juiced-test-worker"), args: ["--port", "{port}", "--model", "{model}", "--events", resolve(directory, "managed.events"), "--slot-save-path", "{cache}"] });
     if (url.pathname === "/speech-fixture.wav") return new Response(Bun.file(resolve(root, "../../test/test_speech_de.wav")));
+    const hubResponse = hub(url);
+    if (hubResponse) return hubResponse;
     if (!url.pathname.endsWith(".gguf")) return new Response("Not found", { status: 404 });
     if (url.pathname.startsWith("/unstable/") && !failed.has(url.pathname)) { failed.add(url.pathname); return new Response("Fixture transient failure", { status: 503 }); }
     const range = request.headers.get("Range");
@@ -95,8 +136,9 @@ source = Bun.serve({
     const managed = { ...models[1]!, id: "fixture.managed-runtime", policy: "disabled", resident_bytes: 64 * 1024 ** 2, execution_profile: { schema_version: 1, adapter: "llama-cpp", implementation_id: "llama-cpp", runtime_package: installed[0], args: ["--host", "127.0.0.1", "--port", "{port}", "--model", "{model}", "--parallel", "1", "--ctx-size", "256", "--n-gpu-layers", "0", "--slot-save-path", "{cache}"], options: {}, placement: "unresolved" } };
     await writeFile(config, JSON.stringify({ ...initialConfig, schema_version: 2, models: [...models, managed] }, null, 2));
   }
+  const { HF_TOKEN: _token, ...environment } = process.env;
   const child = Bun.spawn([executable("lemond"), "--config", config, "--listen", `127.0.0.1:${process.env.JUICED_PREVIEW_PORT ?? 13306}`, "--ui", resolve(root, "ui/dist")], {
-    cwd: root, stdout: "inherit", stderr: "inherit", env: { ...process.env, LEMONADE_API_KEY: "", LEMONADE_ADMIN_API_KEY: "" },
+    cwd: root, stdout: "inherit", stderr: "inherit", env: { ...environment, LEMONADE_API_KEY: "", LEMONADE_ADMIN_API_KEY: "", JUICED_HUGGINGFACE_URL: `http://127.0.0.1:${source!.port}` },
   });
   const stop = () => child.kill("SIGTERM");
   process.once("SIGINT", stop); process.once("SIGTERM", stop);

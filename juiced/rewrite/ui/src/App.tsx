@@ -142,7 +142,7 @@ export function App() {
       </Menu>
     </header>
     <aside className={`sidebar ${mobileOpen ? "open" : ""}`} aria-label="Navigation">
-      <nav aria-label="Destinations">{destinations.map(([id, label, icon]) => <button key={id} aria-current={screen === id ? "page" : undefined} onClick={() => leave(() => { setScreen(id); setSelected(""); setMobileOpen(false); })}><Icon name={icon} size={16} /><span>{label}</span>{id === "models" && snapshot && <span className="nav-count">{snapshot.models.length}</span>}</button>)}</nav>
+      <nav aria-label="Destinations">{destinations.map(([id, label, icon]) => <button key={id} aria-current={screen === id ? "page" : undefined} onClick={() => { setMobileOpen(false); leave(() => { setScreen(id); setSelected(""); }); }}><Icon name={icon} size={16} /><span>{label}</span>{id === "models" && snapshot && <span className="nav-count">{snapshot.models.length}</span>}</button>)}</nav>
     </aside>
     {mobileOpen && <button className="nav-scrim" aria-label="Close navigation" onClick={() => setMobileOpen(false)} />}
     <main ref={workspace} id="workspace" className={`workspace ${modelScreen ? "model-screen" : ""}`} tabIndex={-1}>
