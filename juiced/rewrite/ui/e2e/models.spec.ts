@@ -223,10 +223,11 @@ test("removing a registration keeps its weight file", async ({ page, request }) 
 async function drag(source: Locator, target: Locator) {
   if (!test.info().project.use.hasTouch) return source.dragTo(target);
   const transfer = await source.page().evaluateHandle(() => new DataTransfer());
-  await source.dispatchEvent("dragstart", { dataTransfer: transfer });
+  const card = await source.elementHandle();
+  await card!.dispatchEvent("dragstart", { dataTransfer: transfer });
   await target.dispatchEvent("dragover", { dataTransfer: transfer });
   await target.dispatchEvent("drop", { dataTransfer: transfer });
-  await source.dispatchEvent("dragend", { dataTransfer: transfer }).catch(() => {});
+  await card!.dispatchEvent("dragend", { dataTransfer: transfer });
 }
 
 test.describe("Loading policy board", () => {
