@@ -35,7 +35,11 @@ Dashboard · Models · Loading policy · Library · Backends & hardware · Cache
 | A: hardware detection + backend availability (`GET /system-info`) | helper | merged af388472 |
 | B: `/system-stats`, `/juiced/logs`, request token stats | helper | merged 75a17e0e |
 | C: library search + HF pull (`/juiced/library/search`, `/juiced/library/pull`) | helper | merged 7de93910; real 364 MB Qwen3 Q4_0 pull verified via UI in 33 s |
-| E: new Playwright suite for the redesigned UI | helper worktree | running (Add model journey excluded) |
+| E: new Playwright suite for the redesigned UI | helper | merged 5bd44622; 116/117 pass (1 desktop-only skip) on alternate ports |
+| F: model aliases + options `apply: "reload"` | helper | merged 42e452b3; UI 7da8f87a (Aliases tab, Save and reload); real CUDA reload 2.3 s verified |
+| G: automatic chat session continuation (`/juiced/cache/sessions`) | helper worktree | running |
+| H: sd.cpp images + Kokoros TTS adapters and engines | helper worktree | running |
+| I: journeys for add-with-engine-install, compare, embeddings | helper worktree | running |
 | D: engine install from pinned builds + model→engine auto-select (`/juiced/engines`, `/juiced/models/add`) | helper | merged 2e9ee2ae |
 
 ## Notes
@@ -45,4 +49,6 @@ Dashboard · Models · Loading policy · Library · Backends & hardware · Cache
 
 ## Next action
 
-Primary: merge E's suite; adapt Backends tab rename (Installed → Engines) and Library add flow; add journeys for Add model (engine_not_installed → install → added) using the fixture's fake hub plus the test-fixture engine release override (JUICED_TEST_ENGINE_RELEASES); run the full gate (`bun scripts/quick-check.ts --full …`); commit.
+Primary: merge G, H, I as they report; then Cache sessions UI (slot hit / restored / cold, forget), Speak and Images tabs in Test services; re-anchor inventory evidence; run Rust suites, Clippy, Bun, full e2e (`JUICED_E2E_PORT=13317 JUICED_SOURCE_PORT=13318`), and the full gate; commit.
+
+Verified 2026-11-11 on RTX 5080: Settings save-and-reload, engine/weights controls only shown when actionable (a01abf0b), wide-screen column fix (c05b1883), Library chips 10/10 loads settle, button sweep across every page/tab with no page errors or 4xx/5xx, real two-model Compare.
