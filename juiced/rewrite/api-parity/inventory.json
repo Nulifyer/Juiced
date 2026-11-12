@@ -63,7 +63,7 @@
     },
     {
       "path": "juiced/rewrite/PLAN.md",
-      "sha256": "e3cc2052700c9773cd47f3ff4d39e082caabc79a7646dc6bc6a4b897f2b06db7",
+      "sha256": "e4915b54c30f418c88e037a9dd5f493e3f15feea04a5b3f8ab08268b0b2e6cb3",
       "hash_check": "snapshot_only"
     },
     {
@@ -2187,7 +2187,7 @@
     {
       "path": "juiced/rewrite/PLAN.md",
       "line": 9,
-      "text": "Juiced remains a model appliance for external clients. Keep artifact identity, execution profiles, Disabled / On demand / Hot policies, observed worker state, temporary service tests and bounded diagnostics. The console has nine destinations: Dashboard, Models, Loading policy, Library, Backends & hardware, Cache, Test services, Diagnostics and Connect. Sub-views use one tab strip per page and one side inspector; there are no folding sections. Do not introduce saved conversations, a general agent framework or model-weight conversion. Barista is the sole optional operator-assistant feature. Its required B0-B4 work follows the upstream P0-P6 sequence below. It is not deferred to the optional scale phase.",
+      "text": "Juiced remains a model appliance for external clients. Keep artifact identity, execution profiles, Disabled / On demand / Hot policies, observed worker state, temporary service tests and bounded diagnostics. The console has eight destinations: Dashboard, Models (installed models, local files, discovery and downloads), Loading policy, Engines & hardware, Cache, Test services, Diagnostics and Connect. Sub-views use one tab strip per page and one side inspector; there are no folding sections. Do not introduce saved conversations, a general agent framework or model-weight conversion. Barista is the sole optional operator-assistant feature. Its required B0-B4 work follows the upstream P0-P6 sequence below. It is not deferred to the optional scale phase.",
       "role": "product_boundary"
     },
     {
