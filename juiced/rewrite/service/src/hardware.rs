@@ -104,12 +104,7 @@ pub enum MemlockLimit {
 }
 
 pub fn host_os() -> &'static str {
-    match std::env::consts::OS {
-        "linux" => "linux",
-        "windows" => "windows",
-        "macos" => "macos",
-        other => other,
-    }
+    std::env::consts::OS
 }
 
 fn cpu_family(architecture: &str) -> &str {

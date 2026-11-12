@@ -140,7 +140,7 @@ impl Ingress {
             return Err(unavailable());
         }
         self.reserved_bytes
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |reserved| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |reserved| {
                 reserved
                     .checked_add(bytes)
                     .filter(|next| *next <= self.capacity_bytes)

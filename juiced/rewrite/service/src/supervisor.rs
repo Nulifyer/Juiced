@@ -87,7 +87,7 @@ impl Budget {
                 bytes: 0,
             });
         }
-        self.used.fetch_update(Ordering::AcqRel, Ordering::Acquire, |used| {
+        self.used.try_update(Ordering::AcqRel, Ordering::Acquire, |used| {
             self.after_reservation(used, bytes)
         }).map_err(|_| ApiError::new(StatusCode::SERVICE_UNAVAILABLE, "resident_budget", "The declared resident budget is full. Unload an idle On demand model or increase the configured budget."))?;
         Ok(Reservation {

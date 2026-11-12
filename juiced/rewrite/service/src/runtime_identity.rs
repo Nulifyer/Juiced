@@ -1150,7 +1150,7 @@ mod linux {
             return Err(malformed());
         }
         let mut address = Vec::with_capacity(if ipv6 { 16 } else { 4 });
-        for word in bytes.chunks_exact(8) {
+        for word in bytes.as_chunks::<8>().0 {
             let word = u32::try_from(unsigned(word, 16)?).map_err(|_| malformed())?;
             address.extend_from_slice(&word.to_ne_bytes());
         }
@@ -1635,8 +1635,10 @@ mod linux {
             );
             let ipv6 = std::net::Ipv6Addr::LOCALHOST
                 .octets()
-                .chunks_exact(4)
-                .map(|word| format!("{:08X}", u32::from_ne_bytes(word.try_into().unwrap())))
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|word| format!("{:08X}", u32::from_ne_bytes(*word)))
                 .collect::<String>();
             let ipv6 = format!("{header}{}", row(&ipv6, 42));
             assert!(

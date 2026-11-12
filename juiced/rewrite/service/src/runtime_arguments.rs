@@ -112,7 +112,7 @@ impl ArgumentTemplate {
         })?;
         let mut groups = Vec::new();
         let mut fields: [VecDeque<usize>; 4] = std::array::from_fn(|_| VecDeque::new());
-        for group in resolved.args.chunks_exact(2) {
+        for group in resolved.args.as_chunks::<2>().0 {
             let field = crate::profiles::option_field(&group[0]).ok_or_else(truncated)?;
             let queue = fields.get_mut(field).ok_or_else(truncated)?;
             queue.push_back(groups.len());
@@ -137,7 +137,7 @@ impl ArgumentTemplate {
         }
         for (index, group) in groups.iter().enumerate() {
             if !consumed[index] {
-                arguments.extend_from_slice(group);
+                arguments.extend_from_slice(*group);
             }
         }
         let template = validate_selected(self.adapter, &arguments, self.fixture)?;

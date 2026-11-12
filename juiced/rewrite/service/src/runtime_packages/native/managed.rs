@@ -41,7 +41,7 @@ impl BindingLease {
     fn acquire(record: Arc<Record>) -> Result<Self> {
         record
             .binding_leases
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |count| {
                 count.checked_add(1)
             })
             .map_err(|_| Error::new("package_lease_limit"))?;

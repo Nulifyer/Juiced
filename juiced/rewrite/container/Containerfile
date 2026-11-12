@@ -1,5 +1,5 @@
 # Build context: the repository root. See juiced/rewrite/container/build.sh.
-ARG RUST_IMAGE=docker.io/library/rust:1.97-slim-trixie
+ARG RUST_IMAGE=docker.io/library/rust:1.99.1-slim-trixie
 ARG BUN_IMAGE=docker.io/oven/bun:1.4.4
 ARG RUNTIME_IMAGE=docker.io/library/debian:trixie-slim
 

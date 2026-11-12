@@ -233,7 +233,7 @@ impl Hold {
     fn acquire(count: &mut Option<Arc<AtomicUsize>>) -> Result<Self, ArtifactError> {
         let count = count.get_or_insert_with(|| Arc::new(AtomicUsize::new(0)));
         count
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |value| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |value| {
                 value.checked_add(1)
             })
             .map_err(|_| ArtifactError::Limit)?;

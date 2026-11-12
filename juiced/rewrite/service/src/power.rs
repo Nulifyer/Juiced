@@ -590,7 +590,7 @@ mod tests {
             if self
                 .counts
                 .failures
-                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |value| {
+                .try_update(Ordering::SeqCst, Ordering::SeqCst, |value| {
                     value.checked_sub(1)
                 })
                 .is_ok()

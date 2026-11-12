@@ -306,7 +306,9 @@ fn completion_units(body: &[u8]) -> Option<Vec<UnitDigest>> {
 
 fn text_blocks(text: &str) -> impl Iterator<Item = UnitDigest> + '_ {
     text.as_bytes()
-        .chunks_exact(PROMPT_BLOCK_BYTES)
+        .as_chunks::<PROMPT_BLOCK_BYTES>()
+        .0
+        .iter()
         .map(|block| {
             Sha256::new()
                 .chain_update(b"juiced-prompt-block-v1\0")

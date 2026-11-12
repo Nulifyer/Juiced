@@ -111,8 +111,10 @@ pub fn to_le_bytes(samples: &[i16]) -> Vec<u8> {
 
 pub fn from_le_bytes(bytes: &[u8]) -> Vec<i16> {
     bytes
-        .chunks_exact(2)
-        .map(|pair| i16::from_le_bytes([pair[0], pair[1]]))
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|pair| i16::from_le_bytes(*pair))
         .collect()
 }
 
@@ -167,9 +169,11 @@ pub fn decode_wav(bytes: &[u8]) -> Option<Decoded> {
                         data.chunks_exact(4 * channels)
                             .map(|frame| {
                                 let sum: f32 = frame
-                                    .chunks_exact(4)
+                                    .as_chunks::<4>()
+                                    .0
+                                    .iter()
                                     .map(|value| {
-                                        let value = f32::from_le_bytes(value.try_into().unwrap());
+                                        let value = f32::from_le_bytes(*value);
                                         if value.is_finite() { value } else { 0.0 }
                                     })
                                     .sum();

@@ -706,8 +706,8 @@ fn matches_digest(digest: &[u8; 32], expected: &str) -> bool {
     expected.len() == 64
         && digest
             .iter()
-            .zip(expected.as_bytes().chunks_exact(2))
-            .all(|(byte, pair)| pair == [hex[(byte >> 4) as usize], hex[(byte & 15) as usize]])
+            .zip(expected.as_bytes().as_chunks::<2>().0)
+            .all(|(byte, pair)| *pair == [hex[(byte >> 4) as usize], hex[(byte & 15) as usize]])
 }
 
 #[cfg(all(test, unix))]
