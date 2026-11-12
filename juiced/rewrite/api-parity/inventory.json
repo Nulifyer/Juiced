@@ -118,7 +118,7 @@
     },
     {
       "path": "juiced/rewrite/rust-tests/tests/support/mod.rs",
-      "sha256": "7fadf5c473ee669b61c96759ef04dfdbc383dd1eed854779ad58215d1900d4b4",
+      "sha256": "081f2074a0ab0c550106284a2f514e19ca495146ce791ccf11ce0e45db8f5df8",
       "hash_check": "snapshot_only"
     },
     {
@@ -128,12 +128,12 @@
     },
     {
       "path": "juiced/rewrite/service/src/config.rs",
-      "sha256": "a8662d3b5ddd23fbba637336ae82165a6be44a44d65243810fc52b43dbbcca7f",
+      "sha256": "08bfae4762937a701f2c668f2ec8489bb0d2b48fa111702bcc6407b5ac24b509",
       "hash_check": "snapshot_only"
     },
     {
       "path": "juiced/rewrite/service/src/http.rs",
-      "sha256": "c349b2a58cd16586fc8625d58467d3d4acb697d3c114986340c6841ed872bee6",
+      "sha256": "7b7f17fc49eef53597a9ac50fc363be32fb657aceb36ea6ef1f9b11d072866dd",
       "hash_check": "snapshot_only"
     },
     {
@@ -10809,6 +10809,57 @@
         "juiced/rewrite/rust-tests/tests/session_cache.rs"
       ],
       "native_same_path": false
+    },
+    {
+      "method": "GET",
+      "path": "/juiced/flm",
+      "prefix_scheme": "native_quad",
+      "authority": "operator",
+      "evidence": {
+        "path": "juiced/rewrite/service/src/http.rs",
+        "line": 223,
+        "text": "(get, \"/juiced/flm\", flm_status, \"operator\"),",
+        "role": "registration"
+      },
+      "native_route_ids": [],
+      "scenario_files": [
+        "juiced/rewrite/rust-tests/tests/npu_engines.rs"
+      ],
+      "native_same_path": false
+    },
+    {
+      "method": "POST",
+      "path": "/juiced/flm/pull",
+      "prefix_scheme": "native_quad",
+      "authority": "operator",
+      "evidence": {
+        "path": "juiced/rewrite/service/src/http.rs",
+        "line": 224,
+        "text": "(post, \"/juiced/flm/pull\", flm_pull, \"operator\"),",
+        "role": "registration"
+      },
+      "native_route_ids": [],
+      "scenario_files": [
+        "juiced/rewrite/rust-tests/tests/npu_engines.rs"
+      ],
+      "native_same_path": false
+    },
+    {
+      "method": "POST",
+      "path": "/juiced/flm/models/add",
+      "prefix_scheme": "native_quad",
+      "authority": "operator",
+      "evidence": {
+        "path": "juiced/rewrite/service/src/http.rs",
+        "line": 225,
+        "text": "(post, \"/juiced/flm/models/add\", flm_model_add, \"operator\"),",
+        "role": "registration"
+      },
+      "native_route_ids": [],
+      "scenario_files": [
+        "juiced/rewrite/rust-tests/tests/npu_engines.rs"
+      ],
+      "native_same_path": false
     }
   ],
   "other_transport_boundaries": [
@@ -10823,7 +10874,7 @@
     "native_websocket_routes": 4,
     "auxiliary_http_route_families": 41,
     "native_registration_sites": 143,
-    "rust_published_routes": 75,
+    "rust_published_routes": 78,
     "rust_native_same_path_rows": 42,
     "native_http_status_counts": {
       "partial": 43,
