@@ -48,7 +48,6 @@ export function Aliases({ client, models, online, onOpenModel }: { client: Clien
   return <section className="page-body aliases" aria-label="Aliases">
     <form className="alias-create toolbar" aria-label="New alias" onSubmit={(event) => { event.preventDefault(); void create(); }}>
       <input aria-label="Alias name" placeholder="Alias, e.g. default-chat" value={name} disabled={blocked} onChange={(event) => setName(event.target.value)} />
-      <Icon name="chevron" size={14} />
       <select aria-label="Alias target" value={target} disabled={blocked} onChange={(event) => setTarget(event.target.value)}><option value="">Choose a model…</option>{ids.map((id) => <option key={id} value={id}>{id}</option>)}</select>
       <Button type="submit" variant="primary" disabled={blocked || !name.trim() || !target || nameTaken || data.aliases.length >= data.maximum}>Add alias</Button>
       <HelpTip label="Aliases">Clients send the alias as the model name. Swap the target here and new requests go to the new model; requests already running finish on the old one.</HelpTip>
