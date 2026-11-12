@@ -95,6 +95,12 @@ pub const ENDPOINTS: &[Endpoint] = &[
         authority: "inference",
         prefixes: &[""],
     },
+    Endpoint {
+        method: "POST",
+        path: "/sdapi/v1/txt2img",
+        authority: "inference",
+        prefixes: &[""],
+    },
 ];
 
 #[derive(Clone)]
@@ -190,6 +196,7 @@ pub fn router(manager: Arc<Manager>) -> Router {
         .route("/api/show", post(show))
         .route("/api/version", get(version))
         .route("/mcp", post(mcp))
+        .route("/sdapi/v1/txt2img", post(txt2img))
         .method_not_allowed_fallback(method_not_allowed)
         .layer(DefaultBodyLimit::max(MAX_RESPONSE_BYTES))
         .with_state(Gateway {
@@ -236,10 +243,59 @@ pub(crate) fn rejection(path: &str, error: ApiError) -> Response {
             protocols::mcp_error(Value::Null, -32001, &error.message),
         );
     }
-    if ENDPOINTS.iter().any(|endpoint| endpoint.path == path) {
+    if !path.starts_with("/sdapi/") && ENDPOINTS.iter().any(|endpoint| endpoint.path == path) {
         return protocol_error(from_api(error), path.starts_with("/v1/messages"));
     }
     error.into_response()
+}
+
+async fn txt2img(
+    State(gateway): State<Gateway>,
+    Extension(context): Extension<RequestContext>,
+    headers: HeaderMap,
+    ApiBytes(body): ApiBytes,
+) -> Result<Response, ApiError> {
+    let priority = crate::http::request_priority(&context, &headers)?;
+    let request = crate::media::Txt2ImgRequest::parse(&body)?;
+    let model = match request.model.clone() {
+        Some(model) => model,
+        None => {
+            let candidates: Vec<String> = gateway
+                .manager
+                .catalog()
+                .await
+                .into_iter()
+                .filter(|model| {
+                    model.policy != crate::config::Policy::Disabled
+                        && model.downloaded
+                        && model.operations.contains(&Operation::ImageGeneration)
+                })
+                .map(|model| model.id)
+                .collect();
+            let [model] = <[String; 1]>::try_from(candidates).map_err(|_| {
+                ApiError::new(
+                    StatusCode::BAD_REQUEST,
+                    "image_model_required",
+                    "Name the image model; exactly one enabled image model is needed to omit it.",
+                )
+            })?;
+            model
+        }
+    };
+    let (bytes, mut lease) = crate::http::media_exchange(
+        &gateway.manager,
+        &model,
+        Operation::ImageGeneration,
+        priority,
+        "/sdapi/v1/txt2img",
+        request.upstream(),
+        crate::media::MAX_IMAGE_RESPONSE_BYTES,
+    )
+    .await?;
+    crate::media::validate_txt2img_response(&bytes)
+        .inspect_err(|_| lease.finish("upstream_error", Some(200)))?;
+    lease.finish("completed", Some(200));
+    Ok(crate::http::media_reply("application/json", bytes))
 }
 
 fn parse_body(headers: &HeaderMap, body: Result<ApiBytes, ApiError>) -> Result<Value, CodecError> {

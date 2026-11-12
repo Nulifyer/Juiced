@@ -16,13 +16,27 @@ pub enum Engine {
     LlamaCpp,
     #[serde(rename = "whisper.cpp")]
     WhisperCpp,
+    #[serde(rename = "sd.cpp")]
+    StableDiffusionCpp,
+    #[serde(rename = "kokoros")]
+    Kokoros,
 }
 
 impl Engine {
+    pub const ALL: [Self; 4] = [
+        Self::LlamaCpp,
+        Self::WhisperCpp,
+        Self::StableDiffusionCpp,
+        Self::Kokoros,
+    ];
     pub fn parse(value: &str) -> Option<Self> {
         match value {
             "llama.cpp" | "llamacpp" | "llama-cpp" => Some(Self::LlamaCpp),
             "whisper.cpp" | "whispercpp" | "whisper-cpp" => Some(Self::WhisperCpp),
+            "sd.cpp" | "sd-cpp" | "sdcpp" | "stable-diffusion.cpp" | "stable-diffusion-cpp" => {
+                Some(Self::StableDiffusionCpp)
+            }
+            "kokoros" | "kokoro" => Some(Self::Kokoros),
             _ => None,
         }
     }
@@ -30,24 +44,32 @@ impl Engine {
         match self {
             Self::LlamaCpp => "llama.cpp",
             Self::WhisperCpp => "whisper.cpp",
+            Self::StableDiffusionCpp => "sd.cpp",
+            Self::Kokoros => "kokoros",
         }
     }
     pub fn recipe(self) -> &'static str {
         match self {
             Self::LlamaCpp => "llamacpp",
             Self::WhisperCpp => "whispercpp",
+            Self::StableDiffusionCpp => "sd-cpp",
+            Self::Kokoros => "kokoro",
         }
     }
     pub fn provider(self) -> crate::config::Provider {
         match self {
             Self::LlamaCpp => crate::config::Provider::LlamaCpp,
             Self::WhisperCpp => crate::config::Provider::WhisperCpp,
+            Self::StableDiffusionCpp => crate::config::Provider::StableDiffusionCpp,
+            Self::Kokoros => crate::config::Provider::Kokoros,
         }
     }
     pub fn entrypoint(self) -> &'static str {
         match self {
             Self::LlamaCpp => "llama-server",
             Self::WhisperCpp => "whisper-server",
+            Self::StableDiffusionCpp => "sd-server",
+            Self::Kokoros => "koko",
         }
     }
 }
@@ -95,6 +117,10 @@ const LLAMA_ROCM: &str = "lemonade-sdk/llamacpp-rocm";
 const LLAMA_ROCM_TAG: &str = "b1338";
 const WHISPER: &str = "lemonade-sdk/whisper.cpp-rocm";
 const WHISPER_TAG: &str = "v1.8.4";
+const SD: &str = "lemonade-sdk/stable-diffusion.cpp";
+const SD_TAG: &str = "master-957-90e86d1";
+const KOKOROS: &str = "lemonade-sdk/Kokoros";
+const KOKOROS_TAG: &str = "b21";
 
 const fn linux(
     engine: Engine,
@@ -165,6 +191,23 @@ macro_rules! whisper_rocm {
                 $sha,
             ),
             ArchiveFormat::TarGz,
+        )
+    };
+}
+
+macro_rules! sd_cuda {
+    ($sm:literal, $bytes:literal, $sha:literal) => {
+        linux(
+            Engine::StableDiffusionCpp,
+            "cuda",
+            Some($sm),
+            (SD, SD_TAG),
+            (
+                concat!("sd-master-90e86d1-ubuntu-cuda-", $sm, "-x64.tar.xz"),
+                $bytes,
+                $sha,
+            ),
+            ArchiveFormat::TarXz,
         )
     };
 }
@@ -313,6 +356,82 @@ pub const BUILDS: &[Build] = &[
         "gfx120X",
         551429010,
         "9d136701ceff188a6727ec7e80b005d77a464e1bc7dc4c2ea2815bebe3788290"
+    ),
+    linux(
+        Engine::StableDiffusionCpp,
+        "cpu",
+        None,
+        (SD, SD_TAG),
+        (
+            "sd-master-90e86d1-bin-Linux-Ubuntu-24.04-x86_64.zip",
+            26130363,
+            "763058cdf90250c0cd9d351b3c3c71d36962150d2e02d85948ac9bb40038527e",
+        ),
+        ArchiveFormat::Zip,
+    ),
+    linux(
+        Engine::StableDiffusionCpp,
+        "vulkan",
+        None,
+        (SD, SD_TAG),
+        (
+            "sd-master-90e86d1-bin-Linux-Ubuntu-24.04-x86_64-vulkan.zip",
+            36995490,
+            "9af42e767d12b149648b9bdc44390921a91ac138c0873f8823296f3856cea965",
+        ),
+        ArchiveFormat::Zip,
+    ),
+    sd_cuda!(
+        "sm_75",
+        584578272,
+        "2f9f669e599152beac04f78b47fb06a9334bf1e6ddfef60766207d53d69a0c06"
+    ),
+    sd_cuda!(
+        "sm_80",
+        583804924,
+        "13fd656d22ee87d895712b55368d480293e7fa5036ca0eadd88c15f15b480d7d"
+    ),
+    sd_cuda!(
+        "sm_86",
+        582930992,
+        "4d9a4c4ba92c8cd2062170e51c589ce4cfb2f5826e5ea95f9bc60b36d37ff358"
+    ),
+    sd_cuda!(
+        "sm_89",
+        582907468,
+        "bd395f10cfb1dd8b401bac4c00dcd8fdffa09b68c1f0fe2b76a6e7d799e087c4"
+    ),
+    sd_cuda!(
+        "sm_90",
+        584185972,
+        "8ac73c3d35e545f6811a9ff5e6acc2a74043cbb30c24965e1c04f19a54137ad1"
+    ),
+    sd_cuda!(
+        "sm_100",
+        585864468,
+        "50dba32391c64701fde3c365bc972966877cab847ca2b366fee8b9312223ef90"
+    ),
+    sd_cuda!(
+        "sm_120",
+        585048376,
+        "20b6e9136bf93b484c63340f3fca8f2256d5509f206d67ff67818df217b8612b"
+    ),
+    sd_cuda!(
+        "sm_121",
+        585213856,
+        "216202b21427afa4b747f9d25ff79ebfa195f04a84aa1599ba8653985ecd2bbd"
+    ),
+    linux(
+        Engine::Kokoros,
+        "cpu",
+        None,
+        (KOKOROS, KOKOROS_TAG),
+        (
+            "kokoros-linux-x86_64.tar.gz",
+            21310353,
+            "7dc102345a7b6fd2ac58a4296101996521970857e634353f78bf1861fdc1c996",
+        ),
+        ArchiveFormat::TarGz,
     ),
 ];
 

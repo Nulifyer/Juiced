@@ -464,16 +464,43 @@ impl ArtifactStore {
         artifact: &str,
         set: Option<&str>,
     ) -> Result<ArtifactLease, ArtifactError> {
+        self.hold_binding_with(artifact, set, false)
+    }
+
+    /// Companion members are executable only for adapters that bind each one to an
+    /// explicit worker argument; others still require a single-member set.
+    pub fn hold_binding_with(
+        self: &Arc<Self>,
+        artifact: &str,
+        set: Option<&str>,
+        companions: bool,
+    ) -> Result<ArtifactLease, ArtifactError> {
         artifact_id(artifact)?;
         let Some(id) = set else {
             return self.hold(artifact);
         };
         let view = self.artifact_set(id)?;
-        if view.specification.members.len() != 1 {
+        if view.specification.members.len() != 1 && !companions {
             return Err(ArtifactError::SetUnsupported);
         }
-        if view.specification.members[0].artifact != artifact {
-            return Err(ArtifactError::SetBinding);
+        let primary = view
+            .specification
+            .members
+            .iter()
+            .find(|member| member.name == view.specification.primary)
+            .ok_or(ArtifactError::SetBinding)?;
+        if primary.artifact != artifact
+            || view
+                .specification
+                .members
+                .iter()
+                .any(|member| member.role == ArtifactRole::WeightShard)
+        {
+            return Err(if primary.artifact != artifact {
+                ArtifactError::SetBinding
+            } else {
+                ArtifactError::SetUnsupported
+            });
         }
         let held =
             Arc::new(self.hold_set(id, &self.set_operation(Arc::new(AtomicBool::new(false))))?);

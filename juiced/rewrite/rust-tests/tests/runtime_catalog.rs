@@ -130,7 +130,10 @@ async fn catalog_preserves_reviewed_definition_and_native_row_contract_as_stable
         assert!(ids.insert(id));
         assert_eq!(
             adapter["status"],
-            if matches!(id, "llama-cpp" | "whisper-cpp") {
+            if matches!(
+                id,
+                "llama-cpp" | "whisper-cpp" | "stable-diffusion-cpp" | "kokoros"
+            ) {
                 "partial"
             } else {
                 "planned"

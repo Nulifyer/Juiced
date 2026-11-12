@@ -540,7 +540,7 @@ pub fn parse_info(body: &[u8], maximum_files: usize) -> Result<RepoInfo, HubErro
         let Some(path) = sibling["rfilename"].as_str() else {
             continue;
         };
-        if !valid_file(path) || !quant::is_model_file(path) {
+        if !valid_file(path) || !quant::is_listed_file(path) {
             continue;
         }
         if files.len() == maximum_files {

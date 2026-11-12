@@ -350,14 +350,25 @@ impl Catalog {
 }
 
 fn adapter(implementation_id: &str) -> AdapterImplementation {
-    if implementation_id == "llama-cpp" || implementation_id == "whisper-cpp" {
+    let scope = match implementation_id {
+        "llama-cpp" => Some(
+            "Selected llama.cpp managed subprocess HTTP profile only. Catalog candidates and native backend rows are not adapter qualification.",
+        ),
+        "whisper-cpp" => Some(
+            "Selected whisper.cpp single-slot multipart transcription subprocess only. Runtime bundles, devices, native backend rows and model quality need separate qualification.",
+        ),
+        "stable-diffusion-cpp" => Some(
+            "Selected stable-diffusion.cpp single-slot text-to-image subprocess only. Editing, video, LoRA, upscaling, devices and model quality need separate qualification.",
+        ),
+        "kokoros" => Some(
+            "Selected Kokoros single-slot non-streaming speech subprocess only. Streaming, devices, voices and model quality need separate qualification.",
+        ),
+        _ => None,
+    };
+    if let Some(scope) = scope {
         AdapterImplementation {
             status: AdapterStatus::Partial,
-            scope: if implementation_id == "llama-cpp" {
-                "Selected llama.cpp managed subprocess HTTP profile only. Catalog candidates and native backend rows are not adapter qualification."
-            } else {
-                "Selected whisper.cpp single-slot multipart transcription subprocess only. Runtime bundles, devices, native backend rows and model quality need separate qualification."
-            },
+            scope,
         }
     } else {
         AdapterImplementation {
@@ -847,7 +858,7 @@ mod tests {
                 .iter()
                 .filter(|entry| entry.adapter.status == AdapterStatus::Partial)
                 .count(),
-            2
+            4
         );
         for forbidden in [
             "executable",

@@ -17,6 +17,22 @@ pub struct CatalogModel {
     pub variant_stem: Option<String>,
     pub license: Option<String>,
     pub native_id: String,
+    #[serde(default)]
+    pub companions: Vec<CatalogCompanion>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CatalogCompanion {
+    pub file: String,
+    pub role: crate::artifacts::ArtifactRole,
+}
+
+const MAX_COMPANIONS: usize = 8;
+
+fn bundle_primary(file: &str) -> bool {
+    let name = file.to_ascii_lowercase();
+    name.ends_with(".onnx") || name.ends_with(".safetensors") || name.ends_with(".gguf")
 }
 
 #[derive(Debug, Deserialize)]
@@ -46,6 +62,17 @@ impl CatalogModel {
         self.variant_stem
             .as_deref()
             .is_none_or(|stem| quant::stem(path) == stem.to_ascii_lowercase())
+    }
+    pub fn bundle(&self, files: &[quant::FileMeta]) -> Option<quant::Variant> {
+        if self.companions.is_empty() {
+            return None;
+        }
+        let companions: Vec<_> = self
+            .companions
+            .iter()
+            .map(|companion| (companion.file.clone(), companion.role))
+            .collect();
+        quant::bundle(files, self.recommended_file.as_deref()?, &companions)
     }
     pub fn recommends(&self, label: Option<&str>, primary: &str) -> bool {
         match (&self.recommended_file, &self.recommended_quant) {
@@ -105,10 +132,32 @@ impl Catalog {
                 return fail("license must be a lowercase SPDX-like identifier");
             }
             match (&model.recommended_quant, &model.recommended_file) {
-                (Some(label), None) if quant::quant_label(label).as_deref() == Some(label) => {}
+                (Some(label), None)
+                    if quant::quant_label(label).as_deref() == Some(label)
+                        && model.companions.is_empty() => {}
                 (None, Some(file))
-                    if quant::is_model_file(file) && !file.contains('/') && text(file, 128) => {}
+                    if (quant::is_model_file(file)
+                        || (!model.companions.is_empty() && bundle_primary(file)))
+                        && !file.contains('/')
+                        && text(file, 128) => {}
                 _ => return fail("exactly one parseable recommended quant or file is required"),
+            }
+            if model.companions.len() > MAX_COMPANIONS
+                || model.companions.iter().any(|companion| {
+                    !super::valid_file(&companion.file)
+                        || Some(&companion.file) == model.recommended_file.as_ref()
+                        || !matches!(
+                            companion.role,
+                            crate::artifacts::ArtifactRole::Voice
+                                | crate::artifacts::ArtifactRole::Vae
+                                | crate::artifacts::ArtifactRole::Encoder
+                                | crate::artifacts::ArtifactRole::Decoder
+                        )
+                })
+            {
+                return fail(
+                    "companions need distinct repository files with voice, vae, encoder or decoder roles",
+                );
             }
             if let Some(stem) = &model.variant_stem {
                 let file = model.recommended_file.as_deref().unwrap_or("");

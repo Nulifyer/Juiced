@@ -73,7 +73,7 @@
     },
     {
       "path": "juiced/rewrite/rust-tests/tests/api_end_to_end.rs",
-      "sha256": "0d725c41efe455346cdf30f8248eba2b51c23990b66de6f9e2f963d3e80c30e8",
+      "sha256": "e3fc9e6bb47d546e5e2e7a4d17603e790840a74dc99a8724da1d0b87b20c87f6",
       "hash_check": "snapshot_only"
     },
     {
@@ -118,22 +118,22 @@
     },
     {
       "path": "juiced/rewrite/rust-tests/tests/support/mod.rs",
-      "sha256": "1696480a89bf3ad66a649c3b805bbe67cdcac0b98d7637a891519a8d4668a28e",
+      "sha256": "b439178f97de63a84ce32a32311a489e52460993034f8b72a6271d3d5571bac4",
       "hash_check": "snapshot_only"
     },
     {
       "path": "juiced/rewrite/service/src/compat.rs",
-      "sha256": "c2007da6efdfecbb58ca99816accc63056abee38815707283e9e9adad387b14d",
+      "sha256": "2e0435091686c11c9f7c272368e7e1d43804163e00389666a76e9107da502fde",
       "hash_check": "snapshot_only"
     },
     {
       "path": "juiced/rewrite/service/src/config.rs",
-      "sha256": "a2aa91096640353927ab5fec655a4bf8f49471e317efcca3a8ec90d9a0cf7807",
+      "sha256": "f64fd52c9100986a84272021f477484ff5df1ba69cfc9040b950fdc987b97830",
       "hash_check": "snapshot_only"
     },
     {
       "path": "juiced/rewrite/service/src/http.rs",
-      "sha256": "52986ab6e4e0892c4b69e407e3872c9ba93d7c058bade0134f713987a68a4683",
+      "sha256": "996f525505063d359daba5114f0b123792012d3a603b84ac9ad48f28a192e815",
       "hash_check": "snapshot_only"
     },
     {
@@ -199,6 +199,11 @@
     {
       "path": "juiced/rewrite/rust-tests/tests/library_pipeline.rs",
       "sha256": "40b5ff2df5514f841814fa2d2d67761b99e41ea32f00f83f4f6649cac478f732",
+      "hash_check": "snapshot_only"
+    },
+    {
+      "path": "juiced/rewrite/rust-tests/tests/media_pipeline.rs",
+      "sha256": "fbd7fdf7c3081d4860c85f11a92ef233d744f886f9ad61fe5f96957cb13cf4a6",
       "hash_check": "snapshot_only"
     }
   ],
@@ -2669,7 +2674,7 @@
       "category": "native",
       "native_behavior": "handler",
       "disposition": "retained",
-      "status": "planned",
+      "status": "partial",
       "native_evidence": [
         {
           "path": "src/cpp/server/server.cpp",
@@ -2684,12 +2689,26 @@
         "F134"
       ],
       "rust_equivalent": {
-        "relationship": "none",
-        "routes": [],
-        "scenario_files": [],
-        "authorities": []
+        "relationship": "same_path",
+        "routes": [
+          {
+            "method": "POST",
+            "path": "/audio/speech",
+            "prefix_scheme": "native_quad"
+          }
+        ],
+        "scenario_files": [
+          "juiced/rewrite/rust-tests/tests/media_pipeline.rs"
+        ],
+        "authorities": [
+          {
+            "method": "POST",
+            "path": "/audio/speech",
+            "authority": "inference"
+          }
+        ]
       },
-      "semantic_boundary": "No Rust handler implements this native path. Add request, response, authority, persistence and failure scenarios before claiming parity.",
+      "semantic_boundary": "Rust forwards bounded non-streaming speech JSON (input, voice, wav/mp3/opus/pcm, speed) to a selected single-slot Kokoros worker with auth, admission and disconnect retirement. Streaming, other speech recipes, instructions and wire equality remain unqualified.",
       "documentation": "docs/api/juiced.md",
       "native_authority": "regular_api"
     },
@@ -2701,7 +2720,7 @@
       "category": "native",
       "native_behavior": "handler",
       "disposition": "retained",
-      "status": "planned",
+      "status": "partial",
       "native_evidence": [
         {
           "path": "src/cpp/server/server.cpp",
@@ -2716,12 +2735,26 @@
         "F134"
       ],
       "rust_equivalent": {
-        "relationship": "none",
-        "routes": [],
-        "scenario_files": [],
-        "authorities": []
+        "relationship": "same_path",
+        "routes": [
+          {
+            "method": "POST",
+            "path": "/images/generations",
+            "prefix_scheme": "native_quad"
+          }
+        ],
+        "scenario_files": [
+          "juiced/rewrite/rust-tests/tests/media_pipeline.rs"
+        ],
+        "authorities": [
+          {
+            "method": "POST",
+            "path": "/images/generations",
+            "authority": "inference"
+          }
+        ]
       },
-      "semantic_boundary": "No Rust handler implements this native path. Add request, response, authority, persistence and failure scenarios before claiming parity.",
+      "semantic_boundary": "Rust forwards bounded OpenAI text-to-image JSON (n=1, b64_json, size, steps, cfg_scale, seed, negative prompt) to a selected single-slot stable-diffusion.cpp worker with auth, admission and disconnect retirement. Editing, variations, URLs, LoRAs, native recipe defaults and wire equality remain unqualified.",
       "documentation": "docs/api/juiced.md",
       "native_authority": "regular_api"
     },
@@ -6758,7 +6791,7 @@
       "category": "automatic1111",
       "native_behavior": "handler",
       "disposition": "retained",
-      "status": "planned",
+      "status": "partial",
       "native_evidence": [
         {
           "path": "src/cpp/server/juiced/compatibility.cpp",
@@ -6777,12 +6810,26 @@
         "F119"
       ],
       "rust_equivalent": {
-        "relationship": "none",
-        "routes": [],
-        "scenario_files": [],
-        "authorities": []
+        "relationship": "same_path",
+        "routes": [
+          {
+            "method": "POST",
+            "path": "/sdapi/v1/txt2img",
+            "prefix_scheme": "fixed"
+          }
+        ],
+        "scenario_files": [
+          "juiced/rewrite/rust-tests/tests/media_pipeline.rs"
+        ],
+        "authorities": [
+          {
+            "method": "POST",
+            "path": "/sdapi/v1/txt2img",
+            "authority": "inference"
+          }
+        ]
       },
-      "semantic_boundary": "No Rust handler implements this native path. Add request, response, authority, persistence and failure scenarios before claiming parity.",
+      "semantic_boundary": "Rust forwards a bounded one-image txt2img subset to the same sd.cpp workers; model may be omitted only when exactly one image model is enabled. Options, model listing, samplers, progress, interrupt, img2img and wire equality remain unqualified.",
       "documentation": "docs/api/automatic1111.md",
       "native_authority": "regular_api"
     },
@@ -10561,6 +10608,84 @@
         "juiced/rewrite/rust-tests/tests/api_end_to_end.rs"
       ],
       "native_same_path": false
+    },
+    {
+      "method": "POST",
+      "path": "/images/generations",
+      "prefix_scheme": "native_quad",
+      "authority": "inference",
+      "evidence": {
+        "path": "juiced/rewrite/service/src/http.rs",
+        "line": 216,
+        "text": "(post, \"/images/generations\", image_generation, \"inference\"),",
+        "role": "registration"
+      },
+      "native_route_ids": [
+        "http:POST:native_quad:/images/generations"
+      ],
+      "scenario_files": [
+        "juiced/rewrite/rust-tests/tests/media_pipeline.rs",
+        "juiced/rewrite/rust-tests/tests/api_end_to_end.rs"
+      ],
+      "native_same_path": true
+    },
+    {
+      "method": "POST",
+      "path": "/audio/speech",
+      "prefix_scheme": "native_quad",
+      "authority": "inference",
+      "evidence": {
+        "path": "juiced/rewrite/service/src/http.rs",
+        "line": 217,
+        "text": "(post, \"/audio/speech\", speech, \"inference\"),",
+        "role": "registration"
+      },
+      "native_route_ids": [
+        "http:POST:native_quad:/audio/speech"
+      ],
+      "scenario_files": [
+        "juiced/rewrite/rust-tests/tests/media_pipeline.rs",
+        "juiced/rewrite/rust-tests/tests/api_end_to_end.rs"
+      ],
+      "native_same_path": true
+    },
+    {
+      "method": "GET",
+      "path": "/juiced/voices",
+      "prefix_scheme": "native_quad",
+      "authority": "read",
+      "evidence": {
+        "path": "juiced/rewrite/service/src/http.rs",
+        "line": 218,
+        "text": "(get, \"/juiced/voices\", voices, \"read\"),",
+        "role": "registration"
+      },
+      "native_route_ids": [],
+      "scenario_files": [
+        "juiced/rewrite/rust-tests/tests/media_pipeline.rs",
+        "juiced/rewrite/rust-tests/tests/api_end_to_end.rs"
+      ],
+      "native_same_path": false
+    },
+    {
+      "method": "POST",
+      "path": "/sdapi/v1/txt2img",
+      "prefix_scheme": "fixed",
+      "authority": "inference",
+      "evidence": {
+        "path": "juiced/rewrite/service/src/compat.rs",
+        "line": 98,
+        "text": "Endpoint {",
+        "role": "registration"
+      },
+      "native_route_ids": [
+        "http:POST:fixed:/sdapi/v1/txt2img"
+      ],
+      "scenario_files": [
+        "juiced/rewrite/rust-tests/tests/media_pipeline.rs",
+        "juiced/rewrite/rust-tests/tests/compatibility.rs"
+      ],
+      "native_same_path": true
     }
   ],
   "other_transport_boundaries": [
@@ -10575,11 +10700,11 @@
     "native_websocket_routes": 4,
     "auxiliary_http_route_families": 41,
     "native_registration_sites": 143,
-    "rust_published_routes": 67,
-    "rust_native_same_path_rows": 39,
+    "rust_published_routes": 71,
+    "rust_native_same_path_rows": 42,
     "native_http_status_counts": {
-      "partial": 40,
-      "planned": 86,
+      "partial": 43,
+      "planned": 83,
       "conditional": 2,
       "excluded": 7,
       "implemented": 0

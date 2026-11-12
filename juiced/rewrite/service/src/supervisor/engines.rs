@@ -242,7 +242,7 @@ impl Manager {
             })
             .unwrap_or_default();
         let report = &snapshot.report;
-        let recommendations: BTreeMap<_, _> = [Engine::LlamaCpp, Engine::WhisperCpp]
+        let recommendations: BTreeMap<_, _> = Engine::ALL
             .into_iter()
             .map(|engine| {
                 let recipe = engine.recipe();
@@ -269,8 +269,12 @@ impl Manager {
         self: &Arc<Self>,
         request: EngineInstall,
     ) -> Result<(StatusCode, Value), ApiError> {
-        let engine = Engine::parse(&request.engine)
-            .ok_or_else(|| invalid("unknown_engine", "Choose engine llama.cpp or whisper.cpp."))?;
+        let engine = Engine::parse(&request.engine).ok_or_else(|| {
+            invalid(
+                "unknown_engine",
+                "Choose engine llama.cpp, whisper.cpp, sd.cpp or kokoros.",
+            )
+        })?;
         if !catalog::BUILDS
             .iter()
             .any(|build| build.engine == engine && build.backend == request.backend)
@@ -493,12 +497,15 @@ impl Manager {
             let root = archive::bundle_root(&tree).map_err(archive_failure)?;
             let described = archive::describe(&root, build.engine, &archive::LIMITS, &stop)
                 .map_err(archive_failure)?;
-            let licenses = match build.backend {
-                "cuda" => vec![
+            let licenses = match (build.engine, build.backend) {
+                (Engine::Kokoros, _) => {
+                    vec!["Apache-2.0".into(), "GPL-3.0-or-later".into()]
+                }
+                (_, "cuda") => vec![
                     "LicenseRef-NVIDIA-CUDA-Redistributable".into(),
                     "MIT".into(),
                 ],
-                "rocm" => vec!["LicenseRef-AMD-ROCm".into(), "MIT".into()],
+                (_, "rocm") => vec!["LicenseRef-AMD-ROCm".into(), "MIT".into()],
                 _ => vec!["MIT".to_owned()],
             };
             let request = crate::runtime_packages::ImportRequest {
@@ -545,63 +552,84 @@ impl Manager {
         let set_id = request.artifact_set.clone();
         let requested_artifact = request.artifact.clone();
         let inspect = store.clone();
-        let (artifact, name) = tokio::task::spawn_blocking(move || -> Result<_, ApiError> {
-            match (requested_artifact, set_id.as_deref()) {
-                (None, None) => Err(invalid(
-                    "artifact_required",
-                    "Provide an artifact or a single-member artifact set.",
-                )),
-                (artifact, Some(set)) => {
-                    let view = inspect.artifact_set(set).map_err(ApiError::from)?;
-                    let [member] = view.specification.members.as_slice() else {
-                        return Err(ApiError::from(
-                            crate::artifacts::ArtifactError::SetUnsupported,
-                        ));
-                    };
-                    if artifact
-                        .as_ref()
-                        .is_some_and(|artifact| *artifact != member.artifact)
-                    {
-                        return Err(ApiError::from(crate::artifacts::ArtifactError::SetBinding));
+        let (artifact, artifact_set, name) =
+            tokio::task::spawn_blocking(move || -> Result<_, ApiError> {
+                match (requested_artifact, set_id) {
+                    (None, None) => Err(invalid(
+                        "artifact_required",
+                        "Provide an artifact or an artifact set.",
+                    )),
+                    (artifact, Some(set)) => {
+                        let view = inspect.artifact_set(&set).map_err(ApiError::from)?;
+                        let primary = view
+                            .specification
+                            .members
+                            .iter()
+                            .find(|member| member.name == view.specification.primary)
+                            .ok_or_else(|| {
+                                ApiError::from(crate::artifacts::ArtifactError::SetBinding)
+                            })?;
+                        if artifact
+                            .as_ref()
+                            .is_some_and(|artifact| *artifact != primary.artifact)
+                        {
+                            return Err(ApiError::from(
+                                crate::artifacts::ArtifactError::SetBinding,
+                            ));
+                        }
+                        Ok((
+                            primary.artifact.clone(),
+                            Some(set),
+                            Some(primary.name.clone()),
+                        ))
                     }
-                    Ok((member.artifact.clone(), Some(member.name.clone())))
+                    (Some(artifact), None) => {
+                        let name = inspect.source_file_name(&artifact);
+                        let set = companion_set(&inspect, &artifact)?;
+                        Ok((artifact, set, name))
+                    }
                 }
-                (Some(artifact), None) => {
-                    let name = inspect.source_file_name(&artifact);
-                    Ok((artifact, name))
-                }
-            }
-        })
-        .await
-        .map_err(|_| interrupted())??;
+            })
+            .await
+            .map_err(|_| interrupted())??;
         let held_artifact = artifact.clone();
-        let held_set = request.artifact_set.clone();
-        let (format, file_bytes, model_file) = tokio::task::spawn_blocking(move || {
+        let held_set = artifact_set.clone();
+        let (format, file_bytes, model_file, companions) = tokio::task::spawn_blocking(move || {
             let lease = store
-                .hold_binding(&held_artifact, held_set.as_deref())
+                .hold_binding_with(&held_artifact, held_set.as_deref(), true)
                 .map_err(ApiError::from)?;
             let path = lease.path().to_owned();
-            let (format, bytes) = models::detect(&path).map_err(|error| match error {
-                models::FormatError::Unavailable => ApiError::new(
-                    StatusCode::CONFLICT,
-                    "artifact_unavailable",
-                    "The artifact file could not be inspected.",
-                ),
-                models::FormatError::Unsupported => ApiError::new(
-                    StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                    "unsupported_model_format",
-                    "Only GGUF (llama.cpp) and whisper.cpp ggml weights can be added automatically.",
-                ),
-                models::FormatError::Invalid(code) => ApiError::new(
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    code,
-                    "The model metadata is invalid or exceeds inspection limits.",
-                ),
-            })?;
-            Ok::<_, ApiError>((format, bytes, path))
+            let (format, bytes) = models::detect(&path).map_err(format_error)?;
+            let mut total = bytes;
+            let mut companions = Vec::new();
+            for (name, role, path) in lease.companions() {
+                if role == crate::artifacts::ArtifactRole::Voice {
+                    models::voices(path).map_err(format_error)?;
+                }
+                let size = std::fs::metadata(path)
+                    .map_err(|_| format_error(models::FormatError::Unavailable))?
+                    .len();
+                total = total.saturating_add(size);
+                companions.push(models::Companion {
+                    name: name.to_owned(),
+                    role,
+                });
+            }
+            Ok::<_, ApiError>((format, total, path, companions))
         })
         .await
         .map_err(|_| interrupted())??;
+        let companion_arguments =
+            models::companion_arguments(&format, &companions).map_err(|error| match error {
+                models::CompanionError::Required(code) => ApiError::new(
+                    StatusCode::CONFLICT,
+                    code,
+                    "This model needs companion files. Publish an artifact set with its voices, VAE or text-encoder members and add that set.",
+                ),
+                models::CompanionError::Unsupported => {
+                    ApiError::from(crate::artifacts::ArtifactError::SetUnsupported)
+                }
+            })?;
         let id = match request.id {
             Some(id) => id,
             None => name
@@ -676,12 +704,14 @@ impl Manager {
             id: &id,
             model_file: &model_file,
             artifact: Some(&artifact),
-            artifact_set: request.artifact_set.as_deref(),
+            artifact_set: artifact_set.as_deref(),
             package: &choice.package,
+            backend: &choice.backend,
             gpu: choice.gpu,
             cpu_threads,
             format: &format,
             estimate: &estimate,
+            companion_arguments: &companion_arguments,
         });
         let crate::config::Registration(spec) =
             serde_json::from_value(registration.clone()).map_err(|_| {
@@ -703,11 +733,68 @@ impl Manager {
             "package": choice.package,
             "reason": choice.reason,
             "format": format,
+            "artifact_set": artifact_set,
+            "companions": companions.iter().map(|companion| json!({"name": companion.name, "role": companion.role})).collect::<Vec<_>>(),
             "execution_profile": registration["execution_profile"],
             "estimate": estimate,
             "compatibility": "unqualified",
         }))
     }
+}
+
+fn format_error(error: models::FormatError) -> ApiError {
+    match error {
+        models::FormatError::Unavailable => ApiError::new(
+            StatusCode::CONFLICT,
+            "artifact_unavailable",
+            "The artifact file could not be inspected.",
+        ),
+        models::FormatError::Unsupported => ApiError::new(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "unsupported_model_format",
+            "Only GGUF (llama.cpp or sd.cpp), whisper.cpp ggml, diffusion safetensors and Kokoro ONNX weights can be added automatically.",
+        ),
+        models::FormatError::Invalid(code) => ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            code,
+            "The model metadata is invalid or exceeds inspection limits.",
+        ),
+    }
+}
+
+/// A primary that anchors exactly one complete companion set adds that set; split shards
+/// and ambiguous anchors stay explicit.
+fn companion_set(
+    store: &crate::artifacts::ArtifactStore,
+    artifact: &str,
+) -> Result<Option<String>, ApiError> {
+    let digests = std::collections::BTreeSet::from([artifact.to_owned()]);
+    let presence = store.presence(&digests).map_err(ApiError::from)?;
+    let mut found = None;
+    for id in presence.sets.get(artifact).into_iter().flatten() {
+        let Ok(view) = store.artifact_set(id) else {
+            continue;
+        };
+        let specification = &view.specification;
+        let anchored = specification
+            .members
+            .iter()
+            .any(|member| member.name == specification.primary && member.artifact == artifact);
+        if anchored
+            && view.members_present
+            && specification.members.len() > 1
+            && specification
+                .members
+                .iter()
+                .all(|member| member.role != crate::artifacts::ArtifactRole::WeightShard)
+        {
+            if found.is_some() {
+                return Ok(None);
+            }
+            found = Some(id.clone());
+        }
+    }
+    Ok(found)
 }
 
 fn interrupted() -> ApiError {

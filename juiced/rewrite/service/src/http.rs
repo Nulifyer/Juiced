@@ -213,6 +213,172 @@ define_routes! {
     (get, "/juiced/library/search", library_search, "operator"),
     (post, "/juiced/library/pull", library_pull, "operator"),
     (get, "/juiced/library/pulls/{pull}", library_pull_status, "operator"),
+    (post, "/images/generations", image_generation, "inference"),
+    (post, "/audio/speech", speech, "inference"),
+    (get, "/juiced/voices", voices, "read"),
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct VoiceQuery {
+    model: Option<String>,
+}
+async fn voices(
+    State(state): State<AppState>,
+    ApiQuery(query): ApiQuery<VoiceQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    if query.model.as_deref().is_some_and(|model| {
+        model.is_empty() || model.len() > 256 || model.chars().any(char::is_control)
+    }) {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_voice_query",
+            "Name one bounded registered model ID.",
+        ));
+    }
+    let data = state.manager.voices(query.model.as_deref()).await?;
+    let aliases: serde_json::Map<String, Value> = crate::media::OPENAI_VOICE_ALIASES
+        .iter()
+        .map(|(alias, voice)| ((*alias).to_owned(), json!(voice)))
+        .collect();
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(json!({"schema_version": 1, "data": data, "aliases": aliases})),
+    ))
+}
+
+async fn image_generation(
+    State(state): State<AppState>,
+    Extension(context): Extension<RequestContext>,
+    headers: HeaderMap,
+    ApiBytes(body): ApiBytes,
+) -> Result<Response, ApiError> {
+    let priority = request_priority(&context, &headers)?;
+    let request = crate::media::ImageRequest::parse(&body)?;
+    let (bytes, mut lease) = media_exchange(
+        &state.manager,
+        &request.model,
+        Operation::ImageGeneration,
+        priority,
+        "/v1/images/generations",
+        request.upstream(),
+        crate::media::MAX_IMAGE_RESPONSE_BYTES,
+    )
+    .await?;
+    crate::media::validate_image_response(&bytes, request.format)
+        .inspect_err(|_| lease.finish("upstream_error", Some(200)))?;
+    lease.finish("completed", Some(200));
+    Ok(media_reply("application/json", bytes))
+}
+
+async fn speech(
+    State(state): State<AppState>,
+    Extension(context): Extension<RequestContext>,
+    headers: HeaderMap,
+    ApiBytes(body): ApiBytes,
+) -> Result<Response, ApiError> {
+    let priority = request_priority(&context, &headers)?;
+    let request = crate::media::SpeechRequest::parse(&body)?;
+    let (bytes, mut lease) = media_exchange(
+        &state.manager,
+        &request.model,
+        Operation::Speech,
+        priority,
+        "/v1/audio/speech",
+        request.upstream(),
+        crate::media::MAX_SPEECH_RESPONSE_BYTES,
+    )
+    .await?;
+    crate::media::validate_speech_response(&bytes, request.format)
+        .inspect_err(|_| lease.finish("upstream_error", Some(200)))?;
+    lease.finish("completed", Some(200));
+    Ok(media_reply(request.format.content_type(), bytes))
+}
+
+pub(crate) fn media_reply(content_type: &'static str, bytes: Bytes) -> Response {
+    (
+        [
+            (header::CONTENT_TYPE, content_type),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
+        bytes,
+    )
+        .into_response()
+}
+
+/// Single-slot media workers keep their physical claim until the complete reply arrives;
+/// dropping the transfer earlier retires that exact worker generation.
+pub(crate) async fn media_exchange(
+    manager: &Arc<Manager>,
+    model: &str,
+    operation: Operation,
+    priority: crate::admission::Priority,
+    path: &'static str,
+    body: Vec<u8>,
+    limit: usize,
+) -> Result<(Bytes, RequestLease), ApiError> {
+    let (base, mut lease) = manager.begin_queued(model, operation, priority).await?;
+    lease.speech_dispatched();
+    let mut upstream = manager
+        .client
+        .post(format!("{base}{path}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(body)
+        .timeout(manager.request_timeout)
+        .send()
+        .await
+        .map_err(|error| media_transfer_error(&mut lease, error))?;
+    let status = upstream.status();
+    let mut output = Vec::with_capacity(
+        upstream
+            .content_length()
+            .unwrap_or(0)
+            .min(limit as u64)
+            .min(1024 * 1024) as usize,
+    );
+    while let Some(chunk) = upstream
+        .chunk()
+        .await
+        .map_err(|error| media_transfer_error(&mut lease, error))?
+    {
+        if output.len().saturating_add(chunk.len()) > limit {
+            lease.finish("upstream_error", Some(status.as_u16()));
+            return Err(ApiError::new(
+                StatusCode::BAD_GATEWAY,
+                "media_response_limit",
+                "The media worker response exceeded its bounded result size.",
+            ));
+        }
+        output.extend_from_slice(&chunk);
+    }
+    lease.speech_reply_eof();
+    if !status.is_success() {
+        lease.finish("upstream_error", Some(status.as_u16()));
+        return Err(ApiError::new(
+            StatusCode::BAD_GATEWAY,
+            "media_rejected",
+            "The media worker rejected this request. Check its parameters and the selected model.",
+        ));
+    }
+    Ok((Bytes::from(output), lease))
+}
+
+fn media_transfer_error(lease: &mut RequestLease, error: reqwest::Error) -> ApiError {
+    let timeout = error.is_timeout();
+    lease.finish(if timeout { "timeout" } else { "upstream_error" }, None);
+    ApiError::new(
+        if timeout {
+            StatusCode::GATEWAY_TIMEOUT
+        } else {
+            StatusCode::BAD_GATEWAY
+        },
+        if timeout {
+            "upstream_timeout"
+        } else {
+            "upstream_unavailable"
+        },
+        "The media worker transfer failed. Retry or inspect the selected worker.",
+    )
 }
 async fn library_search(
     State(state): State<AppState>,
@@ -924,9 +1090,9 @@ async fn runtime_resolve(
 
 async fn protocols() -> Json<Value> {
     Json(json!({"data": [
-        {"id": "openai", "support": "partial", "operations": ["models", "chat/completions", "completions", "responses", "embeddings", "audio/transcriptions"], "note": "Forwarded only when the configured worker declares support."},
+        {"id": "openai", "support": "partial", "operations": ["models", "chat/completions", "completions", "responses", "embeddings", "audio/transcriptions", "audio/speech", "images/generations"], "note": "Forwarded only when the configured worker declares support."},
         {"id": "anthropic", "support": "partial", "note":"Selected text/tool Messages codecs and engine-native token counts; native usage required; advanced hosted tools unsupported."}, {"id": "ollama", "support": "partial", "note":"Chat, raw generate, embeddings and discovery; unsupported options are rejected."},
-        {"id": "mcp", "support": "partial", "note":"Stateless JSON Streamable HTTP, explicit-model inference tools and credential/session-scoped cancellation."}, {"id": "automatic1111", "support": "not-implemented"},
+        {"id": "mcp", "support": "partial", "note":"Stateless JSON Streamable HTTP, explicit-model inference tools and credential/session-scoped cancellation."}, {"id": "automatic1111", "support": "partial", "note":"POST /sdapi/v1/txt2img only, one image per request through sd.cpp workers."},
         {"id": "realtime", "support": "not-implemented"}, {"id": "wyoming", "support": "not-implemented"}
     ]}))
 }
@@ -1047,7 +1213,7 @@ async fn embeddings(
     .await
 }
 
-fn request_priority(
+pub(crate) fn request_priority(
     context: &RequestContext,
     headers: &HeaderMap,
 ) -> Result<crate::admission::Priority, ApiError> {

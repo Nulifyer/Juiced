@@ -34,6 +34,7 @@ mod native;
 mod physical;
 mod publication;
 mod state;
+mod voices;
 pub use cache_reply::CacheReply;
 
 fn unix_time_ms() -> u64 {
@@ -2016,7 +2017,11 @@ impl Manager {
                     let store = artifacts
                         .as_ref()
                         .ok_or("Managed artifact storage is required")?;
-                    let held = store.hold_binding(id, spec.artifact_set.as_deref())?;
+                    let held = store.hold_binding_with(
+                        id,
+                        spec.artifact_set.as_deref(),
+                        spec.execution_profile.adapter.accepts_companions(),
+                    )?;
                     let reference = format!("model:{}", spec.id);
                     if let Some(previous) = &spec.previous_artifact_set {
                         let _previous =
@@ -2595,21 +2600,39 @@ impl Manager {
             let store = self.artifacts()?;
             let id = id.clone();
             let set = spec.artifact_set.clone();
-            let held = tokio::task::spawn_blocking(move || store.hold_binding(&id, set.as_deref()))
-                .await
-                .map_err(|_| {
-                    ApiError::new(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "artifact_inspection_interrupted",
-                        "Artifact validation was interrupted.",
-                    )
-                })?
-                .map_err(ApiError::from)?;
+            let companions = spec.execution_profile.adapter.accepts_companions();
+            let held = tokio::task::spawn_blocking(move || {
+                store.hold_binding_with(&id, set.as_deref(), companions)
+            })
+            .await
+            .map_err(|_| {
+                ApiError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "artifact_inspection_interrupted",
+                    "Artifact validation was interrupted.",
+                )
+            })?
+            .map_err(ApiError::from)?;
             spec.model_file = held.path().to_owned();
             Some(held)
         } else {
             None
         };
+        if spec.execution_profile.adapter.accepts_companions() {
+            let (template, _) = spec
+                .execution_profile
+                .resolved_arguments()
+                .map_err(|error| {
+                    ApiError::new(StatusCode::BAD_REQUEST, error.code, error.message)
+                })?;
+            let companions = artifact
+                .as_ref()
+                .map(|held| held.companions())
+                .unwrap_or_default();
+            template
+                .verify_members(companions.iter().map(|(name, role, _)| (*name, *role)))
+                .map_err(|error| ApiError::new(StatusCode::CONFLICT, error.code, error.message))?;
+        }
         let config = self.config.clone().lock_owned().await;
         if config.models.iter().any(|model| model.id == spec.id) {
             return Err(ApiError::new(
@@ -3799,18 +3822,22 @@ impl Manager {
                 let configuration = environment
                     .configuration_inputs(profile, deadline)
                     .map_err(preparation_configuration_error)?;
-                let workspace = if profile.adapter == crate::config::Provider::WhisperCpp {
-                    Some(
+                let workspace = match profile.adapter {
+                    crate::config::Provider::WhisperCpp => Some(
                         tempfile::Builder::new()
                             .prefix("juiced-whisper-worker-")
                             .tempdir()
                             .map_err(preparation_identity_error)?,
-                    )
-                } else {
-                    None
+                    ),
+                    crate::config::Provider::Kokoros => Some(
+                        crate::profiles::phoneme_workspace(bundle.as_deref())
+                            .map_err(preparation_identity_error)?,
+                    ),
+                    _ => None,
                 };
                 let public_directory = workspace
                     .as_ref()
+                    .filter(|_| profile.adapter == crate::config::Provider::WhisperCpp)
                     .map(|workspace| {
                         let directory = workspace.path().join("empty-public");
                         std::fs::create_dir(&directory)?;
@@ -3883,8 +3910,13 @@ impl Manager {
             startup: preparation.resources.clone(),
             plan: plan.clone(),
             _cache: self.cache.clone(),
-            speech: (worker.spec.execution_profile.adapter == crate::config::Provider::WhisperCpp)
-                .then(Arc::default),
+            speech: (worker
+                .spec
+                .execution_profile
+                .adapter
+                .media_operation()
+                .is_some())
+            .then(Arc::default),
             state: (plan.has_cache_binding()
                 || (worker.spec.max_inflight == 1
                     && worker.spec.execution_profile.adapter == crate::config::Provider::LlamaCpp))
@@ -3922,6 +3954,7 @@ impl Manager {
         loading.pid = child.id();
         loading.error = None;
         *worker.observation.lock().unwrap_or_else(|e| e.into_inner()) = Some(loading);
+        let readiness = worker.spec.execution_profile.adapter.readiness_path();
         let ready =
             tokio::time::timeout(deadline.saturating_duration_since(Instant::now()), async {
                 loop {
@@ -3933,7 +3966,7 @@ impl Manager {
                     }
                     if let Ok(response) = self
                         .client
-                        .get(format!("{base}/health"))
+                        .get(format!("{base}{readiness}"))
                         .timeout(Duration::from_millis(250))
                         .send()
                         .await
@@ -4382,7 +4415,7 @@ impl Manager {
             _power: power,
             uncertain: false,
         };
-        let (physical, speech, protected) = if operation == Operation::Transcription {
+        let (physical, speech, protected) = if operation.single_slot_media() {
             let run = state.running.as_ref().expect("loaded worker");
             let claims = run
                 .child

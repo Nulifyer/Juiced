@@ -391,7 +391,7 @@ impl Library {
             .into_iter()
             .filter_map(|record| {
                 let (repo, revision, path) = self.hub.parse_resolve_url(&record.source_url)?;
-                quant::is_model_file(&path).then_some(LocalFile {
+                quant::is_listed_file(&path).then_some(LocalFile {
                     repo,
                     revision,
                     file: quant::FileMeta {
@@ -523,7 +523,7 @@ impl Library {
                 files_truncated: None,
                 variants: None,
             };
-            apply_info(&mut entry, info, |path| model.includes(path));
+            apply_info(&mut entry, info, |path| model.includes(path), Some(model));
             entries.push(entry);
         }
         for repo in hub_repos {
@@ -546,7 +546,7 @@ impl Library {
                 files_truncated: None,
                 variants: None,
             };
-            apply_info(&mut entry, infos.get(&repo.id), |_| true);
+            apply_info(&mut entry, infos.get(&repo.id), |_| true, None);
             if entry.variants.as_ref().is_some_and(Vec::is_empty) {
                 continue;
             }
@@ -699,7 +699,15 @@ impl Library {
                 "The hub did not report the commit for this repository.",
             )
         })?;
-        let variants = quant::group(&info.files);
+        let mut variants = quant::group(&info.files);
+        if let Some(bundle) = catalog::catalog()
+            .models
+            .iter()
+            .filter(|model| model.repo == request.repo)
+            .find_map(|model| model.bundle(&info.files))
+        {
+            variants.insert(0, bundle);
+        }
         let mut selected: Vec<&quant::Variant> = Vec::new();
         for file in &requested {
             let variant = variants
@@ -780,11 +788,11 @@ impl Library {
                     .enumerate()
                     .map(|(index, part)| ArtifactSetMember {
                         name: names[index].clone(),
-                        role: if index == 0 {
+                        role: variant.roles.get(index).copied().unwrap_or(if index == 0 {
                             ArtifactRole::Model
                         } else {
                             ArtifactRole::WeightShard
-                        },
+                        }),
                         artifact: part.request.expected_sha256.clone(),
                         bytes: part.request.maximum_bytes,
                     })
@@ -1036,10 +1044,21 @@ fn member_names(files: &[quant::FileMeta]) -> Vec<String> {
     names
 }
 
+fn grouped(
+    files: &[quant::FileMeta],
+    model: Option<&catalog::CatalogModel>,
+) -> Vec<quant::Variant> {
+    match model.and_then(|model| model.bundle(files)) {
+        Some(bundle) => vec![bundle],
+        None => quant::group(files),
+    }
+}
+
 fn apply_info(
     entry: &mut Entry,
     info: Option<&Result<Arc<RepoInfo>, HubError>>,
     include: impl Fn(&str) -> bool,
+    model: Option<&catalog::CatalogModel>,
 ) {
     match info {
         Some(Ok(info)) => {
@@ -1053,7 +1072,7 @@ fn apply_info(
             entry.metadata = "huggingface";
             entry.metadata_error = None;
             entry.files_truncated = Some(info.files_truncated);
-            entry.variants = Some(quant::group(&files));
+            entry.variants = Some(grouped(&files, model));
             if entry.summary.is_none() {
                 entry.summary = Some(info.summary.clone());
             } else if let Some(summary) = &mut entry.summary {
@@ -1097,7 +1116,7 @@ fn attach_local(
             if !files.iter().any(|known| known.path == file.file.path) {
                 files.push(file.file.clone());
             }
-            *variants = quant::group(&files);
+            *variants = grouped(&files, entry.catalog);
         }
         if !attached {
             leftovers.entry(file.repo.clone()).or_default().push(file);
@@ -1195,7 +1214,7 @@ fn variant_json(
                 .sets
                 .get(*primary)?
                 .iter()
-                .find(|_| variant.parts > 1)
+                .find(|_| variant.files.len() > 1)
                 .cloned()
         });
         json!({
@@ -1226,7 +1245,7 @@ fn variant_json(
         "parts": variant.parts,
         "complete": variant.complete,
         "bytes": variant.bytes(),
-        "sha256": (variant.files.len() == 1).then(|| variant.files[0].sha256.clone()).flatten(),
+        "sha256": (variant.files.len() == 1 || !variant.roles.is_empty()).then(|| variant.files[0].sha256.clone()).flatten(),
         "files": files,
         "recommended": entry.catalog.is_some_and(|model| model.recommends(variant.label.as_deref(), &variant.primary)),
         "pullable": pullable && entry.metadata == "huggingface" && variant.verifiable(),

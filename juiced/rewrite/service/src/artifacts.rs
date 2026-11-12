@@ -390,6 +390,21 @@ impl ArtifactLease {
     pub fn set_id(&self) -> Option<&str> {
         self.set.as_ref().map(|set| set.id())
     }
+    pub fn companions(&self) -> Vec<(&str, ArtifactRole, &Path)> {
+        let Some(set) = &self.set else {
+            return Vec::new();
+        };
+        let specification = set.specification();
+        specification
+            .members
+            .iter()
+            .filter(|member| member.name != specification.primary)
+            .filter_map(|member| {
+                set.member(&member.name)
+                    .map(|held| (member.name.as_str(), member.role, held.path()))
+            })
+            .collect()
+    }
     pub(crate) fn verify_set(&self) -> Result<(), ArtifactError> {
         if let Some(set) = &self.set {
             set.verify()?;

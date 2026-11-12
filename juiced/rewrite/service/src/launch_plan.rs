@@ -111,6 +111,23 @@ impl CapturedEnvironment {
     }
 }
 
+/// eSpeak NG silently ignores data directories longer than its fixed path buffer (160 bytes
+/// on POSIX), so Kokoros reads its bundled phoneme data through a short private link.
+pub(crate) fn phoneme_workspace(
+    bundle: Option<&VerifiedBundle>,
+) -> std::io::Result<tempfile::TempDir> {
+    let workspace = tempfile::Builder::new()
+        .prefix("juiced-kokoros-")
+        .tempdir()?;
+    if let Some(data) = bundle.and_then(VerifiedBundle::phoneme_data) {
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&data, workspace.path().join("espeak-ng-data"))?;
+        #[cfg(not(unix))]
+        let _ = data;
+    }
+    Ok(workspace)
+}
+
 pub(crate) struct VerifiedLaunchBindings {
     pub model: VerifiedFile,
     pub executable: VerifiedFile,
@@ -313,11 +330,35 @@ impl LaunchPlan {
                     "The selected worker needs a UTF-8 snapshot path.",
                 )
             })?;
+        let companions = bindings
+            .artifact
+            .as_ref()
+            .map(|artifact| artifact.companions())
+            .unwrap_or_default();
+        let members = companions
+            .iter()
+            .map(|(name, role, path)| {
+                path.as_os_str()
+                    .to_str()
+                    .map(|path| crate::runtime_arguments::Member {
+                        name,
+                        role: *role,
+                        path,
+                    })
+                    .ok_or_else(|| {
+                        Error::new(
+                            "launch_path_encoding",
+                            "The selected worker needs UTF-8 companion paths.",
+                        )
+                    })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         let mut args = template
             .resolve(crate::runtime_arguments::Bindings {
                 model,
                 port: bindings.port,
                 cache,
+                members: &members,
             })
             .map_err(|error| Error::new(error.code, error.message))?;
         if let Some(alias) = public_alias {
@@ -474,6 +515,11 @@ impl LaunchPlan {
         self.environment.apply(&mut command);
         if let Some(workspace) = &self.workspace {
             command.current_dir(workspace.path());
+            if self.adapter == Provider::Kokoros {
+                command
+                    .env("PIPER_ESPEAKNG_DATA_DIRECTORY", workspace.path())
+                    .env("ESPEAK_DATA_PATH", workspace.path());
+            }
         }
         Ok(command)
     }
