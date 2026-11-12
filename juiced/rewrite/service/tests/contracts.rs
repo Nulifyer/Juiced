@@ -438,7 +438,7 @@ async fn resident_and_slot_pressure_release_without_evicting_other_workers() {
 async fn startup_failure_and_timeout_release_reservations_for_retry() {
     for mode in ["exit", "hang"] {
         let h = Harness::configured(|config| {
-            config.startup_timeout_ms = 150;
+            config.startup_timeout_ms = 1500;
             config.models[0]
                 .execution_profile
                 .args
@@ -458,23 +458,29 @@ async fn startup_failure_and_timeout_release_reservations_for_retry() {
 async fn slow_startup_keeps_catalog_and_other_workers_responsive() {
     let h = Harness::configured(|config| {
         config.admission.startup.concurrent = 2;
+        config.startup_timeout_ms = 30_000;
         config.models[0]
             .execution_profile
             .args
-            .extend(["--startup-delay-ms".into(), "500".into()])
+            .extend(["--startup-delay-ms".into(), "5000".into()])
     });
     let manager = h.manager.clone();
     let loading = tokio::spawn(async move { manager.load("one").await });
     eventually(async || h.manager.resources()["reserved_bytes"] == 64).await;
-    let view = tokio::time::timeout(Duration::from_millis(100), h.manager.catalog())
+    let view = tokio::time::timeout(Duration::from_millis(1000), h.manager.catalog())
         .await
         .expect("catalog blocked on startup");
     assert_eq!(view[0].state, "loading");
-    let other = tokio::time::timeout(Duration::from_millis(250), h.manager.load("two"))
+    let other = tokio::time::timeout(Duration::from_millis(4000), h.manager.load("two"))
         .await
         .expect("unrelated load blocked")
         .unwrap();
     assert!(other.loaded);
+    assert!(
+        !loading.is_finished(),
+        "the slow startup finished before the unrelated load"
+    );
+    assert_eq!(h.manager.catalog().await[0].state, "loading");
     assert!(loading.await.unwrap().unwrap().loaded);
     h.manager.shutdown().await;
 }

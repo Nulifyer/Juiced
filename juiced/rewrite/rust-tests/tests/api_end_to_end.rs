@@ -723,7 +723,7 @@ async fn worker_crash_and_startup_failure_are_scoped_and_recoverable() {
     assert_ne!(server.model("fixture.one").await["pid"], pid);
     assert_eq!(server.model("fixture.two").await["pid"], unrelated);
     let failed = Server::configured(false, |config| {
-        config["startup_timeout_ms"] = json!(150);
+        config["startup_timeout_ms"] = json!(1500);
         config["models"][0]["args"]
             .as_array_mut()
             .unwrap()
