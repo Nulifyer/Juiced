@@ -45,8 +45,34 @@ The default configuration sets `inhibit_suspend` to false, because the container
 | Port | Use |
 | --- | --- |
 | 13305/tcp | HTTP API and console. `LEMONADE_PORT` changes it inside the container. |
+| 10300/tcp | Wyoming speech server for Home Assistant. Disabled by default. |
 
 The image does not expose UDP discovery. Clients connect to an explicit URL.
+
+## Home Assistant voice
+
+Home Assistant reaches Juiced in two ways. Its Ollama integration talks to the HTTP port for conversation. Its Wyoming Protocol integration talks to port 10300 for speech-to-text through whisper.cpp and text-to-speech through Kokoros.
+
+The Wyoming protocol has no authentication. Anyone who can reach the port can transcribe and synthesize with your models, even when API keys are set. The listener is therefore off by default. Publish 10300 only to a trusted network, for example `-p 192.168.1.10:10300:10300` instead of `-p 10300:10300`.
+
+To set it up:
+
+1. Add and enable a transcription model and a speech model in the console. The policy must be on-demand or hot.
+2. Publish the port: add `-p 10300:10300` to `podman run`.
+3. Enable the listener. The `expected_generation` value is the `configuration_generation` that `GET /v1/juiced/wyoming` returns:
+
+   ```bash
+   curl -s -H "Authorization: Bearer $LEMONADE_ADMIN_API_KEY" http://localhost:13305/v1/juiced/wyoming
+   curl -s -H "Authorization: Bearer $LEMONADE_ADMIN_API_KEY" -H 'Content-Type: application/json' \
+     -d '{"settings":{"enabled":true,"listen":"0.0.0.0:10300","stt_model":null,"tts_model":null,"tts_voice":null},"expected_generation":GENERATION}' \
+     http://localhost:13305/v1/juiced/wyoming
+   ```
+
+   With `stt_model` or `tts_model` set to null, Juiced uses every enabled transcription model and the first enabled speech model. `tts_voice` picks the voice used when Home Assistant does not ask for one. The setting is saved in `config.json` and survives restarts.
+4. In Home Assistant, open **Settings → Devices & services → Add integration → Wyoming Protocol**. Enter the container host's address as **Host** and `10300` as **Port**.
+5. Open **Settings → Voice assistants**, edit your assistant, and pick the Juiced entries for **Speech-to-text** and **Text-to-speech**.
+
+`GET /v1/juiced/wyoming` reports whether the listener is up, its bound address, a bind error if any, the connection counts and a summary of the last request (no transcript text). A request that arrives while a model is unloaded waits for the model to load, so the first command after a cold start can take several seconds.
 
 ## Environment
 
