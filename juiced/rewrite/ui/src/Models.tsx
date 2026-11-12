@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { bytes, loadReason, matchingModels, offers, policyNames, services, unloadReason, workerState, workerTone, parseSuitability, type Suitability, type Model, type Policy, type Service } from "./domain";
 import { Badge, Button, Empty, HelpTip, Icon } from "./ui";
 import type { Client } from "./api";
@@ -6,6 +6,7 @@ import { removalReason } from "./management";
 import { ContextInspector } from "./ContextInspector";
 import { ArtifactRevisionInspector } from "./ArtifactRevisionInspector";
 import { RuntimeInspector } from "./RuntimeInspector";
+import { ModelIdle, residencyNote } from "./Residency";
 
 export type Mutate = (path: string, body: unknown, success: string) => Promise<boolean>;
 
@@ -21,13 +22,13 @@ function workerFailure(code: string): string {
   if (code === "model_changed") return "The saved policy changed before startup. Review it before retrying.";
   if (code === "shutting_down") return "The service is shutting down.";
   if (code === "worker_cleanup_pending") return "The previous worker has not confirmed exit. Its reservation is retained. Retry cleanup with Unload before loading another generation.";
-  if (code === "resident_budget") return "The declared resident budget is full. Unload an idle On demand worker, then retry.";
+  if (code === "resident_budget") return "Memory is full and every loaded model is Hot or busy. Unload one, then retry.";
   if (code === "missing_weights") return "The configured model file is unavailable. Check its path on the service host.";
   if (code === "worker_exited") return "The engine exited. Review its launch configuration, then retry loading.";
   return "The worker needs attention. Review its current state before retrying.";
 }
 
-type ListProps = { models: Model[]; selected?: string; onSelect: (id: string) => void; mode: "models" | "policy"; mutate: Mutate; busy: boolean; online: boolean };
+type ListProps = { models: Model[]; selected?: string; onSelect: (id: string) => void; mode: "models" | "policy"; mutate: Mutate; busy: boolean; online: boolean; idleControl?: ReactNode };
 
 function setPolicy(mutate: Mutate, model: Model, policy: Policy) {
   if (policy === model.policy) return;
@@ -46,7 +47,7 @@ function RowAction({ model, mutate, disabled }: { model: Model; mutate: Mutate; 
   return <Button className="row-action" disabled={disabled || !!reason} title={reason ?? undefined} onClick={(event) => { event.stopPropagation(); void mutate(unload ? "unload" : "load", { model: model.id }, unload ? `Unloaded ${model.id}.` : `Loaded ${model.id}.`); }}>{unload ? "Unload" : "Load"}</Button>;
 }
 
-export function ModelList({ models, selected, onSelect, mode, mutate, busy, online }: ListProps) {
+export function ModelList({ models, selected, onSelect, mode, mutate, busy, online, idleControl }: ListProps) {
   const [query, setQuery] = useState("");
   const [service, setService] = useState<Service | null>(null);
   const [dragging, setDragging] = useState("");
@@ -64,6 +65,7 @@ export function ModelList({ models, selected, onSelect, mode, mutate, busy, onli
         onDrop={(event) => { event.preventDefault(); const model = models.find((item) => item.id === dragging); setDragging(""); if (model && !(policy === "disabled" && model.loaded)) setPolicy(mutate, model, policy); }}>
         <header><h2>{policyNames[policy]}</h2><span className="muted">{visible.filter((model) => model.policy === policy).length}</span></header>
         <p className="muted">{policy === "hot" ? "Loaded at startup and kept ready" : policy === "on-demand" ? "Loads on the first request" : "Hidden from apps"}</p>
+        {policy === "on-demand" && idleControl}
         {visible.filter((model) => model.policy === policy).map((model) => <div key={model.id} className={`lane-model ${selected === model.id ? "selected" : ""}`} draggable={!locked} onDragStart={(event) => { setDragging(model.id); event.dataTransfer.effectAllowed = "move"; }} onDragEnd={() => setDragging("")}>
           <button className="lane-open" aria-pressed={selected === model.id} onClick={() => onSelect(model.id)}><strong>{model.id}</strong><span className="muted"><span className={`status-dot ${workerTone(model)}`} /> {workerState(model)} · {bytes(model.resident_bytes)}</span></button>
           <PolicySelect model={model} mutate={mutate} disabled={locked} />
@@ -73,7 +75,7 @@ export function ModelList({ models, selected, onSelect, mode, mutate, busy, onli
       <div className="data-head" role="row"><span role="columnheader">Model</span><span role="columnheader">State</span><span role="columnheader">Policy</span><span role="columnheader" className="numeric">Memory</span><span role="columnheader"><span className="sr-only">Action</span></span></div>
       {visible.map((model) => <div className={`data-row model-row ${selected === model.id ? "selected" : ""}`} role="row" key={model.id} onClick={() => onSelect(model.id)}>
         <div role="cell" className="model-identity"><button className="model-name" aria-pressed={selected === model.id} onClick={(event) => { event.stopPropagation(); onSelect(model.id); }}>{model.id}</button><span className="model-meta">{model.operations.slice(0, 3).join(" · ")}</span></div>
-        <div role="cell" className="model-state"><span className={`status-dot ${workerTone(model)}`} />{workerState(model)}{model.loaded ? <span className="muted"> · {model.active_requests}/{model.max_inflight}</span> : null}</div>
+        <div role="cell" className="model-state" title={residencyNote(model) ?? undefined}><span className={`status-dot ${workerTone(model)}`} />{workerState(model)}{model.loaded ? <span className="muted"> · {model.active_requests}/{model.max_inflight}</span> : null}</div>
         <div role="cell"><PolicySelect model={model} mutate={mutate} disabled={locked} /></div>
         <div role="cell" className="numeric muted">{bytes(model.resident_bytes)}</div>
         <div role="cell" className="row-end"><RowAction model={model} mutate={mutate} disabled={locked} /></div>
@@ -103,6 +105,7 @@ export function Inspector({ model, busy, online, onClose, onDirty, mutate, clien
       <section className="inspector-section"><span className="field-label" id="policy-label">Loading policy</span>
         <div className="segmented wide" role="radiogroup" aria-labelledby="policy-label">{(["hot", "on-demand", "disabled"] as Policy[]).map((policy) => <button key={policy} role="radio" aria-checked={model.policy === policy} disabled={busy || !online || dirty || (policy === "disabled" && model.loaded)} title={policy === "disabled" && model.loaded ? "Unload the model before disabling it" : undefined} onClick={() => setPolicy(mutate, model, policy)}>{policyNames[policy]}</button>)}</div>
         <p className="field-help">{model.policy === "hot" ? (cleanupRetry ? "Retrying cleanup keeps the Hot policy." : "Loads at startup and stays loaded.") : model.policy === "on-demand" ? "Loads on the first request." : "Hidden from apps."}</p>
+        <ModelIdle model={model} client={client} online={online} disabled={busy || dirty} />
       </section>
       <section className="inspector-section"><h3>Worker</h3><dl className="facts"><div><dt>Process</dt><dd>{model.pid ?? "Not running"}</dd></div><div><dt>Requests</dt><dd>{model.active_requests} / {model.max_inflight}</dd></div><div><dt>Reserved</dt><dd>{bytes(model.resident_bytes)}</dd></div><div><dt>Weights</dt><dd>{model.downloaded ? "Present" : "Missing"}</dd></div></dl>
         {(model.uncertain_state_operations ?? 0) > 0 && <p className="inline-warning">A snapshot didn't confirm it finished. Its slot and memory stay held until you retry cleanup.</p>}

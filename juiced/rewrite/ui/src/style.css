@@ -625,3 +625,6 @@ dialog textarea { margin-bottom: 4px; }
 a.button { color: var(--foreground); text-decoration: none; }
 .sidebar-version { margin: auto 0 0; padding: 10px 10px 2px; font-size: .7rem; color: var(--muted); }
 .add-policy { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-bottom: 10px; }
+.idle-default { font-size: .7rem; margin: -8px 0 12px; color: var(--muted); }
+.idle-default select { font-size: .7rem; }
+.idle-setting { margin-top: 10px; }

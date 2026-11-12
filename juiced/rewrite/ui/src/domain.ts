@@ -1,3 +1,5 @@
+import type { Residency } from "./Residency";
+
 export type Policy = "disabled" | "on-demand" | "hot";
 export const policyNames: Record<Policy, string> = { disabled: "Disabled", "on-demand": "On demand", hot: "Hot" };
 export type Model = {
@@ -20,6 +22,7 @@ export type Model = {
   uncertain_requests?: number;
   uncertain_state_operations?: number;
   request_limits?: { input_bytes: number; batch: number; output_tokens: number };
+  residency?: Residency;
 };
 export type RequestRecord = { id: number; model: string; operation: string; outcome: string; status: number | null; elapsed_ms: number; input_tokens?: number | null; output_tokens?: number | null; decode_tokens_per_second?: number | null };
 export type CacheControlMemory = { state: "accounted" | "unavailable" | "legacy"; reason: string | null; metadata_bytes: number; scratch_bytes: number; reserved_bytes: number; outstanding_bytes: number; active_operations: number; bounds?: { bootstrap_bytes: number; metadata_bytes: number; scratch_bytes: number; state_scratch_bytes: number; page_scratch_bytes: number; response_bytes: number } };

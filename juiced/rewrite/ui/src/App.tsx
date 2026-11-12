@@ -14,6 +14,7 @@ import { FindModels } from "./FindModels";
 import { EngineList, Hardware } from "./Backends";
 import { Diagnostics } from "./Diagnostics";
 import { Aliases } from "./Aliases";
+import { IdleDefault } from "./Residency";
 import { gib, percent, rate, useSystemStats } from "./live";
 import { clearToasts, dismiss, notify, useToasts } from "./toast";
 import { Badge, Button, Dialog, Empty, Icon, Menu, Tabs, type IconName } from "./ui";
@@ -157,7 +158,7 @@ export function App() {
       <div className="page-header"><h1>{title}</h1>{tabs}</div>
       {!snapshot ? <Empty title={refreshing ? "Connecting to Juiced" : "Service unavailable"}>{refreshing ? "Reading models and service state…" : "Check the address and API key in Connection settings."}</Empty> : <>
         {screen === "dashboard" && <Dashboard snapshot={snapshot} stats={live.stats} history={live.history} onOpenModel={openModel} onTest={() => setScreen("test")} />}
-        {modelScreen && <div className="model-workspace"><ModelList models={snapshot.models} selected={selected} onSelect={(id) => leave(() => setSelected(id))} mode={screen as "models" | "policy"} mutate={mutate} busy={busy} online={online} />{hasInspector && <Inspector key={`${model.id}:${epoch}`} model={model} busy={busy} online={online} onClose={() => leave(() => setSelected(""))} onDirty={setDirty} mutate={mutate} client={client} stopLoad={loadingModel === model.id ? stopLoad : undefined} />}</div>}
+        {modelScreen && <div className="model-workspace"><ModelList models={snapshot.models} selected={selected} onSelect={(id) => leave(() => setSelected(id))} mode={screen as "models" | "policy"} mutate={mutate} busy={busy} online={online} idleControl={screen === "policy" ? <IdleDefault client={client} online={online} /> : undefined} />{hasInspector && <Inspector key={`${model.id}:${epoch}`} model={model} busy={busy} online={online} onClose={() => leave(() => setSelected(""))} onDirty={setDirty} mutate={mutate} client={client} stopLoad={loadingModel === model.id ? stopLoad : undefined} />}</div>}
         {screen === "models" && modelsTab === "aliases" && <Aliases key={epoch} client={client} models={snapshot.models} online={online} onOpenModel={openModel} />}
         {screen === "library" && libraryView === "find" && <FindModels key={epoch} client={client} online={online} onRegistered={refresh} onOpenModel={openModel} />}
         {screen === "library" && libraryView === "files" && <Library key={epoch} view={libraryView} client={client} online={online} models={snapshot.models} refreshModels={refresh} onInspect={openModel} />}
