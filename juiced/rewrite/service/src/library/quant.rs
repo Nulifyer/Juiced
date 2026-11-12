@@ -40,8 +40,10 @@ pub fn is_listed_file(path: &str) -> bool {
     let name = basename(path).to_ascii_lowercase();
     is_model_file(path)
         || name.ends_with(".onnx")
+        || name.ends_with(".ort")
         || name.ends_with(".safetensors")
         || name.ends_with(".bin")
+        || matches!(name.as_str(), "streaming_config.json" | "tokenizer.json")
 }
 
 pub fn bundle(

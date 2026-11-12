@@ -1164,3 +1164,87 @@ async fn hub_skipped_search_reads_only_the_cache() {
         requests
     );
 }
+
+#[test]
+fn speech_catalog_entries_pin_engines_and_complete_their_moonshine_sets() {
+    let catalog = super::catalog::catalog();
+    let find = |id: &str| catalog.models.iter().find(|model| model.id == id).unwrap();
+    let parakeet = find("parakeet-redux");
+    assert_eq!(
+        parakeet.engine,
+        Some(crate::engines::catalog::Engine::Parakeet)
+    );
+    assert_eq!(parakeet.native_id, "parakeet-cpp-gguf-redux-packed");
+    assert!(parakeet.includes("redux-packed.gguf"));
+    assert!(!parakeet.includes("redux-q8_0.gguf"));
+    let file = |path: &str, sha: Option<&str>| super::quant::FileMeta {
+        path: path.into(),
+        bytes: Some(10),
+        sha256: sha.map(str::to_owned),
+    };
+    let mut files = Vec::new();
+    for size in ["tiny", "small"] {
+        for name in [
+            "encoder.ort",
+            "adapter.ort",
+            "cross_kv.ort",
+            "decoder.ort",
+            "decoder_kv.ort",
+            "frontend.ort",
+            "ten-vad.onnx",
+        ] {
+            files.push(file(&format!("onnx/{size}/{name}"), Some(&"a".repeat(64))));
+        }
+        files.push(file(&format!("onnx/{size}/streaming_config.json"), None));
+        files.push(file(&format!("onnx/{size}/tokenizer.json"), None));
+    }
+    for (id, native, size) in [
+        (
+            "moonshine-tiny-streaming",
+            "Moonshine-Tiny-Streaming",
+            "tiny",
+        ),
+        (
+            "moonshine-small-streaming",
+            "Moonshine-Small-Streaming",
+            "small",
+        ),
+    ] {
+        let model = find(id);
+        assert_eq!(
+            model.engine,
+            Some(crate::engines::catalog::Engine::Moonshine)
+        );
+        assert_eq!(model.native_id, native);
+        let bundle = model.bundle(&files).unwrap();
+        assert!(bundle.complete && bundle.verifiable());
+        assert_eq!(bundle.primary, format!("onnx/{size}/encoder.ort"));
+        assert_eq!(bundle.files.len(), 9);
+        assert!(
+            bundle
+                .files
+                .iter()
+                .all(|file| file.path.starts_with(&format!("onnx/{size}/")))
+        );
+        assert!(model.recommends(None, &bundle.primary));
+        let config = bundle
+            .files
+            .iter()
+            .position(|file| file.path.ends_with("streaming_config.json"))
+            .unwrap();
+        assert_eq!(
+            bundle.roles[config],
+            crate::artifacts::ArtifactRole::Configuration
+        );
+    }
+    files.retain(|file| !file.path.ends_with("onnx/small/tokenizer.json"));
+    assert!(
+        !find("moonshine-small-streaming")
+            .bundle(&files)
+            .unwrap()
+            .complete
+    );
+    assert!(super::quant::is_listed_file("onnx/tiny/encoder.ort"));
+    assert!(super::quant::is_listed_file("onnx/tiny/tokenizer.json"));
+    assert!(!super::quant::is_listed_file("config.json"));
+}
