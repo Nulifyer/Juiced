@@ -1,5 +1,25 @@
 use super::*;
+use crate::{engines::catalog::Engine, profiles::LaunchOptions};
 use std::fs;
+
+fn layers<'a>(
+    definition: &'a BTreeMap<String, Box<RawValue>>,
+    saved: &'a crate::native_settings::SavedOptions,
+) -> Vec<Layer<'a>> {
+    vec![
+        Layer {
+            scope: "registration",
+            values: definition
+                .iter()
+                .map(|(key, value)| (key.as_str(), value.as_ref()))
+                .collect(),
+        },
+        Layer {
+            scope: "saved",
+            values: saved.iter().collect(),
+        },
+    ]
+}
 
 const MARKER: &str = "JUICED_SYNTHETIC_IMPORT_MARKER";
 const REVISION: &str = "0123456789abcdef0123456789abcdef01234567";
@@ -85,7 +105,7 @@ fn good() -> Fixture {
     fixture.file(
         "recipe_options.json",
         format!(
-            r#"{{"builtin.Qwen3-0.6B-GGUF":{{"ctx_size":4096,"llamacpp_args":"-ngl 20 --flash-attn on --rope-scale {MARKER}","llamacpp_backend":"cpu","pinned":true,"evict_idle_timeout":30,"unknown_option":"{MARKER}"}},"unrelated":"{MARKER}","builtin.Removed-Model":{{}}}}"#
+            r#"{{"builtin.Qwen3-0.6B-GGUF":{{"ctx_size":4096,"llamacpp_args":"-ngl 20 --flash-attn on --lora {MARKER} --made-up --host 0.0.0.0 --chat-template-kwargs '{{\"enable_thinking\":false}}'","llamacpp_backend":"cpu","pinned":true,"evict_idle_timeout":30,"unknown_option":"{MARKER}"}},"unrelated":"{MARKER}","builtin.Removed-Model":{{}}}}"#
         ),
     );
     fixture.file(
@@ -186,8 +206,8 @@ fn good_source_maps_models_options_policies_aliases_and_weights_without_writes()
         Some(Engine::LlamaCpp),
         "llamacpp",
         &inspection.config,
-        &definition.registered,
-        qwen.saved.as_ref().unwrap(),
+        &layers(&definition.registered, qwen.saved.as_ref().unwrap()),
+        &[],
     );
     assert_eq!(
         mapped.options,
@@ -213,15 +233,31 @@ fn good_source_maps_models_options_policies_aliases_and_weights_without_writes()
     let unsupported = mapped
         .rows
         .iter()
-        .find(|row| row.key == "llamacpp_args" && row.state == "unsupported")
+        .find(|row| row.key == "llamacpp_args:unsupported")
         .unwrap();
     assert_eq!(
         unsupported.value,
-        Some(serde_json::json!(["--flash-attn", "--rope-scale"]))
+        Some(serde_json::json!(["--lora", "--made-up"]))
+    );
+    let managed = mapped
+        .rows
+        .iter()
+        .find(|row| row.key == "llamacpp_args:managed")
+        .unwrap();
+    assert_eq!(managed.value, Some(serde_json::json!(["--host"])));
+    assert_eq!(
+        mapped.arguments,
+        vec![
+            vec!["--flash-attn".to_owned(), "on".to_owned()],
+            vec![
+                "--chat-template-kwargs".to_owned(),
+                r#"{"enable_thinking":false}"#.to_owned()
+            ],
+        ]
     );
 
     let mine = candidate(&inspection, "user.MyModel");
-    assert_eq!(mine.public_name, "user.MyModel");
+    assert_eq!(mine.public_name, "MyModel");
     assert_eq!(
         mine.previous_policy,
         Some(("on-demand", "native-juiced-state"))
@@ -233,17 +269,30 @@ fn good_source_maps_models_options_policies_aliases_and_weights_without_writes()
         Some(Engine::LlamaCpp),
         "llamacpp",
         &inspection.config,
-        &definition.registered,
-        mine.saved.as_ref().unwrap(),
+        &layers(&definition.registered, mine.saved.as_ref().unwrap()),
+        &[],
     );
     assert_eq!(mapped.options.context_tokens, None);
+    assert!(mapped.automatic_context);
     assert_eq!(mapped.backend.as_deref(), Some("vulkan"));
 
     let vision = candidate(&inspection, "user.Vision");
     let weights = inspection.find_weights(vision).unwrap();
     assert!(weights.path.ends_with("Vision-F16.gguf"));
     assert_eq!(weights.selection, "repository-name");
-    assert!(inspection.find_companion("acme/Vision-GGUF:mmproj-f16.gguf"));
+    let projector = inspection
+        .find_checkpoint(
+            vision
+                .definition
+                .as_ref()
+                .unwrap()
+                .mmproj
+                .as_deref()
+                .unwrap(),
+            Some("acme/Vision-GGUF"),
+        )
+        .unwrap();
+    assert!(projector.path.ends_with("mmproj-f16.gguf"));
     assert_eq!(
         inspection
             .find_weights(candidate(&inspection, "user.Npu"))
@@ -261,7 +310,7 @@ fn good_source_maps_models_options_policies_aliases_and_weights_without_writes()
         inspection.aliases,
         BTreeMap::from([
             ("chat".into(), "Qwen3-0.6B-GGUF".into()),
-            ("mine".into(), "user.MyModel".into())
+            ("mine".into(), "MyModel".into())
         ])
     );
     let global = global_rows(&inspection.config);
@@ -348,12 +397,13 @@ fn profile_owned_settings_are_the_saved_authority() {
     assert_eq!(qwen.selected_profile.as_deref(), Some("custom"));
     let saved = qwen.saved.as_ref().unwrap();
     assert_eq!(saved.get("ctx_size").unwrap().get(), "2048");
+    let empty = BTreeMap::new();
     let mapped = map_options(
         Some(Engine::LlamaCpp),
         "llamacpp",
         &inspection.config,
-        &BTreeMap::new(),
-        saved,
+        &layers(&empty, saved),
+        &[],
     );
     assert_eq!(mapped.options.context_tokens, Some(2048));
     assert!(
@@ -468,4 +518,294 @@ fn variant_selection_matches_native_rules() {
     let first = select(&files, None, "model-GGUF").unwrap();
     assert_eq!(first.selection, "repository-name");
     assert!(!first.path.to_string_lossy().contains("mmproj"));
+}
+
+fn raw(text: &str) -> Box<RawValue> {
+    RawValue::from_string(text.to_owned()).unwrap()
+}
+
+fn one_layer<'a>(scope: &'static str, values: &'a [(&'a str, Box<RawValue>)]) -> Layer<'a> {
+    Layer {
+        scope,
+        values: values
+            .iter()
+            .map(|(key, value)| (*key, value.as_ref()))
+            .collect(),
+    }
+}
+
+#[test]
+fn custom_arguments_split_like_native() {
+    assert_eq!(
+        shell_words(r#"--temp 1.0  --chat-template-kwargs '{"a":true}' -x "b c""#),
+        vec![
+            "--temp",
+            "1.0",
+            "--chat-template-kwargs",
+            r#"{"a":true}"#,
+            "-x",
+            "b c"
+        ]
+    );
+    assert!(shell_words("   ").is_empty());
+}
+
+#[test]
+fn image_defaults_layer_under_recipe_options_and_operator_arguments() {
+    let defaults = [
+        ("steps", raw("4")),
+        ("width", raw("512")),
+        ("flow_shift", raw("3.0")),
+    ];
+    let registered = [
+        ("steps", raw("8")),
+        ("cfg_scale", raw("1.0")),
+        ("width", raw("768")),
+        ("height", raw("768")),
+        ("sampling_method", raw(r#""euler""#)),
+        ("scheduler", raw(r#""karras""#)),
+        ("sd-cpp_backend", raw(r#""vulkan""#)),
+        (
+            "sdcpp_args",
+            raw(
+                r#""--scheduler simple --listen-ip 127.0.0.1 --params-backend Vulkan0 -t 8 --diffusion-fa""#,
+            ),
+        ),
+    ];
+    let saved = [("height", raw("1024")), ("pinned", raw("false"))];
+    let global = Document::parse_bytes(Role::Config, Some(b"{}")).unwrap();
+    let mapped = map_options(
+        Some(Engine::StableDiffusionCpp),
+        "sd-cpp",
+        &global,
+        &[
+            one_layer("image_defaults", &defaults),
+            one_layer("registration", &registered),
+            one_layer("saved", &saved),
+        ],
+        &[],
+    );
+    let flat: Vec<String> = mapped.arguments.concat();
+    assert_eq!(
+        flat,
+        [
+            "--scheduler",
+            "simple",
+            "-t",
+            "8",
+            "--diffusion-fa",
+            "--cfg-scale",
+            "1",
+            "--flow-shift",
+            "3",
+            "-H",
+            "1024",
+            "--sampling-method",
+            "euler",
+            "--steps",
+            "8",
+            "-W",
+            "768"
+        ]
+    );
+    assert_eq!(mapped.backend.as_deref(), Some("vulkan"));
+    let row = |key: &str| mapped.rows.iter().find(|row| row.key == key).unwrap();
+    assert_eq!(
+        row("sdcpp_args:managed").value,
+        Some(serde_json::json!(["--listen-ip"]))
+    );
+    assert_eq!(
+        row("sdcpp_args:unsupported").value,
+        Some(serde_json::json!(["--params-backend"]))
+    );
+}
+
+#[test]
+fn speech_hybrid_and_mtp_options_map_to_engine_arguments() {
+    let global = Document::parse_bytes(Role::Config, Some(b"{}")).unwrap();
+    let speech = [
+        ("asr4all_threads", raw(r#""4""#)),
+        ("asr4all_commit", raw(r#""16""#)),
+        ("asr4all_right", raw("4")),
+    ];
+    let mapped = map_options(
+        Some(Engine::Asr4all),
+        "asr4all",
+        &global,
+        &[one_layer("registration", &speech)],
+        &[],
+    );
+    assert_eq!(
+        mapped.arguments,
+        vec![
+            vec!["--futo-commit".to_owned(), "16".to_owned()],
+            vec!["--futo-right".to_owned(), "4".to_owned()],
+            vec!["--threads".to_owned(), "4".to_owned()],
+        ]
+    );
+    let hybrid = [
+        ("llamacpp_backend", raw(r#""hybrid-rocm""#)),
+        ("llamacpp_device", raw(r#""ROCm0""#)),
+        ("llamacpp_hybrid_memory_mib", raw("2048")),
+        ("hybrid_copy_gib", raw("16")),
+        ("ctx_size", raw("-1")),
+        ("llamacpp_args", raw(r#""--parallel 2 -ngl 999 -ngl 99""#)),
+    ];
+    let labels = vec!["mtp".to_owned()];
+    let mapped = map_options(
+        Some(Engine::LlamaCpp),
+        "llamacpp",
+        &global,
+        &[one_layer("saved", &hybrid)],
+        &labels,
+    );
+    assert_eq!(mapped.backend.as_deref(), Some("hybrid-rocm"));
+    assert!(mapped.automatic_context);
+    assert_eq!(mapped.options.parallel_slots, Some(2));
+    assert_eq!(mapped.options.gpu_layers, Some(99));
+    let flat = mapped.arguments.concat();
+    assert!(
+        flat.windows(2)
+            .any(|pair| pair == [crate::hybrid::DEVICE_FLAG, "ROCm0"])
+    );
+    assert!(
+        flat.windows(2)
+            .any(|pair| pair == [crate::hybrid::MEMORY_FLAG, "2048"])
+    );
+    assert!(
+        flat.windows(2)
+            .any(|pair| pair == ["--spec-type", "draft-mtp"])
+    );
+    assert!(!flat.iter().any(|argument| argument == "--device"));
+    assert!(
+        mapped
+            .rows
+            .iter()
+            .any(|row| row.key == "hybrid_copy_gib" && row.state == "unsupported")
+    );
+    let plain = [
+        ("merge_args", raw("false")),
+        ("llamacpp_device", raw(r#""Vulkan0""#)),
+    ];
+    let mapped = map_options(
+        Some(Engine::LlamaCpp),
+        "llamacpp",
+        &global,
+        &[one_layer("saved", &plain)],
+        &labels,
+    );
+    assert_eq!(
+        mapped.arguments,
+        vec![vec!["--device".to_owned(), "Vulkan0".to_owned()]]
+    );
+}
+
+#[test]
+fn native_names_resolve_across_hubs_snapshots_and_companion_roles() {
+    let fixture = Fixture::new();
+    fixture.file(
+        "user_models.json",
+        r#"{
+          "Qwen3-0.6B-GGUF":{"checkpoint":"acme/Shadow-GGUF:Q4_0","recipe":"llamacpp"},
+          "Old":{"checkpoints":{"main":"acme/Multi-GGUF:Q8_0","mmproj":"acme/Multi-GGUF:mmproj-F16.gguf"},"recipe":"llamacpp"},
+          "Image":{"checkpoints":{"main":"acme/Image:diffusion/model.safetensors","text_encoder":"acme/Encoder-GGUF:enc-Q4_K_M.gguf","vae":"acme/Image:split_files/vae/ae.safetensors"},"recipe":"sd-cpp","image_defaults":{"steps":4}}
+        }"#,
+    );
+    fixture.file(
+        "recipe_options.json",
+        r#"{"builtin.Qwen3-0.6B-GGUF":{},"builtin.kokoro-v1":{}}"#,
+    );
+    fixture.weights("acme/Shadow-GGUF", &["Shadow-Q4_0.gguf"], true);
+    fixture.weights("unsloth/Qwen3-0.6B-GGUF", &["Qwen3-0.6B-Q4_0.gguf"], true);
+    let multi = fixture.hub().join("models--acme--Multi-GGUF");
+    write(&multi.join("snapshots/1111/Multi-Q8_0.gguf"), b"older");
+    write(&multi.join("snapshots/2222/Multi-Q4_0.gguf"), b"newer");
+    write(&multi.join("snapshots/3333/Multi-Q8_0.gguf"), b"partial");
+    write(&multi.join("snapshots/3333/.download_manifest.json"), b"{}");
+    write(&multi.join("snapshots/2222/mmproj-F16.gguf"), b"proj");
+    write(&multi.join("refs/main"), "2222");
+    let library = fixture.root.path().join("library/huggingface/hub");
+    let image = library.join("models--acme--Image/snapshots/abcd");
+    write(&image.join("diffusion/model.safetensors"), b"main");
+    write(&image.join("split_files/vae/ae.safetensors"), b"vae");
+    write(
+        &fixture
+            .hub()
+            .join("models--acme--Encoder-GGUF/snapshots/beef/enc-Q4_K_M.gguf"),
+        b"encoder",
+    );
+    let kokoro = fixture
+        .hub()
+        .join("models--mikkoph--kokoro-onnx/snapshots/cafe");
+    write(
+        &kokoro.join("index.json"),
+        r#"{"model":"kokoro-v1.0.onnx","voices":"voices-v1.0.bin"}"#,
+    );
+    write(&kokoro.join("kokoro-v1.0.onnx"), b"onnx");
+    write(&kokoro.join("voices-v1.0.bin"), b"voices");
+    let roots = vec![
+        fixture.volume(),
+        fs::canonicalize(fixture.root.path().join("library")).unwrap(),
+    ];
+    let inspection = Inspection::open(&fixture.config(), None, &roots, cancelled()).unwrap();
+    assert_eq!(inspection.weights_roots.len(), 2);
+
+    let shadowed = candidate(&inspection, "builtin.Qwen3-0.6B-GGUF");
+    assert_eq!(shadowed.public_name, "builtin.Qwen3-0.6B-GGUF");
+    let user = candidate(&inspection, "user.Qwen3-0.6B-GGUF");
+    assert_eq!(user.public_name, "Qwen3-0.6B-GGUF");
+    assert!(
+        inspection
+            .find_weights(user)
+            .unwrap()
+            .path
+            .ends_with("Shadow-Q4_0.gguf")
+    );
+
+    let old = candidate(&inspection, "user.Old");
+    let found = inspection.find_weights(old).unwrap();
+    assert_eq!(found.snapshot.as_deref(), Some("1111"));
+    assert_eq!(found.bytes, 5);
+    let projector = inspection
+        .find_checkpoint(
+            &old.definition.as_ref().unwrap().checkpoints["mmproj"],
+            None,
+        )
+        .unwrap();
+    assert_eq!(projector.snapshot.as_deref(), Some("2222"));
+
+    let image = candidate(&inspection, "user.Image");
+    let definition = image.definition.as_ref().unwrap();
+    assert!(
+        inspection
+            .find_weights(image)
+            .unwrap()
+            .path
+            .ends_with("diffusion/model.safetensors")
+    );
+    let main = definition.checkpoint.as_deref();
+    let vae = inspection
+        .find_checkpoint(&definition.checkpoints["vae"], main)
+        .unwrap();
+    assert!(vae.path.starts_with(fs::canonicalize(&library).unwrap()));
+    assert!(
+        inspection
+            .find_checkpoint(&definition.checkpoints["text_encoder"], main)
+            .unwrap()
+            .path
+            .ends_with("enc-Q4_K_M.gguf")
+    );
+    assert_eq!(definition.image_defaults["steps"].get(), "4");
+    assert_eq!(
+        inspection
+            .find_checkpoint("acme/Image:missing.safetensors", main)
+            .unwrap_err(),
+        "weights_missing"
+    );
+
+    let kokoro = candidate(&inspection, "builtin.kokoro-v1");
+    assert_eq!(kokoro.public_name, "kokoro-v1");
+    let (model, voices) = inspection.find_kokoro(kokoro).unwrap();
+    assert!(model.path.ends_with("kokoro-v1.0.onnx"));
+    assert!(voices.ends_with("voices-v1.0.bin"));
 }

@@ -349,6 +349,31 @@ pub struct ModelSpec {
     pub revision: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub idle_unload_after_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub companions: Vec<CompanionFile>,
+}
+
+pub const MAXIMUM_COMPANIONS: usize = 8;
+
+/// A companion file registered in place beside an unmanaged model file. Launch checks that it
+/// still exists and binds it to the `{member:NAME}` argument with the same name.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct CompanionFile {
+    pub name: String,
+    pub role: crate::artifacts::ArtifactRole,
+    pub path: PathBuf,
+}
+
+/// Records that the native configuration directory was adopted, so restarts do not repeat it.
+/// `pending` lists native model IDs whose registration still waits for weights or an engine.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct NativeAdoption {
+    pub source: PathBuf,
+    pub adopted_unix_ms: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pending: Vec<String>,
 }
 
 impl ModelSpec {
@@ -402,6 +427,8 @@ pub struct Config {
     pub import_roots: Vec<PathBuf>,
     #[serde(default, skip_serializing_if = "crate::wyoming::Settings::is_default")]
     pub wyoming: crate::wyoming::Settings,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_adoption: Option<NativeAdoption>,
 }
 
 pub const MAXIMUM_IMPORT_ROOTS: usize = 16;
@@ -457,6 +484,7 @@ impl From<LegacyModelSpec> for ModelSpec {
             policy: legacy.policy,
             revision: legacy.revision,
             idle_unload_after_ms: None,
+            companions: Vec::new(),
         }
     }
 }
@@ -464,8 +492,8 @@ impl From<LegacyModelSpec> for ModelSpec {
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum ModelWire {
-    Current(ModelSpec),
-    Legacy(LegacyModelSpec),
+    Current(Box<ModelSpec>),
+    Legacy(Box<LegacyModelSpec>),
 }
 
 #[derive(Deserialize)]
@@ -500,6 +528,8 @@ struct ConfigWire {
     import_roots: Vec<PathBuf>,
     #[serde(default)]
     wyoming: crate::wyoming::Settings,
+    #[serde(default)]
+    native_adoption: Option<NativeAdoption>,
 }
 
 fn deserialize_native_binding<'de, D: Deserializer<'de>>(
@@ -530,8 +560,8 @@ impl<'de> Deserialize<'de> for Config {
             .into_iter()
             .map(|model| {
                 let model = match (wire.schema_version, model) {
-                    (1, ModelWire::Legacy(model)) => model.into(),
-                    (2 | 3, ModelWire::Current(model)) => model,
+                    (1, ModelWire::Legacy(model)) => (*model).into(),
+                    (2 | 3, ModelWire::Current(model)) => *model,
                     _ => {
                         return Err(D::Error::custom(
                             "Configuration model fields do not match its schema version",
@@ -568,6 +598,7 @@ impl<'de> Deserialize<'de> for Config {
             upload_max_bytes: wire.upload_max_bytes,
             import_roots: wire.import_roots,
             wyoming: wire.wyoming,
+            native_adoption: wire.native_adoption,
         })
     }
 }
@@ -578,8 +609,8 @@ pub struct Registration(pub ModelSpec);
 impl<'de> Deserialize<'de> for Registration {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let model = match ModelWire::deserialize(deserializer)? {
-            ModelWire::Current(model) => model,
-            ModelWire::Legacy(model) => model.into(),
+            ModelWire::Current(model) => *model,
+            ModelWire::Legacy(model) => (*model).into(),
         };
         if model.execution_profile.native_model_id().is_some() {
             return Err(D::Error::custom(
@@ -778,6 +809,27 @@ impl Config {
             }
             if model.operations.is_empty() {
                 return Err(format!("{} needs explicit supported operations", model.id));
+            }
+            if !model.companions.is_empty() {
+                let mut names = HashSet::new();
+                if model.artifact_set.is_some()
+                    || model.companions.len() > MAXIMUM_COMPANIONS
+                    || model.companions.iter().any(|companion| {
+                        !crate::runtime_arguments::valid_member_name(&companion.name)
+                            || !names.insert(companion.name.as_str())
+                            || !companion.path.is_absolute()
+                            || companion.path.as_os_str().len() > 4096
+                            || companion
+                                .path
+                                .to_str()
+                                .is_none_or(|text| text.chars().any(char::is_control))
+                    })
+                {
+                    return Err(format!(
+                        "{} needs at most {MAXIMUM_COMPANIONS} uniquely named absolute in-place companions and no artifact set",
+                        model.id
+                    ));
+                }
             }
         }
         if self.aliases.entries.len() > MAXIMUM_ALIASES {

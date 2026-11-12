@@ -80,7 +80,7 @@ pub struct EngineJobs {
 }
 
 impl EngineJobs {
-    fn views(&self) -> Vec<Value> {
+    pub(super) fn views(&self) -> Vec<Value> {
         self.jobs
             .lock()
             .unwrap_or_else(|error| error.into_inner())
@@ -363,6 +363,9 @@ impl Manager {
         let expected = request.expected_generation;
         tokio::spawn(async move {
             let result = manager.run_install(&running, policy, expected).await;
+            if result.is_ok() {
+                manager.resume_native_adoption();
+            }
             running.update(|status| {
                 match result {
                     Ok(package) => {

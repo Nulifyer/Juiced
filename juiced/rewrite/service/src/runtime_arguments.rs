@@ -454,7 +454,52 @@ fn member_flag(flag: &str, adapter: Provider, server_phase: bool) -> Option<Arti
             "-d" | "--data" => Some(ArtifactRole::Voice),
             _ => None,
         },
+        Provider::LlamaCpp => match flag {
+            "-mm" | "--mmproj" => Some(ArtifactRole::Projector),
+            _ => None,
+        },
         _ => None,
+    }
+}
+
+pub fn valid_member_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && name.as_bytes()[0].is_ascii_alphanumeric()
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Passthrough {
+    Accepted(u8),
+    ManagerOwned,
+    Companion,
+    Forbidden,
+    Unknown,
+}
+
+/// Classifies one operator-supplied worker flag the way [`validate`] would treat it.
+pub fn passthrough(adapter: Provider, flag: &str) -> Passthrough {
+    let flag = normalized_flag(adapter, flag);
+    if member_flag(&flag, adapter, false).is_some() {
+        return Passthrough::Companion;
+    }
+    if owned(&flag, adapter, false, adapter == Provider::Kokoros).is_some() {
+        return Passthrough::ManagerOwned;
+    }
+    if forbidden(&flag, adapter) {
+        return Passthrough::Forbidden;
+    }
+    match match adapter {
+        Provider::LlamaCpp => llama_arity(&flag),
+        Provider::WhisperCpp => whisper_arity(&flag),
+        Provider::StableDiffusionCpp => stable_diffusion_arity(&flag),
+        _ => None,
+    } {
+        Some(arity) => Passthrough::Accepted(arity),
+        None => Passthrough::Unknown,
     }
 }
 
@@ -464,13 +509,7 @@ pub fn member_placeholder(name: &str) -> String {
 
 fn member_name(value: &str) -> Option<&str> {
     let name = value.strip_prefix("{member:")?.strip_suffix('}')?;
-    (!name.is_empty()
-        && name.len() <= 64
-        && name.as_bytes()[0].is_ascii_alphanumeric()
-        && name
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte)))
-    .then_some(name)
+    valid_member_name(name).then_some(name)
 }
 
 impl ArgumentTemplate {
@@ -908,6 +947,7 @@ fn llama_arity(flag: &str) -> Option<u8> {
         "--no-cont-batching",
         "--no-mmproj",
         "--no-mmproj-auto",
+        "--no-mmproj-offload",
         "-cmoe",
         "--cpu-moe",
         "--check-tensors",
@@ -1578,7 +1618,6 @@ mod tests {
             "-hf",
             "--docker-repo",
             "-hft",
-            "--mmproj",
             "-mmu",
             "--model-draft",
             "--lora",
@@ -1607,6 +1646,75 @@ mod tests {
             assert_eq!(error.code, "unbound_runtime_side_input", "{flag}");
             assert!(!error.to_string().contains("private-value"));
         }
+    }
+
+    #[test]
+    fn llama_projectors_bind_only_as_retained_or_in_place_companions() {
+        let mut input = base();
+        input.extend(args(&["--mmproj", "/private/projector.gguf"]));
+        let error = validate(Provider::LlamaCpp, &input).unwrap_err();
+        assert_eq!(error.code, "invalid_runtime_binding");
+        let mut input = base();
+        input.extend(args(&[
+            "--mmproj",
+            "{member:mmproj}",
+            "--no-mmproj-offload",
+        ]));
+        let template = validate(Provider::LlamaCpp, &input).unwrap();
+        assert_eq!(
+            template.member_requirements().collect::<Vec<_>>(),
+            vec![("mmproj", ArtifactRole::Projector)]
+        );
+        assert!(template.verify_members([]).is_err());
+        let resolved = template
+            .resolve(Bindings {
+                model: "/m.gguf",
+                port: 9,
+                cache: "/c",
+                members: &[Member {
+                    name: "mmproj",
+                    role: ArtifactRole::Projector,
+                    path: "/p/mmproj.gguf",
+                }],
+            })
+            .unwrap();
+        assert!(
+            resolved
+                .windows(2)
+                .any(|pair| pair == ["--mmproj", "/p/mmproj.gguf"])
+        );
+        assert_eq!(
+            passthrough(Provider::LlamaCpp, "--mmproj"),
+            Passthrough::Companion
+        );
+        assert_eq!(
+            passthrough(Provider::LlamaCpp, "--host"),
+            Passthrough::ManagerOwned
+        );
+        assert_eq!(
+            passthrough(Provider::LlamaCpp, "--lora"),
+            Passthrough::Forbidden
+        );
+        assert_eq!(
+            passthrough(Provider::LlamaCpp, "--spec-type"),
+            Passthrough::Accepted(1)
+        );
+        assert_eq!(
+            passthrough(Provider::LlamaCpp, "--jinja"),
+            Passthrough::Accepted(0)
+        );
+        assert_eq!(
+            passthrough(Provider::LlamaCpp, "--made-up"),
+            Passthrough::Unknown
+        );
+        assert_eq!(
+            passthrough(Provider::StableDiffusionCpp, "--params-backend"),
+            Passthrough::Forbidden
+        );
+        assert_eq!(
+            passthrough(Provider::StableDiffusionCpp, "--scheduler"),
+            Passthrough::Accepted(1)
+        );
     }
 
     #[test]

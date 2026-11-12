@@ -74,6 +74,8 @@ ENV JUICED_DATA=/data \
     LEMONADE_HOST=127.0.0.1 \
     LEMONADE_PORT=8080 \
     TINI_SUBREAPER=1 \
+    JUICED_NATIVE_CONFIG_DIR=/data/config \
+    JUICED_NATIVE_IMPORT_ROOTS=/data:/library \
     HOME=/data/home \
     XDG_CACHE_HOME=/data/home/.cache
 

@@ -136,14 +136,150 @@ struct Plan {
     packages_generation: Value,
 }
 
+/// A companion resolved in place for one native checkpoint role.
+struct Resolved {
+    role: String,
+    checkpoint: String,
+    found: Result<Weights, &'static str>,
+}
+
+struct Detected {
+    weights: Result<Weights, &'static str>,
+    format: Option<Result<models::ModelFormat, models::FormatError>>,
+    companions: Vec<Resolved>,
+}
+
+/// Native recipes the rewrite runs with another engine name: the retired `hybrid` recipe is
+/// llama.cpp on the hybrid-rocm backend.
+fn recipe_engine(recipe: Option<&str>) -> Option<(Engine, &'static str, Option<&'static str>)> {
+    match recipe? {
+        "hybrid" => Some((Engine::LlamaCpp, "llamacpp", Some("hybrid-rocm"))),
+        recipe => {
+            let engine = Engine::parse(recipe)?;
+            Some((engine, engine.recipe(), None))
+        }
+    }
+}
+
+fn detect_candidate(inspection: &Inspection, candidate: &Candidate) -> Detected {
+    let definition = candidate.definition.as_ref();
+    let engine = recipe_engine(definition.and_then(|definition| definition.recipe.as_deref()))
+        .map(|(engine, ..)| engine);
+    let mut companions = Vec::new();
+    let weights = if engine == Some(Engine::Kokoros) {
+        inspection.find_kokoro(candidate).map(|(weights, voices)| {
+            let bytes = std::fs::metadata(&voices).map_or(0, |metadata| metadata.len());
+            companions.push(Resolved {
+                role: "voices".into(),
+                checkpoint: "index.json:voices".into(),
+                found: Ok(Weights {
+                    files: vec![(voices.clone(), bytes)],
+                    path: voices,
+                    bytes,
+                    selection: "kokoro-index",
+                    snapshot: weights.snapshot.clone(),
+                }),
+            });
+            weights
+        })
+    } else {
+        inspection.find_weights(candidate)
+    };
+    if let Some(definition) = definition {
+        let roles: &[&str] = match engine {
+            Some(Engine::LlamaCpp) => &["mmproj"],
+            Some(Engine::StableDiffusionCpp) => &["text_encoder", "vae"],
+            _ => &[],
+        };
+        for role in roles {
+            if let Some(checkpoint) = definition.checkpoints.get(*role) {
+                companions.push(Resolved {
+                    role: (*role).to_owned(),
+                    checkpoint: checkpoint.clone(),
+                    found: inspection.find_checkpoint(checkpoint, definition.checkpoint.as_deref()),
+                });
+            }
+        }
+    }
+    let format = weights
+        .as_ref()
+        .ok()
+        .map(|weights| models::detect(&weights.path).map(|(format, _)| format));
+    Detected {
+        weights,
+        format,
+        companions,
+    }
+}
+
+/// Native trusts the recipe for the worker type; a file the detector reads as another kind of
+/// GGUF still launches with the recipe's engine.
+fn recipe_format(engine: Engine, detected: models::ModelFormat) -> models::ModelFormat {
+    use models::ModelFormat;
+    match (engine, detected) {
+        (Engine::StableDiffusionCpp, ModelFormat::Gguf { declared, .. }) => {
+            ModelFormat::Diffusion {
+                container: models::Container::Gguf,
+                architecture: declared.architecture,
+                includes_vae: false,
+                includes_text_encoder: false,
+            }
+        }
+        (Engine::Asr4all, ModelFormat::Gguf { .. } | ModelFormat::ParakeetGguf {}) => {
+            ModelFormat::Asr4allGguf {}
+        }
+        (Engine::Parakeet, ModelFormat::Gguf { .. } | ModelFormat::Asr4allGguf {}) => {
+            ModelFormat::ParakeetGguf {}
+        }
+        (_, format) => format,
+    }
+}
+
+/// Places mapped native argument groups into the engine's base arguments: a flag the base
+/// already passes takes the native value, any other group is appended in native order.
+fn merge_arguments(arguments: &mut Vec<Value>, groups: &[Vec<String>]) {
+    for group in groups {
+        let position = arguments
+            .iter()
+            .position(|argument| argument.as_str() == Some(group[0].as_str()));
+        match (position, group.len()) {
+            (Some(position), 2)
+                if arguments
+                    .get(position + 1)
+                    .and_then(Value::as_str)
+                    .is_some_and(|value| {
+                        !value.starts_with('-') || value.parse::<f64>().is_ok()
+                    }) =>
+            {
+                arguments[position + 1] = json!(group[1]);
+            }
+            (Some(_), 1) => {}
+            _ => arguments.extend(group.iter().map(|argument| json!(argument))),
+        }
+    }
+}
+
+fn companion_view(companion: &Resolved) -> Value {
+    match &companion.found {
+        Ok(found) => {
+            json!({"role": companion.role, "checkpoint": companion.checkpoint, "found": true, "path": found.path, "bytes": found.bytes})
+        }
+        Err(code) => {
+            json!({"role": companion.role, "checkpoint": companion.checkpoint, "found": false, "reason": code})
+        }
+    }
+}
+
 impl Manager {
     async fn native_import_plan(
         &self,
         source: PathBuf,
         weights: Option<PathBuf>,
+        extra_roots: &[PathBuf],
     ) -> Result<Plan, ApiError> {
         let base = self.config.lock().await.clone();
-        let roots = base.import_roots.clone();
+        let mut roots = base.import_roots.clone();
+        roots.extend(extra_roots.iter().cloned());
         let (inspection, detected) = tokio::task::spawn_blocking(move || {
             let inspection = Inspection::open(
                 &source,
@@ -155,19 +291,7 @@ impl Manager {
             let detected: Vec<_> = inspection
                 .candidates
                 .iter()
-                .map(|candidate| {
-                    let weights = inspection.find_weights(candidate);
-                    let format = weights
-                        .as_ref()
-                        .ok()
-                        .map(|weights| models::detect(&weights.path).map(|(format, _)| format));
-                    let mmproj = candidate
-                        .definition
-                        .as_ref()
-                        .and_then(|definition| definition.mmproj.as_deref())
-                        .map(|checkpoint| inspection.find_companion(checkpoint));
-                    (weights, format, mmproj)
-                })
+                .map(|candidate| detect_candidate(&inspection, candidate))
                 .collect();
             Ok::<_, ApiError>((Arc::new(inspection), detected))
         })
@@ -183,15 +307,20 @@ impl Manager {
             .as_ref()
             .and_then(|cpu| cpu.physical_cores.or(cpu.usable_threads));
         let mut planned = Vec::with_capacity(detected.len());
-        for (candidate, (weights, format, mmproj)) in
-            inspection.candidates.iter().cloned().zip(detected)
-        {
+        for (candidate, detected) in inspection.candidates.iter().cloned().zip(detected) {
+            let Detected {
+                weights,
+                format,
+                companions,
+            } = detected;
             let mut blockers = Vec::new();
             let mut row = serde_json::Map::new();
             let definition = candidate.definition.clone();
             let recipe = definition
                 .as_ref()
                 .and_then(|definition| definition.recipe.clone());
+            let routed = recipe_engine(recipe.as_deref());
+            let recipe_engine = routed.map(|(engine, ..)| engine);
             match candidate.origin {
                 Origin::Extra => blockers.push(blocker("extra_models_unsupported")),
                 Origin::Unrecognized => blockers.push(blocker("native_row_unrecognized")),
@@ -203,7 +332,10 @@ impl Manager {
                 blockers.push(blocker("model_settings_recovery_required"));
             }
             let format = match format {
-                Some(Ok(format)) => Some(format),
+                Some(Ok(format)) => Some(match recipe_engine {
+                    Some(engine) => recipe_format(engine, format),
+                    None => format,
+                }),
                 Some(Err(error)) => {
                     blockers.push(blocker(match error {
                         models::FormatError::Unavailable => "artifact_unavailable",
@@ -219,7 +351,6 @@ impl Manager {
             {
                 blockers.push(blocker(code));
             }
-            let recipe_engine = recipe.as_deref().and_then(Engine::parse);
             if matches!(candidate.origin, Origin::Builtin | Origin::User) && recipe_engine.is_none()
             {
                 blockers.push(blocker("native_recipe_unsupported"));
@@ -230,44 +361,123 @@ impl Manager {
             {
                 blockers.push(blocker("native_recipe_mismatch"));
             }
-            if let Some(format) = &format
-                && models::companion_arguments(format, &[]).is_err()
-            {
-                blockers.push(blocker("companions_required"));
-            }
             let empty = crate::native_settings::SavedOptions::default();
-            let mapped = crate::native_import::map_options(
+            let no_rows = BTreeMap::new();
+            let image_defaults = definition
+                .as_ref()
+                .map(|definition| &definition.image_defaults)
+                .unwrap_or(&no_rows);
+            let registered = definition
+                .as_ref()
+                .map(|definition| &definition.registered)
+                .unwrap_or(&no_rows);
+            let saved = candidate.saved.as_ref().unwrap_or(&empty);
+            let layers = [
+                crate::native_import::Layer {
+                    scope: "image_defaults",
+                    values: image_defaults
+                        .iter()
+                        .map(|(key, value)| (key.as_str(), value.as_ref()))
+                        .collect(),
+                },
+                crate::native_import::Layer {
+                    scope: "registration",
+                    values: registered
+                        .iter()
+                        .map(|(key, value)| (key.as_str(), value.as_ref()))
+                        .collect(),
+                },
+                crate::native_import::Layer {
+                    scope: "saved",
+                    values: saved.iter().collect(),
+                },
+            ];
+            let labels = definition
+                .as_ref()
+                .map(|definition| definition.labels.clone())
+                .unwrap_or_default();
+            let mut mapped = crate::native_import::map_options(
                 recipe_engine,
-                recipe.as_deref().unwrap_or_default(),
+                routed.map_or(recipe.as_deref().unwrap_or_default(), |(_, name, _)| name),
                 &inspection.config,
-                definition
-                    .as_ref()
-                    .map(|definition| &definition.registered)
-                    .unwrap_or(&BTreeMap::new()),
-                candidate.saved.as_ref().unwrap_or(&empty),
+                &layers,
+                &labels,
             );
+            if let Some((_, _, Some(backend))) = routed {
+                mapped.backend = Some(backend.to_owned());
+            }
             let mut settings = mapped.rows.clone();
-            if let Some(definition) = &definition {
-                if let Some(checkpoint) = &definition.mmproj {
-                    settings.push(crate::native_import::SettingRow {
-                        scope: "registration",
-                        key: "mmproj".into(),
-                        state: "unsupported",
-                        value: Some(json!({"checkpoint": checkpoint, "found": mmproj.unwrap_or(false)})),
-                        target: None,
-                        reason: "Vision projectors are not imported yet; the model is imported for text only.",
-                    });
+            let mut bound: Vec<(&Resolved, crate::artifacts::ArtifactRole)> = Vec::new();
+            match recipe_engine {
+                Some(Engine::LlamaCpp) => {
+                    for companion in &companions {
+                        if companion.found.is_ok() {
+                            bound.push((companion, crate::artifacts::ArtifactRole::Projector));
+                        } else {
+                            settings.push(crate::native_import::SettingRow {
+                                scope: "registration",
+                                key: "checkpoints.mmproj".into(),
+                                state: "unsupported",
+                                value: Some(companion_view(companion)),
+                                target: None,
+                                reason: "The vision projector is not downloaded; like native, the model runs for text only.",
+                            });
+                        }
+                    }
                 }
+                Some(Engine::StableDiffusionCpp) => {
+                    let found: Vec<_> = companions
+                        .iter()
+                        .filter(|companion| companion.found.is_ok())
+                        .collect();
+                    if found.len() == 2 {
+                        for companion in found {
+                            bound.push((
+                                companion,
+                                if companion.role == "vae" {
+                                    crate::artifacts::ArtifactRole::Vae
+                                } else {
+                                    crate::artifacts::ArtifactRole::Encoder
+                                },
+                            ));
+                        }
+                    } else if !companions.is_empty() {
+                        settings.push(crate::native_import::SettingRow {
+                            scope: "registration",
+                            key: "checkpoints".into(),
+                            state: "unsupported",
+                            value: Some(json!(companions.iter().map(companion_view).collect::<Vec<_>>())),
+                            target: None,
+                            reason: "Native passes the text encoder and VAE only when both are downloaded; the main file is loaded alone.",
+                        });
+                    }
+                }
+                Some(Engine::Kokoros) => {
+                    for companion in &companions {
+                        if companion.found.is_ok() {
+                            bound.push((companion, crate::artifacts::ArtifactRole::Voice));
+                        }
+                    }
+                }
+                _ => {}
+            }
+            if let Some(definition) = &definition {
                 for role in &definition.other_checkpoints {
+                    if companions.iter().any(|companion| companion.role == *role) {
+                        continue;
+                    }
                     settings.push(crate::native_import::SettingRow {
                         scope: "registration",
                         key: format!("checkpoints.{role}"),
-                        state: "unsupported",
-                        value: None,
+                        state: "ignored",
+                        value: definition.checkpoints.get(role).map(|checkpoint| json!(checkpoint)),
                         target: None,
-                        reason: "Draft and auxiliary checkpoints are not imported.",
+                        reason: "Native does not pass this checkpoint role to the worker for this recipe.",
                     });
                 }
+            }
+            if recipe_engine == Some(Engine::Kokoros) && bound.is_empty() && weights.is_ok() {
+                blockers.push(blocker("companions_required"));
             }
             let mut install = None;
             let mut registration = None;
@@ -298,15 +508,80 @@ impl Manager {
                 }
                 match choice {
                     Ok(choice) => {
-                        let context = match format {
-                            models::ModelFormat::Gguf { .. } => mapped
-                                .options
-                                .context_tokens
-                                .map(u64::from)
-                                .or_else(|| models::context_tokens(format)),
-                            _ => None,
+                        if mapped
+                            .backend
+                            .as_deref()
+                            .is_some_and(|native| native != choice.backend)
+                        {
+                            let before = mapped.arguments.len();
+                            mapped.arguments.retain(|group| {
+                                !matches!(
+                                    group[0].as_str(),
+                                    "--device"
+                                        | "-dev"
+                                        | crate::hybrid::DEVICE_FLAG
+                                        | crate::hybrid::MEMORY_FLAG
+                                        | crate::hybrid::MIN_PROMPT_FLAG
+                                )
+                            });
+                            if mapped.arguments.len() != before {
+                                settings.push(crate::native_import::SettingRow {
+                                    scope: "saved",
+                                    key: "llamacpp_device".into(),
+                                    state: "ignored",
+                                    value: None,
+                                    target: None,
+                                    reason: "The native device belongs to a backend this host does not use; the engine default device applies.",
+                                });
+                            }
+                        }
+                        let companion_bytes: u64 = bound
+                            .iter()
+                            .filter_map(|(companion, _)| companion.found.as_ref().ok())
+                            .map(|found| found.bytes)
+                            .sum();
+                        let bytes = found.bytes.saturating_add(companion_bytes);
+                        let estimate_for =
+                            |context: Option<u64>| models::estimate(format, bytes, context);
+                        let estimate = match format {
+                            models::ModelFormat::Gguf { declared, .. } => {
+                                match mapped.options.context_tokens {
+                                    Some(context) => estimate_for(Some(u64::from(context))),
+                                    None => {
+                                        let mut context = declared
+                                            .training_context_tokens
+                                            .unwrap_or(models::UNKNOWN_CONTEXT_TOKENS)
+                                            .clamp(1, i32::MAX as u64);
+                                        let mut estimate = estimate_for(Some(context));
+                                        while estimate.resident_bytes > base.resident_budget_bytes
+                                            && context > models::DEFAULT_CONTEXT_TOKENS
+                                        {
+                                            context =
+                                                (context / 2).max(models::DEFAULT_CONTEXT_TOKENS);
+                                            estimate = estimate_for(Some(context));
+                                        }
+                                        estimate
+                                    }
+                                }
+                            }
+                            _ => estimate_for(None),
                         };
-                        let estimate = models::estimate(format, found.bytes, context);
+                        let mut companion_arguments: Vec<String> = Vec::new();
+                        for (companion, role) in &bound {
+                            let flag = match (engine, role) {
+                                (Engine::LlamaCpp, _) => "--mmproj",
+                                (Engine::Kokoros, _) => "--data",
+                                (_, crate::artifacts::ArtifactRole::Vae) => "--vae",
+                                _ => "--llm",
+                            };
+                            companion_arguments.extend([
+                                flag.to_owned(),
+                                crate::runtime_arguments::member_placeholder(&companion.role),
+                            ]);
+                        }
+                        if engine == Engine::LlamaCpp && !bound.is_empty() && !choice.gpu {
+                            companion_arguments.push("--no-mmproj-offload".into());
+                        }
                         let mut value = models::registration(&models::ProfileInputs {
                             id: &candidate.public_name,
                             model_file: &found.path,
@@ -318,20 +593,57 @@ impl Manager {
                             cpu_threads,
                             format,
                             estimate: &estimate,
-                            companion_arguments: &[],
+                            companion_arguments: if engine == Engine::LlamaCpp {
+                                &[]
+                            } else {
+                                &companion_arguments
+                            },
                         });
-                        if matches!(format, models::ModelFormat::Gguf { .. }) {
-                            let options = &mut value["execution_profile"]["options"];
-                            if choice.gpu
-                                && let Some(layers) = mapped.options.gpu_layers
-                            {
-                                options["gpu_layers"] = json!(layers);
+                        let profile = &mut value["execution_profile"];
+                        if let Some(arguments) = profile["args"].as_array_mut() {
+                            if engine == Engine::StableDiffusionCpp {
+                                let flag = if bound.len() == 2 {
+                                    "--diffusion-model"
+                                } else {
+                                    "--model"
+                                };
+                                if let Some(position) = arguments.iter().position(|argument| {
+                                    argument == "--model" || argument == "--diffusion-model"
+                                }) {
+                                    arguments[position] = json!(flag);
+                                }
                             }
-                            if !choice.gpu
-                                && let Some(threads) = mapped.options.threads
-                            {
+                            if engine == Engine::LlamaCpp {
+                                arguments.extend(
+                                    companion_arguments.iter().map(|argument| json!(argument)),
+                                );
+                            }
+                            merge_arguments(arguments, &mapped.arguments);
+                        }
+                        if matches!(format, models::ModelFormat::Gguf { .. }) {
+                            let options = &mut profile["options"];
+                            options["context_tokens"] = json!(estimate.context_tokens);
+                            if let Some(layers) = mapped.options.gpu_layers {
+                                options["gpu_layers"] = json!(if choice.gpu { layers } else { 0 });
+                            }
+                            if let Some(threads) = mapped.options.threads {
                                 options["threads"] = json!(threads);
                             }
+                            if let Some(slots) = mapped.options.parallel_slots {
+                                options["parallel_slots"] = json!(slots);
+                                value["max_inflight"] = json!(slots);
+                            }
+                        }
+                        if !bound.is_empty() {
+                            value["companions"] = json!(
+                                bound
+                                    .iter()
+                                    .filter_map(|(companion, role)| {
+                                        let found = companion.found.as_ref().ok()?;
+                                        Some(json!({"name": companion.role, "role": role, "path": found.path}))
+                                    })
+                                    .collect::<Vec<_>>()
+                            );
                         }
                         engine_view = json!({
                             "engine": engine.name(), "backend": choice.backend, "package": choice.package,
@@ -373,9 +685,9 @@ impl Manager {
                 }
             }
             let suggested = match candidate.previous_policy.map(|(policy, _)| policy) {
-                Some("hot") => "hot",
-                Some("on-demand") => "on-demand",
-                _ => "disabled",
+                Some("hot") => Policy::Hot,
+                Some("on-demand") => Policy::OnDemand,
+                _ => Policy::Disabled,
             };
             let definition_view = definition.as_ref();
             row.insert("native_id".into(), json!(candidate.native_id));
@@ -389,14 +701,7 @@ impl Manager {
                 "checkpoint".into(),
                 json!(definition_view.and_then(|definition| definition.checkpoint.clone())),
             );
-            row.insert(
-                "labels".into(),
-                json!(
-                    definition_view
-                        .map(|definition| definition.labels.clone())
-                        .unwrap_or_default()
-                ),
-            );
+            row.insert("labels".into(), json!(labels));
             row.insert("selected_profile".into(), json!(candidate.selected_profile));
             row.insert(
                 "weights".into(),
@@ -405,9 +710,33 @@ impl Manager {
                     Err(code) => json!({"found": false, "reason": code}),
                 },
             );
+            row.insert(
+                "companions".into(),
+                json!(
+                    companions
+                        .iter()
+                        .map(|companion| {
+                            let mut view = companion_view(companion);
+                            view["bound"] =
+                                json!(bound.iter().any(|(held, _)| std::ptr::eq(*held, companion)));
+                            view
+                        })
+                        .collect::<Vec<_>>()
+                ),
+            );
             row.insert("format".into(), json!(format));
             row.insert("engine".into(), engine_view);
             row.insert("options".into(), json!(mapped.options));
+            row.insert(
+                "argument_flags".into(),
+                json!(
+                    mapped
+                        .arguments
+                        .iter()
+                        .map(|group| &group[0])
+                        .collect::<Vec<_>>()
+                ),
+            );
             row.insert("settings".into(), json!(settings));
             row.insert(
                 "previous_policy".into(),
@@ -418,6 +747,7 @@ impl Manager {
                 json!(candidate.previous_policy.map(|(_, source)| source)),
             );
             row.insert("suggested_policy".into(), json!(suggested));
+            row.insert("adopted_policy".into(), json!(suggested));
             row.insert("default_policy".into(), json!("disabled"));
             planned.push(Planned {
                 candidate,
@@ -479,7 +809,7 @@ impl Manager {
     ) -> Result<Value, ApiError> {
         match request {
             NativeImportRequest::Preview { source, weights } => {
-                self.native_import_preview(source, weights).await
+                self.native_import_preview(source, weights, &[]).await
             }
             NativeImportRequest::Apply {
                 source,
@@ -488,18 +818,21 @@ impl Manager {
                 aliases,
                 expected_generation,
             } => {
-                self.native_import_apply(source, weights, models, aliases, expected_generation)
+                self.native_import_apply(source, weights, models, aliases, expected_generation, &[])
                     .await
             }
         }
     }
 
-    async fn native_import_preview(
+    pub(super) async fn native_import_preview(
         self: &Arc<Self>,
         source: PathBuf,
         weights: Option<PathBuf>,
+        extra_roots: &[PathBuf],
     ) -> Result<Value, ApiError> {
-        let plan = self.native_import_plan(source, weights).await?;
+        let plan = self
+            .native_import_plan(source, weights, extra_roots)
+            .await?;
         let config = self.config.lock().await.clone();
         let mut rows = Vec::with_capacity(plan.models.len());
         let mut proposed: BTreeMap<String, String> = BTreeMap::new();
@@ -556,6 +889,7 @@ impl Manager {
             "action": "preview",
             "source": plan.inspection.source,
             "weights_root": plan.inspection.weights_root,
+            "weights_roots": plan.inspection.weights_roots,
             "configuration_generation": config.generation,
             "engines_generation": plan.packages_generation,
             "documents": plan.inspection.documents,
@@ -569,13 +903,14 @@ impl Manager {
         }))
     }
 
-    async fn native_import_apply(
+    pub(super) async fn native_import_apply(
         self: &Arc<Self>,
         source: PathBuf,
         weights: Option<PathBuf>,
         requested: Vec<NativeImportModel>,
         include_aliases: bool,
         expected_generation: u64,
+        extra_roots: &[PathBuf],
     ) -> Result<Value, ApiError> {
         if requested.len() > MAX_CANDIDATES {
             return Err(ApiError::new(
@@ -611,7 +946,9 @@ impl Manager {
                 "The configuration changed. Preview the import again before applying it.",
             ));
         }
-        let plan = self.native_import_plan(source, weights).await?;
+        let plan = self
+            .native_import_plan(source, weights, extra_roots)
+            .await?;
         let mut by_native: BTreeMap<String, Planned> = plan
             .models
             .into_iter()

@@ -2,13 +2,12 @@ use crate::{
     engines::catalog::Engine,
     native_settings::{Document, RecognizedRows, Role, Settings},
     native_store::SourceCohort,
-    profiles::LaunchOptions,
     storage::DirectoryReader,
 };
 use serde::Serialize;
 use serde_json::{Value, value::RawValue};
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeMap,
     path::{Path, PathBuf},
     sync::{Arc, atomic::AtomicBool},
 };
@@ -219,7 +218,7 @@ pub struct SettingRow {
 
 /// Native option and profile names are lowercase identifiers; anything else is shown as a
 /// placeholder so arbitrary document text never reaches the report.
-fn display_key(key: &str) -> String {
+pub(crate) fn display_key(key: &str) -> String {
     if !key.is_empty()
         && key.len() <= MAX_KEY_BYTES
         && key.bytes().all(|byte| {
@@ -232,14 +231,14 @@ fn display_key(key: &str) -> String {
     }
 }
 
-fn scalar(value: &RawValue) -> Option<Value> {
+pub(crate) fn scalar(value: &RawValue) -> Option<Value> {
     match serde_json::from_str::<Value>(value.get()).ok()? {
         value @ (Value::Bool(_) | Value::Number(_) | Value::Null) => Some(value),
         _ => None,
     }
 }
 
-fn backend_text(value: &RawValue) -> Option<String> {
+pub(crate) fn backend_text(value: &RawValue) -> Option<String> {
     let text: String = serde_json::from_str(value.get()).ok()?;
     (text.len() <= 32
         && text
@@ -248,107 +247,7 @@ fn backend_text(value: &RawValue) -> Option<String> {
     .then_some(text)
 }
 
-#[derive(Clone, Debug, Default)]
-pub struct Mapped {
-    pub options: LaunchOptions,
-    pub backend: Option<String>,
-    pub pinned: bool,
-    pub rows: Vec<SettingRow>,
-}
-
-#[derive(Default)]
-struct Layers<'a> {
-    context: Option<(&'static str, &'a RawValue)>,
-    backend: Option<(&'static str, &'a RawValue)>,
-    args: Vec<(&'static str, &'a RawValue)>,
-}
-
-fn args_rows(
-    scope: &'static str,
-    key: &str,
-    value: &RawValue,
-    options: &mut LaunchOptions,
-    rows: &mut Vec<SettingRow>,
-) {
-    let Ok(text) = serde_json::from_str::<String>(value.get()) else {
-        rows.push(SettingRow {
-            scope,
-            key: display_key(key),
-            state: "unsupported",
-            value: None,
-            target: None,
-            reason: "Engine arguments must be text.",
-        });
-        return;
-    };
-    let tokens: Vec<&str> = text.split_whitespace().take(256).collect();
-    let mut unsupported = Vec::new();
-    let mut index = 0;
-    while index < tokens.len() {
-        let flag = tokens[index];
-        let next = tokens
-            .get(index + 1)
-            .and_then(|next| next.parse::<u32>().ok());
-        let (target, field): (&'static str, Option<&mut Option<u32>>) = match flag {
-            "-ngl" | "--n-gpu-layers" | "--gpu-layers" => {
-                ("gpu_layers", Some(&mut options.gpu_layers))
-            }
-            "-t" | "--threads" => ("threads", Some(&mut options.threads)),
-            "-c" | "--ctx-size" => ("context_tokens", Some(&mut options.context_tokens)),
-            "--jinja" | "--metrics" | "--slots" => ("", None),
-            _ => {
-                if flag.starts_with('-') && flag.len() <= 64 {
-                    unsupported.push(Value::String(flag.to_owned()));
-                }
-                index += 1;
-                continue;
-            }
-        };
-        match (field, next) {
-            (None, _) => {
-                rows.push(SettingRow {
-                    scope,
-                    key: format!("{}:{flag}", display_key(key)),
-                    state: "ignored",
-                    value: None,
-                    target: None,
-                    reason: "The rewrite llama.cpp profile already passes this flag.",
-                });
-                index += 1;
-            }
-            (Some(field), Some(number)) if target != "context_tokens" || number > 0 => {
-                *field = Some(number);
-                rows.push(SettingRow {
-                    scope,
-                    key: format!("{}:{flag}", display_key(key)),
-                    state: "mapped",
-                    value: Some(Value::from(number)),
-                    target: Some(target),
-                    reason: "Mapped to the typed launch option.",
-                });
-                index += 2;
-            }
-            (Some(_), _) => {
-                if flag.len() <= 64 {
-                    unsupported.push(Value::String(flag.to_owned()));
-                }
-                index += 1;
-            }
-        }
-    }
-    if !unsupported.is_empty() {
-        rows.push(SettingRow {
-            scope,
-            key: display_key(key),
-            state: "unsupported",
-            value: Some(Value::Array(unsupported)),
-            target: None,
-            reason: "Custom engine arguments other than GPU layers, threads and context are not imported. Only the flag names are shown.",
-        });
-    }
-}
-
-fn unsupported_reason(key: &str) -> Option<(&'static str, &'static str)> {
+pub(crate) fn unsupported_reason(key: &str) -> Option<(&'static str, &'static str)> {
     Some(match key {
         "auto_evict" | "evict_idle_timeout" | "downsize_idle_timeout" | "evict_weight_factor" => (
             "unsupported",
@@ -373,165 +272,6 @@ fn unsupported_reason(key: &str) -> Option<(&'static str, &'static str)> {
         ),
         _ => return None,
     })
-}
-
-/// Maps the effective native options (global < registration < saved) into the rewrite's typed
-/// launch options. Unknown keys stay in the untouched source and are only listed.
-pub fn map_options(
-    engine: Option<Engine>,
-    recipe: &str,
-    global: &Document,
-    registered: &BTreeMap<String, Box<RawValue>>,
-    saved: &crate::native_settings::SavedOptions,
-) -> Mapped {
-    let mut mapped = Mapped::default();
-    let backend_key = format!("{recipe}_backend");
-    let args_key = format!("{recipe}_args");
-    let mut layers = Layers::default();
-    let global_section = global
-        .row(&recipe.replace('-', ""))
-        .and_then(|row| serde_json::from_str::<BTreeMap<String, Box<RawValue>>>(row.get()).ok());
-    if let Some(value) = global.row("ctx_size") {
-        layers.context = Some(("global", value));
-    }
-    if let Some(section) = &global_section {
-        if let Some(value) = section.get("backend") {
-            layers.backend = Some(("global", value));
-        }
-        if let Some(value) = section.get("args") {
-            layers.args.push(("global", value));
-        }
-    }
-    let mut model_rows: Vec<(&'static str, &str, &RawValue)> = registered
-        .iter()
-        .map(|(key, value)| ("registration", key.as_str(), value.as_ref()))
-        .collect();
-    model_rows.extend(saved.iter().map(|(key, value)| ("saved", key, value)));
-    let mut seen = BTreeSet::new();
-    for (scope, key, value) in model_rows.iter().rev() {
-        if !seen.insert(*key) {
-            continue;
-        }
-        match *key {
-            "ctx_size" => layers.context = Some((scope, value)),
-            "pinned" => {
-                mapped.pinned = serde_json::from_str::<bool>(value.get()).unwrap_or(false);
-                mapped.rows.push(SettingRow {
-                    scope,
-                    key: "pinned".into(),
-                    state: if mapped.pinned { "hint" } else { "ignored" },
-                    value: scalar(value),
-                    target: Some("policy"),
-                    reason: if mapped.pinned {
-                        "Pinned models are suggested as Hot. Every import starts Disabled unless you choose a policy."
-                    } else {
-                        "Not pinned; no policy suggestion."
-                    },
-                });
-            }
-            key if key == backend_key => layers.backend = Some((scope, value)),
-            key if key == args_key && engine == Some(Engine::LlamaCpp) => {
-                layers.args.push((scope, value))
-            }
-            key => {
-                let (state, reason) = unsupported_reason(key).unwrap_or((
-                    "unknown",
-                    "This option is not recognized. It stays in the unmodified source.",
-                ));
-                mapped.rows.push(SettingRow {
-                    scope,
-                    key: display_key(key),
-                    state,
-                    value: None,
-                    target: None,
-                    reason,
-                });
-            }
-        }
-    }
-    for (scope, value) in layers.args {
-        args_rows(
-            scope,
-            &args_key,
-            value,
-            &mut mapped.options,
-            &mut mapped.rows,
-        );
-    }
-    match layers.context {
-        Some((scope, value)) => match serde_json::from_str::<i64>(value.get()) {
-            Ok(context @ 1..=2_147_483_647) => {
-                mapped.options.context_tokens = Some(context as u32);
-                mapped.rows.push(SettingRow {
-                    scope,
-                    key: "ctx_size".into(),
-                    state: "mapped",
-                    value: Some(Value::from(context)),
-                    target: Some("context_tokens"),
-                    reason: "Mapped to the launch context budget.",
-                });
-            }
-            Ok(-1) => mapped.rows.push(SettingRow {
-                scope,
-                key: "ctx_size".into(),
-                state: "default",
-                value: Some(Value::from(-1)),
-                target: Some("context_tokens"),
-                reason: "Native automatic context sizing is replaced by the rewrite's GGUF-derived default.",
-            }),
-            _ => mapped.rows.push(SettingRow {
-                scope,
-                key: "ctx_size".into(),
-                state: "unsupported",
-                value: None,
-                target: None,
-                reason: "The saved context is not a positive integer or -1; the rewrite default applies.",
-            }),
-        },
-        None if engine == Some(Engine::LlamaCpp) => mapped.rows.push(SettingRow {
-            scope: "default",
-            key: "ctx_size".into(),
-            state: "default",
-            value: None,
-            target: Some("context_tokens"),
-            reason: "No context was saved; the rewrite's GGUF-derived default applies.",
-        }),
-        None => {}
-    }
-    if let Some((scope, value)) = layers.backend {
-        match backend_text(value) {
-            Some(backend) if backend.is_empty() || backend == "auto" => {
-                mapped.rows.push(SettingRow {
-                    scope,
-                    key: backend_key,
-                    state: "default",
-                    value: Some(Value::String(backend)),
-                    target: Some("backend"),
-                    reason: "Automatic backend selection uses the rewrite's hardware recommendation.",
-                })
-            }
-            Some(backend) => {
-                mapped.rows.push(SettingRow {
-                    scope,
-                    key: backend_key,
-                    state: "mapped",
-                    value: Some(Value::String(backend.clone())),
-                    target: Some("backend"),
-                    reason: "Preferred when this host offers the backend; otherwise the hardware recommendation applies.",
-                });
-                mapped.backend = Some(backend);
-            }
-            None => mapped.rows.push(SettingRow {
-                scope,
-                key: backend_key,
-                state: "unsupported",
-                value: None,
-                target: None,
-                reason: "The saved backend is not a recognized name.",
-            }),
-        }
-    }
-    mapped
 }
 
 const GLOBAL_SERVICE_KEYS: &[&str] = &[
@@ -704,37 +444,64 @@ pub struct Definition {
     pub checkpoint: Option<String>,
     pub mmproj: Option<String>,
     pub other_checkpoints: Vec<String>,
+    /// Checkpoints by role other than `main`, with bare companion file names qualified by the
+    /// main repository the way native resolves them.
+    pub checkpoints: BTreeMap<String, String>,
     pub labels: Vec<String>,
     pub source: Option<String>,
     pub registered: BTreeMap<String, Box<RawValue>>,
+    pub image_defaults: BTreeMap<String, Box<RawValue>>,
+}
+
+fn qualify(checkpoint: &str, main: Option<&str>) -> String {
+    if checkpoint.contains(':') || Path::new(checkpoint).is_absolute() {
+        return checkpoint.to_owned();
+    }
+    match main.map(|main| main.split_once(':').map_or(main, |(repo, _)| repo)) {
+        Some(repo) if !checkpoint.contains('/') || checkpoint.matches('/').count() != 1 => {
+            format!("{repo}:{checkpoint}")
+        }
+        _ => checkpoint.to_owned(),
+    }
 }
 
 fn definition(row: &RawValue) -> Option<Definition> {
     let value: serde_json::Map<String, Value> = serde_json::from_str(row.get()).ok()?;
     let text = |key: &str| value.get(key).and_then(Value::as_str).map(str::to_owned);
-    let checkpoints = value.get("checkpoints").and_then(Value::as_object);
+    let roles = value.get("checkpoints").and_then(Value::as_object);
     let checkpoint = text("checkpoint")
         .filter(|text| !text.is_empty())
         .or_else(|| {
-            checkpoints
+            roles
                 .and_then(|map| map.get("main"))
                 .and_then(Value::as_str)
                 .map(str::to_owned)
         });
-    let mmproj = text("mmproj").filter(|text| !text.is_empty()).or_else(|| {
+    let mut checkpoints = BTreeMap::new();
+    if let Some(roles) = roles {
+        for (role, path) in roles.iter().take(16) {
+            if role == "main" || role.len() > 32 {
+                continue;
+            }
+            if let Some(path) = path
+                .as_str()
+                .filter(|path| !path.is_empty() && path.len() <= 1024)
+            {
+                checkpoints.insert(role.clone(), qualify(path, checkpoint.as_deref()));
+            }
+        }
+    }
+    if let Some(mmproj) = text("mmproj").filter(|text| !text.is_empty() && text.len() <= 1024) {
         checkpoints
-            .and_then(|map| map.get("mmproj"))
-            .and_then(Value::as_str)
-            .map(str::to_owned)
-    });
+            .entry("mmproj".to_owned())
+            .or_insert_with(|| qualify(&mmproj, checkpoint.as_deref()));
+    }
+    let mmproj = checkpoints.get("mmproj").cloned();
     let other_checkpoints = checkpoints
-        .map(|map| {
-            map.keys()
-                .filter(|role| !["main", "mmproj", "npu_cache"].contains(&role.as_str()))
-                .map(|role| display_key(role))
-                .collect()
-        })
-        .unwrap_or_default();
+        .keys()
+        .filter(|role| !["mmproj", "npu_cache"].contains(&role.as_str()))
+        .map(|role| display_key(role))
+        .collect();
     let labels = value
         .get("labels")
         .and_then(Value::as_array)
@@ -749,14 +516,17 @@ fn definition(row: &RawValue) -> Option<Definition> {
         })
         .unwrap_or_default();
     let registered = row_object(row, "recipe_options").unwrap_or_default();
+    let image_defaults = row_object(row, "image_defaults").unwrap_or_default();
     Some(Definition {
         recipe: text("recipe"),
         checkpoint,
         mmproj,
         other_checkpoints,
+        checkpoints,
         labels,
         source: text("source").filter(|source| !source.is_empty()),
         registered,
+        image_defaults,
     })
 }
 
@@ -795,6 +565,7 @@ pub struct Candidate {
 pub struct Inspection {
     pub source: PathBuf,
     pub weights_root: Option<PathBuf>,
+    pub weights_roots: Vec<PathBuf>,
     pub documents: Vec<DocumentReport>,
     pub config: Document,
     pub aliases: BTreeMap<String, String>,
@@ -898,33 +669,56 @@ fn aliases(source: &Path) -> (DocumentReport, BTreeMap<String, String>) {
     (report, BTreeMap::new())
 }
 
-/// Locates the Hugging Face hub directory of an old installation: an explicit directory (the
-/// hub itself or its parent) or the `huggingface/hub` sibling of the configuration directory.
-pub fn weights_root(
+/// Lists the Hugging Face hub directories an old installation may have used, in search order:
+/// an explicit directory (the hub itself or its parent), the `huggingface/hub` sibling of the
+/// configuration directory, then `huggingface/hub` and `hub` beneath every import root (the
+/// appliance's own `HF_HOME` and any read-only library mounts).
+pub fn weights_roots(
     source: &Path,
     explicit: Option<&Path>,
     roots: &[PathBuf],
-) -> Result<Option<PathBuf>, Refusal> {
-    let candidate = match explicit {
-        Some(path) => {
-            let path = confine_directory(path, roots)?;
-            if path.join("hub").is_dir() {
-                path.join("hub")
-            } else {
-                path
-            }
+) -> Result<Vec<PathBuf>, Refusal> {
+    let mut candidates = Vec::new();
+    if let Some(path) = explicit {
+        let path = confine_directory(path, roots)?;
+        candidates.push(if path.join("hub").is_dir() {
+            path.join("hub")
+        } else {
+            path
+        });
+    }
+    if let Some(parent) = source.parent() {
+        candidates.push(parent.join("huggingface").join("hub"));
+    }
+    for root in roots {
+        candidates.push(root.join("huggingface").join("hub"));
+        candidates.push(root.join("hub"));
+    }
+    let allowed = canonical_roots(roots);
+    let mut found: Vec<PathBuf> = Vec::new();
+    for candidate in candidates {
+        if let Ok(path) = std::fs::canonicalize(&candidate)
+            && path.is_dir()
+            && within(&path, &allowed)
+            && !found.contains(&path)
+        {
+            found.push(path);
         }
-        None => match source.parent() {
-            Some(parent) => parent.join("huggingface").join("hub"),
-            None => return Ok(None),
-        },
-    };
-    Ok(std::fs::canonicalize(&candidate)
-        .ok()
-        .filter(|path| path.is_dir() && within(path, &canonical_roots(roots))))
+    }
+    Ok(found)
 }
 
-fn cache_index(weights: &Path) -> BTreeMap<String, CacheRepo> {
+fn cache_index(hubs: &[PathBuf]) -> BTreeMap<String, CacheRepo> {
+    let mut found = BTreeMap::new();
+    for hub in hubs {
+        for (model, repo) in cache_index_one(hub) {
+            found.entry(model).or_insert(repo);
+        }
+    }
+    found
+}
+
+fn cache_index_one(weights: &Path) -> BTreeMap<String, CacheRepo> {
     #[derive(serde::Deserialize)]
     struct Processed {
         #[serde(default)]
@@ -974,7 +768,8 @@ impl Inspection {
         cancelled: Arc<AtomicBool>,
     ) -> Result<Self, Refusal> {
         let source = confine_directory(source, roots)?;
-        let weights_root = weights_root(&source, weights, roots)?;
+        let weights_roots = weights_roots(&source, weights, roots)?;
+        let weights_root = weights_roots.first().cloned();
         let cohort =
             SourceCohort::inspect_for_mapping(&source, cancelled).map_err(source_refusal)?;
         let mut documents: Vec<DocumentReport> = cohort
@@ -1070,7 +865,7 @@ impl Inspection {
         });
         let (alias_report, aliases) = aliases(&source);
         documents.push(alias_report);
-        let index = weights_root.as_deref().map(cache_index).unwrap_or_default();
+        let index = cache_index(&weights_roots);
         let mut ids: BTreeMap<String, Origin> = BTreeMap::new();
         for (key, _) in users.iter() {
             ids.insert(format!("user.{key}"), Origin::User);
@@ -1115,11 +910,15 @@ impl Inspection {
                 Origin::Builtin => {
                     let bare = native_id.trim_start_matches("builtin.").to_owned();
                     let row = registry.get(&bare).and_then(|row| definition(row));
-                    (bare, row)
+                    if users.row(&bare).is_some() {
+                        (native_id.clone(), row)
+                    } else {
+                        (bare, row)
+                    }
                 }
                 Origin::User => {
                     let bare = &native_id["user.".len()..];
-                    (native_id.clone(), users.row(bare).and_then(definition))
+                    (bare.to_owned(), users.row(bare).and_then(definition))
                 }
                 Origin::Extra | Origin::Unrecognized => (native_id.clone(), None),
             };
@@ -1161,10 +960,21 @@ impl Inspection {
                 downloaded_index,
             });
         }
+        let aliases = aliases
+            .into_iter()
+            .map(|(alias, target)| {
+                let target = candidates
+                    .iter()
+                    .find(|candidate| candidate.native_id == target)
+                    .map_or(target, |candidate| candidate.public_name.clone());
+                (alias, target)
+            })
+            .collect();
         cohort.verify().map_err(source_refusal)?;
         Ok(Self {
             source,
             weights_root,
+            weights_roots,
             documents,
             config,
             aliases,
@@ -1175,6 +985,9 @@ impl Inspection {
         })
     }
 
+    /// Resolves a candidate's main checkpoint the way native does: an absolute local file, a
+    /// local upload relative to the hub, or `repo[:variant]` across every hub directory and
+    /// every completed snapshot, the active (`refs/main` or registry) snapshot first.
     pub fn find_weights(&self, candidate: &Candidate) -> Result<Weights, &'static str> {
         let definition = candidate
             .definition
@@ -1186,23 +999,8 @@ impl Inspection {
             .filter(|text| !text.is_empty())
             .ok_or("native_checkpoint_missing")?;
         match definition.source.as_deref() {
-            Some("local_path") => {
-                let path = Path::new(checkpoint);
-                if !bounded_absolute(path) {
-                    return Err("weights_outside_import_roots");
-                }
-                let (path, bytes) =
-                    confine_file(path, &self.roots).ok_or("weights_outside_import_roots")?;
-                return Ok(Weights {
-                    files: vec![(path.clone(), bytes)],
-                    path,
-                    bytes,
-                    selection: "local-path",
-                    snapshot: None,
-                });
-            }
+            Some("local_path") => return self.local_file(checkpoint),
             Some("local_upload") => {
-                let weights = self.weights_root.as_ref().ok_or("weights_root_missing")?;
                 let relative = Path::new(checkpoint);
                 if relative.is_absolute()
                     || relative
@@ -1211,76 +1009,179 @@ impl Inspection {
                 {
                     return Err("weights_missing");
                 }
-                let target = weights.join(relative);
-                if let Some((path, bytes)) = confine_file(&target, &self.roots) {
-                    return Ok(Weights {
-                        files: vec![(path.clone(), bytes)],
-                        path,
-                        bytes,
-                        selection: "local-upload",
-                        snapshot: None,
-                    });
+                if self.weights_roots.is_empty() {
+                    return Err("weights_root_missing");
                 }
-                let files = list_files(&target, &self.roots);
-                return select(&files, None, "").ok_or("weights_missing");
+                for hub in &self.weights_roots {
+                    let target = hub.join(relative);
+                    if let Some((path, bytes)) = confine_file(&target, &self.roots) {
+                        return Ok(Weights {
+                            files: vec![(path.clone(), bytes)],
+                            path,
+                            bytes,
+                            selection: "local-upload",
+                            snapshot: None,
+                        });
+                    }
+                    let files = list_files(&target, &self.roots);
+                    if let Some(found) = select(&files, None, "") {
+                        return Ok(found);
+                    }
+                }
+                return Err("weights_missing");
             }
             Some(source) if source != "huggingface" && source != "hf" => {
                 return Err("weights_registry_unsupported");
             }
             _ => {}
         }
-        let weights = self.weights_root.as_ref().ok_or("weights_root_missing")?;
-        let (repo, variant) = match checkpoint.split_once(':') {
-            Some((repo, variant)) => (repo, Some(variant)),
-            None => (checkpoint, None),
-        };
-        let directory = cache_directory(repo).ok_or("native_checkpoint_invalid")?;
-        let repo_directory = weights.join(directory);
-        let snapshot = candidate
-            .downloaded_index
-            .as_ref()
-            .filter(|index| index.directory == repo_directory)
-            .and_then(|index| index.snapshot.clone())
-            .or_else(|| main_ref(&repo_directory))
-            .or_else(|| only_snapshot(&repo_directory))
-            .filter(|snapshot| valid_revision(snapshot))
-            .ok_or("weights_missing")?;
-        let snapshot_directory = repo_directory.join("snapshots").join(&snapshot);
-        let files = list_files(&snapshot_directory, &self.roots);
+        if Path::new(checkpoint).is_absolute() {
+            return self.local_file(checkpoint);
+        }
+        let (repo, variant) = split_checkpoint(checkpoint);
         let repo_name = repo.rsplit('/').next().unwrap_or(repo);
-        let mut selected = select(&files, variant, repo_name).ok_or("weights_missing")?;
-        selected.snapshot = Some(snapshot);
-        Ok(selected)
+        self.search(repo, candidate.downloaded_index.as_ref(), |files| {
+            select(files, variant, repo_name)
+        })
     }
 
-    pub fn find_companion(&self, checkpoint: &str) -> bool {
-        let Some(weights) = &self.weights_root else {
-            return false;
+    /// Resolves a companion checkpoint (projector, VAE, text encoder, ...) like native's
+    /// default resolver: the exact relative path, or a file with that name anywhere in the
+    /// snapshot, falling back to the main repository for older flat downloads.
+    pub fn find_checkpoint(
+        &self,
+        checkpoint: &str,
+        main: Option<&str>,
+    ) -> Result<Weights, &'static str> {
+        if Path::new(checkpoint).is_absolute() {
+            return self.local_file(checkpoint);
+        }
+        let (repo, variant) = split_checkpoint(checkpoint);
+        let Some(variant) = variant.filter(|variant| !variant.is_empty()) else {
+            return Err("native_checkpoint_invalid");
         };
-        let (repo, variant) = match checkpoint.split_once(':') {
-            Some((repo, variant)) => (repo, Some(variant)),
-            None => (checkpoint, None),
+        let matcher = |files: &[(String, PathBuf, u64)]| {
+            let want = variant.trim_start_matches('/');
+            files
+                .iter()
+                .find(|(name, ..)| name == want)
+                .or_else(|| {
+                    files
+                        .iter()
+                        .find(|(name, ..)| name.rsplit('/').next() == Some(want))
+                })
+                .map(|(_, path, bytes)| Weights {
+                    path: path.clone(),
+                    bytes: *bytes,
+                    files: vec![(path.clone(), *bytes)],
+                    selection: "exact-file",
+                    snapshot: None,
+                })
         };
-        let Some(directory) = cache_directory(repo) else {
-            return false;
-        };
-        let repo_directory = weights.join(directory);
-        let Some(snapshot) = main_ref(&repo_directory).or_else(|| only_snapshot(&repo_directory))
-        else {
-            return false;
-        };
-        let files = list_files(
-            &repo_directory.join("snapshots").join(snapshot),
-            &self.roots,
-        );
-        variant.is_some_and(|variant| {
-            files.iter().any(|(name, ..)| {
-                name.eq_ignore_ascii_case(variant)
-                    || name
-                        .to_ascii_lowercase()
-                        .ends_with(&format!("/{}", variant.to_ascii_lowercase()))
+        match self.search(repo, None, matcher) {
+            Ok(found) => Ok(found),
+            Err(code) => match main.map(split_checkpoint) {
+                Some((main_repo, _)) if main_repo != repo => {
+                    self.search(main_repo, None, matcher).map_err(|_| code)
+                }
+                _ => Err(code),
+            },
+        }
+    }
+
+    /// Native Kokoro checkpoints name a repository whose `index.json` lists the ONNX model and
+    /// the voices pack beside it.
+    pub fn find_kokoro(&self, candidate: &Candidate) -> Result<(Weights, PathBuf), &'static str> {
+        #[derive(serde::Deserialize)]
+        struct Index {
+            model: String,
+            voices: String,
+        }
+        let checkpoint = candidate
+            .definition
+            .as_ref()
+            .and_then(|definition| definition.checkpoint.as_deref())
+            .ok_or("native_checkpoint_missing")?;
+        let (repo, _) = split_checkpoint(checkpoint);
+        let mut voices = None;
+        let weights = self.search(repo, candidate.downloaded_index.as_ref(), |files| {
+            let (_, index, _) = files
+                .iter()
+                .find(|(name, ..)| name.rsplit('/').next() == Some("index.json"))?;
+            let directory = index.parent()?;
+            let bytes = observe_bounded(directory, "index.json", 64 * 1024).ok()??;
+            let index: Index = serde_json::from_slice(&bytes).ok()?;
+            let safe = |name: &str| {
+                Path::new(name)
+                    .components()
+                    .all(|part| matches!(part, std::path::Component::Normal(_)))
+            };
+            if !safe(&index.model) || !safe(&index.voices) {
+                return None;
+            }
+            let (model, bytes) = confine_file(&directory.join(&index.model), &self.roots)?;
+            let (voice, _) = confine_file(&directory.join(&index.voices), &self.roots)?;
+            voices = Some(voice);
+            Some(Weights {
+                files: vec![(model.clone(), bytes)],
+                path: model,
+                bytes,
+                selection: "kokoro-index",
+                snapshot: None,
             })
+        })?;
+        Ok((weights, voices.ok_or("weights_missing")?))
+    }
+
+    fn local_file(&self, checkpoint: &str) -> Result<Weights, &'static str> {
+        let path = Path::new(checkpoint);
+        if !bounded_absolute(path) {
+            return Err("weights_outside_import_roots");
+        }
+        if !path.exists() {
+            return Err("weights_missing");
+        }
+        let (path, bytes) =
+            confine_file(path, &self.roots).ok_or("weights_outside_import_roots")?;
+        Ok(Weights {
+            files: vec![(path.clone(), bytes)],
+            path,
+            bytes,
+            selection: "local-path",
+            snapshot: None,
         })
+    }
+
+    fn search(
+        &self,
+        repo: &str,
+        index: Option<&CacheRepo>,
+        mut matcher: impl FnMut(&[(String, PathBuf, u64)]) -> Option<Weights>,
+    ) -> Result<Weights, &'static str> {
+        if self.weights_roots.is_empty() {
+            return Err("weights_root_missing");
+        }
+        let directory = cache_directory(repo).ok_or("native_checkpoint_invalid")?;
+        for hub in &self.weights_roots {
+            let repo_directory = hub.join(&directory);
+            if !repo_directory.is_dir() {
+                continue;
+            }
+            let preferred = index
+                .filter(|index| index.directory == repo_directory)
+                .and_then(|index| index.snapshot.clone());
+            for snapshot in snapshots(&repo_directory, preferred) {
+                let files = list_files(
+                    &repo_directory.join("snapshots").join(&snapshot),
+                    &self.roots,
+                );
+                if let Some(mut found) = matcher(&files) {
+                    found.snapshot = Some(snapshot);
+                    return Ok(found);
+                }
+            }
+        }
+        Err("weights_missing")
     }
 
     pub fn verify(&self) -> Result<(), Refusal> {
@@ -1326,16 +1227,39 @@ fn main_ref(repo: &Path) -> Option<String> {
     valid_revision(text).then(|| text.to_owned())
 }
 
-fn only_snapshot(repo: &Path) -> Option<String> {
-    let mut entries = std::fs::read_dir(repo.join("snapshots"))
-        .ok()?
-        .flatten()
-        .take(2);
-    let first = entries.next()?;
-    if entries.next().is_some() {
-        return None;
+fn split_checkpoint(checkpoint: &str) -> (&str, Option<&str>) {
+    match checkpoint.split_once(':') {
+        Some((repo, variant)) => (repo, Some(variant)),
+        None => (checkpoint, None),
     }
-    first.file_name().into_string().ok()
+}
+
+/// Completed snapshots in native search order: the preferred or `refs/main` snapshot, then the
+/// others by name. Snapshots still holding a download manifest are interrupted pulls.
+fn snapshots(repo: &Path, preferred: Option<String>) -> Vec<String> {
+    let root = repo.join("snapshots");
+    let mut names: Vec<String> = std::fs::read_dir(&root)
+        .map(|entries| {
+            entries
+                .flatten()
+                .take(64)
+                .filter_map(|entry| entry.file_name().into_string().ok())
+                .filter(|name| valid_revision(name))
+                .filter(|name| !root.join(name).join(".download_manifest.json").exists())
+                .collect()
+        })
+        .unwrap_or_default();
+    names.sort();
+    let active = preferred
+        .filter(|name| valid_revision(name))
+        .or_else(|| main_ref(repo));
+    if let Some(active) = active
+        && let Some(position) = names.iter().position(|name| *name == active)
+    {
+        let name = names.remove(position);
+        names.insert(0, name);
+    }
+    names
 }
 
 fn list_files(root: &Path, roots: &[PathBuf]) -> Vec<(String, PathBuf, u64)> {
@@ -1487,6 +1411,9 @@ fn select(
         snapshot: None,
     })
 }
+
+mod options;
+pub use options::{Layer, Mapped, map_options, shell_words};
 
 #[cfg(test)]
 mod tests;

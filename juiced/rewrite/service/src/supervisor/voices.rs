@@ -31,24 +31,46 @@ impl Manager {
         if workers.is_empty() {
             return Ok(Vec::new());
         }
-        let store = self.artifacts()?;
-        let requests: Vec<(String, Option<String>, Option<String>)> = workers
+        let store = self.artifacts().ok();
+        type Request = (String, Option<String>, Option<String>, Option<PathBuf>);
+        let requests: Vec<Request> = workers
             .iter()
             .map(|worker| {
                 (
                     worker.spec.id.clone(),
                     worker.spec.artifact.clone(),
                     worker.spec.artifact_set.clone(),
+                    worker
+                        .spec
+                        .companions
+                        .iter()
+                        .find(|companion| companion.role == crate::artifacts::ArtifactRole::Voice)
+                        .map(|companion| companion.path.clone()),
                 )
             })
             .collect();
         tokio::task::spawn_blocking(move || {
             requests
                 .into_iter()
-                .map(|(id, artifact, set)| {
+                .map(|(id, artifact, set, in_place)| {
+                    if let Some(path) = in_place {
+                        let listed =
+                            crate::engines::models::voices(&path).map_err(|error| match error {
+                                crate::engines::models::FormatError::Invalid(code) => code,
+                                crate::engines::models::FormatError::Unavailable => {
+                                    "voice_pack_missing"
+                                }
+                                _ => "invalid_voice_pack",
+                            });
+                        return match listed {
+                            Ok(voices) => json!({"model": id, "voices": voices, "error": null}),
+                            Err(code) => json!({"model": id, "voices": [], "error": code}),
+                        };
+                    }
                     let listed = artifact
                         .ok_or("voice_pack_unmanaged")
                         .and_then(|artifact| {
+                            let store = store.as_ref().ok_or("voice_pack_unmanaged")?;
                             store
                                 .hold_binding_with(&artifact, set.as_deref(), true)
                                 .map_err(|error| error.code())

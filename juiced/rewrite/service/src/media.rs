@@ -249,8 +249,8 @@ impl ImageFormat {
 pub struct ImageRequest {
     pub model: String,
     pub prompt: String,
-    pub width: u32,
-    pub height: u32,
+    /// Absent when the client set no size, so the worker applies its configured default.
+    pub size: Option<(u32, u32)>,
     pub format: ImageFormat,
     pub sampling: Sampling,
 }
@@ -302,23 +302,22 @@ impl ImageRequest {
         if fields.get("user").is_some_and(|user| !user.is_string()) {
             return Err(invalid(CODE, "user must be a string."));
         }
-        let (width, height) = match fields.get("size") {
-            None | Some(Value::Null) => (512, 512),
-            Some(Value::String(size)) if size == "auto" => (512, 512),
+        let size = match fields.get("size") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(size)) if size == "auto" => None,
             Some(Value::String(size)) => {
                 let (width, height) = size
                     .split_once('x')
                     .and_then(|(width, height)| Some((width.parse().ok()?, height.parse().ok()?)))
                     .ok_or_else(|| invalid(CODE, "size must look like 512x512."))?;
-                (dimension(width, CODE)?, dimension(height, CODE)?)
+                Some((dimension(width, CODE)?, dimension(height, CODE)?))
             }
             _ => return Err(invalid(CODE, "size must look like 512x512.")),
         };
         Ok(Self {
             model,
             prompt: prompt(&fields, CODE)?,
-            width,
-            height,
+            size,
             format,
             sampling: Sampling::parse(
                 &fields,
@@ -343,13 +342,15 @@ impl ImageRequest {
         } else {
             format!("{} <{EXTRA_ARGS}>{extra}</{EXTRA_ARGS}>", self.prompt)
         };
-        serde_json::to_vec(&json!({
+        let mut body = json!({
             "prompt": prompt,
             "n": 1,
-            "size": format!("{}x{}", self.width, self.height),
             "output_format": self.format.name(),
-        }))
-        .expect("image request serializes")
+        });
+        if let Some((width, height)) = self.size {
+            body["size"] = json!(format!("{width}x{height}"));
+        }
+        serde_json::to_vec(&body).expect("image request serializes")
     }
 }
 
@@ -396,11 +397,12 @@ impl Txt2ImgRequest {
             }
         }
         let side = |key: &str| match fields.get(key) {
-            None | Some(Value::Null) => Ok(512),
+            None | Some(Value::Null) => Ok(None),
             Some(value) => value
                 .as_u64()
                 .ok_or_else(|| invalid(CODE, "width and height must be integers."))
-                .and_then(|value| dimension(value, CODE)),
+                .and_then(|value| dimension(value, CODE))
+                .map(Some),
         };
         let (width, height) = (side("width")?, side("height")?);
         let prompt = prompt(&fields, CODE)?;
@@ -427,8 +429,12 @@ impl Txt2ImgRequest {
         };
         let mut body = Map::new();
         body.insert("prompt".into(), json!(prompt));
-        body.insert("width".into(), json!(width));
-        body.insert("height".into(), json!(height));
+        if let Some(width) = width {
+            body.insert("width".into(), json!(width));
+        }
+        if let Some(height) = height {
+            body.insert("height".into(), json!(height));
+        }
         body.insert("batch_size".into(), json!(1));
         if let Some(negative) = sampling.negative_prompt {
             body.insert("negative_prompt".into(), json!(negative));
@@ -738,7 +744,7 @@ mod tests {
             br#"{"model":"sd","prompt":"a cabin","size":"768x512","steps":4,"cfg_scale":1.0,"seed":7,"negative_prompt":"blur","response_format":"b64_json","n":1,"user":"u"}"#,
         )
         .unwrap();
-        assert_eq!((request.width, request.height), (768, 512));
+        assert_eq!(request.size, Some((768, 512)));
         let upstream: Value = serde_json::from_slice(&request.upstream()).unwrap();
         assert_eq!(upstream["size"], "768x512");
         assert_eq!(upstream["n"], 1);
@@ -756,7 +762,7 @@ mod tests {
         let plain = ImageRequest::parse(br#"{"model":"sd","prompt":"x"}"#).unwrap();
         let upstream: Value = serde_json::from_slice(&plain.upstream()).unwrap();
         assert_eq!(upstream["prompt"], "x");
-        assert_eq!(upstream["size"], "512x512");
+        assert!(upstream.get("size").is_none());
     }
 
     #[test]

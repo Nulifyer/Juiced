@@ -98,6 +98,8 @@ To set it up:
 | `JUICED_RESIDENT_BUDGET_BYTES` | 75% of memory | First-boot resident budget |
 | `JUICED_UPDATE_USERSPACE` | `0` | `1` runs `juiced-update-userspace` at start. Requires `--user 0`. |
 | `JUICED_IO_THREADS` | runtime default | Tokio worker threads |
+| `JUICED_NATIVE_CONFIG_DIR` | `/data/config` | Native Juiced configuration directory adopted once in the background; nothing happens when it does not exist |
+| `JUICED_NATIVE_IMPORT_ROOTS` | `/data:/library` | Colon-separated read roots for adopted weights |
 
 API keys exist only in the environment. The entrypoint never writes them to `/data`, and the service does not pass `LEMONADE_*_API_KEY` to engine processes. Engines do inherit `HF_TOKEN`. `podman inspect` shows plain `-e` values, so a Podman secret is the better way to supply a key:
 

@@ -149,7 +149,7 @@ impl Volume {
         write(
             &config.join("recipe_options.json"),
             format!(
-                r#"{{"builtin.Qwen3-0.6B-GGUF":{{"ctx_size":2048,"llamacpp_args":"-t 2 --flash-attn {MARKER}","llamacpp_backend":"cuda","pinned":true,"{MARKER}":1}},"builtin.Stale-Model":{{}}}}"#
+                r#"{{"builtin.Qwen3-0.6B-GGUF":{{"ctx_size":2048,"llamacpp_args":"-t 2 --lora {MARKER} --flash-attn on","llamacpp_backend":"cuda","pinned":true,"{MARKER}":1}},"builtin.Stale-Model":{{}}}}"#
             ),
         );
         write(
@@ -327,10 +327,12 @@ async fn online_native_import_previews_applies_in_place_and_reapplies_idempotent
         .as_array()
         .unwrap()
         .iter()
-        .find(|row| row["key"] == "llamacpp_args" && row["state"] == "unsupported")
+        .find(|row| row["key"] == "llamacpp_args:unsupported")
         .unwrap();
-    assert_eq!(unsupported["value"], json!(["--flash-attn"]));
+    assert_eq!(unsupported["value"], json!(["--lora"]));
+    assert_eq!(qwen["argument_flags"], json!(["--flash-attn"]));
     let mine = model(&preview, "user.MyModel");
+    assert_eq!(mine["proposed_id"], "MyModel");
     assert_eq!(mine["status"], "engine_install_needed");
     assert_eq!(mine["previous_policy"], "on-demand");
     assert_eq!(model(&preview, "user.Missing")["status"], "blocked");
