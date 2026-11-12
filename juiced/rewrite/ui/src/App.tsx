@@ -6,7 +6,7 @@ import { ServiceTest, type TestService } from "./ServiceTest";
 import { Library, type LibraryView } from "./Library";
 import { Cache } from "./Cache";
 import { CacheSessions } from "./CacheSessions";
-import { ServiceApis } from "./ServiceApis";
+import { ServiceApis, type ConnectTab } from "./ServiceApis";
 import { RuntimeCatalog } from "./RuntimeCatalog";
 import { InstalledRuntimes } from "./InstalledRuntimes";
 import { Dashboard } from "./Dashboard";
@@ -58,7 +58,7 @@ export function App() {
   const [libraryView, setLibraryView] = useState<LibraryView>("find");
   const [diagnosticsTab, setDiagnosticsTab] = useState<"performance" | "requests" | "logs">("performance");
   const [backendTab, setBackendTab] = useState<"machine" | "installed" | "catalog">("machine");
-  const [connectTab, setConnectTab] = useState<"protocols" | "endpoints">("protocols");
+  const [connectTab, setConnectTab] = useState<ConnectTab>("protocols");
   const [cacheTab, setCacheTab] = useState<"sessions" | "snapshots">("sessions");
   const [modelsTab, setModelsTab] = useState<"models" | "aliases">("models");
   const client = useMemo(() => new Client(base, key), [base, key]);
@@ -67,6 +67,7 @@ export function App() {
   const workspace = useRef<HTMLElement>(null);
   useLayoutEffect(() => { workspace.current?.scrollTo(0, 0); }, [screen, client]);
   const poll = useRef<AbortController | null>(null);
+  const adoptingKey = useRef(false);
   const mutation = useRef<{ controller: AbortController; loadModel: string | null } | null>(null);
   const refresh = useCallback(async () => {
     poll.current?.abort();
@@ -80,7 +81,9 @@ export function App() {
     } finally { if (!controller.signal.aborted) { setRefreshing(false); if (poll.current === controller) poll.current = null; } }
   }, [client]);
   useEffect(() => {
-    setSnapshot(null); setOnline(false); setSelected(""); setDirty(false); clearToasts(); setBusy(false); setLoadingModel(null);
+    // Adopting a key the console just created keeps the page, so its one-time secret stays visible.
+    if (adoptingKey.current) adoptingKey.current = false;
+    else { setSnapshot(null); setOnline(false); setSelected(""); setDirty(false); clearToasts(); setBusy(false); setLoadingModel(null); }
     void refresh();
     const timer = setInterval(() => { if (!poll.current) void refresh(); }, 3000);
     return () => { clearInterval(timer); poll.current?.abort(); mutation.current?.controller.abort(); };
@@ -133,7 +136,7 @@ export function App() {
     : screen === "cache" ? <Tabs label="Cache views" value={cacheTab} onChange={setCacheTab} items={[["sessions", "Sessions"], ["snapshots", "Snapshots"]]} />
     : screen === "test" ? <Tabs label="Test operation" value={testService} onChange={setTestService} items={[["chat", "Chat"], ["compare", "Compare"], ["embeddings", "Embeddings"], ["transcription", "Transcribe"], ["speech", "Speak"], ["images", "Images"]]} />
     : screen === "library" ? <Tabs label="Library view" value={libraryView} onChange={setLibraryView} items={[["find", "Find models"], ["files", "Files on disk"], ["import", "Import"]]} />
-    : screen === "connect" ? <Tabs label="Connect views" value={connectTab} onChange={setConnectTab} items={[["protocols", "Protocols"], ["endpoints", "Endpoints"]]} />
+    : screen === "connect" ? <Tabs label="Connect views" value={connectTab} onChange={setConnectTab} items={[["protocols", "Protocols"], ["keys", "API keys"], ["endpoints", "Endpoints"]]} />
     : screen === "backend" ? <Tabs label="Backend views" value={backendTab} onChange={setBackendTab} items={[["machine", "This machine"], ["installed", "Engines"], ["catalog", "Catalog"]]} />
     : screen === "diagnostics" ? <Tabs label="Diagnostics views" value={diagnosticsTab} onChange={setDiagnosticsTab} items={[["performance", "Performance"], ["requests", "Requests"], ["logs", "Logs"]]} />
     : null;
@@ -166,7 +169,7 @@ export function App() {
         {screen === "library" && libraryView === "import" && <NativeImport key={epoch} client={client} online={online} onImported={refresh} />}
         {screen === "diagnostics" && <Diagnostics client={client} snapshot={snapshot} stats={live.stats} history={live.history} tab={diagnosticsTab} />}
         {screen === "test" && <ServiceTest key={`${epoch}:${testService}`} operation={testService} models={snapshot.models} client={client} online={online} />}
-        {screen === "connect" && <ServiceApis key={epoch} base={base} client={client} tab={connectTab} models={snapshot.models} online={online} />}
+        {screen === "connect" && <ServiceApis key={epoch} base={base} client={client} tab={connectTab} models={snapshot.models} online={online} consoleKey={key} onAdoptKey={(next) => { adoptingKey.current = true; setKey(next); }} />}
         {screen === "backend" && backendTab === "machine" && <Hardware key={epoch} client={client} />}
         {screen === "backend" && backendTab === "installed" && <EngineList key={epoch} client={client} online={online}><InstalledRuntimes client={client} online={online} paused={resources?.paused === true} memory={resources?.runtime_control_memory} importOnly /></EngineList>}
         {screen === "backend" && backendTab === "catalog" && <div className="page-body"><RuntimeCatalog key={epoch} client={client} online={online} /></div>}

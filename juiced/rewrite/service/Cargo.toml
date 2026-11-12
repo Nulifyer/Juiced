@@ -25,6 +25,7 @@ subtle = "2"
 tar = { version = "0.4", default-features = false }
 tempfile = "3"
 tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
+tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["cors", "fs"] }
 zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
 
@@ -34,7 +35,6 @@ pprof = { version = "0.15", features = ["flamegraph"], optional = true }
 
 [dev-dependencies]
 lzma-rust2 = { version = "0.25", default-features = false, features = ["std", "xz", "encoder"] }
-tower = { version = "0.5", features = ["util"] }
 
 [[bin]]
 name = "lemond"

@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import type { Client } from "./api";
 import type { Model } from "./domain";
 import { parseVoices } from "./MediaTests";
-import { Badge, Button } from "./ui";
+import { wyomingHost } from "./connectData";
+import { Button } from "./ui";
 import { useOperation, useResource } from "./useResource";
 
 type Settings = { enabled: boolean; listen: string; stt_model: string | null; tts_model: string | null; tts_voice: string | null };
@@ -23,20 +24,13 @@ export function parseWyoming(value: unknown): View {
   };
 }
 
-function hostFor(listen: string, address: string | null) {
-  const value = address ?? listen;
-  const port = value.slice(value.lastIndexOf(":") + 1);
-  const host = value.slice(0, value.lastIndexOf(":")).replace(/^\[|\]$/g, "");
-  return `${["0.0.0.0", "::", ""].includes(host) ? location.hostname : host}:${port}`;
-}
-
 export function WyomingSettings({ client, models, online }: { client: Client; models: Model[]; online: boolean }) {
   const view = useResource(client, "juiced/wyoming", parseWyoming, 3000);
   const operation = useOperation(client, view.reload);
   const [draft, setDraft] = useState<Settings | null>(null);
   const [voices, setVoices] = useState<{ model: string; list: string[] } | null>(null);
   const data = view.data;
-  const current = draft ?? data?.settings ?? null;
+  const current = draft && data ? { ...draft, enabled: data.settings.enabled } : data?.settings ?? null;
   const ttsTarget = current?.tts_model ?? data?.ttsModel ?? null;
   useEffect(() => {
     if (!ttsTarget || ttsTarget === data?.ttsModel) return;
@@ -52,15 +46,11 @@ export function WyomingSettings({ client, models, online }: { client: Client; mo
   const blocked = !online || operation.busy;
   const save = (settings: Settings, success: string) => void operation.run("juiced/wyoming", { settings, expected_generation: data.generation }, success).then((result) => { if (result !== undefined) setDraft(null); });
   const edit = (change: Partial<Settings>) => setDraft({ ...current, ...change });
-  const address = hostFor(data.settings.listen, data.address);
+  const address = wyomingHost(data.settings.listen, data.address, location.hostname);
   return <div className="wyoming">
-    <div className="action-row wrap">
-      <div className="segmented" role="radiogroup" aria-label="Wyoming server">{([false, true] as const).map((value) => <button key={String(value)} role="radio" aria-checked={data.settings.enabled === value} disabled={blocked || dirty} onClick={() => data.settings.enabled !== value && save({ ...data.settings, enabled: value }, value ? "Wyoming server is on." : "Wyoming server is off.")}>{value ? "On" : "Off"}</button>)}</div>
-      {data.settings.enabled && (data.error ? <Badge tone="bad">Not listening</Badge> : data.listening ? <Badge tone="good">Listening</Badge> : <Badge tone="warning">Starting</Badge>)}
-      {data.listening && <span className="muted">{data.connections} {data.connections === 1 ? "connection" : "connections"}</span>}
-    </div>
     {data.error && <p className="inline-error" role="alert">{data.error}</p>}
-    {data.settings.enabled && data.listening && <p className="field-help">In Home Assistant, add the Wyoming Protocol integration with host and port <code>{address}</code>.</p>}
+    {data.settings.enabled && data.listening && <p className="field-help">Listening on <code>{address}</code> · {data.connections} {data.connections === 1 ? "connection" : "connections"}. No authentication: keep it on a trusted network.</p>}
+    {!data.settings.enabled && <p className="field-help">Turn Wyoming on in the list to start its listener.</p>}
     <div className="form-grid wyoming-grid">
       <div><label htmlFor="wyoming-listen">Listen on</label><input id="wyoming-listen" value={current.listen} disabled={blocked} spellCheck={false} onChange={(event) => edit({ listen: event.target.value })} /></div>
       <div><label htmlFor="wyoming-stt">Speech to text</label><select id="wyoming-stt" value={current.stt_model ?? ""} disabled={blocked} onChange={(event) => edit({ stt_model: event.target.value || null })}><option value="">Every enabled speech model</option>{speech.map((model) => <option key={model.id} value={model.id}>{model.id}</option>)}</select></div>

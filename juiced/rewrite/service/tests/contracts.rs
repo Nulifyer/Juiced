@@ -81,6 +81,7 @@ impl Harness {
             upload_max_bytes: juiced_service::config::DEFAULT_UPLOAD_MAX_BYTES,
             import_roots: Vec::new(),
             wyoming: Default::default(),
+            protocols: Default::default(),
             native_adoption: None,
         };
         change(&mut config);

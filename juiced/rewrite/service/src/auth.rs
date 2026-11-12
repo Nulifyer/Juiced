@@ -26,9 +26,27 @@ impl Auth {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Role {
+    Read,
     Inference,
     Operator,
     TrustedLan,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Authority {
+    Read,
+    Inference,
+    Operator,
+}
+
+impl Authority {
+    pub fn from_label(label: &str) -> Self {
+        match label {
+            "read" => Self::Read,
+            "inference" => Self::Inference,
+            _ => Self::Operator,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -40,7 +58,15 @@ pub struct RequestContext {
 
 impl RequestContext {
     pub fn operator(&self) -> bool {
-        self.role != Role::Inference
+        matches!(self.role, Role::Operator | Role::TrustedLan)
+    }
+
+    fn allows(&self, authority: Authority) -> bool {
+        match authority {
+            Authority::Read => true,
+            Authority::Inference => self.role != Role::Read,
+            Authority::Operator => self.operator(),
+        }
     }
 }
 
@@ -53,10 +79,15 @@ pub struct Authorization {
     regular: Option<Credential>,
     operator: Option<Credential>,
     anonymous: RequestContext,
+    keys: Arc<crate::api_keys::KeyStore>,
 }
 
 impl Authorization {
     pub fn new(auth: Auth) -> Self {
+        Self::with_keys(auth, crate::api_keys::KeyStore::memory())
+    }
+
+    pub fn with_keys(auth: Auth, keys: Arc<crate::api_keys::KeyStore>) -> Self {
         let credential = |token: String, principal, role| {
             let epoch: Arc<str> = format!(
                 "{:x}",
@@ -89,15 +120,44 @@ impl Authorization {
                 role: Role::TrustedLan,
                 credential_epoch: "anonymous-trusted-lan-v1".into(),
             },
+            keys,
         }
+    }
+
+    pub fn keys(&self) -> &Arc<crate::api_keys::KeyStore> {
+        &self.keys
+    }
+
+    pub fn environment_operator(&self) -> bool {
+        self.operator.is_some() || self.regular.is_some()
+    }
+
+    pub fn enforcing(&self) -> bool {
+        self.regular.is_some() || self.operator.is_some() || self.keys.enforcing()
+    }
+
+    pub fn environment_keys(&self) -> Vec<serde_json::Value> {
+        [
+            ("LEMONADE_ADMIN_API_KEY", &self.operator),
+            ("LEMONADE_API_KEY", &self.regular),
+        ]
+        .into_iter()
+        .filter_map(|(name, credential)| {
+            let scope = match credential.as_ref()?.context.role {
+                Role::Inference => "inference",
+                _ => "operator",
+            };
+            Some(serde_json::json!({"id": format!("env:{name}"), "name": name, "scope": scope, "source": "environment"}))
+        })
+        .collect()
     }
 
     pub fn authenticate(
         &self,
         headers: &HeaderMap,
-        requires_operator: bool,
+        authority: Authority,
     ) -> Result<RequestContext, ApiError> {
-        if self.regular.is_none() && self.operator.is_none() {
+        if !self.enforcing() {
             return Ok(self.anonymous.clone());
         }
         let unauthorized = || {
@@ -141,20 +201,70 @@ impl Authorization {
             .or(api_key)
             .or_else(|| websocket_key(headers))
             .ok_or_else(unauthorized)?;
-        let credential = self
+        let context = match self
             .operator
             .iter()
             .chain(self.regular.iter())
             .find(|key| bool::from(token.as_bytes().ct_eq(key.token.as_bytes())))
-            .ok_or_else(unauthorized)?;
-        if requires_operator && !credential.context.operator() {
+        {
+            Some(credential) => credential.context.clone(),
+            None => self.issued(token)?,
+        };
+        if !context.allows(authority) {
+            return Err(if authority == Authority::Operator {
+                ApiError::new(
+                    StatusCode::UNAUTHORIZED,
+                    "operator_required",
+                    "An operator API key is required.",
+                )
+            } else {
+                ApiError::new(
+                    StatusCode::UNAUTHORIZED,
+                    "inference_required",
+                    "This read-only key cannot run inference. Use an inference or operator key.",
+                )
+            });
+        }
+        Ok(context)
+    }
+
+    fn issued(&self, token: &str) -> Result<RequestContext, ApiError> {
+        use crate::api_keys::{Lookup, Scope};
+        if let Some(reason) = self.keys.unavailable() {
             return Err(ApiError::new(
-                StatusCode::UNAUTHORIZED,
-                "operator_required",
-                "An operator API key is required.",
+                StatusCode::SERVICE_UNAVAILABLE,
+                "key_store_unavailable",
+                format!(
+                    "The API key store {reason}. Issued keys are refused until {} is fixed or removed.",
+                    crate::api_keys::FILENAME
+                ),
             ));
         }
-        Ok(credential.context.clone())
+        match self.keys.lookup(token) {
+            Lookup::Found(found) => Ok(RequestContext {
+                principal: match found.scope {
+                    Scope::Read => "issued-read",
+                    Scope::Inference => "issued-inference",
+                    Scope::Operator => "issued-operator",
+                },
+                role: match found.scope {
+                    Scope::Read => Role::Read,
+                    Scope::Inference => Role::Inference,
+                    Scope::Operator => Role::Operator,
+                },
+                credential_epoch: found.epoch,
+            }),
+            Lookup::Expired => Err(ApiError::new(
+                StatusCode::UNAUTHORIZED,
+                "api_key_expired",
+                "This API key has expired. Ask an operator for a new key.",
+            )),
+            Lookup::Unknown => Err(ApiError::new(
+                StatusCode::UNAUTHORIZED,
+                "unauthorized",
+                "A valid API key is required.",
+            )),
+        }
     }
 }
 
@@ -186,9 +296,9 @@ mod tests {
             header::SEC_WEBSOCKET_PROTOCOL,
             "realtime, openai-insecure-api-key.client".parse().unwrap(),
         );
-        assert!(auth.authenticate(&headers, false).is_ok());
+        assert!(auth.authenticate(&headers, Authority::Inference).is_ok());
         headers.insert(header::AUTHORIZATION, "Bearer wrong".parse().unwrap());
-        assert!(auth.authenticate(&headers, false).is_err());
+        assert!(auth.authenticate(&headers, Authority::Inference).is_err());
         let mut twice = HeaderMap::new();
         twice.insert(
             header::SEC_WEBSOCKET_PROTOCOL,
@@ -196,7 +306,7 @@ mod tests {
                 .parse()
                 .unwrap(),
         );
-        assert!(auth.authenticate(&twice, false).is_err());
+        assert!(auth.authenticate(&twice, Authority::Inference).is_err());
     }
 
     #[test]
@@ -207,17 +317,17 @@ mod tests {
         });
         let mut headers = HeaderMap::new();
         headers.insert(header::AUTHORIZATION, "Bearer client".parse().unwrap());
-        let bearer = auth.authenticate(&headers, false).unwrap();
+        let bearer = auth.authenticate(&headers, Authority::Inference).unwrap();
         headers.clear();
         headers.insert("x-api-key", "client".parse().unwrap());
-        let other = auth.authenticate(&headers, false).unwrap();
+        let other = auth.authenticate(&headers, Authority::Inference).unwrap();
         assert_eq!(bearer.credential_epoch, other.credential_epoch);
         assert_eq!(other.role, Role::Inference);
-        assert!(auth.authenticate(&headers, true).is_err());
+        assert!(auth.authenticate(&headers, Authority::Operator).is_err());
         headers.insert(header::AUTHORIZATION, "Bearer operator".parse().unwrap());
-        assert!(auth.authenticate(&headers, false).is_err());
+        assert!(auth.authenticate(&headers, Authority::Inference).is_err());
         headers.remove("x-api-key");
-        let admin = auth.authenticate(&headers, true).unwrap();
+        let admin = auth.authenticate(&headers, Authority::Operator).unwrap();
         assert_ne!(admin.credential_epoch, bearer.credential_epoch);
         let rotated = Authorization::new(Auth {
             api_key: Some("rotated".into()),
@@ -226,10 +336,99 @@ mod tests {
         headers.insert(header::AUTHORIZATION, "Bearer rotated".parse().unwrap());
         assert_ne!(
             rotated
-                .authenticate(&headers, false)
+                .authenticate(&headers, Authority::Inference)
                 .unwrap()
                 .credential_epoch,
             bearer.credential_epoch
+        );
+    }
+
+    #[tokio::test]
+    async fn issued_keys_follow_their_scope_beside_environment_keys() {
+        use crate::api_keys::{Create, KeyStore, Scope};
+        let keys = KeyStore::memory();
+        let auth = Authorization::with_keys(Auth::default(), keys.clone());
+        assert_eq!(
+            auth.authenticate(&HeaderMap::new(), Authority::Operator)
+                .unwrap()
+                .role,
+            Role::TrustedLan
+        );
+        let issue = async |name: &str, scope| {
+            keys.create(
+                Create {
+                    name: name.into(),
+                    scope,
+                    expires_in_days: None,
+                },
+                false,
+            )
+            .await
+            .unwrap()
+            .1
+        };
+        let operator = issue("console", Scope::Operator).await;
+        let reader = issue("reader", Scope::Read).await;
+        let bearer = |token: &str| {
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                header::AUTHORIZATION,
+                format!("Bearer {token}").parse().unwrap(),
+            );
+            headers
+        };
+        assert!(
+            auth.authenticate(&HeaderMap::new(), Authority::Read)
+                .is_err()
+        );
+        assert_eq!(
+            auth.authenticate(&bearer(&reader), Authority::Read)
+                .unwrap()
+                .role,
+            Role::Read
+        );
+        for (authority, code) in [
+            (Authority::Inference, "inference_required"),
+            (Authority::Operator, "operator_required"),
+        ] {
+            assert_eq!(
+                auth.authenticate(&bearer(&reader), authority)
+                    .unwrap_err()
+                    .code,
+                code
+            );
+        }
+        let admin = auth
+            .authenticate(&bearer(&operator), Authority::Operator)
+            .unwrap();
+        assert_eq!(admin.principal, "issued-operator");
+        let mut socket = HeaderMap::new();
+        socket.insert(
+            header::SEC_WEBSOCKET_PROTOCOL,
+            format!("realtime, openai-insecure-api-key.{operator}")
+                .parse()
+                .unwrap(),
+        );
+        assert_eq!(
+            auth.authenticate(&socket, Authority::Inference)
+                .unwrap()
+                .credential_epoch,
+            admin.credential_epoch
+        );
+        let environment = Authorization::with_keys(
+            Auth {
+                api_key: Some("client".into()),
+                admin_key: None,
+            },
+            keys,
+        );
+        assert!(environment.environment_operator());
+        assert_eq!(
+            environment
+                .authenticate(&bearer("client"), Authority::Operator)
+                .unwrap()
+                .principal,
+            "configured-api"
         );
     }
 
@@ -237,10 +436,12 @@ mod tests {
     fn dummy_keys_cannot_partition_anonymous_authority() {
         let auth = Authorization::new(Auth::default());
         let mut headers = HeaderMap::new();
-        let empty = auth.authenticate(&headers, true).unwrap();
+        let empty = auth.authenticate(&headers, Authority::Operator).unwrap();
         headers.insert("x-api-key", "untrusted-identity".parse().unwrap());
         assert_eq!(
-            auth.authenticate(&headers, true).unwrap().credential_epoch,
+            auth.authenticate(&headers, Authority::Operator)
+                .unwrap()
+                .credential_epoch,
             empty.credential_epoch
         );
     }
