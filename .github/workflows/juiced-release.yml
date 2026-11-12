@@ -59,6 +59,9 @@ jobs:
           bun catalog-design/inventory.ts --check --native-root ../..
           bun api-parity/inventory.ts --check
           bun test api-parity/inventory.test.ts
+      - name: Build the fixture service before Playwright starts it
+        working-directory: juiced/rewrite
+        run: cargo build --all-features --locked
       - name: Operator browser journeys against the Rust service
         run: bun run test:e2e
       - uses: actions/upload-artifact@v4

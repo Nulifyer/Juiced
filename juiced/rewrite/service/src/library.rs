@@ -1019,14 +1019,20 @@ async fn publish_set(store: &Arc<ArtifactStore>, specification: ArtifactSetSpec)
             Instant::now() + PUBLISH_DEADLINE,
             Arc::new(AtomicBool::new(false)),
         );
-        for _ in 0..16 {
+        let mut last = ArtifactError::Conflict;
+        for _ in 0..64 {
             match store.publish_set(specification.clone(), store.generation(), &operation) {
                 Ok(_) => return SetState::Published,
-                Err(ArtifactError::Conflict) => continue,
+                Err(ArtifactError::Conflict) => last = ArtifactError::Conflict,
+                // Member downloads release their transfer slots just after they finish.
+                Err(ArtifactError::Limit) => {
+                    last = ArtifactError::Limit;
+                    std::thread::sleep(Duration::from_millis(50));
+                }
                 Err(error) => return SetState::Failed(error.code()),
             }
         }
-        SetState::Failed(ArtifactError::Conflict.code())
+        SetState::Failed(last.code())
     })
     .await
     .unwrap_or(SetState::Failed("artifact_operation_interrupted"))
