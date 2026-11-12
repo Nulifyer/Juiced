@@ -6,7 +6,10 @@ Barista or define an executable tool dispatcher. The platform plan and Barista
 contract remain normative.
 
 Source inspection started from `3791a27f`, including the pending snapshot-storage
-binding changes. A native route's presence does not establish assistant authority,
+binding changes. The integration review refreshes committed native references
+through `62e82570`, including saved-profile suitability. Concurrent hierarchy and
+root-alias changes require their separate acceptance. A native route's presence
+does not establish assistant authority,
 complete termination, useful service, physical fit or model qualification.
 
 ## Reading the inventory
@@ -39,7 +42,7 @@ not a general `path`, `method`, `body`, `command` or filesystem tool.
 | inspect.files | `GET /v1/models/{model}/files` | Native: `Server::handle_model_files`. Published file and companion inspection. Do not infer immutable identity or complete companions merely from a path. |
 | inspect.options | `GET /v1/models/{model}/options` | Native: `Server::handle_model_options_get`, ModelManager's coherent options snapshot. Keep saved overrides, effective values and defaults distinct. |
 | inspect.execution | `GET /v1/juiced/execution?model=MODEL`, `GET /v1/juiced/devices` | Native: `JuicedService::execution_api`, `execution_devices`, native backend descriptors. Compatibility, selected profile and observed devices are not useful-service or performance qualification. |
-| inspect.resources | `GET /v1/system-info`, `GET /v1/system-stats`, `GET /v1/juiced/admission` | Native: Server, native resource observations and ResourceAdmission. Full host-fit estimation, UMA accounting and fair actual-slot acceptance remain P1 obligations. |
+| inspect.resources | `GET /v1/system-info`, `GET /v1/system-stats`, `GET /v1/juiced/admission`, `GET /v1/juiced/suitability?model=MODEL` | Native: Server, native resource observations and ResourceAdmission. Suitability compares operator-declared ceilings for saved checkpoint/options without reserving resources. It separates nominal capacity, current pressure, unknown inputs and policy blockers. It does not establish measured peaks, immutable artifact/device identity or a qualified recommendation. Full host-fit estimation, UMA accounting and fair actual-slot acceptance remain P1 obligations. |
 | inspect.activity | `GET /v1/stats`, `GET /metrics`, `GET /v1/juiced/requests` | Native: Server metrics and bounded Juiced request records. Select relevant fields and a bounded interval. Do not dump all metrics or diagnostic data into model context. |
 | inspect.cache | `GET /v1/juiced/cache`, `POST /v1/juiced/cache/profile` | Native: `JuicedService::cache_api`, exact worker state-operation lease. Profile inspection uses POST but does not grant qualification. Report pending writes, charges and cleanup separately. |
 | inspect.slots | `GET /v1/slots` | Native: `Server::handle_slots`, selected llama.cpp worker. Observation does not authorize manual slot mutation or discharge a pending writer. |
@@ -60,7 +63,7 @@ not a general `path`, `method`, `body`, `command` or filesystem tool.
 | configure.profile | `POST /v1/juiced/execution` | Native: execution selection through ModelManager and Juiced's queued operation owner. Preserve `expected_selected`, compatibility acknowledgement, normal options and required reload. |
 | operate.residency | `POST /v1/juiced/operation` | Native: fixed `load`, `unload` and `reload` actions through Juiced and Router. Accepted status is not completion. Verify the current generation and pending cleanup. |
 | operate.legacy_residency | `POST /v1/load`, `POST /v1/unload`, `POST /internal/pin` | Native compatibility entry points. The assistant should prefer the Juiced policy/operation owner. These paths are not a way around Hot intent or unresolved retirement. |
-| configure.server | `POST /internal/set` | Native: RuntimeConfig publication and Server's effects owner. Verify saved intent, applied settings and pending/failed effects separately. Runtime binary and root changes retain their native ownership gates. |
+| configure.server | `POST /internal/set` | Native: RuntimeConfig publication and Server's effects owner. Verify saved intent, applied settings and pending/failed effects separately. The assistant schema must select explicit supported fields. Runtime executable and filesystem-root changes require operator-authorized native handles as well as existing ownership gates. Raw model-generated paths or environment maps are not assistant configuration inputs. |
 | configure.alias_add | `POST /internal/aliases` | Native: ModelManager alias publication and namespace checks. Bind the intended target and verify resulting public resolution. |
 | configure.alias_remove | `DELETE /internal/aliases/{alias}` | Native: ModelManager alias removal. Preserve model registration, files and unrelated aliases. |
 | configure.routing_validate | `POST /v1/routing/validate` | Native: routing validation. Validation is not persisted routing policy, provider qualification or cloud consent. Further routing changes belong to the existing P5 owner. |
@@ -149,6 +152,13 @@ not a general `path`, `method`, `body`, `command` or filesystem tool.
 3. Implement task-driven redacted projections and credential/import handles.
    Retain access to all permitted Juiced data without a blind context dump.
    Treat model cards, imported descriptions, documentation and logs as data.
+   Extend handle validation to runtime executables, storage roots and declared
+   external files. Native operator APIs accept paths that the assistant must not
+   invent. Resolve a handle through its native owner and recheck its scope,
+   artifact/root identity and operator authority at dispatch. Reject unsupported
+   fields before invoking configuration or registration. Ordinary model options
+   keep their validated scalar semantics; path-bearing options require the same
+   native handle boundary. Do not expose a generic environment-variable map.
 4. Finish missing P1 physical-fit, fair actual-slot, identity, termination,
    maintenance and recovery operations before advertising them as supported.
    Keep twelve writer families separate from fourteen execution families.

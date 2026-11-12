@@ -204,7 +204,31 @@ Profile selection and saved options share ModelManager's writer. Option writers
 resolve the committed recipe inside that transaction. Native option APIs reject a
 recipe change since validation. Final readers recheck cache validity under their
 read lock. Direct, supported and downloaded model views apply the same selected
-profile. This does not establish crash-consistent P3 multi-file promotion.
+profile.
+
+A model without profile-owned settings keeps its saved options in
+`recipe_options.json`. The first successful profile selection atomically publishes
+its selection, definitions and active saved options in one `execution_profiles.json`
+row. That row contains `settings: {"version": 1, "saved_options": {...}}`.
+All subsequent saved-option edits for that model publish through the same file.
+The profile API omits this internal storage field. Its existing profile definitions
+and selection fields remain unchanged.
+
+Legacy rows without `settings` still read active options from `recipe_options.json`.
+Selection transfers authority once, without rewriting the preserved legacy entry.
+Merged option edits retain unknown saved keys. Unsupported settings versions,
+incomplete owned rows and malformed profile files reject activation without
+resetting storage.
+Cache cleanup includes active saved-option file references even when their model
+registration has been removed.
+
+With filesystem contents retained, interruption before or after the single atomic
+replacement leaves a complete old or new settings version for manager restart.
+This does not repair an already inconsistent legacy pair or establish power-loss
+durability. Restoring an older executable requires its matching complete settings
+backup. Copying an old `recipe_options.json` over profile-owned settings cannot
+roll back the active options. P3 complete-model and runtime-bundle promotion remain
+separate obligations.
 
 Cloud forwarding and discovery use one per-provider snapshot of endpoint, credential,
 auth header, plaintext permission, wire format and revision. Existing requests retain
@@ -274,10 +298,37 @@ after manager restart; unsealed writes still require termination evidence. Confl
 retain/forget operations reject until publication resolves.
 
 Aborted writes remain charged until the current manager observes exact-generation
-stop. Idle inference is insufficient. Interrupted writes from an unknown previous
-manager remain conservatively charged and visible in `pending_writes`. Complete
-operator recovery of those interrupted writes remains a P1 prerequisite before
-promotion. Snapshot restore and cold inference do not require a new opportunistic
+stop. Idle inference is insufficient. New saves can additionally capture native
+writer identity before dispatch. The durable binding covers the snapshot store,
+write key, manager owner, worker generation, model, profile and declared byte bound.
+A state-operation lease excludes replacement process startup. The exchange checks
+that the reserved native actor remains current before dispatch.
+
+Native identity observation is capability-checked by the existing process owner:
+
+- Linux requires full-width pidfs identity and the original boot/PID namespace.
+- macOS uses the native process-unique ID and read-only boot-session UUID. Unknown
+  libproc results remain unqualified.
+- Windows uses a native process-start key and the original host boot/session
+  context. Server silos and unverified job visibility remain unqualified. The
+  loader boot-entry GUID is combined with native boot/session IDs; it is not
+  treated as a random per-boot nonce. Unknown NT layouts fail closed.
+
+These probes do not signal or collect a process. Native support must be verified
+on the target OS; a successful unsupported-capability check is not recovery
+qualification. PID reuse cannot establish that the old process remains live.
+Cleanup first commits its outcome, then reclaims files; failed publication or
+file deletion retains ownership and disk charges.
+
+Unavailable native support, changed execution environments, invalid bindings and
+legacy writes without captured identity remain conservatively charged and visible
+in `pending_writes`. Target-native acceptance, cross-environment recovery and
+complete operator recovery remain P1 prerequisites before promotion. The identity binding
+detects mismatched metadata; it is not a signature against same-user filesystem
+edits. Malformed publication or cleanup fields also quarantine the write. Their
+unknown disk usage blocks new reservations without following untrusted paths.
+Direct-process exit does not establish descendant or device termination.
+Snapshot restore and cold inference do not require a new opportunistic
 save to succeed. None of these cache controls changes source weights or stores
 consumer conversation messages.
 
@@ -564,9 +615,25 @@ waits for run completion. Every return or exception joins the worker and destroy
 Server before Winsock cleanup. The UI stays on its creating thread. Silent startup
 failures log and return a failure status without an error dialog.
 
+The embedded readiness probe can finish after a client requests shutdown. That
+intentional stop returns success when the owned Server run completes without a
+startup failure. Probe timeout, bind/listen failure and worker exceptions remain
+failures. A successful manager exit still does not discharge prior-manager helper
+ownership. Configuration-migration acceptance preserves its helper journal across
+shutdown and records process exit codes and native application logs. Those logs
+also participate in parser-input redaction checks.
+
 Windows qualification requires `EmbeddedServerShutdownTest`, which builds the
 actual embedded executable and checks HTTP shutdown and occupied-port cleanup.
 Linux terminal-shutdown checks do not establish Windows execution evidence.
+
+The Server lifecycle owner retains a requested shutdown after `stop()` completes.
+Its joining caller can distinguish intentional cancellation from failed startup,
+even when its readiness probe misses the serving interval. Only an explicit
+`set_shutdown_requested(false)` clears that request. This outcome says why the
+manager run ended; it does not certify prior-manager/helper/device termination.
+The native Server fixture exercises cancellation before listener startup and
+repeated cleanup. Embedded Windows qualification remains a separate actual test.
 
 AliasManager serializes alias writers, reloads and directory changes. Candidates
 persist before live publication. File I/O runs outside its read lock, so model
@@ -576,9 +643,29 @@ files retain owner-only permissions. Windows ACL behavior remains unqualified.
 
 Failed alias storage returns HTTP500 and preserves live bindings. Invalid JSON
 and field types remain HTTP400; validation conflicts remain HTTP409. Retry and
-restart consume only committed changes. Corrupt-file recovery retains separate
-backups. These are per-owner publication contracts, not cross-process exclusion
-or whole-store maintenance.
+restart consume only committed changes. Native startup binds alias recovery to
+the existing writer and root owner before loading it.
+
+Recovery verifies a byte-exact backup before atomically replacing a damaged alias
+file. The primary pathname stays present, including in an active configuration
+migration generation. Nonobject JSON, unsupported entries and cyclic bindings
+also retain their original bytes. Supported acyclic bindings survive recovery.
+A failed replacement preserves the source, backup and prior live map. Restart
+can finish that publication without another backup. Parser diagnostics do not
+include the original document values.
+
+The first backup is `aliases.json.corrupted`. If it contains different bytes,
+recovery uses `aliases.json.corrupted.<SHA256>` and reuses an identical verified
+backup. Occupied mismatched destinations reject without overwriting them.
+Historical numbered backups remain untouched. Reads are bounded to 16 MiB,
+128 parse depth and 100000 parser events. Exceeding these bounds reports
+`alias_configuration_recovery_required`; it does not publish an empty map.
+Creating a backup requires free space for three times the source size plus 1 MiB.
+These checks do not establish a hard filesystem quota or measured parse peaks.
+
+These are per-owner publication contracts, not arbitrary external-writer
+exclusion, host-crash durability or whole-store maintenance. An already missing
+role in an active generation still requires validated recovery.
 
 
 `lemond` and the Windows embedded server acquire an exclusive OS lease for each
@@ -590,6 +677,63 @@ Constructor failure releases its partial claims after owned cleanup. The OS rele
 locks when the process exits. Neither release nor shutdown acknowledgement proves
 that a surviving backend or helper stopped.
 
+ModelManager distinguishes missing optional model metadata from present damaged
+storage. Its registration, legacy options and execution-profile documents must
+be regular files containing JSON objects. Missing files use native defaults.
+Unreadable files, malformed JSON and other top-level shapes reject activation
+with `model_settings_recovery_required`. Parser input is omitted from that error.
+Recognized canonical saved-option rows and legacy built-in rows must also be
+objects. Validation precedes legacy key migration, reads and option edits. Unknown
+bare metadata is preserved without assigning model semantics to it.
+No empty replacement is published. Restore the complete compatible document and
+restart to recover. Unknown fields inside valid objects remain with their native
+schema owners. This does not qualify unbounded metadata parsing, live external
+writers or complete recovery of every legacy record.
+
+Startup metadata relocation belongs to ConfigFile. The path resolver selects the
+source and passes the same native directory owner used by the entrypoint. The
+fixed generation includes `config.json`, `jobs.json`, `recipe_options.json`,
+`user_models.json`, `execution_profiles.json` and `native_helpers.json`. When the
+cache root also changes, `aliases.json` moves to the new cache in that generation.
+A configuration-only split leaves aliases under the unchanged cache owner.
+
+`.juiced-configuration-migration.json` binds the canonical source, configuration
+and cache roots, file roles, sizes, permissions and SHA256 digests. Its version 1
+states are `staging`, `prepared` and `active`. The source remains intact. A private
+`.juiced-configuration-generation` directory retains the verified payload. Intent
+precedes staging, complete staging precedes target publication, and `active`
+commits only after complete source and target revalidation. ConfigFile,
+ModelManager, JobManager, AliasManager and helper-journal readers reject an
+incomplete or unsupported generation. Native schema interpretation remains with
+those owners. There is no second model registry or live migration executor.
+
+Retry reconstructs missing staging from the unchanged source and finishes only
+matching target files. Conflicts, unknown generation contents and changed source
+bytes require recovery. Once active, normal native writes own the target. Repeated
+startup does not replay the retained source over later edits. Missing active
+metadata blocks activation. Keep the source, target and retained generation in a
+consistent backup. Do not manually alter migration markers or path bindings.
+Older executables require their matching complete pre-migration backup.
+
+The startup transport accepts JSON objects up to 16 MiB per file and 64 MiB combined,
+a 64 KiB manifest, depth 128 and 100000 parser events. It checks a 30-second cooperative
+deadline between bounded phases. This is not a deadline for blocked filesystem
+calls. Configuration free space must cover twice the cohort plus 1 MiB. A separately
+relocated alias needs its own bytes plus 1 MiB at the cache destination. Source file
+permissions are retained. The generation directory is owner-only and its manifest
+is owner-readable and writable. Windows permissions require separate OS evidence.
+
+The former recursive cache-tree mover is retired. Runtime binaries, model weights
+and other payload remain in their source roots. BackendManager retains runtime
+installation and reference authority. A source `juiced/` directory or unrelated
+existing destination state blocks this metadata transport before publication.
+That state owns canonical snapshot bindings, imports, authentication epochs and
+unresolved writers. Its successful relocation requires separate validated recovery
+through those owners. Rejection preserves data but does not complete modern-store
+migration, all-writer maintenance or prior-manager recovery. Tests establish
+manager-process interruption with retained files and synchronous injected faults.
+They do not establish host-crash, power-loss or candidate-deployment recovery.
+
 The empty `.juiced-store.lock` control file remains in place and must not be removed
 while a manager is running. Directory aliases share ownership within the existing
 owner. Fixed startup and migration roots remain protected for the entry-point
@@ -598,10 +742,45 @@ when their last view finishes. Temporary directory candidates do not accumulate 
 An existing read-only control file can be opened for locking without rewriting it.
 Windows permits this through a read-capable [LockFileEx handle](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-lockfileex).
 POSIX claims also retain a close-on-exec, read-only directory descriptor with an
-exclusive `flock`, acquired before opening the control file. Removing or replacing
-the control file cannot admit another participating owner of that same directory
-inode. Failure to acquire the control file releases the directory descriptor.
-This does not lock parent/child roots or pin pathnames against external moves.
+exclusive `flock`, acquired before opening the control file. Shared ancestor
+directory locks exclude foreign parent/child claims without serializing siblings.
+Each missing component is created only under its parent's intent lock. The owner
+retains those descriptors through partial failure or final scoped release.
+Existing read-only directories are inspected without attempting creation.
+
+Startup roots supplied together acquire broader ownership first. A nested claim
+retains an existing owned ancestor. A later broader claim rejects if acquiring it
+would require dropping a live narrower lock. There is no non-atomic lock upgrade
+or temporary loss of protection. Root/ancestor readability is required. This
+does not pin pathnames against external moves. Windows hierarchy exclusion remains
+unimplemented; its existing exact-root control-file ownership stays separate.
+Before reusing an exact claim or inheriting a POSIX ancestor claim, the owner
+compares its retained directory identity with the current path. A completed
+replacement fails with `Managed directory identity changed` before descendant
+creation. The old claim remains held until its final view releases. This check
+does not prevent movement after validation or anchor ordinary path-based writes.
+
+The native writer gate also validates every live directory claim before new or
+nested mutation admission. Completed replacement reports HTTP503
+`storage_root_unavailable`. Directory checks run outside the admission mutex.
+
+Deferred sync, downloads and snapshot saves revalidate before resuming effects.
+State and FLM helper terminal publication validate before writing their journals.
+Snapshot reclamation and legacy preparation staging cleanup also validate before
+filesystem effects. A preparation child can retire before validation rejects cleanup.
+
+Restoring a continuation itself remains nonthrowing so process retirement can
+finish after a storage rejection. Failed publication retains existing ownership.
+These checks do not prevent root movement after an accepted operation begins,
+anchor child path traversal, or establish a complete all-writer maintenance fence.
+
+Windows compares the volume and full 128-bit `FileIdInfo`, failing closed when
+that query is unavailable. Its directory handle does not add hierarchy exclusion.
+The same native root resolver normalizes trailing separators and dot aliases for
+preflight, acquisition and snapshot-store binding before creating missing roots.
+Both native startup entrypoints replace cache/config input aliases with the
+claimed canonical paths before migration, configuration loading and Server setup.
+Retargeting an input symlink then leaves publication attached to the original store.
 A read-only managed root without an existing usable control file cannot acquire
 ownership. Ordinary read-only external source directories remain outside writable
 store claims and are not modified. Their external consistency still needs validation.
@@ -610,7 +789,9 @@ Model-directory changes first retain current-ledger exclusion and acquire the
 candidate process claim, then persist. Failed persistence releases the candidate.
 Failed application retains current and pending claims. Successful application
 pins filesystem resolution to the claimed canonical directory and releases the
-previous claim. Returning to a former directory requires fresh acquisition.
+previous direct claim. A nested destination retains its inherited ancestor lock
+until the last dependent claim releases. Returning to a former directory requires
+fresh acquisition unless that ancestor remains retained by a dependent claim.
 ModelManager publishes the directory and cache invalidation under its cache owner.
 Model selections retain their resolved root. Router rejects obsolete selections
 before dispatch, after serialization waits and after load admission. Canonical path
@@ -622,13 +803,36 @@ roots, failed activation cleanup, independent roots, directory handoff, normal
 restart and process termination. The independent managers share an external source
 directory without claiming or modifying it. Unicode model/snapshot roots are included.
 Windows recovery permits bounded retries because OS lock release can lag process exit.
-Local Linux regression acceptance additionally removes a live model root's control
-file and verifies that a second isolated native manager is rejected. The first
-manager remains usable. Source changes and Linux checks do not qualify macOS or
-network filesystem behavior. These checks do not establish nested-root exclusion,
-moved-directory recovery, network filesystem locking, foreign/older-manager exclusion, prior-manager
+Local Linux regression acceptance removes a live model root's control file and
+verifies that a second isolated native manager is rejected. Parent-first and
+child-first native fixtures reject overlapping stores before descendant creation
+or ancestor-marker publication. Siblings remain usable, and confirmed release
+permits retry. Source changes and Linux checks do not qualify macOS or network
+filesystem behavior. These checks do not establish moved-directory recovery,
+network filesystem locking, foreign/older-manager exclusion, prior-manager
 writer termination, whole-store backup consistency or host-crash durability.
 Backend, helper, device and remote writers retain their P1 termination gates.
+
+The standalone `lemond --inspect-snapshot-store` path runs before telemetry,
+directory claims, migration or worker startup. It reads Juiced snapshot state and
+the selected default/environment snapshot root, with bounded parsing, records,
+file inventory, checksums and redacted diagnostics. Binding schema validation is
+shared with startup. Other journal checks are diagnostic predicates, not proof
+that an incomplete record owns a terminated writer.
+
+Inspection has no mutation, cleanup, migration or termination authority. Its
+report always leaves `application_authorized` and `writer_termination_verified`
+false. Exit status0 describes completed metadata/file validation only; status2
+reports issues or an exhausted inspection budget. No result establishes a writer
+fence, an atomic filesystem snapshot or the consistency of other store families.
+Reads use retained regular-file handles beneath anchored directories. Windows
+leaf handles permit delete sharing so ordinary replacement can proceed; retained
+ancestor handles restrict directory changes. Use that platform's inspector offline
+from known writers. These [Win32 sharing rules](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilew)
+remain in effect until handle close and are not an all-writer maintenance fence.
+Windows file observations compare the volume and full 128-bit file identifier.
+The older [64-bit file index can be nonunique on ReFS](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/ns-fileapi-by_handle_file_information),
+so an unavailable `FileIdInfo` query leaves the observation unverified.
 
 
 Router host admission and CPU/NPU automatic sizing consume the native
@@ -703,6 +907,31 @@ cleanup failures retain ownership and report failure without escaping their thre
 A failed worker destructor retains uncertain residency in the live admission ledger.
 Dispatched loads retain logical uncertainty even when their legacy estimate is zero.
 
+Registered-worker retirement claims the exact generation under Router's registry
+lock, marks cleanup pending, then releases that lock for process stop. Completion
+rechecks the same shared worker before removal and ledger reconciliation. Failed
+stop keeps the generation and its charge available for cleanup retry. A detached
+process still occupies its pool and exclusive-device boundary while cleanup is
+pending. It cannot be selected as a replacement victim.
+
+Deferred replacement and idle-retirement candidates recheck generation, current
+pin/policy and request state after each unlocked stop. Role changes retain the existing load slot across
+capacity reclamation. Normal readiness can reuse an eligible, same-role worker
+during a known different-model load. Same-model reload and unknown load targets
+keep their serialization gate. Fresh startup and retry reserve a registry slot
+before dispatch. Failure transfers the exact worker and its original resource
+lease into the same cleanup-pending registry. Confirmed stop releases those
+references; failed stop retains them for generation-bound retry. The load slot
+remains owned through cleanup, and cancellation, deadline and policy errors keep
+their initiating status even when cleanup also fails.
+
+Captured workers remain alive through the caller's final use. After any unlocked
+role transition, callers recheck registry membership, cleanup state and liveness.
+Final references, including skipped retirement candidates and removed transition
+targets, are released outside the registry lock so backend destruction cannot
+block unrelated registry access. These contracts do not establish descendant,
+device or remote termination.
+
 Derived worker destruction contains stop failures. Whisper temporary audio and
 vLLM startup shims remain on disk while exit is unconfirmed. Automatic eviction
 retains the failed generation as `cleanup_pending`, preserves its reservation and
@@ -710,6 +939,16 @@ retries cleanup before releasing ownership. Both the idle evaluator and pressure
 monitor contain failures at their thread boundaries. Ollama unload reports a
 retryable `unload_incomplete` error for busy or unconfirmed cleanup. An absent
 worker still satisfies that protocol's unload convention.
+
+Output-pipe closure is not process-exit evidence.
+`ProcessManager::run_process_with_output` keeps its timeout and cancellation
+checks active after EOF. A trailing callback runs
+once when the pipe closes, while its child can still be running. Cancellation or
+callback failure reaches the same confirmed direct-child cleanup path. Normal
+result collection requires observed process exit. The portable fixture covers
+closed output, accepted/cancelled trailing lines and callback exceptions.
+Cleanup can outlast the requested timeout; these checks do not establish an
+end-to-end stop deadline or descendant/device/remote termination.
 
 Ordinary configuration publication and its effects serialize through Server.
 Listener readers retain a shared lifetime while one lifecycle owner replaces or
@@ -808,9 +1047,9 @@ This is operation accounting, not whole-server maintenance acceptance. No public
 maintenance-ready endpoint is exposed. Remaining helper/metadata writers,
 external roots, idle-worker stop and prior-manager recovery still need
 complete integration and evidence. Empty participating-operation counts cannot
-prove storage consistency or that another process stopped writing. Synchronous
-profile rollback evidence still does not establish crash-consistent multi-file
-recovery or rollback-write failure recovery.
+prove storage consistency or that another process stopped writing. Single-file
+model-settings publication does not establish consistent recovery across all
+configuration, registration, import and snapshot owners.
 
 Preparation retains its process, accepted management tickets and staging reference
 through cancellation or shutdown until cleanup confirms direct-child exit. A
