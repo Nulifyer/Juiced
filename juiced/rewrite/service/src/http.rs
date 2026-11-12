@@ -174,6 +174,7 @@ define_routes! {
     (get, "/models/{model}", model_detail, "read"),
     (get, "/models/{model}/options", model_options, "read"),
     (post, "/models/{model}/options", model_options_set, "operator"),
+    (get, "/models/{model}/fit", model_fit, "operator"),
     (get, "/models/{model}/runtime", model_runtime, "operator"),
     (post, "/models/{model}/runtime", model_runtime_set, "operator"),
     (get, "/juiced/runtime-packages", runtime_packages, "operator"),
@@ -864,6 +865,16 @@ async fn model_options(
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
     state.manager.options(&id).await.map(Json)
+}
+async fn model_fit(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    ApiQuery(query): ApiQuery<crate::supervisor::FitQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(state.manager.model_fit(&id, query).await?),
+    ))
 }
 async fn runtime_packages(State(state): State<AppState>) -> Result<Response, ApiError> {
     state

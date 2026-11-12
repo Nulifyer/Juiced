@@ -363,6 +363,7 @@ fn speech_registrations_use_native_defaults_and_pass_the_argument_grammar() {
             format: &format,
             estimate: &estimate,
             companion_arguments: &arguments,
+            llama: None,
         });
         let crate::config::Registration(spec) = serde_json::from_value(registration).unwrap();
         assert_eq!(spec.operations, [crate::config::Operation::Transcription]);

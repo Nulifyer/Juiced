@@ -134,6 +134,10 @@ async fn fake_github(
 }
 
 fn release_archive(top: &str, server: &[u8]) -> Vec<u8> {
+    release_archive_with(top, server, &[])
+}
+
+fn release_archive_with(top: &str, server: &[u8], extra: &[(&str, &[u8])]) -> Vec<u8> {
     let mut builder = tar::Builder::new(Vec::new());
     let mut append = |path: String, mode: u32, data: &[u8]| {
         let mut header = tar::Header::new_gnu();
@@ -149,6 +153,9 @@ fn release_archive(top: &str, server: &[u8]) -> Vec<u8> {
         b"fixture library bytes",
     );
     append(format!("{top}/LICENSE"), 0o644, b"MIT fixture");
+    for (name, data) in extra {
+        append(format!("{top}/{name}"), 0o755, data);
+    }
     let mut header = tar::Header::new_gnu();
     header.set_entry_type(tar::EntryType::Symlink);
     header.set_size(0);
@@ -226,8 +233,16 @@ async fn engine_server() -> EngineServer {
 }
 
 async fn engine_server_with(edit: impl FnOnce(&mut Value)) -> EngineServer {
+    engine_server_from(metadata_gguf(2048), &[], edit).await
+}
+
+async fn engine_server_from(
+    weights: Vec<u8>,
+    extra: &[(&str, &[u8])],
+    edit: impl FnOnce(&mut Value),
+) -> EngineServer {
     let worker = std::fs::read(binary("juiced-test-worker", "JUICED_TEST_WORKER")).unwrap();
-    let llama = release_archive("llama-b12032", &worker);
+    let llama = release_archive_with("llama-b12032", &worker, extra);
     let whisper = release_archive("whisper-v1.8.4-linux-cpu-x86_64", b"not published");
     let mut releases = BTreeMap::new();
     releases.insert(
@@ -252,7 +267,6 @@ async fn engine_server_with(edit: impl FnOnce(&mut Value)) -> EngineServer {
             bytes: whisper,
         },
     );
-    let weights = metadata_gguf(2048);
     let github = fake_github(releases, weights.clone()).await;
     let hardware = tempfile::tempdir().unwrap();
     cpu_only(hardware.path());
@@ -590,6 +604,122 @@ async fn engine_install_auto_registration_load_and_chat_use_the_installed_packag
     assert_eq!(document["generation"], 2);
     assert_eq!(document["installed"].as_array().unwrap().len(), 1);
     assert!(!server.directory.path().join("engine-staging").exists());
+}
+
+#[tokio::test]
+async fn automatic_registration_fits_the_context_and_applies_llama_defaults() {
+    let fit_params: &[u8] = b"#!/bin/sh\necho 'Host 1 2048 512'\n";
+    let server = engine_server_from(
+        support::gguf::qwen35moe(),
+        &[("llama-fit-params", fit_params)],
+        |_| {},
+    )
+    .await;
+    let (status, accepted) = server
+        .post(
+            "juiced/engines/install",
+            json!({"engine":"llama.cpp","backend":"cpu","expected_generation":0}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{accepted}");
+    let job = wait_for_job(&server, accepted["job"]["id"].as_str().unwrap()).await;
+    assert_eq!(job["state"], "complete", "{job}");
+    let artifact = pull_weights(&server).await;
+    let (status, added) = server
+        .post(
+            "juiced/models/add",
+            json!({"artifact":artifact,"id":"hybrid-mtp","policy":"on-demand"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{added}");
+    let profile = &added["execution_profile"];
+    let args: Vec<&str> = profile["args"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|argument| argument.as_str().unwrap())
+        .collect();
+    let joined = args.join(" ");
+    for expected in [
+        "--metrics",
+        "--spec-type draft-mtp",
+        "--temp 1.0",
+        "--top-p 0.95",
+        "--top-k 20",
+        "--chat-template-kwargs {\"preserve_thinking\":true}",
+    ] {
+        assert!(
+            joined.contains(expected),
+            "{expected} missing from {joined}"
+        );
+    }
+    for engine_default in [
+        "--flash-attn",
+        "-fa",
+        "--threads-batch",
+        "--mlock",
+        "--reasoning",
+    ] {
+        assert!(!args.contains(&engine_default), "{joined}");
+    }
+    assert_eq!(profile["options"]["parallel_slots"], 1);
+    let context = profile["options"]["context_tokens"].as_u64().unwrap();
+    // 262144 tokens need 5 GiB of KV; the 4 GiB budget fits less.
+    assert!(
+        context % 1024 == 0 && (4096..262_144).contains(&context),
+        "{context}"
+    );
+    let estimate = &added["estimate"];
+    assert_eq!(estimate["basis"], "gguf-layout");
+    assert_eq!(estimate["context_tokens"], context);
+    let reserved = estimate["resident_bytes"].as_u64().unwrap();
+    assert!(reserved <= 4 * 1024 * 1024 * 1024);
+    assert!(estimate["breakdown"]["draft_bytes"].as_u64().unwrap() > 0);
+    assert_eq!(server.model("hybrid-mtp").await["resident_bytes"], reserved);
+
+    let (status, fit) = server
+        .json(
+            Method::GET,
+            "/v1/models/hybrid-mtp/fit",
+            None,
+            Some(ADMIN_KEY),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{fit}");
+    assert_eq!(fit["source"], "llama-fit-params", "{fit}");
+    assert_eq!(fit["devices"][0]["device"], "Host");
+    assert_eq!(fit["breakdown"]["context_bytes"], 2048u64 * 1024 * 1024);
+    assert_eq!(fit["breakdown"]["compute_bytes"], 512u64 * 1024 * 1024);
+    assert_eq!(fit["breakdown"]["weights_bytes"], 1024 * 1024);
+    assert_eq!(
+        fit["breakdown"]["draft_bytes"],
+        estimate["breakdown"]["draft_bytes"]
+    );
+    assert_eq!(fit["plan"]["mtp"], true);
+    let (_, again) = server
+        .json(
+            Method::GET,
+            "/v1/models/hybrid-mtp/fit?context_tokens=8192",
+            None,
+            Some(ADMIN_KEY),
+        )
+        .await;
+    assert_eq!(again["source"], "llama-fit-params");
+    assert_eq!(again["draft"], true);
+
+    let options = server.get("models/hybrid-mtp/options").await;
+    assert_eq!(options["fields"]["mtp"]["saved"], true, "{options}");
+    assert_eq!(options["fields"]["mtp"]["source"], "model");
+    assert_eq!(options["fields"]["context"]["source"], "auto");
+    assert_eq!(options["fields"]["slots"]["source"], "auto");
+    assert_eq!(options["fields"]["gpu_layers"]["source"], "saved");
+    let (status, loaded) = server.post("load", json!({"model":"hybrid-mtp"})).await;
+    assert_eq!(status, StatusCode::OK, "{loaded}");
+    chat(&server, "hybrid-mtp").await;
+    let options = server.get("models/hybrid-mtp/options").await;
+    assert_eq!(options["fields"]["context"]["launched"], context);
+    assert_eq!(options["fields"]["mtp"]["launched"], true);
+    assert!(options["mtp_metrics"]["acceptance_rate"].as_f64().is_some());
 }
 
 async fn chat(server: &Server, model: &str) {

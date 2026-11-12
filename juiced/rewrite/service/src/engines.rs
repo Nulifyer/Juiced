@@ -1,6 +1,7 @@
 pub mod archive;
 pub mod catalog;
 pub mod download;
+pub mod memory;
 pub mod models;
 #[cfg(test)]
 mod rocm_runtime_tests;

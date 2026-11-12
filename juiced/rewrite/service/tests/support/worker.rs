@@ -1338,6 +1338,7 @@ async fn main() {
         .route("/v1/embeddings", post(embeddings))
         .route("/v1/messages/count_tokens", post(|| async { Json(json!({"input_tokens":7})) }))
         .route("/props", get(|State(fixture): State<Arc<Fixture>>| async move { Json(json!({"total_slots":fixture.parallel,"default_generation_settings":{"n_ctx":fixture.context},"build_info":"fixture"})) }))
+        .route("/metrics", get(|| async { "# HELP llamacpp:spec_decode_num_draft_tokens_total Speculative: Total draft tokens generated\nllamacpp:spec_decode_num_draft_tokens_total 105\nllamacpp:spec_decode_num_accepted_tokens_total 48\nllamacpp:spec_decode_num_drafts_total 35\n" }))
         .route("/slots/{slot}", post(slot_action))
         .route("/slots",get(inspect_slots))
         .with_state(fixture);

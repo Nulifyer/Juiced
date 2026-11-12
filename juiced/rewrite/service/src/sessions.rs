@@ -767,6 +767,7 @@ mod tests {
             head_count_kv: Some(8),
             key_length: Some(128),
             value_length: Some(128),
+            ..Default::default()
         };
         assert_eq!(per_token_bound(&shape), Some(28 * 8 * 256 * 2 * 2));
     }

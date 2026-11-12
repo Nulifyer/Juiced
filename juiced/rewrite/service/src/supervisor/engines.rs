@@ -801,8 +801,47 @@ impl Manager {
                 },
             })),
         })?;
-        let context = models::context_tokens(&format);
-        let estimate = models::estimate(&format, file_bytes, context);
+        let (estimate, llama) = match &format {
+            models::ModelFormat::Gguf { declared, shape }
+                if crate::engines::memory::llama(
+                    shape,
+                    declared.architecture.as_deref(),
+                    file_bytes,
+                    0,
+                    &crate::engines::memory::Plan::new(1, 1, choice.gpu),
+                )
+                .is_some() =>
+            {
+                let defaults = crate::engines::memory::LlamaDefaults::for_model(
+                    shape,
+                    declared.architecture.as_deref(),
+                    1,
+                );
+                let plan = |context| {
+                    let mut plan = crate::engines::memory::Plan::new(context, 1, choice.gpu);
+                    plan.mtp = defaults.mtp;
+                    plan
+                };
+                let share = self.auto_fit_share(&id);
+                let context = crate::engines::memory::auto_context(
+                    declared.training_context_tokens,
+                    share,
+                    |context| {
+                        models::estimate_with(&format, file_bytes, 0, Some(&plan(context)))
+                            .breakdown
+                            .map(|breakdown| breakdown.total())
+                    },
+                );
+                (
+                    models::estimate_with(&format, file_bytes, 0, Some(&plan(context))),
+                    Some(defaults),
+                )
+            }
+            _ => (
+                models::estimate(&format, file_bytes, models::context_tokens(&format)),
+                None,
+            ),
+        };
         let cpu_threads = snapshot
             .report
             .devices
@@ -821,6 +860,7 @@ impl Manager {
             format: &format,
             estimate: &estimate,
             companion_arguments: &companion_arguments,
+            llama: llama.as_ref(),
         });
         let crate::config::Registration(spec) =
             serde_json::from_value(registration.clone()).map_err(|_| {

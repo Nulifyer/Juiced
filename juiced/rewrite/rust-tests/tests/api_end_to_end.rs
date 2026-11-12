@@ -17,6 +17,7 @@ fn concrete_route(path: &str) -> &str {
         "/models/{model}/options" => "/models/fixture.one/options",
         "/models/{model}/artifacts" => "/models/fixture.one/artifacts",
         "/models/{model}/runtime" => "/models/fixture.one/runtime",
+        "/models/{model}/fit" => "/models/fixture.one/fit",
         "/juiced/suitability" => "/juiced/suitability?model=fixture.one",
         "/juiced/context" => "/juiced/context?model=fixture.one",
         "/juiced/runtimes/resolve" => "/juiced/runtimes/resolve?recipe=llamacpp&backend=cpu",

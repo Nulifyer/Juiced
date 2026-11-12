@@ -541,24 +541,43 @@ impl Manager {
                             .map(|found| found.bytes)
                             .sum();
                         let bytes = found.bytes.saturating_add(companion_bytes);
-                        let estimate_for =
-                            |context: Option<u64>| models::estimate(format, bytes, context);
+                        let mut llama_defaults = None;
                         let estimate = match format {
-                            models::ModelFormat::Gguf { declared, .. } => {
+                            models::ModelFormat::Gguf { declared, shape } => {
+                                let slots = mapped.options.parallel_slots.map_or(1, u64::from);
+                                let defaults = crate::engines::memory::LlamaDefaults::for_model(
+                                    shape,
+                                    declared.architecture.as_deref(),
+                                    slots,
+                                );
+                                let mut planned: Vec<String> =
+                                    mapped.arguments.iter().flatten().cloned().collect();
+                                defaults.apply(&mut planned);
+                                let plan = |context: u64| {
+                                    crate::engines::memory::Plan::from_arguments(
+                                        &planned, context, slots, choice.gpu,
+                                    )
+                                };
+                                let estimate_at = |context: u64| {
+                                    models::estimate_with(
+                                        format,
+                                        found.bytes,
+                                        companion_bytes,
+                                        Some(&plan(context)),
+                                    )
+                                };
+                                let share = self.auto_fit_share(&candidate.public_name);
                                 let explicit = mapped.options.context_tokens.map(u64::from);
-                                let mut context = explicit.unwrap_or_else(|| {
-                                    declared
-                                        .training_context_tokens
-                                        .unwrap_or(models::UNKNOWN_CONTEXT_TOKENS)
-                                        .clamp(1, i32::MAX as u64)
-                                });
-                                let mut estimate = estimate_for(Some(context));
-                                while estimate.resident_bytes > base.resident_budget_bytes
-                                    && context > models::DEFAULT_CONTEXT_TOKENS
-                                {
-                                    context = (context / 2).max(models::DEFAULT_CONTEXT_TOKENS);
-                                    estimate = estimate_for(Some(context));
-                                }
+                                let limit = explicit.or(declared.training_context_tokens);
+                                let context = if explicit.is_some_and(|context| {
+                                    estimate_at(context).resident_bytes <= share
+                                }) {
+                                    explicit.unwrap_or_default()
+                                } else {
+                                    crate::engines::memory::auto_context(limit, share, |context| {
+                                        Some(estimate_at(context).resident_bytes)
+                                    })
+                                };
                                 if let Some(saved) = explicit
                                     && context < saved
                                 {
@@ -568,12 +587,13 @@ impl Manager {
                                         state: "mapped",
                                         value: Some(json!(context)),
                                         target: Some("context_tokens"),
-                                        reason: "The saved context does not fit the resident budget, so it was halved until it fits.",
+                                        reason: "The saved context does not fit the resident budget, so the largest context that fits applies.",
                                     });
                                 }
-                                estimate
+                                llama_defaults = Some(defaults);
+                                estimate_at(context)
                             }
-                            _ => estimate_for(None),
+                            _ => models::estimate(format, bytes, None),
                         };
                         let mut companion_arguments: Vec<String> = Vec::new();
                         for (companion, role) in &bound {
@@ -607,6 +627,7 @@ impl Manager {
                             } else {
                                 &companion_arguments
                             },
+                            llama: None,
                         });
                         let profile = &mut value["execution_profile"];
                         if let Some(arguments) = profile["args"].as_array_mut() {
@@ -628,6 +649,14 @@ impl Manager {
                                 );
                             }
                             merge_arguments(arguments, &mapped.arguments);
+                            if let Some(defaults) = &llama_defaults {
+                                let mut texts: Vec<String> = arguments
+                                    .iter()
+                                    .filter_map(|argument| argument.as_str().map(str::to_owned))
+                                    .collect();
+                                defaults.apply(&mut texts);
+                                *arguments = texts.into_iter().map(Value::String).collect();
+                            }
                         }
                         if matches!(format, models::ModelFormat::Gguf { .. }) {
                             let options = &mut profile["options"];
