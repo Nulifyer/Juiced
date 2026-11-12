@@ -118,7 +118,7 @@
     },
     {
       "path": "juiced/rewrite/rust-tests/tests/support/mod.rs",
-      "sha256": "4e67e991ba6b4a54f0672b10d22b6bddcce8840c06dde0bbea92157e8361b5bf",
+      "sha256": "a0e4f5681b31be4f39bdecdfb9ea69afab4b12324cb647816d9a0b8044095a55",
       "hash_check": "snapshot_only"
     },
     {
@@ -128,12 +128,12 @@
     },
     {
       "path": "juiced/rewrite/service/src/config.rs",
-      "sha256": "6c4a98b967468d6a338eeee1b2b2f80864757b2a4040403bcd22b96bcf7f15e0",
+      "sha256": "898cfe54918603956920def520a12e6fcdf08728169ba501737a701c3296accd",
       "hash_check": "snapshot_only"
     },
     {
       "path": "juiced/rewrite/service/src/http.rs",
-      "sha256": "2b1675e7e19466997b36f77638119de9e435b0c65f0f8a5a5e4e4383c5dee9a0",
+      "sha256": "dca6a8a9eb99e67eec7af8e6d7b61013258f20bd02e871515a8c4f6a28628ac3",
       "hash_check": "snapshot_only"
     },
     {
@@ -209,6 +209,16 @@
     {
       "path": "juiced/rewrite/rust-tests/tests/media_pipeline.rs",
       "sha256": "fbd7fdf7c3081d4860c85f11a92ef233d744f886f9ad61fe5f96957cb13cf4a6",
+      "hash_check": "snapshot_only"
+    },
+    {
+      "path": "juiced/rewrite/rust-tests/tests/local_import.rs",
+      "sha256": "f31ce566d35864ec442a97c980162202061f7c97994ee08e2b49c7afa290bfc3",
+      "hash_check": "snapshot_only"
+    },
+    {
+      "path": "juiced/rewrite/rust-tests/tests/engines.rs",
+      "sha256": "6a29884681caf4e9779357b315488e54564aea2d8b7e46e7bf6baeb54ac36bf7",
       "hash_check": "snapshot_only"
     }
   ],
@@ -6309,12 +6319,27 @@
         "F134"
       ],
       "rust_equivalent": {
-        "relationship": "none",
-        "routes": [],
-        "scenario_files": [],
-        "authorities": []
+        "relationship": "related_operation",
+        "routes": [
+          {
+            "method": "POST",
+            "path": "/juiced/library/upload",
+            "prefix_scheme": "native_quad"
+          }
+        ],
+        "scenario_files": [
+          "juiced/rewrite/rust-tests/tests/local_import.rs",
+          "juiced/rewrite/rust-tests/tests/engines.rs"
+        ],
+        "authorities": [
+          {
+            "method": "POST",
+            "path": "/juiced/library/upload",
+            "authority": "operator"
+          }
+        ]
       },
-      "semantic_boundary": "No Rust handler implements this native path. Add request, response, authority, persistence and failure scenarios before claiming parity.",
+      "semantic_boundary": "Native imports use a start, chunk, finish and cancel session. Rust POST /juiced/library/upload accepts one raw application/octet-stream body with filename and size query fields, hashes it while streaming into artifact staging, and publishes a content-addressed artifact; it has no chunk session, resumable offsets or separate cancel route. Operators cancel an active upload through POST /juiced/artifacts/jobs/{job} or by closing the connection.",
       "documentation": "docs/api/juiced.md",
       "native_authority": "operator"
     },
@@ -6346,12 +6371,27 @@
         "F134"
       ],
       "rust_equivalent": {
-        "relationship": "none",
-        "routes": [],
-        "scenario_files": [],
-        "authorities": []
+        "relationship": "related_operation",
+        "routes": [
+          {
+            "method": "POST",
+            "path": "/juiced/library/upload",
+            "prefix_scheme": "native_quad"
+          }
+        ],
+        "scenario_files": [
+          "juiced/rewrite/rust-tests/tests/local_import.rs",
+          "juiced/rewrite/rust-tests/tests/engines.rs"
+        ],
+        "authorities": [
+          {
+            "method": "POST",
+            "path": "/juiced/library/upload",
+            "authority": "operator"
+          }
+        ]
       },
-      "semantic_boundary": "No Rust handler implements this native path. Add request, response, authority, persistence and failure scenarios before claiming parity.",
+      "semantic_boundary": "Native imports use a start, chunk, finish and cancel session. Rust POST /juiced/library/upload accepts one raw application/octet-stream body with filename and size query fields, hashes it while streaming into artifact staging, and publishes a content-addressed artifact; it has no chunk session, resumable offsets or separate cancel route. Operators cancel an active upload through POST /juiced/artifacts/jobs/{job} or by closing the connection.",
       "documentation": "docs/api/juiced.md",
       "native_authority": "operator"
     },
@@ -6383,12 +6423,27 @@
         "F134"
       ],
       "rust_equivalent": {
-        "relationship": "none",
-        "routes": [],
-        "scenario_files": [],
-        "authorities": []
+        "relationship": "related_operation",
+        "routes": [
+          {
+            "method": "POST",
+            "path": "/juiced/library/upload",
+            "prefix_scheme": "native_quad"
+          }
+        ],
+        "scenario_files": [
+          "juiced/rewrite/rust-tests/tests/local_import.rs",
+          "juiced/rewrite/rust-tests/tests/engines.rs"
+        ],
+        "authorities": [
+          {
+            "method": "POST",
+            "path": "/juiced/library/upload",
+            "authority": "operator"
+          }
+        ]
       },
-      "semantic_boundary": "No Rust handler implements this native path. Add request, response, authority, persistence and failure scenarios before claiming parity.",
+      "semantic_boundary": "Native imports use a start, chunk, finish and cancel session. Rust POST /juiced/library/upload accepts one raw application/octet-stream body with filename and size query fields, hashes it while streaming into artifact staging, and publishes a content-addressed artifact; it has no chunk session, resumable offsets or separate cancel route. Operators cancel an active upload through POST /juiced/artifacts/jobs/{job} or by closing the connection.",
       "documentation": "docs/api/juiced.md",
       "native_authority": "operator"
     },
@@ -6420,12 +6475,27 @@
         "F134"
       ],
       "rust_equivalent": {
-        "relationship": "none",
-        "routes": [],
-        "scenario_files": [],
-        "authorities": []
+        "relationship": "related_operation",
+        "routes": [
+          {
+            "method": "POST",
+            "path": "/juiced/library/upload",
+            "prefix_scheme": "native_quad"
+          }
+        ],
+        "scenario_files": [
+          "juiced/rewrite/rust-tests/tests/local_import.rs",
+          "juiced/rewrite/rust-tests/tests/engines.rs"
+        ],
+        "authorities": [
+          {
+            "method": "POST",
+            "path": "/juiced/library/upload",
+            "authority": "operator"
+          }
+        ]
       },
-      "semantic_boundary": "No Rust handler implements this native path. Add request, response, authority, persistence and failure scenarios before claiming parity.",
+      "semantic_boundary": "Native imports use a start, chunk, finish and cancel session. Rust POST /juiced/library/upload accepts one raw application/octet-stream body with filename and size query fields, hashes it while streaming into artifact staging, and publishes a content-addressed artifact; it has no chunk session, resumable offsets or separate cancel route. Operators cancel an active upload through POST /juiced/artifacts/jobs/{job} or by closing the connection.",
       "documentation": "docs/api/juiced.md",
       "native_authority": "operator"
     },
@@ -6457,12 +6527,27 @@
         "F134"
       ],
       "rust_equivalent": {
-        "relationship": "none",
-        "routes": [],
-        "scenario_files": [],
-        "authorities": []
+        "relationship": "related_operation",
+        "routes": [
+          {
+            "method": "POST",
+            "path": "/juiced/library/import-path",
+            "prefix_scheme": "native_quad"
+          }
+        ],
+        "scenario_files": [
+          "juiced/rewrite/rust-tests/tests/local_import.rs",
+          "juiced/rewrite/rust-tests/tests/engines.rs"
+        ],
+        "authorities": [
+          {
+            "method": "POST",
+            "path": "/juiced/library/import-path",
+            "authority": "operator"
+          }
+        ]
       },
-      "semantic_boundary": "No Rust handler implements this native path. Add request, response, authority, persistence and failure scenarios before claiming parity.",
+      "semantic_boundary": "Native server imports read a server path. Rust POST /juiced/library/import-path {path, mode} accepts only regular files whose canonical path stays under configured import_roots, then either copies them as an artifact job with a computed digest or returns a link binding for POST /juiced/models/add {path}; it does not register models itself or accept native recipe fields.",
       "documentation": "docs/api/juiced.md",
       "native_authority": "operator"
     },
@@ -10845,6 +10930,70 @@
         "juiced/rewrite/rust-tests/tests/session_cache.rs"
       ],
       "native_same_path": false
+    },
+    {
+      "method": "POST",
+      "path": "/juiced/library/upload",
+      "prefix_scheme": "native_quad",
+      "authority": "operator",
+      "evidence": {
+        "path": "juiced/rewrite/service/src/http.rs",
+        "line": 225,
+        "text": "(post, \"/juiced/library/upload\", library_upload, \"operator\"),",
+        "role": "registration"
+      },
+      "native_route_ids": [
+        "http:POST:native_quad:/juiced/import/start",
+        "http:POST:native_quad:/juiced/import/chunk",
+        "http:POST:native_quad:/juiced/import/finish",
+        "http:POST:native_quad:/juiced/import/cancel"
+      ],
+      "scenario_files": [
+        "juiced/rewrite/rust-tests/tests/local_import.rs",
+        "juiced/rewrite/rust-tests/tests/engines.rs",
+        "juiced/rewrite/rust-tests/tests/api_end_to_end.rs"
+      ],
+      "native_same_path": false
+    },
+    {
+      "method": "GET",
+      "path": "/juiced/library/import-path",
+      "prefix_scheme": "native_quad",
+      "authority": "operator",
+      "evidence": {
+        "path": "juiced/rewrite/service/src/http.rs",
+        "line": 226,
+        "text": "(get, \"/juiced/library/import-path\", library_import_candidates, \"operator\"),",
+        "role": "registration"
+      },
+      "native_route_ids": [],
+      "scenario_files": [
+        "juiced/rewrite/rust-tests/tests/local_import.rs",
+        "juiced/rewrite/rust-tests/tests/engines.rs",
+        "juiced/rewrite/rust-tests/tests/api_end_to_end.rs"
+      ],
+      "native_same_path": false
+    },
+    {
+      "method": "POST",
+      "path": "/juiced/library/import-path",
+      "prefix_scheme": "native_quad",
+      "authority": "operator",
+      "evidence": {
+        "path": "juiced/rewrite/service/src/http.rs",
+        "line": 227,
+        "text": "(post, \"/juiced/library/import-path\", library_import_path, \"operator\"),",
+        "role": "registration"
+      },
+      "native_route_ids": [
+        "http:POST:native_quad:/juiced/import/server"
+      ],
+      "scenario_files": [
+        "juiced/rewrite/rust-tests/tests/local_import.rs",
+        "juiced/rewrite/rust-tests/tests/engines.rs",
+        "juiced/rewrite/rust-tests/tests/api_end_to_end.rs"
+      ],
+      "native_same_path": false
     }
   ],
   "other_transport_boundaries": [
@@ -10859,7 +11008,7 @@
     "native_websocket_routes": 4,
     "auxiliary_http_route_families": 41,
     "native_registration_sites": 143,
-    "rust_published_routes": 77,
+    "rust_published_routes": 80,
     "rust_native_same_path_rows": 42,
     "native_http_status_counts": {
       "partial": 43,

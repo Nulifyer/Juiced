@@ -33,6 +33,8 @@ mod cache_reply;
 pub use artifact_revision::ArtifactRevisionChange;
 mod engines;
 pub use engines::{AddModelError, EngineInstall, ModelAdd};
+mod intake;
+pub use intake::{ImportListQuery, ImportPathRequest, UploadQuery};
 mod host;
 mod native;
 mod physical;

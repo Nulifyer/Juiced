@@ -169,6 +169,8 @@ pub struct ModelAdd {
     pub policy: Option<Policy>,
     #[serde(default)]
     pub backend: Option<String>,
+    #[serde(default)]
+    pub path: Option<String>,
 }
 
 fn invalid(code: &'static str, message: &'static str) -> ApiError {
@@ -180,7 +182,7 @@ fn archive_failure(error: ArchiveError) -> &'static str {
 }
 
 impl Manager {
-    async fn host(
+    pub(super) async fn host(
         &self,
     ) -> Result<(Arc<crate::hardware::Snapshot>, crate::hardware::Inventory), ApiError> {
         let snapshot = self.hardware.snapshot().await.map_err(|_| {
@@ -194,7 +196,7 @@ impl Manager {
         Ok((snapshot, inventory))
     }
 
-    async fn package_inventory(&self) -> Result<Value, ApiError> {
+    pub(super) async fn package_inventory(&self) -> Result<Value, ApiError> {
         let reply = self.runtime_packages().await?;
         Ok(reply.value)
     }
@@ -548,77 +550,108 @@ impl Manager {
     }
 
     pub async fn add_model(self: &Arc<Self>, request: ModelAdd) -> Result<Value, AddModelError> {
-        let store = self.artifacts()?;
-        let set_id = request.artifact_set.clone();
-        let requested_artifact = request.artifact.clone();
-        let inspect = store.clone();
-        let (artifact, artifact_set, name) =
-            tokio::task::spawn_blocking(move || -> Result<_, ApiError> {
-                match (requested_artifact, set_id) {
-                    (None, None) => Err(invalid(
-                        "artifact_required",
-                        "Provide an artifact or an artifact set.",
-                    )),
-                    (artifact, Some(set)) => {
-                        let view = inspect.artifact_set(&set).map_err(ApiError::from)?;
-                        let primary = view
-                            .specification
-                            .members
-                            .iter()
-                            .find(|member| member.name == view.specification.primary)
-                            .ok_or_else(|| {
-                                ApiError::from(crate::artifacts::ArtifactError::SetBinding)
-                            })?;
-                        if artifact
-                            .as_ref()
-                            .is_some_and(|artifact| *artifact != primary.artifact)
-                        {
-                            return Err(ApiError::from(
-                                crate::artifacts::ArtifactError::SetBinding,
-                            ));
+        let (artifact, artifact_set, name, format, file_bytes, model_file, companions) =
+            if let Some(path) = request.path.as_deref() {
+                if request.artifact.is_some() || request.artifact_set.is_some() {
+                    return Err(invalid(
+                        "model_source_ambiguous",
+                        "Provide an artifact, an artifact set or a linked import path, not several.",
+                    )
+                    .into());
+                }
+                let linked = self.linked_import(path).await?;
+                (
+                    None,
+                    None,
+                    Some(linked.name),
+                    linked.format,
+                    linked.bytes,
+                    linked.path,
+                    Vec::new(),
+                )
+            } else {
+                let store = self.artifacts()?;
+                let set_id = request.artifact_set.clone();
+                let requested_artifact = request.artifact.clone();
+                let inspect = store.clone();
+                let (artifact, artifact_set, name) =
+                    tokio::task::spawn_blocking(move || -> Result<_, ApiError> {
+                        match (requested_artifact, set_id) {
+                            (None, None) => Err(invalid(
+                                "artifact_required",
+                                "Provide an artifact or an artifact set.",
+                            )),
+                            (artifact, Some(set)) => {
+                                let view = inspect.artifact_set(&set).map_err(ApiError::from)?;
+                                let primary = view
+                                    .specification
+                                    .members
+                                    .iter()
+                                    .find(|member| member.name == view.specification.primary)
+                                    .ok_or_else(|| {
+                                        ApiError::from(crate::artifacts::ArtifactError::SetBinding)
+                                    })?;
+                                if artifact
+                                    .as_ref()
+                                    .is_some_and(|artifact| *artifact != primary.artifact)
+                                {
+                                    return Err(ApiError::from(
+                                        crate::artifacts::ArtifactError::SetBinding,
+                                    ));
+                                }
+                                Ok((
+                                    primary.artifact.clone(),
+                                    Some(set),
+                                    Some(primary.name.clone()),
+                                ))
+                            }
+                            (Some(artifact), None) => {
+                                let name = inspect.source_file_name(&artifact);
+                                let set = companion_set(&inspect, &artifact)?;
+                                Ok((artifact, set, name))
+                            }
                         }
-                        Ok((
-                            primary.artifact.clone(),
-                            Some(set),
-                            Some(primary.name.clone()),
-                        ))
-                    }
-                    (Some(artifact), None) => {
-                        let name = inspect.source_file_name(&artifact);
-                        let set = companion_set(&inspect, &artifact)?;
-                        Ok((artifact, set, name))
-                    }
-                }
-            })
-            .await
-            .map_err(|_| interrupted())??;
-        let held_artifact = artifact.clone();
-        let held_set = artifact_set.clone();
-        let (format, file_bytes, model_file, companions) = tokio::task::spawn_blocking(move || {
-            let lease = store
-                .hold_binding_with(&held_artifact, held_set.as_deref(), true)
-                .map_err(ApiError::from)?;
-            let path = lease.path().to_owned();
-            let (format, bytes) = models::detect(&path).map_err(format_error)?;
-            let mut total = bytes;
-            let mut companions = Vec::new();
-            for (name, role, path) in lease.companions() {
-                if role == crate::artifacts::ArtifactRole::Voice {
-                    models::voices(path).map_err(format_error)?;
-                }
-                let size = std::fs::metadata(path)
-                    .map_err(|_| format_error(models::FormatError::Unavailable))?
-                    .len();
-                total = total.saturating_add(size);
-                companions.push(models::Companion {
-                    name: name.to_owned(),
-                    role,
-                });
-            }
-            Ok::<_, ApiError>((format, total, path, companions))
-        })
-        .await
-        .map_err(|_| interrupted())??;
+                    })
+                    .await
+                    .map_err(|_| interrupted())??;
+                let held_artifact = artifact.clone();
+                let held_set = artifact_set.clone();
+                let (format, file_bytes, model_file, companions) =
+                    tokio::task::spawn_blocking(move || {
+                        let lease = store
+                            .hold_binding_with(&held_artifact, held_set.as_deref(), true)
+                            .map_err(ApiError::from)?;
+                        let path = lease.path().to_owned();
+                        let (format, bytes) = models::detect(&path).map_err(format_error)?;
+                        let mut total = bytes;
+                        let mut companions = Vec::new();
+                        for (name, role, path) in lease.companions() {
+                            if role == crate::artifacts::ArtifactRole::Voice {
+                                models::voices(path).map_err(format_error)?;
+                            }
+                            let size = std::fs::metadata(path)
+                                .map_err(|_| format_error(models::FormatError::Unavailable))?
+                                .len();
+                            total = total.saturating_add(size);
+                            companions.push(models::Companion {
+                                name: name.to_owned(),
+                                role,
+                            });
+                        }
+                        Ok::<_, ApiError>((format, total, path, companions))
+                    })
+                    .await
+                    .map_err(|_| interrupted())??;
+                (
+                    Some(artifact),
+                    artifact_set,
+                    name,
+                    format,
+                    file_bytes,
+                    model_file,
+                    companions,
+                )
+            };
         let companion_arguments =
             models::companion_arguments(&format, &companions).map_err(|error| match error {
                 models::CompanionError::Required(code) => ApiError::new(
@@ -703,7 +736,7 @@ impl Manager {
         let registration = models::registration(&models::ProfileInputs {
             id: &id,
             model_file: &model_file,
-            artifact: Some(&artifact),
+            artifact: artifact.as_deref(),
             artifact_set: artifact_set.as_deref(),
             package: &choice.package,
             backend: &choice.backend,
@@ -742,7 +775,7 @@ impl Manager {
     }
 }
 
-fn format_error(error: models::FormatError) -> ApiError {
+pub(super) fn format_error(error: models::FormatError) -> ApiError {
     match error {
         models::FormatError::Unavailable => ApiError::new(
             StatusCode::CONFLICT,

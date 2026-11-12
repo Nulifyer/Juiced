@@ -366,6 +366,10 @@ pub struct Config {
     pub models: Vec<ModelSpec>,
     #[serde(default, skip_serializing_if = "ModelAliases::is_unset")]
     pub aliases: ModelAliases,
+    #[serde(skip_serializing_if = "upload_maximum_is_default")]
+    pub upload_max_bytes: u64,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub import_roots: Vec<PathBuf>,
 }
 
 #[derive(Deserialize)]
@@ -456,6 +460,10 @@ struct ConfigWire {
     models: Vec<ModelWire>,
     #[serde(default)]
     aliases: ModelAliases,
+    #[serde(default = "default_upload_max_bytes")]
+    upload_max_bytes: u64,
+    #[serde(default)]
+    import_roots: Vec<PathBuf>,
 }
 
 fn deserialize_native_binding<'de, D: Deserializer<'de>>(
@@ -521,6 +529,8 @@ impl<'de> Deserialize<'de> for Config {
             request_timeout_ms: wire.request_timeout_ms,
             models,
             aliases: wire.aliases,
+            upload_max_bytes: wire.upload_max_bytes,
+            import_roots: wire.import_roots,
         })
     }
 }
@@ -612,6 +622,18 @@ impl Config {
         {
             return Err(format!(
                 "Idle unload delays must be at most {MAXIMUM_IDLE_UNLOAD_MS} milliseconds"
+            ));
+        }
+        if self.upload_max_bytes == 0 {
+            return Err("upload_max_bytes must be positive".into());
+        }
+        if self.import_roots.len() > MAXIMUM_IMPORT_ROOTS
+            || self.import_roots.iter().any(|root| {
+                !root.is_absolute() || root.as_os_str().len() > 4096 || root.parent().is_none()
+            })
+        {
+            return Err(format!(
+                "import_roots accepts at most {MAXIMUM_IMPORT_ROOTS} absolute directories other than the filesystem root"
             ));
         }
         let mut ids = HashSet::new();
@@ -756,6 +778,17 @@ impl Config {
         })?;
         crate::storage::atomic_json(path, self)
     }
+}
+
+pub const DEFAULT_UPLOAD_MAX_BYTES: u64 = 256 * 1024 * 1024 * 1024;
+const MAXIMUM_IMPORT_ROOTS: usize = 16;
+
+fn default_upload_max_bytes() -> u64 {
+    DEFAULT_UPLOAD_MAX_BYTES
+}
+
+fn upload_maximum_is_default(bytes: &u64) -> bool {
+    *bytes == DEFAULT_UPLOAD_MAX_BYTES
 }
 
 fn default_inhibit_suspend() -> bool {
@@ -1629,5 +1662,37 @@ mod tests {
                 .contains("regular file")
         );
         assert_eq!(fs::read(target).unwrap(), b"{}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn local_import_settings_default_validate_and_stay_out_of_saved_defaults() {
+        let base = json!({
+            "schema_version":2, "resident_budget_bytes":1, "startup_timeout_ms":1,
+            "request_timeout_ms":1, "models":[],
+        });
+        let config: Config = serde_json::from_value(base.clone()).unwrap();
+        assert_eq!(config.upload_max_bytes, DEFAULT_UPLOAD_MAX_BYTES);
+        assert!(config.import_roots.is_empty());
+        let saved = serde_json::to_value(&config).unwrap();
+        assert!(saved.get("upload_max_bytes").is_none() && saved.get("import_roots").is_none());
+        let mut custom = base.clone();
+        custom["upload_max_bytes"] = json!(1024);
+        custom["import_roots"] = json!(["/data/import"]);
+        let config: Config = serde_json::from_value(custom).unwrap();
+        config.validate().unwrap();
+        let saved = serde_json::to_value(&config).unwrap();
+        assert_eq!(saved["upload_max_bytes"], 1024);
+        assert_eq!(saved["import_roots"], json!(["/data/import"]));
+        for (key, value) in [
+            ("upload_max_bytes", json!(0)),
+            ("import_roots", json!(["relative/import"])),
+            ("import_roots", json!(["/"])),
+        ] {
+            let mut invalid = base.clone();
+            invalid[key] = value;
+            let config: Config = serde_json::from_value(invalid).unwrap();
+            assert!(config.validate().is_err(), "{key}");
+        }
     }
 }

@@ -36,6 +36,8 @@ fn job(source_url: Option<String>, error: Option<String>) -> Job {
         artifact: None,
         error,
         restart: false,
+        source_name: None,
+        computed_digest: false,
     }
 }
 fn specification(members: impl IntoIterator<Item = String>, label: &str) -> ArtifactSetSpec {
