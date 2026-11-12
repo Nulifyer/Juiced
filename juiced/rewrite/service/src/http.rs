@@ -174,6 +174,8 @@ define_routes! {
     (get, "/models/{model}", model_detail, "read"),
     (get, "/models/{model}/options", model_options, "read"),
     (post, "/models/{model}/options", model_options_set, "operator"),
+    (get, "/models/{model}/variants", model_variants, "operator"),
+    (post, "/models/{model}/variants", model_variants_sync, "operator"),
     (get, "/models/{model}/runtime", model_runtime, "operator"),
     (post, "/models/{model}/runtime", model_runtime_set, "operator"),
     (get, "/juiced/runtime-packages", runtime_packages, "operator"),
@@ -991,6 +993,32 @@ async fn model_options_set(
             "Profile update was interrupted. Refresh before retrying.",
         ))
     })?
+}
+
+async fn model_variants(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(state.manager.variants(&id).await?),
+    ))
+}
+async fn model_variants_sync(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    ApiJson(request): ApiJson<crate::supervisor::VariantSync>,
+) -> Result<Json<Value>, ApiError> {
+    // A client disconnect must not separate the durable write from its restarts.
+    tokio::spawn(async move { state.manager.sync_variants(&id, request).await.map(Json) })
+        .await
+        .map_err(|_| {
+            ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "variant_sync_interrupted",
+                "Copying settings was interrupted. Refresh before retrying.",
+            )
+        })?
 }
 
 async fn model_detail(

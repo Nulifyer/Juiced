@@ -44,6 +44,7 @@ pub mod startup;
 pub mod storage;
 pub mod supervisor;
 pub mod system_stats;
+pub mod variants;
 pub mod voice;
 pub mod writer_identity;
 pub mod wyoming;

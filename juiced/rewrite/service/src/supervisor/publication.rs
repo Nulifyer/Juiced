@@ -48,6 +48,9 @@ pub(super) enum Effect {
         state: OwnedMutexGuard<WorkerState>,
         replacement: Arc<Worker>,
     },
+    ReplaceMany {
+        entries: Vec<(Arc<Worker>, OwnedMutexGuard<WorkerState>, Arc<Worker>)>,
+    },
 }
 
 impl Effect {
@@ -57,6 +60,7 @@ impl Effect {
             | Self::Remove { state, .. }
             | Self::Policy { state, .. }
             | Self::NativeEdit { state, .. } => drop(state),
+            Self::ReplaceMany { entries } => drop(entries),
             _ => {}
         }
     }
@@ -334,6 +338,21 @@ impl Manager {
                 }
                 Effect::Remove { worker, .. } => {
                     retired.extend(workers.remove(&worker.spec.id));
+                }
+                Effect::ReplaceMany { entries } => {
+                    for (previous, _, replacement) in entries {
+                        debug_assert!(
+                            workers
+                                .get(&previous.spec.id)
+                                .is_some_and(|current| Arc::ptr_eq(current, previous))
+                        );
+                        retired.extend(
+                            workers.insert(replacement.spec.id.clone(), replacement.clone()),
+                        );
+                        if let Ok(state) = replacement.state.try_lock() {
+                            Self::publish(replacement, &state);
+                        }
+                    }
                 }
                 Effect::NativeImport {
                     workers: imported, ..

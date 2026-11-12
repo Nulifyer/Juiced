@@ -118,7 +118,7 @@
     },
     {
       "path": "juiced/rewrite/rust-tests/tests/support/mod.rs",
-      "sha256": "c7415f1c248964b363ed6af25d0c457f43303d455ef9d12de8a284b37525e39d",
+      "sha256": "28ca2f05405316b1379aedd9ca6eef12a1ab7157976da34679e70fe2f72ae559",
       "hash_check": "snapshot_only"
     },
     {
@@ -133,7 +133,7 @@
     },
     {
       "path": "juiced/rewrite/service/src/http.rs",
-      "sha256": "73eaafb8d753b1242272e332f1f513daa8836ace013fb1a05c47ea3311088148",
+      "sha256": "7b1297d4919ab80a03041f5cce9a55b1764bfe0e7f9cf152bdd0940e48f2685d",
       "hash_check": "snapshot_only"
     },
     {
@@ -9831,13 +9831,45 @@
       "native_same_path": true
     },
     {
+      "method": "GET",
+      "path": "/models/{model}/variants",
+      "prefix_scheme": "native_quad",
+      "authority": "operator",
+      "evidence": {
+        "path": "juiced/rewrite/service/src/http.rs",
+        "line": 177,
+        "text": "(get, \"/models/{model}/variants\", model_variants, \"operator\"),"
+      },
+      "native_route_ids": [],
+      "native_same_path": false,
+      "scenario_files": [
+        "juiced/rewrite/rust-tests/tests/quant_sync.rs"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/models/{model}/variants",
+      "prefix_scheme": "native_quad",
+      "authority": "operator",
+      "evidence": {
+        "path": "juiced/rewrite/service/src/http.rs",
+        "line": 178,
+        "text": "(post, \"/models/{model}/variants\", model_variants_sync, \"operator\"),"
+      },
+      "native_route_ids": [],
+      "native_same_path": false,
+      "scenario_files": [
+        "juiced/rewrite/rust-tests/tests/quant_sync.rs"
+      ]
+    },
+    {
       "method": "POST",
       "path": "/models/register",
       "prefix_scheme": "native_quad",
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 186,
+        "line": 188,
         "text": "(post, \"/models/register\", register, \"operator\"),",
         "role": "registration"
       },
@@ -9856,7 +9888,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 187,
+        "line": 189,
         "text": "(post, \"/delete\", unregister, \"operator\"),",
         "role": "registration"
       },
@@ -9875,7 +9907,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 188,
+        "line": 190,
         "text": "(get, \"/juiced/artifacts\", artifact_inventory, \"operator\"),",
         "role": "registration"
       },
@@ -9895,7 +9927,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 189,
+        "line": 191,
         "text": "(post, \"/juiced/artifacts/pull\", artifact_pull, \"operator\"),",
         "role": "registration"
       },
@@ -9914,7 +9946,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 190,
+        "line": 192,
         "text": "(get, \"/juiced/artifacts/jobs/{job}\", artifact_job, \"operator\"),",
         "role": "registration"
       },
@@ -9931,7 +9963,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 191,
+        "line": 193,
         "text": "(post, \"/juiced/artifacts/jobs/{job}\", artifact_control, \"operator\"),",
         "role": "registration"
       },
@@ -9950,7 +9982,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 192,
+        "line": 194,
         "text": "(post, \"/juiced/artifacts/remove\", artifact_remove, \"operator\"),",
         "role": "registration"
       },
@@ -9969,7 +10001,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 196,
+        "line": 198,
         "text": "(get, \"/juiced/cache\", cache_view, \"operator\"),",
         "role": "registration"
       },
@@ -9988,7 +10020,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 197,
+        "line": 199,
         "text": "(post, \"/juiced/cache\", cache_configure, \"operator\"),",
         "role": "registration"
       },
@@ -10007,7 +10039,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 198,
+        "line": 200,
         "text": "(post, \"/juiced/cache/save\", cache_save, \"operator\"),",
         "role": "registration"
       },
@@ -10026,7 +10058,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 199,
+        "line": 201,
         "text": "(post, \"/juiced/cache/restore\", cache_restore, \"operator\"),",
         "role": "registration"
       },
@@ -10045,7 +10077,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 200,
+        "line": 202,
         "text": "(post, \"/juiced/cache/forget\", cache_forget, \"operator\"),",
         "role": "registration"
       },
@@ -10064,7 +10096,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 202,
+        "line": 204,
         "text": "(get, \"/juiced/cache/inspect\", cache_inspect, \"operator\"),",
         "role": "registration"
       },
@@ -10081,7 +10113,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 205,
+        "line": 207,
         "text": "(post, \"/juiced/policy\", policy, \"operator\"),",
         "role": "registration"
       },
@@ -10100,7 +10132,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 206,
+        "line": 208,
         "text": "(post, \"/load\", load, \"operator\"),",
         "role": "registration"
       },
@@ -10119,7 +10151,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 207,
+        "line": 209,
         "text": "(post, \"/unload\", unload, \"operator\"),",
         "role": "registration"
       },
@@ -10138,7 +10170,7 @@
       "authority": "inference",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 208,
+        "line": 210,
         "text": "(post, \"/chat/completions\", chat, \"inference\"),",
         "role": "registration"
       },
@@ -10157,7 +10189,7 @@
       "authority": "inference",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 209,
+        "line": 211,
         "text": "(post, \"/completions\", completion, \"inference\"),",
         "role": "registration"
       },
@@ -10176,7 +10208,7 @@
       "authority": "inference",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 210,
+        "line": 212,
         "text": "(post, \"/responses\", responses, \"inference\"),",
         "role": "registration"
       },
@@ -10195,7 +10227,7 @@
       "authority": "inference",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 211,
+        "line": 213,
         "text": "(post, \"/embeddings\", embeddings, \"inference\"),",
         "role": "registration"
       },
@@ -10214,7 +10246,7 @@
       "authority": "inference",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 212,
+        "line": 214,
         "text": "(post, \"/audio/transcriptions\", transcription, \"inference\"),",
         "role": "registration"
       },
@@ -10443,7 +10475,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 201,
+        "line": 203,
         "text": "(post, \"/juiced/cache/recover\", cache_recover, \"operator\"),",
         "role": "registration"
       },
@@ -10463,7 +10495,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 193,
+        "line": 195,
         "text": "(post, \"/juiced/artifacts/sets\", artifact_set_publish, \"operator\"),",
         "role": "registration"
       },
@@ -10481,7 +10513,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 194,
+        "line": 196,
         "text": "(get, \"/juiced/artifacts/sets/{set}\", artifact_set_get, \"operator\"),",
         "role": "registration"
       },
@@ -10499,7 +10531,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 195,
+        "line": 197,
         "text": "(post, \"/juiced/artifacts/sets/remove\", artifact_set_remove, \"operator\"),",
         "role": "registration"
       },
@@ -10517,7 +10549,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 184,
+        "line": 186,
         "text": "(get, \"/models/{model}/artifacts\", model_artifacts, \"operator\"),"
       },
       "native_route_ids": [],
@@ -10533,7 +10565,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 185,
+        "line": 187,
         "text": "(post, \"/models/{model}/artifacts\", model_artifacts_set, \"operator\"),"
       },
       "native_route_ids": [],
@@ -10549,7 +10581,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 177,
+        "line": 179,
         "text": "(get, \"/models/{model}/runtime\", model_runtime, \"operator\"),"
       },
       "native_route_ids": [],
@@ -10566,7 +10598,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 178,
+        "line": 180,
         "text": "(post, \"/models/{model}/runtime\", model_runtime_set, \"operator\"),"
       },
       "native_route_ids": [],
@@ -10583,7 +10615,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 179,
+        "line": 181,
         "text": "(get, \"/juiced/runtime-packages\", runtime_packages, \"operator\"),"
       },
       "native_route_ids": [],
@@ -10600,7 +10632,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 180,
+        "line": 182,
         "text": "(post, \"/juiced/runtime-packages/import\", runtime_import, \"operator\"),"
       },
       "native_route_ids": [],
@@ -10617,7 +10649,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 181,
+        "line": 183,
         "text": "(get, \"/juiced/engines\", engines, \"operator\"),"
       },
       "native_route_ids": [],
@@ -10634,7 +10666,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 182,
+        "line": 184,
         "text": "(post, \"/juiced/engines/install\", engine_install, \"operator\"),"
       },
       "native_route_ids": [],
@@ -10651,7 +10683,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 183,
+        "line": 185,
         "text": "(post, \"/juiced/models/add\", model_add, \"operator\"),"
       },
       "native_route_ids": [],
@@ -10668,7 +10700,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 213,
+        "line": 215,
         "text": "(get, \"/system-stats\", system_stats, \"operator\"),",
         "role": "registration"
       },
@@ -10688,7 +10720,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 214,
+        "line": 216,
         "text": "(get, \"/juiced/logs\", logs, \"operator\"),",
         "role": "registration"
       },
@@ -10708,7 +10740,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 215,
+        "line": 217,
         "text": "(get, \"/juiced/library/search\", library_search, \"operator\"),",
         "role": "registration"
       },
@@ -10729,7 +10761,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 216,
+        "line": 218,
         "text": "(post, \"/juiced/library/pull\", library_pull, \"operator\"),",
         "role": "registration"
       },
@@ -10749,7 +10781,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 217,
+        "line": 219,
         "text": "(get, \"/juiced/library/pulls/{pull}\", library_pull_status, \"operator\"),",
         "role": "registration"
       },
@@ -10767,7 +10799,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 218,
+        "line": 220,
         "text": "(get, \"/juiced/aliases\", aliases, \"operator\"),",
         "role": "registration"
       },
@@ -10787,7 +10819,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 219,
+        "line": 221,
         "text": "(post, \"/juiced/aliases\", alias_set, \"operator\"),",
         "role": "registration"
       },
@@ -10807,7 +10839,7 @@
       "authority": "inference",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 220,
+        "line": 222,
         "text": "(post, \"/images/generations\", image_generation, \"inference\"),",
         "role": "registration"
       },
@@ -10827,7 +10859,7 @@
       "authority": "inference",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 221,
+        "line": 223,
         "text": "(post, \"/audio/speech\", speech, \"inference\"),",
         "role": "registration"
       },
@@ -10847,7 +10879,7 @@
       "authority": "read",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 222,
+        "line": 224,
         "text": "(get, \"/juiced/voices\", voices, \"read\"),",
         "role": "registration"
       },
@@ -10865,7 +10897,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 223,
+        "line": 225,
         "text": "(get, \"/juiced/residency\", residency, \"operator\"),",
         "role": "registration"
       },
@@ -10883,7 +10915,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 224,
+        "line": 226,
         "text": "(post, \"/juiced/residency\", residency_set, \"operator\"),",
         "role": "registration"
       },
@@ -10921,7 +10953,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 203,
+        "line": 205,
         "text": "(get, \"/juiced/cache/sessions\", cache_sessions, \"operator\"),",
         "role": "registration"
       },
@@ -10939,7 +10971,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 204,
+        "line": 206,
         "text": "(post, \"/juiced/cache/sessions\", cache_sessions_change, \"operator\"),",
         "role": "registration"
       },
@@ -10957,7 +10989,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 225,
+        "line": 227,
         "text": "(post, \"/juiced/library/upload\", library_upload, \"operator\"),",
         "role": "registration"
       },
@@ -10981,7 +11013,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 226,
+        "line": 228,
         "text": "(get, \"/juiced/library/import-path\", library_import_candidates, \"operator\"),",
         "role": "registration"
       },
@@ -11000,7 +11032,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 227,
+        "line": 229,
         "text": "(post, \"/juiced/library/import-path\", library_import_path, \"operator\"),",
         "role": "registration"
       },
@@ -11021,7 +11053,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 228,
+        "line": 230,
         "text": "(post, \"/juiced/import/native\", native_import, \"operator\"),",
         "role": "registration"
       },
@@ -11038,7 +11070,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 229,
+        "line": 231,
         "text": "(get, \"/juiced/wyoming\", wyoming_view, \"operator\"),",
         "role": "registration"
       },
@@ -11057,7 +11089,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 230,
+        "line": 232,
         "text": "(post, \"/juiced/wyoming\", wyoming_set, \"operator\"),",
         "role": "registration"
       },
@@ -11076,7 +11108,7 @@
       "authority": "inference",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 231,
+        "line": 233,
         "text": "(get, \"/realtime\", realtime, \"inference\"),",
         "role": "registration"
       },
@@ -11096,7 +11128,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 232,
+        "line": 234,
         "text": "(get, \"/juiced/flm\", flm_status, \"operator\"),",
         "role": "registration"
       },
@@ -11113,7 +11145,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 233,
+        "line": 235,
         "text": "(post, \"/juiced/flm/pull\", flm_pull, \"operator\"),",
         "role": "registration"
       },
@@ -11130,7 +11162,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 234,
+        "line": 236,
         "text": "(post, \"/juiced/flm/models/add\", flm_model_add, \"operator\"),",
         "role": "registration"
       },
@@ -11153,7 +11185,7 @@
     "native_websocket_routes": 4,
     "auxiliary_http_route_families": 41,
     "native_registration_sites": 143,
-    "rust_published_routes": 87,
+    "rust_published_routes": 89,
     "rust_native_same_path_rows": 42,
     "native_http_status_counts": {
       "partial": 43,
