@@ -370,6 +370,8 @@ pub struct Config {
     pub upload_max_bytes: u64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub import_roots: Vec<PathBuf>,
+    #[serde(default, skip_serializing_if = "crate::wyoming::Settings::is_default")]
+    pub wyoming: crate::wyoming::Settings,
 }
 
 pub const MAXIMUM_IMPORT_ROOTS: usize = 16;
@@ -466,6 +468,8 @@ struct ConfigWire {
     upload_max_bytes: u64,
     #[serde(default)]
     import_roots: Vec<PathBuf>,
+    #[serde(default)]
+    wyoming: crate::wyoming::Settings,
 }
 
 fn deserialize_native_binding<'de, D: Deserializer<'de>>(
@@ -533,6 +537,7 @@ impl<'de> Deserialize<'de> for Config {
             aliases: wire.aliases,
             upload_max_bytes: wire.upload_max_bytes,
             import_roots: wire.import_roots,
+            wyoming: wire.wyoming,
         })
     }
 }
@@ -643,6 +648,7 @@ impl Config {
                 "import_roots accepts at most {MAXIMUM_IMPORT_ROOTS} absolute directories other than the filesystem root"
             ));
         }
+        self.wyoming.validate()?;
         let mut ids = HashSet::new();
         let mut native_ids = HashSet::new();
         for model in &self.models {

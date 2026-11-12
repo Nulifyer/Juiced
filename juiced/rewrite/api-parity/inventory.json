@@ -73,7 +73,7 @@
     },
     {
       "path": "juiced/rewrite/rust-tests/tests/api_end_to_end.rs",
-      "sha256": "6aea6dedc9b879779ac3f0e417f43e4abad618cbb36cebe8a58c473c9ef83ef4",
+      "sha256": "23e184737578b555cfa145e410e987712fe0355e5b6e13bdc01b2981437fc5e1",
       "hash_check": "snapshot_only"
     },
     {
@@ -118,7 +118,7 @@
     },
     {
       "path": "juiced/rewrite/rust-tests/tests/support/mod.rs",
-      "sha256": "b0fe8580d3cd1384ff9680e7dfe409fe7a9b19917e9e21812e066af8edbb091d",
+      "sha256": "8113b4971cb653e0607bd72d61b00b3625ac8aeda82082e2b60cdcc93e934260",
       "hash_check": "snapshot_only"
     },
     {
@@ -128,12 +128,12 @@
     },
     {
       "path": "juiced/rewrite/service/src/config.rs",
-      "sha256": "30a6299bad1bb77cd7e17226b9a8d5fed5e3f4087c53841d2414514366828068",
+      "sha256": "1210383255adc7ecff6cdef26e8e93fc7e24ddd1d04bb383358069d74be5826e",
       "hash_check": "snapshot_only"
     },
     {
       "path": "juiced/rewrite/service/src/http.rs",
-      "sha256": "3cc5361742c0cf5a5189df9137645a326160f5a8dcc26bfea865b3da80dc9894",
+      "sha256": "afa11eb0f775d9d14cc533c72fd60bcc6c86c40d7bce5fceb26298b68b3402ca",
       "hash_check": "snapshot_only"
     },
     {
@@ -208,7 +208,7 @@
     },
     {
       "path": "juiced/rewrite/rust-tests/tests/media_pipeline.rs",
-      "sha256": "fbd7fdf7c3081d4860c85f11a92ef233d744f886f9ad61fe5f96957cb13cf4a6",
+      "sha256": "8d6c929e6c020799a20534ae9c1c2e4cb31ec40572449b2034db8d2e3f06e441",
       "hash_check": "snapshot_only"
     },
     {
@@ -219,6 +219,11 @@
     {
       "path": "juiced/rewrite/rust-tests/tests/engines.rs",
       "sha256": "6a29884681caf4e9779357b315488e54564aea2d8b7e46e7bf6baeb54ac36bf7",
+      "hash_check": "snapshot_only"
+    },
+    {
+      "path": "juiced/rewrite/rust-tests/tests/voice_pipeline.rs",
+      "sha256": "bb78e68aa75beb575287e43b7ad5b3d906a32308ec6319747ed8c3fbf7461c59",
       "hash_check": "snapshot_only"
     }
   ],
@@ -7806,7 +7811,7 @@
       "category": "websocket",
       "native_behavior": "handler",
       "disposition": "retained",
-      "status": "planned",
+      "status": "partial",
       "native_evidence": [
         {
           "path": "src/cpp/server/websocket_server.cpp",
@@ -7819,12 +7824,26 @@
         "F126"
       ],
       "rust_equivalent": {
-        "relationship": "none",
-        "routes": [],
-        "scenario_files": [],
-        "authorities": []
+        "relationship": "same_path",
+        "routes": [
+          {
+            "method": "GET",
+            "path": "/realtime",
+            "prefix_scheme": "native_quad"
+          }
+        ],
+        "scenario_files": [
+          "juiced/rewrite/rust-tests/tests/voice_pipeline.rs"
+        ],
+        "authorities": [
+          {
+            "method": "GET",
+            "path": "/realtime",
+            "authority": "inference"
+          }
+        ]
       },
-      "semantic_boundary": "No Rust WebSocket listener/upgrade handler is published. Preserve handshake authentication, origin checks, frame/event schemas, disconnect cleanup and native bare plus quad-prefix path acceptance.",
+      "semantic_boundary": "Rust serves GET /realtime?intent=transcription under the four native prefixes only (not the bare path) with the regular API-key handshake (Authorization, x-api-key, or one openai-insecure-api-key.<key> subprotocol). Sessions accept beta transcription_session.update and GA session.update, 24 kHz mono pcm16 base64 appends, commit, clear and server_vad energy turn detection, and emit committed, speech_started/stopped and input_audio_transcription completed/failed events through the admitted whisper.cpp path. No conversation/response intent, delta streaming, noise reduction, origin check or native differential receipt exists.",
       "documentation": "docs/api/README.md",
       "native_authority": "websocket_handshake_policy"
     },
@@ -11011,13 +11030,71 @@
         "juiced/rewrite/rust-tests/tests/native_online_import.rs"
       ],
       "native_same_path": false
+    },
+    {
+      "method": "GET",
+      "path": "/juiced/wyoming",
+      "prefix_scheme": "native_quad",
+      "authority": "operator",
+      "evidence": {
+        "path": "juiced/rewrite/service/src/http.rs",
+        "line": 229,
+        "text": "(get, \"/juiced/wyoming\", wyoming_view, \"operator\"),",
+        "role": "registration"
+      },
+      "native_route_ids": [],
+      "scenario_files": [
+        "juiced/rewrite/rust-tests/tests/api_end_to_end.rs",
+        "juiced/rewrite/rust-tests/tests/voice_pipeline.rs",
+        "juiced/rewrite/rust-tests/tests/media_pipeline.rs"
+      ],
+      "native_same_path": false
+    },
+    {
+      "method": "POST",
+      "path": "/juiced/wyoming",
+      "prefix_scheme": "native_quad",
+      "authority": "operator",
+      "evidence": {
+        "path": "juiced/rewrite/service/src/http.rs",
+        "line": 230,
+        "text": "(post, \"/juiced/wyoming\", wyoming_set, \"operator\"),",
+        "role": "registration"
+      },
+      "native_route_ids": [],
+      "scenario_files": [
+        "juiced/rewrite/rust-tests/tests/api_end_to_end.rs",
+        "juiced/rewrite/rust-tests/tests/voice_pipeline.rs",
+        "juiced/rewrite/rust-tests/tests/media_pipeline.rs"
+      ],
+      "native_same_path": false
+    },
+    {
+      "method": "GET",
+      "path": "/realtime",
+      "prefix_scheme": "native_quad",
+      "authority": "inference",
+      "evidence": {
+        "path": "juiced/rewrite/service/src/http.rs",
+        "line": 231,
+        "text": "(get, \"/realtime\", realtime, \"inference\"),",
+        "role": "registration"
+      },
+      "native_route_ids": [
+        "websocket:GET:bare_and_native_quad:/realtime"
+      ],
+      "scenario_files": [
+        "juiced/rewrite/rust-tests/tests/api_end_to_end.rs",
+        "juiced/rewrite/rust-tests/tests/voice_pipeline.rs"
+      ],
+      "native_same_path": false
     }
   ],
   "other_transport_boundaries": [
     {
       "transport": "wyoming_tcp",
-      "status": "planned",
-      "boundary": "Native optional Wyoming describe/transcribe/synthesize listener is outside the HTTP/WebSocket denominator. Approved retained feature F120 still requires separate Rust implementation and conformance."
+      "status": "partial",
+      "boundary": "Rust serves an optional, default-disabled Wyoming 1.x TCP listener (describe/info, transcribe with audio-start/chunk/stop, synthesize) configured by GET/POST /juiced/wyoming and routed through admitted whisper.cpp transcription and Kokoros speech. It has no authentication, no streaming transcript or synthesis events, and no native differential receipt."
     }
   ],
   "summary": {
@@ -11025,7 +11102,7 @@
     "native_websocket_routes": 4,
     "auxiliary_http_route_families": 41,
     "native_registration_sites": 143,
-    "rust_published_routes": 81,
+    "rust_published_routes": 84,
     "rust_native_same_path_rows": 42,
     "native_http_status_counts": {
       "partial": 43,

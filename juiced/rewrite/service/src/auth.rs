@@ -137,7 +137,10 @@ impl Authorization {
         {
             return Err(unauthorized());
         }
-        let token = bearer.or(api_key).ok_or_else(unauthorized)?;
+        let token = bearer
+            .or(api_key)
+            .or_else(|| websocket_key(headers))
+            .ok_or_else(unauthorized)?;
         let credential = self
             .operator
             .iter()
@@ -155,9 +158,46 @@ impl Authorization {
     }
 }
 
+/// Browsers cannot set headers on WebSocket requests, so OpenAI Realtime clients offer the
+/// key as a subprotocol. It is consulted only when no credential header is present.
+fn websocket_key(headers: &HeaderMap) -> Option<&str> {
+    let mut keys = headers
+        .get_all(header::SEC_WEBSOCKET_PROTOCOL)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
+        .filter_map(|protocol| protocol.trim().strip_prefix("openai-insecure-api-key."));
+    let key = keys.next()?;
+    (keys.next().is_none() && !key.is_empty()).then_some(key)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn websocket_subprotocol_keys_need_one_offer_and_no_credential_header() {
+        let auth = Authorization::new(Auth {
+            api_key: Some("client".into()),
+            admin_key: None,
+        });
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::SEC_WEBSOCKET_PROTOCOL,
+            "realtime, openai-insecure-api-key.client".parse().unwrap(),
+        );
+        assert!(auth.authenticate(&headers, false).is_ok());
+        headers.insert(header::AUTHORIZATION, "Bearer wrong".parse().unwrap());
+        assert!(auth.authenticate(&headers, false).is_err());
+        let mut twice = HeaderMap::new();
+        twice.insert(
+            header::SEC_WEBSOCKET_PROTOCOL,
+            "openai-insecure-api-key.client, openai-insecure-api-key.client"
+                .parse()
+                .unwrap(),
+        );
+        assert!(auth.authenticate(&twice, false).is_err());
+    }
 
     #[test]
     fn normalized_transports_share_context_but_roles_and_rotation_do_not() {

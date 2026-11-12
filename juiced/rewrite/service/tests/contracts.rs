@@ -79,6 +79,7 @@ impl Harness {
             aliases: Default::default(),
             upload_max_bytes: juiced_service::config::DEFAULT_UPLOAD_MAX_BYTES,
             import_roots: Vec::new(),
+            wyoming: Default::default(),
         };
         change(&mut config);
         let path = dir.path().join("config.json");

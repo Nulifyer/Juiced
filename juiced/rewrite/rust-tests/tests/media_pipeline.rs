@@ -770,6 +770,33 @@ mod engines {
         assert_eq!(status, StatusCode::OK, "{txt2img}");
         assert_png(&txt2img["images"][0]);
 
+        let wyoming =
+            support::voice::wyoming(&server, json!({"enabled": true, "listen": "127.0.0.1:0"}))
+                .await;
+        assert_eq!(wyoming["resolved"]["tts_model"], speech_id);
+        let mut client =
+            support::voice::Wyoming::connect(wyoming["listener"]["address"].as_str().unwrap())
+                .await;
+        client.send("describe", json!({}), &[]).await;
+        let info = client.next(Duration::from_secs(5)).await.unwrap();
+        let voices: Vec<_> = info.data["tts"][0]["voices"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|voice| voice["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(voices, ["af_heart", "am_adam"]);
+        let (start, pcm, chunks) = client
+            .synthesize(json!({"text": "Hello from Wyoming.", "voice": {"name": "am_adam"}}))
+            .await;
+        assert_eq!(start.kind, "audio-start", "{:?}", start.data);
+        assert_eq!(start.data["rate"], 24_000);
+        assert!(chunks >= 1 && !pcm.is_empty() && pcm.len() % 2 == 0);
+        let summary = server.get("juiced/wyoming").await["last_event"].clone();
+        assert_eq!(summary["outcome"], "completed");
+        assert_eq!(summary["model"], speech_id);
+        support::voice::wyoming(&server, json!({"enabled": false})).await;
+
         let catalog = server.get("juiced/catalog").await;
         let speech_view = catalog["data"]
             .as_array()
