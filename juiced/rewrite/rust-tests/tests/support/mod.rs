@@ -40,7 +40,7 @@ pub const READ_ROUTES: [&str; 11] = [
     "/models/{model}/options",
     "/juiced/voices",
 ];
-pub const OPERATOR_READ_ROUTES: [&str; 25] = [
+pub const OPERATOR_READ_ROUTES: [&str; 27] = [
     "/system-info",
     "/juiced/cache/inspect",
     "/juiced/cache/sessions",
@@ -66,8 +66,10 @@ pub const OPERATOR_READ_ROUTES: [&str; 25] = [
     "/juiced/library/import-path",
     "/juiced/wyoming",
     "/juiced/flm",
+    "/juiced/access",
+    "/juiced/protocols/health",
 ];
-pub const WRITE_ROUTES: [&str; 33] = [
+pub const WRITE_ROUTES: [&str; 36] = [
     "/juiced/runtime-packages/import",
     "/juiced/engines/install",
     "/juiced/models/add",
@@ -101,6 +103,9 @@ pub const WRITE_ROUTES: [&str; 33] = [
     "/juiced/wyoming",
     "/juiced/flm/pull",
     "/juiced/flm/models/add",
+    "/juiced/access/keys",
+    "/juiced/access/keys/revoke",
+    "/juiced/protocols",
 ];
 pub const INFERENCE_ROUTES: [&str; 4] = [
     "/chat/completions",
@@ -548,7 +553,13 @@ impl Server {
                 .request(Method::GET, "/v1/health", None, self.read_key())
                 .await
             {
-                Ok(response) if response.status().is_success() => break,
+                // Issued keys created during a test enforce authentication on a later start.
+                Ok(response)
+                    if response.status().is_success()
+                        || response.status() == StatusCode::UNAUTHORIZED =>
+                {
+                    break;
+                }
                 _ if Instant::now() < deadline => {
                     tokio::time::sleep(Duration::from_millis(10)).await
                 }

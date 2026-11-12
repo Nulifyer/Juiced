@@ -21,6 +21,7 @@ use std::{
 };
 use tokio::sync::{Mutex as AsyncMutex, MutexGuard, watch};
 
+mod access;
 mod aliases;
 pub use aliases::AliasChange;
 mod options;
@@ -1894,6 +1895,7 @@ pub struct Manager {
     shutting_down: std::sync::atomic::AtomicBool,
     paused: std::sync::atomic::AtomicBool,
     residency: residency::Residency,
+    protocol_gate: Arc<crate::protocol_access::Gate>,
 }
 
 impl Manager {
@@ -2190,6 +2192,7 @@ impl Manager {
             session_used: Mutex::new(std::collections::HashMap::new()),
             session_saves: Arc::new(tokio::sync::Semaphore::new(2)),
             residency: residency::Residency::new(&config),
+            protocol_gate: Arc::new(crate::protocol_access::Gate::new(&config.protocols)),
             config: Arc::new(AsyncMutex::new(config)),
             publications: publication::Publications::new(),
             config_path,

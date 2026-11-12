@@ -20,12 +20,14 @@ use std::{path::PathBuf, sync::Arc};
 use tower_http::{cors::CorsLayer, services::ServeDir};
 
 pub use crate::auth::Auth;
-use crate::auth::{Authorization, RequestContext};
+use crate::auth::{Authority, Authorization, RequestContext};
+use crate::connect::{access, health as protocol_health, key_create, key_revoke, protocol_set};
 
 #[derive(Clone)]
-struct AppState {
-    manager: Arc<Manager>,
-    auth: Arc<Authorization>,
+pub(crate) struct AppState {
+    pub(crate) manager: Arc<Manager>,
+    pub(crate) auth: Arc<Authorization>,
+    pub(crate) probe: Arc<std::sync::OnceLock<Router>>,
 }
 
 async fn authorize(State(state): State<AppState>, mut request: Request, next: Next) -> Response {
@@ -37,7 +39,7 @@ async fn authorize(State(state): State<AppState>, mut request: Request, next: Ne
     } else {
         request.method().as_str()
     };
-    let admin = crate::compat::ENDPOINTS
+    let authority = crate::compat::ENDPOINTS
         .iter()
         .find(|endpoint| endpoint.path == raw_path && endpoint.method == method)
         .or_else(|| {
@@ -46,12 +48,32 @@ async fn authorize(State(state): State<AppState>, mut request: Request, next: Ne
                 .find(|endpoint| endpoint.method == method && route_matches(endpoint.path, path))
         })
         .map_or(
-            request.method() != axum::http::Method::GET
+            if request.method() != axum::http::Method::GET
                 && request.method() != axum::http::Method::HEAD
-                || path.starts_with("/juiced/"),
-            |endpoint| endpoint.authority == "operator",
+                || path.starts_with("/juiced/")
+            {
+                Authority::Operator
+            } else {
+                Authority::Read
+            },
+            |endpoint| Authority::from_label(endpoint.authority),
         );
-    match state.auth.authenticate(request.headers(), admin) {
+    let admin = authority == Authority::Operator;
+    let protocol = crate::protocol_access::Protocol::classify(raw_path);
+    let observed = protocol.filter(|_| {
+        request
+            .extensions()
+            .get::<crate::connect::Probe>()
+            .is_none()
+    });
+    let gate = state.manager.protocol_gate().clone();
+    let observe = |response: Response| {
+        if let Some(protocol) = observed {
+            gate.observe(protocol, response.status().as_u16());
+        }
+        response
+    };
+    match state.auth.authenticate(request.headers(), authority) {
         Ok(context) => {
             request.extensions_mut().insert(context);
         }
@@ -60,8 +82,11 @@ async fn authorize(State(state): State<AppState>, mut request: Request, next: Ne
             response
                 .headers_mut()
                 .insert(header::WWW_AUTHENTICATE, "Bearer".parse().unwrap());
-            return response;
+            return observe(response);
         }
+    }
+    if let Some(Err(error)) = protocol.map(|protocol| gate.check(protocol)) {
+        return observe(crate::compat::rejection(raw_path, error));
     }
     let _ingress = if request.method() == axum::http::Method::POST && !admin {
         let maximum = if path == "/audio/transcriptions" {
@@ -80,12 +105,12 @@ async fn authorize(State(state): State<AppState>, mut request: Request, next: Ne
             .await
         {
             Ok(lease) => Some(lease),
-            Err(error) => return crate::compat::rejection(raw_path, error),
+            Err(error) => return observe(crate::compat::rejection(raw_path, error)),
         }
     } else {
         None
     };
-    let response = next.run(request).await;
+    let response = observe(next.run(request).await);
     if state.manager.memory_protected() && _ingress.is_some() {
         let (parts, body) = response.into_parts();
         let tracked = stream::unfold(
@@ -234,6 +259,11 @@ define_routes! {
     (get, "/juiced/flm", flm_status, "operator"),
     (post, "/juiced/flm/pull", flm_pull, "operator"),
     (post, "/juiced/flm/models/add", flm_model_add, "operator"),
+    (get, "/juiced/access", access, "operator"),
+    (post, "/juiced/access/keys", key_create, "operator"),
+    (post, "/juiced/access/keys/revoke", key_revoke, "operator"),
+    (post, "/juiced/protocols", protocol_set, "operator"),
+    (get, "/juiced/protocols/health", protocol_health, "operator"),
 }
 async fn residency(State(state): State<AppState>) -> impl IntoResponse {
     (
@@ -571,10 +601,20 @@ async fn health() -> impl IntoResponse {
         "{\"status\":\"ok\"}",
     )
 }
-async fn endpoints() -> Json<Value> {
-    Json(
-        json!({"schema_version":1,"endpoints":ENDPOINTS.iter().chain(crate::compat::ENDPOINTS).collect::<Vec<_>>()}),
-    )
+async fn endpoints(State(state): State<AppState>) -> Json<Value> {
+    let gate = state.manager.protocol_gate();
+    let live = |native: bool| {
+        move |endpoint: &&Endpoint| {
+            crate::protocol_access::Protocol::of_endpoint(endpoint.path, native)
+                .is_none_or(|protocol| gate.enabled(protocol))
+        }
+    };
+    let endpoints: Vec<_> = ENDPOINTS
+        .iter()
+        .filter(live(true))
+        .chain(crate::compat::ENDPOINTS.iter().filter(live(false)))
+        .collect();
+    Json(json!({"schema_version":1,"endpoints":endpoints}))
 }
 
 async fn admission(State(state): State<AppState>) -> Json<Value> {
@@ -1103,9 +1143,12 @@ pub fn router(manager: Arc<Manager>, auth: Auth, ui: Option<PathBuf>) -> Router 
         let starting = wyoming.clone();
         runtime.spawn(async move { starting.start_configured().await });
     }
+    let keys = manager.open_key_store();
+    keys.spawn_flusher();
     let state = AppState {
         manager,
-        auth: Arc::new(Authorization::new(auth)),
+        auth: Arc::new(Authorization::with_keys(auth, keys)),
+        probe: Arc::default(),
     };
     let routes = native_routes()
         .method_not_allowed_fallback(|| async {
@@ -1132,7 +1175,8 @@ pub fn router(manager: Arc<Manager>, auth: Auth, ui: Option<PathBuf>) -> Router 
         .layer(Extension(Arc::new(crate::realtime::Sessions::default())))
         .merge(crate::compat::router(state.manager.clone()))
         .layer(DefaultBodyLimit::max(crate::admission::JSON_INGRESS_BYTES))
-        .layer(middleware::from_fn_with_state(state, authorize));
+        .layer(middleware::from_fn_with_state(state.clone(), authorize));
+    let _ = state.probe.set(app.clone());
     if let Some(ui) = ui {
         app = app.fallback_service(ServeDir::new(ui).append_index_html_on_directories(true));
     }
@@ -1266,13 +1310,27 @@ async fn runtime_resolve(
         .map(Json)
 }
 
-async fn protocols() -> Json<Value> {
-    Json(json!({"data": [
+async fn protocols(State(state): State<AppState>) -> Json<Value> {
+    let gate = state.manager.protocol_gate();
+    let mut body = json!({ "data": protocol_inventory() });
+    if let Some(data) = body["data"].as_array_mut() {
+        data.retain(|entry| {
+            entry["id"]
+                .as_str()
+                .and_then(crate::protocol_access::Protocol::from_id)
+                .is_none_or(|protocol| gate.enabled(protocol))
+        });
+    }
+    Json(body)
+}
+
+pub(crate) fn protocol_inventory() -> Value {
+    json!([
         {"id": "openai", "support": "partial", "operations": ["models", "chat/completions", "completions", "responses", "embeddings", "audio/transcriptions", "audio/speech", "images/generations"], "note": "Forwarded only when the configured worker declares support."},
         {"id": "anthropic", "support": "partial", "note":"Selected text/tool Messages codecs and engine-native token counts; native usage required; advanced hosted tools unsupported."}, {"id": "ollama", "support": "partial", "note":"Chat, raw generate, embeddings and discovery; unsupported options are rejected."},
         {"id": "mcp", "support": "partial", "note":"Stateless JSON Streamable HTTP, explicit-model inference tools and credential/session-scoped cancellation."}, {"id": "automatic1111", "support": "partial", "note":"POST /sdapi/v1/txt2img only, one image per request through sd.cpp workers."},
         {"id": "realtime", "support": "partial", "note": "WebSocket transcription only: pcm16 at 24 kHz with server VAD."}, {"id": "wyoming", "support": "partial", "note": "Speech to text and text to speech for Home Assistant on its own TCP port. No authentication: listen on a trusted network only."}
-    ]}))
+    ])
 }
 
 #[derive(Deserialize)]

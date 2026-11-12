@@ -427,6 +427,11 @@ pub struct Config {
     pub import_roots: Vec<PathBuf>,
     #[serde(default, skip_serializing_if = "crate::wyoming::Settings::is_default")]
     pub wyoming: crate::wyoming::Settings,
+    #[serde(
+        default,
+        skip_serializing_if = "crate::protocol_access::Settings::is_default"
+    )]
+    pub protocols: crate::protocol_access::Settings,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native_adoption: Option<NativeAdoption>,
 }
@@ -529,6 +534,8 @@ struct ConfigWire {
     #[serde(default)]
     wyoming: crate::wyoming::Settings,
     #[serde(default)]
+    protocols: crate::protocol_access::Settings,
+    #[serde(default)]
     native_adoption: Option<NativeAdoption>,
 }
 
@@ -598,6 +605,7 @@ impl<'de> Deserialize<'de> for Config {
             upload_max_bytes: wire.upload_max_bytes,
             import_roots: wire.import_roots,
             wyoming: wire.wyoming,
+            protocols: wire.protocols,
             native_adoption: wire.native_adoption,
         })
     }
@@ -710,6 +718,7 @@ impl Config {
             ));
         }
         self.wyoming.validate()?;
+        self.protocols.validate()?;
         let mut ids = HashSet::new();
         let mut native_ids = HashSet::new();
         for model in &self.models {

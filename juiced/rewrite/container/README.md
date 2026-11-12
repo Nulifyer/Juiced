@@ -18,7 +18,7 @@ Run it:
 podman run -d --name juiced -p 8080:8080 -v juiced-data:/data localhost/juiced-rewrite:dev
 ```
 
-Open <http://localhost:8080>. Without API keys the service runs in trusted-LAN mode, and anyone who can reach the port has operator rights. Set keys before you publish the port beyond your own machine (see [Environment](#environment)).
+Open <http://localhost:8080>. Without API keys the service runs in trusted-LAN mode, and anyone who can reach the port has operator rights. Before you publish the port beyond your own machine, create keys under **Connect → API keys** or set them in the [environment](#environment).
 
 `build.sh` accepts extra `podman build` arguments. `JUICED_IMAGE` changes the tag and `CONTAINER_ENGINE=docker` builds with Docker. Under Podman the script passes `--format docker`, because the OCI format drops the `HEALTHCHECK`.
 
@@ -58,6 +58,7 @@ Everything that persists lives in `/data`:
 | Path | Contents |
 | --- | --- |
 | `config.json` | Service configuration. The entrypoint creates it only when it is missing. |
+| `api-keys.json` | Hashes of keys issued in the console. Created with the first key. |
 | `artifacts/` | Downloaded model weights |
 | `runtime-packages/` | Installed engines (llama.cpp, whisper.cpp, stable-diffusion.cpp, Kokoros, FUTO and others). Can be its own volume. |
 | `kv-cache/` | Saved conversation state and explicit slot snapshots. Can be its own volume (see [Conversation cache](#conversation-cache)). |
@@ -122,7 +123,7 @@ To set it up:
 | `JUICED_NATIVE_CONFIG_DIR` | `/data/config` | Native Juiced configuration directory adopted once in the background; nothing happens when it does not exist |
 | `JUICED_NATIVE_IMPORT_ROOTS` | `/data:/library` | Colon-separated read roots for adopted weights |
 
-API keys exist only in the environment. The entrypoint never writes them to `/data`, and the service does not pass `LEMONADE_*_API_KEY` to engine processes. Engines do inherit `HF_TOKEN`. `podman inspect` shows plain `-e` values, so a Podman secret is the better way to supply a key:
+Keys issued under **Connect → API keys** are stored as hashes in `/data/api-keys.json`; the secret is shown once. Environment keys exist only in the environment. The entrypoint never writes them to `/data`, and the service does not pass `LEMONADE_*_API_KEY` to engine processes. Engines do inherit `HF_TOKEN`. `podman inspect` shows plain `-e` values, so a Podman secret is the better way to supply a key:
 
 ```bash
 printf '%s' "$(openssl rand -hex 24)" | podman secret create juiced-admin-key -
