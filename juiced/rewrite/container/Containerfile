@@ -1,0 +1,78 @@
+# Build context: the repository root. See juiced/rewrite/container/build.sh.
+ARG RUST_IMAGE=docker.io/library/rust:1.97-slim-trixie
+ARG BUN_IMAGE=docker.io/oven/bun:1.4.4
+ARG RUNTIME_IMAGE=docker.io/library/debian:trixie-slim
+
+FROM ${RUST_IMAGE} AS service
+WORKDIR /src/juiced/rewrite
+# The service embeds the native model registry and the runtime catalog at compile time.
+COPY src/cpp/resources/server_models.json src/cpp/resources/architecture_defaults.json \
+    /src/src/cpp/resources/
+COPY juiced/rewrite/catalog-design/inventory.json catalog-design/
+COPY juiced/rewrite/Cargo.toml juiced/rewrite/Cargo.lock ./
+COPY juiced/rewrite/service/ service/
+COPY juiced/rewrite/rust-tests/ rust-tests/
+RUN --mount=type=cache,id=juiced-rewrite-cargo-registry,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=juiced-rewrite-cargo-target,target=/src/juiced/rewrite/target \
+    cargo build --release --locked -p juiced-service --bin lemond --bin lemonade \
+    && install -D -m 0755 target/release/lemond /out/lemond \
+    && install -D -m 0755 target/release/lemonade /out/lemonade
+
+FROM ${BUN_IMAGE} AS ui
+WORKDIR /src/juiced/rewrite/ui
+COPY juiced/rewrite/ui/package.json juiced/rewrite/ui/bun.lock ./
+RUN bun install --frozen-lockfile --ignore-scripts
+COPY juiced/ui/public/ /src/juiced/ui/public/
+COPY juiced/ui/LICENSE.t3code juiced/ui/T3-SOURCES.json /src/juiced/ui/
+COPY juiced/rewrite/ui/ ./
+RUN bun run build
+
+FROM ${RUNTIME_IMAGE} AS runtime
+ARG DEBIAN_FRONTEND=noninteractive
+COPY juiced/rewrite/container/backports.sources /etc/apt/sources.list.d/backports.sources
+# Mesa comes from trixie-backports so RADV and ANV track recent GPUs;
+# juiced-update-userspace repeats this at runtime. The NVIDIA Vulkan ICD that the
+# container toolkit injects (libGLX_nvidia) fails to create an instance without glvnd
+# libEGL and libXext. Lavapipe is removed so a CPU-only host never reports Vulkan.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates curl tini \
+        libatomic1 libgomp1 libnuma1 libstdc++6 zlib1g \
+        libdrm2 libdrm-amdgpu1 libelf1t64 \
+        libvulkan1 vulkan-tools libegl1 libxext6 \
+    && apt-get install -y --no-install-recommends -t trixie-backports mesa-vulkan-drivers \
+    && rm -f /usr/share/vulkan/icd.d/lvp_icd*.json \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN groupadd --gid 10001 juiced \
+    && useradd --uid 10001 --gid 10001 --home-dir /data/home --no-create-home \
+        --shell /usr/sbin/nologin juiced \
+    && install -d -o 10001 -g 10001 -m 0700 /data
+
+COPY --from=service /out/lemond /out/lemonade /usr/local/bin/
+COPY --from=ui /src/juiced/rewrite/ui/dist/ /opt/juiced/ui/
+COPY LICENSE /opt/juiced/licenses/juiced-Apache-2.0.txt
+COPY LICENSES/ /opt/juiced/licenses/inherited/
+COPY --chmod=0755 juiced/rewrite/container/entrypoint.sh /usr/local/bin/juiced-entrypoint
+COPY --chmod=0755 juiced/rewrite/container/healthcheck.sh /usr/local/bin/juiced-healthcheck
+COPY --chmod=0755 juiced/rewrite/container/update-userspace.sh /usr/local/bin/juiced-update-userspace
+
+ARG SOURCE_REVISION=development
+LABEL org.opencontainers.image.title="Juiced" \
+      org.opencontainers.image.description="Local model appliance: Rust supervisor, web console, engines installed on demand" \
+      org.opencontainers.image.licenses="Apache-2.0" \
+      org.opencontainers.image.revision="${SOURCE_REVISION}"
+
+ENV JUICED_DATA=/data \
+    JUICED_LISTEN_HOST=0.0.0.0 \
+    LEMONADE_HOST=127.0.0.1 \
+    LEMONADE_PORT=13305 \
+    HOME=/data/home \
+    XDG_CACHE_HOME=/data/home/.cache
+
+VOLUME ["/data"]
+EXPOSE 13305
+USER 10001:10001
+WORKDIR /data
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 CMD ["/usr/local/bin/juiced-healthcheck"]
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/juiced-entrypoint"]
