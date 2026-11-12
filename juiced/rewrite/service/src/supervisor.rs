@@ -1796,6 +1796,7 @@ struct NativeSettingsState {
 
 pub struct Manager {
     runtime_definitions: crate::catalog::Catalog,
+    hardware: crate::hardware::Detector,
     runtime_packages: std::sync::OnceLock<Arc<crate::runtime_packages::Store>>,
     runtime_importing: AtomicBool,
     runtime_control: Arc<crate::runtime_packages::memory::Controller>,
@@ -2087,6 +2088,7 @@ impl Manager {
         let power = crate::power::Controller::new(config.inhibit_suspend);
         Ok(Arc::new(Self {
             runtime_definitions,
+            hardware: crate::hardware::Detector::from_environment(),
             runtime_packages,
             runtime_importing: AtomicBool::new(false),
             runtime_control,
@@ -2132,6 +2134,39 @@ impl Manager {
             shutting_down: std::sync::atomic::AtomicBool::new(false),
             paused: std::sync::atomic::AtomicBool::new(false),
         }))
+    }
+
+    pub async fn system_info(&self) -> Result<axum::body::Bytes, ApiError> {
+        let snapshot = self
+            .hardware
+            .snapshot()
+            .await
+            .map_err(|error| match error {
+                crate::hardware::DetectionError::Deadline => ApiError::new(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "hardware_detection_deadline",
+                    "Hardware detection did not finish within its deadline. Retry later.",
+                ),
+                crate::hardware::DetectionError::Interrupted => ApiError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "hardware_detection_interrupted",
+                    "Hardware detection was interrupted. Retry later.",
+                ),
+            })?;
+        let document = crate::hardware::SystemInfo::new(
+            &snapshot,
+            self.hardware.ttl(),
+            &self.runtime_definitions,
+        );
+        serde_json::to_vec(&document)
+            .map(axum::body::Bytes::from)
+            .map_err(|_| {
+                ApiError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "hardware_response",
+                    "Hardware observations could not be represented.",
+                )
+            })
     }
 
     pub fn runtime_catalog(&self) -> axum::body::Bytes {

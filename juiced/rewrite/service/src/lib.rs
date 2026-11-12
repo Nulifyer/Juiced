@@ -10,6 +10,7 @@ pub mod discovery;
 pub mod engine_usage;
 pub mod execution_profile;
 pub mod extract;
+pub mod hardware;
 pub mod host_memory;
 pub mod http;
 pub mod identity;

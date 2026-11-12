@@ -55,6 +55,8 @@ On Linux, a direct-worker lifecycle case kills only the manager PID, observes wo
 
 Snapshot inspection cases execute `lemond --inspect-snapshot-store PATH` without configuration. They compare directory contents before and after inspecting missing, legacy, healthy, corrupt and unresolved stores. A live writer lease remains usable, and inspecting a healthy store without a control marker creates none. These observations grant no recovery, repair or writer-termination authority.
 
+System-info cases set the test-fixture-only `JUICED_TEST_HARDWARE_ROOT` to a synthetic Ryzen AI 9 HX 370 tree with a gfx1150 iGPU, XDNA2 NPU and `/dev/kfd`, then read `GET /system-info` under every native prefix. They check operator authority, HEAD, ROCm/NPU recommendations, that hybrid is never recommended, the refusal when `/dev/kfd` is missing, and a timed-out `vulkaninfo`. One case observes the actual host and checks only the response structure and cache reuse.
+
 Argument guard cases use renamed private fixture copies to exercise the selected production argument grammar. User-configuration cases change only files under their temporary HOME and XDG_CONFIG_HOME.
 
 Ordinary fixtures disable suspend inhibition. The separate Linux power case requires a positive logind `sleep:idle` block acknowledgement and checks shared leases, cancellation, idle release and manager-only shutdown:

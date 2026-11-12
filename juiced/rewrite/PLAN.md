@@ -30,7 +30,7 @@ The experimental config is explicit and separate from native Juiced state. It ne
 
 ## Native API preservation
 
-The [API parity inventory](api-parity/README.md) accounts for135 native application HTTP routes, four WebSocket paths and41 auxiliary route families across143 registration sites in the frozen native reference. It separately captures main's newer semantic contracts. The 58 published Rust routes have 37 same-path matches; those matches remain partial until their payloads, authority and behavior meet the retained contract. Native weight deletion and Rust registration removal, for example, currently differ despite sharing `/delete`.
+The [API parity inventory](api-parity/README.md) accounts for135 native application HTTP routes, four WebSocket paths and41 auxiliary route families across143 registration sites in the frozen native reference. It separately captures main's newer semantic contracts. The 59 published Rust routes have 38 same-path matches; those matches remain partial until their payloads, authority and behavior meet the retained contract. Native weight deletion and Rust registration removal, for example, currently differ despite sharing `/delete`.
 
 The Rust HTTP/socket scenario matrix covers every published Rust method and prefix. That subset gate does not prove native API completeness. Keep missing native endpoints and semantic migrations visible in `api-parity/inventory.json`; its validator rejects unreviewed registration drift. WebSockets, protocol-specific paths and auxiliary handlers have separate inventories rather than inflating the application API count.
 

@@ -159,6 +159,7 @@ macro_rules! define_routes {
 define_routes! {
     (get, "/health", health, "read"),
     (get, "/models", models, "read"),
+    (get, "/system-info", system_info, "operator"),
     (get, "/juiced/catalog", catalog, "read"),
     (get, "/juiced/state", service_state, "read"),
     (get, "/juiced/requests", requests, "operator"),
@@ -815,6 +816,16 @@ async fn suitability(
             )
         })?;
     Ok(Json(state.manager.suitability(id)?))
+}
+
+async fn system_info(State(state): State<AppState>) -> Result<impl IntoResponse, ApiError> {
+    Ok((
+        [
+            (header::CONTENT_TYPE, "application/json"),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
+        state.manager.system_info().await?,
+    ))
 }
 
 async fn runtime_catalog(State(state): State<AppState>) -> impl IntoResponse {

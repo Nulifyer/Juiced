@@ -1,8 +1,8 @@
 # Native API parity inventory
 
-The Rust daemon publishes 58 logical HTTP routes. Those routes do not cover the
+The Rust daemon publishes 59 logical HTTP routes. Those routes do not cover the
 native API. The frozen C++ source declares 135 application HTTP routes and four
-WebSocket paths. Only 37 Rust rows match a native method and path. None has a
+WebSocket paths. Only 38 Rust rows match a native method and path. None has a
 native wire-parity receipt in this inventory.
 
 [inventory.json](inventory.json) owns the maintained crosswalk. Each native row
@@ -14,12 +14,12 @@ prove native request or response compatibility.
 | Native application HTTP status | Rows |
 | --- | ---: |
 | Implemented with native parity evidence | 0 |
-| Partial Rust path or framework behavior | 38 |
-| Planned retained path or rejection contract | 88 |
+| Partial Rust path or framework behavior | 39 |
+| Planned retained path or rejection contract | 87 |
 | Excluded arbitrary workflows or stored conversations | 7 |
 | Conditional music/sound or 3D provider | 2 |
 
-The 38 partial rows include 37 matching paths and the framework rejection for
+The 39 partial rows include 38 matching paths and the framework rejection for
 `GET /mcp`. Twelve Rust routes add runtime definitions, context, endpoint metadata,
 artifact management or explicit cache actions. They do not erase missing native
 routes. Native registry search, model files and option reset, installation,
