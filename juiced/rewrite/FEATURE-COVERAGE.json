@@ -19,8 +19,9 @@
       "disposition": "preserve and regression-check only where affected",
       "rewrite_phase": "R2",
       "owner": "admission and operator workflows",
-      "rewrite_status": "planned",
-      "acceptance": "Shared-pool and actual-slot tests; five active requests and more idle threads than slots with unchanged context; fair bounded queues, explicit caps, cancellation and unified Library journey."
+      "rewrite_status": "partial",
+      "acceptance": "Shared-pool and actual-slot tests; five active requests and more idle threads than slots with unchanged context; fair bounded queues, explicit caps, cancellation and unified Library journey.",
+      "implementation_boundary": "Library shows a curated recommended list beside search results with task chips. Ranking and per-host recommendation tuning remain open."
     },
     {
       "id": "F002",
@@ -30,8 +31,9 @@
       "disposition": "preserve and regression-check only where affected",
       "rewrite_phase": "R2",
       "owner": "admission and operator workflows",
-      "rewrite_status": "planned",
-      "acceptance": "Shared-pool and actual-slot tests; five active requests and more idle threads than slots with unchanged context; fair bounded queues, explicit caps, cancellation and unified Library journey."
+      "rewrite_status": "partial",
+      "acceptance": "Shared-pool and actual-slot tests; five active requests and more idle threads than slots with unchanged context; fair bounded queues, explicit caps, cancellation and unified Library journey.",
+      "implementation_boundary": "One Library search combines the catalog, downloaded files and Hugging Face with a bounded cache and a hub-free first answer. Repository card and file-tree inspection remain open."
     },
     {
       "id": "F003",
@@ -52,8 +54,9 @@
       "disposition": "preserve and regression-check only where affected",
       "rewrite_phase": "R2",
       "owner": "admission and operator workflows",
-      "rewrite_status": "planned",
-      "acceptance": "Shared-pool and actual-slot tests; five active requests and more idle threads than slots with unchanged context; fair bounded queues, explicit caps, cancellation and unified Library journey."
+      "rewrite_status": "partial",
+      "acceptance": "Shared-pool and actual-slot tests; five active requests and more idle threads than slots with unchanged context; fair bounded queues, explicit caps, cancellation and unified Library journey.",
+      "implementation_boundary": "Search results group GGUF quants under one model with size and host-fit hints. Non-GGUF variant grouping remains open."
     },
     {
       "id": "F005",
@@ -97,8 +100,9 @@
       "disposition": "preserve and regression-check only where affected",
       "rewrite_phase": "R4",
       "owner": "artifact and runtime lifecycle",
-      "rewrite_status": "planned",
-      "acceptance": "Complete artifact/package identity, interrupted acquisition/promotion/restart/rollback, reference safety, private/offline policy and selected-family acceptance."
+      "rewrite_status": "partial",
+      "acceptance": "Complete artifact/package identity, interrupted acquisition/promotion/restart/rollback, reference safety, private/offline policy and selected-family acceptance.",
+      "implementation_boundary": "Browser upload and server import-folder intake (copy or in place) validate format, hash while writing and feed the same add step. Split shards and projector companions are refused."
     },
     {
       "id": "F009",
@@ -629,8 +633,9 @@
       "disposition": "preserve and regression-check only where affected",
       "rewrite_phase": "R4",
       "owner": "artifact and runtime lifecycle",
-      "rewrite_status": "planned",
-      "acceptance": "Complete artifact/package identity, interrupted acquisition/promotion/restart/rollback, reference safety, private/offline policy and selected-family acceptance."
+      "rewrite_status": "partial",
+      "acceptance": "Complete artifact/package identity, interrupted acquisition/promotion/restart/rollback, reference safety, private/offline policy and selected-family acceptance.",
+      "implementation_boundary": "The container installs and updates engine runtimes into its data volume at runtime with checksum-verified releases. Signed provenance and rollback UI remain open."
     },
     {
       "id": "F057",
@@ -673,8 +678,9 @@
       "disposition": "preserve and regression-check only where affected",
       "rewrite_phase": "R7",
       "owner": "platform delivery",
-      "rewrite_status": "planned",
-      "acceptance": "Native OS/architecture package CI and restore tests; separate real-device support receipts and actual HA/Pi client smoke tests."
+      "rewrite_status": "partial",
+      "acceptance": "Native OS/architecture package CI and restore tests; separate real-device support receipts and actual HA/Pi client smoke tests.",
+      "implementation_boundary": "The rewrite container uses separate build and runtime stages with a non-root runtime user and one data volume. Docker, ROCm and NPU host builds are not qualified."
     },
     {
       "id": "F061",
@@ -695,8 +701,9 @@
       "disposition": "implement-or-complete",
       "rewrite_phase": "R3",
       "owner": "qualification and Barista",
-      "rewrite_status": "planned",
-      "acceptance": "Frozen paired quality/resource/interference profiles, redacted receipts, restored prior state and the exact Barista model/tool/authority suite before enabling the operator panel."
+      "rewrite_status": "partial",
+      "acceptance": "Frozen paired quality/resource/interference profiles, redacted receipts, restored prior state and the exact Barista model/tool/authority suite before enabling the operator panel.",
+      "implementation_boundary": "Adding a model picks the engine and backend from detected hardware and offers the install when missing. Workload-aware benchmarking of the choice remains open."
     },
     {
       "id": "F063",
@@ -777,8 +784,9 @@
       "disposition": "preserve and regression-check only where affected",
       "rewrite_phase": "R2",
       "owner": "admission and operator workflows",
-      "rewrite_status": "planned",
-      "acceptance": "Shared-pool and actual-slot tests; five active requests and more idle threads than slots with unchanged context; fair bounded queues, explicit caps, cancellation and unified Library journey."
+      "rewrite_status": "partial",
+      "acceptance": "Shared-pool and actual-slot tests; five active requests and more idle threads than slots with unchanged context; fair bounded queues, explicit caps, cancellation and unified Library journey.",
+      "implementation_boundary": "Saving launch settings on a loaded model restarts it with the new settings and rolls back the saved profile on failure. Other apply paths remain open."
     },
     {
       "id": "F070",
@@ -799,8 +807,9 @@
       "disposition": "implement-or-complete",
       "rewrite_phase": "R2",
       "owner": "admission and operator workflows",
-      "rewrite_status": "planned",
-      "acceptance": "Shared-pool and actual-slot tests; five active requests and more idle threads than slots with unchanged context; fair bounded queues, explicit caps, cancellation and unified Library journey."
+      "rewrite_status": "partial",
+      "acceptance": "Shared-pool and actual-slot tests; five active requests and more idle threads than slots with unchanged context; fair bounded queues, explicit caps, cancellation and unified Library journey.",
+      "implementation_boundary": "On demand models unload after a service or per-model idle delay; loads evict the least recently used idle On demand model under budget or host-memory pressure; Ollama keep_alive is honoured. Cost-aware eviction remains open."
     },
     {
       "id": "F072",
@@ -1337,8 +1346,9 @@
       "disposition": "preserve and regression-check only where affected",
       "rewrite_phase": "R5",
       "owner": "protocol and specialist services",
-      "rewrite_status": "planned",
-      "acceptance": "Named consumer wire fixtures, policy/auth/admission parity, actual upstream cancellation and qualified continuation after worker replacement/restart."
+      "rewrite_status": "partial",
+      "acceptance": "Named consumer wire fixtures, policy/auth/admission parity, actual upstream cancellation and qualified continuation after worker replacement/restart.",
+      "implementation_boundary": "POST /sdapi/v1/txt2img through sd.cpp workers, one image per request. Other A1111 routes remain open."
     },
     {
       "id": "F120",
@@ -1348,8 +1358,9 @@
       "disposition": "preserve and regression-check only where affected",
       "rewrite_phase": "R5",
       "owner": "protocol and specialist services",
-      "rewrite_status": "planned",
-      "acceptance": "Named consumer wire fixtures, policy/auth/admission parity, actual upstream cancellation and qualified continuation after worker replacement/restart."
+      "rewrite_status": "partial",
+      "acceptance": "Named consumer wire fixtures, policy/auth/admission parity, actual upstream cancellation and qualified continuation after worker replacement/restart.",
+      "implementation_boundary": "A Wyoming TCP server answers describe, transcribe and synthesize through whisper.cpp and Kokoros, verified with the official wyoming client. Streaming events and a real Home Assistant instance remain unverified."
     },
     {
       "id": "F121",
@@ -1395,8 +1406,9 @@
       "disposition": "native alias/virtual-service integration with policy, identity, discovery and routing conformance",
       "rewrite_phase": "R6",
       "owner": "routing and access",
-      "rewrite_status": "planned",
-      "acceptance": "Routing replay versus explicit models, bounded fallback, no silent cloud egress, credential revocation and cross-protocol allowlist/authority fixtures."
+      "rewrite_status": "partial",
+      "acceptance": "Routing replay versus explicit models, bounded fallback, no silent cloud egress, credential revocation and cross-protocol allowlist/authority fixtures.",
+      "implementation_boundary": "Aliases resolve for every inference route and can be swapped while requests in flight finish on the old target. Alias-scoped policies remain open."
     },
     {
       "id": "F125",
@@ -1418,8 +1430,9 @@
       "disposition": "integrate existing source/provider and qualify before claiming support",
       "rewrite_phase": "R5",
       "owner": "protocol and specialist services",
-      "rewrite_status": "planned",
-      "acceptance": "Named consumer wire fixtures, policy/auth/admission parity, actual upstream cancellation and qualified continuation after worker replacement/restart."
+      "rewrite_status": "partial",
+      "acceptance": "Named consumer wire fixtures, policy/auth/admission parity, actual upstream cancellation and qualified continuation after worker replacement/restart.",
+      "implementation_boundary": "A Realtime WebSocket handles the transcription intent with pcm16 24 kHz audio and energy-based server VAD. Conversation intent and delta events remain open."
     },
     {
       "id": "F127",
@@ -1638,8 +1651,9 @@
       "disposition": "preserve and regression-check only where affected",
       "rewrite_phase": "R5",
       "owner": "protocol and specialist services",
-      "rewrite_status": "planned",
-      "acceptance": "Named consumer wire fixtures, policy/auth/admission parity, actual upstream cancellation and qualified continuation after worker replacement/restart."
+      "rewrite_status": "partial",
+      "acceptance": "Named consumer wire fixtures, policy/auth/admission parity, actual upstream cancellation and qualified continuation after worker replacement/restart.",
+      "implementation_boundary": "whisper.cpp transcription is verified with real models; FUTO, Parakeet and Moonshine engines are tracked separately."
     },
     {
       "id": "F147",
@@ -1649,8 +1663,9 @@
       "disposition": "implement-or-complete",
       "rewrite_phase": "R5",
       "owner": "protocol and specialist services",
-      "rewrite_status": "planned",
-      "acceptance": "Named consumer wire fixtures, policy/auth/admission parity, actual upstream cancellation and qualified continuation after worker replacement/restart."
+      "rewrite_status": "partial",
+      "acceptance": "Named consumer wire fixtures, policy/auth/admission parity, actual upstream cancellation and qualified continuation after worker replacement/restart.",
+      "implementation_boundary": "Kokoros voices are listed per model with language prefixes and used by the speech test and Wyoming. Speaker metadata beyond names remains open."
     },
     {
       "id": "F148",
@@ -1682,8 +1697,9 @@
       "disposition": "integrate existing source/provider and qualify before claiming support",
       "rewrite_phase": "R5",
       "owner": "protocol and specialist services",
-      "rewrite_status": "planned",
-      "acceptance": "Named consumer wire fixtures, policy/auth/admission parity, actual upstream cancellation and qualified continuation after worker replacement/restart."
+      "rewrite_status": "partial",
+      "acceptance": "Named consumer wire fixtures, policy/auth/admission parity, actual upstream cancellation and qualified continuation after worker replacement/restart.",
+      "implementation_boundary": "Realtime transcription has energy-based server VAD with configurable threshold and silence. Model-based VAD remains open."
     },
     {
       "id": "F151",
@@ -1748,8 +1764,9 @@
       "disposition": "preserve and regression-check only where affected",
       "rewrite_phase": "R5",
       "owner": "protocol and specialist services",
-      "rewrite_status": "planned",
-      "acceptance": "Named consumer wire fixtures, policy/auth/admission parity, actual upstream cancellation and qualified continuation after worker replacement/restart."
+      "rewrite_status": "partial",
+      "acceptance": "Named consumer wire fixtures, policy/auth/admission parity, actual upstream cancellation and qualified continuation after worker replacement/restart.",
+      "implementation_boundary": "The Images test generates through sd.cpp with size, steps, seed and negative prompt. Media job progress remains open."
     },
     {
       "id": "F157",
@@ -1957,8 +1974,9 @@
       "disposition": "preserve and regression-check only where affected",
       "rewrite_phase": "R3",
       "owner": "qualification and Barista",
-      "rewrite_status": "planned",
-      "acceptance": "Frozen paired quality/resource/interference profiles, redacted receipts, restored prior state and the exact Barista model/tool/authority suite before enabling the operator panel."
+      "rewrite_status": "partial",
+      "acceptance": "Frozen paired quality/resource/interference profiles, redacted receipts, restored prior state and the exact Barista model/tool/authority suite before enabling the operator panel.",
+      "implementation_boundary": "Dashboard and footer show live CPU, RAM, GPU, VRAM and decode rates. Per-model token metrics history remains open."
     },
     {
       "id": "F176",
@@ -1968,8 +1986,9 @@
       "disposition": "preserve and regression-check only where affected",
       "rewrite_phase": "R3",
       "owner": "qualification and Barista",
-      "rewrite_status": "planned",
-      "acceptance": "Frozen paired quality/resource/interference profiles, redacted receipts, restored prior state and the exact Barista model/tool/authority suite before enabling the operator panel."
+      "rewrite_status": "partial",
+      "acceptance": "Frozen paired quality/resource/interference profiles, redacted receipts, restored prior state and the exact Barista model/tool/authority suite before enabling the operator panel.",
+      "implementation_boundary": "Diagnostics streams bounded service and worker logs. Parsed log views remain open."
     },
     {
       "id": "F177",
@@ -2325,8 +2344,9 @@
       "disposition": "core maintenance drain/pause/resume with saved policies preserved",
       "rewrite_phase": "R2",
       "owner": "admission and operator workflows",
-      "rewrite_status": "planned",
+      "rewrite_status": "partial",
       "acceptance": "Shared-pool and actual-slot tests; five active requests and more idle threads than slots with unchanged context; fair bounded queues, explicit caps, cancellation and unified Library journey.",
+      "implementation_boundary": "Operators can pause and resume new work; queued work drains. Scheduled maintenance windows remain open.",
       "constraint": "Pause/drain/resume must preserve saved policies and expose pending active work."
     },
     {
@@ -2420,8 +2440,9 @@
       "disposition": "One coherent search/selection/acquisition flow with understandable repos/quants, hardware suitability, integrated progress/downloaded state, working enabled controls and actual service verification; no fragmented Downloads/Downloaded tasks",
       "rewrite_phase": "R2",
       "owner": "admission and operator workflows",
-      "rewrite_status": "planned",
+      "rewrite_status": "partial",
       "acceptance": "Shared-pool and actual-slot tests; five active requests and more idle threads than slots with unchanged context; fair bounded queues, explicit caps, cancellation and unified Library journey.",
+      "implementation_boundary": "One Library journey covers search, quant choice, download progress, engine install and add with a chosen policy, plus upload and import. Repository companions remain open.",
       "constraint": "Begin the unified discovery-to-running Library in R2; complete lifecycle in R4. No fragmented Downloads destination."
     },
     {
@@ -2432,8 +2453,9 @@
       "disposition": "P1 safely retires producer controls/APIs/tools and strengthens existing-variant selection; P2 compares external variants; P3 protects complete acquired revisions. Preserve artifacts and unresolved writers; no local converter/quantizer/exporter in any phase",
       "rewrite_phase": "R2",
       "owner": "admission and operator workflows",
-      "rewrite_status": "planned",
+      "rewrite_status": "partial",
       "acceptance": "Shared-pool and actual-slot tests; five active requests and more idle threads than slots with unchanged context; fair bounded queues, explicit caps, cancellation and unified Library journey.",
+      "implementation_boundary": "Library offers published GGUF variants and never converts or quantizes weights.",
       "constraint": "No converter/quantizer/exporter in any phase. Preserve retained artifacts and unresolved writer ownership."
     }
   ]

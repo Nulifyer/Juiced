@@ -4,6 +4,10 @@ This isolated rewrite runs a Rust model supervisor and a Bun/TypeScript/React co
 
 The [plan](PLAN.md) and [feature crosswalk](FEATURE-COVERAGE.json) retain all 211 catalogue features and six Juiced requirements. The current implementation covers selected foundation, lifecycle, artifact, cache, admission and protocol pipelines. It does not replace the release service or migrate production state. See [verification](VERIFICATION.md) for executed checks and open release gates.
 
+## Console
+
+The console has nine pages: Dashboard, Models (with Aliases), Loading policy, Library (Find models, Files on disk, Import), Backends & hardware, Cache (Sessions, Snapshots), Test services, Diagnostics and Connect. Each page has at most one tab strip and one side inspector. Data refreshes live, so there are no refresh buttons except Retry after a failure.
+
 ## Run an isolated preview
 
 From `juiced/rewrite/`:
@@ -396,3 +400,17 @@ The library catalog adds SD Turbo (`Green-Sky/SD-Turbo-GGUF`, `sd_turbo-f16-q8_0
 On the RTX 5080 host, the sd.cpp `sm_120` install (585,048,376 bytes) took 88.4 s and Kokoros CPU 12.7 s. SD Turbo (2.02 GB) generated a 512x512, 4-step PNG in 19.1 s cold, including worker start, and 0.35 s warm. Kokoro produced 5.6 s of 24 kHz WAV in 3.7 s cold and 1.1 s warm.
 
 Companion-file plan for modern image models: Z-Image Turbo, Qwen-Image and Flux.2 need a diffusion GGUF plus a VAE and a text-encoder LLM, often from different repositories. Today these work after acquiring each file with `POST /v1/juiced/artifacts/pull` (URL and SHA-256) and publishing an artifact set through `POST /v1/juiced/artifacts/sets` with `vae` and `encoder` roles. One-call support needs cross-repository catalog companions in `library/pull` and VRAM-aware estimates.
+
+## Idle unload and memory pressure
+
+On demand models unload after `idle_unload_after_ms` without requests (default 900000, 0 means never; maximum 30 days). A model can override it with its own `idle_unload_after_ms`, where null inherits the service value. Hot models never unload on their own. A model with work in flight, queued or starting never unloads; the timer restarts after each request. Saved sessions are written before the worker stops.
+
+When a load would exceed `resident_budget_bytes` (or protected host memory), Juiced unloads the least recently used idle On demand model and retries until the new model fits. Hot, busy and loading models are never evicted. If nothing can be evicted, the `resident_budget` error names the models holding memory.
+
+`GET /v1/juiced/residency` returns the service default and each model's effective setting. `POST /v1/juiced/residency` takes `{"expected_generation":N,"idle_unload_after_ms":MS}` for the default or adds `"model":"ID"` for one model (null inherits). Model views carry a `residency` object with `last_used_unix_ms`, `idle_unload_at_unix_ms` and `last_unload` (`idle`, `pressure` or `operator`). Ollama `keep_alive` on `/api/chat`, `/api/generate` and `/api/embed` sets a temporary per-model value: seconds, a duration such as `"5m"`, 0 to unload after the reply, or a negative value to keep the model loaded.
+
+## Import settings from Juiced 0.9
+
+Mount the old data volume under an import root (`/data/import` in the container) and open Library › Import. Pick the old `config` folder to see each model with its weights, the settings that carry over, the engine Juiced would use and any conflicts. Import registers the selected models in one change. Weights stay where they are and the old folder is never written. Imported models start Disabled unless you pick On demand or Hot; the previous policy is shown as a hint.
+
+The API is `POST /v1/juiced/import/native` with `{"action":"preview","source":DIR}` and then `{"action":"apply","source":DIR,"expected_generation":N,"aliases":true,"models":[{"native_id","id","policy"}]}`. Models whose engine is not installed come back as `engine_install_needed`; install the engine and apply again. Re-applying skips models that are already imported. The offline `--import-native-settings-copy` command still works.
