@@ -57,7 +57,7 @@ fn rtx_5080_resolves_the_sm_120_cuda_build_and_ggml_cpu_vulkan_builds() {
 }
 
 #[test]
-fn strix_point_resolves_gfx1150_rocm_builds_and_never_selects_hybrid() {
+fn strix_point_resolves_gfx1150_rocm_builds_and_selects_hybrid_only_on_request() {
     let host = report(&strix_host(true));
     let rocm = resolve(Engine::LlamaCpp, "rocm", &host).unwrap();
     assert_eq!(rocm.repository, "lemonade-sdk/llamacpp-rocm");
@@ -71,20 +71,58 @@ fn strix_point_resolves_gfx1150_rocm_builds_and_never_selects_hybrid() {
         resolve(Engine::LlamaCpp, "cuda", &host).unwrap_err(),
         Unresolved::NoMatchingGpu
     );
+    let hybrid = resolve(Engine::LlamaCpp, "hybrid-rocm", &host).unwrap();
+    assert_eq!(hybrid.repository, "Nulifyer/llama-xdna-hybrid");
+    assert_eq!(hybrid.tag, "rocm-v0.3.2");
     assert_eq!(
-        resolve(Engine::LlamaCpp, "hybrid-rocm", &host).unwrap_err(),
-        Unresolved::BackendUnknown
+        hybrid.asset,
+        "llama-xdna-hybrid-linux-rocm-gfx1150-x86_64.tar.gz"
+    );
+    assert_eq!(hybrid.gpu_target, Some("gfx1150"));
+    assert_eq!(
+        hybrid.sha256,
+        Some("f9d2825c59a2c7a755c36a6482a20525ebf16521441e1b3b4860c709c1016a1b")
+    );
+    let flm = resolve(Engine::FastFlowLm, "npu", &host).unwrap();
+    assert_eq!(flm.repository, "ROCm/FastFlowLM");
+    assert_eq!(flm.tag, "v1.0.12");
+    assert_eq!(flm.asset, "fastflowlm_1.0.12_linux.tar.gz");
+    assert_eq!(flm.engine.entrypoint(), "flm-real");
+    assert_eq!(
+        flm.sha256,
+        Some("626fbee5e5206a215a8c2c4d3d961055cbf7289d257d36599e9fef38f2f555a8")
     );
     let inventory = inventory(&host);
     assert_eq!(
         inventory.recommendations["llamacpp"].as_deref(),
         Some("rocm")
     );
+    assert_eq!(inventory.recommendations["flm"].as_deref(), Some("npu"));
     assert_eq!(
         choose(
             Engine::LlamaCpp,
             &inventory,
             &host,
+            &[],
+            Some("hybrid-rocm")
+        ),
+        Err(ChoiceError::NotInstalled {
+            backend: "hybrid-rocm".into(),
+            gpu_target: Some("gfx1150".into()),
+            installable: true,
+        })
+    );
+    let mut no_npu = host.clone();
+    no_npu.devices.npus.clear();
+    assert_eq!(
+        resolve(Engine::LlamaCpp, "hybrid-rocm", &no_npu).unwrap_err(),
+        Unresolved::NoMatchingNpu
+    );
+    assert_eq!(
+        choose(
+            Engine::LlamaCpp,
+            &super::tests::inventory(&no_npu),
+            &no_npu,
             &[],
             Some("hybrid-rocm")
         ),
@@ -487,13 +525,6 @@ fn traversal_absolute_links_escapes_devices_and_duplicates_are_refused_before_wr
                 b.symlink("l", "/etc/passwd");
             }),
             "archive_link_escape",
-        ),
-        (
-            "link-directory",
-            Box::new(|b| {
-                b.dir("d/").file("d/f", 0o644, b"x").symlink("l", "d");
-            }),
-            "archive_directory_link",
         ),
         (
             "link-then-file-below",
@@ -1361,4 +1392,218 @@ fn image_and_speech_engines_resolve_pinned_linux_builds() {
             .as_deref(),
         Some("cuda")
     );
+}
+
+/// Krackan Point pairs an XDNA 2 NPU with a gfx1152 iGPU, which no pinned ROCm llama.cpp or
+/// sd.cpp release publishes.
+fn krackan_host() -> HostReport {
+    let tree = strix_host(true);
+    tree.file(
+        "sys/class/kfd/kfd/topology/nodes/1/properties",
+        "cpu_cores_count 0\nsimd_count 16\ngfx_target_version 110502\nvendor_id 4098\ndevice_id 5390\ndrm_render_minor 128\n",
+    );
+    report(&tree)
+}
+
+#[test]
+fn unpublished_recommendations_fall_to_the_best_published_backend() {
+    let host = krackan_host();
+    let inventory = inventory(&host);
+    assert_eq!(
+        inventory.recommendations["llamacpp"].as_deref(),
+        Some("rocm")
+    );
+    assert_eq!(
+        resolve(Engine::LlamaCpp, "rocm", &host).unwrap_err(),
+        Unresolved::NoMatchingGpu
+    );
+    let recommendation = recommended(Engine::LlamaCpp, &inventory, &host).unwrap();
+    assert_eq!(recommendation.backend, "vulkan");
+    assert_eq!(recommendation.unpublished.as_deref(), Some("rocm"));
+    let images = recommended(Engine::StableDiffusionCpp, &inventory, &host).unwrap();
+    assert_eq!(images.backend, "vulkan");
+    let installed = [Installed {
+        package: "vulkan-package".into(),
+        engine: Some(Engine::LlamaCpp),
+        backend: Some("vulkan".into()),
+        gpu_target: None,
+        tag: Some("b11393".into()),
+        installed: true,
+        declared_host_match: true,
+    }];
+    let choice = choose(Engine::LlamaCpp, &inventory, &host, &installed, None).unwrap();
+    assert_eq!(choice.backend, "vulkan");
+    assert!(choice.reason.contains("no rocm build"), "{}", choice.reason);
+    let rows = installable(&inventory, &host, &installed);
+    let row = |backend: &str| {
+        rows.iter()
+            .find(|row| row.engine == Engine::LlamaCpp && row.backend == backend)
+            .unwrap()
+    };
+    assert!(row("vulkan").recommended);
+    assert!(!row("rocm").recommended);
+    assert_eq!(
+        row("hybrid-rocm").unresolved,
+        Some(Unresolved::NoMatchingGpu)
+    );
+    let strix = report(&strix_host(true));
+    let strix_inventory = super::tests::inventory(&strix);
+    let recommendation = recommended(Engine::LlamaCpp, &strix_inventory, &strix).unwrap();
+    assert_eq!(recommendation.backend, "rocm");
+    assert_eq!(recommendation.unpublished, None);
+}
+
+#[test]
+fn unused_directory_aliases_are_dropped() {
+    let mut builder = TarBuilder::default();
+    builder
+        .dir("d/")
+        .file("d/f", 0o644, b"x")
+        .symlink("l", "d")
+        .symlink("m", "l");
+    let (directory, result) = unpack(&builder, &LIMITS);
+    assert_eq!(result.unwrap().aliases_dropped, 2);
+    assert_eq!(names(&directory.path().join("tree")), ["d/f"]);
+}
+
+#[test]
+fn library_aliases_in_other_directories_keep_one_copy_there() {
+    let mut builder = TarBuilder::default();
+    builder
+        .dir("fastflowlm/")
+        .file("fastflowlm/flm-real", 0o755, b"binary")
+        .file("fastflowlm/lib/libxrt_core.so.2.25.00", 0o755, b"core")
+        .symlink("fastflowlm/lib/libxrt_core.so.2", "libxrt_core.so.2.25.00")
+        .symlink("fastflowlm/lib/libxrt_core.so", "libxrt_core.so.2")
+        .symlink(
+            "fastflowlm/lib/x86_64-linux-gnu/libxrt_core.so.2.25.00",
+            "../libxrt_core.so.2.25.00",
+        )
+        .symlink(
+            "fastflowlm/lib/x86_64-linux-gnu/libxrt_core.so.2",
+            "../libxrt_core.so.2.25.00",
+        )
+        .symlink(
+            "fastflowlm/lib/x86_64-linux-gnu/notes",
+            "../libxrt_core.so.2.25.00",
+        );
+    let (directory, result) = unpack(&builder, &LIMITS);
+    let extracted = result.unwrap();
+    assert_eq!(extracted.files, 3);
+    let tree = directory.path().join("tree");
+    assert_eq!(
+        names(&tree),
+        [
+            "fastflowlm/flm-real",
+            "fastflowlm/lib/libxrt_core.so.2",
+            "fastflowlm/lib/x86_64-linux-gnu/libxrt_core.so.2",
+        ]
+    );
+    assert_eq!(
+        std::fs::read(tree.join("fastflowlm/lib/x86_64-linux-gnu/libxrt_core.so.2")).unwrap(),
+        b"core"
+    );
+    let root = archive::bundle_root(&tree).unwrap();
+    let described = describe(&root, Engine::FastFlowLm, &LIMITS, &AtomicBool::new(false)).unwrap();
+    assert_eq!(described.bundle.entrypoint, PathBuf::from("flm-real"));
+    assert_eq!(described.bundle.implementation_id, "fastflowlm");
+    assert_eq!(
+        described.bundle.library_directories,
+        [
+            PathBuf::from("."),
+            "lib".into(),
+            "lib/x86_64-linux-gnu".into()
+        ]
+    );
+}
+
+/// Extracts and describes the published FLM and hybrid archives exactly as installation
+/// does. Set JUICED_TEST_REAL_FLM_ARCHIVE and/or JUICED_TEST_REAL_HYBRID_ARCHIVE to the
+/// downloaded release assets; the digests are checked against the pinned catalog rows.
+#[test]
+#[ignore = "needs downloaded release archives"]
+fn published_npu_archives_extract_and_describe_within_bundle_limits() {
+    let mut checked = 0;
+    for (variable, backend) in [
+        ("JUICED_TEST_REAL_FLM_ARCHIVE", "npu"),
+        ("JUICED_TEST_REAL_HYBRID_ARCHIVE", "hybrid-rocm"),
+    ] {
+        let Some(path) = std::env::var_os(variable) else {
+            continue;
+        };
+        let build = catalog::BUILDS
+            .iter()
+            .find(|build| build.backend == backend)
+            .unwrap();
+        let cancelled = AtomicBool::new(false);
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().len(),
+            build.archive_bytes,
+            "{variable}"
+        );
+        assert_eq!(
+            archive::file_sha256(Path::new(&path), &cancelled).unwrap(),
+            build.sha256.unwrap(),
+            "{variable}"
+        );
+        let directory = tempfile::tempdir_in(Path::new(&path).parent().unwrap()).unwrap();
+        let tree = directory.path().join("tree");
+        std::fs::create_dir(&tree).unwrap();
+        let extracted =
+            extract(Path::new(&path), build.format, &tree, &LIMITS, &cancelled).unwrap();
+        let root = archive::bundle_root(&tree).unwrap();
+        let described = describe(&root, build.engine, &LIMITS, &cancelled).unwrap();
+        described.bundle.validate(build.engine.provider()).unwrap();
+        let verified = described
+            .bundle
+            .verify(std::time::Instant::now() + std::time::Duration::from_secs(600))
+            .unwrap();
+        let mirrored = |relative: &str| root.join(relative).is_file();
+        match backend {
+            "npu" => {
+                for library in [
+                    "libxrt_core.so.2",
+                    "libxrt_coreutil.so.2",
+                    "libxrt_driver_xdna.so.2",
+                ] {
+                    assert!(mirrored(&format!("lib/{library}")), "{library}");
+                    assert!(
+                        mirrored(&format!("lib/x86_64-linux-gnu/{library}")),
+                        "{library}"
+                    );
+                }
+                assert!(mirrored("flm") && mirrored("xclbins/Gemma3-4B-NPU2/attn.xclbin"));
+            }
+            _ => {
+                for library in [
+                    "libxrt_core.so.2",
+                    "libxrt_coreutil.so.2",
+                    "libxrt_driver_xdna.so.2",
+                ] {
+                    assert!(
+                        mirrored(&format!("xrt/lib/x86_64-linux-gnu/{library}")),
+                        "{library}"
+                    );
+                }
+                assert!(
+                    mirrored("hybrid-server")
+                        && mirrored("libggml-xdna.so")
+                        && mirrored("bfp16_gemm.xclbin")
+                );
+            }
+        }
+        eprintln!(
+            "{variable}: files={} bytes={} aliases_materialized={} aliases_dropped={} bundle_files={} library_directories={} entrypoint={} digest={}",
+            extracted.files,
+            extracted.bytes,
+            extracted.aliases_materialized,
+            extracted.aliases_dropped,
+            described.bundle.files.len(),
+            described.bundle.library_directories.len(),
+            described.bundle.entrypoint.display(),
+            verified.digest,
+        );
+        checked += 1;
+    }
+    assert!(checked > 0, "set a JUICED_TEST_REAL_*_ARCHIVE variable");
 }

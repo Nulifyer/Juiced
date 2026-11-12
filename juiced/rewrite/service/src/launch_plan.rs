@@ -111,6 +111,24 @@ impl CapturedEnvironment {
     }
 }
 
+/// FLM serves from the store that holds the registered checkpoint's `config.json`
+/// (`<store>/models/<repo>/config.json`).
+fn flm_store(model: &Path) -> Result<(String, String), Error> {
+    model
+        .parent()
+        .and_then(Path::parent)
+        .filter(|models| models.file_name().is_some_and(|name| name == "models"))
+        .and_then(Path::parent)
+        .and_then(Path::to_str)
+        .map(|store| (crate::flm::MODEL_PATH_ENV.to_owned(), store.to_owned()))
+        .ok_or_else(|| {
+            Error::new(
+                "flm_model_unbound",
+                "An FLM model must be registered from its checkpoint config.json in the FLM store.",
+            )
+        })
+}
+
 /// eSpeak NG silently ignores data directories longer than its fixed path buffer (160 bytes
 /// on POSIX), so Kokoros reads its bundled phoneme data through a short private link.
 pub(crate) fn phoneme_workspace(
@@ -220,6 +238,7 @@ pub(crate) struct LaunchPlan {
     configuration: crate::runtime_inputs::ConfigurationInputs,
     native_generation: Option<Arc<crate::native_store::generations::PreparedBinding>>,
     runtime_package: Option<Arc<crate::runtime_packages::Lease>>,
+    adapter_environment: Vec<(String, String)>,
 }
 
 #[derive(Serialize)]
@@ -377,6 +396,31 @@ impl LaunchPlan {
         if managed_cache {
             digest.update(b"\0juiced-launch-managed-slot-save-v1\0");
         }
+        let hybrid_root = crate::hybrid::root(profile.adapter, bindings.bundle.as_deref());
+        let mut adapter_arguments = template.arguments().to_vec();
+        let hybrid = crate::hybrid::apply(hybrid_root, &mut adapter_arguments)
+            .map_err(|error| Error::new(error.code, error.message))?;
+        let mut adapter_environment = hybrid.environment;
+        if profile.adapter == Provider::FastFlowLm {
+            let root = bindings.bundle.as_ref().ok_or_else(|| {
+                Error::new(
+                    "flm_runtime_unbound",
+                    "FLM models run only from an installed FastFlowLM engine package.",
+                )
+            })?;
+            adapter_environment.extend(crate::flm::runtime_environment(&root.root));
+            adapter_environment.push(flm_store(bindings.model.path())?);
+        }
+        for (key, value) in &adapter_environment {
+            digest.update(b"\0juiced-launch-adapter-environment-v1\0");
+            digest.update(key.as_bytes());
+            digest.update(b"=");
+            digest.update(value.as_bytes());
+        }
+        for argument in &hybrid.prefix {
+            digest.update(b"\0juiced-launch-adapter-prefix-v1\0");
+            digest.update(argument.as_bytes());
+        }
         let fingerprint = Arc::from(format!("{:x}", digest.finalize()));
         let model = bindings.model.path().as_os_str().to_str().ok_or_else(|| {
             Error::new(
@@ -451,6 +495,11 @@ impl LaunchPlan {
         if managed_cache {
             args.extend(["--slot-save-path".to_owned(), cache.to_owned()]);
         }
+        crate::hybrid::apply(hybrid_root, &mut args)
+            .map_err(|error| Error::new(error.code, error.message))?;
+        if !hybrid.prefix.is_empty() {
+            args.splice(0..0, hybrid.prefix.iter().cloned());
+        }
         if profile.adapter == Provider::WhisperCpp {
             let workspace = bindings.workspace.as_ref().ok_or_else(|| {
                 Error::new(
@@ -504,6 +553,7 @@ impl LaunchPlan {
             configuration: bindings.configuration,
             native_generation,
             runtime_package,
+            adapter_environment,
         })
     }
 
@@ -609,6 +659,16 @@ impl LaunchPlan {
         let mut command = tokio::process::Command::new(self.executable.path());
         command.args(&self.args);
         self.environment.apply(&mut command);
+        for (key, value) in &self.adapter_environment {
+            let mut value = OsString::from(value);
+            if key == "LD_LIBRARY_PATH"
+                && let Some(inherited) = self.environment.0.get(std::ffi::OsStr::new(key))
+            {
+                value.push(":");
+                value.push(inherited);
+            }
+            command.env(key, value);
+        }
         if let Some(workspace) = &self.workspace {
             command.current_dir(workspace.path());
             if self.adapter == Provider::Kokoros {

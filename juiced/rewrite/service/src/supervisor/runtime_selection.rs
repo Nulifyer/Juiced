@@ -32,6 +32,13 @@ pub(super) fn package_error(error: crate::runtime_packages::Error) -> ApiError {
             "The package declares a different operating system or CPU target from this service. Select a package for this service target. Matching labels still require separate binary, ABI and hardware qualification.",
         );
     }
+    if error.reason() == "runtime_index_publishing" {
+        return ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            error.reason(),
+            "An engine install is still saving its record. Retry in a moment.",
+        );
+    }
     ApiError::new(
         match error.reason() {
             "package_not_found" => StatusCode::NOT_FOUND,
@@ -143,7 +150,19 @@ impl Manager {
         let active = self.runtime_importing.load(Ordering::Acquire);
         tokio::task::spawn_blocking(move || {
             let mut inventory = if let Some(store) = store {
-                store.inventory().map_err(package_error)?
+                // An install publishing its index blocks reads for milliseconds; wait it out.
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+                loop {
+                    match store.inventory() {
+                        Err(error)
+                            if error.reason() == "runtime_index_publishing"
+                                && std::time::Instant::now() < deadline =>
+                        {
+                            std::thread::sleep(std::time::Duration::from_millis(20));
+                        }
+                        result => break result.map_err(package_error)?,
+                    }
+                }
             } else {
                 serde_json::json!({"schema_version":1,"generation":0,"packages":[],"read_only":true,"compatibility":"unqualified"})
             };

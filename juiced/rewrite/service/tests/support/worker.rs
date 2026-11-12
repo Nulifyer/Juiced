@@ -1147,9 +1147,99 @@ fn chatter(id: &str, bytes: usize) {
     let _ = stdout.flush();
 }
 
+const RECORDED_ENVIRONMENT: [&str; 13] = [
+    "FLM_MODEL_PATH",
+    "XILINX_XRT",
+    "LD_LIBRARY_PATH",
+    "GGML_BACKEND_PATH",
+    "GGML_XDNA_FAIL_CLOSED",
+    "GGML_XDNA_EXPLICIT_PHASE",
+    "GGML_XDNA_GPU_DEVICE",
+    "GGML_XDNA_MAX_COPY_GB",
+    "GGML_XDNA_MIN_BATCH",
+    "HYBRID_GPU_DEVICE",
+    "HYBRID_REQUIRE_NPU",
+    "LEMONADE_API_KEY",
+    "LEMONADE_ADMIN_API_KEY",
+];
+
+fn record_launch(path: &std::path::Path, args: &[String]) {
+    use std::io::Write as _;
+    let mut line = format!("argv:{}\n", args[1..].join(" "));
+    for name in RECORDED_ENVIRONMENT {
+        if let Some(value) = std::env::var_os(name) {
+            line.push_str(&format!("{name}={}\n", value.to_string_lossy()));
+        }
+    }
+    let mirror = std::env::current_exe().ok().and_then(|exe| {
+        exe.parent()
+            .map(|directory| directory.join("lib/x86_64-linux-gnu/libxrt_core.so.2"))
+    });
+    if mirror.is_some_and(|mirror| !mirror.is_file()) {
+        line.push_str("missing-mirror\n");
+    }
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        let _ = file.write_all(line.as_bytes());
+    }
+}
+
+/// Answers the FLM helper subcommands Juiced runs outside `serve`. Helpers start with a
+/// cleared environment, so they record into the FLM store instead.
+fn flm_helper(args: &[String]) -> i32 {
+    let Some(store) = std::env::var_os("FLM_MODEL_PATH").map(PathBuf::from) else {
+        return 2;
+    };
+    record_launch(&store.join("helpers.log"), args);
+    let model = store.join("models/Gemma3-1B-NPU2");
+    match args[1].as_str() {
+        "list" => {
+            let installed = model.join("config.json").is_file();
+            println!(
+                "{}",
+                json!({"models":[
+                    {"name":"gemma3:1b","installed":installed,"footprint":0.5,"label":[],"url":"https://huggingface.co/FastFlowLM/Gemma3-1B-NPU2/tree/main"},
+                    {"name":"embed-gemma:300m","installed":true,"url":"https://huggingface.co/FastFlowLM/Embedding-Gemma-300M-NPU2"}
+                ]})
+            );
+            0
+        }
+        "validate" => {
+            println!(
+                "{}",
+                json!({"ready":true,"amd_device_found":true,"memlock_ok":true})
+            );
+            0
+        }
+        _ => {
+            std::fs::create_dir_all(&model).unwrap();
+            println!("[FLM]  Overall progress: 50.0% (1/2 files)");
+            std::fs::write(
+                model.join("config.json"),
+                br#"{"max_position_embeddings":32768}"#,
+            )
+            .unwrap();
+            println!("[FLM]  Overall progress: 100.0% (2/2 files)");
+            0
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() {
     let args: Vec<String> = std::env::args().collect();
+    if let Some(path) = std::env::var_os("FIXTURE_LAUNCH_RECORD") {
+        record_launch(std::path::Path::new(&path), &args);
+    }
+    if matches!(
+        args.get(1).map(String::as_str),
+        Some("list" | "validate" | "pull")
+    ) {
+        std::process::exit(flm_helper(&args));
+    }
     let arg = |name: &str| {
         args.iter()
             .position(|value| value == name)
@@ -1233,6 +1323,7 @@ async fn main() {
     let fixture = Arc::new(fixture);
     let app = Router::new()
         .route("/health", get(|| async { "ok" }))
+        .route("/api/tags", get(|| async { Json(json!({"models":[]})) }))
         .route("/v1/models", get(|| async { Json(json!({"object":"list","data":[{"id":"fixture-media","object":"model"}]})) }))
         .route("/v1/images/generations", post(image_generation))
         .route("/sdapi/v1/txt2img", post(txt2img))

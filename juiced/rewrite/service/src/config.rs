@@ -257,6 +257,8 @@ pub enum Provider {
     Parakeet,
     Moonshine,
     Asr4all,
+    #[serde(rename = "fastflowlm")]
+    FastFlowLm,
 }
 
 impl Provider {
@@ -270,6 +272,7 @@ impl Provider {
             Self::Parakeet => Some("parakeet-redux"),
             Self::Moonshine => Some("moonshine-voice"),
             Self::Asr4all => Some("futo-transcribe-cpp"),
+            Self::FastFlowLm => Some("fastflowlm"),
         }
     }
     pub fn from_implementation(id: &str) -> Option<Self> {
@@ -281,6 +284,7 @@ impl Provider {
             "parakeet-redux" => Some(Self::Parakeet),
             "moonshine-voice" => Some(Self::Moonshine),
             "futo-transcribe-cpp" => Some(Self::Asr4all),
+            "fastflowlm" => Some(Self::FastFlowLm),
             _ => None,
         }
     }
@@ -291,12 +295,13 @@ impl Provider {
             }
             Self::StableDiffusionCpp => Some(Operation::ImageGeneration),
             Self::Kokoros => Some(Operation::Speech),
-            Self::ExternalHttp | Self::LlamaCpp => None,
+            Self::ExternalHttp | Self::LlamaCpp | Self::FastFlowLm => None,
         }
     }
     pub fn readiness_path(self) -> &'static str {
         match self {
             Self::StableDiffusionCpp | Self::Kokoros => "/v1/models",
+            Self::FastFlowLm => "/api/tags",
             Self::ExternalHttp
             | Self::LlamaCpp
             | Self::WhisperCpp

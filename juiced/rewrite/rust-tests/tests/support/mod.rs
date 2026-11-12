@@ -40,7 +40,7 @@ pub const READ_ROUTES: [&str; 11] = [
     "/models/{model}/options",
     "/juiced/voices",
 ];
-pub const OPERATOR_READ_ROUTES: [&str; 23] = [
+pub const OPERATOR_READ_ROUTES: [&str; 24] = [
     "/system-info",
     "/juiced/cache/inspect",
     "/juiced/cache/sessions",
@@ -64,8 +64,9 @@ pub const OPERATOR_READ_ROUTES: [&str; 23] = [
     "/juiced/residency",
     "/juiced/library/import-path",
     "/juiced/wyoming",
+    "/juiced/flm",
 ];
-pub const WRITE_ROUTES: [&str; 30] = [
+pub const WRITE_ROUTES: [&str; 32] = [
     "/juiced/runtime-packages/import",
     "/juiced/engines/install",
     "/juiced/models/add",
@@ -96,6 +97,8 @@ pub const WRITE_ROUTES: [&str; 30] = [
     "/juiced/library/import-path",
     "/juiced/import/native",
     "/juiced/wyoming",
+    "/juiced/flm/pull",
+    "/juiced/flm/models/add",
 ];
 pub const INFERENCE_ROUTES: [&str; 4] = [
     "/chat/completions",
@@ -696,7 +699,10 @@ impl Server {
         let (status, value) = self
             .json(Method::GET, &format!("/v1/{suffix}"), None, key)
             .await;
-        assert!(status.is_success(), "GET {suffix} returned {status}");
+        assert!(
+            status.is_success(),
+            "GET {suffix} returned {status}: {value}"
+        );
         value
     }
 

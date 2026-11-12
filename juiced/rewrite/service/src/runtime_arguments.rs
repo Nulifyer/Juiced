@@ -62,7 +62,7 @@ impl ArgumentTemplate {
         command: &str,
         arguments: &[String],
     ) -> Result<Self, Error> {
-        if fixture_command(command) {
+        if fixture_command(command) && adapter != Provider::FastFlowLm {
             return validate_selected(adapter, arguments, true);
         }
         validate(adapter, arguments)
@@ -247,7 +247,91 @@ pub fn validate(adapter: Provider, arguments: &[String]) -> Result<ArgumentTempl
             members: Vec::new(),
         });
     }
+    if adapter == Provider::FastFlowLm {
+        return validate_flm(arguments);
+    }
     validate_selected(adapter, arguments, false)
+}
+
+/// FLM serves a checkpoint name from its own store, so the model binding is the literal
+/// positional after `serve`; the registered model file only anchors launch identity.
+fn validate_flm(arguments: &[String]) -> Result<ArgumentTemplate, Error> {
+    bounded(arguments)?;
+    if crate::flm::checkpoint(arguments).is_none() {
+        return Err(Error::new(
+            "missing_runtime_binding",
+            "The FLM worker needs serve followed by one name:tag checkpoint.",
+        ));
+    }
+    let mut result = arguments[..2].to_vec();
+    let mut bindings = [None; 4];
+    let mut seen = std::collections::BTreeSet::new();
+    let mut position = 2;
+    while let Some(flag) = arguments.get(position) {
+        if !seen.insert(flag.as_str()) {
+            return Err(Error::new(
+                "duplicate_runtime_binding",
+                "An FLM worker argument was supplied more than once.",
+            ));
+        }
+        let value = arguments.get(position + 1).map(String::as_str);
+        match flag.as_str() {
+            "--port" | "--host" => {
+                let expected = if flag == "--port" {
+                    "{port}"
+                } else {
+                    "127.0.0.1"
+                };
+                if value != Some(expected) {
+                    return Err(Error::new(
+                        "invalid_runtime_binding",
+                        "Worker model, port, host and cache arguments must use their exact manager-owned bindings.",
+                    ));
+                }
+                if flag == "--port" {
+                    bindings[1] = Some(result.len() + 1);
+                } else {
+                    bindings[2] = Some(result.len() + 1);
+                }
+                result.extend([flag.clone(), expected.to_owned()]);
+                position += 2;
+            }
+            _ => match crate::flm::argument(flag, value) {
+                Ok(crate::flm::Arity::Flag) => {
+                    result.push(flag.clone());
+                    position += 1;
+                }
+                Ok(crate::flm::Arity::Value) => {
+                    result.extend([flag.clone(), value.unwrap_or_default().to_owned()]);
+                    position += 2;
+                }
+                Err(code) => {
+                    return Err(Error::new(
+                        code,
+                        "The FLM worker accepts only its reviewed serve flags with valid values.",
+                    ));
+                }
+            },
+        }
+    }
+    if bindings[1].is_none() {
+        return Err(Error::new(
+            "missing_runtime_binding",
+            "The selected worker needs one model binding, one port binding and its required loopback host.",
+        ));
+    }
+    if bindings[2].is_none() {
+        result.extend(["--host".into(), "127.0.0.1".into()]);
+    }
+    Ok(ArgumentTemplate {
+        arguments: result,
+        cache_binding: false,
+        adapter: Provider::FastFlowLm,
+        fixture: false,
+        typed_spans: Vec::new(),
+        bindings,
+        members: Vec::new(),
+    })
 }
 
 pub fn environment_is_reserved(name: &str) -> bool {
@@ -574,7 +658,7 @@ fn validate_selected(
                     "-t" | "--threads" | "--futo-commit" | "--futo-right"
                 )
                 .then_some(1),
-                Provider::Kokoros | Provider::ExternalHttp => None,
+                Provider::Kokoros | Provider::ExternalHttp | Provider::FastFlowLm => None,
             })
             .ok_or_else(|| {
                 Error::new(
@@ -647,7 +731,7 @@ fn forbidden(flag: &str, adapter: Provider) -> bool {
         return true;
     }
     match adapter {
-        Provider::ExternalHttp => false,
+        Provider::ExternalHttp | Provider::FastFlowLm => false,
         Provider::StableDiffusionCpp => matches!(
             flag,
             "--serve-html-path"
@@ -784,6 +868,9 @@ fn forbidden(flag: &str, adapter: Provider) -> bool {
 }
 
 fn llama_arity(flag: &str) -> Option<u8> {
+    if crate::hybrid::flag(flag) {
+        return Some(1);
+    }
     const SWITCHES: &[&str] = &[
         "--swa-full",
         "-kvu",

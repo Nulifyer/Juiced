@@ -136,7 +136,7 @@ podman run -d --name juiced -p 13305:13305 -v juiced-data:/data \
 
 `--group-add keep-groups` hands your own `video` and `render` memberships to the container under rootless Podman. Rootful Podman and Docker need the host's numeric group IDs instead: `--group-add "$(getent group render | cut -d: -f3)" --group-add "$(getent group video | cut -d: -f3)"`. Another option is `--user 0`, which makes the entrypoint read the group IDs from the device nodes before it drops to uid 10001.
 
-The ROCm builds from `lemonade-sdk/llamacpp-rocm` and `lemonade-sdk/whisper.cpp-rocm` bundle the ROCm runtime, 160 to 820 MB depending on the GPU target. The host needs only the in-kernel `amdgpu` driver. `system-info` reads the GPU's gfx target from KFD topology and picks the matching build.
+The ROCm builds from `lemonade-sdk/llamacpp-rocm` and `lemonade-sdk/whisper.cpp-rocm` bundle the ROCm runtime, 160 to 820 MB depending on the GPU target. The host needs only the in-kernel `amdgpu` driver. `system-info` reads the GPU's gfx target from KFD topology and picks the matching build. The pinned llama.cpp ROCm release publishes gfx103X, gfx110X, gfx1150, gfx1151, gfx120X, gfx908 and gfx90a builds, and whisper.cpp publishes gfx110X, gfx1150, gfx1151 and gfx120X. sd.cpp has no ROCm build in the catalog. When the recommended backend has no build for the detected target, for example gfx1152 or gfx942, automatic registration uses the best remaining backend that has one, usually Vulkan, and its `reason` names the skipped backend.
 
 I have not tested this recipe on AMD hardware. If an engine fails with memory-mapping errors, try `--security-opt seccomp=unconfined`.
 
@@ -149,15 +149,56 @@ podman run -d --name juiced -p 13305:13305 -v juiced-data:/data \
 
 The image ships Mesa's RADV (AMD) and ANV (Intel) drivers. It removes lavapipe, Mesa's CPU Vulkan driver, so a host without a GPU never reports Vulkan as available. Intel GPUs have no SYCL or Level Zero engine in the catalog. Vulkan is the only GPU path for Intel.
 
-### AMD and Intel NPUs
+### AMD NPUs (Ryzen AI, XDNA 2)
+
+Two engines use the XDNA 2 NPU in Ryzen AI 300-series and Strix Halo processors:
+
+- **FastFlowLM** (`fastflowlm`, backend `npu`) runs chat models on the NPU alone. Release `ROCm/FastFlowLM` v1.0.12 is pinned by digest.
+- **llama.cpp hybrid** (`llama.cpp`, backend `hybrid-rocm`) runs llama.cpp on a gfx1150 GPU (Radeon 880M/890M) and moves eligible prefill matrices to the NPU. Release `Nulifyer/llama-xdna-hybrid` rocm-v0.3.2 is pinned by digest. It is experimental, so Juiced never selects it automatically. Name it with `"backend":"hybrid-rocm"` in `POST /juiced/models/add`.
+
+The host needs the in-kernel `amdxdna` driver and its NPU firmware. Both engines bring their own XRT userspace. The hybrid engine also brings its own ROCm runtime, so the archive is about 1.1 GB and unpacks to 3.9 GB. Pass the NPU node, raise the locked-memory limit, and add the GPU nodes for the hybrid engine:
 
 ```bash
 podman run -d --name juiced -p 13305:13305 -v juiced-data:/data \
-  --device /dev/accel/accel0 --ulimit memlock=-1:-1 --group-add keep-groups \
+  --device /dev/accel/accel0 --device /dev/kfd --device /dev/dri \
+  --ulimit memlock=-1:-1 --group-add keep-groups \
   localhost/juiced-rewrite:dev
 ```
 
-`system-info` then reports the `amdxdna` or `intel_vpu` device and its access. No engine in the rewrite catalog runs on an NPU yet, so passthrough currently serves detection only. I have not tested NPU passthrough, and the `memlock` limit follows the `amdxdna` driver's requirement for pinned buffers.
+The XDNA driver pins buffers in memory, and FastFlowLM refuses to start below its locked-memory minimum. A container cannot raise the limit above the hard limit of the user that starts it. Rootless Podman therefore keeps the host user's limit, often 8192 KiB, even with `--ulimit memlock=-1:-1`. Check it with `ulimit -Hl` on the host. Raise it with `LimitMEMLOCK=infinity` in the user's systemd manager or a `memlock` line in `/etc/security/limits.d/`, or run the container with rootful Podman or Docker.
+
+At startup, the entrypoint logs a warning when a passed-through device is not readable and writable, when `/dev/kfd` arrives without `/dev/dri`, or when the locked-memory limit is not unlimited. `GET /system-info` reports the same conditions:
+
+- `devices.npus[]`: the `amdxdna` device, its `family` (`XDNA2`), `access`, and `firmware_version` and `driver_version` when sysfs exposes them.
+- `devices.gpus[].gfx_target`: the GPU target read from KFD topology.
+- `devices.limits.memlock`: `unlimited`, `limited` (with `memlock_bytes`) or `unknown`.
+- `backends[]`: `flm`/`npu` and `llamacpp`/`hybrid-rocm` with their state and reasons, for example `memlock_limited`, `npu_inaccessible`, `no_amd_npu`, or `amd_gpu_target_unsupported` for a GPU that is not gfx1150.
+
+FastFlowLM keeps its own model store at `/data/flm`. Install the engine, then pull and register a checkpoint:
+
+```bash
+curl -X POST http://localhost:13305/v1/juiced/engines/install \
+  -H 'content-type: application/json' \
+  -d '{"engine":"fastflowlm","backend":"npu","expected_generation":0}'
+curl http://localhost:13305/v1/juiced/flm          # NPU validation and the checkpoint list
+curl -X POST http://localhost:13305/v1/juiced/flm/pull \
+  -H 'content-type: application/json' -d '{"checkpoint":"gemma3:4b"}'
+curl -X POST http://localhost:13305/v1/juiced/flm/models/add \
+  -H 'content-type: application/json' -d '{"checkpoint":"gemma3:4b","policy":"on-demand"}'
+```
+
+Only chat checkpoints can be registered. FLM embedding and transcription checkpoints are listed but refused.
+
+Detection, installation, launch arguments and environment are covered by tests with fixture hardware only. Neither engine has run on NPU hardware under this image. Ryzen AI's Windows-only engine (`ryzenai-llm`) is reported as unavailable on Linux.
+
+### Intel NPUs
+
+```bash
+podman run -d --name juiced -p 13305:13305 -v juiced-data:/data \
+  --device /dev/accel/accel0 --group-add keep-groups localhost/juiced-rewrite:dev
+```
+
+`system-info` then reports the `intel_vpu` device and its access. No engine in the rewrite catalog runs on an Intel NPU, so passthrough serves detection only.
 
 ## Updating engines
 

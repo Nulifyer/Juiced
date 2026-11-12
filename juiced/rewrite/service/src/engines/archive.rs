@@ -18,7 +18,7 @@ pub struct Limits {
 }
 
 pub const LIMITS: Limits = Limits {
-    entries: 8192,
+    entries: 16384,
     files: crate::runtime_bundle::MAX_FILES,
     file_bytes: crate::runtime_bundle::MAX_FILE_BYTES,
     total_bytes: crate::runtime_bundle::MAX_TOTAL_BYTES,
@@ -312,8 +312,16 @@ impl<'a> Writer<'a> {
                 }
                 target = next.clone();
             }
+            // Links are never materialized, so a directory alias is dropped unless the
+            // archive also wrote entries beneath the alias path.
             if self.directories.contains(&target) {
-                return Err(ArchiveError::DirectoryLink);
+                if self.directories.contains(alias)
+                    || self.files.iter().any(|file| file.starts_with(alias))
+                {
+                    return Err(ArchiveError::DirectoryLink);
+                }
+                self.extracted.aliases_dropped += 1;
+                continue;
             }
             if self.files.contains(&target) {
                 groups.entry(target).or_default().push(alias.clone());
@@ -322,8 +330,12 @@ impl<'a> Writer<'a> {
             }
         }
         for (file, aliases) in groups {
+            let home = file.parent().map(Path::to_path_buf);
+            let (local, foreign): (Vec<_>, Vec<_>) = aliases
+                .into_iter()
+                .partition(|alias| alias.parent().map(Path::to_path_buf) == home);
             let keep = std::iter::once(&file)
-                .chain(aliases.iter())
+                .chain(local.iter())
                 .filter_map(|name| {
                     soname_rank(name).map(|rank| (rank, name.as_os_str().len(), name))
                 })
@@ -337,10 +349,63 @@ impl<'a> Writer<'a> {
                 }
                 fs::rename(self.root.join(&file), self.root.join(&keep))?;
                 self.files.remove(&file);
-                self.files.insert(keep);
+                self.files.insert(keep.clone());
                 self.extracted.aliases_materialized += 1;
             }
-            self.extracted.aliases_dropped += aliases.len() - usize::from(renamed);
+            self.extracted.aliases_dropped += local.len() - usize::from(renamed);
+            self.mirror_libraries(&keep, foreign)?;
+        }
+        Ok(())
+    }
+
+    /// Runtimes such as XRT locate plugins relative to the directory the loader resolved a
+    /// library from, so a library aliased from another directory keeps one copy there.
+    fn mirror_libraries(&mut self, file: &Path, aliases: Vec<PathBuf>) -> Result<(), ArchiveError> {
+        let mut directories: BTreeMap<PathBuf, Vec<PathBuf>> = BTreeMap::new();
+        for alias in aliases {
+            if shared_library(&alias) {
+                directories
+                    .entry(alias.parent().map(Path::to_path_buf).unwrap_or_default())
+                    .or_default()
+                    .push(alias);
+            } else {
+                self.extracted.aliases_dropped += 1;
+            }
+        }
+        for (directory, names) in directories {
+            self.check()?;
+            let keep = names
+                .iter()
+                .map(|name| {
+                    (
+                        soname_rank(name).unwrap_or(usize::MAX),
+                        name.as_os_str().len(),
+                        name,
+                    )
+                })
+                .min()
+                .map(|(_, _, name)| name.clone())
+                .expect("grouped aliases are nonempty");
+            self.extracted.aliases_dropped += names.len() - 1;
+            if self.files.contains(&keep) {
+                continue;
+            }
+            let size = fs::metadata(self.root.join(file))?.len();
+            self.extracted.files += 1;
+            let total = self
+                .extracted
+                .bytes
+                .checked_add(size)
+                .filter(|total| *total <= self.limits.total_bytes)
+                .ok_or(ArchiveError::SizeLimit)?;
+            if self.extracted.files > self.limits.files {
+                return Err(ArchiveError::EntryLimit);
+            }
+            self.ensure_directory(&directory)?;
+            fs::copy(self.root.join(file), self.root.join(&keep))?;
+            self.files.insert(keep);
+            self.extracted.bytes = total;
+            self.extracted.aliases_materialized += 1;
         }
         Ok(())
     }
@@ -560,7 +625,7 @@ pub fn describe(
         });
         sizes.push((path.clone(), *bytes));
     }
-    if library_directories.len() > 16 {
+    if library_directories.len() > crate::runtime_bundle::MAX_LIBRARY_DIRECTORIES {
         return Err(ArchiveError::Layout);
     }
     Ok(Described {

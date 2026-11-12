@@ -410,6 +410,10 @@ async fn engine_install_auto_registration_load_and_chat_use_the_installed_packag
         ),
         (
             json!({"engine":"llama.cpp","backend":"hybrid-rocm","expected_generation":0}),
+            "engine_build_unavailable",
+        ),
+        (
+            json!({"engine":"llama.cpp","backend":"metal","expected_generation":0}),
             "unknown_backend",
         ),
         (

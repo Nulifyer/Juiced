@@ -1,4 +1,4 @@
-use crate::hardware::{GpuVendor, HostReport};
+use crate::hardware::{GpuVendor, HostReport, NpuVendor};
 use serde::Serialize;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -26,10 +26,12 @@ pub enum Engine {
     Moonshine,
     #[serde(rename = "futo-transcribe.cpp")]
     Asr4all,
+    #[serde(rename = "fastflowlm")]
+    FastFlowLm,
 }
 
 impl Engine {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::LlamaCpp,
         Self::WhisperCpp,
         Self::StableDiffusionCpp,
@@ -37,6 +39,7 @@ impl Engine {
         Self::Parakeet,
         Self::Moonshine,
         Self::Asr4all,
+        Self::FastFlowLm,
     ];
     pub fn parse(value: &str) -> Option<Self> {
         match value {
@@ -49,6 +52,7 @@ impl Engine {
             "parakeet.cpp" | "parakeet" | "parakeet-redux" => Some(Self::Parakeet),
             "moonshine" | "moonshine-voice" => Some(Self::Moonshine),
             "futo-transcribe.cpp" | "futo-transcribe-cpp" | "asr4all" => Some(Self::Asr4all),
+            "fastflowlm" | "flm" => Some(Self::FastFlowLm),
             _ => None,
         }
     }
@@ -61,6 +65,7 @@ impl Engine {
             Self::Parakeet => "parakeet.cpp",
             Self::Moonshine => "moonshine",
             Self::Asr4all => "futo-transcribe.cpp",
+            Self::FastFlowLm => "fastflowlm",
         }
     }
     pub fn recipe(self) -> &'static str {
@@ -72,6 +77,7 @@ impl Engine {
             Self::Parakeet => "parakeet",
             Self::Moonshine => "moonshine",
             Self::Asr4all => "asr4all",
+            Self::FastFlowLm => "flm",
         }
     }
     pub fn provider(self) -> crate::config::Provider {
@@ -83,6 +89,7 @@ impl Engine {
             Self::Parakeet => crate::config::Provider::Parakeet,
             Self::Moonshine => crate::config::Provider::Moonshine,
             Self::Asr4all => crate::config::Provider::Asr4all,
+            Self::FastFlowLm => crate::config::Provider::FastFlowLm,
         }
     }
     pub fn entrypoint(self) -> &'static str {
@@ -94,6 +101,7 @@ impl Engine {
             Self::Parakeet => "parakeet-server",
             Self::Moonshine => "moonshine-server",
             Self::Asr4all => "futo-server",
+            Self::FastFlowLm => "flm-real",
         }
     }
     /// The model format alone selects these engines and their only native support row is
@@ -154,6 +162,10 @@ const PARAKEET: &str = "mudler/parakeet.cpp";
 const PARAKEET_TAG: &str = "v0.6.1";
 const MOONSHINE: &str = "lemonade-sdk/moonshine-server-rocm";
 const MOONSHINE_TAG: &str = "moonshine0.0.62";
+const FLM: &str = "ROCm/FastFlowLM";
+const FLM_TAG: &str = "v1.0.12";
+const HYBRID: &str = "Nulifyer/llama-xdna-hybrid";
+const HYBRID_TAG: &str = "rocm-v0.3.2";
 
 const fn linux(
     engine: Engine,
@@ -492,6 +504,30 @@ pub const BUILDS: &[Build] = &[
         ),
         ArchiveFormat::TarGz,
     ),
+    linux(
+        Engine::FastFlowLm,
+        "npu",
+        None,
+        (FLM, FLM_TAG),
+        (
+            "fastflowlm_1.0.12_linux.tar.gz",
+            45752536,
+            "626fbee5e5206a215a8c2c4d3d961055cbf7289d257d36599e9fef38f2f555a8",
+        ),
+        ArchiveFormat::TarGz,
+    ),
+    linux(
+        Engine::LlamaCpp,
+        "hybrid-rocm",
+        Some("gfx1150"),
+        (HYBRID, HYBRID_TAG),
+        (
+            "llama-xdna-hybrid-linux-rocm-gfx1150-x86_64.tar.gz",
+            1069727615,
+            "f9d2825c59a2c7a755c36a6482a20525ebf16521441e1b3b4860c709c1016a1b",
+        ),
+        ArchiveFormat::TarGz,
+    ),
 ];
 
 /// Engines with a native support row but no published release asset; they install only
@@ -521,6 +557,7 @@ pub enum Unresolved {
     BackendUnknown,
     NoMatchingGpu,
     NotPublished,
+    NoMatchingNpu,
 }
 
 /// Multi-GPU hosts get the highest CUDA compute capability with a published build and a
@@ -575,6 +612,26 @@ pub fn resolve(engine: Engine, backend: &str, host: &HostReport) -> Result<Build
                     candidates
                         .iter()
                         .find(|build| build.gpu_target == Some(asset))
+                        .map(|build| **build)
+                })
+                .ok_or(Unresolved::NoMatchingGpu)
+        }
+        "hybrid-rocm" => {
+            if !host
+                .devices
+                .npus
+                .iter()
+                .any(|npu| npu.vendor == NpuVendor::Amd && npu.family == Some("XDNA2"))
+            {
+                return Err(Unresolved::NoMatchingNpu);
+            }
+            gpus.iter()
+                .filter(|gpu| gpu.vendor == GpuVendor::Amd)
+                .filter_map(|gpu| gpu.family.as_deref())
+                .find_map(|family| {
+                    candidates
+                        .iter()
+                        .find(|build| build.gpu_target == Some(family))
                         .map(|build| **build)
                 })
                 .ok_or(Unresolved::NoMatchingGpu)
