@@ -354,6 +354,9 @@ impl Manager {
         let expected = request.expected_generation;
         tokio::spawn(async move {
             let result = manager.run_install(&running, policy, expected).await;
+            if result.is_ok() {
+                manager.resume_native_adoption();
+            }
             running.update(|status| {
                 match result {
                     Ok(package) => {

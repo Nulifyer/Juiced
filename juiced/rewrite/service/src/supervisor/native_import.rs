@@ -500,6 +500,31 @@ impl Manager {
                 }
                 match choice {
                     Ok(choice) => {
+                        if mapped
+                            .backend
+                            .as_deref()
+                            .is_some_and(|native| native != choice.backend)
+                        {
+                            let before = mapped.arguments.len();
+                            mapped.arguments.retain(|group| {
+                                !matches!(
+                                    group[0].as_str(),
+                                    "--device" | "-dev" | crate::hybrid::DEVICE_FLAG
+                                        | crate::hybrid::MEMORY_FLAG
+                                        | crate::hybrid::MIN_PROMPT_FLAG
+                                )
+                            });
+                            if mapped.arguments.len() != before {
+                                settings.push(crate::native_import::SettingRow {
+                                    scope: "saved",
+                                    key: "llamacpp_device".into(),
+                                    state: "ignored",
+                                    value: None,
+                                    target: None,
+                                    reason: "The native device belongs to a backend this host does not use; the engine default device applies.",
+                                });
+                            }
+                        }
                         let companion_bytes: u64 = bound
                             .iter()
                             .filter_map(|(companion, _)| companion.found.as_ref().ok())

@@ -21,24 +21,42 @@ const INSTALL_POLL: Duration = Duration::from_secs(2);
 const INSTALL_WAIT: Duration = Duration::from_secs(3 * 60 * 60);
 
 #[derive(Default)]
-pub struct Status(std::sync::Mutex<Value>);
+pub struct Status {
+    view: std::sync::Mutex<Value>,
+    target: std::sync::Mutex<Option<(PathBuf, Vec<PathBuf>)>>,
+    running: AtomicBool,
+}
+
+struct Running<'a>(&'a AtomicBool);
+
+impl Drop for Running<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
 
 impl Status {
     fn set(&self, value: Value) {
-        *self.0.lock().unwrap_or_else(|error| error.into_inner()) = value;
+        *self.view.lock().unwrap_or_else(|error| error.into_inner()) = value;
     }
     fn update(&self, change: impl FnOnce(&mut serde_json::Map<String, Value>)) {
-        let mut status = self.0.lock().unwrap_or_else(|error| error.into_inner());
+        let mut status = self.view.lock().unwrap_or_else(|error| error.into_inner());
         if !status.is_object() {
             *status = json!({});
         }
         change(status.as_object_mut().expect("adoption status object"));
     }
     fn view(&self) -> Value {
-        self.0
+        self.view
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .clone()
+    }
+    fn begin(&self) -> Option<Running<'_>> {
+        self.running
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .ok()
+            .map(|_| Running(&self.running))
     }
 }
 
@@ -87,8 +105,49 @@ impl Manager {
         self.native_adoption.set(json!({
             "state": "starting", "source": source, "extra_roots": extra_roots,
         }));
+        *self
+            .native_adoption
+            .target
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = Some((source.clone(), extra_roots.clone()));
         let manager = self.clone();
         tokio::spawn(async move {
+            manager.run_adoption(source, extra_roots).await;
+        })
+    }
+
+    /// Registers models still waiting for an engine once an installation completes.
+    pub(super) fn resume_native_adoption(self: &Arc<Self>) {
+        let Some((source, extra_roots)) = self
+            .native_adoption
+            .target
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
+        else {
+            return;
+        };
+        let manager = self.clone();
+        tokio::spawn(async move {
+            let pending = manager
+                .config
+                .lock()
+                .await
+                .native_adoption
+                .as_ref()
+                .is_some_and(|marker| !marker.pending.is_empty());
+            if pending {
+                manager.run_adoption(source, extra_roots).await;
+            }
+        });
+    }
+
+    async fn run_adoption(self: &Arc<Self>, source: PathBuf, extra_roots: Vec<PathBuf>) {
+        let Some(_running) = self.native_adoption.begin() else {
+            return;
+        };
+        {
+            let manager = self;
             let outcome = manager.adopt_native(source, extra_roots).await;
             if let Err(error) = outcome {
                 manager.logs().service(
@@ -106,7 +165,7 @@ impl Manager {
                     );
                 });
             }
-        })
+        }
     }
 
     async fn adopt_native(
