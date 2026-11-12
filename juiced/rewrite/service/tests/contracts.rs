@@ -326,6 +326,23 @@ async fn all_prefixes_enforce_regular_and_operator_authority() {
     );
 }
 
+// A process forked by a concurrent test holds the inherited lock descriptor until exec.
+async fn reopen(path: PathBuf) -> Arc<Manager> {
+    for _ in 0..200 {
+        match Manager::open(path.clone()) {
+            Err(error)
+                if error
+                    .downcast_ref::<std::io::Error>()
+                    .is_some_and(|error| error.kind() == std::io::ErrorKind::WouldBlock) =>
+            {
+                tokio::time::sleep(Duration::from_millis(5)).await
+            }
+            other => return other.unwrap(),
+        }
+    }
+    Manager::open(path).unwrap()
+}
+
 #[tokio::test]
 async fn policy_is_durable_and_concurrent_edits_have_one_winner() {
     let h = Harness::new();
@@ -343,7 +360,7 @@ async fn policy_is_durable_and_concurrent_edits_have_one_winner() {
         ..
     } = h;
     drop(manager);
-    let restarted = Manager::open(path).unwrap();
+    let restarted = reopen(path).await;
     let view = restarted.catalog().await;
     assert_eq!(view[0].revision, 1);
     assert_eq!(view[0].policy, winning.policy);
