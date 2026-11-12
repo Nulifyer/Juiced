@@ -186,7 +186,7 @@ Operators can also issue keys. `GET /v1/juiced/access` (operator) returns `{"sch
 | OpenAI | Chat completions, completions, Responses and embeddings through one forwarding owner; bounded selected whisper.cpp multipart transcription |
 | Anthropic | Fixed `/v1/messages` and `/v1/messages/count_tokens`, selected text/tools/SSE and native token counts |
 | Ollama | Fixed inference, embedding and discovery subset under `/api/*` |
-| MCP | Stateless JSON `/mcp`, explicit-model inference tools and credential/session-scoped cancellation |
+| MCP | Stateless JSON `/mcp`, explicit-model inference tools, credential/session-scoped cancellation, and operator-only `juiced_*` management tools that replay native routes with the caller's key |
 
 JSON bodies are bounded to 2 MiB; multipart transcription is bounded to 8 MiB including overhead. A shared inference-input budget defaults to 128 MiB and reserves each endpoint’s maximum before reading a body. Full capacity returns 503 before accepting another application body or loading a worker; disconnects release the claim. This bounds admitted wire-body capacity, not total process memory. Operator controls and health reads remain available. Original OpenAI body bytes are forwarded without a full parse/reserialization. Response-body lifetime owns upstream cancellation and the request slot. No caller credentials are forwarded. Metadata records exclude prompts, responses and keys.
 

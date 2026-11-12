@@ -11,6 +11,8 @@ export function chatTestTokenLimit(model: Pick<Model, "request_limits">): number
   return Math.min(1024, limit);
 }
 
+let mcpRequest = 0;
+
 export class Client {
   constructor(readonly base: string, private readonly key: string) {}
 
@@ -66,6 +68,23 @@ export class Client {
     } finally { reader.releaseLock(); }
     state.done = true;
     return state;
+  }
+
+  stream(path: string, body: unknown, signal?: AbortSignal): Promise<Response> {
+    const headers: Record<string, string> = { "Content-Type": "application/json", Accept: "text/event-stream" };
+    if (this.key) headers.Authorization = `Bearer ${this.key}`;
+    return fetch(`${this.base}/v1/${path}`, { method: "POST", headers, signal, cache: "no-store", redirect: "error", body: JSON.stringify(body) });
+  }
+
+  async mcp<T>(method: string, params: unknown, signal?: AbortSignal): Promise<T> {
+    const headers: Record<string, string> = { "Content-Type": "application/json", Accept: "application/json" };
+    if (this.key) headers.Authorization = `Bearer ${this.key}`;
+    const response = await fetch(`${this.base}/mcp`, { method: "POST", headers, signal, cache: "no-store", redirect: "error", body: JSON.stringify({ jsonrpc: "2.0", id: ++mcpRequest, method, params }) });
+    let value: any;
+    try { value = await response.json(); } catch { throw new ApiError(`The MCP gateway returned an unreadable response (${response.status}).`, response.status, "invalid_json"); }
+    if (value?.error) throw new ApiError(value.error.message ?? `The MCP request failed (${response.status}).`, response.status, String(value.error.data?.code ?? value.error.code ?? "mcp_failed"), value);
+    if (!response.ok) throw new ApiError(`The MCP request failed (${response.status}).`, response.status, "mcp_failed", value);
+    return value.result as T;
   }
 
   async binary(path: string, body: unknown, signal?: AbortSignal, maximum = 48 * 1024 * 1024): Promise<Blob> {

@@ -925,9 +925,24 @@ pub fn ollama_error(error: &CodecError) -> Value {
 pub enum McpDispatch {
     Reply(Value),
     Notification,
-    Cancel { request_id: Value },
-    ListModels { id: Value },
-    Inference { id: Value, request: ProtocolRequest },
+    Cancel {
+        request_id: Value,
+    },
+    ListModels {
+        id: Value,
+    },
+    ListTools {
+        id: Value,
+    },
+    Manage {
+        id: Value,
+        name: String,
+        args: Value,
+    },
+    Inference {
+        id: Value,
+        request: ProtocolRequest,
+    },
 }
 
 pub fn mcp_error(id: Value, code: i64, message: &str) -> Value {
@@ -1003,7 +1018,7 @@ pub fn mcp_request(mut input: Value) -> McpDispatch {
             json!({"protocolVersion":"2025-06-18","capabilities":{"tools":{}},"serverInfo":{"name":"juiced-mcp","version":crate::VERSION}}),
         )),
         "ping" => McpDispatch::Reply(mcp_result(id, json!({}))),
-        "tools/list" => McpDispatch::Reply(mcp_result(id, mcp_tools())),
+        "tools/list" => McpDispatch::ListTools { id },
         "tools/call" => {
             if fields(&params, &["name", "arguments", "_meta"]).is_err() {
                 return McpDispatch::Reply(mcp_error(
@@ -1029,6 +1044,13 @@ pub fn mcp_request(mut input: Value) -> McpDispatch {
                     -32602,
                     "Tool arguments must be an object.",
                 ));
+            }
+            if name.starts_with("juiced_") {
+                return McpDispatch::Manage {
+                    id,
+                    name: name.to_owned(),
+                    args,
+                };
             }
             if name == "lemonade_list_models" {
                 return if object(&args).unwrap().is_empty() {

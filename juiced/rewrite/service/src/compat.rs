@@ -107,6 +107,7 @@ pub const ENDPOINTS: &[Endpoint] = &[
 struct Gateway {
     manager: Arc<Manager>,
     pending: Arc<PendingMcp>,
+    app: Arc<std::sync::OnceLock<Router>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -183,7 +184,7 @@ impl PendingMcp {
     }
 }
 
-pub fn router(manager: Arc<Manager>) -> Router {
+pub fn router(manager: Arc<Manager>, app: Arc<std::sync::OnceLock<Router>>) -> Router {
     Router::new()
         .route("/v1/messages", post(messages))
         .route("/v1/messages/count_tokens", post(count_tokens))
@@ -202,6 +203,7 @@ pub fn router(manager: Arc<Manager>) -> Router {
         .with_state(Gateway {
             manager,
             pending: Arc::new(PendingMcp::default()),
+            app,
         })
 }
 
@@ -658,6 +660,46 @@ async fn mcp_message(
                 json!({"content":[{"type":"text","text":json!({"models":models}).to_string()}],"structuredContent":{"models":models},"isError":false}),
             ))
         }
+        McpDispatch::ListTools { id } => {
+            let mut tools = protocols::mcp_tools();
+            if let Some(list) = tools["tools"].as_array_mut() {
+                list.extend(crate::mcp_manage::tools(&context));
+            }
+            Some(protocols::mcp_result(id, tools))
+        }
+        McpDispatch::Manage { id, name, args } => {
+            if !crate::mcp_manage::is_management_tool(&name) {
+                return Some(protocols::mcp_error(id, -32602, "Unknown tool."));
+            }
+            let Some(app) = state.app.get().cloned() else {
+                return Some(protocols::mcp_error(
+                    id,
+                    -32603,
+                    "Management tools are not ready yet. Retry.",
+                ));
+            };
+            Some(
+                match crate::mcp_manage::call(app, &headers, &context, &name, args).await {
+                    Ok(value) => protocols::mcp_result(
+                        id,
+                        json!({"content":[{"type":"text","text":value.to_string()}],"structuredContent":value,"isError":false}),
+                    ),
+                    Err(crate::mcp_manage::Failure::Forbidden) => {
+                        let mut error =
+                            protocols::mcp_error(id, -32001, "This tool requires an operator key.");
+                        error["error"]["data"] = json!({"code":"forbidden","status":403});
+                        error
+                    }
+                    Err(crate::mcp_manage::Failure::InvalidParams(message)) => {
+                        protocols::mcp_error(id, -32602, &message)
+                    }
+                    Err(crate::mcp_manage::Failure::Route(failure)) => protocols::mcp_result(
+                        id,
+                        json!({"content":[{"type":"text","text":failure.to_string()}],"structuredContent":failure,"isError":true}),
+                    ),
+                },
+            )
+        }
         McpDispatch::Inference { id, request } => {
             let result = async {
                 let session = request_session(&headers).map_err(from_api)?;
@@ -682,8 +724,27 @@ async fn mcp_message(
         }
     }
 }
+/// A browser may call the gateway only from the page origin that the service itself served.
+fn same_origin(headers: &HeaderMap) -> bool {
+    let mut origins = headers.get_all(header::ORIGIN).iter();
+    let (Some(origin), None) = (origins.next(), origins.next()) else {
+        return false;
+    };
+    let mut hosts = headers.get_all(header::HOST).iter();
+    let (Some(host), None) = (hosts.next(), hosts.next()) else {
+        return false;
+    };
+    let (Ok(origin), Ok(host)) = (origin.to_str(), host.to_str()) else {
+        return false;
+    };
+    !host.is_empty()
+        && origin
+            .strip_prefix("http://")
+            .or_else(|| origin.strip_prefix("https://"))
+            .is_some_and(|authority| authority.eq_ignore_ascii_case(host))
+}
 fn mcp_transport(headers: &HeaderMap) -> Result<(), CodecError> {
-    if headers.contains_key(header::ORIGIN) {
+    if headers.contains_key(header::ORIGIN) && !same_origin(headers) {
         return Err(codec(
             403,
             "origin_not_allowed",
@@ -1158,7 +1219,16 @@ mod tests {
         assert!(mcp_transport(&headers).is_ok());
         headers.insert(header::ORIGIN, "https://untrusted.example".parse().unwrap());
         assert_eq!(mcp_transport(&headers).unwrap_err().status, 403);
+        headers.insert(header::HOST, "juiced.local:8080".parse().unwrap());
+        assert_eq!(mcp_transport(&headers).unwrap_err().status, 403);
+        headers.insert(header::ORIGIN, "http://juiced.local:8080".parse().unwrap());
+        assert!(mcp_transport(&headers).is_ok());
+        headers.insert(header::ORIGIN, "http://juiced.local:8081".parse().unwrap());
+        assert_eq!(mcp_transport(&headers).unwrap_err().status, 403);
+        headers.insert(header::ORIGIN, "null".parse().unwrap());
+        assert_eq!(mcp_transport(&headers).unwrap_err().status, 403);
         headers.remove(header::ORIGIN);
+        headers.remove(header::HOST);
         headers.insert("mcp-protocol-version", "2025-03-26".parse().unwrap());
         assert_eq!(mcp_transport(&headers).unwrap_err().status, 400);
     }

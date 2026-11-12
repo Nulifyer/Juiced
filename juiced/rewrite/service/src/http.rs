@@ -1244,7 +1244,10 @@ pub fn router(manager: Arc<Manager>, auth: Auth, ui: Option<PathBuf>) -> Router 
         .with_state(state.clone())
         .layer(Extension(wyoming))
         .layer(Extension(Arc::new(crate::realtime::Sessions::default())))
-        .merge(crate::compat::router(state.manager.clone()))
+        .merge(crate::compat::router(
+            state.manager.clone(),
+            state.probe.clone(),
+        ))
         .layer(DefaultBodyLimit::max(crate::admission::JSON_INGRESS_BYTES))
         .layer(middleware::from_fn_with_state(state.clone(), authorize));
     let _ = state.probe.set(app.clone());

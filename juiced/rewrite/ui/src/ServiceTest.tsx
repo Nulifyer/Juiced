@@ -53,7 +53,7 @@ type Turn = { role: "user" | "assistant"; content: string; reasoning?: string; t
 function inline(text: string) {
   return text.split(/(`[^`\n]+`|\*\*[^*\n]+\*\*)/).map((piece, index) => piece.startsWith("`") && piece.endsWith("`") && piece.length > 2 ? <code key={index}>{piece.slice(1, -1)}</code> : piece.startsWith("**") && piece.endsWith("**") && piece.length > 4 ? <strong key={index}>{piece.slice(2, -2)}</strong> : piece);
 }
-function Message({ text }: { text: string }) {
+export function Message({ text }: { text: string }) {
   const parts = text.split(/```[^\n]*\n?/);
   return <div className="message-text">{parts.map((part, index) => index % 2 ? <pre key={index} className="code-block">{part.replace(/\n$/, "")}</pre> : <p key={index}>{inline(part)}</p>)}</div>;
 }
