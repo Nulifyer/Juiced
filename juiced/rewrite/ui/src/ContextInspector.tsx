@@ -21,7 +21,8 @@ export function ContextInspector({ model, client, online, busy, policyDirty, onD
   const view = options.data?.model === model.id ? options.data : null;
   const observation = context.data?.model === model.id ? context.data : null;
   const imported = view?.options_authority === "native-settings";
-  const editable = view?.provider === "llama-cpp" && !model.loaded && model.state !== "loading" && model.active_requests === 0;
+  const reload = model.loaded && !imported;
+  const editable = view?.provider === "llama-cpp" && (!model.loaded || reload) && model.state !== "loading" && model.active_requests === 0;
   const blocked = !editable || !online || busy || policyDirty || !!options.error || !view || pendingSave !== null;
   const accept = (fresh: ModelOptions) => {
     const value = launchDraft(fresh.saved);
@@ -44,7 +45,7 @@ export function ContextInspector({ model, client, online, busy, policyDirty, onD
     setValidationError("");
     try {
       const settings = editedLaunchOptions(view, draft);
-      if (await mutate(`models/${encodeURIComponent(model.id)}/options`, { expected_revision: revision.current, options: settings }, `Saved launch settings for ${model.id}.`)) {
+      if (await mutate(`models/${encodeURIComponent(model.id)}/options`, { expected_revision: revision.current, options: settings, ...(reload ? { apply: "reload" } : {}) }, reload ? `Saved launch settings and restarted ${model.id}.` : `Saved launch settings for ${model.id}.`)) {
         setPendingSave(revision.current);
       }
     } catch (error) { setValidationError((error as Error).message); }
@@ -54,7 +55,7 @@ export function ContextInspector({ model, client, online, busy, policyDirty, onD
     if (fresh) { accept(fresh); setPendingSave(null); setValidationError(""); }
   }
   return <section className="inspector-section" aria-label="Context and launch profile">
-    <div className="section-heading"><div className="page-title"><h3>Launch settings</h3><HelpTip label="Launch settings">Engine: {view?.provider ?? "loading"}. Context is the total budget the engine starts with, shared by its slots. Empty fields keep the engine's own default. GPU layers 0 runs on CPU only. Saving keeps the loading policy and doesn't load the model.</HelpTip></div></div>
+    <div className="section-heading"><div className="page-title"><h3>Launch settings</h3><HelpTip label="Launch settings">Engine: {view?.provider ?? "loading"}. Context is the total budget the engine starts with, shared by its slots. Empty fields keep the engine's own default. GPU layers 0 runs on CPU only. Saving keeps the loading policy. A loaded model restarts with the new settings.</HelpTip></div></div>
     {options.error && <p role="alert" className="inline-error">{options.error}</p>}
     {context.error && <p role="alert" className="inline-error">{context.error}</p>}
     {view && <form aria-label="Launch profile" onSubmit={(event) => { event.preventDefault(); void save(); }}>
@@ -62,12 +63,15 @@ export function ContextInspector({ model, client, online, busy, policyDirty, onD
       {imported ? <p className="field-help">Imported model: empty uses its registered context.</p> : <><div className="profile-option-grid"><div><label htmlFor="profile-threads">Threads</label><input id="profile-threads" inputMode="numeric" value={draft.threads} disabled={blocked} placeholder="Engine default" onChange={(event) => setDraft({ ...draft, threads: event.target.value })} /></div><div><label htmlFor="profile-gpu">GPU layers</label><input id="profile-gpu" inputMode="numeric" value={draft.gpu} disabled={blocked} placeholder="Engine default" onChange={(event) => setDraft({ ...draft, gpu: event.target.value })} /></div></div>
 </>}
       <dl className="facts"><div><dt>Slots</dt><dd>{view.physical_slots}</dd></div><div><dt>Effective context</dt><dd>{tokens(view.effective_launch?.context_tokens)}</dd></div></dl>
-      {view.provider === "external-http" ? <p className="field-help">Only llama.cpp models have editable launch settings.</p> : (model.loaded || model.state === "loading" || model.active_requests > 0) && <p className="field-help">Unload the model to edit these.</p>}
+      {view.provider === "external-http" ? <p className="field-help">Only llama.cpp models have editable launch settings.</p>
+        : model.active_requests > 0 || model.state === "loading" ? <p className="field-help">Wait for running requests and loading to finish to edit these.</p>
+        : model.loaded && imported ? <p className="field-help">Unload the model to edit these.</p>
+        : reload && dirty ? <p className="field-help">Saving restarts the model with these settings.</p> : null}
       {policyDirty && <p className="inline-warning">Save or cancel the policy change first.</p>}
       {dirty && revision.current !== model.revision && <p className="inline-warning">Another client changed this model. Your draft is kept; cancel it to see the latest.</p>}
       {validationError && <p role="alert" className="inline-error">{validationError}</p>}
       {pendingSave !== null && <p className="field-help">Saved. Reading the new settings…</p>}
-      {view.provider === "llama-cpp" && <div className="action-row wrap"><Button disabled={!dirty || busy || !online || options.loading} onClick={() => void cancel()}>{imported ? "Cancel context draft" : "Cancel launch draft"}</Button><Button type="submit" variant="primary" disabled={!dirty || blocked}>{imported ? "Save context override" : "Save launch profile"}</Button></div>}
+      {view.provider === "llama-cpp" && <div className="action-row wrap"><Button disabled={!dirty || busy || !online || options.loading} onClick={() => void cancel()}>{imported ? "Cancel context draft" : "Cancel launch draft"}</Button><Button type="submit" variant="primary" disabled={!dirty || blocked}>{imported ? "Save context override" : reload ? "Save and reload" : "Save launch profile"}</Button></div>}
     </form>}
     <div className="context-observation" aria-label="Context observation">
       <div className="page-title"><h4>Effective context</h4><HelpTip label="Effective context">Trained comes from the model file. Saved is your setting. Launched is what the engine started with. Per request is what the running engine reports for each slot.</HelpTip></div>

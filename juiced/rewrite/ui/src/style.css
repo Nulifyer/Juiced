@@ -582,3 +582,10 @@ dialog textarea { margin-bottom: 4px; }
 .lane-model { flex-wrap: wrap; }
 .lane-open { flex: 1 1 140px; }
 .lane-model .policy-select { margin-left: auto; }
+.alias-create { flex-wrap: wrap; }
+.alias-create input { flex: 1 1 200px; max-width: 320px; }
+.alias-create select { flex: 1 1 220px; max-width: 360px; }
+.alias-table .data-head, .alias-table .data-row { grid-template-columns: minmax(140px, 1fr) minmax(180px, 1.4fr) minmax(140px, 1fr) auto; }
+.alias-table select { width: 100%; }
+.alias-status { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+@media (max-width: 700px) { .alias-table .data-head { display: none; } .alias-table .data-row { grid-template-columns: minmax(0, 1fr) auto; } .alias-table [role="cell"]:nth-child(2) { grid-column: 1 / -1; grid-row: 2; } }

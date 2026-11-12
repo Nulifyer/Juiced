@@ -245,3 +245,32 @@ test.describe("Loading policy board", () => {
     await expect(page.getByRole("complementary", { name: "Model inspector" }).getByRole("heading", { name: modelId })).toBeVisible();
   });
 });
+
+test("saving launch settings on a loaded model restarts it with the new settings", async ({ page, request }) => {
+  const service = api(request);
+  const fixture = await service.source();
+  const id = `browser.reload-${test.info().project.name}`;
+  const path = `/v1/models/${encodeURIComponent(id)}/options`;
+  await service.remove(id);
+  const options = { context_tokens: 1024, threads: 2, gpu_layers: 0, parallel_slots: 1 };
+  await service.register({ id, model_file: fixture.model_file, provider: "llama-cpp", options, command: fixture.command, args: [...fixture.args, "--ctx-size", "1024"] });
+  try {
+    await service.policy(id, "on-demand");
+    await service.post("/v1/load", { model: id });
+    const before = (await service.model(id))!.pid;
+    await open(page);
+    const inspector = await openModel(page, id);
+    await tab(page, "Model sections", "Settings").click();
+    const panel = inspector.getByRole("region", { name: "Context and launch profile" });
+    await panel.getByLabel("Threads").fill("3");
+    await expect(panel).toContainText("Saving restarts the model with these settings.");
+    await panel.getByRole("button", { name: "Save and reload" }).click();
+    await expect(toasts(page).getByRole("status")).toContainText(`Saved launch settings and restarted ${id}.`, { timeout: 15000 });
+    expect((await service.json<{ saved: Record<string, number | null> }>(path)).saved).toMatchObject({ threads: 3 });
+    await expect.poll(async () => { const now = await service.model(id); return now?.loaded && now.pid !== before; }, { timeout: 15000 }).toBe(true);
+    expect((await service.model(id))?.policy).toBe("on-demand");
+    await expect(panel.getByRole("button", { name: "Save and reload" })).toBeDisabled();
+  } finally {
+    await service.remove(id);
+  }
+});

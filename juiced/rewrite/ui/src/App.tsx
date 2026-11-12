@@ -12,6 +12,7 @@ import { Dashboard } from "./Dashboard";
 import { FindModels } from "./FindModels";
 import { EngineList, Hardware } from "./Backends";
 import { Diagnostics } from "./Diagnostics";
+import { Aliases } from "./Aliases";
 import { gib, percent, rate, useSystemStats } from "./live";
 import { clearToasts, dismiss, notify, useToasts } from "./toast";
 import { Badge, Button, Dialog, Empty, Icon, Menu, Tabs, type IconName } from "./ui";
@@ -55,6 +56,7 @@ export function App() {
   const [diagnosticsTab, setDiagnosticsTab] = useState<"performance" | "requests" | "logs">("performance");
   const [backendTab, setBackendTab] = useState<"machine" | "installed" | "catalog">("machine");
   const [connectTab, setConnectTab] = useState<"protocols" | "endpoints">("protocols");
+  const [modelsTab, setModelsTab] = useState<"models" | "aliases">("models");
   const client = useMemo(() => new Client(base, key), [base, key]);
   const toasts = useToasts();
   const live = useSystemStats(client, online);
@@ -115,15 +117,16 @@ export function App() {
     void refresh();
   };
   const model = snapshot?.models.find((model) => model.id === selected);
-  const modelScreen = screen === "models" || screen === "policy";
+  const modelScreen = (screen === "models" && modelsTab === "models") || screen === "policy";
   const hasInspector = !!model && modelScreen;
   const resources = snapshot?.resources;
   const title = destinations.find(([id]) => id === screen)![1];
   const togglePause = () => void mutate("juiced/admission", { paused: !resources?.paused }, resources?.paused ? "Resumed new requests." : "Paused new requests.");
-  const openModel = (id: string) => leave(() => { setScreen("models"); setSelected(id); });
+  const openModel = (id: string) => leave(() => { setScreen("models"); setModelsTab("models"); setSelected(id); });
   const status = !online ? "Offline" : resources?.paused ? "Paused" : "Online";
   const gpu = live.stats?.gpus[0];
-  const tabs = screen === "test" ? <Tabs label="Test operation" value={testService} onChange={setTestService} items={[["chat", "Chat"], ["compare", "Compare"], ["embeddings", "Embeddings"], ["transcription", "Transcribe"]]} />
+  const tabs = screen === "models" ? <Tabs label="Models views" value={modelsTab} onChange={(value) => leave(() => { setModelsTab(value); setSelected(""); })} items={[["models", "Models"], ["aliases", "Aliases"]]} />
+    : screen === "test" ? <Tabs label="Test operation" value={testService} onChange={setTestService} items={[["chat", "Chat"], ["compare", "Compare"], ["embeddings", "Embeddings"], ["transcription", "Transcribe"]]} />
     : screen === "library" ? <Tabs label="Library view" value={libraryView} onChange={setLibraryView} items={[["find", "Find models"], ["files", "Files on disk"]]} />
     : screen === "connect" ? <Tabs label="Connect views" value={connectTab} onChange={setConnectTab} items={[["protocols", "Protocols"], ["endpoints", "Endpoints"]]} />
     : screen === "backend" ? <Tabs label="Backend views" value={backendTab} onChange={setBackendTab} items={[["machine", "This machine"], ["installed", "Engines"], ["catalog", "Catalog"]]} />
@@ -151,6 +154,7 @@ export function App() {
       {!snapshot ? <Empty title={refreshing ? "Connecting to Juiced" : "Service unavailable"}>{refreshing ? "Reading models and service state…" : "Check the address and API key in Connection settings."}</Empty> : <>
         {screen === "dashboard" && <Dashboard snapshot={snapshot} stats={live.stats} history={live.history} onOpenModel={openModel} onTest={() => setScreen("test")} />}
         {modelScreen && <div className="model-workspace"><ModelList models={snapshot.models} selected={selected} onSelect={(id) => leave(() => setSelected(id))} mode={screen as "models" | "policy"} mutate={mutate} busy={busy} online={online} />{hasInspector && <Inspector key={`${model.id}:${epoch}`} model={model} busy={busy} online={online} onClose={() => leave(() => setSelected(""))} onDirty={setDirty} mutate={mutate} client={client} stopLoad={loadingModel === model.id ? stopLoad : undefined} />}</div>}
+        {screen === "models" && modelsTab === "aliases" && <Aliases key={epoch} client={client} models={snapshot.models} online={online} onOpenModel={openModel} />}
         {screen === "library" && libraryView === "find" && <FindModels key={epoch} client={client} online={online} onRegistered={refresh} onOpenModel={openModel} />}
         {screen === "library" && libraryView === "files" && <Library key={epoch} view={libraryView} client={client} online={online} models={snapshot.models} refreshModels={refresh} onInspect={openModel} />}
         {screen === "diagnostics" && <Diagnostics client={client} snapshot={snapshot} stats={live.stats} history={live.history} tab={diagnosticsTab} />}
