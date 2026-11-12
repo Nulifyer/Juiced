@@ -359,6 +359,10 @@ pub struct Config {
     pub models: Vec<ModelSpec>,
     #[serde(default, skip_serializing_if = "ModelAliases::is_unset")]
     pub aliases: ModelAliases,
+    #[serde(skip_serializing_if = "upload_maximum_is_default")]
+    pub upload_max_bytes: u64,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub import_roots: Vec<PathBuf>,
 }
 
 #[derive(Deserialize)]
@@ -446,6 +450,10 @@ struct ConfigWire {
     models: Vec<ModelWire>,
     #[serde(default)]
     aliases: ModelAliases,
+    #[serde(default = "default_upload_max_bytes")]
+    upload_max_bytes: u64,
+    #[serde(default)]
+    import_roots: Vec<PathBuf>,
 }
 
 fn deserialize_native_binding<'de, D: Deserializer<'de>>(
@@ -510,6 +518,8 @@ impl<'de> Deserialize<'de> for Config {
             request_timeout_ms: wire.request_timeout_ms,
             models,
             aliases: wire.aliases,
+            upload_max_bytes: wire.upload_max_bytes,
+            import_roots: wire.import_roots,
         })
     }
 }
@@ -592,6 +602,18 @@ impl Config {
             .validate()
             .map_err(|error| error.to_string())?;
         self.session_cache.validate()?;
+        if self.upload_max_bytes == 0 {
+            return Err("upload_max_bytes must be positive".into());
+        }
+        if self.import_roots.len() > MAXIMUM_IMPORT_ROOTS
+            || self.import_roots.iter().any(|root| {
+                !root.is_absolute() || root.as_os_str().len() > 4096 || root.parent().is_none()
+            })
+        {
+            return Err(format!(
+                "import_roots accepts at most {MAXIMUM_IMPORT_ROOTS} absolute directories other than the filesystem root"
+            ));
+        }
         let mut ids = HashSet::new();
         let mut native_ids = HashSet::new();
         for model in &self.models {
@@ -734,6 +756,17 @@ impl Config {
         })?;
         crate::storage::atomic_json(path, self)
     }
+}
+
+pub const DEFAULT_UPLOAD_MAX_BYTES: u64 = 256 * 1024 * 1024 * 1024;
+const MAXIMUM_IMPORT_ROOTS: usize = 16;
+
+fn default_upload_max_bytes() -> u64 {
+    DEFAULT_UPLOAD_MAX_BYTES
+}
+
+fn upload_maximum_is_default(bytes: &u64) -> bool {
+    *bytes == DEFAULT_UPLOAD_MAX_BYTES
 }
 
 fn default_inhibit_suspend() -> bool {

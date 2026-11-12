@@ -222,6 +222,10 @@ impl Drop for EngineServer {
 }
 
 async fn engine_server() -> EngineServer {
+    engine_server_with(|_| {}).await
+}
+
+async fn engine_server_with(edit: impl FnOnce(&mut Value)) -> EngineServer {
     let worker = std::fs::read(binary("juiced-test-worker", "JUICED_TEST_WORKER")).unwrap();
     let llama = release_archive("llama-b11393", &worker);
     let whisper = release_archive("whisper-v1.8.4-linux-cpu-x86_64", b"not published");
@@ -257,6 +261,7 @@ async fn engine_server() -> EngineServer {
         config["artifact_source_policy"] = json!("allow-loopback-http");
         config["resident_budget_bytes"] = json!(4u64 * 1024 * 1024 * 1024);
         config["startup_timeout_ms"] = json!(10000);
+        edit(config);
     });
     server.set_environment("JUICED_TEST_HARDWARE_ROOT", hardware.path());
     server.set_environment("JUICED_TEST_ENGINE_RELEASES", &github.base);
@@ -581,4 +586,114 @@ async fn engine_install_auto_registration_load_and_chat_use_the_installed_packag
     assert_eq!(document["generation"], 2);
     assert_eq!(document["installed"].as_array().unwrap().len(), 1);
     assert!(!server.directory.path().join("engine-staging").exists());
+}
+
+async fn chat(server: &Server, model: &str) {
+    let (status, reply) = server
+        .json(
+            Method::POST,
+            "/v1/chat/completions",
+            Some(json!({"model":model,"messages":[{"role":"user","content":"local file"}]})),
+            Some(CLIENT_KEY),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{reply}");
+    assert_eq!(reply["model"], model);
+}
+
+#[tokio::test]
+async fn uploaded_and_linked_local_files_use_the_automatic_add_flow() {
+    let imports = tempfile::tempdir().unwrap();
+    let root = imports.path().to_owned();
+    let server = engine_server_with(|config| config["import_roots"] = json!([root])).await;
+    let upload = format!(
+        "{}/v1/juiced/library/upload?filename=local%20fixture.gguf&size={}",
+        server.base,
+        server.weights.len()
+    );
+    let uploaded: Value = server
+        .client
+        .post(&upload)
+        .bearer_auth(ADMIN_KEY)
+        .header("content-type", "application/octet-stream")
+        .body(server.weights.clone())
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(uploaded["sha256"], digest(&server.weights), "{uploaded}");
+    assert_eq!(uploaded["suggested_id"], "local fixture");
+    let option = &uploaded["engines"][0];
+    assert_eq!(option["engine"], "llama.cpp");
+    assert_eq!(option["ready"], false);
+    assert_eq!(option["error"], "engine_not_installed");
+    assert_eq!(option["install"]["backend"], "cpu");
+
+    let (status, accepted) = server
+        .post(
+            "juiced/engines/install",
+            json!({"engine":"llama.cpp","backend":"cpu","expected_generation":0}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{accepted}");
+    let job = wait_for_job(&server, accepted["job"]["id"].as_str().unwrap()).await;
+    assert_eq!(job["state"], "complete", "{job}");
+
+    let (status, added) = server
+        .post(
+            "juiced/models/add",
+            json!({"artifact":uploaded["add"]["artifact"],"id":uploaded["add"]["id"],"policy":"on-demand"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{added}");
+    assert_eq!(added["backend"], "cpu");
+    assert_eq!(added["model"]["policy"], "on-demand");
+    chat(&server, "local fixture").await;
+
+    let linked_file = root.join("linked.gguf");
+    std::fs::write(&linked_file, &server.weights).unwrap();
+    let (status, linked) = server
+        .post(
+            "juiced/library/import-path",
+            json!({"path":linked_file,"mode":"link"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{linked}");
+    assert_eq!(linked["mode"], "link");
+    assert_eq!(linked["job"], Value::Null);
+    assert_eq!(linked["engines"][0]["ready"], true);
+    assert_eq!(linked["engines"][0]["backend"], "cpu");
+    let (status, refused) = server
+        .post(
+            "juiced/models/add",
+            json!({"path":linked_file,"artifact":uploaded["artifact"]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(refused["error"]["code"], "model_source_ambiguous");
+    let (status, added) = server
+        .post(
+            "juiced/models/add",
+            json!({"path":linked["add"]["path"],"id":linked["add"]["id"],"policy":"on-demand"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{added}");
+    assert_eq!(added["model"]["artifact"], Value::Null);
+    chat(&server, "linked").await;
+    let saved: Value =
+        serde_json::from_slice(&std::fs::read(&server.config_path).unwrap()).unwrap();
+    let model = saved["models"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|model| model["id"] == "linked")
+        .unwrap();
+    assert_eq!(
+        model["model_file"],
+        json!(std::fs::canonicalize(&linked_file).unwrap())
+    );
+    assert_eq!(model.get("artifact"), None);
+    assert!(linked_file.is_file());
 }

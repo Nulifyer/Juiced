@@ -151,7 +151,7 @@ macro_rules! define_routes {
         pub const ENDPOINTS: &[Endpoint] = &[$(Endpoint { method: method_name!($method), path: $path, authority: $authority, prefixes: PREFIXES }),*];
         fn native_routes() -> Router<AppState> {
             let router = Router::new();
-            $(let router = router.route($path, $method($handler).layer(DefaultBodyLimit::max(if $path == "/audio/transcriptions" { crate::admission::SPEECH_INGRESS_BYTES } else { crate::admission::JSON_INGRESS_BYTES })));)*
+            $(let router = router.route($path, $method($handler).layer(DefaultBodyLimit::max(if $path == "/juiced/library/upload" { usize::MAX } else if $path == "/audio/transcriptions" { crate::admission::SPEECH_INGRESS_BYTES } else { crate::admission::JSON_INGRESS_BYTES })));)*
             router
         }
     };
@@ -220,6 +220,9 @@ define_routes! {
     (post, "/images/generations", image_generation, "inference"),
     (post, "/audio/speech", speech, "inference"),
     (get, "/juiced/voices", voices, "read"),
+    (post, "/juiced/library/upload", library_upload, "operator"),
+    (get, "/juiced/library/import-path", library_import_candidates, "operator"),
+    (post, "/juiced/library/import-path", library_import_path, "operator"),
 }
 async fn aliases(State(state): State<AppState>) -> Json<Value> {
     Json(state.manager.aliases_view().await)
@@ -422,6 +425,35 @@ async fn library_pull_status(
 ) -> Result<impl IntoResponse, ApiError> {
     let view = state.manager.library().pull_view(&id)?;
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(view)))
+}
+async fn library_upload(
+    State(state): State<AppState>,
+    ApiQuery(query): ApiQuery<crate::supervisor::UploadQuery>,
+    headers: HeaderMap,
+    body: Body,
+) -> Result<Json<Value>, ApiError> {
+    let length = headers
+        .get(header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok());
+    state
+        .manager
+        .library_upload(query, length, body)
+        .await
+        .map(Json)
+}
+async fn library_import_candidates(
+    State(state): State<AppState>,
+    ApiQuery(query): ApiQuery<crate::supervisor::ImportListQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    let view = state.manager.import_candidates(query).await?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(view)))
+}
+async fn library_import_path(
+    State(state): State<AppState>,
+    ApiJson(request): ApiJson<crate::supervisor::ImportPathRequest>,
+) -> Result<Json<Value>, ApiError> {
+    state.manager.import_path(request).await.map(Json)
 }
 async fn system_stats(State(state): State<AppState>) -> impl IntoResponse {
     (

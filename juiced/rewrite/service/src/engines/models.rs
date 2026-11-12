@@ -198,6 +198,16 @@ pub fn detect(path: &Path) -> Result<(ModelFormat, u64), FormatError> {
     Err(FormatError::Unsupported)
 }
 
+/// Cheap first-bytes screen that [`detect`] would not reject outright, so uploads of
+/// unsupported files stop before their remaining bytes are stored.
+pub fn plausible_prefix(prefix: &[u8; 8], bytes: u64) -> bool {
+    &prefix[..4] == b"GGUF"
+        || u32::from_le_bytes(prefix[..4].try_into().expect("magic")) == WHISPER_MAGIC
+        || onnx_version(prefix).is_some()
+        || (2..=MAX_SAFETENSORS_HEADER.min(bytes.saturating_sub(1)))
+            .contains(&u64::from_le_bytes(*prefix))
+}
+
 fn read_prefix(file: &mut File, buffer: &mut [u8]) -> Result<usize, FormatError> {
     let mut filled = 0;
     while filled < buffer.len() {

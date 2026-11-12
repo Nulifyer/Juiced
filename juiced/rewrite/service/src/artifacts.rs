@@ -1,8 +1,10 @@
+mod intake;
 mod inventory;
 mod presence;
 #[cfg(test)]
 mod set_tests;
 mod sets;
+pub use intake::{Intake, Published};
 pub use inventory::{InventoryPage, InventoryRequest, Section as InventorySection};
 pub use presence::{Presence, PresenceJob, SourceRecord};
 pub mod inventory_bounds {
@@ -123,6 +125,10 @@ struct Job {
     artifact: Option<String>,
     error: Option<String>,
     restart: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    source_name: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    computed_digest: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -338,6 +344,10 @@ pub struct JobView {
     pub artifact: Option<String>,
     pub error: Option<String>,
     pub writer_active: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_name: Option<String>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub computed_digest: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -741,11 +751,30 @@ impl ArtifactStore {
         maximum_bytes: u64,
         expected_generation: u64,
     ) -> Result<(JobView, Arc<Control>), ArtifactError> {
+        self.begin_with(
+            source_url,
+            expected_sha256,
+            expected_bytes,
+            maximum_bytes,
+            Some(expected_generation),
+            None,
+        )
+    }
+
+    fn begin_with(
+        &self,
+        source_url: Option<String>,
+        expected_sha256: String,
+        expected_bytes: Option<u64>,
+        maximum_bytes: u64,
+        expected_generation: Option<u64>,
+        source_name: Option<String>,
+    ) -> Result<(JobView, Arc<Control>), ArtifactError> {
         if self.stopping.load(Ordering::Acquire) {
             return Err(ArtifactError::Stop);
         }
         let mut runtime = self.runtime.lock().map_err(|_| ArtifactError::Corrupt)?;
-        if runtime.manifest.generation != expected_generation {
+        if expected_generation.is_some_and(|generation| generation != runtime.manifest.generation) {
             return Err(ArtifactError::Conflict);
         }
         if runtime.manifest.jobs.len() >= self.limits.maximum_jobs
@@ -769,6 +798,8 @@ impl ArtifactStore {
             artifact: None,
             error: None,
             restart: false,
+            computed_digest: source_name.is_some(),
+            source_name,
         };
         let id = self.reserve_intent(&mut runtime, job)?;
         if let Err(error) = self.create_staging(&id) {
@@ -1043,6 +1074,9 @@ impl ArtifactStore {
             .rev()
             .filter(|job| job.artifact.as_deref() == Some(artifact))
             .find_map(|job| {
+                if let Some(name) = &job.source_name {
+                    return Some(name.clone());
+                }
                 let url = Url::parse(job.source_url.as_deref()?).ok()?;
                 url.path_segments()?
                     .next_back()
@@ -1379,13 +1413,17 @@ impl ArtifactStore {
             return Err(ArtifactError::SizeMismatch);
         }
         let actual = format!("{:x}", progress.digest.finalize());
-        if actual != job.expected_sha256 {
+        if !job.computed_digest && actual != job.expected_sha256 {
             return Err(ArtifactError::HashMismatch);
         }
+        let computed = job.computed_digest;
         let store = self.clone();
         let id = id.to_owned();
         let control = control.clone();
         tokio::task::spawn_blocking(move || {
+            if computed {
+                store.learn_digest(&id, &actual)?;
+            }
             store.publish(&id, progress.bytes, &actual, &file, &control)
         })
         .await
@@ -2028,6 +2066,8 @@ fn job_view(id: &str, job: &Job, runtime: &Runtime) -> JobView {
                     .then(|| "artifact_publication_uncertain".to_owned())
             }),
         writer_active: runtime.active.contains_key(id),
+        source_name: job.source_name.clone(),
+        computed_digest: job.computed_digest,
     }
 }
 
@@ -2610,6 +2650,8 @@ mod tests {
             artifact: None,
             error: None,
             restart: false,
+            source_name: None,
+            computed_digest: false,
         }
     }
 
