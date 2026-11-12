@@ -34,10 +34,13 @@ COPY juiced/rewrite/container/backports.sources /etc/apt/sources.list.d/backport
 # juiced-update-userspace repeats this at runtime. The NVIDIA Vulkan ICD that the
 # container toolkit injects (libGLX_nvidia) fails to create an instance without glvnd
 # libEGL and libXext. Lavapipe is removed so a CPU-only host never reports Vulkan.
+# FastFlowLM and the XDNA hybrid bundle ship XRT, which links libuuid and libprotobuf from
+# the system.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates curl tini \
         libatomic1 libgomp1 libnuma1 libstdc++6 zlib1g \
+        libuuid1 libprotobuf32t64 \
         libdrm2 libdrm-amdgpu1 libelf1t64 \
         libvulkan1 vulkan-tools libegl1 libxext6 \
     && apt-get install -y --no-install-recommends -t trixie-backports mesa-vulkan-drivers \

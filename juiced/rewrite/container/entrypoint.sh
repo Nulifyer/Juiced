@@ -86,7 +86,24 @@ if [ ! -w "$data" ]; then
     exit 73
 fi
 
+# Warnings only: system-info reports the same conditions as backend reasons.
+device_checks() {
+    for node in /dev/kfd /dev/dri/renderD* /dev/accel/accel*; do
+        [ -e "$node" ] || continue
+        [ -r "$node" ] && [ -w "$node" ] || log "$node is present but not readable and writable by uid $(id -u); add its group or start the container as root once"
+    done
+    if [ -e /dev/kfd ] && ! ls /dev/dri/renderD* >/dev/null 2>&1; then
+        log "/dev/kfd is present without /dev/dri render nodes; ROCm engines need --device /dev/dri as well"
+    fi
+    if ls /dev/accel/accel* >/dev/null 2>&1; then
+        # shellcheck disable=SC3045 # dash, the image's /bin/sh, implements ulimit -l.
+        memlock=$(ulimit -l 2>/dev/null || echo unknown)
+        [ "$memlock" = unlimited ] || log "the locked-memory limit is $memlock KiB; AMD NPU engines (FastFlowLM, XDNA hybrid) need --ulimit memlock=-1:-1"
+    fi
+}
+
 umask 077
+device_checks
 mkdir -p "$data/home"
 [ -e "$config" ] || write_default_config
 
