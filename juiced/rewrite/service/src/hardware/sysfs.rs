@@ -219,6 +219,20 @@ pub(super) fn detect(probe: &dyn HostProbe, deadline: Instant, report: &mut Host
     let vulkan = vulkan(&mut reader, report);
     gpus(&mut reader, report, nvidia, &vulkan);
     npus(&mut reader, report);
+    report.devices.limits = match probe.memlock_limit() {
+        super::MemlockLimit::Unlimited => super::ProcessLimits {
+            memlock: "unlimited",
+            memlock_bytes: None,
+        },
+        super::MemlockLimit::Bytes(bytes) => super::ProcessLimits {
+            memlock: "limited",
+            memlock_bytes: Some(bytes),
+        },
+        super::MemlockLimit::Unknown => super::ProcessLimits {
+            memlock: "unknown",
+            memlock_bytes: None,
+        },
+    };
     report.devices.cuda.control_device = probe.device_access("/dev/nvidiactl");
     report.issues.append(&mut reader.issues);
     if reader.expired {
@@ -951,7 +965,23 @@ fn npus(reader: &mut Reader<'_>, report: &mut HostReport) {
             ),
         };
         let node = format!("/dev/accel/{accel}");
+        let (firmware_version, driver_version) = if vendor == NpuVendor::Amd {
+            (
+                reader
+                    .text(&format!("{base}/fw_version"))
+                    .and_then(|value| clean_text(&value)),
+                driver
+                    .as_deref()
+                    .filter(|driver| *driver == "amdxdna")
+                    .and_then(|_| reader.text("sys/module/amdxdna/version"))
+                    .and_then(|value| clean_text(&value)),
+            )
+        } else {
+            (None, None)
+        };
         report.devices.npus.push(Npu {
+            firmware_version,
+            driver_version,
             vendor,
             name,
             driver,

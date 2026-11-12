@@ -11,7 +11,7 @@ mod sysfs;
 #[cfg(test)]
 pub(crate) mod tests;
 
-pub use backends::{BackendVariant, Inventory, Reason, ReasonCode, project};
+pub use backends::{BackendVariant, Inventory, Reason, ReasonCode, preference, project};
 pub use command::run_bounded;
 
 pub const CACHE_TTL: Duration = Duration::from_secs(15);
@@ -90,6 +90,17 @@ pub trait HostProbe: Send + Sync {
     fn detection_supported(&self) -> bool {
         cfg!(target_os = "linux")
     }
+    /// The service's RLIMIT_MEMLOCK, which engines it starts inherit.
+    fn memlock_limit(&self) -> MemlockLimit {
+        MemlockLimit::Unknown
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MemlockLimit {
+    Unlimited,
+    Bytes(u64),
+    Unknown,
 }
 
 pub fn host_os() -> &'static str {
@@ -155,6 +166,30 @@ impl HostProbe for SystemProbe {
         std::thread::available_parallelism()
             .ok()
             .map(|count| count.get() as u64)
+    }
+
+    fn memlock_limit(&self) -> MemlockLimit {
+        #[cfg(unix)]
+        {
+            let mut limit = libc::rlimit {
+                rlim_cur: 0,
+                rlim_max: 0,
+            };
+            if unsafe { libc::getrlimit(libc::RLIMIT_MEMLOCK, &mut limit) } != 0 {
+                return MemlockLimit::Unknown;
+            }
+            if limit.rlim_cur == libc::RLIM_INFINITY {
+                MemlockLimit::Unlimited
+            } else {
+                // rlim_t is not u64 on every Unix target.
+                #[allow(clippy::unnecessary_cast)]
+                MemlockLimit::Bytes(limit.rlim_cur as u64)
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            MemlockLimit::Unknown
+        }
     }
 }
 
@@ -263,6 +298,18 @@ impl HostProbe for FixtureProbe {
 
     fn detection_supported(&self) -> bool {
         self.supported
+    }
+
+    /// `limits/memlock` holds `unlimited` or a byte count.
+    fn memlock_limit(&self) -> MemlockLimit {
+        match std::fs::read_to_string(self.root.join("limits/memlock")) {
+            Ok(text) if text.trim() == "unlimited" => MemlockLimit::Unlimited,
+            Ok(text) => text
+                .trim()
+                .parse()
+                .map_or(MemlockLimit::Unknown, MemlockLimit::Bytes),
+            Err(_) => MemlockLimit::Unknown,
+        }
     }
 }
 
@@ -374,6 +421,15 @@ pub struct Npu {
     pub pci_device_id: Option<String>,
     pub device_node: String,
     pub access: DeviceAccess,
+    pub firmware_version: Option<String>,
+    pub driver_version: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ProcessLimits {
+    /// `unlimited`, `limited` or `unknown`.
+    pub memlock: &'static str,
+    pub memlock_bytes: Option<u64>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -417,6 +473,7 @@ pub struct Devices {
     pub vulkan: Vulkan,
     pub rocm: Rocm,
     pub cuda: Cuda,
+    pub limits: ProcessLimits,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -474,6 +531,10 @@ impl HostReport {
                 cuda: Cuda {
                     nvidia_smi: "not_probed",
                     control_device: DeviceAccess::Unknown,
+                },
+                limits: ProcessLimits {
+                    memlock: "unknown",
+                    memlock_bytes: None,
                 },
             },
             probes: Vec::new(),

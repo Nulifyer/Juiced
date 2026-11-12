@@ -25,6 +25,7 @@ pub enum ReasonCode {
     NpuFamilyUnknown,
     NpuFamilyUnsupported,
     NpuInaccessible,
+    MemlockLimited,
     VulkanUnavailable,
     VulkanUnverified,
     InstallationProvenanceUnresolved,
@@ -422,6 +423,18 @@ fn gate(backend: &str, host: &HostReport, evaluation: &mut Evaluation) {
                 ),
             );
         }
+        if !npus.is_empty() && devices.limits.memlock == "limited" {
+            evaluation.limit(
+                Availability::Unknown,
+                reason(
+                    ReasonCode::MemlockLimited,
+                    format!(
+                        "The locked-memory limit is {} bytes; AMD NPU engines pin buffers and normally need an unlimited limit (container: --ulimit memlock=-1:-1).",
+                        devices.limits.memlock_bytes.unwrap_or_default()
+                    ),
+                ),
+            );
+        }
     }
     if backend == "vulkan" {
         match devices.vulkan.state {
@@ -508,7 +521,7 @@ fn evaluate(backend: &str, row: &NativeSupportRow, host: &HostReport) -> Evaluat
     evaluation
 }
 
-fn preference(variant: &BackendVariant) -> Option<u8> {
+pub fn preference(variant: &BackendVariant) -> Option<u8> {
     if variant.state != Availability::Available
         || variant.tier != "core"
         || variant.backend == "system"

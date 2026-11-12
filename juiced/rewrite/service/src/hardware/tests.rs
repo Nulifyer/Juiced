@@ -9,7 +9,7 @@ impl Tree {
         Self(tempfile::tempdir().unwrap())
     }
 
-    fn file(&self, relative: &str, contents: impl AsRef<[u8]>) -> &Self {
+    pub(crate) fn file(&self, relative: &str, contents: impl AsRef<[u8]>) -> &Self {
         let path = self.0.path().join(relative);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, contents).unwrap();
@@ -1014,4 +1014,71 @@ async fn detector_deadline_returns_error_without_caching() {
     );
     assert!(started.elapsed() < Duration::from_millis(2400));
     assert!(detector.current.lock().await.is_none());
+}
+
+#[test]
+fn xdna_versions_and_memlock_limit_gate_npu_engines() {
+    let tree = strix_host(true);
+    tree.file("sys/class/accel/accel0/device/fw_version", "1.5.5.391\n")
+        .file("sys/module/amdxdna/version", "2.21.0\n");
+    let unknown = report(&tree);
+    let npu = &unknown.devices.npus[0];
+    assert_eq!(npu.firmware_version.as_deref(), Some("1.5.5.391"));
+    assert_eq!(npu.driver_version.as_deref(), Some("2.21.0"));
+    assert_eq!(unknown.devices.limits.memlock, "unknown");
+    assert_eq!(
+        variant(&inventory(&unknown), "flm", "npu").state,
+        Availability::Available
+    );
+
+    tree.file("limits/memlock", "unlimited\n");
+    let unlimited = report(&tree);
+    assert_eq!(unlimited.devices.limits.memlock, "unlimited");
+    assert_eq!(unlimited.devices.limits.memlock_bytes, None);
+    assert_eq!(recommended(&inventory(&unlimited), "flm"), Some("npu"));
+
+    tree.file("limits/memlock", "8388608\n");
+    let limited = report(&tree);
+    assert_eq!(limited.devices.limits.memlock, "limited");
+    assert_eq!(limited.devices.limits.memlock_bytes, Some(8388608));
+    let inventory = inventory(&limited);
+    for (recipe, backend) in [("flm", "npu"), ("llamacpp", "hybrid-rocm")] {
+        let gated = variant(&inventory, recipe, backend);
+        assert_eq!(gated.state, Availability::Unknown, "{recipe}:{backend}");
+        assert_eq!(codes(gated), [ReasonCode::MemlockLimited]);
+        assert!(gated.reasons[0].message.contains("8388608 bytes"));
+    }
+    assert_eq!(recommended(&inventory, "flm"), None);
+    assert_eq!(recommended(&inventory, "llamacpp"), Some("rocm"));
+    assert_eq!(
+        codes(variant(&inventory, "ryzenai-llm", "npu")),
+        [ReasonCode::OsUnsupported]
+    );
+    assert_eq!(
+        variant(&inventory, "ryzenai-llm", "npu").reasons[0].message,
+        "Requires Windows."
+    );
+}
+
+#[test]
+fn strix_halo_reports_why_the_gfx1150_hybrid_bundle_is_unavailable() {
+    let tree = strix_host(true);
+    tree.file(
+        "sys/class/kfd/kfd/topology/nodes/1/properties",
+        "simd_count 40\ngfx_target_version 110501\nvendor_id 4098\ndevice_id 5510\ndrm_render_minor 128\n",
+    );
+    let report = report(&tree);
+    assert_eq!(
+        report.devices.gpus[0].gfx_target.as_deref(),
+        Some("gfx1151")
+    );
+    let inventory = inventory(&report);
+    let hybrid = variant(&inventory, "llamacpp", "hybrid-rocm");
+    assert_eq!(hybrid.state, Availability::Unavailable);
+    assert_eq!(codes(hybrid), [ReasonCode::AmdGpuTargetUnsupported]);
+    assert_eq!(
+        hybrid.reasons[0].message,
+        "Detected gfx1151; requires one of gfx1150."
+    );
+    assert_eq!(recommended(&inventory, "flm"), Some("npu"));
 }
