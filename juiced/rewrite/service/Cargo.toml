@@ -10,7 +10,8 @@ test-fixture = []
 cpu-profile = ["dep:pprof"]
 
 [dependencies]
-axum = { version = "0.8.9", features = ["multipart"] }
+axum = { version = "0.8.9", features = ["multipart", "ws"] }
+base64 = "0.22"
 flate2 = "1"
 futures-util = "0.3"
 getrandom = "0.4.3"

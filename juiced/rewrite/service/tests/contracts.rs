@@ -75,6 +75,7 @@ impl Harness {
             request_timeout_ms: 3000,
             models: vec![model("one"), model("two")],
             aliases: Default::default(),
+            wyoming: Default::default(),
         };
         change(&mut config);
         let path = dir.path().join("config.json");

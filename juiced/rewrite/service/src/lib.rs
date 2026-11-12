@@ -1,5 +1,6 @@
 pub mod admission;
 pub mod artifacts;
+pub mod audio;
 pub mod auth;
 mod bounded_json;
 pub mod cache;
@@ -26,6 +27,7 @@ pub mod process;
 pub mod profiles;
 pub mod profiling;
 pub mod protocols;
+pub mod realtime;
 pub mod resource_profile;
 pub mod runtime_arguments;
 pub mod runtime_bundle;
@@ -39,7 +41,9 @@ pub mod startup;
 pub mod storage;
 pub mod supervisor;
 pub mod system_stats;
+pub mod voice;
 pub mod writer_identity;
+pub mod wyoming;
 
 use axum::{Json, http::StatusCode, response::IntoResponse};
 use serde_json::json;

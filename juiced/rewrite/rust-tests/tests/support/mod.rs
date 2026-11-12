@@ -7,6 +7,7 @@ pub mod huggingface;
 #[cfg(target_os = "linux")]
 pub mod llama;
 pub mod speech;
+pub mod voice;
 
 use reqwest::{Client, Method, Response, StatusCode};
 use serde_json::{Value, json};
@@ -39,7 +40,7 @@ pub const READ_ROUTES: [&str; 11] = [
     "/models/{model}/options",
     "/juiced/voices",
 ];
-pub const OPERATOR_READ_ROUTES: [&str; 20] = [
+pub const OPERATOR_READ_ROUTES: [&str; 21] = [
     "/system-info",
     "/juiced/cache/inspect",
     "/juiced/cache/sessions",
@@ -60,8 +61,9 @@ pub const OPERATOR_READ_ROUTES: [&str; 20] = [
     "/juiced/library/search",
     "/juiced/library/pulls/{pull}",
     "/juiced/aliases",
+    "/juiced/wyoming",
 ];
-pub const WRITE_ROUTES: [&str; 25] = [
+pub const WRITE_ROUTES: [&str; 26] = [
     "/juiced/runtime-packages/import",
     "/juiced/engines/install",
     "/juiced/models/add",
@@ -87,6 +89,7 @@ pub const WRITE_ROUTES: [&str; 25] = [
     "/juiced/artifacts/sets/remove",
     "/juiced/library/pull",
     "/juiced/aliases",
+    "/juiced/wyoming",
 ];
 pub const INFERENCE_ROUTES: [&str; 4] = [
     "/chat/completions",
@@ -96,6 +99,7 @@ pub const INFERENCE_ROUTES: [&str; 4] = [
 ];
 pub const MULTIPART_INFERENCE_ROUTES: [&str; 1] = ["/audio/transcriptions"];
 pub const MEDIA_INFERENCE_ROUTES: [&str; 2] = ["/images/generations", "/audio/speech"];
+pub const WEBSOCKET_INFERENCE_ROUTES: [&str; 1] = ["/realtime"];
 pub const COMPAT_ROUTES: [(&str, &str, &str); 12] = [
     ("POST", "/v1/messages", "inference"),
     ("POST", "/v1/messages/count_tokens", "inference"),
@@ -115,6 +119,7 @@ pub fn route_matrix() -> BTreeSet<(String, String)> {
     READ_ROUTES
         .iter()
         .chain(OPERATOR_READ_ROUTES.iter())
+        .chain(WEBSOCKET_INFERENCE_ROUTES.iter())
         .map(|path| ("GET".into(), (*path).into()))
         .chain(
             WRITE_ROUTES

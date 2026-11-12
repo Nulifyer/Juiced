@@ -40,6 +40,7 @@ mod publication;
 mod sessions;
 mod state;
 mod voices;
+mod wyoming;
 pub use cache_reply::CacheReply;
 pub use sessions::{SessionAction, SessionRecord};
 

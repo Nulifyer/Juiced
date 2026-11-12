@@ -220,6 +220,9 @@ define_routes! {
     (post, "/images/generations", image_generation, "inference"),
     (post, "/audio/speech", speech, "inference"),
     (get, "/juiced/voices", voices, "read"),
+    (get, "/juiced/wyoming", wyoming_view, "operator"),
+    (post, "/juiced/wyoming", wyoming_set, "operator"),
+    (get, "/realtime", realtime, "inference"),
 }
 async fn aliases(State(state): State<AppState>) -> Json<Value> {
     Json(state.manager.aliases_view().await)
@@ -981,6 +984,11 @@ async fn unregister(
 }
 
 pub fn router(manager: Arc<Manager>, auth: Auth, ui: Option<PathBuf>) -> Router {
+    let wyoming = crate::wyoming::Controller::new(manager.clone());
+    if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+        let starting = wyoming.clone();
+        runtime.spawn(async move { starting.start_configured().await });
+    }
     let state = AppState {
         manager,
         auth: Arc::new(Authorization::new(auth)),
@@ -1006,6 +1014,8 @@ pub fn router(manager: Arc<Manager>, auth: Auth, ui: Option<PathBuf>) -> Router 
     }
     let mut app = app
         .with_state(state.clone())
+        .layer(Extension(wyoming))
+        .layer(Extension(Arc::new(crate::realtime::Sessions::default())))
         .merge(crate::compat::router(state.manager.clone()))
         .layer(DefaultBodyLimit::max(crate::admission::JSON_INGRESS_BYTES))
         .layer(middleware::from_fn_with_state(state, authorize));
@@ -1653,4 +1663,51 @@ async fn forward_prioritized(
         .headers_mut()
         .insert(header::CACHE_CONTROL, "no-store".parse().unwrap());
     Ok(response)
+}
+
+async fn wyoming_view(
+    Extension(wyoming): Extension<Arc<crate::wyoming::Controller>>,
+) -> impl IntoResponse {
+    (
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(wyoming.view().await),
+    )
+}
+async fn wyoming_set(
+    Extension(wyoming): Extension<Arc<crate::wyoming::Controller>>,
+    ApiJson(change): ApiJson<crate::wyoming::Change>,
+) -> Result<Json<Value>, ApiError> {
+    tokio::spawn(async move { wyoming.configure(change).await.map(Json) })
+        .await
+        .map_err(|_| {
+            ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "wyoming_interrupted",
+                "The Wyoming change was interrupted. Refresh before retrying.",
+            )
+        })?
+}
+async fn realtime(
+    State(state): State<AppState>,
+    Extension(sessions): Extension<Arc<crate::realtime::Sessions>>,
+    ApiQuery(query): ApiQuery<crate::realtime::Query>,
+    upgrade: Result<
+        axum::extract::ws::WebSocketUpgrade,
+        axum::extract::ws::rejection::WebSocketUpgradeRejection,
+    >,
+) -> Result<Response, ApiError> {
+    let upgrade = upgrade.map_err(|_| {
+        ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "websocket_required",
+            "Open this endpoint as a WebSocket with ?intent=transcription.",
+        )
+    })?;
+    let slot = sessions.admit(&query)?;
+    let manager = state.manager.clone();
+    Ok(upgrade
+        .protocols(["realtime"])
+        .max_message_size(crate::realtime::MAX_MESSAGE_BYTES)
+        .max_frame_size(crate::realtime::MAX_MESSAGE_BYTES)
+        .on_upgrade(move |socket| crate::realtime::serve(manager, socket, query, slot)))
 }

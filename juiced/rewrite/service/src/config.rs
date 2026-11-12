@@ -359,6 +359,8 @@ pub struct Config {
     pub models: Vec<ModelSpec>,
     #[serde(default, skip_serializing_if = "ModelAliases::is_unset")]
     pub aliases: ModelAliases,
+    #[serde(default, skip_serializing_if = "crate::wyoming::Settings::is_default")]
+    pub wyoming: crate::wyoming::Settings,
 }
 
 #[derive(Deserialize)]
@@ -446,6 +448,8 @@ struct ConfigWire {
     models: Vec<ModelWire>,
     #[serde(default)]
     aliases: ModelAliases,
+    #[serde(default)]
+    wyoming: crate::wyoming::Settings,
 }
 
 fn deserialize_native_binding<'de, D: Deserializer<'de>>(
@@ -510,6 +514,7 @@ impl<'de> Deserialize<'de> for Config {
             request_timeout_ms: wire.request_timeout_ms,
             models,
             aliases: wire.aliases,
+            wyoming: wire.wyoming,
         })
     }
 }
@@ -592,6 +597,7 @@ impl Config {
             .validate()
             .map_err(|error| error.to_string())?;
         self.session_cache.validate()?;
+        self.wyoming.validate()?;
         let mut ids = HashSet::new();
         let mut native_ids = HashSet::new();
         for model in &self.models {
