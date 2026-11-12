@@ -37,18 +37,25 @@ Dashboard · Models · Loading policy · Library · Backends & hardware · Cache
 | C: library search + HF pull (`/juiced/library/search`, `/juiced/library/pull`) | helper | merged 7de93910; real 364 MB Qwen3 Q4_0 pull verified via UI in 33 s |
 | E: new Playwright suite for the redesigned UI | helper | merged 5bd44622; 116/117 pass (1 desktop-only skip) on alternate ports |
 | F: model aliases + options `apply: "reload"` | helper | merged 42e452b3; UI 7da8f87a (Aliases tab, Save and reload); real CUDA reload 2.3 s verified |
-| G: automatic chat session continuation (`/juiced/cache/sessions`) | helper worktree | running |
-| H: sd.cpp images + Kokoros TTS adapters and engines | helper worktree | running |
-| I: journeys for add-with-engine-install, compare, embeddings | helper worktree | running |
-| D: engine install from pinned builds + model→engine auto-select (`/juiced/engines`, `/juiced/models/add`) | helper | merged 2e9ee2ae |
+| G: automatic chat session continuation (`/juiced/cache/sessions`) | helper | merged 78935bd1; UI 8421c71d (Cache › Sessions); real CUDA: restore 59–93 ms, 1–18 new tokens processed; removal forgets sessions 59a3768d |
+| H: sd.cpp images + Kokoros TTS, `/images/generations`, `/audio/speech`, `/sdapi/v1/txt2img`, `/juiced/voices` | helper | merged 3364a15b; UI 23e0c3d5 (Speak, Images); real RTX 5080: image 0.6 s warm, speech 4.9 s audio in 3.4 s cold |
+| I: journeys for add-with-engine-install, compare, embeddings | helper | merged; its 3 defects fixed 9648bce8 |
 
 ## Notes
 
 - Interim compact pass (uncommitted in ui/) is superseded by this rebuild; 22/26 desktop journeys passed on it.
 - Reference v0.9.2 container `juiced-v092-ref` on 127.0.0.1:18090 (local volume, not homelab).
 
+## Research findings (plan + threads, 2026-11-12)
+
+User decisions to keep: models Disabled by default "until I add them to on-demand or hot" (thread bfcf@7678); no saved chats or conversation browser; no Juiced-owned quantization; compact UI with (i) tips, no folding; Home Assistant over Ollama and Wyoming; container image with build/runtime stages and runtime-updatable drivers; hardware-first automatic backend choice with manual override.
+
+Open, ranked: (1) Rust-rewrite container image (juiced/Dockerfile still builds the C++ lemond); (2) more engines: hybrid ROCm+NPU, FLM/RyzenAI, FUTO, parakeet, moonshine; (3) Wyoming, Realtime; (4) residency: idle TTL, pressure eviction, protected HA reservations; (5) manual GGUF upload; (6) migration import from v0.9.2 native settings, matched benchmarks, review council. Doc drift: PLAN.md/PLATFORM-PLAN.md say eight destinations; UI-DESIGN.md describes the native console; FEATURE-COVERAGE.json predates the redesign.
+
+Open question for the user: one-click Add registers On demand; their rule says Disabled by default.
+
 ## Next action
 
-Primary: merge G, H, I as they report; then Cache sessions UI (slot hit / restored / cold, forget), Speak and Images tabs in Test services; re-anchor inventory evidence; run Rust suites, Clippy, Bun, full e2e (`JUICED_E2E_PORT=13317 JUICED_SOURCE_PORT=13318`), and the full gate; commit.
+Primary: record the gate result (`bun scripts/quick-check.ts --full --real --speech --power --resources`); ask about Add's default policy; then start the container image.
 
-Verified 2026-11-11 on RTX 5080: Settings save-and-reload, engine/weights controls only shown when actionable (a01abf0b), wide-screen column fix (c05b1883), Library chips 10/10 loads settle, button sweep across every page/tab with no page errors or 4xx/5xx, real two-model Compare.
+Verified 2026-11-12: Rust lib 668, process suites all pass (artifact_sets flaked once under load, 4/4 alone), Clippy clean, inventory 75 routes, Bun 66, Playwright 155 passed / 1 skipped.
