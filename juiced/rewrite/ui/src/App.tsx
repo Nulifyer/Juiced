@@ -14,6 +14,7 @@ import { FindModels } from "./FindModels";
 import { EngineList, Hardware } from "./Backends";
 import { Diagnostics } from "./Diagnostics";
 import { Aliases } from "./Aliases";
+import { NativeImport } from "./NativeImport";
 import { IdleDefault } from "./Residency";
 import { gib, percent, rate, useSystemStats } from "./live";
 import { clearToasts, dismiss, notify, useToasts } from "./toast";
@@ -131,7 +132,7 @@ export function App() {
   const tabs = screen === "models" ? <Tabs label="Models views" value={modelsTab} onChange={(value) => leave(() => { setModelsTab(value); setSelected(""); })} items={[["models", "Models"], ["aliases", "Aliases"]]} />
     : screen === "cache" ? <Tabs label="Cache views" value={cacheTab} onChange={setCacheTab} items={[["sessions", "Sessions"], ["snapshots", "Snapshots"]]} />
     : screen === "test" ? <Tabs label="Test operation" value={testService} onChange={setTestService} items={[["chat", "Chat"], ["compare", "Compare"], ["embeddings", "Embeddings"], ["transcription", "Transcribe"], ["speech", "Speak"], ["images", "Images"]]} />
-    : screen === "library" ? <Tabs label="Library view" value={libraryView} onChange={setLibraryView} items={[["find", "Find models"], ["files", "Files on disk"]]} />
+    : screen === "library" ? <Tabs label="Library view" value={libraryView} onChange={setLibraryView} items={[["find", "Find models"], ["files", "Files on disk"], ["import", "Import"]]} />
     : screen === "connect" ? <Tabs label="Connect views" value={connectTab} onChange={setConnectTab} items={[["protocols", "Protocols"], ["endpoints", "Endpoints"]]} />
     : screen === "backend" ? <Tabs label="Backend views" value={backendTab} onChange={setBackendTab} items={[["machine", "This machine"], ["installed", "Engines"], ["catalog", "Catalog"]]} />
     : screen === "diagnostics" ? <Tabs label="Diagnostics views" value={diagnosticsTab} onChange={setDiagnosticsTab} items={[["performance", "Performance"], ["requests", "Requests"], ["logs", "Logs"]]} />
@@ -162,6 +163,7 @@ export function App() {
         {screen === "models" && modelsTab === "aliases" && <Aliases key={epoch} client={client} models={snapshot.models} online={online} onOpenModel={openModel} />}
         {screen === "library" && libraryView === "find" && <FindModels key={epoch} client={client} online={online} onRegistered={refresh} onOpenModel={openModel} />}
         {screen === "library" && libraryView === "files" && <Library key={epoch} view={libraryView} client={client} online={online} models={snapshot.models} refreshModels={refresh} onInspect={openModel} />}
+        {screen === "library" && libraryView === "import" && <NativeImport key={epoch} client={client} online={online} onImported={refresh} />}
         {screen === "diagnostics" && <Diagnostics client={client} snapshot={snapshot} stats={live.stats} history={live.history} tab={diagnosticsTab} />}
         {screen === "test" && <ServiceTest key={`${epoch}:${testService}`} operation={testService} models={snapshot.models} client={client} online={online} />}
         {screen === "connect" && <ServiceApis key={epoch} base={base} client={client} tab={connectTab} models={snapshot.models} online={online} />}

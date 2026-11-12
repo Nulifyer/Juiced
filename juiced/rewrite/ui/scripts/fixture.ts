@@ -128,6 +128,13 @@ source = Bun.serve({
   await mkdir(resolve(importRoot, "nested"), { recursive: true });
   await writeFile(resolve(importRoot, "nested", "Local-Import-Q8_0.gguf"), metadataGguf(2048, 48 * 1024));
   await writeFile(resolve(directory, "Upload-Sample-Q8_0.gguf"), metadataGguf(2048, 40 * 1024));
+  const oldVolume = resolve(importRoot, "old-juiced");
+  await mkdir(resolve(oldVolume, "config", "juiced"), { recursive: true });
+  await writeFile(resolve(oldVolume, "config", "user_models.json"), JSON.stringify({ OldChat: { checkpoint: "acme/Old-Chat-GGUF:Q8_0", recipe: "llamacpp" } }));
+  await writeFile(resolve(oldVolume, "config", "recipe_options.json"), JSON.stringify({ "user.OldChat": { ctx_size: 2048 } }));
+  await writeFile(resolve(oldVolume, "config", "juiced", "state.json"), JSON.stringify({ version: 1, policies: { "user.OldChat": "on-demand" } }));
+  await mkdir(resolve(oldVolume, "huggingface", "hub", "models--acme--Old-Chat-GGUF", "snapshots", "abc123"), { recursive: true });
+  await writeFile(resolve(oldVolume, "huggingface", "hub", "models--acme--Old-Chat-GGUF", "snapshots", "abc123", "Old-Chat-Q8_0.gguf"), metadataGguf(2048, 36 * 1024));
   const model = (id: string, policy: string, resident: number, missing = false) => ({
     id, model_file: missing ? resolve(directory, "unavailable.gguf") : file,
     command: executable("juiced-test-worker"), args: ["--port", "{port}", "--model", "{model}", "--events", resolve(directory, `${id}.events`), "--slot-save-path", "{cache}", "--report-timings"],

@@ -38,7 +38,7 @@ function Pager({ section, data, cursors, loading, onChange }: { section: Invento
   </div>;
 }
 
-export type LibraryView = "find" | "files";
+export type LibraryView = "find" | "files" | "import";
 export function Library({ client, online, view, refreshModels }: { client: Client; online: boolean; view: LibraryView; models: Model[]; refreshModels: () => Promise<void>; onInspect: (id: string) => void }) {
   const [urlOpen, setUrlOpen] = useState(false);
   const [cursors, setCursors] = useState(firstInventoryPages);
