@@ -18,18 +18,18 @@ jobs:
         working-directory: juiced/rewrite
     steps:
       - uses: actions/checkout@v4
-      - name: Install Rust stable
-        run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+      - name: Install the pinned Rust toolchain
+        run: rustup toolchain install
       - name: Build daemon and fixture executables
-        run: cargo +stable build --all-features --locked
+        run: cargo build --all-features --locked
       - name: Service contracts
-        run: cargo +stable test -p juiced-service --features test-fixture --locked
+        run: cargo test -p juiced-service --features test-fixture --locked
       - name: Process and socket API pipelines
-        run: cargo +stable test -p juiced-rust-tests --locked
+        run: cargo test -p juiced-rust-tests --locked
       - name: Formatting and lint
         run: |
-          cargo +stable fmt --all --check
-          cargo +stable clippy --workspace --all-targets --features test-fixture --locked -- -D warnings
+          cargo fmt --all --check
+          cargo clippy --workspace --all-targets --features test-fixture --locked -- -D warnings
 
   console-checks:
     runs-on: ubuntu-24.04
@@ -42,8 +42,9 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
-      - name: Install Rust stable for the fixture service
-        run: rustup toolchain install stable --profile minimal
+      - name: Install the pinned Rust toolchain for the fixture service
+        working-directory: juiced/rewrite
+        run: rustup toolchain install
       - name: Install console dependencies and browser
         run: |
           bun install --frozen-lockfile
