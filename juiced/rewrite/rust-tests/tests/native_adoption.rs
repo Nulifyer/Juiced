@@ -549,6 +549,19 @@ async fn first_boot_adopts_a_native_volume_in_place_and_restarts_idempotently() 
     ));
     assert!(has_pair(&args, "--spec-type", "draft-mtp"));
     assert!(has_pair(&args, "--temp", "1.0"));
+    assert_eq!(
+        args.iter()
+            .filter(|argument| *argument == "--metrics")
+            .count(),
+        1,
+        "{args:?}"
+    );
+    assert_eq!(
+        args.iter()
+            .filter(|argument| *argument == "--temp" || *argument == "--temperature")
+            .count(),
+        1
+    );
     assert!(
         !args
             .iter()

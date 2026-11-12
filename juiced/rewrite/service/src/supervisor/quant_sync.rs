@@ -448,7 +448,7 @@ impl Manager {
                                 .format
                                 .as_ref()
                                 .map(|format| models::estimate(format, target_facts.bytes, Some(context)))
-                                .filter(|estimate| estimate.basis == "gguf-shape" && estimate.resident_bytes > budget)
+                                .filter(|estimate| estimate.basis == "gguf-layout" && estimate.resident_bytes > budget)
                                 .map(|estimate| json!({
                                     "field": field, "reason": "context_exceeds_budget", "value": context,
                                     "estimated_bytes": estimate.resident_bytes, "limit": budget,

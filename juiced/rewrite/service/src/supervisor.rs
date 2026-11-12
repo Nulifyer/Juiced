@@ -38,6 +38,8 @@ mod intake;
 pub use intake::{ImportListQuery, ImportPathRequest, UploadQuery};
 mod local_library;
 pub use local_library::LocalDelete;
+mod fit;
+pub use fit::FitQuery;
 mod flm;
 pub use flm::{FlmModelAdd, FlmPull};
 mod host;
@@ -2305,6 +2307,7 @@ impl Manager {
         processes: &Arc<crate::process::Registry<WorkerResources>>,
         slots: Option<crate::admission::SlotPool>,
     ) -> Result<Arc<Worker>, ApiError> {
+        let spec = fit::refresh_reservation(spec);
         let state = WorkerState {
             policy: spec.policy,
             revision: spec.revision,
@@ -2374,9 +2377,13 @@ impl Manager {
             .resolved_arguments()
             .map_err(|error| ApiError::new(StatusCode::CONFLICT, error.code, error.message))?
             .1;
-        Ok(
-            serde_json::json!({"model":id,"revision":spec.revision,"provider":spec.execution_profile.adapter,"saved":spec.execution_profile.options(),"effective_launch":effective,"physical_slots":spec.max_inflight,"context_semantics":"context_tokens is a total launch budget; serving context requires engine observation"}),
-        )
+        let mut view = serde_json::json!({"model":id,"revision":spec.revision,"provider":spec.execution_profile.adapter,"saved":spec.execution_profile.options(),"effective_launch":effective,"physical_slots":spec.max_inflight,"reservation_bytes":self.worker(id)?.spec.resident_bytes,"context_semantics":"context_tokens is a total launch budget; serving context requires engine observation"});
+        drop(config);
+        if let Some((fields, metrics)) = self.launch_provenance(id).await {
+            view["fields"] = fields;
+            view["mtp_metrics"] = metrics;
+        }
+        Ok(view)
     }
 
     async fn profile_observation(
@@ -3391,15 +3398,21 @@ impl Manager {
             )
         } else {
             let used = self.budget.used.load(Ordering::Acquire);
+            // A loaded model already holds its reservation; judge it as a replacement.
+            let others = if model.loaded {
+                used.saturating_sub(worker.spec.resident_bytes)
+            } else {
+                used
+            };
             (
                 "operator-declared",
                 Some(self.budget.limit),
                 used,
-                Some(self.budget.limit.saturating_sub(used)),
+                Some(self.budget.limit.saturating_sub(others)),
                 Some(worker.spec.resident_bytes),
                 Some(
                     self.budget
-                        .after_reservation(used, worker.spec.resident_bytes)
+                        .after_reservation(others, worker.spec.resident_bytes)
                         .is_some(),
                 ),
             )
@@ -3448,7 +3461,7 @@ impl Manager {
                 "reason": if host.is_some() {"Declared ceilings and a point observation do not qualify model fit, interference or hardware behavior."} else {"Physical capacity, saved context, workspace ceilings and complete execution identity are unavailable. A declared reservation is not hardware fit."},
                 "hardware_qualified": false, "recommendation_qualified": false,
                 "admission_open": !shutting_down && !paused, "blockers": blockers,
-                "assessment_scope": "additional-worker", "reservation_source": source,
+                "assessment_scope": if model.loaded && host.is_none() {"replace-running-worker"} else {"additional-worker"}, "reservation_source": source,
                 "declared_budget": {
                     "capacity_bytes": capacity, "reserved_bytes": used,
                     "available_bytes": available,

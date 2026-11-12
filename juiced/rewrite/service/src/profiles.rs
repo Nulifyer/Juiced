@@ -557,6 +557,66 @@ impl<R: Read + Seek> MetadataReader<'_, R> {
             }
         }
     }
+    fn integer_array(&mut self) -> Result<Option<Vec<u64>>, Error> {
+        let element = self.u32()?;
+        let count = self.u64()?;
+        if count > MAX_ARRAY_ELEMENTS {
+            return Err(Error::new(
+                "gguf_limit",
+                "A GGUF metadata array exceeds one million elements.",
+            ));
+        }
+        if !matches!(element, 0..=5 | 7 | 10 | 11) || count > MAX_LAYER_ARRAY {
+            if element == 8 {
+                for _ in 0..count {
+                    self.skip_string()?;
+                }
+                return Ok(None);
+            }
+            let size = scalar_size(element).ok_or_else(|| {
+                Error::new(
+                    "invalid_gguf",
+                    "Nested arrays or unknown GGUF metadata types are unsupported.",
+                )
+            })?;
+            self.skip(count.checked_mul(size).ok_or_else(|| {
+                Error::new("gguf_limit", "A GGUF metadata array size overflowed.")
+            })?)?;
+            return Ok(None);
+        }
+        let mut values = Vec::with_capacity(count as usize);
+        for _ in 0..count {
+            let kind = if element == 7 { 0 } else { element };
+            values.push(self.integer(kind).unwrap_or(None).unwrap_or(0));
+        }
+        Ok(Some(values))
+    }
+    fn array_count(&mut self) -> Result<u64, Error> {
+        let element = self.u32()?;
+        let count = self.u64()?;
+        if count > MAX_ARRAY_ELEMENTS {
+            return Err(Error::new(
+                "gguf_limit",
+                "A GGUF metadata array exceeds one million elements.",
+            ));
+        }
+        if element == 8 {
+            for _ in 0..count {
+                self.skip_string()?;
+            }
+        } else {
+            let size = scalar_size(element).ok_or_else(|| {
+                Error::new(
+                    "invalid_gguf",
+                    "Nested arrays or unknown GGUF metadata types are unsupported.",
+                )
+            })?;
+            self.skip(count.checked_mul(size).ok_or_else(|| {
+                Error::new("gguf_limit", "A GGUF metadata array size overflowed.")
+            })?)?;
+        }
+        Ok(count)
+    }
     fn integer(&mut self, kind: u32) -> Result<Option<u64>, Error> {
         let value = match kind {
             0 => self.bytes::<1>()?[0] as i128,
@@ -601,16 +661,71 @@ pub struct ModelShape {
     pub head_count_kv: Option<u64>,
     pub key_length: Option<u64>,
     pub value_length: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub head_count_kv_layers: Option<Vec<u64>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub full_attention_interval: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sliding_window: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sliding_window_pattern: Option<Vec<bool>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sliding_window_period: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key_length_swa: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value_length_swa: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shared_kv_layers: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nextn_predict_layers: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ssm_conv_kernel: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ssm_inner_size: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ssm_state_size: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ssm_group_count: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shortconv_cache: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vocab_size: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tied_embedding_bytes: Option<u64>,
 }
 
-const SHAPE_KEYS: [&str; 6] = [
+const SHAPE_KEYS: [&str; 18] = [
     "block_count",
     "embedding_length",
     "attention.head_count",
     "attention.head_count_kv",
     "attention.key_length",
     "attention.value_length",
+    "full_attention_interval",
+    "attention.sliding_window",
+    "attention.sliding_window_pattern",
+    "attention.key_length_swa",
+    "attention.value_length_swa",
+    "attention.shared_kv_layers",
+    "nextn_predict_layers",
+    "ssm.conv_kernel",
+    "ssm.inner_size",
+    "ssm.state_size",
+    "ssm.group_count",
+    "vocab_size",
 ];
+const SHORTCONV_KEY: &str = "shortconv.l_cache";
+const MAX_LAYER_ARRAY: u64 = 65_536;
+
+fn architecture_suffix<'a>(key: &'a str, suffixes: &[&str]) -> Option<&'a str> {
+    suffixes.iter().find_map(|suffix| {
+        key.strip_suffix(suffix).and_then(|prefix| {
+            (prefix.ends_with('.') && !prefix[..prefix.len() - 1].contains('.'))
+                .then(|| &key[..prefix.len() - 1])
+        })
+    })
+}
 
 pub fn read_gguf<R: Read + Seek>(reader: &mut R) -> Result<DeclaredContext, Error> {
     read_gguf_shape(reader).map(|(declared, _)| declared)
@@ -707,6 +822,9 @@ pub fn read_gguf_shape<R: Read + Seek>(
     let mut architecture = None;
     let mut contexts = Vec::new();
     let mut shape_values = Vec::new();
+    let mut shape_arrays: Vec<(String, Vec<u64>)> = Vec::new();
+    let mut vocabulary = None;
+    let mut alignment = None;
     for _ in 0..entries {
         let key = input.string(1024)?;
         if key.is_empty() || key.chars().any(char::is_control) || seen.contains(&key) {
@@ -737,14 +855,21 @@ pub fn read_gguf_shape<R: Read + Seek>(
             architecture = Some(name);
         } else if key.ends_with(".context_length") {
             contexts.push((key.clone(), input.integer(kind)?));
-        } else if matches!(kind, 0..=5 | 10 | 11)
-            && SHAPE_KEYS.iter().any(|suffix| {
-                key.strip_suffix(suffix).is_some_and(|prefix| {
-                    prefix.ends_with('.') && !prefix[..prefix.len() - 1].contains('.')
-                })
-            })
+        } else if matches!(kind, 0..=5 | 7 | 10 | 11)
+            && architecture_suffix(&key, &SHAPE_KEYS)
+                .or_else(|| architecture_suffix(&key, &[SHORTCONV_KEY]))
+                .is_some()
         {
+            let kind = if kind == 7 { 0 } else { kind };
             shape_values.push((key.clone(), input.integer(kind).unwrap_or(None)));
+        } else if kind == 9 && architecture_suffix(&key, &SHAPE_KEYS).is_some() {
+            if let Some(values) = input.integer_array()? {
+                shape_arrays.push((key.clone(), values));
+            }
+        } else if kind == 9 && key == "tokenizer.ggml.tokens" {
+            vocabulary = Some(input.array_count()?);
+        } else if key == "general.alignment" && matches!(kind, 4 | 10) {
+            alignment = input.integer(kind)?;
         } else {
             input.skip_value(kind)?;
         }
@@ -764,13 +889,43 @@ pub fn read_gguf_shape<R: Read + Seek>(
             .find(|(key, _)| *key == target)
             .and_then(|(_, value)| *value)
     };
+    let shape_array = |suffix: &str| {
+        let target = format!("{}.{suffix}", architecture.as_deref()?);
+        shape_arrays
+            .iter()
+            .find(|(key, _)| *key == target)
+            .map(|(_, values)| values.clone())
+    };
+    let head_count_kv_layers = shape_array(SHAPE_KEYS[3]);
     let shape = ModelShape {
         block_count: shape_value(SHAPE_KEYS[0]),
         embedding_length: shape_value(SHAPE_KEYS[1]),
-        head_count: shape_value(SHAPE_KEYS[2]),
-        head_count_kv: shape_value(SHAPE_KEYS[3]),
+        head_count: shape_value(SHAPE_KEYS[2])
+            .or_else(|| shape_array(SHAPE_KEYS[2]).and_then(|values| values.into_iter().max())),
+        head_count_kv: shape_value(SHAPE_KEYS[3]).or_else(|| {
+            head_count_kv_layers
+                .as_ref()
+                .and_then(|values| values.iter().copied().max())
+        }),
         key_length: shape_value(SHAPE_KEYS[4]),
         value_length: shape_value(SHAPE_KEYS[5]),
+        head_count_kv_layers,
+        full_attention_interval: shape_value(SHAPE_KEYS[6]),
+        sliding_window: shape_value(SHAPE_KEYS[7]),
+        sliding_window_pattern: shape_array(SHAPE_KEYS[8])
+            .map(|values| values.into_iter().map(|value| value != 0).collect()),
+        sliding_window_period: shape_value(SHAPE_KEYS[8]),
+        key_length_swa: shape_value(SHAPE_KEYS[9]),
+        value_length_swa: shape_value(SHAPE_KEYS[10]),
+        shared_kv_layers: shape_value(SHAPE_KEYS[11]),
+        nextn_predict_layers: shape_value(SHAPE_KEYS[12]),
+        ssm_conv_kernel: shape_value(SHAPE_KEYS[13]),
+        ssm_inner_size: shape_value(SHAPE_KEYS[14]),
+        ssm_state_size: shape_value(SHAPE_KEYS[15]),
+        ssm_group_count: shape_value(SHAPE_KEYS[16]),
+        shortconv_cache: shape_value(SHORTCONV_KEY),
+        vocab_size: shape_value(SHAPE_KEYS[17]).or(vocabulary),
+        tied_embedding_bytes: tied_embedding_bytes(&mut input, tensors, alignment.unwrap_or(32)),
     };
     Ok((
         DeclaredContext {
@@ -781,6 +936,44 @@ pub fn read_gguf_shape<R: Read + Seek>(
         },
         shape,
     ))
+}
+
+/// Without an `output.weight` tensor llama.cpp reuses `token_embd.weight` for the output
+/// head, and GPU builds hold a second copy of it on the device. Best effort: a tensor table
+/// that cannot be read leaves the size unknown.
+fn tied_embedding_bytes<R: Read + Seek>(
+    input: &mut MetadataReader<'_, R>,
+    tensors: u64,
+    alignment: u64,
+) -> Option<u64> {
+    let mut offsets = Vec::with_capacity(tensors.min(65_536) as usize);
+    let mut embedding = None;
+    let mut output = false;
+    for _ in 0..tensors {
+        let name = input.string(1024).ok()?;
+        let dimensions = input.u32().ok()?;
+        if dimensions == 0 || dimensions > 8 {
+            return None;
+        }
+        input.skip(u64::from(dimensions) * 8 + 4).ok()?;
+        let offset = input.u64().ok()?;
+        match name.as_str() {
+            "token_embd.weight" => embedding = Some(offset),
+            "output.weight" => output = true,
+            _ => {}
+        }
+        offsets.push(offset);
+    }
+    let embedding = embedding.filter(|_| !output)?;
+    let alignment = alignment.clamp(1, 1 << 20);
+    let start = input.position.div_ceil(alignment).checked_mul(alignment)?;
+    let data = input.file_bytes.checked_sub(start)?;
+    let end = offsets
+        .into_iter()
+        .filter(|offset| *offset > embedding)
+        .min()
+        .unwrap_or(data);
+    end.checked_sub(embedding).filter(|bytes| *bytes > 0)
 }
 
 #[cfg(test)]

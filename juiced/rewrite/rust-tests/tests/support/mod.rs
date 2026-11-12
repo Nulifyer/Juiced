@@ -3,6 +3,7 @@
 pub mod artifacts;
 pub mod cli;
 pub mod filesystem;
+pub mod gguf;
 pub mod huggingface;
 #[cfg(target_os = "linux")]
 pub mod llama;
@@ -40,7 +41,7 @@ pub const READ_ROUTES: [&str; 11] = [
     "/models/{model}/options",
     "/juiced/voices",
 ];
-pub const OPERATOR_READ_ROUTES: [&str; 29] = [
+pub const OPERATOR_READ_ROUTES: [&str; 30] = [
     "/system-info",
     "/juiced/cache/inspect",
     "/juiced/cache/sessions",
@@ -57,6 +58,7 @@ pub const OPERATOR_READ_ROUTES: [&str; 29] = [
     "/models/{model}/artifacts",
     "/models/{model}/runtime",
     "/models/{model}/variants",
+    "/models/{model}/fit",
     "/system-stats",
     "/juiced/logs",
     "/juiced/library/search",
@@ -216,6 +218,12 @@ fn diagnostic_route(path: &str) -> &'static str {
                 .is_some_and(|id| !id.is_empty() && !id.contains('/'))
             {
                 return "/models/{model}/options";
+            }
+            if model
+                .strip_suffix("/fit")
+                .is_some_and(|id| !id.is_empty() && !id.contains('/'))
+            {
+                return "/models/{model}/fit";
             }
             if !model.is_empty() && !model.contains('/') {
                 return "/models/{model}";

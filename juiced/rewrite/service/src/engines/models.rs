@@ -84,7 +84,7 @@ pub enum Container {
 pub enum ModelFormat {
     Gguf {
         declared: DeclaredContext,
-        shape: ModelShape,
+        shape: Box<ModelShape>,
     },
     WhisperGgml {
         vocabulary: u32,
@@ -195,7 +195,13 @@ pub fn detect(path: &Path) -> Result<(ModelFormat, u64), FormatError> {
                 bytes,
             ));
         }
-        return Ok((ModelFormat::Gguf { declared, shape }, bytes));
+        return Ok((
+            ModelFormat::Gguf {
+                declared,
+                shape: Box::new(shape),
+            },
+            bytes,
+        ));
     }
     if available >= 4 && u32::from_le_bytes(magic[..4].try_into().expect("magic")) == WHISPER_MAGIC
     {
@@ -367,13 +373,27 @@ pub struct Estimate {
     pub resident_bytes: u64,
     pub basis: &'static str,
     pub formula: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub breakdown: Option<super::memory::Breakdown>,
 }
 
-/// KV bytes = layers x context x KV heads x (key + value head width) x 2 bytes (f16 cache).
-/// Head widths default to embedding / heads and KV heads default to heads. When the shape is
-/// incomplete, KV is charged as a quarter of the weight file instead. Image and speech
-/// workers charge their weights, companions and a fixed per-engine workspace.
+/// GGUF chat models are charged the layout llama.cpp allocates for a single-slot GPU launch
+/// with Juiced's defaults (see [`super::memory::llama`]). When the shape is incomplete, KV is
+/// charged as a quarter of the weight file instead. Image and speech workers charge their
+/// weights, companions and a fixed per-engine workspace.
 pub fn estimate(format: &ModelFormat, file_bytes: u64, context: Option<u64>) -> Estimate {
+    let plan = context.map(|context| super::memory::Plan::new(context, 1, true));
+    estimate_with(format, file_bytes, 0, plan.as_ref())
+}
+
+/// `model_bytes` excludes `projector_bytes`; the plan carries the launch context and flags.
+pub fn estimate_with(
+    format: &ModelFormat,
+    model_bytes: u64,
+    projector_bytes: u64,
+    plan: Option<&super::memory::Plan>,
+) -> Estimate {
+    let file_bytes = model_bytes.saturating_add(projector_bytes);
     match format {
         ModelFormat::Diffusion { .. }
         | ModelFormat::Onnx { .. }
@@ -393,15 +413,37 @@ pub fn estimate(format: &ModelFormat, file_bytes: u64, context: Option<u64>) -> 
                 resident_bytes: file_bytes.saturating_add(workspace),
                 basis: "weights-plus-workspace",
                 formula: "file_bytes (including companions) + fixed engine workspace",
+                breakdown: None,
             };
         }
         _ => {}
     }
+    if let (ModelFormat::Gguf { declared, shape }, Some(plan)) = (format, plan)
+        && let Some(breakdown) = super::memory::llama(
+            shape,
+            declared.architecture.as_deref(),
+            model_bytes,
+            projector_bytes,
+            plan,
+        )
+    {
+        let resident_bytes = breakdown.total();
+        return Estimate {
+            file_bytes,
+            context_tokens: Some(plan.context_tokens),
+            kv_bytes: breakdown.context_bytes,
+            workspace_bytes: resident_bytes
+                .saturating_sub(file_bytes)
+                .saturating_sub(breakdown.context_bytes),
+            resident_bytes,
+            basis: "gguf-layout",
+            formula: "weights + attention KV (hybrid, SWA and per-layer heads) + recurrent state + compute + projector + MTP draft + prompt cache and checkpoints",
+            breakdown: Some(breakdown),
+        };
+    }
+    let context = plan.map(|plan| plan.context_tokens);
     let (kv_bytes, basis) = match (format, context) {
-        (ModelFormat::Gguf { shape, .. }, Some(context)) => match kv_bytes(shape, context) {
-            Some(bytes) => (bytes, "gguf-shape"),
-            None => (file_bytes / 4, "file-fraction"),
-        },
+        (ModelFormat::Gguf { .. }, Some(_)) => (file_bytes / 4, "file-fraction"),
         _ => (0, "weights-only"),
     };
     Estimate {
@@ -413,8 +455,21 @@ pub fn estimate(format: &ModelFormat, file_bytes: u64, context: Option<u64>) -> 
             .saturating_add(kv_bytes)
             .saturating_add(WORKSPACE_ALLOWANCE_BYTES),
         basis,
-        formula: "file_bytes + layers*context*kv_heads*(key_width+value_width)*2 + 256 MiB",
+        formula: "file_bytes + file_bytes/4 + 256 MiB",
+        breakdown: None,
     }
+}
+
+/// The reservation earlier releases computed for a GGUF registration: every block charged full
+/// f16 KV plus a flat 256 MiB. A stored reservation equal to it was generated automatically.
+pub fn legacy_resident_bytes(format: &ModelFormat, file_bytes: u64, context: u64) -> u64 {
+    let kv = match format {
+        ModelFormat::Gguf { shape, .. } => kv_bytes(shape, context).unwrap_or(file_bytes / 4),
+        _ => 0,
+    };
+    file_bytes
+        .saturating_add(kv)
+        .saturating_add(WORKSPACE_ALLOWANCE_BYTES)
 }
 
 pub fn kv_bytes(shape: &ModelShape, context: u64) -> Option<u64> {
@@ -567,6 +622,7 @@ pub struct ProfileInputs<'a> {
     pub format: &'a ModelFormat,
     pub estimate: &'a Estimate,
     pub companion_arguments: &'a [String],
+    pub llama: Option<&'a super::memory::LlamaDefaults>,
 }
 
 pub fn registration(inputs: &ProfileInputs<'_>) -> Value {
@@ -593,17 +649,23 @@ pub fn registration(inputs: &ProfileInputs<'_>) -> Value {
                 }
                 options
             };
+            let mut args: Vec<String> = [
+                "--host",
+                "127.0.0.1",
+                "--port",
+                "{port}",
+                "--model",
+                "{model}",
+                "--slots",
+                "--jinja",
+            ]
+            .map(str::to_owned)
+            .into();
+            if let Some(defaults) = inputs.llama {
+                defaults.apply(&mut args);
+            }
             (
-                json!([
-                    "--host",
-                    "127.0.0.1",
-                    "--port",
-                    "{port}",
-                    "--model",
-                    "{model}",
-                    "--slots",
-                    "--jinja"
-                ]),
+                json!(args),
                 options,
                 json!(["chat/completions", "completions", "responses"]),
             )

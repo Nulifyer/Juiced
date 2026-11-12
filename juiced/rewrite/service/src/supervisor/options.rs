@@ -184,15 +184,43 @@ impl Manager {
                     && (state.running.is_some() || state.policy == Policy::Hot)
             }
         };
+        let projector_worker = worker.clone();
+        let budget = (!self.memory_protected()).then_some(self.budget.limit);
+        let parent = self
+            .config_path
+            .parent()
+            .expect("configuration parent")
+            .to_owned();
         let (replacement, previous) = self
-            .replace_local_profile(worker, state, move |profile| {
-                profile.set_local_options(options).map_err(|_| {
-                    ApiError::new(
-                        StatusCode::CONFLICT,
-                        "native_settings_authority",
-                        "Native options must be changed through their committed settings generation.",
-                    )
-                })
+            .replace_local_profile(worker, state, move |spec| {
+                spec.execution_profile
+                    .set_local_options(options)
+                    .map_err(|_| {
+                        ApiError::new(
+                            StatusCode::CONFLICT,
+                            "native_settings_authority",
+                            "Native options must be changed through their committed settings generation.",
+                        )
+                    })?;
+                if let Some((_, corrected)) = super::fit::formula_reservation(
+                    &spec.resolved(&parent),
+                    Some(&projector_worker),
+                )
+                {
+                    if budget.is_some_and(|budget| corrected > budget) {
+                        return Err(ApiError::new(
+                            StatusCode::CONFLICT,
+                            "reservation_exceeds_budget",
+                            format!(
+                                "These settings need {:.1} GiB, more than the {:.1} GiB resident budget. Lower the context or slots; nothing was saved.",
+                                corrected as f64 / 1073741824.0,
+                                budget.unwrap_or_default() as f64 / 1073741824.0
+                            ),
+                        ));
+                    }
+                    spec.resident_bytes = corrected;
+                }
+                Ok(())
             })
             .await?;
         let mut view = if restart {
@@ -223,7 +251,7 @@ impl Manager {
     async fn roll_back_options(
         self: &Arc<Self>,
         failed: Arc<Worker>,
-        previous: ExecutionProfile,
+        previous: (ExecutionProfile, u64),
         error: ApiError,
     ) -> OptionsError {
         let state = failed.state.clone().lock_owned().await;
@@ -232,8 +260,8 @@ impl Manager {
         {
             None
         } else {
-            self.replace_local_profile(failed, state, move |profile| {
-                *profile = previous;
+            self.replace_local_profile(failed, state, move |spec| {
+                (spec.execution_profile, spec.resident_bytes) = previous;
                 Ok(())
             })
             .await
@@ -258,8 +286,8 @@ impl Manager {
         self: &Arc<Self>,
         worker: Arc<Worker>,
         mut state: OwnedMutexGuard<WorkerState>,
-        change: impl FnOnce(&mut ExecutionProfile) -> Result<(), ApiError>,
-    ) -> Result<(Arc<Worker>, ExecutionProfile), ApiError> {
+        change: impl FnOnce(&mut crate::config::ModelSpec) -> Result<(), ApiError>,
+    ) -> Result<(Arc<Worker>, (ExecutionProfile, u64)), ApiError> {
         let id = worker.spec.id.clone();
         self.ensure_registered(&worker)?;
         let config = self.config.clone().lock_owned().await;
@@ -276,8 +304,8 @@ impl Manager {
             .iter_mut()
             .find(|model| model.id == id)
             .expect("registered model");
-        let previous = spec.execution_profile.clone();
-        change(&mut spec.execution_profile)?;
+        let previous = (spec.execution_profile.clone(), spec.resident_bytes);
+        change(spec)?;
         spec.revision = next.generation;
         let applied = spec
             .execution_profile

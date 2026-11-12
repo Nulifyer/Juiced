@@ -317,6 +317,45 @@ OpenAI, Anthropic, Ollama and MCP inference resolve an alias to its current targ
 
 `POST /v1/models/{model}/options` accepts `"apply":"next_load"` (default) or `"apply":"reload"`. With `next_load` the worker must be unloaded. With `reload` Juiced validates the options, stops the loaded worker, saves the options atomically and starts a loaded or Hot worker with them. Its policy is preserved. If the save fails, the worker restarts with its previous options. The response adds `apply` and `restarted`. Active or starting requests return `409 worker_busy` and nothing is saved. If the new worker does not start, the previous options are saved again at a newer revision and restarted when possible. That failure returns `options_reload_failed` with `cause`, `rolled_back`, `restored_revision` and `restarted`. Native-settings profiles return `501 reload_unsupported`.
 
+## llama.cpp memory fit and launch defaults
+
+Juiced charges each llama.cpp model the memory layout the pinned llama.cpp builds allocate. It reads the GGUF metadata and counts:
+
+- weights (plus the device copy of tied embeddings on GPU backends)
+- KV only for attention layers: hybrid and recurrent layers hold a fixed state per slot, and sliding-window layers are capped at the window unless `--swa-full` is set
+- the KV cache type (`f16`, `q8_0`, `q4_0` and others)
+- the compute buffers, the projector, the MTP draft context
+- the prompt cache, and context checkpoints for hybrid and sliding-window models
+
+Saving launch options recomputes the reservation and refuses settings that exceed the budget (`409 reservation_exceeds_budget`). A stored reservation equal to the formula of earlier releases is replaced at startup. Explicit reservations stay.
+
+`GET /v1/models/{model}/fit` requires operator authority under all four prefixes. It previews the saved settings, or an unsaved draft with `context_tokens`, `gpu_layers`, `kv_cache_type` and `parallel_slots` query parameters. The response is `{breakdown:{weights_bytes, context_bytes, compute_bytes, projector_bytes, draft_bytes, other_bytes}, total_bytes, reservation_bytes, budget_bytes, available_bytes, loaded, fits, largest_context_that_fits, trained_context, plan, devices, draft, source, warnings}`.
+
+- `source` is `llama-fit-params` when the installed runtime's own `llama-fit-params` reported the per-device layout without loading weights. Otherwise it is `estimate`.
+- Results are cached by model file, runtime and arguments.
+- `available_bytes` counts a loaded model's own reservation as free.
+
+New registrations, library adds and native adoption without a saved context get the largest context that fits the budget left by Hot models, up to the trained context (32768 when unknown). They also get:
+
+- `--parallel 1` and all layers on GPU backends
+- `--metrics`
+- native per-architecture sampler defaults from `architecture_defaults.json`, unless an argument already sets them
+- `--spec-type draft-mtp` when the GGUF has an MTP head and one slot
+
+Flash attention, threads on GPU, mmap and reasoning stay at engine defaults.
+
+Every llama.cpp launch that does not set `--cache-ram` passes `--cache-ram 1024`. The reservation charges it. Without the flag, llama-server's 8 GiB prompt cache would grow outside the reservation, and Juiced's own session cache already keeps conversations on disk.
+
+`GET /v1/models/{model}/options` adds `reservation_bytes` and `fields`. `fields` holds context, gpu_layers, slots, threads, kv_cache_type, flash_attention, mtp and thinking. Each field is `{saved, launched, effective, source, restart_needed}`, and `source` is one of:
+
+- `reported` (from the running engine's `/props` or `/slots`)
+- `auto` (matches Juiced's automatic choice)
+- `model` (a GGUF or architecture default)
+- `saved`
+- `engine` (unset)
+
+`mtp_metrics` reports `draft_tokens`, `accepted_tokens`, `drafts`, `acceptance_rate` and `accepted_per_draft` from llama-server `/metrics` while an MTP worker is loaded.
+
 ## Model revision changes
 
 A registration bound to a primary-only managed set can select another complete set in the model inspector. Unload the worker first. Juiced preserves the public ID, policy and engine settings, and retains one previous set for rollback. Recorded content does not establish engine compatibility. No model loads as a side effect. Another client's model change keeps your selection and requires an explicit refresh before saving.

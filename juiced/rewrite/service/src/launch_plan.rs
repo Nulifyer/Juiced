@@ -106,7 +106,7 @@ impl CapturedEnvironment {
         format!("{:x}", hash.finalize())
     }
 
-    fn apply(&self, command: &mut tokio::process::Command) {
+    pub(crate) fn apply(&self, command: &mut tokio::process::Command) {
         command.env_clear().envs(&self.0);
     }
 }
@@ -355,6 +355,8 @@ impl LaunchPlan {
             None
         };
         let managed_cache = profile.adapter == Provider::LlamaCpp && !template.has_cache_binding();
+        let managed_prompt_cache = profile.adapter == Provider::LlamaCpp
+            && !crate::engines::memory::has_flag(template.arguments(), "--cache-ram");
         let cache_binding = template.has_cache_binding() || managed_cache;
         let identity = serde_json::to_vec(&(
             "juiced-launch-plan-v3",
@@ -395,6 +397,9 @@ impl LaunchPlan {
         }
         if managed_cache {
             digest.update(b"\0juiced-launch-managed-slot-save-v1\0");
+        }
+        if managed_prompt_cache {
+            digest.update(b"\0juiced-launch-managed-prompt-cache-v1\0");
         }
         for companion in &spec.companions {
             let metadata = std::fs::metadata(&companion.path)
@@ -540,6 +545,12 @@ impl LaunchPlan {
         }
         if managed_cache {
             args.extend(["--slot-save-path".to_owned(), cache.to_owned()]);
+        }
+        if managed_prompt_cache {
+            args.extend([
+                "--cache-ram".to_owned(),
+                crate::engines::memory::JUICED_CACHE_RAM_MIB.to_string(),
+            ]);
         }
         crate::hybrid::apply(hybrid_root, &mut args)
             .map_err(|error| Error::new(error.code, error.message))?;
@@ -735,6 +746,9 @@ impl LaunchPlan {
     }
     pub(crate) fn executable(&self) -> &Path {
         self.executable.path()
+    }
+    pub(crate) fn arguments(&self) -> &[String] {
+        &self.args
     }
     pub(crate) fn effective(&self) -> Option<&LaunchOptions> {
         self.effective.as_ref()

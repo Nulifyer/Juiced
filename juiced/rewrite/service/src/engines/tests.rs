@@ -884,9 +884,17 @@ fn profiles_and_estimates_follow_the_documented_formula() {
     assert_eq!(context, Some(8192));
     let estimate = models::estimate(&format, file_bytes, context);
     assert_eq!(estimate.kv_bytes, 28 * 8192 * 8 * (128 + 128) * 2);
-    assert_eq!(estimate.basis, "gguf-shape");
+    assert_eq!(estimate.basis, "gguf-layout");
+    let breakdown = estimate.breakdown.unwrap();
+    assert_eq!(breakdown.weights_bytes, file_bytes);
+    assert_eq!(breakdown.context_bytes, estimate.kv_bytes);
+    assert_eq!(estimate.resident_bytes, breakdown.total());
+    assert!(
+        estimate.resident_bytes
+            < models::legacy_resident_bytes(&format, file_bytes, 8192) + 2 * 1024 * 1024 * 1024
+    );
     assert_eq!(
-        estimate.resident_bytes,
+        models::legacy_resident_bytes(&format, file_bytes, 8192),
         file_bytes + estimate.kv_bytes + models::WORKSPACE_ALLOWANCE_BYTES
     );
     let package = format!("package-{}", "a".repeat(64));
@@ -902,8 +910,55 @@ fn profiles_and_estimates_follow_the_documented_formula() {
         format: &format,
         estimate: &estimate,
         companion_arguments: &[],
+        llama: None,
     };
     let gpu = models::registration(&inputs(true));
+    assert_eq!(
+        gpu["execution_profile"]["args"],
+        serde_json::json!([
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "{port}",
+            "--model",
+            "{model}",
+            "--slots",
+            "--jinja"
+        ])
+    );
+    let defaults = crate::engines::memory::LlamaDefaults::for_model(
+        &crate::profiles::ModelShape::default(),
+        Some("qwen3"),
+        1,
+    );
+    let with_defaults = models::registration(&models::ProfileInputs {
+        llama: Some(&defaults),
+        ..inputs(true)
+    });
+    assert_eq!(
+        with_defaults["execution_profile"]["args"],
+        serde_json::json!([
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "{port}",
+            "--model",
+            "{model}",
+            "--slots",
+            "--jinja",
+            "--metrics",
+            "--temp",
+            "0.6",
+            "--top-p",
+            "0.85",
+            "--top-k",
+            "20",
+            "--min-p",
+            "0.0",
+            "--repeat-penalty",
+            "1.0"
+        ])
+    );
     assert_eq!(gpu["execution_profile"]["options"]["gpu_layers"], 29);
     assert_eq!(gpu["execution_profile"]["options"]["context_tokens"], 8192);
     assert_eq!(gpu["execution_profile"]["options"]["parallel_slots"], 1);
@@ -928,7 +983,7 @@ fn profiles_and_estimates_follow_the_documented_formula() {
 
     let mut shapeless = format.clone();
     if let ModelFormat::Gguf { shape, declared } = &mut shapeless {
-        *shape = Default::default();
+        **shape = Default::default();
         declared.training_context_tokens = None;
     }
     assert_eq!(
@@ -958,6 +1013,7 @@ fn profiles_and_estimates_follow_the_documented_formula() {
         format: &whisper,
         estimate: &estimate,
         companion_arguments: &[],
+        llama: None,
     });
     let crate::config::Registration(spec) = serde_json::from_value(registration).unwrap();
     assert_eq!(spec.operations, [crate::config::Operation::Transcription]);
@@ -1306,6 +1362,7 @@ fn media_registrations_bind_every_companion_and_pass_the_argument_grammar() {
             format,
             estimate: &estimate,
             companion_arguments: &arguments,
+            llama: None,
         });
         let crate::config::Registration(spec) = serde_json::from_value(registration).unwrap();
         assert_eq!(spec.operations, [operation]);
