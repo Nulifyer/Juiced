@@ -523,6 +523,7 @@ async fn checkpoint_heavy_slot_state_grows_past_its_kv_estimate_and_still_restor
     const OVERHEAD: u64 = 72 * 1024 * 1024;
     let server = Server::configured(true, |config| {
         configure(config, 1, fast());
+        config["request_timeout_ms"] = json!(30000);
         let shaped = std::path::Path::new(config["models"][0]["model_file"].as_str().unwrap())
             .with_file_name("shaped.gguf");
         std::fs::write(&shaped, shaped_gguf()).unwrap();

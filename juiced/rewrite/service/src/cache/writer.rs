@@ -282,8 +282,10 @@ pub(super) fn binding_digest<T: Serialize + ?Sized>(value: &T) -> Result<String,
 
 pub(super) fn hash_budget(limits: &CacheLimits, control: Option<&OperationControl>) -> HashBudget {
     let mut budget = HashBudget::new(limits);
+    // Publication and restore hash the whole snapshot; a session near the per-model budget can
+    // take longer than the inspection timeout, so bounded operations use their own deadline.
     if let Some(control) = control {
-        budget.deadline = budget.deadline.min(control.deadline);
+        budget.deadline = control.deadline;
         budget.cancelled = Some(control.cancelled.clone());
     }
     budget
