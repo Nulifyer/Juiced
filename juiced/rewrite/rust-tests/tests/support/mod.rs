@@ -37,7 +37,7 @@ pub const READ_ROUTES: [&str; 10] = [
     "/models/{model}",
     "/models/{model}/options",
 ];
-pub const OPERATOR_READ_ROUTES: [&str; 15] = [
+pub const OPERATOR_READ_ROUTES: [&str; 16] = [
     "/system-info",
     "/juiced/cache/inspect",
     "/juiced/requests",
@@ -47,6 +47,7 @@ pub const OPERATOR_READ_ROUTES: [&str; 15] = [
     "/juiced/cache",
     "/juiced/artifacts",
     "/juiced/runtime-packages",
+    "/juiced/engines",
     "/juiced/artifacts/jobs/{job}",
     "/juiced/artifacts/sets/{set}",
     "/models/{model}/artifacts",
@@ -54,8 +55,10 @@ pub const OPERATOR_READ_ROUTES: [&str; 15] = [
     "/system-stats",
     "/juiced/logs",
 ];
-pub const WRITE_ROUTES: [&str; 20] = [
+pub const WRITE_ROUTES: [&str; 22] = [
     "/juiced/runtime-packages/import",
+    "/juiced/engines/install",
+    "/juiced/models/add",
     "/juiced/policy",
     "/load",
     "/unload",

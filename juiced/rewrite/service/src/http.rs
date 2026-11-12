@@ -178,6 +178,9 @@ define_routes! {
     (post, "/models/{model}/runtime", model_runtime_set, "operator"),
     (get, "/juiced/runtime-packages", runtime_packages, "operator"),
     (post, "/juiced/runtime-packages/import", runtime_import, "operator"),
+    (get, "/juiced/engines", engines, "operator"),
+    (post, "/juiced/engines/install", engine_install, "operator"),
+    (post, "/juiced/models/add", model_add, "operator"),
     (get, "/models/{model}/artifacts", model_artifacts, "operator"),
     (post, "/models/{model}/artifacts", model_artifacts_set, "operator"),
     (post, "/models/register", register, "operator"),
@@ -566,6 +569,33 @@ async fn runtime_import(
         .await?
         .into_response()
         .await
+}
+async fn engines(State(state): State<AppState>) -> Result<impl IntoResponse, ApiError> {
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(state.manager.engines().await?),
+    ))
+}
+async fn engine_install(
+    State(state): State<AppState>,
+    ApiJson(request): ApiJson<crate::supervisor::EngineInstall>,
+) -> Result<Response, ApiError> {
+    let (status, body) = state.manager.install_engine(request).await?;
+    Ok((status, Json(body)).into_response())
+}
+async fn model_add(
+    State(state): State<AppState>,
+    ApiJson(request): ApiJson<crate::supervisor::ModelAdd>,
+) -> Result<Json<Value>, crate::supervisor::AddModelError> {
+    tokio::spawn(async move { state.manager.add_model(request).await.map(Json) })
+        .await
+        .map_err(|_| {
+            crate::supervisor::AddModelError::from(ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "model_add_interrupted",
+                "Automatic registration was interrupted. Inspect the current catalog before retrying.",
+            ))
+        })?
 }
 async fn model_runtime(
     State(state): State<AppState>,

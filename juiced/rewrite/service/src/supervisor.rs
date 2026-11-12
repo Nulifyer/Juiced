@@ -27,6 +27,8 @@ mod runtime_selection;
 pub use runtime_selection::{RuntimeChange, RuntimeReply};
 mod cache_reply;
 pub use artifact_revision::ArtifactRevisionChange;
+mod engines;
+pub use engines::{AddModelError, EngineInstall, ModelAdd};
 mod host;
 mod native;
 mod physical;
@@ -1797,6 +1799,8 @@ struct NativeSettingsState {
 pub struct Manager {
     runtime_definitions: crate::catalog::Catalog,
     hardware: crate::hardware::Detector,
+    engine_jobs: engines::EngineJobs,
+    engine_releases: crate::engines::ReleaseEndpoints,
     runtime_packages: std::sync::OnceLock<Arc<crate::runtime_packages::Store>>,
     runtime_importing: AtomicBool,
     runtime_control: Arc<crate::runtime_packages::memory::Controller>,
@@ -2089,6 +2093,8 @@ impl Manager {
         Ok(Arc::new(Self {
             runtime_definitions,
             hardware: crate::hardware::Detector::from_environment(),
+            engine_jobs: engines::EngineJobs::default(),
+            engine_releases: crate::engines::ReleaseEndpoints::from_environment(),
             runtime_packages,
             runtime_importing: AtomicBool::new(false),
             runtime_control,

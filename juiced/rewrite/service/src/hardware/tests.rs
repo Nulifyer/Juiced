@@ -2,7 +2,7 @@ use super::*;
 use crate::catalog::Catalog;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-struct Tree(tempfile::TempDir);
+pub(crate) struct Tree(tempfile::TempDir);
 
 impl Tree {
     fn new() -> Self {
@@ -68,7 +68,7 @@ const VULKAN_NVIDIA: &str = "==========\nVULKANINFO\n==========\n\nDevices:\n===
 
 const VULKAN_RADV: &str = "Devices:\n========\nGPU0:\n\tapiVersion         = 1.4.305\n\tvendorID           = 0x1002\n\tdeviceID           = 0x150e\n\tdeviceType         = PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU\n\tdeviceName         = AMD Radeon 890M Graphics (RADV GFX1150)\n\tdriverName         = radv\nGPU1:\n\tvendorID           = 0x10005\n\tdeviceType         = PHYSICAL_DEVICE_TYPE_CPU\n\tdeviceName         = llvmpipe (LLVM 19.1.7, 256 bits)\n\tdriverName         = llvmpipe\n";
 
-fn rtx_host() -> Tree {
+pub(crate) fn rtx_host() -> Tree {
     let tree = Tree::new();
     tree.file(
         "proc/cpuinfo",
@@ -91,7 +91,7 @@ fn rtx_host() -> Tree {
     tree
 }
 
-fn strix_host(kfd: bool) -> Tree {
+pub(crate) fn strix_host(kfd: bool) -> Tree {
     let tree = Tree::new();
     tree.file(
         "proc/cpuinfo",
@@ -133,8 +133,24 @@ fn strix_host(kfd: bool) -> Tree {
     tree
 }
 
-fn report(tree: &Tree) -> HostReport {
+pub(crate) fn report(tree: &Tree) -> HostReport {
     detect(&tree.probe(), Instant::now() + Duration::from_secs(5))
+}
+
+pub(crate) fn cpu_only_host() -> Tree {
+    let tree = Tree::new();
+    tree.file(
+        "proc/cpuinfo",
+        cpuinfo(
+            "AMD Ryzen 7 3700X 8-Core Processor",
+            "AuthenticAMD",
+            8,
+            2,
+            ZEN2_FLAGS,
+        ),
+    )
+    .file("proc/meminfo", MEMINFO);
+    tree
 }
 
 fn inventory(report: &HostReport) -> Inventory {

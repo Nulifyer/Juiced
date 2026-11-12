@@ -591,7 +591,32 @@ fn scalar_size(kind: u32) -> Option<u64> {
     }
 }
 
+#[derive(Clone, Debug, Default, Serialize, PartialEq, Eq)]
+pub struct ModelShape {
+    pub block_count: Option<u64>,
+    pub embedding_length: Option<u64>,
+    pub head_count: Option<u64>,
+    pub head_count_kv: Option<u64>,
+    pub key_length: Option<u64>,
+    pub value_length: Option<u64>,
+}
+
+const SHAPE_KEYS: [&str; 6] = [
+    "block_count",
+    "embedding_length",
+    "attention.head_count",
+    "attention.head_count_kv",
+    "attention.key_length",
+    "attention.value_length",
+];
+
 pub fn read_gguf<R: Read + Seek>(reader: &mut R) -> Result<DeclaredContext, Error> {
+    read_gguf_shape(reader).map(|(declared, _)| declared)
+}
+
+pub fn read_gguf_shape<R: Read + Seek>(
+    reader: &mut R,
+) -> Result<(DeclaredContext, ModelShape), Error> {
     let file_bytes = reader
         .seek(SeekFrom::End(0))
         .map_err(|_| Error::new("gguf_io", "The GGUF metadata size is unavailable."))?;
@@ -627,6 +652,7 @@ pub fn read_gguf<R: Read + Seek>(reader: &mut R) -> Result<DeclaredContext, Erro
     let mut seen = HashSet::with_capacity(entries as usize);
     let mut architecture = None;
     let mut contexts = Vec::new();
+    let mut shape_values = Vec::new();
     for _ in 0..entries {
         let key = input.string(1024)?;
         if key.is_empty() || key.chars().any(char::is_control) || seen.contains(&key) {
@@ -657,6 +683,14 @@ pub fn read_gguf<R: Read + Seek>(reader: &mut R) -> Result<DeclaredContext, Erro
             architecture = Some(name);
         } else if key.ends_with(".context_length") {
             contexts.push((key.clone(), input.integer(kind)?));
+        } else if matches!(kind, 0..=5 | 10 | 11)
+            && SHAPE_KEYS.iter().any(|suffix| {
+                key.strip_suffix(suffix).is_some_and(|prefix| {
+                    prefix.ends_with('.') && !prefix[..prefix.len() - 1].contains('.')
+                })
+            })
+        {
+            shape_values.push((key.clone(), input.integer(kind).unwrap_or(None)));
         } else {
             input.skip_value(kind)?;
         }
@@ -669,12 +703,30 @@ pub fn read_gguf<R: Read + Seek>(reader: &mut R) -> Result<DeclaredContext, Erro
             .find(|(key, _)| key == &target)
             .and_then(|(_, value)| value)
     });
-    Ok(DeclaredContext {
-        source: "gguf:metadata",
-        format_version,
-        architecture,
-        training_context_tokens,
-    })
+    let shape_value = |suffix: &str| {
+        let target = format!("{}.{suffix}", architecture.as_deref()?);
+        shape_values
+            .iter()
+            .find(|(key, _)| *key == target)
+            .and_then(|(_, value)| *value)
+    };
+    let shape = ModelShape {
+        block_count: shape_value(SHAPE_KEYS[0]),
+        embedding_length: shape_value(SHAPE_KEYS[1]),
+        head_count: shape_value(SHAPE_KEYS[2]),
+        head_count_kv: shape_value(SHAPE_KEYS[3]),
+        key_length: shape_value(SHAPE_KEYS[4]),
+        value_length: shape_value(SHAPE_KEYS[5]),
+    };
+    Ok((
+        DeclaredContext {
+            source: "gguf:metadata",
+            format_version,
+            architecture,
+            training_context_tokens,
+        },
+        shape,
+    ))
 }
 
 #[cfg(test)]

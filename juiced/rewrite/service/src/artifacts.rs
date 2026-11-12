@@ -1014,6 +1014,23 @@ impl ArtifactStore {
         self.retained_job(id)
     }
 
+    pub fn source_file_name(&self, artifact: &str) -> Option<String> {
+        let runtime = self.runtime.lock().ok()?;
+        runtime
+            .manifest
+            .jobs
+            .values()
+            .rev()
+            .filter(|job| job.artifact.as_deref() == Some(artifact))
+            .find_map(|job| {
+                let url = Url::parse(job.source_url.as_deref()?).ok()?;
+                url.path_segments()?
+                    .next_back()
+                    .filter(|name| !name.is_empty())
+                    .map(str::to_owned)
+            })
+    }
+
     fn retained_job(&self, id: &str) -> Result<JobView, ArtifactError> {
         let runtime = self.runtime.lock().map_err(|_| ArtifactError::Corrupt)?;
         Ok(job_view(
@@ -1698,32 +1715,7 @@ impl ArtifactStore {
     }
 
     async fn client(&self, url: &Url) -> Result<reqwest::Client, ArtifactError> {
-        let host = url.host_str().ok_or(ArtifactError::SourcePolicy)?;
-        let port = url
-            .port_or_known_default()
-            .ok_or(ArtifactError::SourcePolicy)?;
-        let addresses: Vec<SocketAddr> = tokio::time::timeout(
-            Duration::from_secs(5),
-            tokio::net::lookup_host((host.trim_matches(['[', ']']), port)),
-        )
-        .await
-        .map_err(|_| ArtifactError::Network)?
-        .map_err(|_| ArtifactError::Network)?
-        .collect();
-        if addresses.is_empty()
-            || addresses
-                .iter()
-                .any(|address| !allowed_address(address.ip(), url.scheme(), self.policy))
-        {
-            return Err(ArtifactError::SourcePolicy);
-        }
-        reqwest::Client::builder()
-            .no_proxy()
-            .redirect(reqwest::redirect::Policy::none())
-            .connect_timeout(Duration::from_secs(5))
-            .resolve_to_addrs(host, &addresses)
-            .build()
-            .map_err(|_| ArtifactError::Network)
+        checked_client(url, self.policy).await
     }
 
     async fn checkpoint_async(
@@ -2174,7 +2166,43 @@ fn reference_valid(value: &str) -> bool {
     !value.is_empty() && value.len() <= 256 && !value.chars().any(char::is_control)
 }
 
-fn source_url(value: &str, policy: SourcePolicy, redirect: bool) -> Result<Url, ArtifactError> {
+pub(crate) async fn checked_client(
+    url: &Url,
+    policy: SourcePolicy,
+) -> Result<reqwest::Client, ArtifactError> {
+    let host = url.host_str().ok_or(ArtifactError::SourcePolicy)?;
+    let port = url
+        .port_or_known_default()
+        .ok_or(ArtifactError::SourcePolicy)?;
+    let addresses: Vec<SocketAddr> = tokio::time::timeout(
+        Duration::from_secs(5),
+        tokio::net::lookup_host((host.trim_matches(['[', ']']), port)),
+    )
+    .await
+    .map_err(|_| ArtifactError::Network)?
+    .map_err(|_| ArtifactError::Network)?
+    .collect();
+    if addresses.is_empty()
+        || addresses
+            .iter()
+            .any(|address| !allowed_address(address.ip(), url.scheme(), policy))
+    {
+        return Err(ArtifactError::SourcePolicy);
+    }
+    reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(Duration::from_secs(5))
+        .resolve_to_addrs(host, &addresses)
+        .build()
+        .map_err(|_| ArtifactError::Network)
+}
+
+pub(crate) fn source_url(
+    value: &str,
+    policy: SourcePolicy,
+    redirect: bool,
+) -> Result<Url, ArtifactError> {
     let url = Url::parse(value).map_err(|_| ArtifactError::SourcePolicy)?;
     if policy == SourcePolicy::Offline {
         return Err(ArtifactError::Offline);

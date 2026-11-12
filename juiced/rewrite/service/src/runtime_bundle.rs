@@ -8,10 +8,10 @@ use std::{
     time::Instant,
 };
 
-pub(crate) const MAX_FILES: usize = 256;
-pub(crate) const MAX_FILE_BYTES: u64 = 256 * 1024 * 1024;
-pub(crate) const MAX_TOTAL_BYTES: u64 = 1024 * 1024 * 1024;
-pub(crate) const MAX_ENTRIES: usize = 1024;
+pub(crate) const MAX_FILES: usize = 2048;
+pub(crate) const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+pub(crate) const MAX_TOTAL_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+pub(crate) const MAX_ENTRIES: usize = 4096;
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
