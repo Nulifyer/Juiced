@@ -9,6 +9,7 @@ pub mod config;
 pub mod discovery;
 pub mod execution_profile;
 pub mod extract;
+pub mod hardware;
 pub mod host_memory;
 pub mod http;
 pub mod identity;

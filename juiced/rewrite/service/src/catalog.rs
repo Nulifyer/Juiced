@@ -222,6 +222,10 @@ impl Catalog {
         self.seed.entries.iter().find(|entry| entry.id == id)
     }
 
+    pub fn native_recipe_migrations(&self) -> &[NativeMigration] {
+        &self.seed.native_recipe_migrations
+    }
+
     pub fn projection(&self) -> CatalogProjection<'_> {
         CatalogProjection {
             schema_version: self.seed.schema_version,
