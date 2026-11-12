@@ -170,6 +170,7 @@ Receipts under `local/verification/speech/` retain identities, response shapes, 
 | Family | Implemented operations |
 | --- | --- |
 | Native reads | Health, model list/detail/catalog, state, requests, protocols, endpoints, admission, suitability, context, model options and read-only runtime definitions/alias resolution |
+| Diagnostics | Operator-only `system-stats` sampling and bounded `juiced/logs` service/worker output |
 | Model operations | Disabled registration, policy CAS, load/unload, unloaded typed-option CAS and registration removal retaining weights |
 | Artifact store | Inventory, bounded SHA256 pull, job inspection/pause/resume/retry/cancel, confirmed terminal-history forgetting and reference-safe weight removal |
 | Slot snapshots | Explicit cache opt-in CAS, scoped inventory, save/restore/forget and bounded operator inspection |
@@ -179,6 +180,10 @@ Receipts under `local/verification/speech/` retain identities, response shapes, 
 | MCP | Stateless JSON `/mcp`, explicit-model inference tools and credential/session-scoped cancellation |
 
 JSON bodies are bounded to 2 MiB; multipart transcription is bounded to 8 MiB including overhead. A shared inference-input budget defaults to 128 MiB and reserves each endpoint’s maximum before reading a body. Full capacity returns 503 before accepting another application body or loading a worker; disconnects release the claim. This bounds admitted wire-body capacity, not total process memory. Operator controls and health reads remain available. Original OpenAI body bytes are forwarded without a full parse/reserialization. Response-body lifetime owns upstream cancellation and the request slot. No caller credentials are forwarded. Metadata records exclude prompts, responses and keys.
+
+`GET /v1/system-stats` keeps the native `cpu_percent`, `memory_gb`, `gpu_percent`, `vram_gb`, `primary_gpu_id`, `gpus` and `npu_percent` fields. One background sampler starts on the first read, refreshes every 2 seconds and stops after 60 seconds without reads or at shutdown. It reads `/proc/stat` deltas, `/proc/meminfo`, NVIDIA GPUs through `nvidia-smi` with a 1-second deadline and 64 KiB output limit, and AMD GPUs through amdgpu sysfs. A runtime-suspended AMD GPU is not woken. The response also reports active and queued requests and `last_inference`: token counts and decode/prompt rates from the last completed chat, completion or Responses request whose engine reported `usage` or llama.cpp `timings`. Unknown values are null. NPU utilization is not observed. Other platforms report `supported: false`.
+
+`GET /v1/juiced/logs?after=SEQ&limit=N&source=ID` pages one in-memory ring of service lines and worker stdout/stderr. The ring keeps 4096 lines and 8 MiB; each line is limited to 4 KiB and marked `truncated` when clipped. Dedicated reader threads drain each worker pipe continuously, so a full ring drops its oldest lines instead of blocking the engine. Pass the returned `next` as `after`. `dropped` counts lines that left the ring before the cursor reached them. `source` is `service` or a model ID; `limit` defaults to 200 and allows at most 500. Request bodies are not logged, but worker output is retained as the engine printed it.
 
 Admission queues default to 64 shared pending and 16 pending per service, with configurable 2/10/30 second essential/interactive/batch waits. Physical slots and the resident budget remain separate. No principal or conversation quota is enabled by default. Native `X-Juiced-Priority` accepts interactive or batch; essential requires operator authority. Pause rejects new inference and clears waiting requests while preserving active work and policies. Queue expiry is 504; bounded overflow is 429. Resident pressure does not evict other workers.
 
