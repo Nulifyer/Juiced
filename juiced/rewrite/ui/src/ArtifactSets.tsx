@@ -9,7 +9,6 @@ export function referenceSummary(references: string[], total: number) {
 
 type Props = { sets: ArtifactSet[]; total: number; pager: ReactNode; disabled: boolean; onRegister: (artifact: string, set: ArtifactSet) => void; onRemove: (set: ArtifactSet) => void };
 export function ArtifactSets({ sets, total, pager, disabled, onRegister, onRemove }: Props) {
-  const [expanded, setExpanded] = useState("");
   return <section className="management-section" aria-label="Artifact sets">
     <div className="section-heading"><div className="page-title"><h2>Model sets</h2><HelpTip label="Model sets">A set groups the files one model needs, such as weights and a projector. Its files stay on disk until the set is removed.</HelpTip></div><span className="muted">{total}</span></div>
     {pager}
@@ -25,10 +24,9 @@ export function ArtifactSets({ sets, total, pager, disabled, onRegister, onRemov
         {members.length > 1 && <p className="field-help">Multi-file sets can't be registered yet.</p>}
         <div className="action-row wrap">
           <Button disabled={disabled || members.length !== 1 || !set.members_present} onClick={() => onRegister(primary.artifact, set)}>Register model</Button>
-          <Button onClick={() => setExpanded(expanded === set.id ? "" : set.id)} aria-expanded={expanded === set.id}>{expanded === set.id ? "Hide member files" : "View member files"}</Button>
           <Button variant="danger" disabled={blocked} onClick={() => onRemove(set)}>Remove set</Button>
         </div>
-        {expanded === set.id && <div aria-label="Set member files">{members.map((member) => <div className="management-row" key={member.name}><strong>{member.name} · {member.role}</strong><p className="field-help break-word">{member.artifact}</p><p className="field-help">{bytes(member.bytes)}</p></div>)}</div>}
+        <ul className="member-list" aria-label="Set member files">{members.map((member) => <li key={member.name}><strong>{member.name}</strong> <span className="muted">{member.role} · {bytes(member.bytes)}</span> <code className="muted" title={member.artifact}>{member.artifact.slice(0, 12)}…</code></li>)}</ul>
       </article>;
     })}
   </section>;

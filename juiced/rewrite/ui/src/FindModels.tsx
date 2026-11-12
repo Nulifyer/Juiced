@@ -6,6 +6,7 @@ import { bytes } from "./domain";
 import { parseSystemInfo } from "./hardware";
 import { parseSearch, progress, tasks, type LibraryModel, type Quant, type SearchResult } from "./libraryData";
 import { Badge, Button, Empty, Icon } from "./ui";
+import { notify } from "./toast";
 import { useResource } from "./useResource";
 
 function fit(size: number | null, vram: number | null, ram: number | null): [string, "good" | "warning" | "bad" | "quiet"] {
@@ -79,7 +80,7 @@ export function FindModels({ client, online, onRegistered, onOpenModel }: { clie
     setError(""); setNotice("");
     try {
       await client.request("juiced/library/pull", { repo: target.repo, file: item.file, expected_generation: result.generation });
-      setNotice(`Downloading ${target.name} ${item.label}.`);
+      notify(`Downloading ${target.name} ${item.label}.`);
       setTick((value) => value + 1);
     } catch (failure) { setError(failure instanceof Error ? failure.message : "The download didn't start."); }
   }
@@ -108,7 +109,6 @@ export function FindModels({ client, online, onRegistered, onOpenModel }: { clie
         <div className="chip-filter" role="group" aria-label="Task"><button aria-pressed={task === null} onClick={() => setTask(null)}>All</button>{tasks.map(([id, label]) => <button key={id} aria-pressed={task === id} onClick={() => setTask(task === id ? null : id)}>{label}</button>)}</div>
       </div>
       {error && <div className="action-row"><p className="inline-error" role="alert">{error}</p><Button onClick={() => setTick((value) => value + 1)}>Retry</Button></div>}
-      {notice && <p className="inline-success" role="status">{notice}</p>}
       {loading && <p className="searching muted" role="status">Searching…</p>}
       {result && result.hub !== "ok" && <p className="field-help">{result.offline ? "Offline mode: showing recommended and downloaded models only." : "Hugging Face is unreachable right now; showing recommended and downloaded models."}</p>}
       {!result ? <p className="muted">{loading ? "Searching…" : ""}</p> : models.length === 0 ? <Empty title="No models found">Try a shorter search or another task.</Empty> : <ul className={`model-results ${loading ? "stale" : ""}`} aria-label="Search results" aria-busy={loading}>

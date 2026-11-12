@@ -13,6 +13,7 @@ import { FindModels } from "./FindModels";
 import { EngineList, Hardware } from "./Backends";
 import { Diagnostics } from "./Diagnostics";
 import { gib, percent, rate, useSystemStats } from "./live";
+import { clearToasts, dismiss, notify, useToasts } from "./toast";
 import { Badge, Button, Dialog, Empty, Icon, Menu, Tabs, type IconName } from "./ui";
 import logo from "../../../ui/public/juiced-icon.svg";
 
@@ -43,8 +44,6 @@ export function App() {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [online, setOnline] = useState(false);
   const [connectionError, setConnectionError] = useState("");
-  const [notice, setNotice] = useState("");
-  const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [loadingModel, setLoadingModel] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -57,6 +56,7 @@ export function App() {
   const [backendTab, setBackendTab] = useState<"machine" | "installed" | "catalog">("machine");
   const [connectTab, setConnectTab] = useState<"protocols" | "endpoints">("protocols");
   const client = useMemo(() => new Client(base, key), [base, key]);
+  const toasts = useToasts();
   const live = useSystemStats(client, online);
   const workspace = useRef<HTMLElement>(null);
   useLayoutEffect(() => { workspace.current?.scrollTo(0, 0); }, [screen, client]);
@@ -74,13 +74,12 @@ export function App() {
     } finally { if (!controller.signal.aborted) { setRefreshing(false); if (poll.current === controller) poll.current = null; } }
   }, [client]);
   useEffect(() => {
-    setSnapshot(null); setOnline(false); setSelected(""); setDirty(false); setError(""); setNotice(""); setBusy(false); setLoadingModel(null);
+    setSnapshot(null); setOnline(false); setSelected(""); setDirty(false); clearToasts(); setBusy(false); setLoadingModel(null);
     void refresh();
     const timer = setInterval(() => { if (!poll.current) void refresh(); }, 3000);
     return () => { clearInterval(timer); poll.current?.abort(); mutation.current?.controller.abort(); };
   }, [refresh]);
   useEffect(() => { writeLocal("juiced.rewrite.screen", screen); setMobileOpen(false); }, [screen]);
-  useEffect(() => { if (!notice) return; const timer = setTimeout(() => setNotice(""), 5000); return () => clearTimeout(timer); }, [notice]);
   useEffect(() => {
     if (!mobileOpen) return;
     const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") setMobileOpen(false); };
@@ -94,16 +93,16 @@ export function App() {
     const loadModel = path === "load" && body && typeof body === "object" && "model" in body && typeof body.model === "string" ? body.model : null;
     const controller = new AbortController(); mutation.current = { controller, loadModel };
     setLoadingModel(loadModel);
-    setBusy(true); setError(""); setNotice("");
+    setBusy(true);
     try {
       const result = await client.request<{ artifact_reference_retained?: boolean }>(path, body, controller.signal);
       if (controller.signal.aborted) return false;
       await refresh();
       if (controller.signal.aborted) return false;
-      setNotice(success + (result.artifact_reference_retained ? " A storage reference remains retained. Inspect Library before deleting weights." : ""));
+      notify(success + (result.artifact_reference_retained ? " A storage reference remains retained. Inspect Library before deleting weights." : ""));
       return true;
     } catch (error) {
-      if (!controller.signal.aborted) { setError(error instanceof Error ? error.message : "The operation failed. Refresh and retry."); await refresh(); }
+      if (!controller.signal.aborted) { notify(error instanceof Error ? error.message : "The operation failed. Refresh and retry.", "error"); await refresh(); }
       return false;
     } finally { if (!controller.signal.aborted) setBusy(false); if (mutation.current?.controller === controller) { mutation.current = null; setLoadingModel(null); } }
   };
@@ -111,8 +110,8 @@ export function App() {
     const operation = mutation.current;
     if (!operation?.loadModel) return;
     operation.controller.abort(); mutation.current = null;
-    setBusy(false); setLoadingModel(null); setError("");
-    setNotice(`Stopped waiting for ${operation.loadModel}. Refresh observes any remaining startup or cleanup.`);
+    setBusy(false); setLoadingModel(null);
+    notify(`Stopped waiting for ${operation.loadModel}.`);
     void refresh();
   };
   const model = snapshot?.models.find((model) => model.id === selected);
@@ -172,8 +171,7 @@ export function App() {
       <span>Active <strong>{resources?.active_requests ?? "—"}</strong></span>
     </footer>
     <div className="toasts" aria-live="polite">
-      {error && <div className="toast error" role="alert"><span>{error}</span><Button variant="ghost" aria-label="Dismiss error" onClick={() => setError("")}><Icon name="close" size={14} /></Button></div>}
-      {notice && <div className="toast success" role="status"><span>{notice}</span><Button variant="ghost" aria-label="Dismiss notification" onClick={() => setNotice("")}><Icon name="close" size={14} /></Button></div>}
+      {toasts.map((toast) => <div key={toast.id} className={`toast ${toast.tone}`} role={toast.tone === "error" ? "alert" : "status"}><span>{toast.text}</span><Button variant="ghost" aria-label={toast.tone === "error" ? "Dismiss error" : "Dismiss notification"} onClick={() => dismiss(toast.id)}><Icon name="close" size={14} /></Button></div>)}
     </div>
     {connectionOpen && <ConnectionDialog base={base} apiKey={key} version={snapshot?.version} onClose={() => setConnectionOpen(false)} onSave={(nextBase, nextKey) => { setBase(nextBase); setKey(nextKey); setEpoch((value) => value + 1); writeLocal("juiced.rewrite.base", nextBase); setConnectionOpen(false); }} />}
     {pending && <Dialog title="Discard unsaved changes?" onClose={() => setPending(null)}><p>Your model changes have not been saved.</p><div className="dialog-actions"><Button onClick={() => setPending(null)}>Keep editing</Button><Button variant="danger" onClick={() => { setDirty(false); setEpoch(epoch + 1); pending(); setPending(null); }}>Discard changes</Button></div></Dialog>}

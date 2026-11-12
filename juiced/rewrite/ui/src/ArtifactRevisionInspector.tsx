@@ -10,11 +10,11 @@ import { useRevisionSelection } from "./useRevisionSelection";
 
 export function ArtifactRevisionInspector({ model, client, busy, online, otherDirty, onDirty, mutate }: { model: Model; client: Client; busy: boolean; online: boolean; otherDirty: boolean; onDirty: (dirty: boolean) => void; mutate: Mutate }) {
   const path = `models/${encodeURIComponent(model.id)}/artifacts`;
-  const revision = useResource(client, path, parseArtifactRevision, 0);
+  const revision = useResource(client, path, parseArtifactRevision, 5000);
   const draft = useRevisionSelection(client, model, onDirty, revision.reload);
   const { selected, draftRevision } = draft;
   const [cursors, setCursors] = useState(firstInventoryPages);
-  const inventory = useResource(client, inventoryPath(cursors, { artifact_set: selected || undefined }, "artifact_sets", 128), parseArtifactInventory, 0, true);
+  const inventory = useResource(client, inventoryPath(cursors, { artifact_set: selected || undefined }, "artifact_sets", 128), parseArtifactInventory, 5000, true);
   const view = revision.data?.model === model.id ? revision.data : null;
   const sets = inventory.data?.artifact_sets ?? [];
   const selection = inventory.data?.selection.artifact_set;
@@ -36,7 +36,7 @@ export function ArtifactRevisionInspector({ model, client, busy, online, otherDi
     if (selected && fresh?.model === model.id) draft.rebase(fresh.revision);
   }
   return <section className="inspector-section" aria-label="Model artifact revision">
-    <div className="section-heading"><div className="page-title"><h3>Weights</h3><HelpTip label="Weights">Switch to another weight set while the model is unloaded. The previous set is kept for rollback. Engine settings and policy don't change. Saved snapshots only restore with the weights that made them.</HelpTip></div><Button variant="ghost" aria-label="Refresh revisions" disabled={busy || revision.loading || inventory.loading} onClick={() => void refresh()}><Icon name="refresh" size={16} /></Button></div>
+    <div className="section-heading"><div className="page-title"><h3>Weights</h3><HelpTip label="Weights">Switch to another weight set while the model is unloaded. The previous set is kept for rollback. Engine settings and policy don't change. Saved snapshots only restore with the weights that made them.</HelpTip></div></div>
     {revision.error && <p role="alert" className="inline-error">{revision.error}</p>}
     {inventory.error && <p role="alert" className="inline-error">{inventory.error}</p>}
     {(view?.current || view?.previous) && <dl className="facts">{view?.current && <div><dt>Current set</dt><dd className="break-word">{view.current.artifact_set}</dd></div>}{view?.previous && <div><dt>Previous set</dt><dd className="break-word">{view.previous.artifact_set}</dd></div>}</dl>}
@@ -51,7 +51,7 @@ export function ArtifactRevisionInspector({ model, client, busy, online, otherDi
     {setPage && (setDepth > 0 || setPage.next_after) && <div className="action-row wrap cache-pagination" aria-label="Replacement set pages"><Button disabled={inventory.loading || setDepth === 0} onClick={() => setCursors(previousInventoryPage(cursors, "artifact_sets"))}>Previous sets</Button><span className="muted">Page {setDepth + 1} · {setPage.total} sets</span><Button disabled={inventory.loading || !setPage.next_after} onClick={() => inventory.data && setCursors(nextInventoryPage(cursors, inventory.data, "artifact_sets"))}>More sets</Button></div>}
     {selected && <p className="field-help break-word">Selected set: {selected}</p>}
     {removed && <p className="inline-warning">The selected set was removed. Pick another or cancel.</p>}
-    {(staleDraft || (view && view.revision !== model.revision)) && <p className="inline-warning">The model changed. Your selection is kept; refresh or cancel it.</p>}
+    {(staleDraft || (view && view.revision !== model.revision)) && <div className="action-row wrap"><p className="inline-warning">The model changed. Your selection is kept.</p><Button onClick={() => void refresh()}>Use latest</Button></div>}
     {otherDirty && <p className="field-help">Save or cancel your other changes first.</p>}
     <div className="action-row wrap"><Button disabled={busy || !selected} onClick={draft.clear}>Cancel revision draft</Button><Button disabled={blocked || !target || !!inventory.error} onClick={() => void change(false)}>Use selected set</Button><Button disabled={blocked || !!selected || !view?.previous} onClick={() => void change(true)}>Roll back model revision</Button></div>
   </section>;

@@ -28,7 +28,7 @@ function ChatTest({ models, client, online }: { models: Model[]; client: Client;
   const [busy, setBusy] = useState(false);
   const request = useRef<AbortController | null>(null);
   const thread = useRef<HTMLDivElement>(null);
-  const selected = ready.find((model) => model.id === id) ?? (ready.length === 1 && !id ? ready[0] : undefined);
+  const selected = ready.find((model) => model.id === id) ?? (!id ? ready.find((model) => model.loaded) ?? (ready.length === 1 ? ready[0] : undefined) : undefined);
   useEffect(() => () => { request.current?.abort(); }, [client]);
   useEffect(() => { thread.current?.scrollTo({ top: thread.current.scrollHeight }); }, [turns]);
   async function send() {

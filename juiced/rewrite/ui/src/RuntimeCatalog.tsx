@@ -7,7 +7,6 @@ import { useResource } from "./useResource";
 export function RuntimeCatalog({ client, online }: { client: Client; online: boolean }) {
   const inventory = useResource(client, "juiced/runtimes", parseRuntimeInventory, 0);
   const [query, setQuery] = useState(""); const [treatment, setTreatment] = useState<Treatment | "all">("parity");
-  const [selected, setSelected] = useState("");
   const data = inventory.data;
   const counts = useMemo(() => treatmentCounts(data?.definitions ?? []), [data]);
   const visible = useMemo(() => filterRuntimes(data?.definitions ?? [], treatment, query), [data, treatment, query]);
@@ -16,13 +15,13 @@ export function RuntimeCatalog({ client, online }: { client: Client; online: boo
     {inventory.error && <div className="action-row"><p role="alert" className="inline-error">{data ? "Showing the last catalog observation. " : ""}{inventory.error}</p><Button disabled={inventory.loading || !online} onClick={() => void inventory.reload()}>Retry</Button></div>}
     {!data ? !inventory.error && <p className="field-help">Loading…</p> : <>
       <NativeResolver key={client.base} inventory={data} client={client} online={online} />
-      <div className="catalog-toolbar"><div><label htmlFor="runtime-search">Search runtime definitions</label><input id="runtime-search" type="search" value={query} placeholder="Name, identity, task or candidate path…" onChange={(event) => { setQuery(event.target.value); setSelected(""); }} /></div><div><label htmlFor="runtime-treatment">Delivery treatment</label><select id="runtime-treatment" value={treatment} onChange={(event) => { setTreatment(event.target.value as Treatment | "all"); setSelected(""); }}><option value="all">All treatments ({data.definitions.length})</option>{Object.entries(treatmentNames).map(([key, label]) => <option key={key} value={key}>{label} ({counts[key as Treatment]})</option>)}</select></div></div>
+      <div className="catalog-toolbar"><div><label htmlFor="runtime-search">Search runtime definitions</label><input id="runtime-search" type="search" value={query} placeholder="Name, identity, task or candidate path…" onChange={(event) => { setQuery(event.target.value); }} /></div><div><label htmlFor="runtime-treatment">Delivery treatment</label><select id="runtime-treatment" value={treatment} onChange={(event) => { setTreatment(event.target.value as Treatment | "all"); }}><option value="all">All treatments ({data.definitions.length})</option>{Object.entries(treatmentNames).map(([key, label]) => <option key={key} value={key}>{label} ({counts[key as Treatment]})</option>)}</select></div></div>
       
       <div className="section-heading catalog-count"><h3>Definitions</h3><span className="muted">{visible.length} matches</span></div>
       {visible.length === 0 ? <Empty title="No matches">Clear the search or pick another group.</Empty> : visible.map((entry) => <article className="runtime-row" aria-label={`Runtime definition ${entry.id}`} key={entry.id}>
-        <div className="row-heading"><div><button className="model-name" aria-expanded={selected === entry.id} aria-controls={`runtime-detail-${entry.id}`} onClick={() => setSelected(selected === entry.id ? "" : entry.id)}>{entry.name}</button><p className="field-help"><code>{entry.id}</code> · {entry.kind}</p></div><Badge tone={entry.adapter.status === "partial" ? "warning" : "quiet"}>{entry.adapter.status === "partial" ? "Partial adapter" : "Planned adapter"}</Badge></div>
+        <div className="row-heading"><div><strong>{entry.name}</strong><p className="field-help"><code>{entry.id}</code> · {entry.kind}</p></div><Badge tone={entry.adapter.status === "partial" ? "warning" : "quiet"}>{entry.adapter.status === "partial" ? "Partial adapter" : "Planned adapter"}</Badge></div>
         <p className="field-help">{entry.tasks.join(", ")} · {entry.candidate_backends.join(", ")}</p>
-        {selected === entry.id && <RuntimeDetails entry={entry} />}
+        <RuntimeDetails entry={entry} />
       </article>)}
       <p className="field-help">Reviewed {data.reviewed_at}.</p>
     </>}
@@ -30,9 +29,9 @@ export function RuntimeCatalog({ client, online }: { client: Client; online: boo
 }
 
 function RuntimeDetails({ entry }: { entry: RuntimeDefinition }) {
-  return <div className="runtime-detail" id={`runtime-detail-${entry.id}`}>
-    <p>{entry.notes}</p><dl className="facts"><div><dt>Upstream lifecycle</dt><dd>{entry.upstream_lifecycle}</dd></div><div><dt>Adapter implementation</dt><dd>{entry.adapter.status}</dd></div><div><dt>Package availability</dt><dd>Not established</dd></div><div><dt>Hardware fit</dt><dd>Unknown</dd></div><div><dt>Qualification receipts</dt><dd>None</dd></div><div><dt>Model policy</dt><dd>Not set by this catalog</dd></div></dl><p className="field-help">{entry.adapter.scope}</p>
-    <h4>Recorded sources</h4><ul className="runtime-sources">{entry.sources.map((source) => { const href = sourceLink(source); return <li key={source}>{href ? <a href={href} target="_blank" rel="noreferrer noopener">{source}</a> : <code>{source}</code>}</li>; })}</ul>
+  return <div className="runtime-detail compact" id={`runtime-detail-${entry.id}`}>
+    {entry.notes && <p className="field-help">{entry.notes}</p>}
+    {entry.sources.length > 0 && <p className="runtime-sources-inline">{entry.sources.map((source) => { const href = sourceLink(source); return href ? <a key={source} href={href} target="_blank" rel="noreferrer noopener">{href.replace(/^https?:\/\//, "")}</a> : <code key={source}>{source}</code>; })}</p>}
   </div>;
 }
 

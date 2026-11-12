@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Client } from "./api";
+import { notify } from "./toast";
 
 export function useResource<T>(client: Client, path: string, parse: (value: unknown) => T, period = 2000, retain = false) {
   const [data, setData] = useState<{ client: Client; path: string; value: T } | null>(null);
@@ -40,7 +41,7 @@ export function useOperation(client: Client, refresh: () => Promise<unknown>) {
     setBusy(true); setError(""); setNotice("");
     try {
       const result = await client.request<T>(path, body, controller.signal, session);
-      if (!controller.signal.aborted) { await refresh(); if (!controller.signal.aborted) setNotice(success); return result; }
+      if (!controller.signal.aborted) { await refresh(); if (!controller.signal.aborted) { setNotice(success); notify(success); } return result; }
     } catch (error) {
       if (!controller.signal.aborted) { setError(error instanceof Error ? error.message : "The operation failed. Refresh and retry."); await refresh(); }
     } finally { if (!controller.signal.aborted) setBusy(false); if (request.current === controller) request.current = null; }

@@ -43,10 +43,10 @@ export function Registration({ artifactId, artifactSet, unavailableReason, clien
         <div><label htmlFor="registration-gpu">Initial GPU layers</label><input id="registration-gpu" inputMode="numeric" value={launch.gpu} placeholder="Engine default" onChange={(event) => setLaunch({ ...launch, gpu: event.target.value })} /></div>
       </>}
     </div>
-    {provider === "llama-cpp" ? <details><summary>Advanced engine arguments</summary>{argumentFields}</details> : <div className="management-section">{argumentFields}</div>}
+    <div className="registration-arguments">{argumentFields}</div>
     {provider === "whisper-cpp" && <p className="field-help">Uses whisper-server with one slot for transcription.</p>}
     <fieldset><legend>Declared engine operations</legend><div className="checkbox-row">{(provider === "whisper-cpp" ? ["audio/transcriptions"] : ["chat/completions", "completions", "responses", "embeddings", "messages/count_tokens"]).map((value) => <label key={value}><input type="checkbox" disabled={provider === "whisper-cpp"} checked={operations.includes(value)} onChange={(event) => setOperations(event.target.checked ? [...operations, value] : operations.filter((item) => item !== value))} />{value}</label>)}</div></fieldset>
-    {operation.error && <p role="alert" className="inline-error">{operation.error}</p>}{operation.notice && <p role="status" className="inline-success">{operation.notice}</p>}
+    {operation.error && <p role="alert" className="inline-error">{operation.error}</p>}
     <div className="form-actions"><div>{unavailableReason && <p role="alert" className="inline-warning">{unavailableReason}</p>}<p className="field-help">New models start Disabled.</p></div><Button type="submit" variant="primary" disabled={disabled || operation.busy}>Register Disabled model</Button></div>
   </form>;
 }

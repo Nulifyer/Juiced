@@ -8,8 +8,8 @@ import { Button, HelpTip, Icon } from "./ui";
 
 export function RuntimeInspector({ model, client, busy, online, otherDirty, onDirty, mutate }: { model: Model; client: Client; busy: boolean; online: boolean; otherDirty: boolean; onDirty: (dirty: boolean) => void; mutate: Mutate }) {
   const path = `models/${encodeURIComponent(model.id)}/runtime`;
-  const revision = useResource(client, path, parseRuntimeSelection, 0);
-  const inventory = useResource(client, "juiced/runtime-packages", parseRuntimeInventory, 0);
+  const revision = useResource(client, path, parseRuntimeSelection, 5000);
+  const inventory = useResource(client, "juiced/runtime-packages", parseRuntimeInventory, 5000);
   const draft = useRevisionSelection(client, model, onDirty, revision.reload);
   const view = revision.data?.model === model.id ? revision.data : null;
   const packages = inventory.data?.packages ?? [];
@@ -30,7 +30,7 @@ export function RuntimeInspector({ model, client, busy, online, otherDirty, onDi
     }
   }
   return <section className="inspector-section" aria-label="Model runtime selection">
-    <div className="section-heading"><div className="page-title"><h3>Engine</h3><HelpTip label="Engine">Switch to another installed engine package while the model is unloaded. The previous one stays available for rollback. Weights, settings and policy don't change. Saved snapshots only restore with the engine that made them.</HelpTip></div><Button variant="ghost" aria-label="Refresh runtimes" disabled={busy || revision.loading || inventory.loading} onClick={() => void refresh()}><Icon name="refresh" size={16} /></Button></div>
+    <div className="section-heading"><div className="page-title"><h3>Engine</h3><HelpTip label="Engine">Switch to another installed engine package while the model is unloaded. The previous one stays available for rollback. Weights, settings and policy don't change. Saved snapshots only restore with the engine that made them.</HelpTip></div></div>
     {revision.error && <p role="alert" className="inline-error">{revision.error}</p>}
     {inventory.error && <p role="alert" className="inline-error">{inventory.error}</p>}
     <dl className="facts"><div><dt>Current</dt><dd className="break-word" title={view?.current ?? undefined}>{view ? view.current ? label(view.current) : "Set in config" : "Loading…"}</dd></div>{view?.previous && <div><dt>Previous</dt><dd className="break-word" title={view.previous}>{label(view.previous)}</dd></div>}</dl>
@@ -42,7 +42,7 @@ export function RuntimeInspector({ model, client, busy, online, otherDirty, onDi
       {candidates.map((item) => <option value={item.id} key={item.id}>{packageLabel(item)}</option>)}
     </select>
     {target && <dl className="facts"><div><dt>Build</dt><dd>{target.provenance.build_revision}</dd></div><div><dt>Target</dt><dd>{target.declared_target.operating_system} / {target.declared_target.architecture}</dd></div><div><dt>Size</dt><dd>{bytes(target.reserved_bytes)}</dd></div></dl>}
-    {(stale || (view && view.revision !== model.revision)) && <p className="inline-warning">The model changed. Your selection is kept; refresh or cancel it.</p>}
+    {(stale || (view && view.revision !== model.revision)) && <div className="action-row wrap"><p className="inline-warning">The model changed. Your selection is kept.</p><Button onClick={() => void refresh()}>Use latest</Button></div>}
     {draft.selected && !eligibleTarget && <p className="inline-warning">That engine can't be used for this model. Pick another or cancel.</p>}
     {inventory.data && candidates.length === 0 && view?.supported && <p className="field-help">No other installed engine fits this model.</p>}
     {otherDirty && <p className="field-help">Save or cancel your other changes first.</p>}

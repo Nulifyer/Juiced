@@ -11,7 +11,7 @@ function tokens(value: number | null | undefined) { return value == null ? "Unkn
 
 export function ContextInspector({ model, client, online, busy, policyDirty, onDirty, mutate }: { model: Model; client: Client; online: boolean; busy: boolean; policyDirty: boolean; onDirty: (dirty: boolean) => void; mutate: Mutate }) {
   const options = useResource(client, `models/${encodeURIComponent(model.id)}/options`, parseModelOptions, 0);
-  const context = useResource(client, `juiced/context?model=${encodeURIComponent(model.id)}`, parseModelContext, 0);
+  const context = useResource(client, `juiced/context?model=${encodeURIComponent(model.id)}`, parseModelContext, model.loaded ? 5000 : 0);
   const [draft, setDraft] = useState(emptyDraft); const [saved, setSaved] = useState(emptyDraft);
   const [validationError, setValidationError] = useState("");
   const [pendingSave, setPendingSave] = useState<number | null>(null);
@@ -54,7 +54,7 @@ export function ContextInspector({ model, client, online, busy, policyDirty, onD
     if (fresh) { accept(fresh); setPendingSave(null); setValidationError(""); }
   }
   return <section className="inspector-section" aria-label="Context and launch profile">
-    <div className="section-heading"><div className="page-title"><h3>Launch settings</h3><HelpTip label="Launch settings">Engine: {view?.provider ?? "loading"}. Context is the total budget the engine starts with, shared by its slots. Empty fields keep the engine's own default. GPU layers 0 runs on CPU only. Saving keeps the loading policy and doesn't load the model.</HelpTip></div><Button variant="ghost" aria-label="Refresh context" disabled={options.loading || context.loading || busy || !online} onClick={() => { void options.reload(); void context.reload(); }}><Icon name="refresh" size={16} /></Button></div>
+    <div className="section-heading"><div className="page-title"><h3>Launch settings</h3><HelpTip label="Launch settings">Engine: {view?.provider ?? "loading"}. Context is the total budget the engine starts with, shared by its slots. Empty fields keep the engine's own default. GPU layers 0 runs on CPU only. Saving keeps the loading policy and doesn't load the model.</HelpTip></div></div>
     {options.error && <p role="alert" className="inline-error">{options.error}</p>}
     {context.error && <p role="alert" className="inline-error">{context.error}</p>}
     {view && <form aria-label="Launch profile" onSubmit={(event) => { event.preventDefault(); void save(); }}>

@@ -81,7 +81,7 @@ export function Cache({ client, models, online }: { client: Client; models: Mode
   const used = snapshots.reduce((total, snapshot) => total + (snapshot.bytes ?? snapshot.reserved_bytes), 0);
   return <div className="page-body cache-page">
     {inventory.error && <div className="action-row"><p role="alert" className="inline-error">{data ? "Showing the last observation. " : ""}{inventory.error}</p><Button disabled={operation.busy || inventory.loading} onClick={() => void refreshFirstPage()}>{pages.length > 1 ? "Restart snapshot pages" : "Refresh snapshots"}</Button></div>}
-    {operation.error && <p role="alert" className="inline-error">{operation.error}</p>}{operation.notice && <p role="status" className="inline-success">{operation.notice}</p>}
+    {operation.error && <p role="alert" className="inline-error">{operation.error}</p>}
     <section className="panel cache-summary" aria-label="Prompt snapshots">
       <div><h2>Prompt snapshots</h2><span className="muted">{!data ? "Unavailable" : `${snapshots.length} saved · ${bytes(used)}`}</span></div>
       <HelpTip label="Prompt snapshots">A snapshot saves an engine slot's processed prompt for one session, so restoring it skips reprocessing. Works with llama.cpp completions models that have one slot and a slot-save folder. Snapshots made with other API keys aren't listed.</HelpTip>

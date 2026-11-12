@@ -82,7 +82,6 @@ export function Library({ client, online, view, refreshModels }: { client: Clien
     {inventory.error && <p role="alert" className="inline-error">{data ? "Showing the last observation. " : ""}{inventory.error}</p>}
     {inventory.error && paged && <div className="action-row wrap"><p className="inline-warning">The library changed while you were paging.</p><Button onClick={() => setCursors(firstInventoryPages())}>Return to first pages</Button></div>}
     {operation.error && !urlOpen && <p role="alert" className="inline-error">{operation.error}</p>}
-    {operation.notice && <p role="status" className="inline-success">{operation.notice}</p>}
     {view === "files" && <div className="action-row"><Button onClick={() => setUrlOpen(true)}>Add from URL</Button></div>}
     {urlOpen && <Dialog title="Add weights from a URL" onClose={() => setUrlOpen(false)}>
       <form aria-label="Acquire weights" onSubmit={(event) => { event.preventDefault(); void acquire(); }}>
