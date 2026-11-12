@@ -2,7 +2,8 @@ import { useMemo, useState } from "react";
 import type { Client } from "./api";
 import { backendNames, parseSystemInfo, type BackendRow } from "./hardware";
 import { gib } from "./live";
-import { Badge, Button, Empty } from "./ui";
+import { activeJob, installEngine, parseEngines, type EngineJob } from "./engines";
+import { Badge, Button, Dialog, Empty } from "./ui";
 import { useResource } from "./useResource";
 
 export function Hardware({ client }: { client: Client }) {
@@ -36,5 +37,46 @@ export function Hardware({ client }: { client: Client }) {
       </div>}
       <p className="field-help">★ marks the backend Juiced picks for new models on this machine. Hover a backend to see why it is or isn't available.</p>
     </section>
+  </div>;
+}
+
+export function EngineList({ client, online, children }: { client: Client; online: boolean; children: React.ReactNode }) {
+  const engines = useResource(client, "juiced/engines", parseEngines, 3000);
+  const [installing, setInstalling] = useState<Record<string, EngineJob>>({});
+  const [error, setError] = useState("");
+  const [advanced, setAdvanced] = useState(false);
+  const data = engines.data;
+  async function install(engine: string, backend: string) {
+    const key = `${engine}:${backend}`;
+    setError("");
+    try {
+      await installEngine(client, engine, backend, (job) => setInstalling((current) => ({ ...current, [key]: job })));
+      await engines.reload();
+    } catch (failure) { setError(failure instanceof Error ? failure.message : "The engine didn't install."); }
+    finally { setInstalling((current) => { const next = { ...current }; delete next[key]; return next; }); }
+  }
+  if (!data) return engines.error ? <div className="action-row"><p className="inline-error" role="alert">{engines.error}</p><Button onClick={() => void engines.reload()}>Retry</Button></div> : <p className="muted">Loading engines…</p>;
+  const rows = data.installable.filter((row) => row.availability === "available" || row.installed_package);
+  return <div className="page-body">
+    {error && <p className="inline-error" role="alert">{error}</p>}
+    <div className="data-table engine-table" role="table" aria-label="Engines">
+      <div role="row" className="data-head"><span role="columnheader">Engine</span><span role="columnheader">Backend</span><span role="columnheader" className="numeric">Download</span><span role="columnheader">Status</span></div>
+      {rows.map((row) => {
+        const key = `${row.engine}:${row.backend}`;
+        const job = installing[key] ?? data.jobs.find((entry) => entry.engine === row.engine && entry.backend === row.backend && activeJob(entry));
+        const installed = data.installed.find((entry) => entry.package === row.installed_package);
+        return <div role="row" className="data-row" key={key} aria-label={`${row.engine} ${backendNames[row.backend] ?? row.backend}`}>
+          <span role="cell"><strong>{row.engine}</strong></span>
+          <span role="cell">{row.recommended && <span aria-label="Recommended">★ </span>}{backendNames[row.backend] ?? row.backend}</span>
+          <span role="cell" className="numeric muted">{row.archive_bytes ? gib(row.archive_bytes) : "—"}</span>
+          <span role="cell" className="row-end">{row.installed_package ? <span className="installed-note"><Badge tone="good">Installed</Badge>{installed?.models.length ? <span className="muted"> used by {installed.models.length}</span> : null}</span>
+            : job ? <span className="install-progress"><progress aria-label={`Installing ${row.engine} ${row.backend}`} max={job.total_bytes ?? 1} value={job.total_bytes ? job.downloaded_bytes : undefined} /><span className="muted">{job.state}</span></span>
+            : <Button variant={row.recommended ? "primary" : "outline"} disabled={!online} onClick={() => void install(row.engine, row.backend)}>Install</Button>}</span>
+        </div>;
+      })}
+    </div>
+    <p className="field-help">★ marks the engine Juiced uses for new models on this machine. Engines download from pinned releases and are checked against a published checksum.</p>
+    <div className="action-row"><Button onClick={() => setAdvanced(true)}>Import a local engine bundle</Button></div>
+    {advanced && <Dialog title="Engine packages" onClose={() => setAdvanced(false)}>{children}</Dialog>}
   </div>;
 }

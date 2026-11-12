@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { Client } from "./api";
+import { ApiError, type Client } from "./api";
+import { installEngine, type EngineJob } from "./engines";
+import { backendNames } from "./hardware";
 import { bytes } from "./domain";
 import { parseSystemInfo } from "./hardware";
 import { parseSearch, progress, tasks, type LibraryModel, type Quant, type SearchResult } from "./libraryData";
-import { Registration } from "./Registration";
-import { Badge, Button, Dialog, Empty, Icon } from "./ui";
+import { Badge, Button, Empty, Icon } from "./ui";
 import { useResource } from "./useResource";
 
 function fit(size: number | null, vram: number | null, ram: number | null): [string, "good" | "warning" | "bad" | "quiet"] {
@@ -21,7 +22,12 @@ function featured(quants: Quant[]): Quant[] {
 }
 const compact = (value: number | null) => value === null ? null : value >= 1e6 ? `${(value / 1e6).toFixed(1)}M` : value >= 1e3 ? `${Math.round(value / 1e3)}k` : String(value);
 
-export function FindModels({ client, online, onRegistered }: { client: Client; online: boolean; onRegistered: () => Promise<void> }) {
+type Install = { engine: string; backend: string; size: number | null };
+export function FindModels({ client, online, onRegistered, onOpenModel }: { client: Client; online: boolean; onRegistered: () => Promise<void>; onOpenModel: (id: string) => void }) {
+  const [needs, setNeeds] = useState<Install | null>(null);
+  const [installing, setInstalling] = useState<EngineJob | null>(null);
+  const [added, setAdded] = useState<{ model: string; backend: string } | null>(null);
+  const [panelError, setPanelError] = useState("");
   const [query, setQuery] = useState("");
   const [task, setTask] = useState<string | null>(null);
   const [result, setResult] = useState<SearchResult | null>(null);
@@ -30,6 +36,7 @@ export function FindModels({ client, online, onRegistered }: { client: Client; o
   const [selected, setSelected] = useState<{ repo: string; label: string } | null>(null);
   const [notice, setNotice] = useState("");
   const [adding, setAdding] = useState(false);
+  useEffect(() => { setNeeds(null); setAdded(null); setPanelError(""); }, [selected?.repo, selected?.label]);
   const [tick, setTick] = useState(0);
   const info = useResource(client, "system-info", parseSystemInfo, 0);
   const request = useRef<AbortController | null>(null);
@@ -70,6 +77,23 @@ export function FindModels({ client, online, onRegistered }: { client: Client; o
       setNotice(`Downloading ${target.name} ${item.label}.`);
       setTick((value) => value + 1);
     } catch (failure) { setError(failure instanceof Error ? failure.message : "The download didn't start."); }
+  }
+  async function add(item: Quant, install?: Install) {
+    if (!item.sha256) return;
+    setAdding(true); setPanelError("");
+    try {
+      if (install) await installEngine(client, install.engine, install.backend, setInstalling);
+      setInstalling(null);
+      const response = await client.request<{ model: string | { id?: string }; backend: string }>("juiced/models/add", { artifact: item.sha256, policy: "on-demand" });
+      const id = typeof response.model === "string" ? response.model : response.model?.id ?? "the model";
+      setNeeds(null); setAdded({ model: id, backend: response.backend });
+      await onRegistered();
+    } catch (failure) {
+      setInstalling(null);
+      const body = failure instanceof ApiError ? failure.body as { install?: { engine?: string; backend?: string; installable?: { build?: { archive_bytes?: number } } } } | undefined : undefined;
+      if (failure instanceof ApiError && failure.code === "engine_not_installed" && body?.install?.engine && body.install.backend) setNeeds({ engine: body.install.engine, backend: body.install.backend, size: body.install.installable?.build?.archive_bytes ?? null });
+      else setPanelError(failure instanceof ApiError && failure.code === "model_exists" ? "A model with this name is already added. Rename or remove it under Models first." : failure instanceof Error ? failure.message : "The model couldn't be added.");
+    } finally { setAdding(false); }
   }
   const models = useMemo(() => result?.models ?? [], [result]);
   return <div className={`find-models ${model ? "has-detail" : ""}`}>
@@ -118,13 +142,16 @@ export function FindModels({ client, online, onRegistered }: { client: Client; o
           <div><dt>This machine</dt><dd><Badge tone={fit(quant.bytes, gpu, ram)[1]}>{fit(quant.bytes, gpu, ram)[0]}</Badge></dd></div>
         </dl>
         {progress(quant) !== null && <><progress aria-label="Download progress" max={100} value={progress(quant)!} /><p className="field-help">Downloading… {Math.round(progress(quant)!)}%</p></>}
-        <div className="action-row wrap">
-          {quant.present ? <Button variant="primary" disabled={!online || quant.parts > 1 || !quant.sha256} title={quant.parts > 1 ? "Split models can't be added yet" : undefined} onClick={() => setAdding(true)}>Add model</Button>
+        {added ? <div className="added"><p className="inline-success" role="status">Added {added.model}. It runs on {backendNames[added.backend] ?? added.backend} and loads on its first request.</p><div className="action-row"><Button variant="primary" onClick={() => onOpenModel(added.model)}>Open model</Button></div></div>
+          : needs ? <div className="needs-engine"><p className="field-help">This model needs the {needs.engine} {backendNames[needs.backend] ?? needs.backend} engine{needs.size ? ` (${bytes(needs.size)} download)` : ""}. Juiced picked it for this machine.</p>
+            {installing ? <><progress aria-label="Engine install progress" max={installing.total_bytes ?? 1} value={installing.total_bytes ? installing.downloaded_bytes : undefined} /><p className="field-help">Installing engine… {installing.state}</p></> : <Button variant="primary" disabled={!online || adding} onClick={() => void add(quant, needs)}>Install engine and add</Button>}</div>
+          : <div className="action-row wrap">
+          {quant.present ? <Button variant="primary" disabled={!online || adding || quant.parts > 1 || !quant.sha256} title={quant.parts > 1 ? "Split models can't be added yet" : undefined} onClick={() => void add(quant)}>{adding ? "Adding…" : "Add model"}</Button>
             : progress(quant) === null && <Button variant="primary" disabled={!online || !quant.pullable || model.gated} onClick={() => void download(model, quant)}>Download</Button>}
-        </div>
+        </div>}
+        {panelError && <p className="inline-error" role="alert">{panelError}</p>}
         {model.gated && !quant.present && <p className="field-help">This repository is gated on Hugging Face and can't be downloaded here yet.</p>}
       </div>
     </aside>}
-    {adding && quant?.sha256 && <Dialog title={`Add ${model?.name ?? "model"}`} onClose={() => setAdding(false)}><Registration artifactId={quant.sha256} client={client} disabled={!online} onClose={() => setAdding(false)} onRegistered={async () => { await onRegistered(); }} /></Dialog>}
   </div>;
 }

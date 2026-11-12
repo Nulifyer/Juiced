@@ -2,7 +2,7 @@ import { parseSnapshot, type Snapshot, type Model } from "./domain";
 import { multipartPayloadBytes } from "./speech";
 
 export class ApiError extends Error {
-  constructor(message: string, readonly status: number, readonly code: string) { super(message); }
+  constructor(message: string, readonly status: number, readonly code: string, readonly body?: unknown) { super(message); }
 }
 
 export function chatTestTokenLimit(model: Pick<Model, "request_limits">): number {
@@ -97,7 +97,7 @@ export class Client {
     let value;
     try { value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)); }
     catch { throw new ApiError(`The service returned an unreadable response (${response.status}).`, response.status, "invalid_json"); }
-    if (!response.ok) throw new ApiError(value?.error?.message ?? `The request failed (${response.status}).`, response.status, value?.error?.code ?? "request_failed");
+    if (!response.ok) throw new ApiError(value?.error?.message ?? `The request failed (${response.status}).`, response.status, value?.error?.code ?? "request_failed", value);
     return value as T;
   }
 

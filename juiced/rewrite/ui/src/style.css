@@ -538,3 +538,10 @@ dialog textarea { margin-bottom: 4px; }
 .quant-option strong { font-weight: 500; }
 .quant-option .numeric { margin-left: auto; }
 .quant-option .muted { font-size: .7rem; }
+.engine-table .data-head, .engine-table .data-row { grid-template-columns: minmax(120px, 1fr) minmax(90px, 1fr) 90px minmax(150px, 1.2fr); }
+.installed-note { display: inline-flex; align-items: center; gap: 6px; font-size: .75rem; }
+.install-progress { display: inline-flex; align-items: center; gap: 8px; font-size: .72rem; }
+.install-progress progress, .needs-engine progress { width: 120px; height: 6px; accent-color: var(--ring); }
+.needs-engine, .added { margin-top: 12px; display: grid; gap: 8px; }
+.needs-engine progress { width: 100%; }
+@media (max-width: 700px) { .engine-table .data-head { display: none; } .engine-table .data-row { grid-template-columns: minmax(0, 1fr) auto; } .engine-table [role="cell"]:nth-child(3) { display: none; } }
