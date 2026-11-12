@@ -15,9 +15,9 @@ impl Default for Limits {
         Self {
             maps_bytes: 1024 * 1024,
             mappings: 16_384,
-            files: 256,
-            file_bytes: 256 * 1024 * 1024,
-            total_bytes: 1024 * 1024 * 1024,
+            files: 512,
+            file_bytes: 2 * 1024 * 1024 * 1024,
+            total_bytes: 8 * 1024 * 1024 * 1024,
             path_bytes: 4096,
         }
     }
@@ -236,7 +236,7 @@ mod linux {
             }
         }
     }
-    #[derive(Clone, Debug, PartialEq, Eq)]
+    #[derive(Clone, Debug, PartialEq, Eq, Hash)]
     struct Stamp {
         device: u64,
         inode: u64,
@@ -800,6 +800,17 @@ mod linux {
         }
         Ok(())
     }
+    const DIGEST_CACHE_ENTRIES: usize = 4096;
+
+    // A content change always advances ctime, which user space cannot set back, so an
+    // identical full stamp lets a later launch reuse the digest without rereading the file.
+    fn digests() -> &'static std::sync::Mutex<std::collections::HashMap<Stamp, String>> {
+        static DIGESTS: std::sync::OnceLock<
+            std::sync::Mutex<std::collections::HashMap<Stamp, String>>,
+        > = std::sync::OnceLock::new();
+        DIGESTS.get_or_init(Default::default)
+    }
+
     fn hash_file(
         file: &mut File,
         stamp: &Stamp,
@@ -807,7 +818,20 @@ mod linux {
         limits: Limits,
         deadline: Instant,
     ) -> Result<String, Refusal> {
-        if stamp.bytes > limits.file_bytes || stamp.bytes > *remaining {
+        if stamp.bytes > limits.file_bytes {
+            return Err(Refusal::unqualified(
+                "runtime_identity_limit",
+                "The runtime executable file closure exceeds its file or aggregate byte limit.",
+            ));
+        }
+        if let Some(digest) = digests()
+            .lock()
+            .ok()
+            .and_then(|cache| cache.get(stamp).cloned())
+        {
+            return Ok(digest);
+        }
+        if stamp.bytes > *remaining {
             return Err(Refusal::unqualified(
                 "runtime_identity_limit",
                 "The runtime executable file closure exceeds its file or aggregate byte limit.",
@@ -835,7 +859,14 @@ mod linux {
         }
         *remaining -= bytes;
         deadline_check(deadline)?;
-        Ok(format!("{:x}", hash.finalize()))
+        let digest = format!("{:x}", hash.finalize());
+        if let Ok(mut cache) = digests().lock() {
+            if cache.len() >= DIGEST_CACHE_ENTRIES {
+                cache.clear();
+            }
+            cache.insert(stamp.clone(), digest.clone());
+        }
+        Ok(digest)
     }
     fn kernel(mappings: &[Mapping], deadline: Instant) -> Result<KernelProvenance, Refusal> {
         let mut special_mappings = Vec::new();
