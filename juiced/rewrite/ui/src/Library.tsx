@@ -81,7 +81,7 @@ export function Library({ client, online, view, refreshModels }: { client: Clien
   return <section className="content-pane management-pane">
     {inventory.error && <p role="alert" className="inline-error">{data ? "Showing the last observation. " : ""}{inventory.error}</p>}
     {inventory.error && paged && <div className="action-row wrap"><p className="inline-warning">The library changed while you were paging.</p><Button onClick={() => setCursors(firstInventoryPages())}>Return to first pages</Button></div>}
-    {operation.error && <p role="alert" className="inline-error">{operation.error}</p>}
+    {operation.error && !urlOpen && <p role="alert" className="inline-error">{operation.error}</p>}
     {operation.notice && <p role="status" className="inline-success">{operation.notice}</p>}
     {view === "files" && <div className="action-row"><Button onClick={() => setUrlOpen(true)}>Add from URL</Button></div>}
     {urlOpen && <Dialog title="Add weights from a URL" onClose={() => setUrlOpen(false)}>
@@ -93,6 +93,7 @@ export function Library({ client, online, view, refreshModels }: { client: Clien
           <div><label htmlFor="download-size">Expected size in bytes</label><input id="download-size" inputMode="numeric" value={expected} disabled={operation.busy} onChange={(event) => setExpected(event.target.value)} placeholder="Optional" /></div>
           <div><label htmlFor="download-ceiling">Storage ceiling in bytes</label><input id="download-ceiling" inputMode="numeric" value={ceiling} disabled={operation.busy} onChange={(event) => setCeiling(event.target.value)} title="Reserved before the download starts" /></div>
         </div>
+        {operation.error && <p role="alert" className="inline-error">{operation.error}</p>}
         <div className="dialog-actions"><Button onClick={() => setUrlOpen(false)}>Cancel</Button><Button variant="primary" type="submit" disabled={blocked || data?.source_policy === "offline"}>Start download</Button></div>
       </form>
     </Dialog>}

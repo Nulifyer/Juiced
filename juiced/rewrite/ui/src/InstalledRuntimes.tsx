@@ -30,12 +30,15 @@ export function InstalledRuntimes({ client, online, paused, memory }: { client: 
       }
     } catch (error) { operation.fail((error as Error).message); }
   }
-  return <section className="runtime-packages management-section" aria-label="Installed runtime packages">
-    <div className="section-heading"><div className="page-title"><h2>Installed engines</h2><HelpTip label="Installed engines">Engine packages stored by the service. Pick one for a model in its Settings tab while the model is unloaded.{memory?.state === "accounted" ? ` Package metadata reserves ${bytes(memory.metadata_bytes + memory.binding_bytes)}.` : ""}</HelpTip></div><div className="action-row">{data && <span className="muted">{data.packages.length} installed</span>}<Button variant="ghost" aria-label="Refresh installed runtimes" disabled={!online || operation.busy || inventory.loading} onClick={() => void refresh()}><Icon name="refresh" size={16} /></Button></div></div>
-    {inventory.error && <p role="alert" className="inline-error">{data ? "Showing the last observation. " : ""}{inventory.error}</p>}
+  const feedback = <>
     {operation.error && <p role="alert" className="inline-error">{operation.error} Your path is kept.</p>}
     {receipt && <div role="status" className="inline-success break-word">{receipt.newly_installed ? "Installed" : "Already installed"}: {receipt.package}</div>}
     {(operation.busy || data?.installation_active) && <p role="status" className="field-help">Installing… Leaving this page doesn't cancel it.</p>}
+  </>;
+  return <section className="runtime-packages management-section" aria-label="Installed runtime packages">
+    <div className="section-heading"><div className="page-title"><h2>Installed engines</h2><HelpTip label="Installed engines">Engine packages stored by the service. Pick one for a model in its Settings tab while the model is unloaded.{memory?.state === "accounted" ? ` Package metadata reserves ${bytes(memory.metadata_bytes + memory.binding_bytes)}.` : ""}</HelpTip></div><div className="action-row">{data && <span className="muted">{data.packages.length} installed</span>}<Button variant="ghost" aria-label="Refresh installed runtimes" disabled={!online || operation.busy || inventory.loading} onClick={() => void refresh()}><Icon name="refresh" size={16} /></Button></div></div>
+    {inventory.error && <p role="alert" className="inline-error">{data ? "Showing the last observation. " : ""}{inventory.error}</p>}
+    {!importing && feedback}
     {!data && !inventory.error && <p className="field-help">Loading…</p>}
     {data?.packages.length === 0 && <p className="field-help">No engine packages installed.</p>}
     {data?.packages.map((item) => <article className="item-row" aria-label={`Installed package ${item.id}`} key={item.id}>
@@ -52,6 +55,7 @@ export function InstalledRuntimes({ client, online, paused, memory }: { client: 
         <input id="runtime-specification" value={draft.path} maxLength={4096} placeholder="/path/to/runtime-import.json" autoComplete="off" spellCheck={false} disabled={!online || operation.busy || !data} onChange={(event) => { const path = event.target.value; setDraft((current) => ({ path, generation: current.path ? current.generation : data?.generation ?? null })); setReceipt(null); }} />
         <p className="field-help">An absolute path on the service host.</p>
         {stale && <p className="inline-warning">Installed engines changed. Your path is kept; refresh before importing.</p>}
+        {feedback}
         <div className="action-row wrap"><Button disabled={operation.busy || !draft.path} onClick={() => { setDraft({ path: "", generation: null }); setReceipt(null); operation.fail(""); }}>Clear import draft</Button><Button type="submit" variant="primary" disabled={blocked || !draft.path}>{operation.busy ? "Importing…" : "Import local runtime"}</Button></div>
       </form>
     </Dialog>}
