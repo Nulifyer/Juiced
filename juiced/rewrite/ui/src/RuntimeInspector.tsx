@@ -4,7 +4,7 @@ import type { Mutate } from "./Models";
 import { packageLabel, parseRuntimeInventory, parseRuntimeSelection, runtimeCandidate } from "./runtimePackages";
 import { useResource } from "./useResource";
 import { useRevisionSelection } from "./useRevisionSelection";
-import { Button, HelpTip, Icon } from "./ui";
+import { Button, HelpTip } from "./ui";
 
 export function RuntimeInspector({ model, client, busy, online, otherDirty, onDirty, mutate }: { model: Model; client: Client; busy: boolean; online: boolean; otherDirty: boolean; onDirty: (dirty: boolean) => void; mutate: Mutate }) {
   const path = `models/${encodeURIComponent(model.id)}/runtime`;
@@ -33,19 +33,24 @@ export function RuntimeInspector({ model, client, busy, online, otherDirty, onDi
     <div className="section-heading"><div className="page-title"><h3>Engine</h3><HelpTip label="Engine">Switch to another installed engine package while the model is unloaded. The previous one stays available for rollback. Weights, settings and policy don't change. Saved snapshots only restore with the engine that made them.</HelpTip></div></div>
     {revision.error && <p role="alert" className="inline-error">{revision.error}</p>}
     {inventory.error && <p role="alert" className="inline-error">{inventory.error}</p>}
-    <dl className="facts"><div><dt>Current</dt><dd className="break-word" title={view?.current ?? undefined}>{view ? view.current ? label(view.current) : "Set in config" : "Loading…"}</dd></div>{view?.previous && <div><dt>Previous</dt><dd className="break-word" title={view.previous}>{label(view.previous)}</dd></div>}</dl>
-    {view && !view.supported && <p className="field-help">This model's engine can't be switched here.</p>}
-    {(view?.worker_in_use || model.loaded) && <p className="field-help">Unload the model to switch engines.</p>}
-    <label htmlFor="runtime-package">Switch engine to</label><select id="runtime-package" value={draft.selected} disabled={busy || !online || otherDirty || !view?.supported || view.worker_in_use || model.loaded || model.state === "loading" || model.active_requests > 0 || revision.loading || inventory.loading} onChange={(event) => draft.select(event.target.value, view?.revision ?? null)}>
-      <option value="">Choose an installed engine</option>
-      {!!draft.selected && !eligibleTarget && <option value={draft.selected}>Selected runtime needs review</option>}
-      {candidates.map((item) => <option value={item.id} key={item.id}>{packageLabel(item)}</option>)}
-    </select>
-    {target && <dl className="facts"><div><dt>Build</dt><dd>{target.provenance.build_revision}</dd></div><div><dt>Target</dt><dd>{target.declared_target.operating_system} / {target.declared_target.architecture}</dd></div><div><dt>Size</dt><dd>{bytes(target.reserved_bytes)}</dd></div></dl>}
-    {(stale || (view && view.revision !== model.revision)) && <div className="action-row wrap"><p className="inline-warning">The model changed. Your selection is kept.</p><Button onClick={() => void refresh()}>Use latest</Button></div>}
-    {draft.selected && !eligibleTarget && <p className="inline-warning">That engine can't be used for this model. Pick another or cancel.</p>}
-    {inventory.data && candidates.length === 0 && view?.supported && <p className="field-help">No other installed engine fits this model.</p>}
-    {otherDirty && <p className="field-help">Save or cancel your other changes first.</p>}
-    <div className="action-row wrap"><Button disabled={busy || !draft.selected} onClick={draft.clear}>Cancel runtime draft</Button><Button disabled={blocked || !eligibleTarget || !!inventory.error} onClick={() => void change(false)}>Use selected runtime</Button><Button disabled={blocked || !!draft.selected || !view?.previous} onClick={() => void change(true)}>Roll back runtime</Button></div>
+    <dl className="facts"><div><dt>Current</dt><dd className="break-word" title={view?.current ?? undefined}>{view ? view.current ? label(view.current) : "Set by the registration" : "Loading…"}</dd></div>{view?.previous && <div><dt>Previous</dt><dd className="break-word" title={view.previous}>{label(view.previous)}</dd></div>}</dl>
+    {!view ? null
+      : !view.supported ? <p className="field-help">This model runs a command from its registration, so there is no engine to switch.</p>
+      : view.worker_in_use || model.loaded || model.state === "loading" || model.active_requests > 0 ? <p className="field-help">Unload the model to switch engines.</p>
+      : candidates.length === 0 && !view.previous && !draft.selected ? <p className="field-help">No other installed engine fits this model. Install one from Backends &amp; hardware.</p>
+      : <>
+        {(candidates.length > 0 || draft.selected) && <><label htmlFor="runtime-package">Switch to</label><select id="runtime-package" value={draft.selected} disabled={busy || !online || otherDirty || revision.loading || inventory.loading} onChange={(event) => draft.select(event.target.value, view.revision)}>
+          <option value="">Choose an installed engine</option>
+          {!!draft.selected && !eligibleTarget && <option value={draft.selected}>Selected engine needs review</option>}
+          {candidates.map((item) => <option value={item.id} key={item.id}>{packageLabel(item)}</option>)}
+        </select></>}
+        {target && <dl className="facts"><div><dt>Build</dt><dd>{target.provenance.build_revision}</dd></div><div><dt>Target</dt><dd>{target.declared_target.operating_system} / {target.declared_target.architecture}</dd></div><div><dt>Size</dt><dd>{bytes(target.reserved_bytes)}</dd></div></dl>}
+        {(stale || view.revision !== model.revision) && <div className="action-row wrap"><p className="inline-warning">The model changed. Your selection is kept.</p><Button onClick={() => void refresh()}>Use latest</Button></div>}
+        {draft.selected && !eligibleTarget && <p className="inline-warning">That engine can't be used for this model. Pick another or cancel.</p>}
+        {otherDirty && <p className="field-help">Save or cancel your other changes first.</p>}
+        <div className="action-row wrap">{draft.selected
+          ? <><Button disabled={busy} onClick={draft.clear}>Cancel</Button><Button disabled={blocked || !eligibleTarget || !!inventory.error} onClick={() => void change(false)}>Switch engine</Button></>
+          : view.previous && <Button disabled={blocked} onClick={() => void change(true)}>Roll back to previous</Button>}</div>
+      </>}
   </section>;
 }

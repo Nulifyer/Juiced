@@ -62,7 +62,7 @@ export function ContextInspector({ model, client, online, busy, policyDirty, onD
       <label htmlFor="profile-context">Total context budget in tokens</label><input id="profile-context" inputMode="numeric" value={draft.context} disabled={blocked} placeholder={imported ? "Registered model setting" : "Engine arguments or default"} onChange={(event) => setDraft({ ...draft, context: event.target.value })} />
       {imported ? <p className="field-help">Imported model: empty uses its registered context.</p> : <><div className="profile-option-grid"><div><label htmlFor="profile-threads">Threads</label><input id="profile-threads" inputMode="numeric" value={draft.threads} disabled={blocked} placeholder="Engine default" onChange={(event) => setDraft({ ...draft, threads: event.target.value })} /></div><div><label htmlFor="profile-gpu">GPU layers</label><input id="profile-gpu" inputMode="numeric" value={draft.gpu} disabled={blocked} placeholder="Engine default" onChange={(event) => setDraft({ ...draft, gpu: event.target.value })} /></div></div>
 </>}
-      <dl className="facts"><div><dt>Slots</dt><dd>{view.physical_slots}</dd></div><div><dt>Effective context</dt><dd>{tokens(view.effective_launch?.context_tokens)}</dd></div></dl>
+      <dl className="facts"><div><dt>Slots</dt><dd>{view.physical_slots}</dd></div></dl>
       {view.provider === "external-http" ? <p className="field-help">Only llama.cpp models have editable launch settings.</p>
         : model.active_requests > 0 || model.state === "loading" ? <p className="field-help">Wait for running requests and loading to finish to edit these.</p>
         : model.loaded && imported ? <p className="field-help">Unload the model to edit these.</p>
@@ -71,7 +71,7 @@ export function ContextInspector({ model, client, online, busy, policyDirty, onD
       {dirty && revision.current !== model.revision && <p className="inline-warning">Another client changed this model. Your draft is kept; cancel it to see the latest.</p>}
       {validationError && <p role="alert" className="inline-error">{validationError}</p>}
       {pendingSave !== null && <p className="field-help">Saved. Reading the new settings…</p>}
-      {view.provider === "llama-cpp" && <div className="action-row wrap"><Button disabled={!dirty || busy || !online || options.loading} onClick={() => void cancel()}>{imported ? "Cancel context draft" : "Cancel launch draft"}</Button><Button type="submit" variant="primary" disabled={!dirty || blocked}>{imported ? "Save context override" : reload ? "Save and reload" : "Save launch profile"}</Button></div>}
+      {view.provider === "llama-cpp" && <div className="action-row wrap">{dirty && <Button disabled={busy || !online || options.loading} onClick={() => void cancel()}>{imported ? "Cancel context draft" : "Cancel launch draft"}</Button>}<Button type="submit" variant="primary" disabled={!dirty || blocked}>{imported ? "Save context override" : reload ? "Save and reload" : "Save launch profile"}</Button></div>}
     </form>}
     <div className="context-observation" aria-label="Context observation">
       <div className="page-title"><h4>Effective context</h4><HelpTip label="Effective context">Trained comes from the model file. Saved is your setting. Launched is what the engine started with. Per request is what the running engine reports for each slot.</HelpTip></div>

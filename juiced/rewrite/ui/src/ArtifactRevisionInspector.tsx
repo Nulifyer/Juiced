@@ -4,7 +4,7 @@ import type { Model } from "./domain";
 import type { Mutate } from "./Models";
 import { parseArtifactRevision } from "./artifactSetData";
 import { firstInventoryPages, inventoryPath, nextInventoryPage, parseArtifactInventory, previousInventoryPage } from "./management";
-import { Button, HelpTip, Icon } from "./ui";
+import { Button, HelpTip } from "./ui";
 import { useResource } from "./useResource";
 import { useRevisionSelection } from "./useRevisionSelection";
 
@@ -22,6 +22,7 @@ export function ArtifactRevisionInspector({ model, client, busy, online, otherDi
   const removed = !!selected && !target && inventory.current;
   const setPage = inventory.data?.pages.artifact_sets;
   const setDepth = cursors.stacks.artifact_sets.length;
+  const choices = sets.filter((set) => set.specification.members.length === 1 && set.members_present && set.id !== view?.current?.artifact_set);
   const staleDraft = !!selected && draftRevision !== view?.revision;
   const blocked = !online || busy || otherDirty || !!revision.error || !view || !view.supported || view.worker_in_use || model.loaded || model.state === "loading" || model.active_requests > 0 || view.revision !== model.revision || staleDraft;
   async function change(rollback: boolean) {
@@ -39,20 +40,25 @@ export function ArtifactRevisionInspector({ model, client, busy, online, otherDi
     <div className="section-heading"><div className="page-title"><h3>Weights</h3><HelpTip label="Weights">Switch to another weight set while the model is unloaded. The previous set is kept for rollback. Engine settings and policy don't change. Saved snapshots only restore with the weights that made them.</HelpTip></div></div>
     {revision.error && <p role="alert" className="inline-error">{revision.error}</p>}
     {inventory.error && <p role="alert" className="inline-error">{inventory.error}</p>}
-    {(view?.current || view?.previous) && <dl className="facts">{view?.current && <div><dt>Current set</dt><dd className="break-word">{view.current.artifact_set}</dd></div>}{view?.previous && <div><dt>Previous set</dt><dd className="break-word">{view.previous.artifact_set}</dd></div>}</dl>}
-    {view && !view.supported && <p className="field-help">This model's weights can't be switched here.</p>}
-    {(view?.worker_in_use || model.loaded) && <p className="field-help">Unload the model to switch weights.</p>}
-    <label htmlFor="revision-set">Switch weights to</label><select id="revision-set" value={selected} disabled={busy || otherDirty || !view?.supported || view.worker_in_use || model.loaded || model.state === "loading" || model.active_requests > 0 || revision.loading || inventory.loading} onChange={(event) => { draft.select(event.target.value, view!.revision); }}>
-      <option value="">Choose a weight set</option>
-      {!!selected && !target && <option value={selected}>{removed ? "Selected set is no longer recorded" : "Selected set"}</option>}
-      {!!target && !sets.includes(target) && <option value={target.id}>{target.specification.origin.source_revision} · {target.id.slice(4, 16)}</option>}
-      {sets.filter((set) => set.specification.members.length === 1 && set.members_present && set.id !== view?.current?.artifact_set).map((set) => <option value={set.id} key={set.id}>{set.specification.origin.source_revision} · {set.id.slice(4, 16)}</option>)}
-    </select>
-    {setPage && (setDepth > 0 || setPage.next_after) && <div className="action-row wrap cache-pagination" aria-label="Replacement set pages"><Button disabled={inventory.loading || setDepth === 0} onClick={() => setCursors(previousInventoryPage(cursors, "artifact_sets"))}>Previous sets</Button><span className="muted">Page {setDepth + 1} · {setPage.total} sets</span><Button disabled={inventory.loading || !setPage.next_after} onClick={() => inventory.data && setCursors(nextInventoryPage(cursors, inventory.data, "artifact_sets"))}>More sets</Button></div>}
-    {selected && <p className="field-help break-word">Selected set: {selected}</p>}
-    {removed && <p className="inline-warning">The selected set was removed. Pick another or cancel.</p>}
-    {(staleDraft || (view && view.revision !== model.revision)) && <div className="action-row wrap"><p className="inline-warning">The model changed. Your selection is kept.</p><Button onClick={() => void refresh()}>Use latest</Button></div>}
-    {otherDirty && <p className="field-help">Save or cancel your other changes first.</p>}
-    <div className="action-row wrap"><Button disabled={busy || !selected} onClick={draft.clear}>Cancel revision draft</Button><Button disabled={blocked || !target || !!inventory.error} onClick={() => void change(false)}>Use selected set</Button><Button disabled={blocked || !!selected || !view?.previous} onClick={() => void change(true)}>Roll back model revision</Button></div>
+    {(view?.current || view?.previous) && <dl className="facts">{view?.current && <div><dt>Current</dt><dd className="break-word" title={view.current.artifact_set}>{view.current.artifact_set.slice(4, 16)}</dd></div>}{view?.previous && <div><dt>Previous</dt><dd className="break-word" title={view.previous.artifact_set}>{view.previous.artifact_set.slice(4, 16)}</dd></div>}</dl>}
+    {!view ? null
+      : !view.supported ? <p className="field-help">This model's weights are set by its registration.</p>
+      : view.worker_in_use || model.loaded || model.state === "loading" || model.active_requests > 0 ? <p className="field-help">Unload the model to switch weights.</p>
+      : <>
+        {(choices.length > 0 || selected || (setPage && (setDepth > 0 || setPage.next_after))) && <><label htmlFor="revision-set">Switch to</label><select id="revision-set" value={selected} disabled={busy || otherDirty || revision.loading || inventory.loading} onChange={(event) => { draft.select(event.target.value, view.revision); }}>
+          <option value="">Choose a weight set</option>
+          {!!selected && !target && <option value={selected}>{removed ? "Selected set is no longer recorded" : "Selected set"}</option>}
+          {!!target && !choices.includes(target) && <option value={target.id}>{target.specification.origin.source_revision} · {target.id.slice(4, 16)}</option>}
+          {choices.map((set) => <option value={set.id} key={set.id}>{set.specification.origin.source_revision} · {set.id.slice(4, 16)}</option>)}
+        </select></>}
+        {setPage && (setDepth > 0 || setPage.next_after) && <div className="action-row wrap cache-pagination" aria-label="Replacement set pages"><Button disabled={inventory.loading || setDepth === 0} onClick={() => setCursors(previousInventoryPage(cursors, "artifact_sets"))}>Previous sets</Button><span className="muted">Page {setDepth + 1} · {setPage.total} sets</span><Button disabled={inventory.loading || !setPage.next_after} onClick={() => inventory.data && setCursors(nextInventoryPage(cursors, inventory.data, "artifact_sets"))}>More sets</Button></div>}
+        {inventory.data && choices.length === 0 && !selected && !view.previous && <p className="field-help">No other weight set is recorded for this model.</p>}
+        {removed && <p className="inline-warning">The selected set was removed. Pick another or cancel.</p>}
+        {(staleDraft || view.revision !== model.revision) && <div className="action-row wrap"><p className="inline-warning">The model changed. Your selection is kept.</p><Button onClick={() => void refresh()}>Use latest</Button></div>}
+        {otherDirty && <p className="field-help">Save or cancel your other changes first.</p>}
+        <div className="action-row wrap">{selected
+          ? <><Button disabled={busy} onClick={draft.clear}>Cancel</Button><Button disabled={blocked || !target || !!inventory.error} onClick={() => void change(false)}>Switch weights</Button></>
+          : view.previous && <Button disabled={blocked} onClick={() => void change(true)}>Roll back to previous</Button>}</div>
+      </>}
   </section>;
 }

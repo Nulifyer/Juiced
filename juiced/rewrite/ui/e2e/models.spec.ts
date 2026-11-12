@@ -274,3 +274,38 @@ test("saving launch settings on a loaded model restarts it with the new settings
     await service.remove(id);
   }
 });
+
+test("the engine section switches between installed engines and rolls back", async ({ page, request }) => {
+  test.skip(process.platform === "win32", "The fixture installs engine packages on Unix only.");
+  const service = api(request);
+  const id = "fixture.managed-runtime";
+  const path = `/v1/models/${encodeURIComponent(id)}/runtime`;
+  const original = await service.json<{ current: string; revision: number }>(path);
+  await open(page);
+  const inspector = await openModel(page, hotModel);
+  await tab(page, "Model sections", "Settings").click();
+  const hot = inspector.getByRole("region", { name: "Model runtime selection" });
+  await expect(hot).toContainText("runs a command from its registration");
+  await expect(hot.getByRole("button")).toHaveCount(1);
+
+  const managed = await openModel(page, id);
+  await tab(page, "Model sections", "Settings").click();
+  const engine = managed.getByRole("region", { name: "Model runtime selection" });
+  await expect(engine).toContainText("llama-cpp · fixture-runtime-first");
+  await expect(engine.getByRole("button", { name: "Switch engine" })).toHaveCount(0);
+  await engine.getByLabel("Switch to").selectOption({ label: "llama-cpp · fixture-runtime-second" });
+  await expect(managed.getByRole("tab", { name: /^Settings/ }).getByLabel("unsaved")).toBeVisible();
+  await engine.getByRole("button", { name: "Cancel" }).click();
+  await expect(engine.getByLabel("Switch to")).toHaveValue("");
+  await engine.getByLabel("Switch to").selectOption({ label: "llama-cpp · fixture-runtime-second" });
+  await engine.getByRole("button", { name: "Switch engine" }).click();
+  await expect(toasts(page).getByRole("status")).toContainText(`Changed the engine for ${id}.`);
+  await expect(engine.getByRole("definition").first()).toContainText("fixture-runtime-second");
+  await expect(engine).toContainText("Previous");
+  expect((await service.json<{ current: string }>(path)).current).not.toBe(original.current);
+
+  await engine.getByRole("button", { name: "Roll back to previous" }).click();
+  await expect(toasts(page).getByRole("status")).toContainText(`Changed the engine for ${id}.`);
+  await expect(engine.getByRole("definition").first()).toContainText("fixture-runtime-first");
+  expect((await service.json<{ current: string }>(path)).current).toBe(original.current);
+});
