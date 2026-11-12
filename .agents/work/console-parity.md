@@ -46,7 +46,7 @@ Dashboard · Models · Loading policy · Library · Backends & hardware · Cache
 | M1: parakeet.cpp, Moonshine, FUTO asr4all | helper | merged 25dc0aee; real transcription for all three; FUTO has no published build |
 | M2: FastFlowLM, llama.cpp hybrid-rocm, NPU/memlock detection | helper | merged 52e7b38e; UI b1c91b98 (Library NPU section); fake hardware only, real archives checksum-verified |
 | N: online v0.9.2 import (`/juiced/import/native`) | helper | merged 29f282b0; UI 22e1d1e4 (Library › Import); real preview against local 0.9.2 volume, volume unchanged |
-| O: FUTO built into the container and imported on first boot | helper | running |
+| O: FUTO built into the container and imported on first boot | helper | merged; real FUTO transcription in the container; image 484 MB |
 
 ## Notes
 
@@ -65,6 +65,8 @@ Container: merged 39d38274 (juiced/rewrite/container). Image 473 MB; CPU and RTX
 
 ## Next action
 
-Primary: merge O (FUTO in container), rebuild localhost/juiced-rewrite:dev, run the full gate, record it. Then open items: real AMD NPU/ROCm host check (homelab Strix), real Home Assistant Wyoming check, split GGUF and mmproj companions, transcription_rejected 400 mapping for parakeet/FUTO, intermittent native_store::generations owner_busy unit flake under parallel load.
+Verified 2026-11-12 14:24 UTC: localhost/juiced-rewrite:dev rebuilt (483.7 MB), CPU and RTX 5080 smoke tests pass with FUTO installed on first boot; full gate `quick-check --full --real --speech --power --resources` passed, 31 steps, no source change, Playwright 176 passed / 1 skipped.
+
+Open items: real AMD NPU/ROCm host check (homelab Strix), real Home Assistant Wyoming check, split GGUF and mmproj companions, transcription_rejected 400 mapping for parakeet/FUTO, intermittent native_store::generations owner_busy unit flake under parallel load.
 
 Fixed 2026-11-12: `GET /juiced/engines` returned 503 `runtime_index_publishing` when an engine install was publishing its index; the inventory read now waits up to 3 s (52e7b38e). PLATFORM-PLAN.md is bound to PLATFORM-APPROVAL.json, so its "eight screens" wording stays until the approval is re-recorded; the rewrite PLAN.md lists the nine pages.
