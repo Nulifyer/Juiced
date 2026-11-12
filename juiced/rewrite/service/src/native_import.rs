@@ -122,7 +122,7 @@ fn within(path: &Path, roots: &[PathBuf]) -> bool {
 fn confine_file(path: &Path, roots: &[PathBuf]) -> Option<(PathBuf, u64)> {
     let canonical = std::fs::canonicalize(path).ok()?;
     let metadata = std::fs::metadata(&canonical).ok()?;
-    (metadata.is_file() && within(&canonical, roots)).then(|| (canonical, metadata.len()))
+    (metadata.is_file() && within(&canonical, roots)).then_some((canonical, metadata.len()))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -217,11 +217,18 @@ pub struct SettingRow {
     pub reason: &'static str,
 }
 
+/// Native option and profile names are lowercase identifiers; anything else is shown as a
+/// placeholder so arbitrary document text never reaches the report.
 fn display_key(key: &str) -> String {
-    if key.len() <= MAX_KEY_BYTES && !key.chars().any(char::is_control) {
+    if !key.is_empty()
+        && key.len() <= MAX_KEY_BYTES
+        && key.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"_.:-".contains(&byte)
+        })
+    {
         key.to_owned()
     } else {
-        "<unprintable key>".to_owned()
+        "<unrecognized key>".to_owned()
     }
 }
 
@@ -1033,11 +1040,6 @@ impl Inspection {
             .collect::<Vec<_>>();
         let legacy = registry
             .keys()
-            .filter(|key| {
-                !users
-                    .iter()
-                    .any(|(user, _)| format!("user.{user}") == **key)
-            })
             .map(|key| (key.clone(), format!("builtin.{key}")));
         let recognized = RecognizedRows::new(canonical, legacy).map_err(|error| {
             source_refusal(crate::native_store::Error {

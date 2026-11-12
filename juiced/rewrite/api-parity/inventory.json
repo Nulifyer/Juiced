@@ -118,7 +118,7 @@
     },
     {
       "path": "juiced/rewrite/rust-tests/tests/support/mod.rs",
-      "sha256": "7fadf5c473ee669b61c96759ef04dfdbc383dd1eed854779ad58215d1900d4b4",
+      "sha256": "41b2660256e2fd0628d6d46c8ff63c7b7b92a5c5513cccb22828a5268bf522f1",
       "hash_check": "snapshot_only"
     },
     {
@@ -128,12 +128,12 @@
     },
     {
       "path": "juiced/rewrite/service/src/config.rs",
-      "sha256": "a8662d3b5ddd23fbba637336ae82165a6be44a44d65243810fc52b43dbbcca7f",
+      "sha256": "da0ec3ec4205fa8b35a5a09feb841d0e46021c18fe85b2489a128ee09dec477e",
       "hash_check": "snapshot_only"
     },
     {
       "path": "juiced/rewrite/service/src/http.rs",
-      "sha256": "c349b2a58cd16586fc8625d58467d3d4acb697d3c114986340c6841ed872bee6",
+      "sha256": "747727a7b3fae3c2eee9448182fb30f70e3ab09c5a7fc86b8ec37bf0ce4250ca",
       "hash_check": "snapshot_only"
     },
     {
@@ -10756,6 +10756,23 @@
     },
     {
       "method": "POST",
+      "path": "/juiced/import/native",
+      "prefix_scheme": "native_quad",
+      "authority": "operator",
+      "evidence": {
+        "path": "juiced/rewrite/service/src/http.rs",
+        "line": 223,
+        "text": "(post, \"/juiced/import/native\", native_import, \"operator\"),",
+        "role": "registration"
+      },
+      "native_route_ids": [],
+      "scenario_files": [
+        "juiced/rewrite/rust-tests/tests/native_online_import.rs"
+      ],
+      "native_same_path": false
+    },
+    {
+      "method": "POST",
       "path": "/sdapi/v1/txt2img",
       "prefix_scheme": "fixed",
       "authority": "inference",
@@ -10823,7 +10840,7 @@
     "native_websocket_routes": 4,
     "auxiliary_http_route_families": 41,
     "native_registration_sites": 143,
-    "rust_published_routes": 75,
+    "rust_published_routes": 76,
     "rust_native_same_path_rows": 42,
     "native_http_status_counts": {
       "partial": 43,

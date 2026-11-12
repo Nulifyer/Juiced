@@ -94,6 +94,12 @@ fn blocker(code: &'static str) -> Value {
         "model_settings_recovery_required" => {
             "This model's saved native options are damaged. They were not imported or changed."
         }
+        "resident_budget_exceeded" => {
+            "The estimated resident memory exceeds resident_budget_bytes. Raise the budget or import a smaller quantization."
+        }
+        "invalid_registration" => {
+            "The derived registration has invalid identity, launch, reservation or operation settings."
+        }
         "artifact_unavailable" => "The weight file could not be inspected.",
         "unsupported_model_format" => {
             "The weight file is not a GGUF, whisper.cpp ggml, diffusion safetensors or ONNX model."
@@ -136,7 +142,8 @@ impl Manager {
         source: PathBuf,
         weights: Option<PathBuf>,
     ) -> Result<Plan, ApiError> {
-        let roots = self.config.lock().await.import_roots.clone();
+        let base = self.config.lock().await.clone();
+        let roots = base.import_roots.clone();
         let (inspection, detected) = tokio::task::spawn_blocking(move || {
             let inspection = Inspection::open(
                 &source,
@@ -337,7 +344,10 @@ impl Manager {
                             "execution_profile".into(),
                             value["execution_profile"].clone(),
                         );
-                        registration = Some(value);
+                        match Self::trial_registration(&base, &value) {
+                            Ok(()) => registration = Some(value),
+                            Err(code) => blockers.push(blocker(code)),
+                        }
                     }
                     Err(ChoiceError::NotInstalled {
                         backend,
@@ -423,6 +433,22 @@ impl Manager {
             models: planned,
             packages_generation: packages["generation"].clone(),
         })
+    }
+
+    fn trial_registration(base: &Config, value: &Value) -> Result<(), &'static str> {
+        let crate::config::Registration(spec) =
+            serde_json::from_value(value.clone()).map_err(|_| "invalid_registration")?;
+        let mut trial = base.clone();
+        trial.models.clear();
+        trial.aliases = Default::default();
+        let exceeds = trial.admission.memory.mode == crate::admission::MemoryMode::Legacy
+            && spec.resident_bytes > trial.resident_budget_bytes;
+        trial.models.push(spec);
+        match trial.validate() {
+            Ok(()) => Ok(()),
+            Err(_) if exceeds => Err("resident_budget_exceeded"),
+            Err(_) => Err("invalid_registration"),
+        }
     }
 
     fn import_conflicts(
@@ -792,5 +818,45 @@ impl Manager {
             "source_modified": false,
             "weights_copied": false,
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn trial_registration_reports_budget_and_shape_failures_per_model() {
+        let base: Config = serde_json::from_value(json!({
+            "schema_version": 2, "resident_budget_bytes": 1000, "startup_timeout_ms": 1,
+            "request_timeout_ms": 1, "models": [], "aliases": {"revision": 1, "entries": {"other": "x"}},
+        }))
+        .unwrap();
+        let registration = |resident: u64, operations: Value| {
+            json!({
+                "id": "imported", "model_file": "/weights/model.gguf",
+                "execution_profile": {"schema_version": 1, "adapter": "llama-cpp", "implementation_id": "llama-cpp",
+                    "command": "/engine/llama-server", "args": ["--port", "{port}", "--model", "{model}"],
+                    "options": {}, "placement": "unresolved"},
+                "resident_bytes": resident, "max_inflight": 1, "operations": operations, "policy": "disabled",
+            })
+        };
+        let chat = json!(["chat/completions"]);
+        assert_eq!(
+            Manager::trial_registration(&base, &registration(1000, chat.clone())),
+            Ok(())
+        );
+        assert_eq!(
+            Manager::trial_registration(&base, &registration(1001, chat)),
+            Err("resident_budget_exceeded")
+        );
+        assert_eq!(
+            Manager::trial_registration(&base, &registration(10, json!([]))),
+            Err("invalid_registration")
+        );
+        assert_eq!(
+            Manager::trial_registration(&base, &json!({"id": "x"})),
+            Err("invalid_registration")
+        );
     }
 }

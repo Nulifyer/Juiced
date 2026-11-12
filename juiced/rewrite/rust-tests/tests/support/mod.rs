@@ -61,7 +61,7 @@ pub const OPERATOR_READ_ROUTES: [&str; 20] = [
     "/juiced/library/pulls/{pull}",
     "/juiced/aliases",
 ];
-pub const WRITE_ROUTES: [&str; 25] = [
+pub const WRITE_ROUTES: [&str; 26] = [
     "/juiced/runtime-packages/import",
     "/juiced/engines/install",
     "/juiced/models/add",
@@ -87,6 +87,7 @@ pub const WRITE_ROUTES: [&str; 25] = [
     "/juiced/artifacts/sets/remove",
     "/juiced/library/pull",
     "/juiced/aliases",
+    "/juiced/import/native",
 ];
 pub const INFERENCE_ROUTES: [&str; 4] = [
     "/chat/completions",
