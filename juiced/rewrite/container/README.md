@@ -263,3 +263,7 @@ Arguments after the script name go to `podman run`. With `EXPECT_GPU`, the test 
 ## Init and user
 
 `tini` is PID 1. It forwards `podman stop` to `lemond` and reaps orphaned processes. The image's default user is 10001. Starting with `--user 0` runs the optional userspace update, fixes `/data` ownership and adds device groups. The entrypoint then uses `setpriv` to drop to uid 10001 with no capabilities before it starts `lemond`. Any command that does not start with `-` runs instead of the service, for example `podman run --rm localhost/juiced-rewrite:dev lemonade --help`.
+
+## Published images
+
+Pushing a `rewrite-v*` tag runs `.github/workflows/juiced-rewrite-image.yml` at that commit. It builds this Containerfile, runs `smoke-test.sh` against the exact image with Docker, then pushes `ghcr.io/nulifyer/juiced:<tag>` and moves `ghcr.io/nulifyer/juiced:rewrite-preview`. It never touches `latest` or the `v*` release tags, which still come from `juiced-release.yml`.

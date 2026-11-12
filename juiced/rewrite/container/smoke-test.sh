@@ -24,7 +24,7 @@ cleanup() {
         echo "--- container log (last 40 lines)" >&2
         "$engine" logs --tail 40 "$name" >&2 2>&1 || true
     fi
-    "$engine" rm -f -t 5 "$name" >/dev/null 2>&1 || true
+    "$engine" rm -f "$name" >/dev/null 2>&1 || true
     "$engine" volume rm -f "$volume" >/dev/null 2>&1 || true
     exit "$status"
 }
@@ -63,7 +63,18 @@ code=$(curl -s -o /dev/null -w '%{http_code}' "$base/v1/system-info")
 echo "unauthenticated system-info: $code"
 
 step "container healthcheck"
-"$engine" healthcheck run "$name" && echo "healthcheck: healthy"
+if [ "$engine" = podman ]; then
+    "$engine" healthcheck run "$name" && echo "healthcheck: healthy"
+else
+    health=starting
+    for _ in $(seq 1 45); do
+        health=$("$engine" inspect --format '{{.State.Health.Status}}' "$name")
+        [ "$health" = healthy ] && break
+        sleep 2
+    done
+    [ "$health" = healthy ] || fail "container health is $health"
+    echo "healthcheck: healthy"
+fi
 
 step "first-boot config"
 "$engine" exec "$name" cat /data/config.json | jq -c '{schema_version, inhibit_suspend, resident_budget_bytes, models: (.models | length)}'
