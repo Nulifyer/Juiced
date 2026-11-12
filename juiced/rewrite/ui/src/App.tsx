@@ -13,6 +13,7 @@ import { Dashboard } from "./Dashboard";
 import { EngineList, Hardware } from "./Backends";
 import { Diagnostics } from "./Diagnostics";
 import { Aliases } from "./Aliases";
+import { Assistant } from "./Assistant";
 import { IdleDefault } from "./Residency";
 import { gib, percent, rate, useSystemStats } from "./live";
 import { clearToasts, dismiss, notify, useToasts } from "./toast";
@@ -42,6 +43,7 @@ export function App() {
   const [key, setKey] = useState("");
   const [connectionOpen, setConnectionOpen] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [assistantOpen, setAssistantOpen] = useState(false);
   const [selected, setSelected] = useState("");
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [online, setOnline] = useState(false);
@@ -94,6 +96,7 @@ export function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [mobileOpen]);
 
+  const closeAssistant = useCallback(() => setAssistantOpen(false), []);
   const leave = (action: () => void) => { if (dirty) setPending(() => action); else action(); };
   const mutate: Mutate = async (path, body, success) => {
     if (mutation.current && !mutation.current.controller.signal.aborted) return false;
@@ -143,11 +146,12 @@ export function App() {
     <a className="skip-link" href="#workspace">Skip to workspace</a>
     <header className="topbar">
       <div className="brand"><Button variant="ghost" className="mobile-menu" aria-label="Toggle navigation" aria-expanded={mobileOpen} onClick={() => setMobileOpen(!mobileOpen)}><Icon name="menu" /></Button><img src={logo} alt="" width="22" height="22" /><span>Juiced</span><Badge tone="warning">Preview</Badge></div>
+      <div className="topbar-actions"><Button variant="ghost" className="assistant-toggle" aria-label="Assistant" aria-expanded={assistantOpen} onClick={() => setAssistantOpen(!assistantOpen)}><Icon name="chat" size={16} /><span className="assistant-toggle-label">Assistant</span></Button>
       <Menu label="Service status" trigger={<><span className={`status-dot ${status === "Online" ? "good" : status === "Paused" ? "warning" : "bad"}`} /><span>{status}</span><Icon name="chevron" size={14} /></>}>
         <div className="menu-note">{snapshot ? `Juiced ${snapshot.version}` : connectionError || "Not connected"}</div>
         <button role="menuitem" disabled={!online || busy} onClick={togglePause}>{resources?.paused ? "Resume requests" : "Pause new requests"}</button>
         <button role="menuitem" onClick={() => leave(() => setConnectionOpen(true))}>Connection settings</button>
-      </Menu>
+      </Menu></div>
     </header>
     <aside className={`sidebar ${mobileOpen ? "open" : ""}`} aria-label="Navigation">
       <nav aria-label="Destinations">{destinations.map(([id, label, icon]) => <button key={id} aria-current={screen === id ? "page" : undefined} onClick={() => { setMobileOpen(false); leave(() => { setScreen(id); setSelected(""); }); }}><Icon name={icon} size={16} /><span>{label}</span>{id === "models" && snapshot && <span className="nav-count">{snapshot.models.length}</span>}</button>)}</nav>
@@ -187,6 +191,7 @@ export function App() {
     <div className="toasts" aria-live="polite">
       {toasts.map((toast) => <div key={toast.id} className={`toast ${toast.tone}`} role={toast.tone === "error" ? "alert" : "status"}><span>{toast.text}</span><Button variant="ghost" aria-label={toast.tone === "error" ? "Dismiss error" : "Dismiss notification"} onClick={() => dismiss(toast.id)}><Icon name="close" size={14} /></Button></div>)}
     </div>
+    <Assistant open={assistantOpen} onClose={closeAssistant} models={snapshot?.models ?? []} client={client} online={online} onChanged={() => { if (!dirty) setEpoch((value) => value + 1); void refresh(); }} />
     {connectionOpen && <ConnectionDialog base={base} apiKey={key} version={snapshot?.version} onClose={() => setConnectionOpen(false)} onSave={(nextBase, nextKey) => { setBase(nextBase); setKey(nextKey); setEpoch((value) => value + 1); writeLocal("juiced.rewrite.base", nextBase); setConnectionOpen(false); }} />}
     {pending && <Dialog title="Discard unsaved changes?" onClose={() => setPending(null)}><p>Your model changes have not been saved.</p><div className="dialog-actions"><Button onClick={() => setPending(null)}>Keep editing</Button><Button variant="danger" onClick={() => { setDirty(false); setEpoch(epoch + 1); pending(); setPending(null); }}>Discard changes</Button></div></Dialog>}
   </div>;

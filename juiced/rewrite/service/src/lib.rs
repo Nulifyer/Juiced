@@ -22,6 +22,7 @@ pub mod hybrid;
 pub mod identity;
 pub mod library;
 pub mod logs;
+mod mcp_manage;
 pub mod media;
 pub mod native_execution;
 pub mod native_import;

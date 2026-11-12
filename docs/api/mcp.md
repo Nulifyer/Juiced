@@ -31,6 +31,43 @@ request path. The client owns orchestration and any tool execution beyond these
 individual model operations. Generic caller-authored job graphs and Omni agent
 loops are unavailable.
 
+## Manage Juiced from a model
+
+Callers with an operator key, or any caller in trusted-LAN mode, also get
+`juiced_` management tools. Inference keys see only the model-service tools
+above, and a management call made with one fails with JSON-RPC error `-32001`.
+Each tool runs the matching native route with the caller's own key, so the
+route's validation and revision checks apply unchanged.
+
+| Tool | Changes state | Native route |
+|---|:---:|---|
+| `juiced_status` | no | `GET /v1/juiced/state`, `GET /v1/system-info`, `GET /v1/juiced/catalog` |
+| `juiced_list_models` | no | `GET /v1/juiced/catalog` |
+| `juiced_model_settings` | no | `GET /v1/models/{model}/options` and `/fit` |
+| `juiced_list_engines` | no | `GET /v1/juiced/engines` |
+| `juiced_search_models` | no | `GET /v1/juiced/library/search` |
+| `juiced_list_local_files` | no | `GET /v1/juiced/library/local` |
+| `juiced_list_downloads` | no | `GET /v1/juiced/library/pulls` |
+| `juiced_set_policy` | yes | `POST /v1/juiced/policy` |
+| `juiced_load_model` | yes | `POST /v1/load` |
+| `juiced_unload_model` | yes | `POST /v1/unload` |
+| `juiced_set_model_settings` | yes | `POST /v1/models/{model}/options` |
+| `juiced_download_model` | yes | `POST /v1/juiced/library/pull` |
+| `juiced_add_model` | yes | `POST /v1/juiced/models/add` |
+| `juiced_install_engine` | yes | `POST /v1/juiced/engines/install` |
+
+`tools/list` marks each tool with `readOnlyHint`, plus `destructiveHint` and
+`idempotentHint` on the ones that change state. Results arrive as one JSON
+`text` block and the same value in `structuredContent`. A route failure, such
+as `revision_conflict` from a stale `expected_revision`, comes back as
+`isError: true` with the route's error code and HTTP status. Settings fields you
+omit keep their saved value, and `null` resets one to automatic. Downloads and
+engine installs read the current generation when you leave
+`expected_generation` out, as the console does.
+
+Browsers can call `/mcp` only from the origin that served the page, which is how
+the console's Assistant reaches it. Other browser origins get `403`.
+
 For exact schemas, query `tools/list` against the running release. The native
 [generated MCP reference](https://github.com/Nulifyer/Juiced/blob/main/juiced/MCP-TOOLS.md) records the build's tool
 metadata for contributors.
