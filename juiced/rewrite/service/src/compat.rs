@@ -520,10 +520,7 @@ async fn ps(State(state): State<Gateway>) -> Response {
     json_response(200, protocols::ollama_models(&catalog(&state).await, true))
 }
 async fn version() -> Response {
-    json_response(
-        200,
-        json!({"version":env!("CARGO_PKG_VERSION"),"server":"juiced"}),
-    )
+    json_response(200, json!({"version":crate::VERSION,"server":"juiced"}))
 }
 async fn show(
     State(state): State<Gateway>,

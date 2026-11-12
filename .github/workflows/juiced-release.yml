@@ -10,77 +10,71 @@ concurrency:
   group: juiced-container-publication
   cancel-in-progress: false
 jobs:
-  ui-acceptance:
+  service-checks:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: juiced/rewrite
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust stable
+        run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+      - name: Build daemon and fixture executables
+        run: cargo +stable build --all-features --locked
+      - name: Service contracts
+        run: cargo +stable test -p juiced-service --features test-fixture --locked
+      - name: Process and socket API pipelines
+        run: cargo +stable test -p juiced-rust-tests --locked
+      - name: Formatting and lint
+        run: |
+          cargo +stable fmt --all --check
+          cargo +stable clippy --workspace --all-targets --features test-fixture --locked -- -D warnings
+
+  console-checks:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: juiced/rewrite/ui
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.4.3
-      - name: Install UI and browser
-        working-directory: juiced/ui
+          bun-version: 1.4.4
+      - name: Install Rust stable for the fixture service
+        run: rustup toolchain install stable --profile minimal
+      - name: Install console dependencies and browser
         run: |
           bun install --frozen-lockfile
-          node node_modules/@playwright/test/cli.js install --with-deps chromium
-      - name: Browser workflow acceptance
-        working-directory: juiced/ui
+          bunx playwright install --with-deps chromium
+      - name: Console unit tests and production build
+        run: |
+          bun test ./test
+          bun run build
+      - name: Plan and API inventory integrity
+        working-directory: juiced/rewrite
+        run: |
+          bun test scripts/plan.test.ts
+          bun catalog-design/inventory.ts --check --native-root ../..
+          bun api-parity/inventory.ts --check
+          bun test api-parity/inventory.test.ts
+      - name: Operator browser journeys against the Rust service
         run: bun run test:e2e
       - uses: actions/upload-artifact@v4
-        if: always()
+        if: failure()
         with:
-          name: operator-ui-acceptance
+          name: console-browser-evidence
           path: |
-            juiced/ui/playwright-report/
-            juiced/ui/test-results/
-  native-contracts:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-24.04, windows-2025, macos-15]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 40
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install Linux native build prerequisites
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libdrm-dev libssl-dev
-      - name: Configure native core without desktop or web packaging
-        run: |
-          python -c "from pathlib import Path; Path('.version').write_text('2026.44.1-juiced\n')"
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_WEB_APP=OFF -DBUILD_TAURI_APP=OFF -DBUILD_TESTING=ON
-      - name: Compile core and portable contracts
-        run: cmake --build build --config Release ${{ runner.os != 'Windows' && '--parallel 4' || '' }} --target lemond lemonade test_model_cache_cleanup test_model_sync_and_auto_update test_job_records test_writer_operations test_gguf_shard_utils test_download_retry test_launch_command test_process_exit test_native_helpers test_managed_directory_lease test_model_alias test_config_merging test_persistence_boundaries test_cloud_runtime test_gateway_admission test_cloud_provider_registry_config test_anthropic_error test_auto_tune test_request_cancellation test_provider_request_observation test_management_admission test_resource_admission test_resource_suitability test_router_admission test_provider_request_bounds test_request_identity test_backend_mode_contract test_memory_budget test_inference_lease test_realtime_worker_lease test_routing_helper_reconcile test_live_throughput
-      - name: Compile Windows embedded server
-        if: runner.os == 'Windows'
-        run: cmake --build build --config Release --target LemonadeServer
-      - name: Verify native contracts
-        run: ctest --test-dir build -C Release --output-on-failure -R "^(ModelCacheCleanupTest|ModelSyncAndAutoUpdateTest|RetainedJobRecordsTest|WriterOperationMaintenanceTest|GgufShardUtilsTest|DownloadRetryTest|LaunchCommandTest|ProcessExitObservationTest|NativeHelperOwnershipTest|ModelAliasTest|AliasPublicationHTTPTest|ConfigMergingTest|PersistenceBoundariesTest|ModelMetadataPersistenceTest|ConfigurationEffectsTest|PublicationOrderingTest|RuntimeLifecyclePublicationTest|SnapshotPublicationTest|CacheTerminalRecoveryTest|ImportPublicationTest|ImportOwnershipTest|ArtifactRemovalOwnershipTest|CacheSaveDispatchTest|CloudRuntimeTest|ModelDiscoveryConcurrencyTest|ModelShutdownTest|ServerShutdownEntrypointsTest|ManagedDirectoryLeaseTest|StoreOwnershipEntrypointsTest|SnapshotStoreBindingTest|EmbeddedServerShutdownTest|IngressAdmissionTest|GatewayAdmissionTest|CloudProviderRegistryConfigTest|AnthropicErrorTest|AutoTuneTest|RequestCancellationTest|ProviderRequestObservationTest|VoiceHelperOwnershipTest|VoiceIntentRecoveryTest|PreparationCleanupTest|PreparationRetirementTest|PreparationLegacyStateTest|ManagementAdmissionTest|ResourceAdmissionTest|ResourceSuitabilityTest|RouterAdmissionTest|ProviderRequestBoundsTest|RequestIdentityTest|BackendModeContractTest|MemoryBudgetTest|InferenceLeaseTest|RealtimeWorkerLeaseTest|RoutingHelperReconcileTest|LiveThroughputTest)$"
-      - name: Preserve initial native acceptance details
-        if: always()
-        run: python -c "from pathlib import Path; import shutil; source = Path('build/Testing/Temporary/LastTest.log'); shutil.copyfile(source, 'build/native-contracts.log') if source.is_file() else None"
-      - name: Repeat admission queue and concurrency contract
-        run: ctest --test-dir build -C Release --output-on-failure --repeat until-fail:20 -R "^ResourceAdmissionTest$"
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: native-contracts-${{ runner.os }}
-          path: |
-            build/native-contracts.log
-            build/model-shutdown-proof.json
-            build/store-ownership-proof.json
-            build/snapshot-store-binding-proof.json
-            build/embedded-shutdown-proof.json
-            build/alias-publication-proof.json
-            build/*-proof.server.log
-            build/ingress-admission-proof.json
-            build/Testing/Temporary/LastTest.log
-            build/Testing/Temporary/LastTestsFailed.log
-            .version
+            juiced/rewrite/ui/playwright-report/
+            juiced/rewrite/ui/test-results/
+
   image:
-    needs: [ui-acceptance, native-contracts]
+    needs: [service-checks, console-checks]
     runs-on: ubuntu-24.04
     timeout-minutes: 90
+    env:
+      IMAGE: ghcr.io/nulifyer/juiced:${{ github.ref_type == 'tag' && github.ref_name || 'development' }}
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
@@ -89,144 +83,34 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build tested image
+      - name: Release version
+        id: version
+        run: |
+          if [ "${{ github.ref_type }}" = tag ]; then version="${GITHUB_REF_NAME#v}"; else version=development; fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Build the appliance image
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: juiced/Dockerfile
-          target: runtime
+          file: juiced/rewrite/container/Containerfile
           load: true
-          tags: ghcr.io/nulifyer/juiced:${{ github.ref_type == 'tag' && github.ref_name || 'development' }}
+          tags: ${{ env.IMAGE }}
           build-args: |
             SOURCE_REVISION=${{ github.sha }}
-            SERVICE_VERSION=${{ github.ref_type == 'tag' && github.ref_name || 'development' }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-      - name: Verify default container
+            SERVICE_VERSION=${{ steps.version.outputs.version }}
+          cache-from: type=gha,scope=juiced-appliance
+          cache-to: type=gha,mode=max,scope=juiced-appliance
+      - name: Smoke-test the exact image
+        run: SKIP_BUILD=1 CONTAINER_ENGINE=docker JUICED_IMAGE="$IMAGE" EXPECT_VERSION="${{ steps.version.outputs.version }}" juiced/rewrite/container/smoke-test.sh
+      - name: Publish accepted image
         run: |
-          image=ghcr.io/nulifyer/juiced:${{ github.ref_type == 'tag' && github.ref_name || 'development' }}
-          docker run --rm --entrypoint /bin/sh -v "$PWD/juiced/tests/test_runtime_image.sh:/test_runtime_image.sh:ro" "$image" /test_runtime_image.sh
-          docker run -d --name juiced-smoke -e JUICED_SNAPSHOT_DIR=/data/prompt-state -p 127.0.0.1:18080:8080 "$image"
-          for attempt in $(seq 1 60); do
-            if curl --fail --silent http://127.0.0.1:18080/v1/juiced/state > state.json; then break; fi
-            sleep 2
-          done
-          curl --fail --silent http://127.0.0.1:18080/ | grep -q '<title>Juiced</title>'
-          curl --fail --silent http://127.0.0.1:18080/v1/juiced/catalog > catalog.json
-          python3 -c 'import json; assert json.load(open("state.json"))["version"] == "${{ github.ref_type == 'tag' && github.ref_name || 'development' }}"; assert "data" in json.load(open("catalog.json"))'
-          curl --fail --location --silent --show-error --retry 3 https://huggingface.co/ggml-org/models/resolve/main/tinyllamas/stories15M-q4_0.gguf -o stories15M-q4_0.gguf
-          echo '66967fbece6dbe97886593fdbb73589584927e29119ec31f08090732d1861739  stories15M-q4_0.gguf' | sha256sum -c -
-          docker cp stories15M-q4_0.gguf juiced-smoke:/library/stories15M-q4_0.gguf
-          python3 juiced/tests/test_engine_cache.py --url http://127.0.0.1:18080 --container juiced-smoke --model-file /library/stories15M-q4_0.gguf --snapshots /data/prompt-state --out engine-cache-proof.json
-          python3 -c 'import json; p=json.load(open("engine-cache-proof.json"))["profile"]; assert p["identity"]["runtime_image"]["executable"]["path"] == "/opt/juiced/llama-cpu/bin/llama-server", p'
-          docker cp juiced/tests/test_engine_cache.py juiced-smoke:/tmp/test_engine_cache.py
-          docker cp juiced/tests/admission_fixture.py juiced-smoke:/tmp/admission_fixture.py
-          docker cp juiced/tests/test_cache_admission.py juiced-smoke:/tmp/test_cache_admission.py
-          docker exec juiced-smoke python3 /tmp/test_cache_admission.py --binary /opt/lemonade/lemond --engine /opt/juiced/llama-cpu/llama-server --model-file /library/stories15M-q4_0.gguf --out /tmp/cache-admission-proof.json
-          docker cp juiced-smoke:/tmp/cache-admission-proof.json cache-admission-proof.json
-          docker cp juiced/tests/test_execution_identity.py juiced-smoke:/tmp/test_execution_identity.py
-          docker exec juiced-smoke python3 /tmp/test_execution_identity.py --binary /opt/lemonade/lemond --engine /opt/juiced/llama-cpu/llama-server --model-file /library/stories15M-q4_0.gguf --out /tmp/execution-identity-proof.json
-          docker cp juiced-smoke:/tmp/execution-identity-proof.json execution-identity-proof.json
-          docker cp juiced-smoke:/tmp/execution-identity-proof.server.log execution-identity-proof.server.log
-          docker cp juiced/tests/test_execution_inputs.py juiced-smoke:/tmp/test_execution_inputs.py
-          docker exec juiced-smoke python3 /tmp/test_execution_inputs.py --binary /opt/lemonade/lemond --engine /opt/juiced/llama-cpu/llama-server --model-file /library/stories15M-q4_0.gguf --out /tmp/execution-inputs-proof.json
-          docker cp juiced-smoke:/tmp/execution-inputs-proof.json execution-inputs-proof.json
-          docker cp juiced-smoke:/tmp/execution-inputs-proof.server.log execution-inputs-proof.server.log
-          docker cp juiced/tests/test_runtime_modules.py juiced-smoke:/tmp/test_runtime_modules.py
-          docker exec juiced-smoke python3 /tmp/test_runtime_modules.py --binary /opt/lemonade/lemond --runtime-dir /opt/juiced/llama-cpu/bin --model-file /library/stories15M-q4_0.gguf --out /tmp/runtime-modules-proof.json
-          docker cp juiced-smoke:/tmp/runtime-modules-proof.json runtime-modules-proof.json
-          docker cp juiced-smoke:/tmp/runtime-modules-proof.server.log runtime-modules-proof.server.log
-          docker cp juiced/tests/test_runtime_environment.py juiced-smoke:/tmp/test_runtime_environment.py
-          docker exec juiced-smoke python3 /tmp/test_runtime_environment.py --binary /opt/lemonade/lemond --engine /opt/juiced/llama-cpu/llama-server --model-file /library/stories15M-q4_0.gguf --out /tmp/runtime-environment-proof.json
-          docker cp juiced-smoke:/tmp/runtime-environment-proof.json runtime-environment-proof.json
-          docker cp juiced-smoke:/tmp/runtime-environment-proof.server.log runtime-environment-proof.server.log
-          docker cp juiced/tests/test_runtime_defaults.py juiced-smoke:/tmp/test_runtime_defaults.py
-          docker exec juiced-smoke python3 /tmp/test_runtime_defaults.py --binary /opt/lemonade/lemond --cpu-runtime /opt/juiced/llama-cpu --defaults-file /opt/juiced/defaults.json --model-file /library/stories15M-q4_0.gguf --out /tmp/runtime-defaults-proof.json
-          docker cp juiced-smoke:/tmp/runtime-defaults-proof.json runtime-defaults-proof.json
-          docker cp juiced-smoke:/tmp/runtime-defaults-proof.server.log runtime-defaults-proof.server.log
-          docker cp juiced/tests/test_model_context.py juiced-smoke:/tmp/test_model_context.py
-          docker exec juiced-smoke python3 /tmp/test_model_context.py --binary /opt/lemonade/lemond --engine /opt/juiced/llama-cpu/llama-server --model-file /library/stories15M-q4_0.gguf --out /tmp/model-context-proof.json
-          docker cp juiced-smoke:/tmp/model-context-proof.json model-context-proof.json
-          docker cp juiced-smoke:/tmp/model-context-proof.server.log model-context-proof.server.log
-          docker cp juiced/tests/test_cache_disk_budget.py juiced-smoke:/tmp/test_cache_disk_budget.py
-          docker exec juiced-smoke python3 /tmp/test_cache_disk_budget.py --binary /opt/lemonade/lemond --engine /opt/juiced/llama-cpu/llama-server --model-file /library/stories15M-q4_0.gguf --out /tmp/cache-disk-proof.json
-          docker cp juiced-smoke:/tmp/cache-disk-proof.json cache-disk-proof.json
-          docker cp juiced/tests/test_resource_admission.py juiced-smoke:/tmp/test_resource_admission.py
-          docker exec juiced-smoke python3 /tmp/test_resource_admission.py --binary /opt/lemonade/lemond --engine /opt/juiced/llama-cpu/llama-server --model-file /library/stories15M-q4_0.gguf --out /tmp/resource-admission-proof.json
-          docker cp juiced-smoke:/tmp/resource-admission-proof.json resource-admission-proof.json
-          docker cp juiced/tests/test_runtime_boundaries.py juiced-smoke:/tmp/test_runtime_boundaries.py
-          docker exec juiced-smoke python3 /tmp/test_runtime_boundaries.py --binary /opt/lemonade/lemond --engine /opt/juiced/llama-cpu/llama-server --model-file /library/stories15M-q4_0.gguf --out /tmp/runtime-boundaries-proof.json
-          docker cp juiced-smoke:/tmp/runtime-boundaries-proof.json runtime-boundaries-proof.json
-          docker cp juiced/tests/test_cloud_publication.py juiced-smoke:/tmp/test_cloud_publication.py
-          docker exec juiced-smoke python3 /tmp/test_cloud_publication.py --binary /opt/lemonade/lemond --engine /opt/juiced/llama-cpu/llama-server --model-file /library/stories15M-q4_0.gguf --out /tmp/cloud-publication-proof.json
-          docker cp juiced-smoke:/tmp/cloud-publication-proof.json cloud-publication-proof.json
-          docker cp juiced/tests/test_cloud_lifecycle.py juiced-smoke:/tmp/test_cloud_lifecycle.py
-          docker exec juiced-smoke python3 /tmp/test_cloud_lifecycle.py --binary /opt/lemonade/lemond --engine /opt/juiced/llama-cpu/llama-server --model-file /library/stories15M-q4_0.gguf --out /tmp/cloud-lifecycle-proof.json
-          docker cp juiced-smoke:/tmp/cloud-lifecycle-proof.json cloud-lifecycle-proof.json
-          docker cp juiced/tests/test_cache_inspection.py juiced-smoke:/tmp/test_cache_inspection.py
-          docker exec juiced-smoke python3 /tmp/test_cache_inspection.py --binary /opt/lemonade/lemond --engine /opt/juiced/llama-cpu/llama-server --model-file /library/stories15M-q4_0.gguf --out /tmp/cache-inspection-proof.json
-          docker cp juiced-smoke:/tmp/cache-inspection-proof.json cache-inspection-proof.json
-          docker cp juiced/tests/test_preparation.py juiced-smoke:/tmp/test_preparation.py
-          docker exec juiced-smoke python3 /tmp/test_preparation.py --url http://127.0.0.1:8080 --runtime-root /opt/juiced --out /tmp/preparation-retirement-proof.json
-          docker cp juiced-smoke:/tmp/preparation-retirement-proof.json preparation-retirement-proof.json
-          python3 juiced/tests/test_execution_switch.py --url http://127.0.0.1:18080 --out execution-switch-proof.json
-          python3 juiced/tests/test_model_tuning.py --url http://127.0.0.1:18080 --out model-tuning-proof.json
-          python3 -m venv /tmp/juiced-clients
-          /tmp/juiced-clients/bin/pip install -r juiced/tests/client-requirements.txt
-          /tmp/juiced-clients/bin/python juiced/tests/test_clients.py --url http://127.0.0.1:18080 --model Stories15M-Q4_0 --out client-proof.json
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.4.3
-      - name: Browser acceptance against the actual container and CPU engine
-        working-directory: juiced/ui
-        run: |
-          bun install --frozen-lockfile
-          node node_modules/@playwright/test/cli.js install --with-deps chromium
-          JUICED_LIVE_URL=http://127.0.0.1:18080 bun run test:e2e
+          docker push "$IMAGE"
+          if [ "${{ github.ref_type }}" = tag ] && [[ "${{ github.ref_name }}" != *-* ]]; then
+            docker tag "$IMAGE" ghcr.io/nulifyer/juiced:latest
+            docker push ghcr.io/nulifyer/juiced:latest
+          fi
+          docker inspect "$IMAGE" --format '{{json .RepoDigests}}' > image-digest.json
       - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: native-browser-acceptance
-          path: |
-            juiced/ui/playwright-report/
-            juiced/ui/test-results/
-      - name: Stop accepted fixture
-        run: docker stop juiced-smoke
-      - name: Publish accepted container
-        run: |
-          image=ghcr.io/nulifyer/juiced:${{ github.ref_type == 'tag' && github.ref_name || 'development' }}
-          docker push "$image"
-          if [ "${{ github.ref_type }}" = tag ] && [[ "${{ github.ref_name }}" != *-* ]]; then docker tag "$image" ghcr.io/nulifyer/juiced:latest; docker push ghcr.io/nulifyer/juiced:latest; fi
-          docker inspect "$image" --format '{{json .RepoDigests}}' > image-digest.json
-      - uses: actions/upload-artifact@v4
-        if: always()
         with:
           name: release-identity
-          path: |
-            image-digest.json
-            state.json
-            catalog.json
-            engine-cache-proof.json
-            cache-admission-proof.json
-            execution-identity-proof.json
-            execution-identity-proof.server.log
-            execution-inputs-proof.json
-            execution-inputs-proof.server.log
-            runtime-modules-proof.json
-            runtime-modules-proof.server.log
-            runtime-environment-proof.json
-            runtime-environment-proof.server.log
-            runtime-defaults-proof.json
-            runtime-defaults-proof.server.log
-            model-context-proof.json
-            model-context-proof.server.log
-            cache-disk-proof.json
-            resource-admission-proof.json
-            runtime-boundaries-proof.json
-            cloud-publication-proof.json
-            cloud-lifecycle-proof.json
-            cache-inspection-proof.json
-            preparation-retirement-proof.json
-            execution-switch-proof.json
-            model-tuning-proof.json
-            client-proof.json
+          path: image-digest.json

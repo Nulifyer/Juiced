@@ -44,7 +44,7 @@ echo "image size: $("$engine" image inspect "$image" --format '{{.Size}}' | awk 
 
 step "run $name"
 "$engine" volume create "$volume" >/dev/null
-"$engine" run -d --name "$name" -p "127.0.0.1:$port:13305" -v "$volume:/data" \
+"$engine" run -d --name "$name" -p "127.0.0.1:$port:8080" -v "$volume:/data" \
     -e LEMONADE_ADMIN_API_KEY="$key" "$@" "$image" >/dev/null
 
 step "wait for /v1/health"
@@ -56,6 +56,13 @@ until admin -o /dev/null "$base/v1/health" 2>/dev/null; do
 done
 admin "$base/v1/health" | jq -c .
 echo "healthy after ~${i}s"
+
+step "service version"
+version=$(admin "$base/v1/juiced/state" | jq -r .version)
+echo "version: $version"
+if [ -n "${EXPECT_VERSION:-}" ] && [ "$version" != "$EXPECT_VERSION" ]; then
+    fail "service reports version $version, expected $EXPECT_VERSION"
+fi
 
 step "authentication"
 code=$(curl -s -o /dev/null -w '%{http_code}' "$base/v1/system-info")

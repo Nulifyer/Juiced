@@ -308,7 +308,7 @@ pub async fn resolve(manager: &Manager, settings: &Settings) -> Resolved {
 }
 
 pub fn info(resolved: &Resolved) -> Event {
-    let version = env!("CARGO_PKG_VERSION");
+    let version = crate::VERSION;
     let whisper = attribution("whisper.cpp", "https://github.com/ggml-org/whisper.cpp");
     let kokoro = attribution("Kokoros", "https://github.com/lucasjinreal/Kokoros");
     let asr: Vec<Value> = if resolved.stt_models.is_empty() {

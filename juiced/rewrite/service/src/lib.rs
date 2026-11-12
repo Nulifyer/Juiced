@@ -111,3 +111,9 @@ impl From<admission::Error> for ApiError {
         )
     }
 }
+
+/// The release version, set at build time for published images; the crate version otherwise.
+pub const VERSION: &str = match option_env!("JUICED_SERVICE_VERSION") {
+    Some(version) if !version.is_empty() => version,
+    _ => env!("CARGO_PKG_VERSION"),
+};

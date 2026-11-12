@@ -939,7 +939,7 @@ pub fn mcp_request(mut input: Value) -> McpDispatch {
     match method.as_str() {
         "initialize" => McpDispatch::Reply(mcp_result(
             id,
-            json!({"protocolVersion":"2025-06-18","capabilities":{"tools":{}},"serverInfo":{"name":"juiced-mcp","version":env!("CARGO_PKG_VERSION")}}),
+            json!({"protocolVersion":"2025-06-18","capabilities":{"tools":{}},"serverInfo":{"name":"juiced-mcp","version":crate::VERSION}}),
         )),
         "ping" => McpDispatch::Reply(mcp_result(id, json!({}))),
         "tools/list" => McpDispatch::Reply(mcp_result(id, mcp_tools())),

@@ -12,9 +12,10 @@ COPY juiced/rewrite/catalog-design/inventory.json catalog-design/
 COPY juiced/rewrite/Cargo.toml juiced/rewrite/Cargo.lock ./
 COPY juiced/rewrite/service/ service/
 COPY juiced/rewrite/rust-tests/ rust-tests/
+ARG SERVICE_VERSION=
 RUN --mount=type=cache,id=juiced-rewrite-cargo-registry,target=/usr/local/cargo/registry \
     --mount=type=cache,id=juiced-rewrite-cargo-target,target=/src/juiced/rewrite/target \
-    cargo build --release --locked -p juiced-service --bin lemond --bin lemonade \
+    JUICED_SERVICE_VERSION="${SERVICE_VERSION}" cargo build --release --locked -p juiced-service --bin lemond --bin lemonade \
     && install -D -m 0755 target/release/lemond /out/lemond \
     && install -D -m 0755 target/release/lemonade /out/lemonade
 
@@ -132,12 +133,13 @@ LABEL org.opencontainers.image.title="Juiced" \
 ENV JUICED_DATA=/data \
     JUICED_LISTEN_HOST=0.0.0.0 \
     LEMONADE_HOST=127.0.0.1 \
-    LEMONADE_PORT=13305 \
+    LEMONADE_PORT=8080 \
+    TINI_SUBREAPER=1 \
     HOME=/data/home \
     XDG_CACHE_HOME=/data/home/.cache
 
 VOLUME ["/data"]
-EXPOSE 13305 10300
+EXPOSE 8080 10300
 USER 10001:10001
 WORKDIR /data
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 CMD ["/usr/local/bin/juiced-healthcheck"]

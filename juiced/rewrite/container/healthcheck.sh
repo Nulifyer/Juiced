@@ -13,4 +13,4 @@ key=${LEMONADE_ADMIN_API_KEY:-${LEMONADE_API_KEY:-}}
 if [ -n "$key" ]; then
     printf 'header = "Authorization: Bearer %s"\n' "$key"
 fi | curl --config - --fail --silent --show-error --max-time 4 --output /dev/null \
-    "http://$host:${LEMONADE_PORT:-13305}/v1/health"
+    "http://$host:${LEMONADE_PORT:-8080}/v1/health"

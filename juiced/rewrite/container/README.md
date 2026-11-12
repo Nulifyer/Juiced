@@ -15,10 +15,10 @@ juiced/rewrite/container/build.sh
 Run it:
 
 ```bash
-podman run -d --name juiced -p 13305:13305 -v juiced-data:/data localhost/juiced-rewrite:dev
+podman run -d --name juiced -p 8080:8080 -v juiced-data:/data localhost/juiced-rewrite:dev
 ```
 
-Open <http://localhost:13305>. Without API keys the service runs in trusted-LAN mode, and anyone who can reach the port has operator rights. Set keys before you publish the port beyond your own machine (see [Environment](#environment)).
+Open <http://localhost:8080>. Without API keys the service runs in trusted-LAN mode, and anyone who can reach the port has operator rights. Set keys before you publish the port beyond your own machine (see [Environment](#environment)).
 
 `build.sh` accepts extra `podman build` arguments. `JUICED_IMAGE` changes the tag and `CONTAINER_ENGINE=docker` builds with Docker. Under Podman the script passes `--format docker`, because the OCI format drops the `HEALTHCHECK`.
 
@@ -44,7 +44,7 @@ Everything that persists lives in `/data`:
 
 The service runs as uid 10001 and needs to own `/data`. A named volume gets the right owner automatically. For a host directory, use `-v /srv/juiced:/data:U` under Podman, or start the container once with `--user 0` so the entrypoint can `chown` the top directory.
 
-To add a model file that is not on Hugging Face, upload it from the console or with `curl -X POST -T model.gguf -H 'Content-Type: application/octet-stream' "http://HOST:13305/v1/juiced/library/upload?filename=model.gguf&size=$(stat -c %s model.gguf)"`. A file already on the host can be mounted under `/data/import` and imported with `POST /v1/juiced/library/import-path`, either copied into `artifacts/` or linked in place. A linked file must stay mounted at the same path. The first-boot configuration lists `/data/import` in `import_roots`; a configuration created by an older image needs `"import_roots": ["/data/import"]` added by hand.
+To add a model file that is not on Hugging Face, upload it from the console or with `curl -X POST -T model.gguf -H 'Content-Type: application/octet-stream' "http://HOST:8080/v1/juiced/library/upload?filename=model.gguf&size=$(stat -c %s model.gguf)"`. A file already on the host can be mounted under `/data/import` and imported with `POST /v1/juiced/library/import-path`, either copied into `artifacts/` or linked in place. A linked file must stay mounted at the same path. The first-boot configuration lists `/data` and `/library` in `import_roots`, so `/data/import`, an old Juiced data volume and read-only model mounts under `/library` are all reachable.
 
 The default configuration sets `inhibit_suspend` to false, because the container cannot reach the host's logind. It sets `resident_budget_bytes` to three quarters of the smaller of host memory and the container's cgroup memory limit. `JUICED_RESIDENT_BUDGET_BYTES` overrides that value, but only on first boot. Later, edit the value in the console or in `config.json`.
 
@@ -52,7 +52,7 @@ The default configuration sets `inhibit_suspend` to false, because the container
 
 | Port | Use |
 | --- | --- |
-| 13305/tcp | HTTP API and console. `LEMONADE_PORT` changes it inside the container. |
+| 8080/tcp | HTTP API and console. `LEMONADE_PORT` changes it inside the container. |
 | 10300/tcp | Wyoming speech server for Home Assistant. Disabled by default. |
 
 The image does not expose UDP discovery. Clients connect to an explicit URL.
@@ -70,10 +70,10 @@ To set it up:
 3. Enable the listener. The `expected_generation` value is the `configuration_generation` that `GET /v1/juiced/wyoming` returns:
 
    ```bash
-   curl -s -H "Authorization: Bearer $LEMONADE_ADMIN_API_KEY" http://localhost:13305/v1/juiced/wyoming
+   curl -s -H "Authorization: Bearer $LEMONADE_ADMIN_API_KEY" http://localhost:8080/v1/juiced/wyoming
    curl -s -H "Authorization: Bearer $LEMONADE_ADMIN_API_KEY" -H 'Content-Type: application/json' \
      -d '{"settings":{"enabled":true,"listen":"0.0.0.0:10300","stt_model":null,"tts_model":null,"tts_voice":null},"expected_generation":GENERATION}' \
-     http://localhost:13305/v1/juiced/wyoming
+     http://localhost:8080/v1/juiced/wyoming
    ```
 
    With `stt_model` or `tts_model` set to null, Juiced uses every enabled transcription model and the first enabled speech model. `tts_voice` picks the voice used when Home Assistant does not ask for one. The setting is saved in `config.json` and survives restarts.
@@ -90,7 +90,7 @@ To set it up:
 | `LEMONADE_ADMIN_API_KEY` | unset | Requires this key for operator routes. With only `LEMONADE_API_KEY` set, that key is the operator key. |
 | `HF_TOKEN` | unset | Sent only to Hugging Face metadata requests. Gated downloads still fail. |
 | `JUICED_HUGGINGFACE_URL` | `https://huggingface.co` | Hugging Face base URL for library search |
-| `LEMONADE_PORT` | `13305` | Listen port. The healthcheck and the bundled `lemonade` CLI read it too. |
+| `LEMONADE_PORT` | `8080` | Listen port. The healthcheck and the bundled `lemonade` CLI read it too. |
 | `JUICED_LISTEN_HOST` | `0.0.0.0` | Listen address |
 | `JUICED_RESIDENT_BUDGET_BYTES` | 75% of memory | First-boot resident budget |
 | `JUICED_UPDATE_USERSPACE` | `0` | `1` runs `juiced-update-userspace` at start. Requires `--user 0`. |
@@ -100,7 +100,7 @@ API keys exist only in the environment. The entrypoint never writes them to `/da
 
 ```bash
 printf '%s' "$(openssl rand -hex 24)" | podman secret create juiced-admin-key -
-podman run -d --name juiced -p 13305:13305 -v juiced-data:/data \
+podman run -d --name juiced -p 8080:8080 -v juiced-data:/data \
   --secret juiced-admin-key,type=env,target=LEMONADE_ADMIN_API_KEY \
   localhost/juiced-rewrite:dev
 ```
@@ -123,7 +123,7 @@ nvidia-ctk cdi list
 Then run:
 
 ```bash
-podman run -d --name juiced -p 13305:13305 -v juiced-data:/data \
+podman run -d --name juiced -p 8080:8080 -v juiced-data:/data \
   --device nvidia.com/gpu=all localhost/juiced-rewrite:dev
 ```
 
@@ -134,7 +134,7 @@ With Docker, use `--gpus all`, or `--device nvidia.com/gpu=all` when CDI is enab
 ROCm needs `/dev/kfd` and the DRI nodes:
 
 ```bash
-podman run -d --name juiced -p 13305:13305 -v juiced-data:/data \
+podman run -d --name juiced -p 8080:8080 -v juiced-data:/data \
   --device /dev/kfd --device /dev/dri --group-add keep-groups \
   localhost/juiced-rewrite:dev
 ```
@@ -148,7 +148,7 @@ I have not tested this recipe on AMD hardware. If an engine fails with memory-ma
 ### Intel and AMD Vulkan
 
 ```bash
-podman run -d --name juiced -p 13305:13305 -v juiced-data:/data \
+podman run -d --name juiced -p 8080:8080 -v juiced-data:/data \
   --device /dev/dri --group-add keep-groups localhost/juiced-rewrite:dev
 ```
 
@@ -164,7 +164,7 @@ Two engines use the XDNA 2 NPU in Ryzen AI 300-series and Strix Halo processors:
 The host needs the in-kernel `amdxdna` driver and its NPU firmware. Both engines bring their own XRT userspace. The hybrid engine also brings its own ROCm runtime, so the archive is about 1.1 GB and unpacks to 3.9 GB. Pass the NPU node, raise the locked-memory limit, and add the GPU nodes for the hybrid engine:
 
 ```bash
-podman run -d --name juiced -p 13305:13305 -v juiced-data:/data \
+podman run -d --name juiced -p 8080:8080 -v juiced-data:/data \
   --device /dev/accel/accel0 --device /dev/kfd --device /dev/dri \
   --ulimit memlock=-1:-1 --group-add keep-groups \
   localhost/juiced-rewrite:dev
@@ -182,13 +182,13 @@ At startup, the entrypoint logs a warning when a passed-through device is not re
 FastFlowLM keeps its own model store at `/data/flm`. Install the engine, then pull and register a checkpoint:
 
 ```bash
-curl -X POST http://localhost:13305/v1/juiced/engines/install \
+curl -X POST http://localhost:8080/v1/juiced/engines/install \
   -H 'content-type: application/json' \
   -d '{"engine":"fastflowlm","backend":"npu","expected_generation":0}'
-curl http://localhost:13305/v1/juiced/flm          # NPU validation and the checkpoint list
-curl -X POST http://localhost:13305/v1/juiced/flm/pull \
+curl http://localhost:8080/v1/juiced/flm          # NPU validation and the checkpoint list
+curl -X POST http://localhost:8080/v1/juiced/flm/pull \
   -H 'content-type: application/json' -d '{"checkpoint":"gemma3:4b"}'
-curl -X POST http://localhost:13305/v1/juiced/flm/models/add \
+curl -X POST http://localhost:8080/v1/juiced/flm/models/add \
   -H 'content-type: application/json' -d '{"checkpoint":"gemma3:4b","policy":"on-demand"}'
 ```
 
@@ -199,7 +199,7 @@ Detection, installation, launch arguments and environment are covered by tests w
 ### Intel NPUs
 
 ```bash
-podman run -d --name juiced -p 13305:13305 -v juiced-data:/data \
+podman run -d --name juiced -p 8080:8080 -v juiced-data:/data \
   --device /dev/accel/accel0 --group-add keep-groups localhost/juiced-rewrite:dev
 ```
 
@@ -210,7 +210,7 @@ podman run -d --name juiced -p 13305:13305 -v juiced-data:/data \
 The engine catalog, with its pinned releases and digests, is compiled into `lemond`. Install engines from the console or the API:
 
 ```bash
-curl -X POST http://localhost:13305/v1/juiced/engines/install \
+curl -X POST http://localhost:8080/v1/juiced/engines/install \
   -H 'content-type: application/json' \
   -d '{"engine":"llama.cpp","backend":"cuda","expected_generation":0}'
 ```
@@ -237,7 +237,7 @@ NVIDIA userspace comes from the host. Upgrade the host driver, regenerate the CD
 podman exec juiced cat /data/config.json > config.json.bak
 juiced/rewrite/container/build.sh
 podman rm -f juiced
-podman run -d --name juiced -p 13305:13305 -v juiced-data:/data localhost/juiced-rewrite:dev
+podman run -d --name juiced -p 8080:8080 -v juiced-data:/data localhost/juiced-rewrite:dev
 ```
 
 The new service migrates configuration in memory and saves the new schema on the next edit. An older image may fail to read a configuration that a newer one saved, so keep the backup until you no longer need to roll back.
@@ -266,4 +266,4 @@ Arguments after the script name go to `podman run`. With `EXPECT_GPU`, the test 
 
 ## Published images
 
-Pushing a `rewrite-v*` tag runs `.github/workflows/juiced-rewrite-image.yml` at that commit. It builds this Containerfile, runs `smoke-test.sh` against the exact image with Docker, then pushes `ghcr.io/nulifyer/juiced:<tag>` and moves `ghcr.io/nulifyer/juiced:rewrite-preview`. It never touches `latest` or the `v*` release tags, which still come from `juiced-release.yml`.
+Pushing a `v*` tag runs `.github/workflows/juiced-release.yml` at that commit. It runs the service, process and console checks, builds this Containerfile with the tag as the service version, smoke-tests the exact image with Docker and pushes `ghcr.io/nulifyer/juiced:<tag>`. Only tags without a hyphen move `latest`, so release candidates such as `v1.0.0-rc.1` never replace the stable image.

@@ -3,7 +3,7 @@ set -eu
 
 data=${JUICED_DATA:-/data}
 config="$data/config.json"
-port=${LEMONADE_PORT:-13305}
+port=${LEMONADE_PORT:-8080}
 host=${JUICED_LISTEN_HOST:-0.0.0.0}
 ui=${JUICED_UI:-/opt/juiced/ui}
 uid=10001
@@ -49,7 +49,7 @@ write_default_config() {
   "resident_budget_bytes": $budget,
   "startup_timeout_ms": 120000,
   "request_timeout_ms": 300000,
-  "import_roots": ["$data/import"],
+  "import_roots": ["$data", "/library"],
   "models": []
 }
 EOF
@@ -75,6 +75,19 @@ import_bundled_engines() {
         fi
     done
 }
+
+# Native Juiced took `lemond CACHE_DIR CONFIG_DIR --host H --port P`; keep compose files that
+# still pass it working by honouring the address and ignoring the directories.
+if case "${1:-}" in /*) ! { [ -f "$1" ] && [ -x "$1" ]; } ;; *) false ;; esac; then
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --host) host=$2; shift 2 ;;
+            --port) port=$2; shift 2 ;;
+            *) shift ;;
+        esac
+    done
+    export JUICED_LISTEN_HOST="$host" LEMONADE_PORT="$port"
+fi
 
 case "${1:-}" in
     "" | -*) ;;

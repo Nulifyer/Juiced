@@ -1150,7 +1150,7 @@ async fn main() -> ExitCode {
             writeln!(
                 io::stdout().lock(),
                 "lemonade {} (Juiced Rust)",
-                env!("CARGO_PKG_VERSION")
+                juiced_service::VERSION
             )
         };
         return ExitCode::from(if result.is_ok() { 0 } else { 1 });
