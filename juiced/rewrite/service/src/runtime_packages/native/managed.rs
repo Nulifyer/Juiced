@@ -123,6 +123,16 @@ impl Store {
                         root.acquire_private_child(&existing, Path::new(STORE), true)
                             .map_err(storage)?
                     }
+                    // A dedicated engines volume arrives as an empty directory with no control file.
+                    Ok(metadata)
+                        if metadata.is_dir() && empty_directory(&root.root().join(STORE)) =>
+                    {
+                        if !create {
+                            return Ok(None);
+                        }
+                        root.acquire_private_child(&existing, Path::new(STORE), true)
+                            .map_err(storage)?
+                    }
                     _ => return Err(Error::new("package_store_unavailable")),
                 }
             }
@@ -491,4 +501,8 @@ impl Lease {
         self.store.verify()?;
         self.payload.verify().map_err(storage)
     }
+}
+
+fn empty_directory(path: &Path) -> bool {
+    std::fs::read_dir(path).is_ok_and(|mut entries| entries.next().is_none())
 }

@@ -1,0 +1,34 @@
+name: Juiced engine release
+on:
+  push:
+    tags: ['engine-futo-*']
+permissions:
+  contents: write
+jobs:
+  futo:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build FUTO transcribe.cpp
+        run: |
+          docker buildx build --file juiced/rewrite/engines/futo/Containerfile \
+            --output type=local,dest=out .
+      - name: Package
+        id: package
+        run: |
+          asset="${GITHUB_REF_NAME}-linux-x86_64.tar.gz"
+          tar --sort=name --owner=0 --group=0 --numeric-owner --mtime='2000-01-01' \
+            -C out -czf "$asset" futo-transcribe
+          sha256sum "$asset" | tee "$asset.sha256"
+          echo "asset=$asset" >> "$GITHUB_OUTPUT"
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            "${{ steps.package.outputs.asset }}" "${{ steps.package.outputs.asset }}.sha256" \
+            --repo "$GITHUB_REPOSITORY" --prerelease --verify-tag \
+            --title "FUTO transcribe.cpp engine (${GITHUB_REF_NAME#engine-futo-})" \
+            --notes "CPU build of FUTO transcribe.cpp at the pinned source revision with Juiced's HTTP adapter (juiced/runtime/futo_server.cpp). Built from juiced/rewrite/engines/futo/Containerfile on Debian trixie. Installed by Juiced from Backends & hardware; not meant for direct use."

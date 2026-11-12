@@ -1,0 +1,55 @@
+# Builds the FUTO transcribe.cpp engine published as a Juiced engine release.
+# Build context: the repository root. See .github/workflows/juiced-engine-release.yml.
+ARG RUNTIME_IMAGE=docker.io/library/debian:trixie-slim
+
+# FUTO publishes no transcribe.cpp builds. This builds the same pinned source and adapter
+# as the native image, on the runtime's Debian release so glibc and libstdc++ match.
+FROM ${RUNTIME_IMAGE} AS build
+ARG DEBIAN_FRONTEND=noninteractive
+ARG FUTO_REVISION=26d75933c16b2cec228e34c69e92a6c3c154b97c
+ARG FUTO_ARCHIVE_SHA256=2406099892f60fa4fcdf30cfd4f86858cd66b054c96827af76670bc9a20d4cab
+ARG FUTO_ARCHIVE_BYTES=47097391
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        build-essential ca-certificates cmake curl jq ninja-build \
+    && rm -rf /var/lib/apt/lists/*
+RUN curl --fail --location --retry 3 -o /tmp/transcribe.tar.gz \
+        "https://gitlab.futo.org/api/v4/projects/keyboard%2Ftranscribe.cpp/repository/archive.tar.gz?sha=$FUTO_REVISION" \
+    && echo "$FUTO_ARCHIVE_SHA256  /tmp/transcribe.tar.gz" | sha256sum -c - \
+    && mkdir /native && tar -xzf /tmp/transcribe.tar.gz --strip-components=1 -C /native \
+    && rm /tmp/transcribe.tar.gz
+RUN cmake -S /native -B /native/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=OFF \
+        -DTRANSCRIBE_BUILD_TESTS=OFF -DTRANSCRIBE_USE_SYSTEM_BLAS=OFF -DTRANSCRIBE_VULKAN=OFF \
+        -DTRANSCRIBE_CUDA=OFF -DTRANSCRIBE_HIP=OFF -DTRANSCRIBE_METAL=OFF -DTRANSCRIBE_BUILD_SHARED=ON \
+    && cmake --build /native/build --target transcribe-cli -j"$(nproc)"
+# Header pins match the native build's FetchContent revisions (cpp-httplib v0.51.0 with its
+# graceful-close backport, nlohmann/json v3.11.3).
+COPY cmake/PatchHttplibGracefulClose.cmake /tmp/
+RUN mkdir -p /include/nlohmann \
+    && curl --fail --location --retry 3 -o /include/httplib.h \
+        https://raw.githubusercontent.com/yhirose/cpp-httplib/d66d9a95997d51a8ba9822a611d1267757741535/httplib.h \
+    && curl --fail --location --retry 3 -o /include/nlohmann/json.hpp \
+        https://github.com/nlohmann/json/releases/download/v3.11.3/json.hpp \
+    && printf '%s  %s\n' \
+        dfbaccb76432ed6d56ddd9983fd9d262b61ba6ba0958f6b00db35c802607bd35 /include/httplib.h \
+        9bea4c8066ef4a1c206b2be5a36302f8926f7fdc6087af5d20b417d0cf103ea6 /include/nlohmann/json.hpp \
+        | sha256sum -c - \
+    && cmake -DHTTPLIB_SOURCE_DIR=/include -P /tmp/PatchHttplibGracefulClose.cmake
+COPY juiced/runtime/futo_server.cpp /adapter/futo_server.cpp
+# Only real files under their SONAME: the runtime-package importer refuses symlinks.
+RUN mkdir -p /out/futo-transcribe/lib /out/futo-transcribe/licenses \
+    && g++ -std=c++17 -O2 -pthread -I/native/include -I/native/examples/common -I/include \
+        /adapter/futo_server.cpp -L/native/build/src -ltranscribe \
+        -Wl,-rpath-link,/native/build/ggml/src -o /out/futo-transcribe/futo-server \
+    && strip /out/futo-transcribe/futo-server \
+    && find /native/build -type f -name '*.so*' | while read -r library; do \
+        soname=$(objdump -p "$library" | awk '/SONAME/ { print $2 }'); \
+        cp "$library" "/out/futo-transcribe/lib/${soname:-${library##*/}}"; \
+    done \
+    && cp /native/LICENSE /out/futo-transcribe/licenses/transcribe.txt \
+    && cp /native/THIRD-PARTY-LICENSES.md /out/futo-transcribe/licenses/ \
+    && cp /native/ggml/LICENSE /out/futo-transcribe/licenses/ggml.txt \
+    && LD_LIBRARY_PATH=/out/futo-transcribe/lib /out/futo-transcribe/futo-server --version
+
+FROM scratch AS artifact
+COPY --from=build /out/ /

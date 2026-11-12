@@ -13,8 +13,6 @@
 !juiced/rewrite/rust-tests/
 !juiced/rewrite/ui/
 !juiced/rewrite/container/
-!cmake/PatchHttplibGracefulClose.cmake
-!juiced/runtime/futo_server.cpp
 juiced/rewrite/ui/node_modules/
 juiced/rewrite/ui/dist/
 juiced/rewrite/ui/test-results/

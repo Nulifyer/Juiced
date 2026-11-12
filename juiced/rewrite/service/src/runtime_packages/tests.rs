@@ -553,6 +553,30 @@ fn protected_runtime_control(
     (admission, control)
 }
 
+#[cfg(unix)]
+#[test]
+fn an_empty_pre_created_package_root_is_claimed_but_foreign_content_is_not() {
+    use std::os::unix::fs::PermissionsExt;
+    let fresh = fixture();
+    let root = fresh.configuration.parent().unwrap().join(STORE);
+    fs::create_dir(&root).unwrap();
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+    run(&fresh).unwrap();
+    assert!(root.join(crate::storage::CONTROL_FILE).exists());
+
+    let foreign = fixture();
+    let root = foreign.configuration.parent().unwrap().join(STORE);
+    fs::create_dir(&root).unwrap();
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+    fs::write(root.join("unrelated"), b"keep").unwrap();
+    assert_eq!(
+        run(&foreign).unwrap_err().reason(),
+        "package_store_unavailable"
+    );
+    assert_eq!(fs::read(root.join("unrelated")).unwrap(), b"keep");
+    assert!(!root.join(crate::storage::CONTROL_FILE).exists());
+}
+
 #[test]
 fn an_existing_package_root_without_its_control_file_is_never_reported_empty_or_repaired() {
     let fixture = fixture();
