@@ -39,6 +39,9 @@ pub(super) enum Effect {
         snapshot: Arc<NativeSettingsSnapshot>,
         workers: Vec<Arc<Worker>>,
     },
+    InsertMany {
+        workers: Vec<Arc<Worker>>,
+    },
     NativeEdit {
         snapshot: Arc<NativeSettingsSnapshot>,
         previous: Arc<Worker>,
@@ -333,7 +336,8 @@ impl Manager {
                 }
                 Effect::NativeImport {
                     workers: imported, ..
-                } => {
+                }
+                | Effect::InsertMany { workers: imported } => {
                     for worker in imported {
                         retired.extend(workers.insert(worker.spec.id.clone(), worker.clone()));
                     }

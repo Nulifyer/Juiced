@@ -35,6 +35,8 @@ mod engines;
 pub use engines::{AddModelError, EngineInstall, ModelAdd};
 mod host;
 mod native;
+mod native_import;
+pub use native_import::{NativeImportModel, NativeImportRequest};
 mod physical;
 mod publication;
 mod sessions;

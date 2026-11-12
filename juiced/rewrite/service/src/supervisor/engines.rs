@@ -180,7 +180,7 @@ fn archive_failure(error: ArchiveError) -> &'static str {
 }
 
 impl Manager {
-    async fn host(
+    pub(super) async fn host(
         &self,
     ) -> Result<(Arc<crate::hardware::Snapshot>, crate::hardware::Inventory), ApiError> {
         let snapshot = self.hardware.snapshot().await.map_err(|_| {
@@ -194,7 +194,7 @@ impl Manager {
         Ok((snapshot, inventory))
     }
 
-    async fn package_inventory(&self) -> Result<Value, ApiError> {
+    pub(super) async fn package_inventory(&self) -> Result<Value, ApiError> {
         let reply = self.runtime_packages().await?;
         Ok(reply.value)
     }

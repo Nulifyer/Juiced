@@ -105,9 +105,35 @@ impl SourceCohort {
         )
     }
 
+    /// Reads the settings documents for an online mapping import, which never transports the
+    /// cohort, so a native `juiced/` state store beside them is tolerated and left unread.
+    /// Interrupted native migration markers still refuse the source.
+    pub fn inspect_for_mapping(
+        path: impl AsRef<Path>,
+        cancelled: Arc<AtomicBool>,
+    ) -> Result<Self, Error> {
+        Self::inspect_with(
+            path.as_ref(),
+            false,
+            true,
+            cancelled,
+            Instant::now() + Duration::from_secs(30),
+        )
+    }
+
     fn inspect_before(
         path: &Path,
         include_aliases: bool,
+        cancelled: Arc<AtomicBool>,
+        deadline: Instant,
+    ) -> Result<Self, Error> {
+        Self::inspect_with(path, include_aliases, false, cancelled, deadline)
+    }
+
+    fn inspect_with(
+        path: &Path,
+        include_aliases: bool,
+        allow_native_store: bool,
         cancelled: Arc<AtomicBool>,
         deadline: Instant,
     ) -> Result<Self, Error> {
@@ -117,6 +143,9 @@ impl SourceCohort {
             .map_err(|_| error(None, Reason::SourceUnavailable))?;
         let mut unsupported_absences = Vec::with_capacity(UNSUPPORTED_SOURCE_ENTRIES.len());
         for name in UNSUPPORTED_SOURCE_ENTRIES {
+            if allow_native_store && name == "juiced" {
+                continue;
+            }
             check()?;
             let observation = reader
                 .observe(name, 1)

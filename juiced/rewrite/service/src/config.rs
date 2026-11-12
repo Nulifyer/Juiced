@@ -359,7 +359,11 @@ pub struct Config {
     pub models: Vec<ModelSpec>,
     #[serde(default, skip_serializing_if = "ModelAliases::is_unset")]
     pub aliases: ModelAliases,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub import_roots: Vec<PathBuf>,
 }
+
+pub const MAXIMUM_IMPORT_ROOTS: usize = 16;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -446,6 +450,8 @@ struct ConfigWire {
     models: Vec<ModelWire>,
     #[serde(default)]
     aliases: ModelAliases,
+    #[serde(default)]
+    import_roots: Vec<PathBuf>,
 }
 
 fn deserialize_native_binding<'de, D: Deserializer<'de>>(
@@ -510,6 +516,7 @@ impl<'de> Deserialize<'de> for Config {
             request_timeout_ms: wire.request_timeout_ms,
             models,
             aliases: wire.aliases,
+            import_roots: wire.import_roots,
         })
     }
 }
@@ -692,6 +699,19 @@ impl Config {
             if model.operations.is_empty() {
                 return Err(format!("{} needs explicit supported operations", model.id));
             }
+        }
+        if self.import_roots.len() > MAXIMUM_IMPORT_ROOTS
+            || self.import_roots.iter().any(|root| {
+                !root.is_absolute()
+                    || root.as_os_str().len() > 4096
+                    || root
+                        .to_str()
+                        .is_none_or(|text| text.chars().any(char::is_control))
+            })
+        {
+            return Err(format!(
+                "At most {MAXIMUM_IMPORT_ROOTS} absolute import roots are supported"
+            ));
         }
         if self.aliases.entries.len() > MAXIMUM_ALIASES {
             return Err(format!(

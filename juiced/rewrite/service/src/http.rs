@@ -220,6 +220,21 @@ define_routes! {
     (post, "/images/generations", image_generation, "inference"),
     (post, "/audio/speech", speech, "inference"),
     (get, "/juiced/voices", voices, "read"),
+    (post, "/juiced/import/native", native_import, "operator"),
+}
+async fn native_import(
+    State(state): State<AppState>,
+    ApiJson(request): ApiJson<crate::supervisor::NativeImportRequest>,
+) -> Result<Json<Value>, ApiError> {
+    tokio::spawn(async move { state.manager.native_import(request).await.map(Json) })
+        .await
+        .map_err(|_| {
+            ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "native_import_interrupted",
+                "The native import was interrupted. Inspect the current catalog before retrying.",
+            )
+        })?
 }
 async fn aliases(State(state): State<AppState>) -> Json<Value> {
     Json(state.manager.aliases_view().await)

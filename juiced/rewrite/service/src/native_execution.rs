@@ -8,6 +8,7 @@ use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, fmt, sync::OnceLock};
 
 const REGISTRY: &str = include_str!("../../../../src/cpp/resources/server_models.json");
+pub(crate) const NATIVE_REGISTRY: &str = REGISTRY;
 const ARCHITECTURES: &str =
     include_str!("../../../../src/cpp/resources/architecture_defaults.json");
 const FLAGS: [&str; 2] = ["--jinja", "--metrics"];
