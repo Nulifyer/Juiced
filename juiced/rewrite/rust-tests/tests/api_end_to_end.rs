@@ -383,7 +383,7 @@ async fn model_lifecycle_is_serialized_and_hot_and_busy_guards_are_enforced() {
 }
 
 #[tokio::test]
-async fn resource_and_slot_pressure_do_not_evict_other_workers() {
+async fn resource_and_slot_pressure_do_not_evict_busy_workers() {
     let server =
         Server::configured(false, |config| config["resident_budget_bytes"] = json!(64)).await;
     assert_eq!(
@@ -391,10 +391,6 @@ async fn resource_and_slot_pressure_do_not_evict_other_workers() {
         StatusCode::OK
     );
     let pid = server.model("fixture.one").await["pid"].clone();
-    assert_eq!(
-        server.post("load", json!({"model":"fixture.two"})).await.1["error"]["code"],
-        "resident_budget"
-    );
     let one = server
         .socket_request(
             "chat/completions",
@@ -413,6 +409,10 @@ async fn resource_and_slot_pressure_do_not_evict_other_workers() {
                 && server.event("fixture.one", "slot-two", "started")
         })
         .await;
+    assert_eq!(
+        server.post("load", json!({"model":"fixture.two"})).await.1["error"]["code"],
+        "resident_budget"
+    );
     let queued = server
         .socket_request(
             "chat/completions",

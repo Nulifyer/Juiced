@@ -3487,6 +3487,9 @@ impl Manager {
                 "The policy was committed, but directory durability is unconfirmed. Refresh its current revision and check storage health.",
             ));
         }
+        if policy == Policy::OnDemand {
+            self.residency.touch(id);
+        }
         Ok(outcome.model.expect("published model policy"))
     }
 
