@@ -16,10 +16,23 @@ const failed = new Set<string>();
 const hubRevision = "0123456789abcdef0123456789abcdef01234567";
 type HubFile = { path: string; bytes: Uint8Array; declared?: number };
 const hubBytes = (seed: number, length: number) => Uint8Array.from({ length }, (_, index) => (index % 239) ^ seed);
+function metadataGguf(context: number, length: number) {
+  const encoder = new TextEncoder();
+  const parts: Uint8Array[] = [encoder.encode("GGUF")];
+  const integer = (bits: 32 | 64, value: number) => { const view = new DataView(new ArrayBuffer(bits / 8)); if (bits === 32) view.setUint32(0, value, true); else view.setBigUint64(0, BigInt(value), true); parts.push(new Uint8Array(view.buffer)); };
+  const string = (text: string) => { const bytes = encoder.encode(text); integer(64, bytes.length); parts.push(bytes); };
+  integer(32, 3); integer(64, 0); integer(64, 2);
+  string("general.architecture"); integer(32, 8); string("llama");
+  string("llama.context_length"); integer(32, 4); integer(32, context);
+  const bytes = new Uint8Array(length);
+  let offset = 0;
+  for (const part of parts) { bytes.set(part, offset); offset += part.length; }
+  return bytes;
+}
 const hubDigest = (file: HubFile) => file.declared ? "f".repeat(64) : new Bun.CryptoHasher("sha256").update(file.bytes).digest("hex");
 const hubRepos = new Map<string, { pipeline: string; downloads: number; files: HubFile[] }>([
   ["unsloth/Qwen3-0.6B-GGUF", { pipeline: "text-generation", downloads: 125000, files: ["Q2_K", "Q3_K_M", "Q4_0", "Q4_K_M", "Q5_K_M", "Q6_K", "Q8_0", "F16", "IQ4_NL", "IQ2_XXS"].map((label, index): HubFile => ({ path: `Qwen3-0.6B-${label}.gguf`, bytes: hubBytes(index + 1, 4096 + index * 512) })).concat([{ path: "Qwen3-0.6B-BF16.gguf", bytes: new Uint8Array(), declared: 4 * 1024 ** 4 }]) }],
-  ["fixture-labs/Tiny-Chat-GGUF", { pipeline: "text-generation", downloads: 4200, files: [{ path: "Tiny-Chat-Q4_K_M.gguf", bytes: hubBytes(31, 256 * 1024) }, { path: "Tiny-Chat-Q8_0.gguf", bytes: hubBytes(32, 300 * 1024) }] }],
+  ["fixture-labs/Tiny-Chat-GGUF", { pipeline: "text-generation", downloads: 4200, files: [{ path: "Tiny-Chat-Q4_K_M.gguf", bytes: hubBytes(31, 256 * 1024) }, { path: "Tiny-Chat-Q8_0.gguf", bytes: metadataGguf(2048, 96 * 1024) }] }],
 ]);
 const hubFiles = new Map<string, HubFile>([...hubRepos].flatMap(([repo, entry]) => entry.files.map((file): [string, HubFile] => [`/${repo}/resolve/${hubRevision}/${file.path}`, file])));
 function slowBody(bytes: Uint8Array, start: number, chunk: number, delay: number) {
@@ -53,13 +66,40 @@ function hub(url: URL): Response | undefined {
   if (url.pathname.includes("/resolve/")) return new Response("Not found", { status: 404 });
 }
 let source: ReturnType<typeof Bun.serve> | undefined;
+let engineArchive = new Uint8Array();
+const llamaRelease = { repository: "ggml-org/llama.cpp", tag: "b11393", asset: "llama-b11393-bin-ubuntu-x64.tar.gz" };
+function engineRelease(url: URL): Response | undefined {
+  if (url.pathname === `/api/repos/${llamaRelease.repository}/releases/tags/${llamaRelease.tag}`) {
+    return Response.json({ tag_name: llamaRelease.tag, assets: [{ name: llamaRelease.asset, size: engineArchive.length, digest: `sha256:${new Bun.CryptoHasher("sha256").update(engineArchive).digest("hex")}` }] });
+  }
+  if (url.pathname === `/${llamaRelease.repository}/releases/download/${llamaRelease.tag}/${llamaRelease.asset}`) {
+    return new Response(slowBody(engineArchive, 0, 256 * 1024, 70), { headers: { "Content-Length": String(engineArchive.length), "Content-Type": "application/octet-stream" } });
+  }
+  if (url.pathname.startsWith("/api/repos/") || url.pathname.includes("/releases/download/")) return new Response("Not found", { status: 404 });
+}
 try {
+  const hardware = resolve(directory, "hardware");
+  await mkdir(resolve(hardware, "proc"), { recursive: true });
+  await writeFile(resolve(hardware, "proc/cpuinfo"), Array.from({ length: 8 }, (_, processor) => `processor\t: ${processor}\nvendor_id\t: AuthenticAMD\nmodel name\t: Fixture CPU\nphysical id\t: 0\ncore id\t\t: ${processor % 4}\ncpu cores\t: 4\nflags\t\t: avx avx2 fma f16c\n\n`).join(""));
+  await writeFile(resolve(hardware, "proc/meminfo"), "MemTotal:       32763640 kB\nMemAvailable:   26446104 kB\n");
+  if (process.platform === "linux" && process.arch === "x64") {
+    const release = resolve(directory, "engine-release");
+    await mkdir(resolve(release, "llama-b11393"), { recursive: true });
+    await copyFile(executable("juiced-test-worker"), resolve(release, "llama-b11393/llama-server"));
+    await writeFile(resolve(release, "llama-b11393/LICENSE"), "MIT fixture\n");
+    const packer = Bun.spawn(["tar", "--format=gnu", "-C", release, "-czf", resolve(release, llamaRelease.asset), "llama-b11393"], { stdout: "inherit", stderr: "inherit" });
+    if (await packer.exited !== 0) throw new Error("The engine release fixture could not be packed.");
+    engineArchive = new Uint8Array(await Bun.file(resolve(release, llamaRelease.asset)).arrayBuffer());
+    await rm(release, { recursive: true });
+  }
 source = Bun.serve({
   hostname: "127.0.0.1", port: Number(process.env.JUICED_SOURCE_PORT ?? 13308),
   fetch(request) {
     const url = new URL(request.url);
     if (url.pathname === "/fixture.json") return Response.json({ model_file: resolve(directory, "fixture.gguf"), source_url: `${url.origin}/weights.gguf`, sha256, bytes: weights.length, command: executable("juiced-test-worker"), args: ["--port", "{port}", "--model", "{model}", "--events", resolve(directory, "managed.events"), "--slot-save-path", "{cache}"] });
     if (url.pathname === "/speech-fixture.wav") return new Response(Bun.file(resolve(root, "../../test/test_speech_de.wav")));
+    const releaseResponse = engineRelease(url);
+    if (releaseResponse) return releaseResponse;
     const hubResponse = hub(url);
     if (hubResponse) return hubResponse;
     if (!url.pathname.endsWith(".gguf")) return new Response("Not found", { status: 404 });
@@ -86,7 +126,7 @@ source = Bun.serve({
   await writeFile(file, "Test fixture bytes. Not model weights.\n");
   const model = (id: string, policy: string, resident: number, missing = false) => ({
     id, model_file: missing ? resolve(directory, "unavailable.gguf") : file,
-    command: executable("juiced-test-worker"), args: ["--port", "{port}", "--model", "{model}", "--events", resolve(directory, `${id}.events`), "--slot-save-path", "{cache}"],
+    command: executable("juiced-test-worker"), args: ["--port", "{port}", "--model", "{model}", "--events", resolve(directory, `${id}.events`), "--slot-save-path", "{cache}", "--report-timings"],
     resident_bytes: resident * 1024 ** 3, max_inflight: 1, operations: ["chat/completions", "completions", "responses"], policy,
   });
   const config = resolve(directory, "config.json");
@@ -98,7 +138,7 @@ source = Bun.serve({
   const initialConfig = {
     schema_version: 1, artifact_source_policy: "allow-loopback-http", resident_budget_bytes: 6 * 1024 ** 3, startup_timeout_ms: 15000, request_timeout_ms: 15000,
     admission: protectedRuntime ? { memory: { mode: "protected", capacity_bytes: 512 * 1024 ** 2, essential_headroom_bytes: 0, maximum_sample_age_ms: 5000 } } : undefined,
-    models: [model("fixture.chat-small-q4", "hot", 1), model("fixture.chat-long-context-q8", "on-demand", 2), model("fixture.missing-weights", "disabled", 1, true), { id: "fixture.speech-tiny", provider: "whisper-cpp", model_file: file, command: executable("juiced-test-worker"), args: ["--host", "127.0.0.1", "--port", "{port}", "--model", "{model}", "--events", resolve(directory, "speech.events"), "--inference-delay-ms", "750", "--no-gpu"], resident_bytes: 64 * 1024 ** 2, max_inflight: 1, operations: ["audio/transcriptions"], policy: "on-demand" }],
+    models: [model("fixture.chat-small-q4", "hot", 1), model("fixture.chat-long-context-q8", "on-demand", 2), model("fixture.missing-weights", "disabled", 1, true), { id: "fixture.speech-tiny", provider: "whisper-cpp", model_file: file, command: executable("juiced-test-worker"), args: ["--host", "127.0.0.1", "--port", "{port}", "--model", "{model}", "--events", resolve(directory, "speech.events"), "--inference-delay-ms", "750", "--no-gpu"], resident_bytes: 64 * 1024 ** 2, max_inflight: 1, operations: ["audio/transcriptions"], policy: "on-demand" }, { ...model("fixture.embed-tiny", "on-demand", 0), resident_bytes: 64 * 1024 ** 2, operations: ["embeddings"] }],
   };
   if (protectedRuntime) initialConfig.models = initialConfig.models.map((model) => ({ ...model, policy: "disabled" }));
   await writeFile(config, JSON.stringify(initialConfig, null, 2));
@@ -138,7 +178,7 @@ source = Bun.serve({
   }
   const { HF_TOKEN: _token, ...environment } = process.env;
   const child = Bun.spawn([executable("lemond"), "--config", config, "--listen", `127.0.0.1:${process.env.JUICED_PREVIEW_PORT ?? 13306}`, "--ui", resolve(root, "ui/dist")], {
-    cwd: root, stdout: "inherit", stderr: "inherit", env: { ...environment, LEMONADE_API_KEY: "", LEMONADE_ADMIN_API_KEY: "", JUICED_HUGGINGFACE_URL: `http://127.0.0.1:${source!.port}` },
+    cwd: root, stdout: "inherit", stderr: "inherit", env: { ...environment, LEMONADE_API_KEY: "", LEMONADE_ADMIN_API_KEY: "", JUICED_HUGGINGFACE_URL: `http://127.0.0.1:${source!.port}`, JUICED_TEST_ENGINE_RELEASES: `http://127.0.0.1:${source!.port}`, JUICED_TEST_HARDWARE_ROOT: hardware },
   });
   const stop = () => child.kill("SIGTERM");
   process.once("SIGINT", stop); process.once("SIGTERM", stop);
