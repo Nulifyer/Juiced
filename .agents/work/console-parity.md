@@ -40,6 +40,13 @@ Dashboard · Models · Loading policy · Library · Backends & hardware · Cache
 | G: automatic chat session continuation (`/juiced/cache/sessions`) | helper | merged 78935bd1; UI 8421c71d (Cache › Sessions); real CUDA: restore 59–93 ms, 1–18 new tokens processed; removal forgets sessions 59a3768d |
 | H: sd.cpp images + Kokoros TTS, `/images/generations`, `/audio/speech`, `/sdapi/v1/txt2img`, `/juiced/voices` | helper | merged 3364a15b; UI 23e0c3d5 (Speak, Images); real RTX 5080: image 0.6 s warm, speech 4.9 s audio in 3.4 s cold |
 | I: journeys for add-with-engine-install, compare, embeddings | helper | merged; its 3 defects fixed 9648bce8 |
+| J: idle unload, pressure eviction, Ollama keep_alive (`/juiced/residency`) | helper | merged 025c9186; UI 8b5e9330 (Loading policy lane select, inspector override); real llama-server eviction and idle unload verified |
+| K: Wyoming server (10300) and Realtime transcription WebSocket | helper | merged c58b0537; UI 85af6ddf (Connect › Wyoming card); real whisper and Kokoros round trip; official wyoming client parsed info; no real HA instance yet |
+| L: model upload and server import folder (`/juiced/library/upload`, `/juiced/library/import-path`) | helper | merged 2e5811b5; UI 4980a4bc (Library › Add file); real upload → add → chat verified; split GGUF and mmproj refused |
+| M1: parakeet.cpp, Moonshine, FUTO asr4all | helper | merged 25dc0aee; real transcription for all three; FUTO has no published build |
+| M2: FastFlowLM, llama.cpp hybrid-rocm, NPU/memlock detection | helper | merged 52e7b38e; UI b1c91b98 (Library NPU section); fake hardware only, real archives checksum-verified |
+| N: online v0.9.2 import (`/juiced/import/native`) | helper | merged 29f282b0; UI 22e1d1e4 (Library › Import); real preview against local 0.9.2 volume, volume unchanged |
+| O: FUTO built into the container and imported on first boot | helper | running |
 
 ## Notes
 
@@ -58,6 +65,6 @@ Container: merged 39d38274 (juiced/rewrite/container). Image 473 MB; CPU and RTX
 
 ## Next action
 
-Primary: engines beyond llama.cpp/whisper/sd.cpp/Kokoros (hybrid ROCm+NPU, FLM, FUTO, parakeet, moonshine); Wyoming then Realtime; idle TTL and pressure eviction; manual GGUF upload; v0.9.2 settings import; doc drift fixes (PLAN.md destinations, UI-DESIGN.md, FEATURE-COVERAGE.json).
+Primary: merge O (FUTO in container), rebuild localhost/juiced-rewrite:dev, run the full gate, record it. Then open items: real AMD NPU/ROCm host check (homelab Strix), real Home Assistant Wyoming check, split GGUF and mmproj companions, transcription_rejected 400 mapping for parakeet/FUTO, intermittent native_store::generations owner_busy unit flake under parallel load.
 
-Verified 2026-11-12 06:21 UTC: full gate `quick-check --full --real --speech --power --resources` passed with real llama.cpp, whisper.cpp, power and host-memory lanes, no source change during the run (local/verification/latest.json); Playwright 155 passed / 1 skipped.
+Fixed 2026-11-12: `GET /juiced/engines` returned 503 `runtime_index_publishing` when an engine install was publishing its index; the inventory read now waits up to 3 s (52e7b38e). PLATFORM-PLAN.md is bound to PLATFORM-APPROVAL.json, so its "eight screens" wording stays until the approval is re-recorded; the rewrite PLAN.md lists the nine pages.
