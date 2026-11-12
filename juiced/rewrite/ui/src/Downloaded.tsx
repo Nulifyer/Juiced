@@ -61,7 +61,7 @@ export function Downloaded({ client, online, onRegistered, onOpenModel, onSearch
       {!data ? <p className="muted" role="status">{local.loading ? "Looking for model files…" : ""}</p>
         : data.groups.length === 0 ? <Empty title="Nothing downloaded yet">Model files on this machine show here. <button className="link-button" onClick={onSearch}>Search for a model</button></Empty>
         : groups.length === 0 ? <Empty title="No matches">Try a shorter filter.</Empty>
-        : <ul className="model-results" aria-label="Downloaded models">
+        : <ul className="model-results downloaded-list" aria-label="Downloaded models">
           {groups.map((item) => <li key={item.id} className={`model-result ${item.id === group?.id ? "selected" : ""}`}>
             <div className="result-head">
               <button className="result-title" onClick={() => choose(item)}><strong className="break-word">{item.name}</strong></button>

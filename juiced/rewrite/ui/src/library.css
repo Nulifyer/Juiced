@@ -21,3 +21,7 @@
 .download-title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; min-width: 0; }
 .download-title .muted { font-size: .72rem; }
 .download-leftovers { display: flex; align-items: center; gap: 4px; }
+.downloaded-list .model-result { display: grid; grid-template-columns: minmax(220px, 38%) minmax(0, 1fr); align-items: center; gap: 4px 18px; padding: 8px 12px; }
+.downloaded-list .model-result .quant-chips { margin: 0; }
+.has-detail .downloaded-list .model-result { grid-template-columns: minmax(0, 1fr); }
+@media (max-width: 760px) { .downloaded-list .model-result { grid-template-columns: minmax(0, 1fr); } }
