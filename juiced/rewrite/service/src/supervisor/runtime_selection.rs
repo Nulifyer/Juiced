@@ -1,8 +1,8 @@
 use super::*;
 
 pub struct RuntimeReply<T> {
-    value: T,
-    claim: crate::runtime_packages::memory::Claim,
+    pub(super) value: T,
+    pub(super) claim: crate::runtime_packages::memory::Claim,
 }
 
 impl<T: serde::Serialize + Send + 'static> RuntimeReply<T> {

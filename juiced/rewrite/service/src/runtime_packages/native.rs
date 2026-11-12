@@ -15,7 +15,7 @@ const MANIFEST: &str = "packages.json";
 const MAX_INPUT: u64 = 2 * 1024 * 1024;
 const MAX_MANIFEST: u64 = 4 * 1024 * 1024;
 const MAX_PACKAGES: usize = 32;
-const MAX_STORE_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+const MAX_STORE_BYTES: u64 = 32 * 1024 * 1024 * 1024;
 
 fn storage(error: io::Error) -> Error {
     if crate::storage::is_root_unavailable(&error) {
@@ -119,6 +119,11 @@ impl ImportRequest {
                     .iter()
                     .any(|file| file.path == *path && file.role == FileRole::Resource)
             })
+            || self
+                .provenance
+                .release
+                .as_ref()
+                .is_some_and(|release| !release.valid())
         {
             return Err(invalid());
         }

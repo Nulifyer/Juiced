@@ -8,6 +8,7 @@ pub mod compat;
 pub mod config;
 pub mod discovery;
 pub mod engine_usage;
+pub mod engines;
 pub mod execution_profile;
 pub mod extract;
 pub mod hardware;

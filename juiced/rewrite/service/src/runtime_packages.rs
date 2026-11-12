@@ -34,6 +34,44 @@ pub struct Provenance {
     pub build_revision: String,
     pub declared_licenses: Vec<String>,
     pub declared_sbom: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release: Option<ReleaseSource>,
+}
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReleaseSource {
+    pub engine: String,
+    pub backend: String,
+    pub gpu_target: Option<String>,
+    pub repository: String,
+    pub tag: String,
+    pub asset: String,
+    pub archive_sha256: String,
+    pub archive_bytes: u64,
+    pub digest_source: String,
+}
+impl ReleaseSource {
+    pub(crate) fn valid(&self) -> bool {
+        let text = |value: &str| {
+            !value.is_empty()
+                && value.len() <= 256
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"._-+/@:".contains(&byte))
+        };
+        text(&self.engine)
+            && text(&self.backend)
+            && self.gpu_target.as_deref().is_none_or(text)
+            && text(&self.repository)
+            && text(&self.tag)
+            && text(&self.asset)
+            && text(&self.digest_source)
+            && self.archive_sha256.len() == 64
+            && self
+                .archive_sha256
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    }
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]

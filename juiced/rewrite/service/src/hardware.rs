@@ -9,7 +9,7 @@ mod backends;
 mod command;
 mod sysfs;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 pub use backends::{BackendVariant, Inventory, Reason, ReasonCode, project};
 pub use command::run_bounded;

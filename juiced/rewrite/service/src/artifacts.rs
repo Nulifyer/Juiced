@@ -1019,6 +1019,23 @@ impl ArtifactStore {
         self.retained_job(id)
     }
 
+    pub fn source_file_name(&self, artifact: &str) -> Option<String> {
+        let runtime = self.runtime.lock().ok()?;
+        runtime
+            .manifest
+            .jobs
+            .values()
+            .rev()
+            .filter(|job| job.artifact.as_deref() == Some(artifact))
+            .find_map(|job| {
+                let url = Url::parse(job.source_url.as_deref()?).ok()?;
+                url.path_segments()?
+                    .next_back()
+                    .filter(|name| !name.is_empty())
+                    .map(str::to_owned)
+            })
+    }
+
     fn retained_job(&self, id: &str) -> Result<JobView, ArtifactError> {
         let runtime = self.runtime.lock().map_err(|_| ArtifactError::Corrupt)?;
         Ok(job_view(
@@ -2190,7 +2207,11 @@ pub(crate) fn policy_url(value: &str, policy: SourcePolicy) -> Result<Url, Artif
     source_url(value, policy, true)
 }
 
-fn source_url(value: &str, policy: SourcePolicy, redirect: bool) -> Result<Url, ArtifactError> {
+pub(crate) fn source_url(
+    value: &str,
+    policy: SourcePolicy,
+    redirect: bool,
+) -> Result<Url, ArtifactError> {
     let url = Url::parse(value).map_err(|_| ArtifactError::SourcePolicy)?;
     if policy == SourcePolicy::Offline {
         return Err(ArtifactError::Offline);
