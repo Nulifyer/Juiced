@@ -218,6 +218,10 @@ pub enum Operation {
     TokenCount,
     #[serde(rename = "audio/transcriptions")]
     Transcription,
+    #[serde(rename = "audio/speech")]
+    Speech,
+    #[serde(rename = "images/generations")]
+    ImageGeneration,
 }
 
 impl Operation {
@@ -229,7 +233,15 @@ impl Operation {
             Self::Embeddings => "embeddings",
             Self::TokenCount => "messages/count_tokens",
             Self::Transcription => "audio/transcriptions",
+            Self::Speech => "audio/speech",
+            Self::ImageGeneration => "images/generations",
         }
+    }
+    pub fn single_slot_media(self) -> bool {
+        matches!(
+            self,
+            Self::Transcription | Self::Speech | Self::ImageGeneration
+        )
     }
 }
 
@@ -240,6 +252,8 @@ pub enum Provider {
     ExternalHttp,
     LlamaCpp,
     WhisperCpp,
+    StableDiffusionCpp,
+    Kokoros,
 }
 
 impl Provider {
@@ -248,7 +262,35 @@ impl Provider {
             Self::ExternalHttp => None,
             Self::LlamaCpp => Some("llama-cpp"),
             Self::WhisperCpp => Some("whisper-cpp"),
+            Self::StableDiffusionCpp => Some("stable-diffusion-cpp"),
+            Self::Kokoros => Some("kokoros"),
         }
+    }
+    pub fn from_implementation(id: &str) -> Option<Self> {
+        match id {
+            "llama-cpp" => Some(Self::LlamaCpp),
+            "whisper-cpp" => Some(Self::WhisperCpp),
+            "stable-diffusion-cpp" => Some(Self::StableDiffusionCpp),
+            "kokoros" => Some(Self::Kokoros),
+            _ => None,
+        }
+    }
+    pub fn media_operation(self) -> Option<Operation> {
+        match self {
+            Self::WhisperCpp => Some(Operation::Transcription),
+            Self::StableDiffusionCpp => Some(Operation::ImageGeneration),
+            Self::Kokoros => Some(Operation::Speech),
+            Self::ExternalHttp | Self::LlamaCpp => None,
+        }
+    }
+    pub fn readiness_path(self) -> &'static str {
+        match self {
+            Self::StableDiffusionCpp | Self::Kokoros => "/v1/models",
+            Self::ExternalHttp | Self::LlamaCpp | Self::WhisperCpp => "/health",
+        }
+    }
+    pub fn accepts_companions(self) -> bool {
+        matches!(self, Self::StableDiffusionCpp | Self::Kokoros)
     }
 }
 
@@ -565,15 +607,25 @@ impl Config {
             {
                 return Err("Native public model IDs must be single literal aliases without surrounding whitespace or comma separators".into());
             }
-            if profile.adapter == Provider::WhisperCpp
-                && (model.max_inflight != 1 || model.operations != [Operation::Transcription])
+            if let Some(operation) = profile.adapter.media_operation()
+                && (model.max_inflight != 1 || model.operations != [operation])
             {
-                return Err("The selected whisper.cpp worker needs one physical slot and only audio/transcriptions".into());
+                return Err(format!(
+                    "The selected {} worker needs one physical slot and only {}",
+                    profile.adapter.implementation_id().unwrap_or_default(),
+                    operation.path()
+                ));
             }
-            if profile.adapter != Provider::WhisperCpp
-                && model.operations.contains(&Operation::Transcription)
+            if let Some(operation) = model
+                .operations
+                .iter()
+                .find(|operation| operation.single_slot_media())
+                && profile.adapter.media_operation() != Some(*operation)
             {
-                return Err("Transcription requires the explicit whisper-cpp adapter".into());
+                return Err(format!(
+                    "{} requires its explicit single-slot media adapter",
+                    operation.path()
+                ));
             }
             if profile.adapter == Provider::LlamaCpp && profile.options().is_some() {
                 let applied = profile

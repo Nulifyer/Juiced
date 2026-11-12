@@ -110,11 +110,8 @@ impl BundleSpec {
     }
 
     pub fn verify(&self, deadline: Instant) -> Result<VerifiedBundle, String> {
-        let provider = match self.implementation_id.as_str() {
-            "llama-cpp" => crate::config::Provider::LlamaCpp,
-            "whisper-cpp" => crate::config::Provider::WhisperCpp,
-            _ => return Err(invalid()),
-        };
+        let provider = crate::config::Provider::from_implementation(&self.implementation_id)
+            .ok_or_else(invalid)?;
         self.validate(provider)?;
         let refused = || {
             "The runtime bundle is incomplete, changed, linked or outside its inspection bounds."
@@ -216,6 +213,22 @@ impl VerifiedBundle {
                 code: "runtime_bundle_changed",
                 message: "The runtime bundle changed or its complete file identity is unavailable.",
             })
+    }
+    pub(crate) fn phoneme_data(&self) -> Option<PathBuf> {
+        if self.spec.implementation_id != "kokoros" {
+            return None;
+        }
+        let relative = self
+            .spec
+            .entrypoint
+            .parent()
+            .unwrap_or(Path::new(""))
+            .join("espeak-ng-data");
+        self.spec
+            .files
+            .iter()
+            .any(|file| file.path.starts_with(&relative))
+            .then(|| self.root.join(relative))
     }
     pub(crate) fn configure_environment(
         &self,

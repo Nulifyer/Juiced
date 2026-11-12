@@ -1,4 +1,4 @@
-use crate::config::Provider;
+use crate::{artifacts::ArtifactRole, config::Provider};
 use std::{collections::VecDeque, fmt};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -28,6 +28,21 @@ pub struct Bindings<'a> {
     pub model: &'a str,
     pub port: u16,
     pub cache: &'a str,
+    pub members: &'a [Member<'a>],
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct Member<'a> {
+    pub name: &'a str,
+    pub role: ArtifactRole,
+    pub path: &'a str,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct MemberBinding {
+    position: usize,
+    name: String,
+    role: ArtifactRole,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -38,6 +53,7 @@ pub struct ArgumentTemplate {
     fixture: bool,
     typed_spans: Vec<(usize, usize)>,
     bindings: [Option<usize>; 4],
+    members: Vec<MemberBinding>,
 }
 
 impl ArgumentTemplate {
@@ -138,6 +154,12 @@ impl ArgumentTemplate {
                 "The resolved worker needs a model path and a nonzero private port.",
             ));
         }
+        self.verify_members(
+            bindings
+                .members
+                .iter()
+                .map(|member| (member.name, member.role)),
+        )?;
         let port = bindings.port.to_string();
         let mut arguments = Vec::with_capacity(self.arguments.len());
         let mut bytes = 0usize;
@@ -145,7 +167,25 @@ impl ArgumentTemplate {
             let resolved = if self.adapter == Provider::ExternalHttp && !self.fixture {
                 substitute(argument, &port, bindings.model, bindings.cache)?
             } else {
-                let value = if self.bindings[0] == Some(position) {
+                let member = self
+                    .members
+                    .iter()
+                    .find(|member| member.position == position)
+                    .and_then(|member| {
+                        bindings
+                            .members
+                            .iter()
+                            .find(|bound| bound.name == member.name)
+                    });
+                let value = if let Some(member) = member {
+                    if member.path.is_empty() {
+                        return Err(Error::new(
+                            "invalid_runtime_binding",
+                            "Every bound companion needs its retained path.",
+                        ));
+                    }
+                    member.path
+                } else if self.bindings[0] == Some(position) {
                     bindings.model
                 } else if self.bindings[1] == Some(position) {
                     &port
@@ -204,6 +244,7 @@ pub fn validate(adapter: Provider, arguments: &[String]) -> Result<ArgumentTempl
             fixture: false,
             typed_spans: Vec::new(),
             bindings: [None; 4],
+            members: Vec::new(),
         });
     }
     validate_selected(adapter, arguments, false)
@@ -227,6 +268,7 @@ pub fn environment_is_reserved(name: &str) -> bool {
                 | "HTTP_PROXY"
                 | "HTTPS_PROXY"
                 | "NO_PROXY"
+                | "ESPEAK_DATA_PATH"
         )
 }
 
@@ -260,15 +302,115 @@ fn normalized_flag(adapter: Provider, flag: &str) -> String {
     }
 }
 
-fn owned(flag: &str, adapter: Provider, fixture: bool) -> Option<(usize, &'static str)> {
-    match flag {
-        "-m" | "--model" => Some((0, "--model")),
-        "--port" => Some((1, "--port")),
-        "--host" => Some((2, "--host")),
-        "--slot-save-path" if adapter == Provider::LlamaCpp || fixture => {
-            Some((3, "--slot-save-path"))
-        }
+const KOKOROS_SERVER: &str = "openai";
+
+fn owned(
+    flag: &str,
+    adapter: Provider,
+    fixture: bool,
+    server_phase: bool,
+) -> Option<(usize, &'static str)> {
+    match adapter {
+        Provider::StableDiffusionCpp => match flag {
+            "-m" | "--model" => Some((0, "--model")),
+            "--diffusion-model" => Some((0, "--diffusion-model")),
+            "--listen-port" => Some((1, "--listen-port")),
+            "-l" | "--listen-ip" => Some((2, "--listen-ip")),
+            _ => None,
+        },
+        Provider::Kokoros => match (flag, server_phase) {
+            ("-m" | "--model", false) => Some((0, "--model")),
+            ("--port", true) => Some((1, "--port")),
+            ("--ip", true) => Some((2, "--ip")),
+            _ => None,
+        },
+        _ => match flag {
+            "-m" | "--model" => Some((0, "--model")),
+            "--port" => Some((1, "--port")),
+            "--host" => Some((2, "--host")),
+            "--slot-save-path" if adapter == Provider::LlamaCpp || fixture => {
+                Some((3, "--slot-save-path"))
+            }
+            _ => None,
+        },
+    }
+}
+
+fn host_flag(adapter: Provider) -> &'static str {
+    match adapter {
+        Provider::StableDiffusionCpp => "--listen-ip",
+        Provider::Kokoros => "--ip",
+        _ => "--host",
+    }
+}
+
+fn member_flag(flag: &str, adapter: Provider, server_phase: bool) -> Option<ArtifactRole> {
+    match adapter {
+        Provider::StableDiffusionCpp => match flag {
+            "--vae" => Some(ArtifactRole::Vae),
+            "--taesd" | "--tae" => Some(ArtifactRole::Decoder),
+            "--llm" | "--qwen2vl" | "--clip_l" | "--clip_g" | "--t5xxl" => {
+                Some(ArtifactRole::Encoder)
+            }
+            _ => None,
+        },
+        Provider::Kokoros if !server_phase => match flag {
+            "-d" | "--data" => Some(ArtifactRole::Voice),
+            _ => None,
+        },
         _ => None,
+    }
+}
+
+pub fn member_placeholder(name: &str) -> String {
+    format!("{{member:{name}}}")
+}
+
+fn member_name(value: &str) -> Option<&str> {
+    let name = value.strip_prefix("{member:")?.strip_suffix('}')?;
+    (!name.is_empty()
+        && name.len() <= 64
+        && name.as_bytes()[0].is_ascii_alphanumeric()
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte)))
+    .then_some(name)
+}
+
+impl ArgumentTemplate {
+    pub fn member_requirements(&self) -> impl Iterator<Item = (&str, ArtifactRole)> {
+        self.members
+            .iter()
+            .map(|member| (member.name.as_str(), member.role))
+    }
+
+    /// Every companion in the retained set must be named by exactly one argument with its
+    /// declared role, so a set cannot carry inputs the worker silently ignores.
+    pub fn verify_members<'a>(
+        &self,
+        companions: impl IntoIterator<Item = (&'a str, ArtifactRole)>,
+    ) -> Result<(), Error> {
+        let mismatch = || {
+            Error::new(
+                "artifact_set_binding_mismatch",
+                "Every artifact-set companion must be bound once by a worker argument with its declared role.",
+            )
+        };
+        let mut available = std::collections::BTreeMap::new();
+        for (name, role) in companions {
+            if available.insert(name, role).is_some() {
+                return Err(mismatch());
+            }
+        }
+        if available.len() != self.members.len() {
+            return Err(mismatch());
+        }
+        for member in &self.members {
+            if available.get(member.name.as_str()) != Some(&member.role) {
+                return Err(mismatch());
+            }
+        }
+        Ok(())
     }
 }
 
@@ -282,15 +424,54 @@ fn validate_selected(
     let mut bindings = [None; 4];
     let mut result = Vec::with_capacity(arguments.len() + 2);
     let mut typed_spans = Vec::new();
+    let mut members: Vec<MemberBinding> = Vec::new();
+    let mut server_phase = false;
     let mut position = 0;
     while let Some(argument) = arguments.get(position) {
+        if adapter == Provider::Kokoros && argument == KOKOROS_SERVER {
+            if server_phase {
+                return Err(Error::new(
+                    "unsupported_runtime_argument",
+                    "The Kokoros worker accepts its server subcommand once.",
+                ));
+            }
+            server_phase = true;
+            result.push(argument.clone());
+            position += 1;
+            continue;
+        }
         let (raw_flag, inline) = argument
             .split_once('=')
             .map_or((argument.as_str(), None), |(flag, value)| {
                 (flag, Some(value))
             });
         let flag = normalized_flag(adapter, raw_flag);
-        if let Some((index, canonical)) = owned(&flag, adapter, fixture) {
+        if let Some(role) = member_flag(&flag, adapter, server_phase) {
+            let value = inline
+                .or_else(|| arguments.get(position + 1).map(String::as_str))
+                .ok_or_else(truncated)?;
+            let name = member_name(value).ok_or_else(|| {
+                Error::new(
+                    "invalid_runtime_binding",
+                    "Companion model arguments must name a retained artifact-set member as {member:NAME}.",
+                )
+            })?;
+            if members.iter().any(|member| member.name == name) {
+                return Err(Error::new(
+                    "duplicate_runtime_binding",
+                    "An artifact-set companion was bound more than once.",
+                ));
+            }
+            members.push(MemberBinding {
+                position: result.len() + 1,
+                name: name.to_owned(),
+                role,
+            });
+            result.extend([flag, value.to_owned()]);
+            position += if inline.is_some() { 1 } else { 2 };
+            continue;
+        }
+        if let Some((index, canonical)) = owned(&flag, adapter, fixture, server_phase) {
             if seen[index] {
                 return Err(Error::new(
                     "duplicate_runtime_binding",
@@ -329,7 +510,9 @@ fn validate_selected(
             .or_else(|| match adapter {
                 Provider::LlamaCpp => llama_arity(&flag),
                 Provider::WhisperCpp => whisper_arity(&flag),
-                Provider::ExternalHttp => None,
+                Provider::StableDiffusionCpp => stable_diffusion_arity(&flag),
+                Provider::Kokoros if !server_phase => kokoros_arity(&flag),
+                Provider::Kokoros | Provider::ExternalHttp => None,
             })
             .ok_or_else(|| {
                 Error::new(
@@ -363,8 +546,18 @@ fn validate_selected(
             "The selected worker needs one model binding, one port binding and its required loopback host.",
         ));
     }
+    if adapter == Provider::Kokoros
+        && !members
+            .iter()
+            .any(|member| member.role == ArtifactRole::Voice)
+    {
+        return Err(Error::new(
+            "missing_runtime_binding",
+            "The Kokoros worker needs its server subcommand and one voices companion binding.",
+        ));
+    }
     if !seen[2] {
-        result.extend(["--host".into(), "127.0.0.1".into()]);
+        result.extend([host_flag(adapter).into(), "127.0.0.1".into()]);
     }
     bounded(&result)?;
     Ok(ArgumentTemplate {
@@ -374,6 +567,7 @@ fn validate_selected(
         fixture,
         typed_spans,
         bindings,
+        members,
     })
 }
 
@@ -390,6 +584,30 @@ fn forbidden(flag: &str, adapter: Provider) -> bool {
     }
     match adapter {
         Provider::ExternalHttp => false,
+        Provider::StableDiffusionCpp => matches!(
+            flag,
+            "--serve-html-path"
+                | "--lora-model-dir"
+                | "--embd-dir"
+                | "--hires-upscalers-dir"
+                | "--upscale-model"
+                | "--control-net"
+                | "--photo-maker"
+                | "--pulid-weights"
+                | "--ip-adapter"
+                | "--motion-module"
+                | "--rpc-servers"
+                | "--tokenizer"
+                | "--prompt-file"
+                | "--negative-prompt-file"
+                | "-i"
+                | "--init-img"
+                | "--mask"
+                | "--control-image"
+                | "--params-backend"
+                | "--list-devices"
+        ),
+        Provider::Kokoros => matches!(flag, "--timestamps"),
         Provider::WhisperCpp => matches!(
             flag,
             "-tr"
@@ -833,6 +1051,81 @@ fn whisper_arity(flag: &str) -> Option<u8> {
     }
 }
 
+fn stable_diffusion_arity(flag: &str) -> Option<u8> {
+    const SWITCHES: &[&str] = &[
+        "--offload-to-cpu",
+        "--mmap",
+        "--fa",
+        "--diffusion-fa",
+        "--sage-attn",
+        "--diffusion-conv-direct",
+        "--vae-conv-direct",
+        "--vae-tiling",
+        "--force-sdxl-vae-conv-scale",
+        "--eager-load",
+        "--disable-prefetch",
+        "--disable-segmented-compute",
+        "--clip-on-cpu",
+        "--vae-on-cpu",
+        "--disable-image-metadata",
+        "--color",
+        "-v",
+        "--verbose",
+    ];
+    const VALUES: &[&str] = &[
+        "-t",
+        "--threads",
+        "--type",
+        "--rng",
+        "--sampler-rng",
+        "--prediction",
+        "--vae-format",
+        "--backend",
+        "--split-mode",
+        "--max-vram",
+        "--auto-fit",
+        "--batched-cfg",
+        "--conditioning-cache-size",
+        "--log-level",
+        "-H",
+        "--height",
+        "-W",
+        "--width",
+        "--steps",
+        "--clip-skip",
+        "--cfg-scale",
+        "--img-cfg-scale",
+        "--guidance",
+        "--flow-shift",
+        "--eta",
+        "--timestep-shift",
+        "--slg-scale",
+        "-s",
+        "--seed",
+        "--sampling-method",
+        "--scheduler",
+        "--vae-tile-size",
+        "--vae-tile-overlap",
+        "--vae-relative-tile-size",
+    ];
+    if SWITCHES.contains(&flag) {
+        Some(0)
+    } else if VALUES.contains(&flag) {
+        Some(1)
+    } else {
+        None
+    }
+}
+
+fn kokoros_arity(flag: &str) -> Option<u8> {
+    match flag {
+        "--mono" => Some(0),
+        "-l" | "--lan" | "-s" | "--style" | "-p" | "--speed" | "--instances"
+        | "--initial-silence" => Some(1),
+        _ => None,
+    }
+}
+
 fn fixture_arity(flag: &str) -> Option<u8> {
     #[cfg(feature = "test-fixture")]
     {
@@ -1241,6 +1534,7 @@ mod tests {
                 model: "a {port} $() `literal` ✓",
                 port: 1234,
                 cache: "cache",
+                members: &[],
             })
             .unwrap();
         assert_eq!(resolved[1], "a {port} $() `literal` ✓");
@@ -1256,6 +1550,7 @@ mod tests {
                 model: "weights.gguf",
                 port: 1,
                 cache: "cache",
+                members: &[],
             })
             .unwrap();
         assert_eq!(resolved[5], "{model}".repeat(9000));
@@ -1264,7 +1559,8 @@ mod tests {
                 .resolve(Bindings {
                     model: &"x".repeat(65537),
                     port: 1,
-                    cache: "cache"
+                    cache: "cache",
+                    members: &[],
                 })
                 .is_err()
         );
@@ -1275,6 +1571,7 @@ mod tests {
                     model: &"x".repeat(4096),
                     port: 1,
                     cache: "cache",
+                    members: &[],
                 })
                 .is_err()
         );
@@ -1298,6 +1595,7 @@ mod tests {
                     model: "weights.gguf",
                     port,
                     cache: "/cache",
+                    members: &[],
                 })
                 .unwrap();
             assert_eq!(resolved[1], "weights.gguf");
@@ -1423,5 +1721,275 @@ mod tests {
             ArgumentTemplate::for_profile(Provider::LlamaCpp, "juiced-test-worker", &input)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn stable_diffusion_binds_loopback_listener_model_and_role_checked_companions() {
+        let template = validate(
+            Provider::StableDiffusionCpp,
+            &args(&[
+                "--listen-port",
+                "{port}",
+                "--diffusion-model",
+                "{model}",
+                "--vae={member:ae.safetensors}",
+                "--llm",
+                "{member:qwen.gguf}",
+                "--vae-tiling",
+                "--steps",
+                "8",
+            ]),
+        )
+        .unwrap();
+        assert_eq!(
+            template.arguments(),
+            args(&[
+                "--listen-port",
+                "{port}",
+                "--diffusion-model",
+                "{model}",
+                "--vae",
+                "{member:ae.safetensors}",
+                "--llm",
+                "{member:qwen.gguf}",
+                "--vae-tiling",
+                "--steps",
+                "8",
+                "--listen-ip",
+                "127.0.0.1"
+            ])
+        );
+        let members = [
+            Member {
+                name: "qwen.gguf",
+                role: ArtifactRole::Encoder,
+                path: "/store/qwen",
+            },
+            Member {
+                name: "ae.safetensors",
+                role: ArtifactRole::Vae,
+                path: "/store/ae",
+            },
+        ];
+        let resolved = template
+            .resolve(Bindings {
+                model: "/store/model",
+                port: 4321,
+                cache: "",
+                members: &members,
+            })
+            .unwrap();
+        assert_eq!(
+            &resolved[..8],
+            args(&[
+                "--listen-port",
+                "4321",
+                "--diffusion-model",
+                "/store/model",
+                "--vae",
+                "/store/ae",
+                "--llm",
+                "/store/qwen"
+            ])
+        );
+        for wrong in [
+            &members[..1],
+            &[members[0], members[1], members[1]][..],
+            &[
+                Member {
+                    role: ArtifactRole::Voice,
+                    ..members[0]
+                },
+                members[1],
+            ][..],
+            &[
+                members[0],
+                members[1],
+                Member {
+                    name: "extra",
+                    role: ArtifactRole::Vae,
+                    path: "/store/extra",
+                },
+            ][..],
+        ] {
+            assert_eq!(
+                template
+                    .resolve(Bindings {
+                        model: "/store/model",
+                        port: 4321,
+                        cache: "",
+                        members: wrong,
+                    })
+                    .unwrap_err()
+                    .code,
+                "artifact_set_binding_mismatch"
+            );
+        }
+        for unsafe_input in [
+            args(&["--listen-port", "{port}", "-m", "{model}", "-l", "0.0.0.0"]),
+            args(&["--listen-port", "{port}", "-m", "/etc/passwd"]),
+            args(&[
+                "--listen-port",
+                "{port}",
+                "-m",
+                "{model}",
+                "--vae",
+                "/tmp/vae",
+            ]),
+            args(&[
+                "--listen-port",
+                "{port}",
+                "-m",
+                "{model}",
+                "--vae",
+                "{member:../x}",
+            ]),
+            args(&[
+                "--listen-port",
+                "{port}",
+                "-m",
+                "{model}",
+                "--lora-model-dir",
+                "/tmp",
+            ]),
+            args(&[
+                "--listen-port",
+                "{port}",
+                "-m",
+                "{model}",
+                "--serve-html-path",
+                "/x",
+            ]),
+            args(&[
+                "--listen-port",
+                "{port}",
+                "-m",
+                "{model}",
+                "--upscale-model",
+                "x",
+            ]),
+            args(&["--port", "{port}", "-m", "{model}"]),
+            args(&[
+                "--listen-port",
+                "{port}",
+                "-m",
+                "{model}",
+                "--vae",
+                "{member:a}",
+                "--vae",
+                "{member:a}",
+            ]),
+        ] {
+            assert!(
+                validate(Provider::StableDiffusionCpp, &unsafe_input).is_err(),
+                "{unsafe_input:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn kokoros_requires_ordered_server_subcommand_loopback_and_one_voice_pack() {
+        let template = validate(
+            Provider::Kokoros,
+            &args(&[
+                "-m",
+                "{model}",
+                "-d",
+                "{member:voices-v1.0.bin}",
+                "--instances",
+                "1",
+                "openai",
+                "--port",
+                "{port}",
+            ]),
+        )
+        .unwrap();
+        assert_eq!(
+            template.arguments(),
+            args(&[
+                "--model",
+                "{model}",
+                "-d",
+                "{member:voices-v1.0.bin}",
+                "--instances",
+                "1",
+                "openai",
+                "--port",
+                "{port}",
+                "--ip",
+                "127.0.0.1"
+            ])
+        );
+        assert_eq!(
+            template.member_requirements().collect::<Vec<_>>(),
+            [("voices-v1.0.bin", ArtifactRole::Voice)]
+        );
+        for invalid in [
+            args(&["-m", "{model}", "openai", "--port", "{port}"]),
+            args(&["-m", "{model}", "-d", "{member:v}", "--port", "{port}"]),
+            args(&[
+                "openai",
+                "-m",
+                "{model}",
+                "-d",
+                "{member:v}",
+                "--port",
+                "{port}",
+            ]),
+            args(&[
+                "-m",
+                "{model}",
+                "-d",
+                "{member:v}",
+                "openai",
+                "--port",
+                "{port}",
+                "--ip",
+                "0.0.0.0",
+            ]),
+            args(&[
+                "-m",
+                "{model}",
+                "-d",
+                "{member:v}",
+                "openai",
+                "--port",
+                "{port}",
+                "--timestamps",
+            ]),
+            args(&[
+                "-m",
+                "{model}",
+                "-d",
+                "{member:v}",
+                "openai",
+                "openai",
+                "--port",
+                "{port}",
+            ]),
+            args(&[
+                "-m",
+                "{model}",
+                "-d",
+                "/tmp/voices",
+                "openai",
+                "--port",
+                "{port}",
+            ]),
+            args(&[
+                "-m",
+                "{model}",
+                "-d",
+                "{member:v}",
+                "text",
+                "--port",
+                "{port}",
+            ]),
+        ] {
+            assert!(
+                validate(Provider::Kokoros, &invalid).is_err(),
+                "{invalid:?}"
+            );
+        }
     }
 }

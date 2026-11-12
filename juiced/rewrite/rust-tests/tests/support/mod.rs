@@ -26,7 +26,7 @@ pub const CLIENT_KEY: &str = "isolated-e2e-client-key";
 pub const ADMIN_KEY: &str = "isolated-e2e-admin-key";
 const ROTATED_CLIENT_KEY: &str = "isolated-e2e-rotated-client-key";
 const ROTATED_ADMIN_KEY: &str = "isolated-e2e-rotated-admin-key";
-pub const READ_ROUTES: [&str; 10] = [
+pub const READ_ROUTES: [&str; 11] = [
     "/health",
     "/models",
     "/juiced/catalog",
@@ -37,6 +37,7 @@ pub const READ_ROUTES: [&str; 10] = [
     "/juiced/endpoints",
     "/models/{model}",
     "/models/{model}/options",
+    "/juiced/voices",
 ];
 pub const OPERATOR_READ_ROUTES: [&str; 19] = [
     "/system-info",
@@ -92,7 +93,8 @@ pub const INFERENCE_ROUTES: [&str; 4] = [
     "/embeddings",
 ];
 pub const MULTIPART_INFERENCE_ROUTES: [&str; 1] = ["/audio/transcriptions"];
-pub const COMPAT_ROUTES: [(&str, &str, &str); 11] = [
+pub const MEDIA_INFERENCE_ROUTES: [&str; 2] = ["/images/generations", "/audio/speech"];
+pub const COMPAT_ROUTES: [(&str, &str, &str); 12] = [
     ("POST", "/v1/messages", "inference"),
     ("POST", "/v1/messages/count_tokens", "inference"),
     ("POST", "/api/chat", "inference"),
@@ -104,6 +106,7 @@ pub const COMPAT_ROUTES: [(&str, &str, &str); 11] = [
     ("POST", "/api/show", "read"),
     ("GET", "/api/version", "read"),
     ("POST", "/mcp", "inference"),
+    ("POST", "/sdapi/v1/txt2img", "inference"),
 ];
 
 pub fn route_matrix() -> BTreeSet<(String, String)> {
@@ -116,6 +119,7 @@ pub fn route_matrix() -> BTreeSet<(String, String)> {
                 .iter()
                 .chain(INFERENCE_ROUTES.iter())
                 .chain(MULTIPART_INFERENCE_ROUTES.iter())
+                .chain(MEDIA_INFERENCE_ROUTES.iter())
                 .map(|path| ("POST".into(), (*path).into())),
         )
         .chain(
@@ -138,6 +142,7 @@ fn diagnostic_route(path: &str) -> &'static str {
             .chain(WRITE_ROUTES.iter())
             .chain(INFERENCE_ROUTES.iter())
             .chain(MULTIPART_INFERENCE_ROUTES.iter())
+            .chain(MEDIA_INFERENCE_ROUTES.iter())
             .find(|route| **route == path)
         {
             return route;

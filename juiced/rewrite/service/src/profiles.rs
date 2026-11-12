@@ -1,6 +1,8 @@
 #[path = "launch_plan.rs"]
 mod launch_plan;
-pub(crate) use launch_plan::{CapturedEnvironment, LaunchPlan, VerifiedLaunchBindings};
+pub(crate) use launch_plan::{
+    CapturedEnvironment, LaunchPlan, VerifiedLaunchBindings, phoneme_workspace,
+};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -612,6 +614,58 @@ const SHAPE_KEYS: [&str; 6] = [
 
 pub fn read_gguf<R: Read + Seek>(reader: &mut R) -> Result<DeclaredContext, Error> {
     read_gguf_shape(reader).map(|(declared, _)| declared)
+}
+
+/// Visits at most `limit` tensor names after skipping the bounded metadata section.
+pub fn visit_gguf_tensor_names<R: Read + Seek>(
+    reader: &mut R,
+    limit: u64,
+    mut visit: impl FnMut(&str),
+) -> Result<u64, Error> {
+    let file_bytes = reader
+        .seek(SeekFrom::End(0))
+        .map_err(|_| Error::new("gguf_io", "The GGUF metadata size is unavailable."))?;
+    reader
+        .seek(SeekFrom::Start(0))
+        .map_err(|_| Error::new("gguf_io", "The GGUF metadata could not be inspected."))?;
+    let mut input = MetadataReader {
+        reader: BufReader::with_capacity(64 * 1024, reader),
+        position: 0,
+        file_bytes,
+    };
+    if input.bytes::<4>()? != *b"GGUF" || !matches!(input.u32()?, 2 | 3) {
+        return Err(Error::new(
+            "invalid_gguf",
+            "The artifact is not a supported GGUF file.",
+        ));
+    }
+    let tensors = input.u64()?;
+    let entries = input.u64()?;
+    if tensors > MAX_ARRAY_ELEMENTS || entries > MAX_METADATA_ENTRIES {
+        return Err(Error::new(
+            "gguf_limit",
+            "The GGUF header exceeds its tensor or metadata-entry count limit.",
+        ));
+    }
+    for _ in 0..entries {
+        input.skip_string()?;
+        let kind = input.u32()?;
+        input.skip_value(kind)?;
+    }
+    let visited = tensors.min(limit);
+    for _ in 0..visited {
+        let name = input.string(1024)?;
+        let dimensions = input.u32()?;
+        if dimensions == 0 || dimensions > 8 {
+            return Err(Error::new(
+                "invalid_gguf",
+                "A GGUF tensor declares an unsupported dimension count.",
+            ));
+        }
+        input.skip(u64::from(dimensions) * 8 + 12)?;
+        visit(&name);
+    }
+    Ok(visited)
 }
 
 pub fn read_gguf_shape<R: Read + Seek>(

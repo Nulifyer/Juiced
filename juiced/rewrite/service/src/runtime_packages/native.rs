@@ -59,11 +59,8 @@ impl ImportRequest {
     }
     fn validate(&self) -> Result<u64> {
         let invalid = || Error::new("invalid_import");
-        let provider = match self.bundle.implementation_id.as_str() {
-            "llama-cpp" => crate::config::Provider::LlamaCpp,
-            "whisper-cpp" => crate::config::Provider::WhisperCpp,
-            _ => return Err(invalid()),
-        };
+        let provider = crate::config::Provider::from_implementation(&self.bundle.implementation_id)
+            .ok_or_else(invalid)?;
         self.bundle.validate(provider).map_err(|_| invalid())?;
         if self.schema_version != 1
             || !token(&self.provenance.builder_id, 128)

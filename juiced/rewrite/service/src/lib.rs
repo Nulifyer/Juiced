@@ -17,6 +17,7 @@ pub mod http;
 pub mod identity;
 pub mod library;
 pub mod logs;
+pub mod media;
 pub mod native_execution;
 pub mod native_settings;
 pub mod native_store;

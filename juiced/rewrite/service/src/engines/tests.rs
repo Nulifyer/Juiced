@@ -852,10 +852,12 @@ fn profiles_and_estimates_follow_the_documented_formula() {
         artifact: None,
         artifact_set: None,
         package: &package,
+        backend: if gpu { "cuda" } else { "cpu" },
         gpu,
         cpu_threads: Some(8),
         format: &format,
         estimate: &estimate,
+        companion_arguments: &[],
     };
     let gpu = models::registration(&inputs(true));
     assert_eq!(gpu["execution_profile"]["options"]["gpu_layers"], 29);
@@ -906,10 +908,12 @@ fn profiles_and_estimates_follow_the_documented_formula() {
         artifact: None,
         artifact_set: None,
         package: &package,
+        backend: "cpu",
         gpu: false,
         cpu_threads: Some(8),
         format: &whisper,
         estimate: &estimate,
+        companion_arguments: &[],
     });
     let crate::config::Registration(spec) = serde_json::from_value(registration).unwrap();
     assert_eq!(spec.operations, [crate::config::Operation::Transcription]);
@@ -1045,4 +1049,316 @@ async fn downloads_verify_the_pinned_digest_and_size_while_streaming() {
         download::DownloadError::Offline
     );
     assert!(!directory.path().join("policy").exists());
+}
+
+fn tensor_gguf(entries: &[(&str, u32, Vec<u8>)], tensors: &[&str]) -> Vec<u8> {
+    let mut bytes = gguf(entries);
+    bytes[8..16].copy_from_slice(&(tensors.len() as u64).to_le_bytes());
+    for name in tensors {
+        bytes.extend(text(name));
+        bytes.extend(2u32.to_le_bytes());
+        bytes.extend(64u64.to_le_bytes());
+        bytes.extend(64u64.to_le_bytes());
+        bytes.extend(1u32.to_le_bytes());
+        bytes.extend(0u64.to_le_bytes());
+    }
+    bytes
+}
+
+#[test]
+fn diffusion_gguf_safetensors_and_kokoro_onnx_select_media_engines() {
+    let directory = tempfile::tempdir().unwrap();
+    let full = directory.path().join("sd_turbo.gguf");
+    std::fs::write(
+        &full,
+        tensor_gguf(
+            &[],
+            &[
+                "cond_stage_model.transformer.text_model.final_layer_norm.bias",
+                "first_stage_model.decoder.conv_in.weight",
+                "model.diffusion_model.input_blocks.0.0.weight",
+            ],
+        ),
+    )
+    .unwrap();
+    let (format, _) = models::detect(&full).unwrap();
+    assert_eq!(format.engine(), Engine::StableDiffusionCpp);
+    assert!(format.standalone());
+    assert_eq!(
+        format,
+        ModelFormat::Diffusion {
+            container: models::Container::Gguf,
+            architecture: None,
+            includes_vae: true,
+            includes_text_encoder: true,
+        }
+    );
+
+    let flux = directory.path().join("flux.gguf");
+    std::fs::write(
+        &flux,
+        tensor_gguf(
+            &[("general.architecture", 8, text("flux"))],
+            &["double_blocks.0.img_attn.proj.weight"],
+        ),
+    )
+    .unwrap();
+    let (format, _) = models::detect(&flux).unwrap();
+    assert_eq!(format.engine(), Engine::StableDiffusionCpp);
+    assert!(!format.standalone());
+
+    let llm = directory.path().join("llm.gguf");
+    std::fs::write(
+        &llm,
+        tensor_gguf(&[], &["token_embd.weight", "blk.0.attn_q.weight"]),
+    )
+    .unwrap();
+    assert_eq!(models::detect(&llm).unwrap().0.engine(), Engine::LlamaCpp);
+
+    let safetensors = directory.path().join("sd.safetensors");
+    let header = br#"{"__metadata__":{"format":"pt"},"model.diffusion_model.out.2.weight":{"dtype":"F16","shape":[4],"data_offsets":[0,8]},"first_stage_model.decoder.conv_out.bias":{"dtype":"F16","shape":[3],"data_offsets":[8,14]}}"#;
+    let mut bytes = (header.len() as u64).to_le_bytes().to_vec();
+    bytes.extend_from_slice(header);
+    bytes.extend([0u8; 14]);
+    std::fs::write(&safetensors, &bytes).unwrap();
+    let (format, _) = models::detect(&safetensors).unwrap();
+    assert_eq!(
+        format,
+        ModelFormat::Diffusion {
+            container: models::Container::Safetensors,
+            architecture: None,
+            includes_vae: true,
+            includes_text_encoder: false,
+        }
+    );
+    let text_only =
+        br#"{"model.embed_tokens.weight":{"dtype":"F16","shape":[2],"data_offsets":[0,4]}}"#;
+    let mut bytes = (text_only.len() as u64).to_le_bytes().to_vec();
+    bytes.extend_from_slice(text_only);
+    bytes.extend([0u8; 4]);
+    std::fs::write(&safetensors, &bytes).unwrap();
+    assert_eq!(
+        models::detect(&safetensors).unwrap_err(),
+        FormatError::Unsupported
+    );
+
+    let onnx = directory.path().join("kokoro-v1.0.onnx");
+    std::fs::write(&onnx, b"\x08\x09\x12\x07pytorch\x1a\x052.6.0").unwrap();
+    let (format, _) = models::detect(&onnx).unwrap();
+    assert_eq!(format, ModelFormat::Onnx { ir_version: 9 });
+    assert_eq!(format.engine(), Engine::Kokoros);
+
+    let voices = directory.path().join("voices-v1.0.bin");
+    {
+        let mut writer = zip::ZipWriter::new(std::fs::File::create(&voices).unwrap());
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        for name in ["am_adam.npy", "af_heart.npy"] {
+            writer.start_file(name, options).unwrap();
+            writer.write_all(b"\x93NUMPY").unwrap();
+        }
+        writer.finish().unwrap();
+    }
+    assert_eq!(models::voices(&voices).unwrap(), ["af_heart", "am_adam"]);
+    {
+        let mut writer = zip::ZipWriter::new(std::fs::File::create(&voices).unwrap());
+        writer
+            .start_file("../escape.npy", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        writer.finish().unwrap();
+    }
+    assert_eq!(
+        models::voices(&voices).unwrap_err(),
+        FormatError::Invalid("invalid_voice_pack")
+    );
+    assert_eq!(models::voices(&onnx).unwrap_err(), FormatError::Unsupported);
+}
+
+#[test]
+fn media_registrations_bind_every_companion_and_pass_the_argument_grammar() {
+    use crate::artifacts::ArtifactRole;
+    let package = format!("package-{}", "b".repeat(64));
+    let model = PathBuf::from("weights");
+    let full = ModelFormat::Diffusion {
+        container: models::Container::Gguf,
+        architecture: None,
+        includes_vae: true,
+        includes_text_encoder: true,
+    };
+    let split = ModelFormat::Diffusion {
+        container: models::Container::Gguf,
+        architecture: Some("z_image".into()),
+        includes_vae: false,
+        includes_text_encoder: false,
+    };
+    let kokoro = ModelFormat::Onnx { ir_version: 9 };
+    let companion = |name: &str, role| models::Companion {
+        name: name.into(),
+        role,
+    };
+    assert_eq!(
+        models::companion_arguments(&split, &[]).unwrap_err(),
+        models::CompanionError::Required("diffusion_companions_required")
+    );
+    assert_eq!(
+        models::companion_arguments(&kokoro, &[]).unwrap_err(),
+        models::CompanionError::Required("kokoro_voices_required")
+    );
+    assert_eq!(
+        models::companion_arguments(&kokoro, &[companion("voices.bin", ArtifactRole::Vae)])
+            .unwrap_err(),
+        models::CompanionError::Unsupported
+    );
+    let split_companions = [
+        companion("ae.safetensors", ArtifactRole::Vae),
+        companion("qwen_3_4b.safetensors", ArtifactRole::Encoder),
+    ];
+    let split_arguments = models::companion_arguments(&split, &split_companions).unwrap();
+    assert_eq!(
+        split_arguments,
+        [
+            "--vae",
+            "{member:ae.safetensors}",
+            "--llm",
+            "{member:qwen_3_4b.safetensors}"
+        ]
+    );
+    let voice = vec![companion("voices-v1.0.bin", ArtifactRole::Voice)];
+    let voice_arguments = models::companion_arguments(&kokoro, &voice).unwrap();
+    for (format, backend, arguments, companions, operation) in [
+        (
+            &full,
+            "cuda",
+            Vec::new(),
+            Vec::new(),
+            crate::config::Operation::ImageGeneration,
+        ),
+        (
+            &split,
+            "vulkan",
+            split_arguments.clone(),
+            split_companions.to_vec(),
+            crate::config::Operation::ImageGeneration,
+        ),
+        (
+            &kokoro,
+            "cpu",
+            voice_arguments.clone(),
+            voice.clone(),
+            crate::config::Operation::Speech,
+        ),
+    ] {
+        let estimate = models::estimate(format, 2_000_000_000, None);
+        assert_eq!(estimate.basis, "weights-plus-workspace");
+        let registration = models::registration(&models::ProfileInputs {
+            id: "media",
+            model_file: &model,
+            artifact: None,
+            artifact_set: None,
+            package: &package,
+            backend,
+            gpu: backend != "cpu",
+            cpu_threads: Some(8),
+            format,
+            estimate: &estimate,
+            companion_arguments: &arguments,
+        });
+        let crate::config::Registration(spec) = serde_json::from_value(registration).unwrap();
+        assert_eq!(spec.operations, [operation]);
+        assert_eq!(spec.max_inflight, 1);
+        let (template, _) = spec.execution_profile.resolved_arguments().unwrap();
+        template
+            .verify_members(
+                companions
+                    .iter()
+                    .map(|member| (member.name.as_str(), member.role)),
+            )
+            .unwrap();
+        let args = &spec.execution_profile.args;
+        if matches!(format, ModelFormat::Diffusion { .. }) {
+            assert!(
+                args.windows(2)
+                    .any(|pair| pair == ["--listen-ip", "127.0.0.1"])
+            );
+            assert_eq!(
+                args.contains(&"--diffusion-model".to_owned()),
+                !format.standalone()
+            );
+            assert_eq!(
+                args.contains(&"--vae-tiling".to_owned()),
+                backend == "vulkan"
+            );
+        } else {
+            let server = args.iter().position(|arg| arg == "openai").unwrap();
+            assert!(
+                args[server..]
+                    .windows(2)
+                    .any(|pair| pair == ["--ip", "127.0.0.1"])
+            );
+            assert!(args[..server].contains(&"--data".to_owned()));
+        }
+    }
+    assert_eq!(
+        models::default_id("kokoro-v1.0.onnx").as_deref(),
+        Some("kokoro-v1.0")
+    );
+    assert_eq!(
+        models::default_id("sd_turbo.safetensors").as_deref(),
+        Some("sd_turbo")
+    );
+}
+
+#[test]
+fn image_and_speech_engines_resolve_pinned_linux_builds() {
+    let host = report(&rtx_host());
+    let cuda = resolve(Engine::StableDiffusionCpp, "cuda", &host).unwrap();
+    assert_eq!(cuda.repository, "lemonade-sdk/stable-diffusion.cpp");
+    assert_eq!(cuda.tag, "master-957-90e86d1");
+    assert_eq!(
+        cuda.asset,
+        "sd-master-90e86d1-ubuntu-cuda-sm_120-x64.tar.xz"
+    );
+    assert_eq!(
+        cuda.sha256,
+        Some("20b6e9136bf93b484c63340f3fca8f2256d5509f206d67ff67818df217b8612b")
+    );
+    let cpu = report(&cpu_only_host());
+    assert_eq!(
+        resolve(Engine::StableDiffusionCpp, "cpu", &cpu)
+            .unwrap()
+            .format,
+        ArchiveFormat::Zip
+    );
+    assert_eq!(
+        resolve(Engine::StableDiffusionCpp, "cuda", &cpu).unwrap_err(),
+        Unresolved::NoMatchingGpu
+    );
+    let kokoros = resolve(Engine::Kokoros, "cpu", &cpu).unwrap();
+    assert_eq!(kokoros.asset, "kokoros-linux-x86_64.tar.gz");
+    assert_eq!(kokoros.repository, "lemonade-sdk/Kokoros");
+    assert_eq!(
+        resolve(Engine::Kokoros, "cuda", &host).unwrap_err(),
+        Unresolved::BackendUnknown
+    );
+    for (name, engine) in [
+        ("sd.cpp", Engine::StableDiffusionCpp),
+        ("stable-diffusion-cpp", Engine::StableDiffusionCpp),
+        ("kokoros", Engine::Kokoros),
+        ("kokoro", Engine::Kokoros),
+    ] {
+        assert_eq!(Engine::parse(name), Some(engine));
+        assert_eq!(
+            Engine::parse(engine.provider().implementation_id().unwrap()),
+            Some(engine)
+        );
+    }
+    assert_eq!(
+        inventory(&host)
+            .recommendations
+            .get("sd-cpp")
+            .cloned()
+            .flatten()
+            .as_deref(),
+        Some("cuda")
+    );
 }

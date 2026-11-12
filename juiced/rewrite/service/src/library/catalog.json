@@ -373,6 +373,43 @@
       "variant_stem": "ggml-large-v3-turbo",
       "license": "mit",
       "native_id": "Whisper-Large-v3-Turbo"
+    },
+    {
+      "id": "sd-turbo",
+      "name": "SD Turbo",
+      "repo": "Green-Sky/SD-Turbo-GGUF",
+      "family": "stable-diffusion",
+      "task": "image",
+      "recommended_quant": null,
+      "recommended_file": "sd_turbo-f16-q8_0.gguf",
+      "variant_stem": "sd_turbo-f16-q8_0",
+      "license": "other",
+      "native_id": "SD-Turbo-GGUF"
+    },
+    {
+      "id": "stable-diffusion-v1.5",
+      "name": "Stable Diffusion v1.5",
+      "repo": "second-state/stable-diffusion-v1-5-GGUF",
+      "family": "stable-diffusion",
+      "task": "image",
+      "recommended_quant": "Q8_0",
+      "recommended_file": null,
+      "variant_stem": null,
+      "license": "creativeml-openrail-m",
+      "native_id": "SD-1.5"
+    },
+    {
+      "id": "kokoro-v1",
+      "name": "Kokoro v1.0",
+      "repo": "mikkoph/kokoro-onnx",
+      "family": "kokoro",
+      "task": "tts",
+      "recommended_quant": null,
+      "recommended_file": "kokoro-v1.0.onnx",
+      "variant_stem": null,
+      "license": "apache-2.0",
+      "native_id": "kokoro-v1",
+      "companions": [{ "file": "voices-v1.0.bin", "role": "voice" }]
     }
   ]
 }

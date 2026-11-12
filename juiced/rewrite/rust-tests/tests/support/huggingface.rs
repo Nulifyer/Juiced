@@ -154,7 +154,7 @@ impl Hub {
             path: path.to_owned(),
             bytes: bytes(seed, length),
         };
-        let repos = Arc::new(BTreeMap::from([
+        Self::with_repos(BTreeMap::from([
             (
                 "fixture/Process-GGUF".to_owned(),
                 vec![
@@ -171,7 +171,12 @@ impl Hub {
                     file("Shard-Q4_K_M-00002-of-00002.gguf", 6, 20_000),
                 ],
             ),
-        ]));
+        ]))
+        .await
+    }
+
+    pub async fn with_repos(repos: BTreeMap<String, Vec<HubFile>>) -> Self {
+        let repos = Arc::new(repos);
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
         let observed = Arc::new(Mutex::new(Vec::new()));

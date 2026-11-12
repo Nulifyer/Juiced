@@ -16,6 +16,8 @@ pub struct Variant {
     pub files: Vec<FileMeta>,
     pub parts: u32,
     pub complete: bool,
+    /// Per-file artifact-set roles for companion bundles; empty for single files and splits.
+    pub roles: Vec<crate::artifacts::ArtifactRole>,
 }
 
 impl Variant {
@@ -31,6 +33,47 @@ impl Variant {
                 .iter()
                 .all(|file| file.bytes.is_some_and(|bytes| bytes > 0) && file.sha256.is_some())
     }
+}
+
+/// Files a catalog companion bundle may name; grouping still offers only model files.
+pub fn is_listed_file(path: &str) -> bool {
+    let name = basename(path).to_ascii_lowercase();
+    is_model_file(path)
+        || name.ends_with(".onnx")
+        || name.ends_with(".safetensors")
+        || name.ends_with(".bin")
+}
+
+pub fn bundle(
+    files: &[FileMeta],
+    primary: &str,
+    companions: &[(String, crate::artifacts::ArtifactRole)],
+) -> Option<Variant> {
+    let find = |path: &str| files.iter().find(|file| file.path == path).cloned();
+    let mut members = vec![find(primary)?];
+    let mut roles = vec![crate::artifacts::ArtifactRole::Model];
+    let mut complete = true;
+    for (path, role) in companions {
+        match find(path) {
+            Some(file) => {
+                members.push(file);
+                roles.push(*role);
+            }
+            None => complete = false,
+        }
+    }
+    let label = label_for(primary).or_else(|| {
+        let extension = basename(primary).rsplit_once('.')?.1;
+        (!extension.is_empty() && extension.len() <= 16).then(|| extension.to_ascii_uppercase())
+    });
+    Some(Variant {
+        label,
+        primary: primary.to_owned(),
+        files: members,
+        parts: 1,
+        complete,
+        roles,
+    })
 }
 
 pub fn basename(path: &str) -> &str {
@@ -220,6 +263,7 @@ pub fn group(files: &[FileMeta]) -> Vec<Variant> {
                 files: vec![file.clone()],
                 parts: 1,
                 complete: true,
+                roles: Vec::new(),
             });
         }
     }
@@ -233,6 +277,7 @@ pub fn group(files: &[FileMeta]) -> Vec<Variant> {
             files,
             parts: total,
             complete,
+            roles: Vec::new(),
         });
     }
     variants.sort_by(|left, right| left.primary.cmp(&right.primary));

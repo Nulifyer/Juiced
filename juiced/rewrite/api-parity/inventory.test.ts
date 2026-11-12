@@ -7,15 +7,15 @@ describe("native API preservation inventory", () => {
     await validateInventory(inventory);
     expect(inventory.summary.native_http_routes).toBe(135);
     expect(inventory.summary.native_websocket_routes).toBe(4);
-    expect(inventory.summary.rust_published_routes).toBe(69);
-    expect(inventory.summary.rust_native_same_path_rows).toBe(39);
+    expect(inventory.summary.rust_published_routes).toBe(73);
+    expect(inventory.summary.rust_native_same_path_rows).toBe(42);
     expect(inventory.summary.native_http_status_counts.implemented).toBe(0);
   });
 
   test("a missing native route fails even when all Rust routes remain inventoried", async () => {
     const inventory = await loadInventory();
     inventory.http_routes = inventory.http_routes.filter(route => route.canonical_path !== "/registry/search");
-    expect(inventory.rust_published_routes.length).toBe(69);
+    expect(inventory.rust_published_routes.length).toBe(73);
     await expect(validateInventory(inventory)).rejects.toThrow("Registration references missing route");
   });
 

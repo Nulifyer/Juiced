@@ -615,6 +615,114 @@ async fn transcription(
     })).into_response()
 }
 
+const FIXTURE_PNG: &[u8] = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\x01\0\0\0\x01\x08\x06\0\0\0\x1f\x15\xc4\x89\0\0\0\rIDATx\x9cc\xf8\xcf\xc0\xf0\x1f\0\x05\0\x01\xff\x89\x99=\x1d\0\0\0\0IEND\xaeB`\x82";
+
+fn base64(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut output = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let word = chunk.iter().enumerate().fold(0u32, |word, (index, byte)| {
+            word | (u32::from(*byte) << (16 - 8 * index))
+        });
+        for index in 0..4 {
+            if index <= chunk.len() {
+                output.push(ALPHABET[((word >> (18 - 6 * index)) & 63) as usize] as char);
+            } else {
+                output.push('=');
+            }
+        }
+    }
+    output
+}
+
+async fn media_delay(fixture: &Fixture, kind: &str) {
+    if let Some(path) = &fixture.events {
+        write_record(path, json!({"id":kind,"event":"started"}));
+    }
+    if fixture.inference_delay > 0 {
+        tokio::time::sleep(Duration::from_millis(fixture.inference_delay)).await;
+    }
+    if let Some(path) = &fixture.events {
+        write_record(path, json!({"id":kind,"event":"completed"}));
+    }
+}
+
+async fn image_generation(
+    State(fixture): State<Arc<Fixture>>,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> Response {
+    media_delay(&fixture, "image-request").await;
+    if fixture.speech_status != 200 {
+        return (
+            StatusCode::from_u16(fixture.speech_status).unwrap(),
+            "private worker error",
+        )
+            .into_response();
+    }
+    if fixture.speech_mode == "invalid-image" {
+        return Json(json!({"data":[{"b64_json":base64(b"not an image")}]})).into_response();
+    }
+    Json(
+        json!({"created":0,"data":[{"b64_json":base64(FIXTURE_PNG)}],"output_format":"png",
+        "received":body,"received_authorization":headers.contains_key("authorization")}),
+    )
+    .into_response()
+}
+
+async fn txt2img(State(fixture): State<Arc<Fixture>>, Json(body): Json<Value>) -> Response {
+    media_delay(&fixture, "txt2img-request").await;
+    Json(json!({"images":[base64(FIXTURE_PNG)],"parameters":body,"info":"{}"})).into_response()
+}
+
+async fn audio_speech(
+    State(fixture): State<Arc<Fixture>>,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> Response {
+    media_delay(&fixture, "tts-request").await;
+    if fixture.speech_status != 200 {
+        return (
+            StatusCode::from_u16(fixture.speech_status).unwrap(),
+            "private worker error",
+        )
+            .into_response();
+    }
+    let mut received = body.clone();
+    received["received_authorization"] = json!(headers.contains_key("authorization"));
+    received["espeak_data"] = json!(
+        std::env::var("PIPER_ESPEAKNG_DATA_DIRECTORY")
+            .ok()
+            .filter(|directory| Some(directory) == std::env::var("ESPEAK_DATA_PATH").ok().as_ref())
+            .map(|directory| std::path::Path::new(&directory).join("espeak-ng-data/phontab"))
+            .filter(|phontab| phontab.is_file())
+    );
+    let data = serde_json::to_vec(&received).unwrap();
+    match body["response_format"].as_str() {
+        Some("mp3") => {
+            let mut bytes = b"ID3\x04\0\0\0\0\0\0".to_vec();
+            bytes.extend(data);
+            ([("content-type", "audio/mpeg")], bytes).into_response()
+        }
+        _ => {
+            let mut bytes = b"RIFF".to_vec();
+            bytes.extend((36 + data.len() as u32).to_le_bytes());
+            bytes.extend(b"WAVEfmt ");
+            bytes.extend(16u32.to_le_bytes());
+            bytes.extend(3u16.to_le_bytes());
+            bytes.extend(1u16.to_le_bytes());
+            bytes.extend(24000u32.to_le_bytes());
+            bytes.extend(96000u32.to_le_bytes());
+            bytes.extend(4u16.to_le_bytes());
+            bytes.extend(32u16.to_le_bytes());
+            bytes.extend(b"data");
+            bytes.extend((data.len() as u32).to_le_bytes());
+            bytes.extend(data);
+            ([("content-type", "audio/wav")], bytes).into_response()
+        }
+    }
+}
+
 #[derive(serde::Deserialize)]
 struct SlotAction {
     action: String,
@@ -876,7 +984,7 @@ async fn main() {
     if let Some(path) = arg("--events") {
         write_record(
             std::path::Path::new(&path),
-            json!({"id":"worker-startup","event":"started","pid":std::process::id(),"port":arg("--port").and_then(|port| port.parse::<u16>().ok())}),
+            json!({"id":"worker-startup","event":"started","pid":std::process::id(),"port":arg("--port").or_else(|| arg("--listen-port")).and_then(|port| port.parse::<u16>().ok())}),
         );
     }
     if arg("--mode").as_deref() == Some("exit") {
@@ -893,7 +1001,11 @@ async fn main() {
     {
         std::process::exit(12);
     }
-    let port: u16 = arg("--port").unwrap().parse().unwrap();
+    let port: u16 = arg("--port")
+        .or_else(|| arg("--listen-port"))
+        .unwrap()
+        .parse()
+        .unwrap();
     if let Some(marker) = arg("--startup-log") {
         println!("fixture stdout {marker}");
         eprintln!("W fixture stderr {marker}");
@@ -941,6 +1053,10 @@ async fn main() {
     });
     let app = Router::new()
         .route("/health", get(|| async { "ok" }))
+        .route("/v1/models", get(|| async { Json(json!({"object":"list","data":[{"id":"fixture-media","object":"model"}]})) }))
+        .route("/v1/images/generations", post(image_generation))
+        .route("/sdapi/v1/txt2img", post(txt2img))
+        .route("/v1/audio/speech", post(audio_speech))
         .route("/inference", post(transcription).layer(DefaultBodyLimit::max(8 * 1024 * 1024)))
         .route("/v1/chat/completions", post(inference))
         .route("/v1/completions", post(inference))
