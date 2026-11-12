@@ -1,11 +1,12 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ApiError, type Client } from "./api";
 import { installEngine, parseEngines, type EngineJob } from "./engines";
 import { backendNames } from "./hardware";
 import { bytes, policyNames, type Policy } from "./domain";
 import { parseSystemInfo } from "./hardware";
 import { parseSearch, progress, tasks, type LibraryModel, type Quant, type SearchResult } from "./libraryData";
-import { Badge, Button, Empty, Icon } from "./ui";
+import { Badge, Button, Empty, Icon, Menu } from "./ui";
+import { LocalProgress, ServerFolder, useLocalFile } from "./LocalFiles";
 import { notify } from "./toast";
 import { useResource } from "./useResource";
 
@@ -29,6 +30,7 @@ function modelId(file: string): string {
   return name.replace(/\.(gguf|bin|safetensors|onnx)$/, "").trim();
 }
 type Install = { engine: string; backend: string; size: number | null };
+type Source = { artifact: string } | { path: string };
 export function FindModels({ client, online, onRegistered, onOpenModel }: { client: Client; online: boolean; onRegistered: () => Promise<void>; onOpenModel: (id: string) => void }) {
   const [needs, setNeeds] = useState<Install | null>(null);
   const [installing, setInstalling] = useState<EngineJob | null>(null);
@@ -45,7 +47,10 @@ export function FindModels({ client, online, onRegistered, onOpenModel }: { clie
   const [selected, setSelected] = useState<{ repo: string; label: string } | null>(null);
   const [notice, setNotice] = useState("");
   const [adding, setAdding] = useState(false);
-  useEffect(() => { setNeeds(null); setAdded(null); setPanelError(""); }, [selected?.repo, selected?.label]);
+  const local = useLocalFile(client);
+  const [folderOpen, setFolderOpen] = useState(false);
+  const picker = useRef<HTMLInputElement>(null);
+  useEffect(() => { setNeeds(null); setAdded(null); setPanelError(""); }, [selected?.repo, selected?.label, local.file?.name]);
   useEffect(() => {
     const list = quantList.current, option = list?.querySelector<HTMLElement>('[aria-selected="true"]');
     if (list && option) list.scrollTop = option.offsetTop - list.offsetTop - list.clientHeight / 2 + option.offsetHeight / 2;
@@ -93,7 +98,8 @@ export function FindModels({ client, online, onRegistered, onOpenModel }: { clie
     const timer = setInterval(() => setTick((value) => value + 1), 2000);
     return () => clearInterval(timer);
   }, [downloading]);
-  const model = result?.models.find((item) => item.repo === selected?.repo);
+  const choose = (next: { repo: string; label: string } | null) => { if (next) local.clear(); setSelected(next); };
+  const model = local.file ? undefined : result?.models.find((item) => item.repo === selected?.repo);
   const quant = model?.quants.find((item) => item.label === selected?.label);
   const gpu = info.data?.gpus.reduce((best, item) => Math.max(best, item.vram_total_bytes ?? 0), 0) || null;
   const ram = info.data?.memory?.total_bytes ?? null;
@@ -106,15 +112,14 @@ export function FindModels({ client, online, onRegistered, onOpenModel }: { clie
       setTick((value) => value + 1);
     } catch (failure) { setError(failure instanceof Error ? failure.message : "The download didn't start."); }
   }
-  async function add(item: Quant, install?: Install) {
-    if (!item.sha256) return;
+  async function add(source: Source, id: string, install?: Install) {
     setAdding(true); setPanelError("");
     try {
       if (install) await installEngine(client, install.engine, install.backend, setInstalling);
       setInstalling(null);
-      const response = await client.request<{ model: string | { id?: string }; backend: string }>("juiced/models/add", { artifact: item.sha256, id: modelId(item.file), policy: addPolicy });
-      const id = typeof response.model === "string" ? response.model : response.model?.id ?? "the model";
-      setNeeds(null); setAdded({ model: id, backend: response.backend, policy: addPolicy });
+      const response = await client.request<{ model: string | { id?: string }; backend: string }>("juiced/models/add", { ...source, id, policy: addPolicy });
+      const created = typeof response.model === "string" ? response.model : response.model?.id ?? "the model";
+      setNeeds(null); setAdded({ model: created, backend: response.backend, policy: addPolicy });
       await onRegistered();
     } catch (failure) {
       setInstalling(null);
@@ -128,12 +133,27 @@ export function FindModels({ client, online, onRegistered, onOpenModel }: { clie
     } finally { setAdding(false); }
   }
   const models = useMemo(() => result?.models ?? [], [result]);
-  return <div className={`find-models ${model ? "has-detail" : ""}`}>
+  const file = local.file;
+  const target: Source | null = file ? file.artifact ? { artifact: file.artifact } : file.path ? { path: file.path } : null : quant?.sha256 ? { artifact: quant.sha256 } : null;
+  const targetId = file ? file.id.trim() : quant ? modelId(quant.file) : "";
+  const ready = file ? !!target && !file.error : !!quant?.present;
+  const addControls = (fallback: ReactNode) => added ? <div className="added"><p className="inline-success" role="status">Added {added.model}. It runs on {backendNames[added.backend] ?? added.backend} and {added.policy === "hot" ? "loads now and stays loaded" : added.policy === "on-demand" ? "loads on its first request" : "stays Disabled until you enable it in Models"}.</p><div className="action-row"><Button variant="primary" onClick={() => onOpenModel(added.model)}>Open model</Button></div></div>
+    : <>{ready && <div className="add-policy"><span className="field-label" id="add-policy-label">Make available as</span><div className="segmented" role="radiogroup" aria-labelledby="add-policy-label">{(["disabled", "on-demand", "hot"] as Policy[]).map((policy) => <button key={policy} role="radio" aria-checked={addPolicy === policy} disabled={adding} onClick={() => setAddPolicy(policy)}>{policyNames[policy]}</button>)}</div></div>}
+      {needs ? <div className="needs-engine"><p className="field-help">This model needs the {needs.engine} {backendNames[needs.backend] ?? needs.backend} engine{needs.size ? ` (${bytes(needs.size)} download)` : ""}. Juiced picked it for this machine.</p>
+        {installing ? <><progress aria-label="Engine install progress" max={installing.total_bytes ?? 1} value={installing.total_bytes ? installing.downloaded_bytes : undefined} /><p className="field-help">Installing engine… {installing.state}</p></> : <Button variant="primary" disabled={!online || adding || !target} onClick={() => target && void add(target, targetId, needs)}>Install engine and add</Button>}</div>
+      : <div className="action-row wrap">{ready ? <Button variant="primary" disabled={!online || adding || !target || !targetId || (!file && (quant?.parts ?? 1) > 1)} title={!file && (quant?.parts ?? 1) > 1 ? "Split models can't be added yet" : undefined} onClick={() => target && void add(target, targetId)}>{adding ? "Adding…" : "Add model"}</Button> : fallback}</div>}</>;
+  return <div className={`find-models ${model || file ? "has-detail" : ""}`}>
     <div className="find-main">
       <div className="toolbar">
         <input type="search" aria-label="Search models" placeholder="Search models, e.g. qwen3, llama, whisper" value={query} onChange={(event) => setQuery(event.target.value)} />
         <div className="chip-filter" role="group" aria-label="Task"><button aria-pressed={task === null} onClick={() => setTask(null)}>All</button>{tasks.map(([id, label]) => <button key={id} aria-pressed={task === id} onClick={() => setTask(task === id ? null : id)}>{label}</button>)}</div>
+        <Menu label="Add a model file" trigger={<><Icon name="upload" size={14} /> Add file</>}>
+          <button role="menuitem" disabled={!online} onClick={() => picker.current?.click()}>Upload from this computer…</button>
+          <button role="menuitem" disabled={!online} onClick={() => setFolderOpen(true)}>Pick from the server…</button>
+        </Menu>
+        <input ref={picker} type="file" hidden accept=".gguf,.bin,.safetensors,.onnx" aria-label="Model file" onChange={(event) => { const picked = event.target.files?.[0]; event.target.value = ""; if (picked) { setSelected(null); void local.upload(picked); } }} />
       </div>
+      {folderOpen && <ServerFolder client={client} onClose={() => setFolderOpen(false)} onPick={(entry, mode) => { setFolderOpen(false); setSelected(null); void local.pick(entry, mode); }} />}
       {error && <div className="action-row"><p className="inline-error" role="alert">{error}</p><Button onClick={() => setTick((value) => value + 1)}>Retry</Button></div>}
       {result && hubPending && <p className="searching muted" role="status">Searching Hugging Face…</p>}
       {result && !hubPending && result.hub !== "ok" && result.hub !== "skipped" && <p className="field-help">{result.offline ? "Offline mode: showing recommended and downloaded models only." : "Hugging Face is unreachable right now; showing recommended and downloaded models."}</p>}
@@ -148,24 +168,39 @@ export function FindModels({ client, online, onRegistered, onOpenModel }: { clie
           <div className="quant-chips" role="group" aria-label={`${item.name} quants`}>
             {item.quants.length === 0 ? <span className="muted">No GGUF files found</span> : featured(item.quants).map((entry) => {
               const percent = progress(entry);
-              return <button key={entry.label} className={`quant-chip ${entry.present ? "present" : ""}`} aria-pressed={item.repo === selected?.repo && entry.label === selected?.label} onClick={() => setSelected({ repo: item.repo, label: entry.label })} title={entry.file}>
+              return <button key={entry.label} className={`quant-chip ${entry.present ? "present" : ""}`} aria-pressed={item.repo === selected?.repo && entry.label === selected?.label} onClick={() => choose({ repo: item.repo, label: entry.label })} title={entry.file}>
                 {entry.present && <span aria-label="Downloaded">✓ </span>}{entry.label}<span className="muted"> {bytes(entry.bytes)}</span>{entry.recommended && <span className="quant-star" aria-label="Suggested">★</span>}
                 {percent !== null && <span className="quant-progress" style={{ width: `${percent}%` }} />}
               </button>;
             })}
-            {item.quants.length > featured(item.quants).length && <button className="quant-chip more" onClick={() => setSelected({ repo: item.repo, label: (item.quants.find((entry) => entry.recommended) ?? featured(item.quants)[0] ?? item.quants[0])!.label })}>+{item.quants.length - featured(item.quants).length} more</button>}
+            {item.quants.length > featured(item.quants).length && <button className="quant-chip more" onClick={() => choose({ repo: item.repo, label: (item.quants.find((entry) => entry.recommended) ?? featured(item.quants)[0] ?? item.quants[0])!.label })}>+{item.quants.length - featured(item.quants).length} more</button>}
           </div>
         </li>)}
       </ul>}
     </div>
+    {file && <aside className="inspector find-detail" aria-label="Model detail">
+      <div className="inspector-top"><Button variant="ghost" className="back-button" onClick={local.clear}><Icon name="back" /> Back to results</Button><Button variant="ghost" className="close-inspector" aria-label="Close detail" onClick={local.clear}><Icon name="close" /></Button></div>
+      <div className="inspector-body">
+        <div className="inspector-title"><h2 className="break-word">{file.name}</h2></div>
+        <dl className="facts">
+          <div><dt>Size</dt><dd>{bytes(file.bytes)}</dd></div>
+          <div><dt>Stored</dt><dd>{file.path ? "Used where it is" : file.job ? "Copied to library" : "Uploaded to library"}</dd></div>
+          <div><dt>This machine</dt><dd><Badge tone={fit(file.bytes, gpu, ram)[1]}>{fit(file.bytes, gpu, ram)[0]}</Badge></dd></div>
+        </dl>
+        <LocalProgress file={file} onCancel={local.clear} />
+        {ready && !added && <div className="add-name"><label htmlFor="local-model-id">Model name</label><input id="local-model-id" value={file.id} maxLength={128} disabled={adding} onChange={(event) => local.rename(event.target.value)} /></div>}
+        {addControls(null)}
+        {panelError && <p className="inline-error" role="alert">{panelError}</p>}
+      </div>
+    </aside>}
     {model && quant && <aside className="inspector find-detail" aria-label="Model detail">
-      <div className="inspector-top"><Button variant="ghost" className="back-button" onClick={() => setSelected(null)}><Icon name="back" /> Back to results</Button><Button variant="ghost" className="close-inspector" aria-label="Close detail" onClick={() => setSelected(null)}><Icon name="close" /></Button></div>
+      <div className="inspector-top"><Button variant="ghost" className="back-button" onClick={() => choose(null)}><Icon name="back" /> Back to results</Button><Button variant="ghost" className="close-inspector" aria-label="Close detail" onClick={() => choose(null)}><Icon name="close" /></Button></div>
       <div className="inspector-body">
         <div className="inspector-title"><h2 className="break-word">{model.name}</h2></div>
         <p className="field-help">{[model.publisher, model.license, model.gated ? "Gated" : null].filter(Boolean).join(" · ")}</p>
         <div ref={quantList} className="quant-list" role="listbox" aria-label="Quants">{[...model.quants].sort((left, right) => (left.bytes ?? 0) - (right.bytes ?? 0)).map((entry) => {
           const [label, tone] = fit(entry.bytes, gpu, ram);
-          return <button key={entry.label} role="option" aria-selected={entry.label === quant.label} className="quant-option" onClick={() => setSelected({ repo: model.repo, label: entry.label })}>
+          return <button key={entry.label} role="option" aria-selected={entry.label === quant.label} className="quant-option" onClick={() => choose({ repo: model.repo, label: entry.label })}>
             <span className={`status-dot ${tone}`} title={label} /><strong>{entry.label}</strong>{entry.recommended && <span className="quant-star" aria-label="Suggested">★</span>}{entry.present && <span className="muted">✓ downloaded</span>}<span className="numeric muted">{bytes(entry.bytes)}</span>
           </button>;
         })}</div>
@@ -174,14 +209,7 @@ export function FindModels({ client, online, onRegistered, onOpenModel }: { clie
           <div><dt>This machine</dt><dd><Badge tone={fit(quant.bytes, gpu, ram)[1]}>{fit(quant.bytes, gpu, ram)[0]}</Badge></dd></div>
         </dl>
         {progress(quant) !== null && <><progress aria-label="Download progress" max={100} value={progress(quant)!} /><p className="field-help">Downloading… {Math.round(progress(quant)!)}%</p></>}
-        {added ? <div className="added"><p className="inline-success" role="status">Added {added.model}. It runs on {backendNames[added.backend] ?? added.backend} and {added.policy === "hot" ? "loads now and stays loaded" : added.policy === "on-demand" ? "loads on its first request" : "stays Disabled until you enable it in Models"}.</p><div className="action-row"><Button variant="primary" onClick={() => onOpenModel(added.model)}>Open model</Button></div></div>
-          : <>{quant.present && <div className="add-policy"><span className="field-label" id="add-policy-label">Make available as</span><div className="segmented" role="radiogroup" aria-labelledby="add-policy-label">{(["disabled", "on-demand", "hot"] as Policy[]).map((policy) => <button key={policy} role="radio" aria-checked={addPolicy === policy} disabled={adding} onClick={() => setAddPolicy(policy)}>{policyNames[policy]}</button>)}</div></div>}
-          {needs ? <div className="needs-engine"><p className="field-help">This model needs the {needs.engine} {backendNames[needs.backend] ?? needs.backend} engine{needs.size ? ` (${bytes(needs.size)} download)` : ""}. Juiced picked it for this machine.</p>
-            {installing ? <><progress aria-label="Engine install progress" max={installing.total_bytes ?? 1} value={installing.total_bytes ? installing.downloaded_bytes : undefined} /><p className="field-help">Installing engine… {installing.state}</p></> : <Button variant="primary" disabled={!online || adding} onClick={() => void add(quant, needs)}>Install engine and add</Button>}</div>
-          : <div className="action-row wrap">
-          {quant.present ? <Button variant="primary" disabled={!online || adding || quant.parts > 1 || !quant.sha256} title={quant.parts > 1 ? "Split models can't be added yet" : undefined} onClick={() => void add(quant)}>{adding ? "Adding…" : "Add model"}</Button>
-            : progress(quant) === null && <Button variant="primary" disabled={!online || !quant.pullable || model.gated} onClick={() => void download(model, quant)}>Download</Button>}
-        </div>}</>}
+        {addControls(progress(quant) === null && <Button variant="primary" disabled={!online || !quant.pullable || model.gated} onClick={() => void download(model, quant)}>Download</Button>)}
         {panelError && <p className="inline-error" role="alert">{panelError}</p>}
         {model.gated && !quant.present && <p className="field-help">This repository is gated on Hugging Face and can't be downloaded here yet.</p>}
       </div>

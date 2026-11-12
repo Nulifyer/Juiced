@@ -117,6 +117,28 @@ export class Client {
     return value as T;
   }
 
+  upload<T>(path: string, file: Blob, onProgress: (sent: number) => void, signal?: AbortSignal): Promise<T> {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", `${this.base}/v1/${path}`);
+      if (this.key) xhr.setRequestHeader("Authorization", `Bearer ${this.key}`);
+      xhr.setRequestHeader("Content-Type", "application/octet-stream");
+      xhr.upload.onprogress = (event) => onProgress(event.loaded);
+      const abort = () => xhr.abort();
+      signal?.addEventListener("abort", abort, { once: true });
+      xhr.onabort = () => reject(new DOMException("Upload cancelled.", "AbortError"));
+      xhr.onerror = () => reject(new ApiError("The upload was interrupted. Check the connection and retry.", 0, "upload_network"));
+      xhr.onload = () => {
+        signal?.removeEventListener("abort", abort);
+        let value: any;
+        try { value = JSON.parse(xhr.responseText); } catch { return reject(new ApiError(`The service returned an unreadable response (${xhr.status}).`, xhr.status, "invalid_json")); }
+        if (xhr.status < 200 || xhr.status >= 300) return reject(new ApiError(value?.error?.message ?? `The upload failed (${xhr.status}).`, xhr.status, value?.error?.code ?? "upload_failed", value));
+        resolve(value as T);
+      };
+      xhr.send(file);
+    });
+  }
+
   async snapshot(signal?: AbortSignal): Promise<Snapshot> {
     const [catalog, state, requests] = await Promise.all([
       this.request("juiced/catalog", undefined, signal), this.request("juiced/state", undefined, signal), this.request("juiced/requests", undefined, signal),

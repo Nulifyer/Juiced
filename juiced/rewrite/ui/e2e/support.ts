@@ -7,7 +7,7 @@ export const modelId = "fixture.chat-long-context-q8";
 export const speechModel = "fixture.speech-tiny";
 export type Policy = "hot" | "on-demand" | "disabled";
 export type CatalogModel = { id: string; policy: Policy; revision: number; loaded: boolean; state: string; error: string | null; pid: number | null };
-export type SourceFixture = { model_file: string; source_url: string; sha256: string; bytes: number; command: string; args: string[] };
+export type SourceFixture = { model_file: string; upload_file: string; import_root: string; source_url: string; sha256: string; bytes: number; command: string; args: string[] };
 
 export function api(request: APIRequestContext) {
   async function json<T>(path: string): Promise<T> {

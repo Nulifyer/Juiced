@@ -96,7 +96,7 @@ source = Bun.serve({
   hostname: "127.0.0.1", port: Number(process.env.JUICED_SOURCE_PORT ?? 13308),
   fetch(request) {
     const url = new URL(request.url);
-    if (url.pathname === "/fixture.json") return Response.json({ model_file: resolve(directory, "fixture.gguf"), source_url: `${url.origin}/weights.gguf`, sha256, bytes: weights.length, command: executable("juiced-test-worker"), args: ["--port", "{port}", "--model", "{model}", "--events", resolve(directory, "managed.events"), "--slot-save-path", "{cache}"] });
+    if (url.pathname === "/fixture.json") return Response.json({ model_file: resolve(directory, "fixture.gguf"), source_url: `${url.origin}/weights.gguf`, upload_file: resolve(directory, "Upload-Sample-Q8_0.gguf"), import_root: resolve(directory, "import"), sha256, bytes: weights.length, command: executable("juiced-test-worker"), args: ["--port", "{port}", "--model", "{model}", "--events", resolve(directory, "managed.events"), "--slot-save-path", "{cache}"] });
     if (url.pathname === "/speech-fixture.wav") return new Response(Bun.file(resolve(root, "../../test/test_speech_de.wav")));
     const releaseResponse = engineRelease(url);
     if (releaseResponse) return releaseResponse;
@@ -124,6 +124,10 @@ source = Bun.serve({
 });
   const file = resolve(directory, "fixture.gguf");
   await writeFile(file, "Test fixture bytes. Not model weights.\n");
+  const importRoot = resolve(directory, "import");
+  await mkdir(resolve(importRoot, "nested"), { recursive: true });
+  await writeFile(resolve(importRoot, "nested", "Local-Import-Q8_0.gguf"), metadataGguf(2048, 48 * 1024));
+  await writeFile(resolve(directory, "Upload-Sample-Q8_0.gguf"), metadataGguf(2048, 40 * 1024));
   const model = (id: string, policy: string, resident: number, missing = false) => ({
     id, model_file: missing ? resolve(directory, "unavailable.gguf") : file,
     command: executable("juiced-test-worker"), args: ["--port", "{port}", "--model", "{model}", "--events", resolve(directory, `${id}.events`), "--slot-save-path", "{cache}", "--report-timings"],
@@ -136,7 +140,7 @@ source = Bun.serve({
   }
   const protectedRuntime = process.env.JUICED_TEST_PROTECTED_RUNTIME_FIXTURE === "1";
   const initialConfig = {
-    schema_version: 1, artifact_source_policy: "allow-loopback-http", resident_budget_bytes: 6 * 1024 ** 3, startup_timeout_ms: 15000, request_timeout_ms: 15000,
+    schema_version: 1, artifact_source_policy: "allow-loopback-http", import_roots: [importRoot], resident_budget_bytes: 6 * 1024 ** 3, startup_timeout_ms: 15000, request_timeout_ms: 15000,
     admission: protectedRuntime ? { memory: { mode: "protected", capacity_bytes: 512 * 1024 ** 2, essential_headroom_bytes: 0, maximum_sample_age_ms: 5000 } } : undefined,
     models: [model("fixture.chat-small-q4", "hot", 1), model("fixture.chat-long-context-q8", "on-demand", 2), model("fixture.missing-weights", "disabled", 1, true), { id: "fixture.speech-tiny", provider: "whisper-cpp", model_file: file, command: executable("juiced-test-worker"), args: ["--host", "127.0.0.1", "--port", "{port}", "--model", "{model}", "--events", resolve(directory, "speech.events"), "--inference-delay-ms", "750", "--no-gpu"], resident_bytes: 64 * 1024 ** 2, max_inflight: 1, operations: ["audio/transcriptions"], policy: "on-demand" }, { ...model("fixture.embed-tiny", "on-demand", 0), resident_bytes: 64 * 1024 ** 2, operations: ["embeddings"] }],
   };

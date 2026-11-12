@@ -628,3 +628,10 @@ a.button { color: var(--foreground); text-decoration: none; }
 .idle-default { font-size: .7rem; margin: -8px 0 12px; color: var(--muted); }
 .idle-default select { font-size: .7rem; }
 .idle-setting { margin-top: 10px; }
+.folder-path { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; min-height: 30px; }
+.folder-list { list-style: none; margin: 0 0 12px; padding: 0; max-height: 50vh; overflow: auto; border: 1px solid var(--border); border-radius: 6px; }
+.folder-list li + li { border-top: 1px solid var(--border); }
+.folder-list button { display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 10px; border: 0; background: transparent; text-align: left; font-size: .8rem; }
+.folder-list button:hover:not(:disabled) { background: var(--secondary); }
+.folder-list button .numeric { margin-left: auto; }
+.add-name { display: grid; gap: 4px; margin: 10px 0; }
