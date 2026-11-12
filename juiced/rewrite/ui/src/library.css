@@ -5,6 +5,9 @@
 .result-title:hover strong { text-decoration: underline; text-underline-offset: 2px; }
 .result-size { margin-left: auto; font-size: .75rem; }
 .library-total { font-size: .75rem; }
+.inventory .library-total { margin-left: auto; display: inline-flex; align-items: center; white-space: nowrap; }
+.chip-filter .library-total { padding-left: 4px; }
+.chip-filter .library-total .help-trigger { border: 0; padding: 0; border-radius: 4px; }
 .used-by { display: inline-flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px 10px; }
 .facts .fact-path { display: block; }
 .facts .fact-path dd { text-align: left; margin-top: 2px; }

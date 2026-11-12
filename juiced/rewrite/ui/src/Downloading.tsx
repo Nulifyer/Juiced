@@ -46,6 +46,14 @@ function engineRow(job: EngineJob): Row {
   return { key: `engine:${job.id}`, title: `${job.engine} ${backendNames[job.backend] ?? job.backend} engine`, detail: "Engine install", state: job.state, done: job.downloaded_bytes, total: job.total_bytes, error: job.error, jobs: [], finished: ["complete", "failed"].includes(job.state) };
 }
 
+export function useActiveDownloads(client: Client, enabled: boolean): number {
+  const pulls = useResource(client, "juiced/library/pulls", parsePulls, 3000, true, enabled);
+  const inventory = useResource(client, "juiced/artifacts?limit=64", parseArtifactInventory, 3000, true, enabled);
+  const pulled = new Set((pulls.data ?? []).flatMap((pull) => pull.files.map((file) => file.job).filter(Boolean) as string[]));
+  return (pulls.data ?? []).filter((pull) => !["complete", "failed"].includes(pull.state)).length
+    + (inventory.data?.jobs ?? []).filter((job) => job.writer_active && !pulled.has(job.id)).length;
+}
+
 export function Downloading({ client, online, onSearch }: { client: Client; online: boolean; onSearch: () => void }) {
   const pulls = useResource(client, "juiced/library/pulls", parsePulls, 1500, true);
   const inventory = useResource(client, "juiced/artifacts?limit=64", parseArtifactInventory, 1500, true);
@@ -81,7 +89,7 @@ export function Downloading({ client, online, onSearch }: { client: Client; onli
   return <section className="downloads" aria-label="Downloads">
     {error && <div className="action-row"><p className="inline-error" role="alert">{loaded ? "Showing the last observation. " : ""}{error}</p><Button onClick={() => void Promise.all([pulls.reload(), inventory.reload(), engines.reload()])}>Retry</Button></div>}
     {!loaded ? <p className="muted" role="status">{error ? "" : "Reading downloads…"}</p>
-      : rows.length === 0 ? <Empty title="Nothing downloading">Model downloads and engine installs show here. <button className="link-button" onClick={onSearch}>Search for a model</button></Empty>
+      : rows.length === 0 ? <Empty title="Nothing downloading">Model downloads and engine installs show here. <button className="link-button" onClick={onSearch}>Find a model</button></Empty>
       : <ul className="download-list" aria-label="Download list">{rows.map((row) => <li key={row.key} className="download-row" aria-label={row.title}>
         <div className="row-heading"><div className="download-title"><strong className="break-word">{row.title}</strong><span className="muted">{row.detail}</span></div><Badge tone={tone(row.state)}>{stateNames[row.state] ?? row.state}</Badge></div>
         {!["complete", "cancelled"].includes(row.state) && <progress aria-label={`${row.title} progress`} max={row.total ?? 1} value={row.total ? Math.min(row.done, row.total) : undefined} />}

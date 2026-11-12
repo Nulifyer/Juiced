@@ -118,6 +118,15 @@ export async function serviceMenu(page: Page, item: string) {
 export const toasts = (page: Page) => page.locator(".toasts");
 export const tab = (page: Page, list: string, name: string) => page.getByRole("tablist", { name: list }).getByRole("tab", { name, exact: true });
 
+export type ModelsView = "Installed" | "Discover" | "Downloads" | "Aliases";
+export const modelsTab = (page: Page, view: ModelsView) => page.getByRole("tablist", { name: "Models views" }).getByRole("tab", view === "Downloads" ? { name: /^Downloads(?: \d+)?$/ } : { name: view, exact: true });
+
+export async function modelsView(page: Page, view: ModelsView) {
+  await navigate(page, "Models");
+  await modelsTab(page, view).click();
+  await expect(modelsTab(page, view)).toHaveAttribute("aria-selected", "true");
+}
+
 export async function openModel(page: Page, id: string) {
   await navigate(page, "Models");
   await page.getByRole("table", { name: "Registered models" }).getByRole("button", { name: id, exact: true }).click();

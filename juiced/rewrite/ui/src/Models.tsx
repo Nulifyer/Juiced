@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { bytes, loadReason, matchingModels, offers, policyNames, services, unloadReason, workerState, workerTone, type Model, type Policy, type Service } from "./domain";
-import { Badge, Button, Empty, Icon, Switch } from "./ui";
+import { Badge, Button, Empty, HelpTip, Icon, Switch } from "./ui";
 import type { Client } from "./api";
 import { removalReason } from "./management";
 import { ContextInspector } from "./ContextInspector";
@@ -8,6 +8,8 @@ import { QuantSync } from "./QuantSync";
 import { ArtifactRevisionInspector } from "./ArtifactRevisionInspector";
 import { RuntimeInspector } from "./RuntimeInspector";
 import { ModelIdle, residencyNote } from "./Residency";
+import { ModelFiles, removalNote, unusedQuants } from "./LocalModels";
+import type { LocalGroup, LocalInventory } from "./localLibraryData";
 
 export type Mutate = (path: string, body: unknown, success: string) => Promise<boolean>;
 
@@ -29,7 +31,7 @@ function workerFailure(code: string): string {
   return "The worker needs attention. Review its current state before retrying.";
 }
 
-type ListProps = { models: Model[]; selected?: string; onSelect: (id: string) => void; mode: "models" | "policy"; mutate: Mutate; busy: boolean; online: boolean; idleControl?: ReactNode };
+type ListProps = { models: Model[]; selected?: string; onSelect: (id: string) => void; mode: "models" | "policy"; mutate: Mutate; busy: boolean; online: boolean; idleControl?: ReactNode; files?: LocalGroup[]; inventory?: LocalInventory | null; selectedFile?: string; onSelectFile?: (id: string) => void; onDiscover?: () => void };
 
 function setPolicy(mutate: Mutate, model: Model, policy: Policy) {
   if (policy === model.policy) return;
@@ -48,20 +50,43 @@ function RowAction({ model, mutate, disabled }: { model: Model; mutate: Mutate; 
   return <Button className="row-action" disabled={disabled || !!reason} title={reason ?? undefined} onClick={(event) => { event.stopPropagation(); void mutate(unload ? "unload" : "load", { model: model.id }, unload ? `Unloaded ${model.id}.` : `Loaded ${model.id}.`); }}>{unload ? "Unload" : "Load"}</Button>;
 }
 
-export function ModelList({ models, selected, onSelect, mode, mutate, busy, online, idleControl }: ListProps) {
+function fileMatches(group: LocalGroup, query: string) {
+  const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const text = `${group.name} ${group.publisher ?? ""} ${group.quants.map((quant) => quant.label).join(" ")}`.toLowerCase();
+  return terms.every((term) => text.includes(term));
+}
+
+function FileRow({ group, selected, onSelect }: { group: LocalGroup; selected: boolean; onSelect: () => void }) {
+  const unused = unusedQuants(group);
+  const size = unused.length ? unused.reduce((sum, quant) => sum + quant.bytes, 0) : group.bytes;
+  return <div className={`data-row model-row file-row ${selected ? "selected" : ""}`} role="row" onClick={onSelect}>
+    <div role="cell" className="model-identity"><button className="model-name" aria-pressed={selected} onClick={(event) => { event.stopPropagation(); onSelect(); }}>{group.name}</button><span className="model-meta">{[group.publisher, unused.map((quant) => quant.label).join(", ") || null, bytes(size), group.readOnly ? "read-only" : null].filter(Boolean).join(" · ")}</span></div>
+    <div role="cell" className="model-state"><Badge>Not added</Badge></div>
+    <div role="cell" />
+    <div role="cell" />
+    <div role="cell" className="row-end"><Button className="row-action" aria-label={`Add ${group.name}`} onClick={(event) => { event.stopPropagation(); onSelect(); }}>Add</Button></div>
+  </div>;
+}
+
+export function ModelList({ models, selected, onSelect, mode, mutate, busy, online, idleControl, files = [], inventory, selectedFile, onSelectFile, onDiscover }: ListProps) {
   const [query, setQuery] = useState("");
-  const [service, setService] = useState<Service | null>(null);
+  const [service, setService] = useState<Service | "files" | null>(null);
   const [dragging, setDragging] = useState("");
   const dragged = useRef("");
-  const visible = matchingModels(service ? models.filter((model) => offers(model, service)) : models, query);
+  const visible = service === "files" ? [] : matchingModels(service ? models.filter((model) => offers(model, service)) : models, query);
+  const visibleFiles = service === null || service === "files" ? files.filter((group) => fileMatches(group, query)) : [];
   const chips = services.map(([id, label]) => [id, label, models.filter((model) => offers(model, id)).length] as const).filter(([, , count]) => count > 0);
+  const filtered = service !== null && service !== "files" && !chips.some(([id]) => id === service);
+  useEffect(() => { if (filtered || (service === "files" && files.length === 0)) setService(null); }, [filtered, service, files.length]);
   const locked = busy || !online;
+  const disk = inventory && <span className="muted library-total">{bytes(inventory.totalBytes)} on disk<HelpTip label="disk use">Model files on this machine, including read-only libraries.{inventory.removableBytes > 0 ? ` ${bytes(inventory.removableBytes)} isn't used by a model and can be deleted.` : ""}{inventory.truncated ? " Large folders are counted up to a limit." : ""}</HelpTip></span>;
   return <section className="inventory" aria-label="Model inventory">
     <div className="toolbar">
       <input type="search" aria-label="Search models" placeholder="Search models" value={query} onChange={(event) => setQuery(event.target.value)} />
-      {chips.length > 1 && <div className="chip-filter" role="group" aria-label="Service filter"><button aria-pressed={service === null} onClick={() => setService(null)}>All <span>{models.length}</span></button>{chips.map(([id, label, count]) => <button key={id} aria-pressed={service === id} onClick={() => setService(service === id ? null : id)}>{label} <span>{count}</span></button>)}</div>}
+      {(chips.length > 1 || files.length > 0) && <div className="chip-filter" role="group" aria-label="Service filter"><button aria-pressed={service === null} onClick={() => setService(null)}>All <span>{models.length + files.length}</span></button>{chips.map(([id, label, count]) => <button key={id} aria-pressed={service === id} onClick={() => setService(service === id ? null : id)}>{label} <span>{count}</span></button>)}{files.length > 0 && <button aria-pressed={service === "files"} onClick={() => setService(service === "files" ? null : "files")}>Not added <span>{files.length}</span></button>}{disk}</div>}
+      {!(chips.length > 1 || files.length > 0) && disk}
     </div>
-    {models.length === 0 ? <Empty title="No models yet">Find a model in Library to get started.</Empty> : visible.length === 0 ? <Empty title="No matches">Try another search or filter.</Empty> : mode === "policy" ? <div className="policy-board">
+    {models.length === 0 && files.length === 0 ? <Empty title="No models yet">{onDiscover ? <><button className="link-button" onClick={onDiscover}>Find a model</button> to get started.</> : "Find a model in Discover to get started."}</Empty> : visible.length === 0 && visibleFiles.length === 0 ? <Empty title="No matches">Try another search or filter.</Empty> : mode === "policy" ? <div className="policy-board">
       {(["hot", "on-demand", "disabled"] as Policy[]).map((policy) => <section className={`policy-lane ${dragging ? "droppable" : ""}`} key={policy} aria-label={`${policyNames[policy]} models`}
         onDragOver={(event) => { if (dragged.current) event.preventDefault(); }}
         onDrop={(event) => { event.preventDefault(); const model = models.find((item) => item.id === dragged.current); dragged.current = ""; setDragging(""); if (model && !(policy === "disabled" && model.loaded)) setPolicy(mutate, model, policy); }}>
@@ -82,11 +107,12 @@ export function ModelList({ models, selected, onSelect, mode, mutate, busy, onli
         <div role="cell" className="numeric muted">{bytes(model.resident_bytes)}</div>
         <div role="cell" className="row-end"><RowAction model={model} mutate={mutate} disabled={locked} /></div>
       </div>)}
+      {visibleFiles.map((group) => <FileRow key={group.id} group={group} selected={selectedFile === group.id} onSelect={() => onSelectFile?.(group.id)} />)}
     </div>}
   </section>;
 }
 
-export function Inspector({ model, busy, online, onClose, onDirty, mutate, client, stopLoad }: { model: Model; busy: boolean; online: boolean; onClose: () => void; onDirty: (value: boolean) => void; mutate: Mutate; client: Client; stopLoad?: () => void }) {
+export function Inspector({ model, busy, online, onClose, onDirty, mutate, client, stopLoad, inventory = null, onRemoved }: { model: Model; busy: boolean; online: boolean; onClose: () => void; onDirty: (value: boolean) => void; mutate: Mutate; client: Client; stopLoad?: () => void; inventory?: LocalInventory | null; onRemoved?: () => void }) {
   const [profileDirty, setProfileDirty] = useState(false);
   const [artifactDirty, setArtifactDirty] = useState(false);
   const [runtimeDirty, setRuntimeDirty] = useState(false);
@@ -130,7 +156,8 @@ export function Inspector({ model, busy, online, onClose, onDirty, mutate, clien
       </div>
       <div role="tabpanel" id="panel-manage" aria-labelledby="tab-manage" hidden={tab !== "manage"}>
       <section className="inspector-section"><h3>Operations</h3><div className="chip-row">{model.operations.map((operation) => <code className="chip" key={operation}>{operation}</code>)}</div></section>
-      <section className="inspector-section"><h3>Remove registration</h3><p className="muted">Removes the model. Its weight files are kept.</p><Button variant="danger" disabled={busy || !online || dirty || !!removalReason(model)} onClick={() => void mutate("delete", { model: model.id, expected_revision: model.revision }, `Removed ${model.id}. Weight files kept.`)}>Remove registration</Button>{removalReason(model) && <p className="field-help">{removalReason(model)}</p>}</section>
+      <ModelFiles model={model} inventory={inventory} />
+      <section className="inspector-section"><h3>Remove registration</h3><p className="muted">{removalNote(model, inventory)}</p><Button variant="danger" disabled={busy || !online || dirty || !!removalReason(model)} onClick={() => void mutate("delete", { model: model.id, expected_revision: model.revision }, `Removed ${model.id}. Weight files kept.`).then((removed) => { if (removed) onRemoved?.(); })}>Remove registration</Button>{removalReason(model) && <p className="field-help">{removalReason(model)}</p>}</section>
       </div>
     </div>
   </aside>;

@@ -1,5 +1,5 @@
 import type { Locator, Page } from "@playwright/test";
-import { api, expect, navigate, open, test } from "./support";
+import { api, expect, modelsView, open, test } from "./support";
 
 async function addFrom(detail: Locator, id: string) {
   await detail.getByLabel("Model name").fill(id);
@@ -13,7 +13,7 @@ async function addFrom(detail: Locator, id: string) {
 
 async function openMenu(page: Page) {
   await open(page);
-  await navigate(page, "Library");
+  await modelsView(page, "Discover");
   await page.getByRole("button", { name: "Add a model file" }).click();
 }
 

@@ -6,7 +6,7 @@ The [plan](PLAN.md) and [feature crosswalk](FEATURE-COVERAGE.json) retain all 21
 
 ## Console
 
-The console has nine pages: Dashboard, Models (with Aliases), Loading policy, Library (Find models, Files on disk, Import), Backends & hardware, Cache (Sessions, Snapshots), Test services, Diagnostics and Connect. Each page has at most one tab strip and one side inspector. Data refreshes live, so there are no refresh buttons except Retry after a failure.
+The console has eight pages: Dashboard, Models (Installed, Discover, Downloads, Aliases), Loading policy, Backends & hardware, Cache (Sessions, Snapshots), Test services, Diagnostics and Connect. Each page has at most one tab strip and one side inspector. Data refreshes live, so there are no refresh buttons except Retry after a failure.
 
 ## Run an isolated preview
 
@@ -19,7 +19,7 @@ bun run build
 bun run fixture
 ```
 
-Open <http://127.0.0.1:13306>. The launcher starts actual Rust daemon/worker processes with synthetic replies, temporary configuration and fake weights. Stop it with Ctrl+C. The preview supports policy changes, load/unload, temporary tests, maintenance pause, Library acquisition/registration, explicit slot snapshots and bounded diagnostics. It does not judge model output quality.
+Open <http://127.0.0.1:13306>. The launcher starts actual Rust daemon/worker processes with synthetic replies, temporary configuration and fake weights. Stop it with Ctrl+C. The preview supports policy changes, load/unload, temporary tests, maintenance pause, model downloads and adding, explicit slot snapshots and bounded diagnostics. It does not judge model output quality.
 
 For development, `bun run dev` proxies `/v1/` to `http://127.0.0.1:13306`. Set `JUICED_DEV_API` for another isolated service; the development UI defaults to port 5178. Credentials and opaque cache sessions stay in tab memory. Only the service origin and navigation selection may persist locally.
 
@@ -454,7 +454,7 @@ When a load would exceed `resident_budget_bytes` (or protected host memory), Jui
 
 ## Import settings from Juiced 0.9
 
-Mount the old data volume under an import root (`/data/import` in the container) and open Library › Import. Pick the old `config` folder to see each model with its weights, the settings that carry over, the engine Juiced would use and any conflicts. Import registers the selected models in one change. Weights stay where they are and the old folder is never written. Imported models start Disabled unless you pick On demand or Hot; the previous policy is shown as a hint.
+Most installs use automatic adoption, described below. To import by hand, mount the old data volume under an import root (`/data/import` in the container). `POST /v1/juiced/import/native` with `{"action":"preview","source":PATH}` and the old `config` folder lists each model with its weights, the settings that carry over, the engine Juiced would use and any conflicts. `{"action":"apply","source":PATH,"expected_generation":N,"aliases":true,"models":[{"native_id":ID,"id":NEW_ID,"policy":POLICY,"include":true}]}` registers the selected models in one change. Weights stay where they are and the old folder is never written. Imported models start Disabled unless the request names On demand or Hot; the preview reports the previous policy. The console has no import page.
 
 ### Automatic adoption on first boot
 

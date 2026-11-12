@@ -3,7 +3,9 @@ import { Client } from "./api";
 import { normalizeBase, type Snapshot } from "./domain";
 import { Inspector, ModelList, type Mutate } from "./Models";
 import { ServiceTest, type TestMode } from "./ServiceTest";
-import { Library, libraryViews, type LibraryView } from "./Library";
+import { FindModels } from "./FindModels";
+import { Downloading, useActiveDownloads } from "./Downloading";
+import { FileInspector, modelFiles, notAdded, useLocalFiles } from "./LocalModels";
 import { Cache } from "./Cache";
 import { CacheSessions } from "./CacheSessions";
 import { ServiceApis, type ConnectTab } from "./ServiceApis";
@@ -20,7 +22,7 @@ import { Badge, Button, Dialog, Empty, Icon, Menu, Tabs, type IconName } from ".
 import logo from "../../../ui/public/juiced-icon.svg";
 
 const destinations = [
-  ["dashboard", "Dashboard", "dashboard"], ["models", "Models", "models"], ["policy", "Loading policy", "policy"], ["library", "Library", "library"],
+  ["dashboard", "Dashboard", "dashboard"], ["models", "Models", "models"], ["policy", "Loading policy", "policy"],
   ["backend", "Backends & hardware", "backend"], ["cache", "Cache", "cache"], ["test", "Test services", "test"],
   ["diagnostics", "Diagnostics", "diagnostics"], ["connect", "Connect", "api"],
 ] as const satisfies readonly (readonly [string, string, IconName])[];
@@ -36,13 +38,14 @@ function writeLocal(key: string, value: string) {
 export function App() {
   const [screen, setScreen] = useState<Screen>(() => {
     const saved = readLocal("juiced.rewrite.screen");
-    return destinations.some(([id]) => id === saved) ? saved as Screen : saved === "api" ? "connect" : "dashboard";
+    return destinations.some(([id]) => id === saved) ? saved as Screen : saved === "api" ? "connect" : saved === "library" ? "models" : "dashboard";
   });
   const [base, setBase] = useState(() => { try { return normalizeBase(readLocal("juiced.rewrite.base")); } catch { return ""; } });
   const [key, setKey] = useState("");
   const [connectionOpen, setConnectionOpen] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [selected, setSelected] = useState("");
+  const [selectedFile, setSelectedFile] = useState("");
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [online, setOnline] = useState(false);
   const [connectionError, setConnectionError] = useState("");
@@ -53,12 +56,11 @@ export function App() {
   const [epoch, setEpoch] = useState(0);
   const [pending, setPending] = useState<(() => void) | null>(null);
   const [testMode, setTestMode] = useState<TestMode>("try");
-  const [libraryView, setLibraryView] = useState<LibraryView>("search");
   const [diagnosticsTab, setDiagnosticsTab] = useState<"performance" | "requests" | "logs">("performance");
   const [backendTab, setBackendTab] = useState<"machine" | "installed" | "catalog">("machine");
   const [connectTab, setConnectTab] = useState<ConnectTab>("protocols");
   const [cacheTab, setCacheTab] = useState<"sessions" | "snapshots">("sessions");
-  const [modelsTab, setModelsTab] = useState<"models" | "aliases">("models");
+  const [modelsTab, setModelsTab] = useState<"installed" | "discover" | "downloads" | "aliases">("installed");
   const client = useMemo(() => new Client(base, key), [base, key]);
   const toasts = useToasts();
   const live = useSystemStats(client, online);
@@ -81,7 +83,7 @@ export function App() {
   useEffect(() => {
     // Adopting a key the console just created keeps the page, so its one-time secret stays visible.
     if (adoptingKey.current) adoptingKey.current = false;
-    else { setSnapshot(null); setOnline(false); setSelected(""); setDirty(false); clearToasts(); setBusy(false); setLoadingModel(null); }
+    else { setSnapshot(null); setOnline(false); setSelected(""); setSelectedFile(""); setDirty(false); clearToasts(); setBusy(false); setLoadingModel(null); }
     void refresh();
     const timer = setInterval(() => { if (!poll.current) void refresh(); }, 3000);
     return () => { clearInterval(timer); poll.current?.abort(); mutation.current?.controller.abort(); };
@@ -106,7 +108,7 @@ export function App() {
       if (controller.signal.aborted) return false;
       await refresh();
       if (controller.signal.aborted) return false;
-      notify(success + (result.artifact_reference_retained ? " A storage reference remains retained. Inspect Library before deleting weights." : ""));
+      notify(success + (result.artifact_reference_retained ? " A storage reference remains retained. Check its files before deleting them." : ""));
       return true;
     } catch (error) {
       if (!controller.signal.aborted) { notify(error instanceof Error ? error.message : "The operation failed. Refresh and retry.", "error"); await refresh(); }
@@ -122,18 +124,24 @@ export function App() {
     void refresh();
   };
   const model = snapshot?.models.find((model) => model.id === selected);
-  const modelScreen = (screen === "models" && modelsTab === "models") || screen === "policy";
-  const hasInspector = !!model && modelScreen;
+  const installed = screen === "models" && modelsTab === "installed";
+  const modelScreen = installed || screen === "policy";
+  const local = useLocalFiles(client, modelScreen && online);
+  const downloads = useActiveDownloads(client, screen === "models" && online);
+  const files = useMemo(() => notAdded(local.data), [local.data]);
+  const fileGroup = installed && !model ? local.data?.groups.find((group) => group.id === selectedFile) : undefined;
+  useEffect(() => { if (selectedFile && local.data && !local.data.groups.some((group) => group.id === selectedFile)) setSelectedFile(""); }, [local.data, selectedFile]);
+  const hasInspector = (!!model || !!fileGroup) && modelScreen;
   const resources = snapshot?.resources;
   const title = destinations.find(([id]) => id === screen)![1];
   const togglePause = () => void mutate("juiced/admission", { paused: !resources?.paused }, resources?.paused ? "Resumed new requests." : "Paused new requests.");
-  const openModel = (id: string) => leave(() => { setScreen("models"); setModelsTab("models"); setSelected(id); });
+  const openModel = (id: string) => leave(() => { setScreen("models"); setModelsTab("installed"); setSelected(id); setSelectedFile(""); });
+  const modelsView = (tab: typeof modelsTab) => leave(() => { setScreen("models"); setModelsTab(tab); setSelected(""); setSelectedFile(""); });
   const status = !online ? "Offline" : resources?.paused ? "Paused" : "Online";
   const gpu = live.stats?.gpus[0];
-  const tabs = screen === "models" ? <Tabs label="Models views" value={modelsTab} onChange={(value) => leave(() => { setModelsTab(value); setSelected(""); })} items={[["models", "Models"], ["aliases", "Aliases"]]} />
+  const tabs = screen === "models" ? <Tabs label="Models views" value={modelsTab} onChange={modelsView} items={[["installed", "Installed"], ["discover", "Discover"], ["downloads", downloads ? `Downloads ${downloads}` : "Downloads"], ["aliases", "Aliases"]]} />
     : screen === "cache" ? <Tabs label="Cache views" value={cacheTab} onChange={setCacheTab} items={[["sessions", "Sessions"], ["snapshots", "Snapshots"]]} />
     : screen === "test" ? <Tabs label="Test mode" value={testMode} onChange={setTestMode} items={[["try", "Try a model"], ["compare", "Compare"]]} />
-    : screen === "library" ? <Tabs label="Library view" value={libraryView} onChange={setLibraryView} items={libraryViews} />
     : screen === "connect" ? <Tabs label="Connect views" value={connectTab} onChange={setConnectTab} items={[["protocols", "Protocols"], ["keys", "API keys"], ["endpoints", "Endpoints"]]} />
     : screen === "backend" ? <Tabs label="Backend views" value={backendTab} onChange={setBackendTab} items={[["machine", "This machine"], ["installed", "Engines"], ["catalog", "Catalog"]]} />
     : screen === "diagnostics" ? <Tabs label="Diagnostics views" value={diagnosticsTab} onChange={setDiagnosticsTab} items={[["performance", "Performance"], ["requests", "Requests"], ["logs", "Logs"]]} />
@@ -150,7 +158,7 @@ export function App() {
       </Menu>
     </header>
     <aside className={`sidebar ${mobileOpen ? "open" : ""}`} aria-label="Navigation">
-      <nav aria-label="Destinations">{destinations.map(([id, label, icon]) => <button key={id} aria-current={screen === id ? "page" : undefined} onClick={() => { setMobileOpen(false); leave(() => { setScreen(id); setSelected(""); }); }}><Icon name={icon} size={16} /><span>{label}</span>{id === "models" && snapshot && <span className="nav-count">{snapshot.models.length}</span>}</button>)}</nav>
+      <nav aria-label="Destinations">{destinations.map(([id, label, icon]) => <button key={id} aria-current={screen === id ? "page" : undefined} onClick={() => { setMobileOpen(false); leave(() => { setScreen(id); setSelected(""); setSelectedFile(""); }); }}><Icon name={icon} size={16} /><span>{label}</span>{id === "models" && snapshot && <span className="nav-count">{snapshot.models.length}</span>}</button>)}</nav>
       <div className="sidebar-footer">
         <p className="sidebar-version" aria-label="Service version" title={snapshot ? `${snapshot.models.filter((model) => model.loaded).length} loaded · ${snapshot.models.filter((model) => model.policy !== "disabled").length} available` : undefined}>{snapshot ? `Juiced ${snapshot.version} · ${snapshot.models.filter((model) => model.loaded).length} loaded` : "Not connected"}</p>
         <a href="https://github.com/Nulifyer/Juiced" target="_blank" rel="noreferrer" aria-label="Source and releases" title="Source and releases"><Icon name="github" size={15} /></a>
@@ -163,9 +171,12 @@ export function App() {
       <div className="page-header"><h1>{title}</h1>{tabs}</div>
       {!snapshot ? <Empty title={refreshing ? "Connecting to Juiced" : "Service unavailable"}>{refreshing ? "Reading models and service state…" : "Check the address and API key in Connection settings."}</Empty> : <>
         {screen === "dashboard" && <Dashboard snapshot={snapshot} stats={live.stats} history={live.history} onOpenModel={openModel} onTest={() => setScreen("test")} />}
-        {modelScreen && <div className="model-workspace"><ModelList models={snapshot.models} selected={selected} onSelect={(id) => leave(() => setSelected(id))} mode={screen as "models" | "policy"} mutate={mutate} busy={busy} online={online} idleControl={screen === "policy" ? <IdleDefault client={client} online={online} /> : undefined} />{hasInspector && <Inspector key={`${model.id}:${epoch}`} model={model} busy={busy} online={online} onClose={() => leave(() => setSelected(""))} onDirty={setDirty} mutate={mutate} client={client} stopLoad={loadingModel === model.id ? stopLoad : undefined} />}</div>}
+        {modelScreen && <div className="model-workspace"><ModelList models={snapshot.models} selected={selected} onSelect={(id) => leave(() => { setSelected(id); setSelectedFile(""); })} mode={screen as "models" | "policy"} mutate={mutate} busy={busy} online={online} idleControl={screen === "policy" ? <IdleDefault client={client} online={online} /> : undefined} files={installed ? files : undefined} inventory={installed ? local.data : undefined} selectedFile={fileGroup?.id} onSelectFile={(id) => leave(() => { setSelected(""); setSelectedFile(id); })} onDiscover={() => modelsView("discover")} />
+          {hasInspector && model && <Inspector key={`${model.id}:${epoch}`} model={model} busy={busy} online={online} onClose={() => leave(() => setSelected(""))} onDirty={setDirty} mutate={mutate} client={client} stopLoad={loadingModel === model.id ? stopLoad : undefined} inventory={local.data} onRemoved={() => { const { groups } = modelFiles(model, local.data); setSelected(""); if (installed && groups.length === 1 && groups[0]!.usedBy.every((id) => id === model.id)) setSelectedFile(groups[0]!.id); void local.reload(); }} />}
+          {hasInspector && fileGroup && <FileInspector key={`${fileGroup.id}:${epoch}`} group={fileGroup} client={client} online={online} onClose={() => setSelectedFile("")} onRegistered={refresh} onOpenModel={openModel} onChanged={local.reload} />}</div>}
+        {screen === "models" && modelsTab === "discover" && <FindModels key={epoch} client={client} online={online} onRegistered={refresh} onOpenModel={openModel} onDownloads={() => modelsView("downloads")} />}
+        {screen === "models" && modelsTab === "downloads" && <Downloading key={epoch} client={client} online={online} onSearch={() => modelsView("discover")} />}
         {screen === "models" && modelsTab === "aliases" && <Aliases key={epoch} client={client} models={snapshot.models} online={online} onOpenModel={openModel} />}
-        {screen === "library" && <Library key={`${epoch}:${libraryView}`} view={libraryView} onView={setLibraryView} client={client} online={online} onRegistered={refresh} onOpenModel={openModel} />}
         {screen === "diagnostics" && <Diagnostics client={client} snapshot={snapshot} stats={live.stats} history={live.history} tab={diagnosticsTab} />}
         {screen === "test" && <ServiceTest key={`${epoch}:${testMode}`} mode={testMode} models={snapshot.models} client={client} online={online} />}
         {screen === "connect" && <ServiceApis key={epoch} base={base} client={client} tab={connectTab} models={snapshot.models} online={online} consoleKey={key} onAdoptKey={(next) => { adoptingKey.current = true; setKey(next); }} />}

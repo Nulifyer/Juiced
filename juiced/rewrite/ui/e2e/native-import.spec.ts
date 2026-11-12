@@ -1,34 +1,26 @@
-import { api, expect, navigate, open, tab, test, toasts } from "./support";
+import { api, expect, test } from "./support";
 
-test("settings from an old Juiced folder are previewed and imported", async ({ page, request }) => {
+type Row = { native_id: string; proposed_id: string; importable: boolean; previous_policy: string | null; status: string; already_imported: string | null };
+type Preview = { source: string; configuration_generation: number; models: Row[] };
+
+test("settings from an old Juiced folder are previewed and imported through the API", async ({ request }) => {
   const service = api(request);
   const fixture = await service.source();
   const source = `${fixture.import_root}/old-juiced/config`;
-  type Preview = { models: { native_id: string; proposed_id: string }[] };
-  const proposed = (await service.post<Preview>("/v1/juiced/import/native", { action: "preview", source })).models.find((row) => row.native_id === "user.OldChat")!.proposed_id;
+  const preview = async () => service.post<Preview>("/v1/juiced/import/native", { action: "preview", source });
+  const proposed = (await preview()).models.find((row) => row.native_id === "user.OldChat")!.proposed_id;
   await service.remove(proposed);
   try {
-    await open(page);
-    await navigate(page, "Library");
-    await tab(page, "Library view", "Import").click();
-    const view = page.getByRole("region", { name: "Import from Juiced 0.9" });
-    const folders = view.getByRole("list", { name: "Folders" });
-    await folders.getByRole("button").first().click();
-    await folders.getByRole("button", { name: "old-juiced" }).click();
-    await folders.getByRole("button", { name: "config" }).click();
-    await view.getByRole("button", { name: "Use this folder" }).click();
-    const row = view.getByRole("table", { name: "Models to import" }).getByRole("row", { name: "user.OldChat" });
-    await expect(row).toContainText(proposed);
-    await expect(row.getByRole("option", { name: "On demand (before)" })).toBeAttached();
-    const install = row.getByRole("button", { name: "Install" });
-    if (await install.isVisible()) { await install.click(); await expect(row).toContainText("Ready", { timeout: 30000 }); }
-    await expect(row.getByLabel("Import user.OldChat")).toBeChecked();
-    await expect(row.getByLabel("Policy for user.OldChat")).toHaveValue("disabled");
-    await row.getByLabel("Policy for user.OldChat").selectOption("on-demand");
-    await view.getByRole("button", { name: /^Import \d+ models?$/ }).click();
-    await expect(toasts(page).getByRole("status")).toContainText("Imported 1 model.");
-    await expect(row).toContainText("Already added");
+    const before = await preview();
+    const row = before.models.find((entry) => entry.native_id === "user.OldChat")!;
+    expect(row).toMatchObject({ importable: true, previous_policy: "on-demand", already_imported: null });
+    const result = await service.post<{ models: { native_id: string; id: string; status: string }[] }>("/v1/juiced/import/native", {
+      action: "apply", source: before.source, expected_generation: before.configuration_generation, aliases: true,
+      models: [{ native_id: row.native_id, id: row.proposed_id, policy: "on-demand", include: true }],
+    });
+    expect(result.models).toContainEqual(expect.objectContaining({ native_id: "user.OldChat", id: proposed, status: "imported" }));
     expect((await service.model(proposed))?.policy).toBe("on-demand");
+    expect((await preview()).models.find((entry) => entry.native_id === "user.OldChat")).toMatchObject({ status: "already_imported", already_imported: proposed });
   } finally {
     await service.remove(proposed);
   }
