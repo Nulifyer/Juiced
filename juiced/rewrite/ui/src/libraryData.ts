@@ -1,5 +1,5 @@
 export type QuantJob = { id: string; state: string; downloaded_bytes: number; expected_bytes: number | null };
-export type Quant = { label: string; file: string; parts: number; bytes: number | null; recommended: boolean; pullable: boolean; present: boolean; presentFiles: number; set: string | null; sha256: string | null; jobs: QuantJob[] };
+export type Quant = { label: string; file: string; parts: number; bytes: number | null; recommended: boolean; pullable: boolean; present: boolean; presentFiles: number; set: string | null; localPath: string | null; readOnly: boolean; sha256: string | null; jobs: QuantJob[] };
 export type LibraryModel = { id: string; repo: string; name: string; publisher: string | null; task: string | null; source: "catalog" | "huggingface" | "local"; downloads: number | null; likes: number | null; license: string | null; gated: boolean; quants: Quant[] };
 export type SearchResult = { generation: number; offline: boolean; hub: string; models: LibraryModel[]; next: string | null };
 export type PullFile = { file: string; bytes: number | null; sha256: string | null; state: string; downloaded_bytes: number; job: string | null; error: string | null };
@@ -25,7 +25,7 @@ export function parseSearch(value: unknown): SearchResult {
         const local = record(quant.local ?? {});
         return {
           label: text(quant.label) ?? "Unknown", file: text(quant.file) ?? "", parts: number(quant.parts) ?? 1, bytes: number(quant.bytes), recommended: quant.recommended === true, pullable: quant.pullable === true,
-          present: local.present === true, presentFiles: number(local.present_files) ?? 0, set: text(local.set), sha256: text(quant.sha256),
+          present: local.present === true, presentFiles: number(local.present_files) ?? 0, set: text(local.set), localPath: text(local.path), readOnly: local.read_only === true, sha256: text(quant.sha256),
           jobs: list(quant.jobs, 16).map((job) => ({ id: text(job.id) ?? "", state: text(job.state) ?? "", downloaded_bytes: number(job.downloaded_bytes) ?? 0, expected_bytes: number(job.expected_bytes) })),
         };
       }),

@@ -6,7 +6,7 @@ mod set_tests;
 mod sets;
 pub use intake::{Intake, Published};
 pub use inventory::{InventoryPage, InventoryRequest, Section as InventorySection};
-pub use presence::{Presence, PresenceJob, SourceRecord};
+pub use presence::{Presence, PresenceJob, SourceRecord, StoreListing, StoredFile, StoredSet};
 pub mod inventory_bounds {
     pub use super::inventory::{
         DEFAULT_PAGE_SIZE, ERROR_PREVIEW_BYTES, MAXIMUM_PAGE_SIZE, REFERENCE_PREVIEW,

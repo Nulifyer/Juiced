@@ -143,6 +143,15 @@ pub(super) struct SetRecord {
     holds: Option<Arc<AtomicUsize>>,
 }
 
+impl SetRecord {
+    pub(super) fn in_use(&self) -> bool {
+        !self.references.is_empty() || hold_count(&self.holds) != 0
+    }
+    pub(super) fn references(&self) -> impl Iterator<Item = &String> {
+        self.references.iter()
+    }
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct ArtifactSetView {
     pub id: String,

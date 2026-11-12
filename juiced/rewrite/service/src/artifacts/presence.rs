@@ -121,4 +121,83 @@ impl ArtifactStore {
         }
         Ok(records)
     }
+
+    pub fn local_listing(&self, limit: usize) -> Result<StoreListing, ArtifactError> {
+        let runtime = self.runtime.lock().map_err(|_| ArtifactError::Corrupt)?;
+        let mut sources: BTreeMap<&str, (Option<&str>, Option<&str>)> = BTreeMap::new();
+        for job in runtime.manifest.jobs.values() {
+            if let Some(artifact) = job.artifact.as_deref() {
+                sources.insert(
+                    artifact,
+                    (job.source_url.as_deref(), job.source_name.as_deref()),
+                );
+            }
+        }
+        let files = runtime
+            .manifest
+            .artifacts
+            .iter()
+            .take(limit)
+            .map(|(id, artifact)| {
+                let (url, name) = sources.get(id.as_str()).copied().unwrap_or_default();
+                StoredFile {
+                    id: id.clone(),
+                    bytes: artifact.bytes,
+                    path: self.artifact_path(id),
+                    removing: artifact.removing,
+                    references: artifact.references.iter().cloned().collect(),
+                    active_holds: artifact.active_holds(),
+                    source_url: url.map(str::to_owned),
+                    source_name: name.map(str::to_owned),
+                }
+            })
+            .collect();
+        let sets = runtime
+            .manifest
+            .artifact_sets
+            .iter()
+            .take(limit)
+            .map(|(id, record)| StoredSet {
+                id: id.clone(),
+                specification: record.specification.clone(),
+                in_use: record.in_use(),
+                references: record.references().cloned().collect(),
+            })
+            .collect();
+        Ok(StoreListing {
+            generation: runtime.manifest.generation,
+            truncated: runtime.manifest.artifacts.len() > limit
+                || runtime.manifest.artifact_sets.len() > limit,
+            files,
+            sets,
+        })
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct StoredFile {
+    pub id: String,
+    pub bytes: u64,
+    pub path: PathBuf,
+    pub removing: bool,
+    pub references: Vec<String>,
+    pub active_holds: usize,
+    pub source_url: Option<String>,
+    pub source_name: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct StoredSet {
+    pub id: String,
+    pub specification: Arc<ArtifactSetSpec>,
+    pub in_use: bool,
+    pub references: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct StoreListing {
+    pub generation: u64,
+    pub truncated: bool,
+    pub files: Vec<StoredFile>,
+    pub sets: Vec<StoredSet>,
 }
