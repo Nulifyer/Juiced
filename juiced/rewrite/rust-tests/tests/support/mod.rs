@@ -41,7 +41,7 @@ pub const READ_ROUTES: [&str; 11] = [
     "/models/{model}/options",
     "/juiced/voices",
 ];
-pub const OPERATOR_READ_ROUTES: [&str; 30] = [
+pub const OPERATOR_READ_ROUTES: [&str; 31] = [
     "/system-info",
     "/juiced/cache/inspect",
     "/juiced/cache/sessions",
@@ -72,8 +72,9 @@ pub const OPERATOR_READ_ROUTES: [&str; 30] = [
     "/juiced/flm",
     "/juiced/access",
     "/juiced/protocols/health",
+    "/juiced/barista",
 ];
-pub const WRITE_ROUTES: [&str; 38] = [
+pub const WRITE_ROUTES: [&str; 40] = [
     "/juiced/runtime-packages/import",
     "/juiced/engines/install",
     "/juiced/models/add",
@@ -112,6 +113,8 @@ pub const WRITE_ROUTES: [&str; 38] = [
     "/juiced/access/keys",
     "/juiced/access/keys/revoke",
     "/juiced/protocols",
+    "/juiced/barista",
+    "/juiced/barista/tools/call",
 ];
 pub const INFERENCE_ROUTES: [&str; 4] = [
     "/chat/completions",

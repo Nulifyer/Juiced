@@ -23,6 +23,7 @@ use tokio::sync::{Mutex as AsyncMutex, MutexGuard, watch};
 
 mod access;
 mod aliases;
+mod barista;
 pub use aliases::AliasChange;
 mod options;
 pub use options::{OptionsApply, OptionsError};

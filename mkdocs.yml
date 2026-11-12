@@ -62,6 +62,7 @@ nav:
       - Native compatibility: api/lemonade.md
   - Operate your server:
       - Diagnostics: guide/diagnostics.md
+      - Barista: guide/barista.md
       - Update and recovery: guide/maintenance.md
       - Troubleshooting: guide/troubleshooting.md
   - Credits: credits.md

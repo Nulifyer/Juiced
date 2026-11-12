@@ -27,6 +27,7 @@ comparing controls with a tagged release.
 - [Connect Home Assistant speech](integrations/home-assistant.md)
 - [Use the HTTP and MCP APIs](api/README.md)
 - [Inspect runtime activity](guide/diagnostics.md)
+- [Manage Juiced with Barista](guide/barista.md)
 - [Use the command-line client](guide/cli.md)
 - [Solve problems](guide/troubleshooting.md)
 

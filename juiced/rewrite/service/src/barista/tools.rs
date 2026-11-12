@@ -1,4 +1,4 @@
-//! Juiced management tools for the MCP gateway.
+//! Barista's typed management tools.
 //!
 //! Each tool replays the equivalent native route through the service router with the caller's
 //! own credentials, so route authority, validation and revision conflicts stay authoritative.
@@ -16,12 +16,12 @@ use tower::ServiceExt;
 const MAX_ROUTE_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 const MODEL_ID_BYTES: u64 = 256;
 
-struct Tool {
+pub(super) struct Tool {
     name: &'static str,
     title: &'static str,
     description: &'static str,
     authority: Authority,
-    read_only: bool,
+    pub(super) read_only: bool,
     destructive: bool,
     idempotent: bool,
     open_world: bool,
@@ -244,7 +244,7 @@ const TOOLS: &[Tool] = &[
     },
 ];
 
-fn tool(name: &str) -> Option<&'static Tool> {
+pub(super) fn tool(name: &str) -> Option<&'static Tool> {
     TOOLS.iter().find(|tool| tool.name == name)
 }
 
@@ -255,27 +255,25 @@ fn allows(context: &RequestContext, authority: Authority) -> bool {
     }
 }
 
-pub(crate) fn is_management_tool(name: &str) -> bool {
-    tool(name).is_some()
-}
-
-pub(crate) fn tools(context: &RequestContext) -> Vec<Value> {
+pub(super) fn listed(context: &RequestContext, permission: super::Permission) -> Vec<Value> {
     TOOLS
         .iter()
         .filter(|tool| allows(context, tool.authority))
+        .filter(|tool| tool.read_only || permission != super::Permission::ReadOnly)
         .map(|tool| {
             let mut annotations = json!({"title":tool.title,"readOnlyHint":tool.read_only,"openWorldHint":tool.open_world});
             if !tool.read_only {
                 annotations["destructiveHint"] = json!(tool.destructive);
                 annotations["idempotentHint"] = json!(tool.idempotent);
             }
-            json!({"name":tool.name,"title":tool.title,"description":tool.description,"inputSchema":(tool.input)(),"annotations":annotations})
+            let confirm = !tool.read_only && permission == super::Permission::Ask;
+            json!({"name":tool.name,"title":tool.title,"description":tool.description,"inputSchema":(tool.input)(),"annotations":annotations,"requires_confirmation":confirm})
         })
         .collect()
 }
 
 #[derive(Debug)]
-pub(crate) enum Failure {
+pub(super) enum Failure {
     Forbidden,
     InvalidParams(String),
     Route(Value),
@@ -518,14 +516,13 @@ fn launch(value: Option<Option<u32>>, maximum: u32, field: &str) -> Result<(), F
     }
 }
 
-pub(crate) async fn call(
+pub(super) async fn call(
     app: Router,
     headers: &HeaderMap,
     context: &RequestContext,
-    name: &str,
+    tool: &Tool,
     args: Value,
 ) -> Result<Value, Failure> {
-    let tool = tool(name).ok_or_else(|| Failure::InvalidParams("Unknown tool.".into()))?;
     if !allows(context, tool.authority) {
         return Err(Failure::Forbidden);
     }
@@ -921,16 +918,18 @@ mod tests {
     }
 
     #[test]
-    fn management_tools_are_listed_only_to_operators_with_consistent_annotations() {
-        assert!(tools(&context(Role::Inference)).is_empty());
+    fn tools_are_listed_only_to_operators_and_filtered_by_permission() {
+        use super::super::Permission;
+        assert!(listed(&context(Role::Inference), Permission::Full).is_empty());
         for role in [Role::Operator, Role::TrustedLan] {
-            let listed = tools(&context(role));
-            assert_eq!(listed.len(), TOOLS.len());
-            for tool in &listed {
+            let full = listed(&context(role), Permission::Full);
+            assert_eq!(full.len(), TOOLS.len());
+            for tool in &full {
                 let name = tool["name"].as_str().unwrap();
                 assert!(name.starts_with("juiced_"), "{name}");
                 assert_eq!(tool["inputSchema"]["type"], "object");
                 assert_eq!(tool["inputSchema"]["additionalProperties"], false);
+                assert_eq!(tool["requires_confirmation"], false);
                 let read_only = tool["annotations"]["readOnlyHint"].as_bool().unwrap();
                 assert_eq!(
                     read_only,
@@ -945,6 +944,23 @@ mod tests {
                     read_only
                 );
             }
+            let ask = listed(&context(role), Permission::Ask);
+            assert_eq!(ask.len(), TOOLS.len());
+            for tool in &ask {
+                assert_eq!(
+                    tool["requires_confirmation"],
+                    tool["annotations"]["readOnlyHint"] == false
+                );
+            }
+            let read = listed(&context(role), Permission::ReadOnly);
+            assert_eq!(
+                read.len(),
+                TOOLS.iter().filter(|tool| tool.read_only).count()
+            );
+            assert!(
+                read.iter()
+                    .all(|tool| tool["annotations"]["readOnlyHint"] == true)
+            );
         }
     }
 
@@ -960,7 +976,7 @@ mod tests {
             Router::new(),
             &HeaderMap::new(),
             &context(Role::Inference),
-            "juiced_set_policy",
+            tool("juiced_set_policy").unwrap(),
             json!({"model":"m","policy":"hot","expected_revision":0}),
         )
         .await;
@@ -969,7 +985,7 @@ mod tests {
             Router::new(),
             &HeaderMap::new(),
             &context(Role::Operator),
-            "juiced_set_policy",
+            tool("juiced_set_policy").unwrap(),
             json!({"model":"m","policy":"always","expected_revision":0}),
         )
         .await;
@@ -978,7 +994,7 @@ mod tests {
             Router::new(),
             &HeaderMap::new(),
             &context(Role::Operator),
-            "juiced_add_model",
+            tool("juiced_add_model").unwrap(),
             json!({"path":"/a.gguf","artifact":"b"}),
         )
         .await;

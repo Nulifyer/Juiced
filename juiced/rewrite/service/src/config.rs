@@ -432,6 +432,8 @@ pub struct Config {
         skip_serializing_if = "crate::protocol_access::Settings::is_default"
     )]
     pub protocols: crate::protocol_access::Settings,
+    #[serde(default, skip_serializing_if = "crate::barista::Settings::is_default")]
+    pub barista: crate::barista::Settings,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native_adoption: Option<NativeAdoption>,
 }
@@ -536,6 +538,8 @@ struct ConfigWire {
     #[serde(default)]
     protocols: crate::protocol_access::Settings,
     #[serde(default)]
+    barista: crate::barista::Settings,
+    #[serde(default)]
     native_adoption: Option<NativeAdoption>,
 }
 
@@ -606,6 +610,7 @@ impl<'de> Deserialize<'de> for Config {
             import_roots: wire.import_roots,
             wyoming: wire.wyoming,
             protocols: wire.protocols,
+            barista: wire.barista,
             native_adoption: wire.native_adoption,
         })
     }
@@ -718,6 +723,7 @@ impl Config {
             ));
         }
         self.wyoming.validate()?;
+        self.barista.validate()?;
         self.protocols.validate()?;
         let mut ids = HashSet::new();
         let mut native_ids = HashSet::new();
@@ -1033,6 +1039,34 @@ mod tests {
         let mut unknown = saved;
         unknown["aliases"]["extra"] = json!(true);
         assert!(serde_json::from_value::<Config>(unknown).is_err());
+    }
+
+    #[test]
+    fn barista_is_off_after_upgrade_and_round_trips_once_configured() {
+        let upgraded: Config = serde_json::from_value(legacy_config()).unwrap();
+        assert!(!upgraded.barista.enabled);
+        assert_eq!(
+            upgraded.barista.permission,
+            crate::barista::Permission::Full
+        );
+        assert!(
+            serde_json::to_value(&upgraded)
+                .unwrap()
+                .get("barista")
+                .is_none()
+        );
+        let mut saved = serde_json::to_value(&upgraded).unwrap();
+        saved["barista"] =
+            json!({"enabled":true,"model":"folder/model λ","permission":"ask","revision":2});
+        let current: Config = serde_json::from_value(saved.clone()).unwrap();
+        current.validate().unwrap();
+        assert_eq!(
+            serde_json::to_value(&current).unwrap()["barista"],
+            saved["barista"]
+        );
+        saved["barista"] = json!({"enabled":true,"revision":2});
+        let orphan: Config = serde_json::from_value(saved).unwrap();
+        assert!(orphan.validate().is_err());
     }
 
     #[test]
