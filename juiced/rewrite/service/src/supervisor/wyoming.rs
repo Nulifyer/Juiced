@@ -3,6 +3,18 @@ use super::*;
 impl Manager {
     pub async fn wyoming_settings(&self) -> (crate::wyoming::Settings, u64) {
         let config = self.config.lock().await;
+        if config.wyoming.is_default() {
+            let enabled = std::env::var("JUICED_WYOMING_ENABLED").ok();
+            let uri = std::env::var("JUICED_WYOMING_URI").ok();
+            match crate::wyoming::Settings::from_environment(enabled.as_deref(), uri.as_deref()) {
+                Some(Ok(settings)) => return (settings, config.generation),
+                Some(Err(message)) => self.logs().service(
+                    crate::logs::Level::Error,
+                    &format!("JUICED_WYOMING_URI is ignored: {message}"),
+                ),
+                None => {}
+            }
+        }
         (config.wyoming.clone(), config.generation)
     }
 

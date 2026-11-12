@@ -1,0 +1,455 @@
+{
+ "_capture": {
+  "program": "wyoming_openai 0.8.0 (roryeckel/wyoming_openai 8e73875b2bd3d9d396d0dc750e58e639ed7b5f6a, wyoming 1.10.2)",
+  "argv": "as native juiced/runtime/voice.py on port 8080: --languages en --stt-backend OPENAI --stt-models asr4all-l-gptq-Q8_0 --tts-backend OPENAI --tts-models kokoro-v1 --tts-voices <af_/am_/bf_/bm_ voices of kokoro-v1>",
+  "header": {
+   "type": "info",
+   "version": "1.10.2"
+  }
+ },
+ "data": {
+  "asr": [
+   {
+    "name": "openai",
+    "attribution": {
+     "name": "OpenAI-Compatible Proxy",
+     "url": "http://127.0.0.1:8080/v1"
+    },
+    "installed": true,
+    "description": "OpenAI (Non-Streaming)",
+    "version": "0.8.0",
+    "models": [
+     {
+      "name": "asr4all-l-gptq-Q8_0",
+      "attribution": {
+       "name": "OpenAI-Compatible Wyoming Proxy",
+       "url": "http://127.0.0.1:8080/v1"
+      },
+      "installed": true,
+      "description": "asr4all-l-gptq-Q8_0",
+      "version": null,
+      "languages": [
+       "en"
+      ]
+     }
+    ],
+    "supports_transcript_streaming": false,
+    "requires_external_vad": true,
+    "prefers_auto_gain_enabled": true,
+    "prefers_noise_reduction_enabled": true
+   }
+  ],
+  "tts": [
+   {
+    "name": "openai",
+    "attribution": {
+     "name": "OpenAI-Compatible Proxy",
+     "url": "https://github.com/roryeckel/wyoming_openai"
+    },
+    "installed": true,
+    "description": "OpenAI (Non-Streaming)",
+    "version": "0.8.0",
+    "voices": [
+     {
+      "name": "af_alloy",
+      "attribution": {
+       "name": "OpenAI-Compatible Wyoming Proxy",
+       "url": "http://127.0.0.1:8080/v1"
+      },
+      "installed": true,
+      "description": "af_alloy",
+      "version": null,
+      "languages": [
+       "en"
+      ],
+      "speakers": null
+     },
+     {
+      "name": "af_aoede",
+      "attribution": {
+       "name": "OpenAI-Compatible Wyoming Proxy",
+       "url": "http://127.0.0.1:8080/v1"
+      },
+      "installed": true,
+      "description": "af_aoede",
+      "version": null,
+      "languages": [
+       "en"
+      ],
+      "speakers": null
+     },
+     {
+      "name": "af_bella",
+      "attribution": {
+       "name": "OpenAI-Compatible Wyoming Proxy",
+       "url": "http://127.0.0.1:8080/v1"
+      },
+      "installed": true,
+      "description": "af_bella",
+      "version": null,
+      "languages": [
+       "en"
+      ],
+      "speakers": null
+     },
+     {
+      "name": "af_heart",
+      "attribution": {
+       "name": "OpenAI-Compatible Wyoming Proxy",
+       "url": "http://127.0.0.1:8080/v1"
+      },
+      "installed": true,
+      "description": "af_heart",
+      "version": null,
+      "languages": [
+       "en"
+      ],
+      "speakers": null
+     },
+     {
+      "name": "af_jessica",
+      "attribution": {
+       "name": "OpenAI-Compatible Wyoming Proxy",
+       "url": "http://127.0.0.1:8080/v1"
+      },
+      "installed": true,
+      "description": "af_jessica",
+      "version": null,
+      "languages": [
+       "en"
+      ],
+      "speakers": null
+     },
+     {
+      "name": "af_kore",
+      "attribution": {
+       "name": "OpenAI-Compatible Wyoming Proxy",
+       "url": "http://127.0.0.1:8080/v1"
+      },
+      "installed": true,
+      "description": "af_kore",
+      "version": null,
+      "languages": [
+       "en"
+      ],
+      "speakers": null
+     },
+     {
+      "name": "af_nicole",
+      "attribution": {
+       "name": "OpenAI-Compatible Wyoming Proxy",
+       "url": "http://127.0.0.1:8080/v1"
+      },
+      "installed": true,
+      "description": "af_nicole",
+      "version": null,
+      "languages": [
+       "en"
+      ],
+      "speakers": null
+     },
+     {
+      "name": "af_nova",
+      "attribution": {
+       "name": "OpenAI-Compatible Wyoming Proxy",
+       "url": "http://127.0.0.1:8080/v1"
+      },
+      "installed": true,
+      "description": "af_nova",
+      "version": null,
+      "languages": [
+       "en"
+      ],
+      "speakers": null
+     },
+     {
+      "name": "af_river",
+      "attribution": {
+       "name": "OpenAI-Compatible Wyoming Proxy",
+       "url": "http://127.0.0.1:8080/v1"
+      },
+      "installed": true,
+      "description": "af_river",
+      "version": null,
+      "languages": [
+       "en"
+      ],
+      "speakers": null
+     },
+     {
+      "name": "af_sarah",
+      "attribution": {
+       "name": "OpenAI-Compatible Wyoming Proxy",
+       "url": "http://127.0.0.1:8080/v1"
+      },
+      "installed": true,
+      "description": "af_sarah",
+      "version": null,
+      "languages": [
+       "en"
+      ],
+      "speakers": null
+     },
+     {
+      "name": "af_sky",
+      "attribution": {
+       "name": "OpenAI-Compatible Wyoming Proxy",
+       "url": "http://127.0.0.1:8080/v1"
+      },
+      "installed": true,
+      "description": "af_sky",
+      "version": null,
+      "languages": [
+       "en"
+      ],
+      "speakers": null
+     },
+     {
+      "name": "am_adam",
+      "attribution": {
+       "name": "OpenAI-Compatible Wyoming Proxy",
+       "url": "http://127.0.0.1:8080/v1"
+      },
+      "installed": true,
+      "description": "am_adam",
+      "version": null,
+      "languages": [
+       "en"
+      ],
+      "speakers": null
+     },
+     {
+      "name": "am_echo",
+      "attribution": {
+       "name": "OpenAI-Compatible Wyoming Proxy",
+       "url": "http://127.0.0.1:8080/v1"
+      },
+      "installed": true,
+      "description": "am_echo",
+      "version": null,
+      "languages": [
+       "en"
+      ],
+      "speakers": null
+     },
+     {
+      "name": "am_eric",
+      "attribution": {
+       "name": "OpenAI-Compatible Wyoming Proxy",
+       "url": "http://127.0.0.1:8080/v1"
+      },
+      "installed": true,
+      "description": "am_eric",
+      "version": null,
+      "languages": [
+       "en"
+      ],
+      "speakers": null
+     },
+     {
+      "name": "am_fenrir",
+      "attribution": {
+       "name": "OpenAI-Compatible Wyoming Proxy",
+       "url": "http://127.0.0.1:8080/v1"
+      },
+      "installed": true,
+      "description": "am_fenrir",
+      "version": null,
+      "languages": [
+       "en"
+      ],
+      "speakers": null
+     },
+     {
+      "name": "am_liam",
+      "attribution": {
+       "name": "OpenAI-Compatible Wyoming Proxy",
+       "url": "http://127.0.0.1:8080/v1"
+      },
+      "installed": true,
+      "description": "am_liam",
+      "version": null,
+      "languages": [
+       "en"
+      ],
+      "speakers": null
+     },
+     {
+      "name": "am_michael",
+      "attribution": {
+       "name": "OpenAI-Compatible Wyoming Proxy",
+       "url": "http://127.0.0.1:8080/v1"
+      },
+      "installed": true,
+      "description": "am_michael",
+      "version": null,
+      "languages": [
+       "en"
+      ],
+      "speakers": null
+     },
+     {
+      "name": "am_onyx",
+      "attribution": {
+       "name": "OpenAI-Compatible Wyoming Proxy",
+       "url": "http://127.0.0.1:8080/v1"
+      },
+      "installed": true,
+      "description": "am_onyx",
+      "version": null,
+      "languages": [
+       "en"
+      ],
+      "speakers": null
+     },
+     {
+      "name": "am_puck",
+      "attribution": {
+       "name": "OpenAI-Compatible Wyoming Proxy",
+       "url": "http://127.0.0.1:8080/v1"
+      },
+      "installed": true,
+      "description": "am_puck",
+      "version": null,
+      "languages": [
+       "en"
+      ],
+      "speakers": null
+     },
+     {
+      "name": "am_santa",
+      "attribution": {
+       "name": "OpenAI-Compatible Wyoming Proxy",
+       "url": "http://127.0.0.1:8080/v1"
+      },
+      "installed": true,
+      "description": "am_santa",
+      "version": null,
+      "languages": [
+       "en"
+      ],
+      "speakers": null
+     },
+     {
+      "name": "bf_alice",
+      "attribution": {
+       "name": "OpenAI-Compatible Wyoming Proxy",
+       "url": "http://127.0.0.1:8080/v1"
+      },
+      "installed": true,
+      "description": "bf_alice",
+      "version": null,
+      "languages": [
+       "en"
+      ],
+      "speakers": null
+     },
+     {
+      "name": "bf_emma",
+      "attribution": {
+       "name": "OpenAI-Compatible Wyoming Proxy",
+       "url": "http://127.0.0.1:8080/v1"
+      },
+      "installed": true,
+      "description": "bf_emma",
+      "version": null,
+      "languages": [
+       "en"
+      ],
+      "speakers": null
+     },
+     {
+      "name": "bf_isabella",
+      "attribution": {
+       "name": "OpenAI-Compatible Wyoming Proxy",
+       "url": "http://127.0.0.1:8080/v1"
+      },
+      "installed": true,
+      "description": "bf_isabella",
+      "version": null,
+      "languages": [
+       "en"
+      ],
+      "speakers": null
+     },
+     {
+      "name": "bf_lily",
+      "attribution": {
+       "name": "OpenAI-Compatible Wyoming Proxy",
+       "url": "http://127.0.0.1:8080/v1"
+      },
+      "installed": true,
+      "description": "bf_lily",
+      "version": null,
+      "languages": [
+       "en"
+      ],
+      "speakers": null
+     },
+     {
+      "name": "bm_daniel",
+      "attribution": {
+       "name": "OpenAI-Compatible Wyoming Proxy",
+       "url": "http://127.0.0.1:8080/v1"
+      },
+      "installed": true,
+      "description": "bm_daniel",
+      "version": null,
+      "languages": [
+       "en"
+      ],
+      "speakers": null
+     },
+     {
+      "name": "bm_fable",
+      "attribution": {
+       "name": "OpenAI-Compatible Wyoming Proxy",
+       "url": "http://127.0.0.1:8080/v1"
+      },
+      "installed": true,
+      "description": "bm_fable",
+      "version": null,
+      "languages": [
+       "en"
+      ],
+      "speakers": null
+     },
+     {
+      "name": "bm_george",
+      "attribution": {
+       "name": "OpenAI-Compatible Wyoming Proxy",
+       "url": "http://127.0.0.1:8080/v1"
+      },
+      "installed": true,
+      "description": "bm_george",
+      "version": null,
+      "languages": [
+       "en"
+      ],
+      "speakers": null
+     },
+     {
+      "name": "bm_lewis",
+      "attribution": {
+       "name": "OpenAI-Compatible Wyoming Proxy",
+       "url": "http://127.0.0.1:8080/v1"
+      },
+      "installed": true,
+      "description": "bm_lewis",
+      "version": null,
+      "languages": [
+       "en"
+      ],
+      "speakers": null
+     }
+    ],
+    "supports_synthesize_streaming": false
+   }
+  ],
+  "handle": [],
+  "intent": [],
+  "wake": [],
+  "mic": [],
+  "snd": []
+ }
+}

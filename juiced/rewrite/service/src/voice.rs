@@ -16,7 +16,11 @@ pub async fn models(manager: &Manager, operation: Operation) -> Vec<String> {
         .catalog()
         .await
         .into_iter()
-        .filter(|model| model.policy != Policy::Disabled && model.operations.contains(&operation))
+        .filter(|model| {
+            model.policy != Policy::Disabled
+                && model.downloaded
+                && model.operations.contains(&operation)
+        })
         .map(|model| model.id)
         .collect()
 }
@@ -83,11 +87,13 @@ pub async fn transcribe(
             crate::admission::Priority::Interactive,
         )
         .await?;
+    let (path, form) = crate::speech::worker_request(lease.adapter(), request)
+        .inspect_err(|_| lease.finish("rejected", Some(400)))?;
     lease.speech_dispatched();
     let mut upstream = manager
         .client
-        .post(format!("{base}/inference"))
-        .multipart(request.form())
+        .post(format!("{base}{path}"))
+        .multipart(form)
         .timeout(manager.request_timeout)
         .send()
         .await

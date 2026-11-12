@@ -123,7 +123,7 @@
     },
     {
       "path": "juiced/rewrite/service/src/compat.rs",
-      "sha256": "ea7d78a6158b70bea9c98c9a91a849bcf5c04653f929e2312ff03d37252d9c43",
+      "sha256": "f981b3b828f3aec77b71024867d5f5113255109675d8c8d507b114eaed763e46",
       "hash_check": "snapshot_only"
     },
     {

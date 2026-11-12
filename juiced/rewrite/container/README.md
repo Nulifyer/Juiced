@@ -61,6 +61,8 @@ The image does not expose UDP discovery. Clients connect to an explicit URL.
 
 Home Assistant reaches Juiced in two ways. Its Ollama integration talks to the HTTP port for conversation. Its Wyoming Protocol integration talks to port 10300 for speech-to-text through whisper.cpp and text-to-speech through Kokoros.
 
+`JUICED_WYOMING_ENABLED=true` turns the listener on at `JUICED_WYOMING_URI` (default `tcp://0.0.0.0:10300`) until Wyoming settings are saved, matching the native container.
+
 The Wyoming protocol has no authentication. Anyone who can reach the port can transcribe and synthesize with your models, even when API keys are set. The listener is therefore off by default. Publish 10300 only to a trusted network, for example `-p 192.168.1.10:10300:10300` instead of `-p 10300:10300`.
 
 To set it up:

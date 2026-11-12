@@ -21,7 +21,7 @@ use tokio::{
 };
 
 pub const DEFAULT_LISTEN: &str = "0.0.0.0:10300";
-pub const PROTOCOL_VERSION: &str = "1.5.4";
+pub const PROTOCOL_VERSION: &str = "1.10.2";
 const MAX_HEADER_BYTES: usize = 64 * 1024;
 const MAX_DATA_BYTES: usize = 64 * 1024;
 const MAX_PAYLOAD_BYTES: usize = 1024 * 1024;
@@ -63,6 +63,26 @@ impl Default for Settings {
 impl Settings {
     pub fn is_default(&self) -> bool {
         *self == Self::default()
+    }
+    /// Native containers enable Wyoming with `JUICED_WYOMING_ENABLED=true`; that switch applies
+    /// until the operator saves explicit Wyoming settings.
+    pub fn from_environment(
+        enabled: Option<&str>,
+        uri: Option<&str>,
+    ) -> Option<Result<Self, &'static str>> {
+        if enabled? != "true" {
+            return None;
+        }
+        let listen = match uri {
+            None => default_listen(),
+            Some(uri) => uri.strip_prefix("tcp://").unwrap_or(uri).to_owned(),
+        };
+        let settings = Self {
+            enabled: true,
+            listen,
+            ..Self::default()
+        };
+        Some(settings.validate().map(|()| settings))
     }
     pub fn validate(&self) -> Result<(), &'static str> {
         if self.listen.parse::<SocketAddr>().is_err() {
@@ -238,33 +258,51 @@ pub async fn write_event<W: AsyncWrite + Unpin>(
     writer.write_all(&encode_event(event)).await
 }
 
-const WHISPER_LANGUAGES: &[&str] = &[
-    "af", "am", "ar", "as", "az", "ba", "be", "bg", "bn", "bo", "br", "bs", "ca", "cs", "cy", "da",
-    "de", "el", "en", "es", "et", "eu", "fa", "fi", "fo", "fr", "gl", "gu", "ha", "haw", "he",
-    "hi", "hr", "ht", "hu", "hy", "id", "is", "it", "ja", "jw", "ka", "kk", "km", "kn", "ko", "la",
-    "lb", "ln", "lo", "lt", "lv", "mg", "mi", "mk", "ml", "mn", "mr", "ms", "mt", "my", "ne", "nl",
-    "nn", "no", "oc", "pa", "pl", "ps", "pt", "ro", "ru", "sa", "sd", "si", "sk", "sl", "sn", "so",
-    "sq", "sr", "su", "sv", "sw", "ta", "te", "tg", "th", "tk", "tl", "tr", "tt", "uk", "ur", "uz",
-    "vi", "yi", "yo", "yue", "zh",
-];
+/// Native Juiced v0.9.2 served Wyoming through wyoming_openai 0.8.0; Home Assistant keeps
+/// its entities and pipeline selections only while this identity stays the same.
+const PROXY_VERSION: &str = "0.8.0";
+const PROXY_PROGRAM: &str = "openai";
+const PROXY_DESCRIPTION: &str = "OpenAI (Non-Streaming)";
+const PROXY_URL: &str = "https://github.com/roryeckel/wyoming_openai";
+const ATTRIBUTION_PROGRAM: &str = "OpenAI-Compatible Proxy";
+const ATTRIBUTION_MODEL: &str = "OpenAI-Compatible Wyoming Proxy";
+const ADVERTISED_LANGUAGES: &[&str] = &["en"];
+const ADVERTISED_VOICE_PREFIXES: &[&str] = &["af_", "am_", "bf_", "bm_"];
+static HTTP_PORT: std::sync::OnceLock<u16> = std::sync::OnceLock::new();
 
-/// Kokoro voice names start with a language letter, e.g. `af_heart` is American English.
-fn voice_language(voice: &str) -> &'static str {
-    match voice.as_bytes().first() {
-        Some(b'b') => "en_GB",
-        Some(b'e') => "es_ES",
-        Some(b'f') => "fr_FR",
-        Some(b'h') => "hi_IN",
-        Some(b'i') => "it_IT",
-        Some(b'j') => "ja_JP",
-        Some(b'p') => "pt_BR",
-        Some(b'z') => "zh_CN",
-        _ => "en_US",
-    }
+pub fn set_http_port(port: u16) {
+    let _ = HTTP_PORT.set(port);
+}
+
+fn openai_url() -> String {
+    format!(
+        "http://127.0.0.1:{}/v1",
+        HTTP_PORT.get().copied().unwrap_or(8080)
+    )
 }
 
 fn attribution(name: &str, url: &str) -> Value {
     json!({"name": name, "url": url})
+}
+
+pub fn advertised_voices(resolved: &Resolved, pinned: Option<&str>) -> Vec<String> {
+    let mut voices: Vec<String> = resolved
+        .tts_voices
+        .iter()
+        .filter(|voice| {
+            Some(voice.as_str()) == pinned
+                || ADVERTISED_VOICE_PREFIXES
+                    .iter()
+                    .any(|prefix| voice.starts_with(prefix))
+        })
+        .cloned()
+        .collect();
+    voices.sort();
+    voices.dedup();
+    if voices.is_empty() {
+        voices.extend(resolved.tts_voices.first().cloned());
+    }
+    voices
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -307,48 +345,49 @@ pub async fn resolve(manager: &Manager, settings: &Settings) -> Resolved {
     }
 }
 
-pub fn info(resolved: &Resolved) -> Event {
-    let version = crate::VERSION;
-    let whisper = attribution("whisper.cpp", "https://github.com/ggml-org/whisper.cpp");
-    let kokoro = attribution("Kokoros", "https://github.com/lucasjinreal/Kokoros");
+pub fn info(resolved: &Resolved, pinned_voice: Option<&str>) -> Event {
+    let url = openai_url();
     let asr: Vec<Value> = if resolved.stt_models.is_empty() {
         Vec::new()
     } else {
         vec![json!({
-            "name": "juiced-whisper",
-            "description": "Juiced speech-to-text",
-            "attribution": whisper,
+            "name": PROXY_PROGRAM,
+            "attribution": attribution(ATTRIBUTION_PROGRAM, &url),
             "installed": true,
-            "version": version,
-            "supports_transcript_streaming": false,
+            "description": PROXY_DESCRIPTION,
+            "version": PROXY_VERSION,
             "models": resolved.stt_models.iter().map(|model| json!({
                 "name": model,
-                "description": model,
-                "attribution": whisper,
+                "attribution": attribution(ATTRIBUTION_MODEL, &url),
                 "installed": true,
+                "description": model,
                 "version": null,
-                "languages": WHISPER_LANGUAGES,
+                "languages": ADVERTISED_LANGUAGES,
             })).collect::<Vec<_>>(),
+            "supports_transcript_streaming": false,
+            "requires_external_vad": true,
+            "prefers_auto_gain_enabled": true,
+            "prefers_noise_reduction_enabled": true,
         })]
     };
     let tts: Vec<Value> = match &resolved.tts_model {
         None => Vec::new(),
-        Some(model) => vec![json!({
-            "name": "juiced-kokoro",
-            "description": format!("Juiced text-to-speech ({model})"),
-            "attribution": kokoro,
+        Some(_) => vec![json!({
+            "name": PROXY_PROGRAM,
+            "attribution": attribution(ATTRIBUTION_PROGRAM, PROXY_URL),
             "installed": true,
-            "version": version,
-            "supports_synthesize_streaming": false,
-            "voices": resolved.tts_voices.iter().map(|voice| json!({
+            "description": PROXY_DESCRIPTION,
+            "version": PROXY_VERSION,
+            "voices": advertised_voices(resolved, pinned_voice).iter().map(|voice| json!({
                 "name": voice,
-                "description": voice,
-                "attribution": kokoro,
+                "attribution": attribution(ATTRIBUTION_MODEL, &url),
                 "installed": true,
+                "description": voice,
                 "version": null,
-                "languages": [voice_language(voice)],
+                "languages": ADVERTISED_LANGUAGES,
                 "speakers": null,
             })).collect::<Vec<_>>(),
+            "supports_synthesize_streaming": false,
         })],
     };
     Event::new(
@@ -522,9 +561,10 @@ impl Controller {
             .manager
             .configure_wyoming(change.settings.clone(), change.expected_generation)
             .await?;
-        self.apply(&mut running, &change.settings).await;
+        let (effective, _) = self.shared.manager.wyoming_settings().await;
+        self.apply(&mut running, &effective).await;
         drop(running);
-        Ok(self.render(change.settings, generation).await)
+        Ok(self.render(effective, generation).await)
     }
 }
 
@@ -613,7 +653,10 @@ async fn connection(slot: ConnectionSlot, stream: TcpStream, settings: Arc<Setti
             Ok(Ok(event)) => event,
         };
         let replies = match event.kind.as_str() {
-            "describe" => vec![info(&resolve(&shared.manager, &settings).await)],
+            "describe" => vec![info(
+                &resolve(&shared.manager, &settings).await,
+                settings.tts_voice.as_deref(),
+            )],
             "ping" => vec![Event::new("pong", json!({"text": event.text("text")}))],
             "transcribe" => {
                 request = Some(Request {
@@ -929,41 +972,81 @@ mod tests {
     }
 
     #[test]
-    fn info_matches_wyoming_program_shapes() {
-        let resolved = Resolved {
-            stt_models: vec!["whisper-tiny".into()],
-            tts_model: Some("kokoro".into()),
-            tts_voices: vec!["af_heart".into(), "bm_george".into()],
-        };
-        let info = info(&resolved);
-        assert_eq!(info.kind, "info");
-        let asr = &info.data["asr"][0];
-        for key in [
-            "name",
-            "attribution",
-            "installed",
-            "description",
-            "version",
-            "models",
-        ] {
-            assert!(asr.get(key).is_some(), "{key}");
-        }
-        assert_eq!(asr["models"][0]["name"], "whisper-tiny");
-        assert_eq!(asr["models"][0]["installed"], true);
-        assert!(
-            asr["models"][0]["languages"]
+    fn info_is_identical_to_wyoming_openai_for_the_native_configuration() {
+        let fixture: Value =
+            serde_json::from_str(include_str!("../fixtures/wyoming_openai-0.8.0-info.json"))
+                .unwrap();
+        assert_eq!(fixture["_capture"]["header"]["version"], PROTOCOL_VERSION);
+        let mut listed: Vec<String> = [
+            "af_heart",
+            "af_alloy",
+            "zf_xiaobei",
+            "alloy",
+            "bm_george",
+            "ef_dora",
+            "am_adam",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+        listed.extend(
+            fixture["data"]["tts"][0]["voices"]
                 .as_array()
                 .unwrap()
-                .contains(&json!("en"))
+                .iter()
+                .map(|voice| voice["name"].as_str().unwrap().to_owned()),
         );
-        assert!(asr["attribution"]["url"].is_string());
-        let tts = &info.data["tts"][0];
-        assert_eq!(tts["installed"], true);
-        assert_eq!(tts["voices"][1]["languages"], json!(["en_GB"]));
-        assert_eq!(tts["supports_synthesize_streaming"], false);
-        let empty = super::info(&Resolved::default());
+        let resolved = Resolved {
+            stt_models: vec!["asr4all-l-gptq-Q8_0".into()],
+            tts_model: Some("kokoro-v1".into()),
+            tts_voices: listed,
+        };
+        let info = info(&resolved, None);
+        assert_eq!(info.kind, "info");
+        assert_eq!(Value::Object(info.data), fixture["data"]);
+        let empty = super::info(&Resolved::default(), None);
         assert_eq!(empty.data["asr"], json!([]));
         assert_eq!(empty.data["tts"], json!([]));
+    }
+
+    #[test]
+    fn pinned_voices_stay_advertised_and_an_empty_pack_keeps_the_default() {
+        let resolved = Resolved {
+            stt_models: Vec::new(),
+            tts_model: Some("kokoro".into()),
+            tts_voices: vec!["ef_dora".into(), "bm_george".into(), "jf_alpha".into()],
+        };
+        assert_eq!(
+            advertised_voices(&resolved, Some("ef_dora")),
+            ["bm_george", "ef_dora"]
+        );
+        let only_default = Resolved {
+            tts_voices: vec!["af_heart".into()],
+            ..resolved
+        };
+        assert_eq!(advertised_voices(&only_default, None), ["af_heart"]);
+    }
+
+    #[test]
+    fn native_environment_enables_the_default_listener() {
+        assert_eq!(Settings::from_environment(None, None), None);
+        assert_eq!(Settings::from_environment(Some("false"), None), None);
+        let enabled = Settings::from_environment(Some("true"), None)
+            .unwrap()
+            .unwrap();
+        assert!(enabled.enabled);
+        assert_eq!(enabled.listen, DEFAULT_LISTEN);
+        assert_eq!(enabled.stt_model, None);
+        assert_eq!(enabled.tts_model, None);
+        let custom = Settings::from_environment(Some("true"), Some("tcp://127.0.0.1:10301"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(custom.listen, "127.0.0.1:10301");
+        assert!(
+            Settings::from_environment(Some("true"), Some("unix:///run/w.sock"))
+                .unwrap()
+                .is_err()
+        );
     }
 
     #[test]

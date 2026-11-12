@@ -516,19 +516,36 @@ pub fn ollama_request(
     let route = match operation {
         OllamaOperation::Chat => {
             let mut messages = Vec::new();
+            let mut unanswered: Vec<(String, String)> = Vec::new();
             for message in array(&input, "messages")? {
                 fields(
                     message,
-                    &["role", "content", "images", "tool_calls", "tool_call_id"],
+                    &[
+                        "role",
+                        "content",
+                        "images",
+                        "tool_calls",
+                        "tool_call_id",
+                        "tool_name",
+                        "thinking",
+                    ],
                 )?;
                 let role = text(message, "role")?;
                 if !["system", "user", "assistant", "tool"].contains(&role) {
                     return Err(invalid("Unsupported chat message role."));
                 }
-                let content = message
-                    .get("content")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| invalid("Message content must be text."))?;
+                if message
+                    .get("thinking")
+                    .is_some_and(|thinking| role != "assistant" || !thinking.is_string())
+                {
+                    return Err(invalid("thinking must be assistant text."));
+                }
+                let content = match message.get("content") {
+                    None | Some(Value::Null) if role == "assistant" => "",
+                    content => content
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| invalid("Message content must be text."))?,
+                };
                 let mut converted = json!({"role":role,"content":content});
                 if let Some(images) = message.get("images") {
                     let images = images
@@ -563,14 +580,36 @@ pub fn ollama_request(
                         if !call["function"]["arguments"].is_object() {
                             return Err(invalid("Ollama tool arguments must be an object."));
                         }
-                        normalized.push(json!({"id":call.get("id").cloned().unwrap_or(json!(format!("call_{index}"))),"type":"function","function":{"name":text(&call["function"],"name")?,"arguments":serde_json::to_string(&call["function"]["arguments"]).unwrap()}}));
+                        let name = text(&call["function"], "name")?;
+                        let id = match call.get("id").and_then(Value::as_str) {
+                            Some(id) => id.to_owned(),
+                            None => format!("call_{}_{index}", messages.len()),
+                        };
+                        unanswered.push((id.clone(), name.to_owned()));
+                        normalized.push(json!({"id":id,"type":"function","function":{"name":name,"arguments":serde_json::to_string(&call["function"]["arguments"]).unwrap()}}));
                     }
                     converted["tool_calls"] = Value::Array(normalized);
                 }
                 if role == "tool" {
-                    converted["tool_call_id"] = json!(text(message, "tool_call_id")?);
-                } else if message.get("tool_call_id").is_some() {
-                    return Err(invalid("tool_call_id requires tool role."));
+                    let id = if message.get("tool_call_id").is_some() {
+                        Some(text(message, "tool_call_id")?.to_owned())
+                    } else {
+                        let name = message
+                            .get("tool_name")
+                            .map(|_| text(message, "tool_name"))
+                            .transpose()?;
+                        name.and_then(|name| unanswered.iter().find(|(_, call)| call == name))
+                            .or_else(|| unanswered.first())
+                            .map(|(id, _)| id.clone())
+                    };
+                    if let Some(id) = id {
+                        unanswered.retain(|(call, _)| *call != id);
+                        converted["tool_call_id"] = json!(id);
+                    }
+                } else if message.get("tool_call_id").is_some()
+                    || message.get("tool_name").is_some()
+                {
+                    return Err(invalid("tool_call_id and tool_name require the tool role."));
                 }
                 messages.push(converted);
             }
@@ -648,6 +687,7 @@ pub fn ollama_request(
         fields(
             options,
             &[
+                "num_ctx",
                 "temperature",
                 "top_p",
                 "top_k",
@@ -667,6 +707,9 @@ pub fn ollama_request(
             ("frequency_penalty", "frequency_penalty"),
         ] {
             copy_number(options, from, &mut output, to)?;
+        }
+        if options.get("num_ctx").is_some() {
+            positive_integer(options, "num_ctx")?;
         }
         if options.get("num_predict").is_some() {
             output["max_tokens"] = json!(positive_integer(options, "num_predict")?);
@@ -806,16 +849,34 @@ fn ollama_message(message: &Value) -> Result<Value, CodecError> {
     Ok(result)
 }
 
+/// Native Juiced published every model as `ID:latest`, so saved Ollama client selections carry it.
+pub fn ollama_model_name(name: &str) -> &str {
+    name.strip_suffix(":latest")
+        .filter(|base| !base.is_empty())
+        .unwrap_or(name)
+}
+
 pub fn ollama_models(models: &[Value], loaded_only: bool) -> Value {
     let entries: Vec<_> = models
         .iter()
         .filter(|model| {
             model["policy"] != "disabled"
                 && model["downloaded"] == true
-                && (!loaded_only || model["loaded"] == true)
+                && if loaded_only {
+                    model["loaded"] == true
+                } else {
+                    model["operations"].as_array().is_some_and(|operations| {
+                        operations.iter().any(|operation| {
+                            ["chat/completions", "completions", "embeddings"]
+                                .iter()
+                                .any(|chat| operation == chat)
+                        })
+                    })
+                }
         })
         .map(|model| {
-            let mut item = json!({"name":model["id"],"model":model["id"]});
+            let name = format!("{}:latest", model["id"].as_str().unwrap_or_default());
+            let mut item = json!({"name":name,"model":name});
             for key in ["digest", "size", "modified_at", "details", "aliased_to"] {
                 if let Some(value) = model.get(key) {
                     item[key] = value.clone();
@@ -1697,11 +1758,64 @@ mod tests {
         );
         assert!(
             ollama_request(
-                json!({"model":"tiny","prompt":"abc","options":{"num_ctx":2048}}),
+                json!({"model":"tiny","prompt":"abc","options":{"mirostat":2}}),
                 OllamaOperation::Generate
             )
             .is_err()
         );
+        let sized = ollama_request(
+            json!({"model":"tiny","prompt":"abc","options":{"num_ctx":8192}}),
+            OllamaOperation::Generate,
+        )
+        .unwrap();
+        assert!(sized.body.get("num_ctx").is_none());
+        assert!(
+            ollama_request(
+                json!({"model":"tiny","prompt":"abc","options":{"num_ctx":0}}),
+                OllamaOperation::Generate
+            )
+            .is_err()
+        );
+    }
+    #[test]
+    fn ollama_client_tool_turns_without_ids_pair_with_their_calls() {
+        let chat = ollama_request(
+            json!({"model":"tiny","messages":[
+                {"role":"user","content":"lights"},
+                {"role":"assistant","thinking":"plan","tool_calls":[
+                    {"function":{"name":"HassTurnOn","arguments":{"name":"kitchen"}}},
+                    {"function":{"name":"GetLiveContext","arguments":{}}}
+                ]},
+                {"role":"tool","content":"{\"ok\":2}","tool_name":"GetLiveContext"},
+                {"role":"tool","content":"{\"ok\":1}"},
+                {"role":"tool","content":"{\"late\":true}"}
+            ],"tools":[],"think":true}),
+            OllamaOperation::Chat,
+        )
+        .unwrap();
+        let messages = chat.body["messages"].as_array().unwrap();
+        assert_eq!(messages[1]["content"], "");
+        assert!(messages[1].get("thinking").is_none());
+        let calls = messages[1]["tool_calls"].as_array().unwrap();
+        assert_eq!(calls[0]["function"]["arguments"], "{\"name\":\"kitchen\"}");
+        assert_eq!(messages[2]["tool_call_id"], calls[1]["id"]);
+        assert_eq!(messages[3]["tool_call_id"], calls[0]["id"]);
+        assert_ne!(calls[0]["id"], calls[1]["id"]);
+        assert!(messages[4].get("tool_call_id").is_none());
+        assert_eq!(chat.body["enable_thinking"], true);
+        for bad in [
+            json!({"role":"user","content":"x","tool_name":"a"}),
+            json!({"role":"user","content":"x","thinking":"a"}),
+            json!({"role":"user"}),
+        ] {
+            assert!(
+                ollama_request(
+                    json!({"model":"tiny","messages":[bad]}),
+                    OllamaOperation::Chat
+                )
+                .is_err()
+            );
+        }
     }
     #[test]
     fn ollama_embeddings_and_discovery_do_not_invent_measurements() {
@@ -1722,13 +1836,27 @@ mod tests {
         assert!(result.get("prompt_eval_count").is_none());
         let models = ollama_models(
             &[
-                json!({"id":"off","policy":"disabled","downloaded":true}),
-                json!({"id":"on","policy":"hot","downloaded":true,"loaded":true}),
+                json!({"id":"off","policy":"disabled","downloaded":true,"operations":["chat/completions"]}),
+                json!({"id":"on","policy":"hot","downloaded":true,"loaded":true,"operations":["chat/completions"]}),
+                json!({"id":"voice","policy":"hot","downloaded":true,"loaded":true,"operations":["audio/speech"]}),
             ],
             false,
         );
         assert_eq!(models["models"].as_array().unwrap().len(), 1);
+        assert_eq!(models["models"][0]["name"], "on:latest");
+        assert_eq!(models["models"][0]["model"], "on:latest");
         assert!(models["models"][0].get("digest").is_none());
+        let running = ollama_models(
+            &[
+                json!({"id":"on","policy":"hot","downloaded":true,"loaded":true,"operations":["chat/completions"]}),
+                json!({"id":"voice","policy":"hot","downloaded":true,"loaded":true,"operations":["audio/speech"]}),
+            ],
+            true,
+        );
+        assert_eq!(running["models"].as_array().unwrap().len(), 2);
+        assert_eq!(ollama_model_name("on:latest"), "on");
+        assert_eq!(ollama_model_name("on:q4"), "on:q4");
+        assert_eq!(ollama_model_name(":latest"), ":latest");
         assert!(ollama_show(&json!({"id":"off","policy":"disabled"})).is_err());
     }
     #[test]

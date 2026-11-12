@@ -460,6 +460,11 @@ async fn ollama(
 ) -> Response {
     let result = async {
         let mut input = parse_body(&headers, body)?;
+        if let Some(model) = input.get_mut("model")
+            && let Some(name) = model.as_str()
+        {
+            *model = json!(protocols::ollama_model_name(name));
+        }
         let keep_alive = input
             .as_object_mut()
             .and_then(|input| input.remove("keep_alive"))
@@ -519,8 +524,10 @@ async fn tags(State(state): State<Gateway>) -> Response {
 async fn ps(State(state): State<Gateway>) -> Response {
     json_response(200, protocols::ollama_models(&catalog(&state).await, true))
 }
+/// Ollama clients gate features on this version; native Juiced v0.9.2 reported it.
+const OLLAMA_VERSION: &str = "0.16.1";
 async fn version() -> Response {
-    json_response(200, json!({"version":crate::VERSION,"server":"juiced"}))
+    json_response(200, json!({"version":OLLAMA_VERSION}))
 }
 async fn show(
     State(state): State<Gateway>,
@@ -550,6 +557,7 @@ async fn show(
             .get("model")
             .or_else(|| input.get("name"))
             .and_then(Value::as_str)
+            .map(protocols::ollama_model_name)
             .filter(|value| !value.is_empty())
             .ok_or_else(|| {
                 codec(

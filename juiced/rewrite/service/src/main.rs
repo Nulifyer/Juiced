@@ -253,6 +253,7 @@ async fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
         listener.local_addr()?
     );
     let bound = listener.local_addr()?;
+    juiced_service::wyoming::set_http_port(bound.port());
     manager.logs().service(
         juiced_service::logs::Level::Info,
         &format!("Service listening on http://{bound}"),
