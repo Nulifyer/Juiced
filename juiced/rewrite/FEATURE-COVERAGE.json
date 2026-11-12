@@ -1653,7 +1653,7 @@
       "owner": "protocol and specialist services",
       "rewrite_status": "partial",
       "acceptance": "Named consumer wire fixtures, policy/auth/admission parity, actual upstream cancellation and qualified continuation after worker replacement/restart.",
-      "implementation_boundary": "whisper.cpp transcription is verified with real models; FUTO, Parakeet and Moonshine engines are tracked separately."
+      "implementation_boundary": "whisper.cpp, parakeet.cpp, Moonshine and FUTO asr4all transcribe real audio through the service on CPU. FUTO has no published build and installs from an imported runtime package."
     },
     {
       "id": "F147",

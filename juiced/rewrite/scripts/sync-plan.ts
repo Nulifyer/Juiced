@@ -57,7 +57,7 @@ const partial: Record<string, string> = {
   F120: "A Wyoming TCP server answers describe, transcribe and synthesize through whisper.cpp and Kokoros, verified with the official wyoming client. Streaming events and a real Home Assistant instance remain unverified.",
   F124: "Aliases resolve for every inference route and can be swapped while requests in flight finish on the old target. Alias-scoped policies remain open.",
   F126: "A Realtime WebSocket handles the transcription intent with pcm16 24 kHz audio and energy-based server VAD. Conversation intent and delta events remain open.",
-  F146: "whisper.cpp transcription is verified with real models; FUTO, Parakeet and Moonshine engines are tracked separately.",
+  F146: "whisper.cpp, parakeet.cpp, Moonshine and FUTO asr4all transcribe real audio through the service on CPU. FUTO has no published build and installs from an imported runtime package.",
   F147: "Kokoros voices are listed per model with language prefixes and used by the speech test and Wyoming. Speaker metadata beyond names remains open.",
   F150: "Realtime transcription has energy-based server VAD with configurable threshold and silence. Model-based VAD remains open.",
   F156: "The Images test generates through sd.cpp with size, steps, seed and negative prompt. Media job progress remains open.",
