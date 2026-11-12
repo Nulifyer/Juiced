@@ -26,11 +26,11 @@ Request source: user, 2026-11-12. The homelab switched stack 83 to `rewrite-prev
 
 | Stream | Owner | State |
 | --- | --- | --- |
-| Container contract, release pipeline, compose, deployment | primary | in progress |
+| Container contract, release pipeline, compose, deployment | primary | contract + pipeline 3f29d557 (port 8080, native args, tini subreaper, import roots /data,/library, release version); deployment pending |
 | P: native adoption fidelity (IDs, policies, weights roots, checkpoint forms, companions, options, engines) | helper | starting |
-| Q: engine parity on gfx1150 (ROCm/Vulkan llama.cpp, sd.cpp, versions supporting the configured models) | helper | starting |
-| R: client parity (HA llama_cpp, Ollama, Wyoming identity) | helper | starting |
+| Q: engine parity on gfx1150 (ROCm/Vulkan llama.cpp, sd.cpp, versions supporting the configured models) | helper | merged; native pins (llama.cpp rocm b11580 + TheRock 10.1 gfx1150, vulkan/cpu b12032, sd.cpp rocm/vulkan master-957); ROCm not executed on AMD yet. Runtime identity now skips JIT/W+X/memfd executable regions (6a7f595c) so GPU runtimes can start |
+| R: client parity (HA llama_cpp, Ollama, Wyoming identity) | helper | merged 929f5811; HA llama_cpp/Ollama/Wyoming verified with HA pinned libraries; Wyoming info equals captured wyoming_openai 0.8.0; Ollama 0.16.1, :latest names |
 
 ## Next action
 
-Primary: container contract + release workflow while helpers run.
+Primary: wait for P, merge, full gate, candidate run on mage against a volume copy, then tag v1.0.0-rc.1, deploy via Portainer, inspect. Known flake: api_end_to_end worker_crash test under full-suite load (502 startup).
