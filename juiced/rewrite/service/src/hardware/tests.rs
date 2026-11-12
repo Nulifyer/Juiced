@@ -395,8 +395,8 @@ fn strix_point_igpu_npu_and_kfd_select_rocm_without_recommending_hybrid() {
         Availability::Available
     );
     assert_eq!(recommended(&inventory, "llamacpp"), Some("rocm"));
-    assert_eq!(recommended(&inventory, "whispercpp"), Some("rocm"));
-    assert_eq!(recommended(&inventory, "sd-cpp"), Some("rocm"));
+    assert_eq!(recommended(&inventory, "whispercpp"), Some("vulkan"));
+    assert_eq!(recommended(&inventory, "sd-cpp"), Some("vulkan"));
     assert_eq!(recommended(&inventory, "flm"), Some("npu"));
     assert_eq!(variant(&inventory, "flm", "npu").devices, ["amd_npu"]);
     let hybrid = variant(&inventory, "llamacpp", "hybrid-rocm");

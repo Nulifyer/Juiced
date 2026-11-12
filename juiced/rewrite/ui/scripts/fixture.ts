@@ -67,7 +67,7 @@ function hub(url: URL): Response | undefined {
 }
 let source: ReturnType<typeof Bun.serve> | undefined;
 let engineArchive = new Uint8Array();
-const llamaRelease = { repository: "ggml-org/llama.cpp", tag: "b11393", asset: "llama-b11393-bin-ubuntu-x64.tar.gz" };
+const llamaRelease = { repository: "ggml-org/llama.cpp", tag: "b12032", asset: "llama-b12032-bin-ubuntu-x64.tar.gz" };
 function engineRelease(url: URL): Response | undefined {
   if (url.pathname === `/api/repos/${llamaRelease.repository}/releases/tags/${llamaRelease.tag}`) {
     return Response.json({ tag_name: llamaRelease.tag, assets: [{ name: llamaRelease.asset, size: engineArchive.length, digest: `sha256:${new Bun.CryptoHasher("sha256").update(engineArchive).digest("hex")}` }] });
@@ -84,10 +84,10 @@ try {
   await writeFile(resolve(hardware, "proc/meminfo"), "MemTotal:       32763640 kB\nMemAvailable:   26446104 kB\n");
   if (process.platform === "linux" && process.arch === "x64") {
     const release = resolve(directory, "engine-release");
-    await mkdir(resolve(release, "llama-b11393"), { recursive: true });
-    await copyFile(executable("juiced-test-worker"), resolve(release, "llama-b11393/llama-server"));
-    await writeFile(resolve(release, "llama-b11393/LICENSE"), "MIT fixture\n");
-    const packer = Bun.spawn(["tar", "--format=gnu", "-C", release, "-czf", resolve(release, llamaRelease.asset), "llama-b11393"], { stdout: "inherit", stderr: "inherit" });
+    await mkdir(resolve(release, "llama-b12032"), { recursive: true });
+    await copyFile(executable("juiced-test-worker"), resolve(release, "llama-b12032/llama-server"));
+    await writeFile(resolve(release, "llama-b12032/LICENSE"), "MIT fixture\n");
+    const packer = Bun.spawn(["tar", "--format=gnu", "-C", release, "-czf", resolve(release, llamaRelease.asset), "llama-b12032"], { stdout: "inherit", stderr: "inherit" });
     if (await packer.exited !== 0) throw new Error("The engine release fixture could not be packed.");
     engineArchive = new Uint8Array(await Bun.file(resolve(release, llamaRelease.asset)).arrayBuffer());
     await rm(release, { recursive: true });

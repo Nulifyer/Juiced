@@ -33,10 +33,10 @@ fn rtx_5080_resolves_the_sm_120_cuda_build_and_ggml_cpu_vulkan_builds() {
     );
     let cpu = resolve(Engine::LlamaCpp, "cpu", &host).unwrap();
     assert_eq!(cpu.repository, "ggml-org/llama.cpp");
-    assert_eq!(cpu.asset, "llama-b11393-bin-ubuntu-x64.tar.gz");
+    assert_eq!(cpu.asset, "llama-b12032-bin-ubuntu-x64.tar.gz");
     assert_eq!(
         resolve(Engine::LlamaCpp, "vulkan", &host).unwrap().asset,
-        "llama-b11393-bin-ubuntu-vulkan-x64.tar.gz"
+        "llama-b12032-bin-ubuntu-vulkan-x64.tar.gz"
     );
     assert_eq!(
         resolve(Engine::LlamaCpp, "rocm", &host).unwrap_err(),
@@ -60,9 +60,9 @@ fn rtx_5080_resolves_the_sm_120_cuda_build_and_ggml_cpu_vulkan_builds() {
 fn strix_point_resolves_gfx1150_rocm_builds_and_selects_hybrid_only_on_request() {
     let host = report(&strix_host(true));
     let rocm = resolve(Engine::LlamaCpp, "rocm", &host).unwrap();
-    assert_eq!(rocm.repository, "lemonade-sdk/llamacpp-rocm");
-    assert_eq!(rocm.asset, "llama-b1338-ubuntu-rocm-gfx1150-x64.zip");
-    assert_eq!(rocm.format, ArchiveFormat::Zip);
+    assert_eq!(rocm.repository, "lemonade-sdk/llama.cpp");
+    assert_eq!(rocm.asset, "llama-b11580-bin-ubuntu-rocm-10.1-x64.tar.gz");
+    assert_eq!(rocm.format, ArchiveFormat::TarGz);
     assert_eq!(
         resolve(Engine::WhisperCpp, "rocm", &host).unwrap().asset,
         "whisper-v1.8.4-linux-rocm-gfx1150.tar.gz"
@@ -130,7 +130,11 @@ fn strix_point_resolves_gfx1150_rocm_builds_and_selects_hybrid_only_on_request()
     );
     assert_eq!(
         choose(Engine::LlamaCpp, &inventory, &host, &[], Some("system")),
-        Err(ChoiceError::NotSelectable("system".into()))
+        Err(ChoiceError::NotInstalled {
+            backend: "vulkan".into(),
+            gpu_target: None,
+            installable: true,
+        })
     );
     assert_eq!(catalog::rocm_asset_family("gfx1201"), "gfx120X");
     assert_eq!(catalog::rocm_asset_family("gfx1103"), "gfx110X");
@@ -187,7 +191,7 @@ fn package(id: &str, backend: &str, target: Option<&str>, tag: &str) -> Installe
 fn automatic_choice_requires_the_recommended_installed_package_for_the_detected_target() {
     let host = report(&rtx_host());
     let inventory = inventory(&host);
-    let cpu = package("package-cpu", "cpu", None, "b11393");
+    let cpu = package("package-cpu", "cpu", None, "b12032");
     assert_eq!(
         choose(
             Engine::LlamaCpp,
@@ -269,7 +273,15 @@ fn every_catalog_build_is_pinned_unique_and_named_for_its_backend() {
         assert!(sha.len() == 64 && sha.bytes().all(|byte| byte.is_ascii_hexdigit()));
         assert!(build.archive_bytes > 0);
         if let Some(target) = build.gpu_target {
-            assert!(build.asset.contains(target), "{}", build.asset);
+            assert!(
+                build.asset.contains(target)
+                    || build
+                        .runtime
+                        .is_some_and(|runtime| runtime.gpu_target == target
+                            && runtime.asset.contains(target)),
+                "{}",
+                build.asset
+            );
         }
         let suffix = match build.format {
             ArchiveFormat::TarGz => ".tar.gz",
@@ -292,6 +304,7 @@ fn release_provenance_is_bounded_label_text_with_a_hex_digest() {
         archive_sha256: "c".repeat(64),
         archive_bytes: 607784448,
         digest_source: "pinned".into(),
+        runtime: None,
     };
     assert!(release.valid());
     for change in [
@@ -1427,7 +1440,7 @@ fn unpublished_recommendations_fall_to_the_best_published_backend() {
         engine: Some(Engine::LlamaCpp),
         backend: Some("vulkan".into()),
         gpu_target: None,
-        tag: Some("b11393".into()),
+        tag: Some("b12032".into()),
         installed: true,
         declared_host_match: true,
     }];
