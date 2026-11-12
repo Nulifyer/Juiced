@@ -44,7 +44,6 @@ export function EngineList({ client, online, children }: { client: Client; onlin
   const engines = useResource(client, "juiced/engines", parseEngines, 3000);
   const [installing, setInstalling] = useState<Record<string, EngineJob>>({});
   const [error, setError] = useState("");
-  const [advanced, setAdvanced] = useState(false);
   const data = engines.data;
   async function install(engine: string, backend: string) {
     const key = `${engine}:${backend}`;
@@ -76,7 +75,6 @@ export function EngineList({ client, online, children }: { client: Client; onlin
       })}
     </div>
     <p className="field-help">★ marks the engine Juiced uses for new models on this machine. Engines download from pinned releases and are checked against a published checksum.</p>
-    <div className="action-row"><Button onClick={() => setAdvanced(true)}>Import a local engine bundle</Button></div>
-    {advanced && <Dialog title="Engine packages" onClose={() => setAdvanced(false)}>{children}</Dialog>}
+    {children}
   </div>;
 }

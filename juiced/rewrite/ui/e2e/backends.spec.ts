@@ -5,7 +5,7 @@ import { api, expect, navigate, open, tab, test } from "./support";
 test("This machine shows device cards and filters available backends", async ({ page }) => {
   await open(page);
   await navigate(page, "Backends & hardware");
-  await expect(page.getByRole("tablist", { name: "Backend views" }).getByRole("tab")).toHaveText(["This machine", "Installed", "Catalog"]);
+  await expect(page.getByRole("tablist", { name: "Backend views" }).getByRole("tab")).toHaveText(["This machine", "Engines", "Catalog"]);
   await expect(tab(page, "Backend views", "This machine")).toHaveAttribute("aria-selected", "true");
   const devices = page.getByRole("region", { name: "Detected hardware" });
   await expect(devices.getByRole("article").first()).toContainText("CPU");
@@ -25,7 +25,7 @@ test("This machine shows device cards and filters available backends", async ({ 
   await expect(page.getByRole("button", { name: /refresh/i })).toHaveCount(0);
 });
 
-test("the Installed tab imports a local engine bundle through its dialog", async ({ page, request }) => {
+test("the Engines tab lists engines for this host and imports a local bundle through its dialog", async ({ page, request }) => {
   test.skip(process.platform === "win32", "Managed runtime installation needs the qualified POSIX file owner.");
   const service = api(request);
   const fixture = await service.source();
@@ -42,9 +42,9 @@ test("the Installed tab imports a local engine bundle through its dialog", async
   try {
     await open(page);
     await navigate(page, "Backends & hardware");
-    await tab(page, "Backend views", "Installed").click();
+    await tab(page, "Backend views", "Engines").click();
+    await expect(page.getByRole("table", { name: "Engines" }).getByRole("row").nth(1)).toBeVisible();
     const panel = page.getByRole("region", { name: "Installed runtime packages" });
-    await expect(panel.getByRole("article", { name: `Installed package ${source.id}` })).toContainText("llama-cpp · fixture-runtime-first");
     await panel.getByRole("button", { name: "Import a local engine bundle" }).click();
     const dialog = page.getByRole("dialog", { name: "Import engine bundle" });
     const input = dialog.getByLabel("Bundle specification on service host");
@@ -61,7 +61,6 @@ test("the Installed tab imports a local engine bundle through its dialog", async
     await expect(input).toHaveValue("");
     await dialog.getByRole("button", { name: "Close dialog" }).click();
     await expect(dialog).toHaveCount(0);
-    await expect(panel.getByRole("article").filter({ hasText: `llama-cpp · ${build}` })).toBeVisible();
     expect((await service.json<any>("/v1/juiced/runtime-packages")).packages.some((item: any) => item.provenance.build_revision === build)).toBe(true);
   } finally {
     await rm(path, { force: true });
