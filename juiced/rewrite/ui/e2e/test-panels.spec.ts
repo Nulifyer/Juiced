@@ -1,4 +1,4 @@
-import { api, expect, hotModel, modelId, navigate, noHorizontalOverflow, open, storedText, tab, test } from "./support";
+import { api, expect, hotModel, modelId, navigate, noHorizontalOverflow, open, storedText, tab, test, tryModel } from "./support";
 
 const embedModel = "fixture.embed-tiny";
 
@@ -6,7 +6,7 @@ test("Compare streams one prompt to two models with timings and Stop cancels bot
   test.setTimeout(60000);
   await open(page);
   await navigate(page, "Test services");
-  await tab(page, "Test operation", "Compare").click();
+  await tab(page, "Test mode", "Compare").click();
   const panel = page.getByRole("region", { name: "Compare models" });
   const compare = panel.getByRole("button", { name: "Compare" });
   await panel.getByLabel("Model 1").selectOption(hotModel);
@@ -60,7 +60,7 @@ test("Compare streams one prompt to two models with timings and Stop cancels bot
 test("Compare Stop with the prompt still filled does not start another comparison", async ({ page }) => {
   await open(page);
   await navigate(page, "Test services");
-  await tab(page, "Test operation", "Compare").click();
+  await tab(page, "Test mode", "Compare").click();
   const panel = page.getByRole("region", { name: "Compare models" });
   await panel.getByLabel("Model 1").selectOption(hotModel);
   await panel.getByLabel("Model 2").selectOption(modelId);
@@ -83,11 +83,11 @@ test("Embeddings embeds each line and shows dimensions, a cosine grid and vector
   try {
     await open(page);
     await navigate(page, "Test services");
-    await tab(page, "Test operation", "Embeddings").click();
+    const picker = page.getByRole("region", { name: "Try a model" }).getByLabel("Model");
+    await expect(picker.locator('optgroup[label="Embeddings"] option', { hasText: hotModel })).toHaveCount(0);
+    await tryModel(page, embedModel);
     const panel = page.getByRole("region", { name: "Embeddings test" });
     const embed = panel.getByRole("button", { name: "Embed" });
-    await expect(panel.getByLabel("Model").locator("option", { hasText: hotModel })).toHaveCount(0);
-    await panel.getByLabel("Model").selectOption(embedModel);
     await expect(embed).toBeDisabled();
     await panel.getByLabel("Texts, one per line").fill(`  ${lines[0]}\n\n${lines[1]}\n${lines[2]}  \n`);
     const sent = page.waitForRequest((outgoing) => outgoing.method() === "POST" && new URL(outgoing.url()).pathname === "/v1/embeddings");

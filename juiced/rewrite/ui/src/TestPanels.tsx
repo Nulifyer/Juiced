@@ -1,24 +1,21 @@
 import { useEffect, useRef, useState } from "react";
 import { chatTestTokenLimit, type Client } from "./api";
-import { eligible, offers, operationEligible, type Model } from "./domain";
+import { eligible, offers, type Model } from "./domain";
 import { Button, Empty } from "./ui";
 
 type Vector = { values: number[]; norm: number };
 const cosine = (left: Vector, right: Vector) => left.values.reduce((sum, value, index) => sum + value * (right.values[index] ?? 0), 0) / (left.norm * right.norm || 1);
 
-export function EmbeddingsTest({ models, client, online }: { models: Model[]; client: Client; online: boolean }) {
-  const ready = models.filter((model) => operationEligible(model, "embeddings"));
-  const [id, setId] = useState("");
+export function EmbeddingsTest({ model: selected, client, online }: { model: Model; client: Client; online: boolean }) {
   const [text, setText] = useState("");
   const [vectors, setVectors] = useState<Vector[] | null>(null);
   const [inputs, setInputs] = useState<string[]>([]);
   const [elapsed, setElapsed] = useState<number | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const selected = ready.find((model) => model.id === id) ?? (ready.length === 1 && !id ? ready[0] : undefined);
   async function run() {
     const lines = text.split("\n").map((line) => line.trim()).filter(Boolean).slice(0, 16);
-    if (!selected || lines.length === 0) return;
+    if (lines.length === 0) return;
     setBusy(true); setError(""); setVectors(null);
     const started = performance.now();
     try {
@@ -29,12 +26,10 @@ export function EmbeddingsTest({ models, client, online }: { models: Model[]; cl
     } catch (failure) { setError(failure instanceof Error ? failure.message : "The request failed."); }
     finally { setBusy(false); }
   }
-  if (ready.length === 0) return <Empty title="No embedding models available">Add an embedding model in Library, then set it to Hot or On demand.</Empty>;
   return <section className="test-panel" aria-label="Embeddings test">
-    <div className="toolbar"><select aria-label="Model" value={selected?.id ?? ""} disabled={busy} onChange={(event) => setId(event.target.value)}><option value="">Choose a model…</option>{ready.map((model) => <option key={model.id} value={model.id}>{model.id}</option>)}</select></div>
     <label htmlFor="embedding-input">Texts, one per line</label>
     <textarea id="embedding-input" rows={5} value={text} placeholder={"A cat sits on the mat\nA kitten rests on a rug\nStock prices fell today"} onChange={(event) => setText(event.target.value)} />
-    <div className="action-row"><Button variant="primary" disabled={!selected || !text.trim() || busy || !online} onClick={() => void run()}>{busy ? "Embedding…" : "Embed"}</Button>{vectors && <span className="muted">{vectors.length} vectors · {vectors[0]!.values.length} dimensions · {Math.round(elapsed ?? 0)} ms</span>}</div>
+    <div className="action-row"><Button variant="primary" disabled={!text.trim() || busy || !online} onClick={() => void run()}>{busy ? "Embedding…" : "Embed"}</Button>{vectors && <span className="muted">{vectors.length} vectors · {vectors[0]!.values.length} dimensions · {Math.round(elapsed ?? 0)} ms</span>}</div>
     {error && <p className="inline-error" role="alert">{error}</p>}
     {vectors && vectors.length > 1 && <div className="similarity" role="table" aria-label="Cosine similarity">
       <div role="row" className="similarity-row"><span role="columnheader" />{inputs.map((_, index) => <span role="columnheader" key={index}>{index + 1}</span>)}</div>

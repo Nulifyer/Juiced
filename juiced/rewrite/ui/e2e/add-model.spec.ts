@@ -1,5 +1,5 @@
 import type { APIRequestContext, Page } from "@playwright/test";
-import { api, closeInspector, expect, navigate, open, tab, test, toasts } from "./support";
+import { api, closeInspector, expect, navigate, open, tab, test, toasts, tryModel } from "./support";
 
 const repo = "fixture-labs/Tiny-Chat-GGUF";
 const file = "Tiny-Chat-Q8_0.gguf";
@@ -96,9 +96,9 @@ test("Add model downloads a quant, installs the engine when needed and serves ch
     await expect(page.getByLabel(`Loading policy for ${added}`)).toHaveValue("on-demand");
 
     await navigate(page, "Test services");
+    await tryModel(page, added);
     const chat = page.getByRole("region", { name: "Chat test" });
-    await chat.getByLabel("Model").selectOption(added);
-    await expect(chat).toContainText("Loads on first message");
+    await expect(page.getByRole("region", { name: "Try a model" })).toContainText("Loads on first use");
     await chat.getByLabel("Prompt").fill("Engine journey");
     await chat.getByRole("button", { name: "Send" }).click();
     const reply = chat.getByRole("article", { name: "Model reply" });

@@ -4,7 +4,7 @@ export function Button({ variant = "outline", className = "", ...props }: Button
   return <button type="button" className={`button ${variant} ${className}`} {...props} />;
 }
 
-export type IconName = "models" | "policy" | "library" | "backend" | "cache" | "api" | "diagnostics" | "test" | "refresh" | "close" | "menu" | "back" | "settings" | "info" | "chat" | "mic" | "layers" | "pause" | "play" | "download" | "upload" | "dashboard" | "chevron" | "cpu";
+export type IconName = "models" | "policy" | "library" | "backend" | "cache" | "api" | "diagnostics" | "test" | "refresh" | "close" | "menu" | "back" | "settings" | "info" | "chat" | "mic" | "layers" | "pause" | "play" | "download" | "upload" | "github" | "dashboard" | "chevron" | "cpu";
 const paths: Record<IconName, ReactNode> = {
   models: <><rect x="3" y="3" width="18" height="7" rx="2" /><rect x="3" y="14" width="18" height="7" rx="2" /><path d="M7 6h.01M7 17h.01" /></>,
   policy: <><path d="M4 6h16M4 12h16M4 18h16M8 3v6M16 9v6M10 15v6" /></>,
@@ -27,6 +27,7 @@ const paths: Record<IconName, ReactNode> = {
   play: <path d="m8 5 11 7-11 7Z" />,
   download: <path d="M12 3v12m-5-5 5 5 5-5M4 20h16" />,
   upload: <path d="M12 16V4m-5 5 5-5 5 5M4 20h16" />,
+  github: <path d="M9 19c-4 1.3-4-2-6-2.5m12 5v-3.4a3 3 0 0 0-.8-2.3c2.7-.3 5.6-1.3 5.6-6a4.6 4.6 0 0 0-1.3-3.2 4.3 4.3 0 0 0-.1-3.2s-1-.3-3.4 1.3a11.6 11.6 0 0 0-6 0C6.6 2.1 5.6 2.4 5.6 2.4a4.3 4.3 0 0 0-.1 3.2A4.6 4.6 0 0 0 4.2 8.8c0 4.6 2.8 5.7 5.5 6a3 3 0 0 0-.8 2.3v3.4" />,
   dashboard: <><rect x="3" y="3" width="7" height="9" rx="1.5" /><rect x="14" y="3" width="7" height="5" rx="1.5" /><rect x="14" y="12" width="7" height="9" rx="1.5" /><rect x="3" y="16" width="7" height="5" rx="1.5" /></>,
   chevron: <path d="m6 9 6 6 6-6" />,
   cpu: <><rect x="6" y="6" width="12" height="12" rx="2" /><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4" /></>,

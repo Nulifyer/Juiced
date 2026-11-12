@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test";
-import { expect, navigate, noHorizontalOverflow, open, tab, test } from "./support";
+import { expect, navigate, noHorizontalOverflow, open, tab, test, tryModel } from "./support";
 
 const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
 const wav = () => {
@@ -29,9 +29,8 @@ test("Speak lists voices, sends the chosen voice, speed and format, and plays th
     await page.route("**/v1/audio/speech", async (route) => { sent.push(route.request().postDataJSON()); await new Promise((done) => setTimeout(done, 300)); await route.fulfill({ body: wav(), contentType: "audio/wav" }); });
     await open(page);
     await navigate(page, "Test services");
-    await tab(page, "Test operation", "Speak").click();
+    await tryModel(page, id);
     const panel = page.getByRole("region", { name: "Speech test" });
-    await panel.getByLabel("Model").selectOption(id);
     await expect(panel.getByLabel("Voice").locator("option")).toHaveCount(3);
     await panel.getByLabel("Voice").selectOption("am_michael");
     await panel.getByLabel("Speed").fill("1.5");
@@ -62,9 +61,8 @@ test("Images remembers the size per model, validates fields, generates and clear
     await page.route("**/v1/images/generations", async (route) => { sent.push(route.request().postDataJSON()); await new Promise((done) => setTimeout(done, 300)); await route.fulfill({ json: { created: 1, data: [{ b64_json: png }], output_format: "png" } }); });
     await open(page);
     await navigate(page, "Test services");
-    await tab(page, "Test operation", "Images").click();
+    await tryModel(page, first);
     const panel = page.getByRole("region", { name: "Image test" });
-    await panel.getByLabel("Model").selectOption(first);
     await panel.getByLabel("Size").selectOption("768x512");
     await panel.getByLabel("Prompt").fill("a lighthouse at dusk");
     await panel.getByLabel("Steps").fill("200");
@@ -80,10 +78,10 @@ test("Images remembers the size per model, validates fields, generates and clear
     await expect(results).toContainText("768 × 512 · seed 42");
     expect(sent[0]).toEqual({ model: first, prompt: "a lighthouse at dusk", size: "768x512", seed: 42, negative_prompt: "fog", steps: 4 });
 
-    await panel.getByLabel("Model").selectOption(second);
+    await tryModel(page, second);
     await expect(results).toHaveCount(0);
     await expect(panel.getByLabel("Size")).toHaveValue("512x512");
-    await panel.getByLabel("Model").selectOption(first);
+    await tryModel(page, first);
     await expect(panel.getByLabel("Size")).toHaveValue("768x512");
 
     await panel.getByLabel("Seed").fill("");

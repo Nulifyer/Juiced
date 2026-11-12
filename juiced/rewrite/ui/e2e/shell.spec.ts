@@ -17,7 +17,8 @@ test("every destination opens from the navigation without page errors", async ({
     await expect(main.getByRole("button", { name: /^(Refresh|Reload)\b/ }), `${name} refreshes live data without a manual button`).toHaveCount(0);
   }
   await expect(page.getByRole("navigation", { name: "Destinations", includeHidden: true }).getByRole("button", { name: /^Models \d+$/, includeHidden: true })).toBeAttached();
-  await expect(page.locator(".sidebar-version")).toHaveText("Juiced 0.1.0");
+  await expect(page.locator(".sidebar-version")).toHaveText(/^Juiced 0\.1\.0 · \d+ loaded$/);
+  await expect(page.locator("a[aria-label=\"Source and releases\"]")).toHaveAttribute("href", "https://github.com/Nulifyer/Juiced");
   expect(await page.evaluate(() => [...document.images].every((image) => image.complete && image.naturalWidth > 0))).toBe(true);
   expect(failures).toEqual([]);
 });

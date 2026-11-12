@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { Client } from "./api";
 import { normalizeBase, type Snapshot } from "./domain";
 import { Inspector, ModelList, type Mutate } from "./Models";
-import { ServiceTest, type TestService } from "./ServiceTest";
+import { ServiceTest, type TestMode } from "./ServiceTest";
 import { Library, type LibraryView } from "./Library";
 import { Cache } from "./Cache";
 import { CacheSessions } from "./CacheSessions";
@@ -54,7 +54,7 @@ export function App() {
   const [dirty, setDirty] = useState(false);
   const [epoch, setEpoch] = useState(0);
   const [pending, setPending] = useState<(() => void) | null>(null);
-  const [testService, setTestService] = useState<TestService>("chat");
+  const [testMode, setTestMode] = useState<TestMode>("try");
   const [libraryView, setLibraryView] = useState<LibraryView>("find");
   const [diagnosticsTab, setDiagnosticsTab] = useState<"performance" | "requests" | "logs">("performance");
   const [backendTab, setBackendTab] = useState<"machine" | "installed" | "catalog">("machine");
@@ -131,7 +131,7 @@ export function App() {
   const gpu = live.stats?.gpus[0];
   const tabs = screen === "models" ? <Tabs label="Models views" value={modelsTab} onChange={(value) => leave(() => { setModelsTab(value); setSelected(""); })} items={[["models", "Models"], ["aliases", "Aliases"]]} />
     : screen === "cache" ? <Tabs label="Cache views" value={cacheTab} onChange={setCacheTab} items={[["sessions", "Sessions"], ["snapshots", "Snapshots"]]} />
-    : screen === "test" ? <Tabs label="Test operation" value={testService} onChange={setTestService} items={[["chat", "Chat"], ["compare", "Compare"], ["embeddings", "Embeddings"], ["transcription", "Transcribe"], ["speech", "Speak"], ["images", "Images"]]} />
+    : screen === "test" ? <Tabs label="Test mode" value={testMode} onChange={setTestMode} items={[["try", "Try a model"], ["compare", "Compare"]]} />
     : screen === "library" ? <Tabs label="Library view" value={libraryView} onChange={setLibraryView} items={[["find", "Find models"], ["files", "Files on disk"], ["import", "Import"]]} />
     : screen === "connect" ? <Tabs label="Connect views" value={connectTab} onChange={setConnectTab} items={[["protocols", "Protocols"], ["endpoints", "Endpoints"]]} />
     : screen === "backend" ? <Tabs label="Backend views" value={backendTab} onChange={setBackendTab} items={[["machine", "This machine"], ["installed", "Engines"], ["catalog", "Catalog"]]} />
@@ -150,10 +150,13 @@ export function App() {
     </header>
     <aside className={`sidebar ${mobileOpen ? "open" : ""}`} aria-label="Navigation">
       <nav aria-label="Destinations">{destinations.map(([id, label, icon]) => <button key={id} aria-current={screen === id ? "page" : undefined} onClick={() => { setMobileOpen(false); leave(() => { setScreen(id); setSelected(""); }); }}><Icon name={icon} size={16} /><span>{label}</span>{id === "models" && snapshot && <span className="nav-count">{snapshot.models.length}</span>}</button>)}</nav>
-      <p className="sidebar-version" aria-label="Service version">{snapshot ? `Juiced ${snapshot.version}` : "Not connected"}</p>
+      <div className="sidebar-footer">
+        <p className="sidebar-version" aria-label="Service version" title={snapshot ? `${snapshot.models.filter((model) => model.loaded).length} loaded · ${snapshot.models.filter((model) => model.policy !== "disabled").length} available` : undefined}>{snapshot ? `Juiced ${snapshot.version} · ${snapshot.models.filter((model) => model.loaded).length} loaded` : "Not connected"}</p>
+        <a href="https://github.com/Nulifyer/Juiced" target="_blank" rel="noreferrer" aria-label="Source and releases" title="Source and releases"><Icon name="github" size={15} /></a>
+      </div>
     </aside>
     {mobileOpen && <button className="nav-scrim" aria-label="Close navigation" onClick={() => setMobileOpen(false)} />}
-    <main ref={workspace} id="workspace" className={`workspace ${modelScreen ? "model-screen" : ""}`} tabIndex={-1}>
+    <main ref={workspace} id="workspace" className={`workspace ${modelScreen ? "model-screen" : ""} ${screen === "test" ? "test-screen" : ""}`} tabIndex={-1}>
       {resources?.paused && <div className="paused-bar" role="region" aria-label="Maintenance admission"><span><strong>New requests paused.</strong> Running requests can finish.</span><Button disabled={!online || busy} onClick={togglePause}>Resume requests</Button></div>}
       {connectionError && <div className="notice error" role="alert"><span>{snapshot ? "Showing the last observation. " : ""}{connectionError}</span><Button onClick={() => leave(() => setConnectionOpen(true))}>Connection settings</Button></div>}
       <div className="page-header"><h1>{title}</h1>{tabs}</div>
@@ -165,7 +168,7 @@ export function App() {
         {screen === "library" && libraryView === "files" && <Library key={epoch} view={libraryView} client={client} online={online} models={snapshot.models} refreshModels={refresh} onInspect={openModel} />}
         {screen === "library" && libraryView === "import" && <NativeImport key={epoch} client={client} online={online} onImported={refresh} />}
         {screen === "diagnostics" && <Diagnostics client={client} snapshot={snapshot} stats={live.stats} history={live.history} tab={diagnosticsTab} />}
-        {screen === "test" && <ServiceTest key={`${epoch}:${testService}`} operation={testService} models={snapshot.models} client={client} online={online} />}
+        {screen === "test" && <ServiceTest key={`${epoch}:${testMode}`} mode={testMode} models={snapshot.models} client={client} online={online} />}
         {screen === "connect" && <ServiceApis key={epoch} base={base} client={client} tab={connectTab} models={snapshot.models} online={online} />}
         {screen === "backend" && backendTab === "machine" && <Hardware key={epoch} client={client} />}
         {screen === "backend" && backendTab === "installed" && <EngineList key={epoch} client={client} online={online}><InstalledRuntimes client={client} online={online} paused={resources?.paused === true} memory={resources?.runtime_control_memory} importOnly /></EngineList>}

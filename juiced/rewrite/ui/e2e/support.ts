@@ -154,3 +154,7 @@ export async function storedText(page: Page) {
 export function rowFor(table: Locator, id: string) {
   return table.getByRole("row").filter({ has: table.page().getByRole("button", { name: id, exact: true }) });
 }
+
+export async function tryModel(page: Page, id: string) {
+  await page.getByRole("region", { name: "Try a model" }).getByLabel("Model").selectOption(id);
+}

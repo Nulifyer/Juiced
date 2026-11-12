@@ -54,7 +54,7 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 .button.ghost { border-color: transparent; background: transparent; }
 .button.danger { color: var(--bad); border-color: #673a40; background: #2a1b20; }
 .button svg { flex-shrink: 0; }
-.badge { display: inline-flex; align-items: center; padding: 2px 7px; border-radius: 4px; font-size: .7rem; font-weight: 500; color: var(--muted); background: var(--secondary); max-width: 100%; overflow-wrap: anywhere; }
+.badge { display: inline-flex; align-items: center; padding: 2px 7px; border-radius: 4px; font-size: .7rem; font-weight: 500; color: var(--muted); background: var(--secondary); max-width: 100%; white-space: nowrap; flex-shrink: 0; }
 .badge.good { color: var(--good); background: #172b24; }
 .badge.warning { color: var(--warning); background: #31291c; }
 .badge.bad { color: var(--bad); background: #321f24; }
@@ -654,3 +654,30 @@ a.button { color: var(--foreground); text-decoration: none; }
 .flm-models .panel-head .inline-field { margin-left: auto; }
 .flm-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
 .flm-list li { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 10px; }
+
+/* Scroll containers position absolute descendants (screen-reader labels) so they never grow the document. */
+html, body { height: 100%; overflow: hidden; }
+.workspace, .inspector, .inspector-body, .inventory, .find-main, .find-detail, .folder-list { position: relative; }
+.lane-model, .lane-open { cursor: grab; }
+.lane-model:active, .lane-model:active .lane-open { cursor: grabbing; }
+.lane-model select { cursor: pointer; }
+.sidebar-footer { display: flex; align-items: center; gap: 8px; margin-top: auto; padding: 10px 6px 2px 10px; font-size: .72rem; color: var(--muted); }
+.sidebar-footer .sidebar-version { margin: 0; padding: 0; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sidebar-footer a { display: inline-flex; color: var(--muted); padding: 4px; border-radius: 4px; }
+.sidebar-footer a:hover { color: var(--foreground); background: var(--secondary); }
+
+/* Test services: one column aligned with the page header; Compare uses the full width. */
+.workspace > .service-tests { max-width: 1680px; margin-inline: auto; }
+.service-tests:not(.wide) > * { max-width: 980px; }
+.service-tests:not(.wide) { display: flex; flex-direction: column; gap: 12px; }
+.test-toolbar select { max-width: min(100%, 420px); }
+.test-panel { max-width: 980px; }
+.test-output { border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; background: #121418; }
+.test-output h3 { font-size: .75rem; color: var(--muted); margin: 0 0 6px; }
+.transcript { margin: 0; white-space: pre-wrap; }
+.chat-thread { position: relative; }
+.new-chat { position: sticky; top: 0; align-self: flex-end; z-index: 1; }
+.workspace.test-screen { display: flex; flex-direction: column; }
+.workspace.test-screen > * { flex-shrink: 0; }
+.workspace.test-screen > .service-tests:not(.wide) { flex: 1 1 auto; min-height: 0; }
+.service-tests:not(.wide) > .chat { flex: 1 1 auto; min-height: 280px; height: auto; width: 100%; }
