@@ -1,0 +1,12 @@
+.quant-sync-list, .quant-sync-report { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 2px; }
+.quant-sync-list label { display: grid; grid-template-columns: 16px minmax(0, 1fr); align-items: center; gap: 10px; margin: 0 -8px; padding: 5px 8px; border-radius: 6px; cursor: pointer; }
+.quant-sync-list label:hover { background: var(--secondary); }
+.quant-sync-list label:has(input:disabled) { cursor: default; background: none; }
+.quant-sync-list input[type="checkbox"] { width: 16px; height: 16px; min-height: 0; padding: 0; margin: 0; accent-color: var(--ring); }
+.quant-sync-name { display: grid; min-width: 0; font-size: .8rem; line-height: 1.35; }
+.quant-sync-name strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.quant-sync-name span { font-size: .74rem; overflow-wrap: anywhere; }
+.quant-sync-report { gap: 4px; margin-top: 10px; font-size: .78rem; }
+.quant-sync-report li { margin: 0; overflow-wrap: anywhere; }
+.quant-sync-list label:has(input:disabled) input { opacity: .4; }
+.quant-sync .action-row { margin-top: 12px; }

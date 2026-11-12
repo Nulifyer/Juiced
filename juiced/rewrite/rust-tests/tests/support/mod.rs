@@ -40,7 +40,7 @@ pub const READ_ROUTES: [&str; 11] = [
     "/models/{model}/options",
     "/juiced/voices",
 ];
-pub const OPERATOR_READ_ROUTES: [&str; 24] = [
+pub const OPERATOR_READ_ROUTES: [&str; 25] = [
     "/system-info",
     "/juiced/cache/inspect",
     "/juiced/cache/sessions",
@@ -56,6 +56,7 @@ pub const OPERATOR_READ_ROUTES: [&str; 24] = [
     "/juiced/artifacts/sets/{set}",
     "/models/{model}/artifacts",
     "/models/{model}/runtime",
+    "/models/{model}/variants",
     "/system-stats",
     "/juiced/logs",
     "/juiced/library/search",
@@ -66,7 +67,7 @@ pub const OPERATOR_READ_ROUTES: [&str; 24] = [
     "/juiced/wyoming",
     "/juiced/flm",
 ];
-pub const WRITE_ROUTES: [&str; 32] = [
+pub const WRITE_ROUTES: [&str; 33] = [
     "/juiced/runtime-packages/import",
     "/juiced/engines/install",
     "/juiced/models/add",
@@ -78,6 +79,7 @@ pub const WRITE_ROUTES: [&str; 32] = [
     "/models/{model}/options",
     "/models/{model}/artifacts",
     "/models/{model}/runtime",
+    "/models/{model}/variants",
     "/delete",
     "/juiced/cache",
     "/juiced/cache/save",
@@ -193,6 +195,12 @@ fn diagnostic_route(path: &str) -> &'static str {
                 .is_some_and(|id| !id.is_empty() && !id.contains('/'))
             {
                 return "/models/{model}/artifacts";
+            }
+            if model
+                .strip_suffix("/variants")
+                .is_some_and(|id| !id.is_empty() && !id.contains('/'))
+            {
+                return "/models/{model}/variants";
             }
             if model
                 .strip_suffix("/options")

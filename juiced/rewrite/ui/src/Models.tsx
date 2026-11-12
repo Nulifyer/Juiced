@@ -4,6 +4,7 @@ import { Badge, Button, Empty, HelpTip, Icon } from "./ui";
 import type { Client } from "./api";
 import { removalReason } from "./management";
 import { ContextInspector } from "./ContextInspector";
+import { QuantSync } from "./QuantSync";
 import { ArtifactRevisionInspector } from "./ArtifactRevisionInspector";
 import { RuntimeInspector } from "./RuntimeInspector";
 import { ModelIdle, residencyNote } from "./Residency";
@@ -120,6 +121,7 @@ export function Inspector({ model, busy, online, onClose, onDirty, mutate, clien
       </div>
       <div role="tabpanel" id="panel-settings" aria-labelledby="tab-settings" hidden={tab !== "settings"}>
       {model.operations.includes("audio/transcriptions") ? <section className="inspector-section"><p className="muted">Speech models use one slot. Text context settings don't apply.</p></section> : <ContextInspector model={model} client={client} online={online} busy={busy} policyDirty={artifactDirty || runtimeDirty} onDirty={setProfileDirty} mutate={mutate} />}
+      <QuantSync model={model} client={client} online={online} busy={busy} blocked={dirty} />
       {model.artifact_set && <ArtifactRevisionInspector model={model} client={client} busy={busy} online={online} otherDirty={profileDirty || runtimeDirty} onDirty={setArtifactDirty} mutate={mutate} />}
       <RuntimeInspector model={model} client={client} busy={busy} online={online} otherDirty={profileDirty || artifactDirty} onDirty={setRuntimeDirty} mutate={mutate} />
       </div>

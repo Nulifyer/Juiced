@@ -209,7 +209,7 @@ impl Manager {
         Ok(view)
     }
 
-    async fn restart_worker(&self, worker: &Arc<Worker>) -> Result<(), ApiError> {
+    pub(super) async fn restart_worker(&self, worker: &Arc<Worker>) -> Result<(), ApiError> {
         let state = worker.state.lock().await;
         let revision = state.revision;
         self.ensure_loaded(worker, state, Some(revision))

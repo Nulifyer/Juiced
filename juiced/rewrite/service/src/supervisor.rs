@@ -48,6 +48,8 @@ mod native_import;
 pub use native_import::{NativeImportModel, NativeImportRequest};
 mod physical;
 mod publication;
+mod quant_sync;
+pub use quant_sync::VariantSync;
 mod residency;
 pub use residency::{KeepAlive, ResidencyChange, ResidencyView, UnloadReason, parse_keep_alive};
 mod sessions;
