@@ -400,6 +400,11 @@ impl ArtifactLease {
     pub fn set_id(&self) -> Option<&str> {
         self.set.as_ref().map(|set| set.id())
     }
+    pub fn primary_name(&self) -> Option<&str> {
+        self.set
+            .as_ref()
+            .map(|set| set.specification().primary.as_str())
+    }
     pub fn companions(&self) -> Vec<(&str, ArtifactRole, &Path)> {
         let Some(set) = &self.set else {
             return Vec::new();

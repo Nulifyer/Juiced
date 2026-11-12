@@ -63,7 +63,7 @@
     },
     {
       "path": "juiced/rewrite/PLAN.md",
-      "sha256": "28ce3d8a2749f0c7dcaaed8db298a5f5963ccc79a8e7e95823f6a426947a1046",
+      "sha256": "c7a1512dd83126b107d3533ca98c9c09c6661b4e9192aa05ad04da0ab9499c53",
       "hash_check": "snapshot_only"
     },
     {
@@ -128,12 +128,12 @@
     },
     {
       "path": "juiced/rewrite/service/src/config.rs",
-      "sha256": "1210383255adc7ecff6cdef26e8e93fc7e24ddd1d04bb383358069d74be5826e",
+      "sha256": "a791f04880e29cbe01cb839d2f46f866f7f5b93786e6d38a935a7901d5afbeac",
       "hash_check": "snapshot_only"
     },
     {
       "path": "juiced/rewrite/service/src/http.rs",
-      "sha256": "afa11eb0f775d9d14cc533c72fd60bcc6c86c40d7bce5fceb26298b68b3402ca",
+      "sha256": "3bc40bf980020413ed4229005a48e8d4ce40762046616b6558df0a35db06c50c",
       "hash_check": "snapshot_only"
     },
     {
@@ -2187,7 +2187,7 @@
     {
       "path": "juiced/rewrite/PLAN.md",
       "line": 9,
-      "text": "Juiced remains a model appliance for external clients. Keep artifact identity, execution profiles, Disabled / On demand / Hot policies, observed worker state, temporary service tests and bounded diagnostics. Retain the eight console destinations in the eventual migration. Do not introduce saved conversations, a general agent framework or model-weight conversion. Barista is the sole optional operator-assistant feature. Its required B0-B4 work follows the upstream P0-P6 sequence below. It is not deferred to the optional scale phase.",
+      "text": "Juiced remains a model appliance for external clients. Keep artifact identity, execution profiles, Disabled / On demand / Hot policies, observed worker state, temporary service tests and bounded diagnostics. The console has nine destinations: Dashboard, Models, Loading policy, Library, Backends & hardware, Cache, Test services, Diagnostics and Connect. Sub-views use one tab strip per page and one side inspector; there are no folding sections. Do not introduce saved conversations, a general agent framework or model-weight conversion. Barista is the sole optional operator-assistant feature. Its required B0-B4 work follows the upstream P0-P6 sequence below. It is not deferred to the optional scale phase.",
       "role": "product_boundary"
     },
     {

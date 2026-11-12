@@ -25,6 +25,16 @@ const WHISPER_MAGIC: u32 = 0x6767_6d6c;
 const MAX_TENSOR_NAMES: u64 = 65_536;
 const MAX_SAFETENSORS_HEADER: u64 = 64 * 1024 * 1024;
 const MAX_VOICES: usize = 1024;
+const ORT_IDENTIFIER: &[u8] = b"ORTM";
+const MAX_SPEECH_CONFIG_BYTES: u64 = 64 * 1024;
+const SPEECH_DEFAULT_THREADS: u64 = 4;
+const PARAKEET_MAX_THREADS: u64 = 12;
+const ASR4ALL_MAX_THREADS: u64 = 32;
+const ASR4ALL_COMMIT_FRAMES: u32 = 256;
+const ASR4ALL_RIGHT_FRAMES: u32 = 32;
+const MOONSHINE_DEFAULT_ARCH: u32 = 5;
+pub const MOONSHINE_CONFIG: &str = "streaming_config.json";
+pub const MOONSHINE_TOKENIZER: &str = "tokenizer.json";
 
 const DIFFUSION_ARCHITECTURES: &[&str] = &[
     "flux",
@@ -90,6 +100,11 @@ pub enum ModelFormat {
     Onnx {
         ir_version: u32,
     },
+    ParakeetGguf {},
+    Asr4allGguf {},
+    MoonshineOrt {
+        model_arch: Option<u32>,
+    },
 }
 
 impl ModelFormat {
@@ -99,6 +114,9 @@ impl ModelFormat {
             Self::WhisperGgml { .. } => Engine::WhisperCpp,
             Self::Diffusion { .. } => Engine::StableDiffusionCpp,
             Self::Onnx { .. } => Engine::Kokoros,
+            Self::ParakeetGguf { .. } => Engine::Parakeet,
+            Self::Asr4allGguf { .. } => Engine::Asr4all,
+            Self::MoonshineOrt { .. } => Engine::Moonshine,
         }
     }
     pub fn standalone(&self) -> bool {
@@ -108,8 +126,11 @@ impl ModelFormat {
                 includes_text_encoder,
                 ..
             } => *includes_vae && *includes_text_encoder,
-            Self::Onnx { .. } => false,
-            Self::Gguf { .. } | Self::WhisperGgml { .. } => true,
+            Self::Onnx { .. } | Self::MoonshineOrt { .. } => false,
+            Self::Gguf { .. }
+            | Self::WhisperGgml { .. }
+            | Self::ParakeetGguf { .. }
+            | Self::Asr4allGguf { .. } => true,
         }
     }
 }
@@ -147,6 +168,11 @@ pub fn detect(path: &Path) -> Result<(ModelFormat, u64), FormatError> {
             .map_err(|_| FormatError::Unavailable)?;
         let (declared, shape) = crate::profiles::read_gguf_shape(&mut file)
             .map_err(|error| FormatError::Invalid(error.code))?;
+        match declared.architecture.as_deref() {
+            Some("parakeet") => return Ok((ModelFormat::ParakeetGguf {}, bytes)),
+            Some("asr4all") => return Ok((ModelFormat::Asr4allGguf {}, bytes)),
+            _ => {}
+        }
         let mut classes = TensorClasses::default();
         let diffusion_architecture = declared
             .architecture
@@ -174,6 +200,9 @@ pub fn detect(path: &Path) -> Result<(ModelFormat, u64), FormatError> {
     if available >= 4 && u32::from_le_bytes(magic[..4].try_into().expect("magic")) == WHISPER_MAGIC
     {
         return whisper(&mut file, bytes);
+    }
+    if available == 8 && &magic[4..8] == ORT_IDENTIFIER {
+        return Ok((ModelFormat::MoonshineOrt { model_arch: None }, bytes));
     }
     if let Some(ir_version) = onnx_version(&magic[..available]) {
         return Ok((ModelFormat::Onnx { ir_version }, bytes));
@@ -346,7 +375,11 @@ pub struct Estimate {
 /// workers charge their weights, companions and a fixed per-engine workspace.
 pub fn estimate(format: &ModelFormat, file_bytes: u64, context: Option<u64>) -> Estimate {
     match format {
-        ModelFormat::Diffusion { .. } | ModelFormat::Onnx { .. } => {
+        ModelFormat::Diffusion { .. }
+        | ModelFormat::Onnx { .. }
+        | ModelFormat::ParakeetGguf {}
+        | ModelFormat::Asr4allGguf {}
+        | ModelFormat::MoonshineOrt { .. } => {
             let workspace = if matches!(format, ModelFormat::Diffusion { .. }) {
                 DIFFUSION_WORKSPACE_BYTES
             } else {
@@ -412,7 +445,10 @@ pub fn context_tokens(format: &ModelFormat) -> Option<u64> {
         ),
         ModelFormat::WhisperGgml { .. }
         | ModelFormat::Diffusion { .. }
-        | ModelFormat::Onnx { .. } => None,
+        | ModelFormat::Onnx { .. }
+        | ModelFormat::ParakeetGguf {}
+        | ModelFormat::Asr4allGguf {}
+        | ModelFormat::MoonshineOrt { .. } => None,
     }
 }
 
@@ -477,8 +513,44 @@ pub fn companion_arguments(
             }
             Ok(arguments)
         }
+        ModelFormat::MoonshineOrt { .. } => {
+            crate::runtime_arguments::verify_directory_members(
+                companions
+                    .iter()
+                    .map(|companion| (companion.name.as_str(), companion.role)),
+            )
+            .map_err(|_| CompanionError::Required("moonshine_companions_required"))?;
+            Ok(Vec::new())
+        }
         _ if companions.is_empty() => Ok(Vec::new()),
         _ => Err(CompanionError::Unsupported),
+    }
+}
+
+#[derive(Deserialize)]
+struct MoonshineConfig {
+    encoder_dim: u64,
+    depth: u64,
+}
+
+/// Maps a Moonshine streaming configuration to the `moonshine_voice.ModelArch` value the
+/// native catalog pins for each published size (tiny 2, small 4, medium 5).
+pub fn moonshine_arch(path: &Path) -> Result<u32, FormatError> {
+    let file = File::open(path).map_err(|_| FormatError::Unavailable)?;
+    let mut bytes = Vec::new();
+    file.take(MAX_SPEECH_CONFIG_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| FormatError::Unavailable)?;
+    if bytes.len() as u64 > MAX_SPEECH_CONFIG_BYTES {
+        return Err(FormatError::Invalid("moonshine_config_limit"));
+    }
+    let config: MoonshineConfig = serde_json::from_slice(&bytes)
+        .map_err(|_| FormatError::Invalid("invalid_moonshine_config"))?;
+    match (config.encoder_dim, config.depth) {
+        (320, 6) => Ok(2),
+        (620, 10) => Ok(4),
+        (768, 14) => Ok(5),
+        _ => Err(FormatError::Invalid("moonshine_architecture_unknown")),
     }
 }
 
@@ -582,6 +654,56 @@ pub fn registration(inputs: &ProfileInputs<'_>) -> Value {
             args.extend(["openai", "--ip", "127.0.0.1", "--port", "{port}"].map(str::to_owned));
             (json!(args), json!({}), json!(["audio/speech"]))
         }
+        ModelFormat::ParakeetGguf {} => {
+            let threads = speech_threads(threads, PARAKEET_MAX_THREADS);
+            (
+                json!([
+                    "--model",
+                    "{model}",
+                    "--host",
+                    "127.0.0.1",
+                    "--port",
+                    "{port}",
+                    "--threads",
+                    threads,
+                    "--concurrency",
+                    "1"
+                ]),
+                json!({}),
+                json!(["audio/transcriptions"]),
+            )
+        }
+        ModelFormat::Asr4allGguf {} => {
+            let threads = speech_threads(threads, ASR4ALL_MAX_THREADS);
+            (
+                json!([
+                    "--model",
+                    "{model}",
+                    "--port",
+                    "{port}",
+                    "--threads",
+                    threads,
+                    "--futo-commit",
+                    ASR4ALL_COMMIT_FRAMES.to_string(),
+                    "--futo-right",
+                    ASR4ALL_RIGHT_FRAMES.to_string()
+                ]),
+                json!({}),
+                json!(["audio/transcriptions"]),
+            )
+        }
+        ModelFormat::MoonshineOrt { model_arch } => (
+            json!([
+                "--model-path",
+                "{model}",
+                "--model-arch",
+                model_arch.unwrap_or(MOONSHINE_DEFAULT_ARCH).to_string(),
+                "--port",
+                "{port}"
+            ]),
+            json!({}),
+            json!(["audio/transcriptions"]),
+        ),
     };
     let mut registration = json!({
         "id": inputs.id,
@@ -609,9 +731,33 @@ pub fn registration(inputs: &ProfileInputs<'_>) -> Value {
     registration
 }
 
+/// Native recipe defaults from `juiced/BACKENDS.md` (`parakeet_threads`, `asr4all_threads`,
+/// `asr4all_commit`, `asr4all_right`), never above the host's usable threads.
+fn speech_threads(host: Option<u64>, maximum: u64) -> String {
+    host.unwrap_or(SPEECH_DEFAULT_THREADS)
+        .clamp(1, SPEECH_DEFAULT_THREADS.min(maximum))
+        .to_string()
+}
+
+/// A Moonshine set's primary is a generic encoder file, so its default ID is the native
+/// catalog name for the detected size.
+pub fn native_default_id(format: &ModelFormat) -> Option<String> {
+    match format {
+        ModelFormat::MoonshineOrt {
+            model_arch: Some(arch),
+        } => match arch {
+            2 => Some("Moonshine-Tiny-Streaming".into()),
+            4 => Some("Moonshine-Small-Streaming".into()),
+            5 => Some("Moonshine-Medium-Streaming".into()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 pub fn default_id(name: &str) -> Option<String> {
     let file = name.rsplit(['/', '\\']).next()?;
-    let stem = [".gguf", ".bin", ".safetensors", ".onnx"]
+    let stem = [".gguf", ".bin", ".safetensors", ".onnx", ".ort"]
         .iter()
         .find_map(|suffix| file.strip_suffix(suffix))
         .unwrap_or(file);

@@ -1159,7 +1159,7 @@ async fn main() {
     if let Some(path) = arg("--events") {
         write_record(
             std::path::Path::new(&path),
-            json!({"id":"worker-startup","event":"started","pid":std::process::id(),"port":arg("--port").or_else(|| arg("--listen-port")).and_then(|port| port.parse::<u16>().ok())}),
+            json!({"id":"worker-startup","event":"started","pid":std::process::id(),"port":arg("--port").or_else(|| arg("--listen-port")).and_then(|port| port.parse::<u16>().ok()),"model_path":arg("--model-path"),"ws_port":arg("--ws-port"),"tcp_port":arg("--tcp-port"),"host":arg("--host")}),
         );
     }
     if arg("--mode").as_deref() == Some("exit") {
@@ -1238,6 +1238,7 @@ async fn main() {
         .route("/sdapi/v1/txt2img", post(txt2img))
         .route("/v1/audio/speech", post(audio_speech))
         .route("/inference", post(transcription).layer(DefaultBodyLimit::max(8 * 1024 * 1024)))
+        .route("/v1/audio/transcriptions", post(transcription).layer(DefaultBodyLimit::max(8 * 1024 * 1024)))
         .route("/v1/chat/completions", post(inference))
         .route("/v1/completions", post(inference))
         .route("/v1/responses", post(inference))

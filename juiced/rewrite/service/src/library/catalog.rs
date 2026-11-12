@@ -18,6 +18,8 @@ pub struct CatalogModel {
     pub license: Option<String>,
     pub native_id: String,
     #[serde(default)]
+    pub engine: Option<crate::engines::catalog::Engine>,
+    #[serde(default)]
     pub companions: Vec<CatalogCompanion>,
 }
 
@@ -26,13 +28,26 @@ pub struct CatalogModel {
 pub struct CatalogCompanion {
     pub file: String,
     pub role: crate::artifacts::ArtifactRole,
+    /// Pinned for small non-LFS files, for which the hub publishes no SHA-256.
+    #[serde(default)]
+    pub sha256: Option<String>,
 }
 
 const MAX_COMPANIONS: usize = 8;
 
 fn bundle_primary(file: &str) -> bool {
     let name = file.to_ascii_lowercase();
-    name.ends_with(".onnx") || name.ends_with(".safetensors") || name.ends_with(".gguf")
+    name.ends_with(".onnx")
+        || name.ends_with(".ort")
+        || name.ends_with(".safetensors")
+        || name.ends_with(".gguf")
+}
+
+fn sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 #[derive(Debug, Deserialize)]
@@ -72,11 +87,24 @@ impl CatalogModel {
             .iter()
             .map(|companion| (companion.file.clone(), companion.role))
             .collect();
-        quant::bundle(files, self.recommended_file.as_deref()?, &companions)
+        let mut variant = quant::bundle(files, self.recommended_file.as_deref()?, &companions)?;
+        for file in &mut variant.files {
+            if file.sha256.is_none() {
+                file.sha256 = self
+                    .companions
+                    .iter()
+                    .find(|companion| companion.file == file.path)
+                    .and_then(|companion| companion.sha256.clone());
+            }
+        }
+        Some(variant)
     }
     pub fn recommends(&self, label: Option<&str>, primary: &str) -> bool {
         match (&self.recommended_file, &self.recommended_quant) {
-            (Some(file), _) => quant::basename(primary).eq_ignore_ascii_case(file),
+            (Some(file), _) => {
+                primary.eq_ignore_ascii_case(file)
+                    || quant::basename(primary).eq_ignore_ascii_case(file)
+            }
             (None, Some(recommended)) => label == Some(recommended.as_str()),
             (None, None) => false,
         }
@@ -136,9 +164,10 @@ impl Catalog {
                     if quant::quant_label(label).as_deref() == Some(label)
                         && model.companions.is_empty() => {}
                 (None, Some(file))
-                    if (quant::is_model_file(file)
-                        || (!model.companions.is_empty() && bundle_primary(file)))
-                        && !file.contains('/')
+                    if ((quant::is_model_file(file) && !file.contains('/'))
+                        || (!model.companions.is_empty()
+                            && bundle_primary(file)
+                            && super::valid_file(file)))
                         && text(file, 128) => {}
                 _ => return fail("exactly one parseable recommended quant or file is required"),
             }
@@ -146,17 +175,24 @@ impl Catalog {
                 || model.companions.iter().any(|companion| {
                     !super::valid_file(&companion.file)
                         || Some(&companion.file) == model.recommended_file.as_ref()
+                        || companion
+                            .sha256
+                            .as_deref()
+                            .is_some_and(|digest| !sha256(digest))
                         || !matches!(
                             companion.role,
                             crate::artifacts::ArtifactRole::Voice
                                 | crate::artifacts::ArtifactRole::Vae
                                 | crate::artifacts::ArtifactRole::Encoder
                                 | crate::artifacts::ArtifactRole::Decoder
+                                | crate::artifacts::ArtifactRole::Tokenizer
+                                | crate::artifacts::ArtifactRole::Configuration
+                                | crate::artifacts::ArtifactRole::Processor
                         )
                 })
             {
                 return fail(
-                    "companions need distinct repository files with voice, vae, encoder or decoder roles",
+                    "companions need distinct repository files with model-input roles and valid pinned digests",
                 );
             }
             if let Some(stem) = &model.variant_stem {

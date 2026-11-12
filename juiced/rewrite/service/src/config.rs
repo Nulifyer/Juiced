@@ -254,6 +254,9 @@ pub enum Provider {
     WhisperCpp,
     StableDiffusionCpp,
     Kokoros,
+    Parakeet,
+    Moonshine,
+    Asr4all,
 }
 
 impl Provider {
@@ -264,6 +267,9 @@ impl Provider {
             Self::WhisperCpp => Some("whisper-cpp"),
             Self::StableDiffusionCpp => Some("stable-diffusion-cpp"),
             Self::Kokoros => Some("kokoros"),
+            Self::Parakeet => Some("parakeet-redux"),
+            Self::Moonshine => Some("moonshine-voice"),
+            Self::Asr4all => Some("futo-transcribe-cpp"),
         }
     }
     pub fn from_implementation(id: &str) -> Option<Self> {
@@ -272,12 +278,17 @@ impl Provider {
             "whisper-cpp" => Some(Self::WhisperCpp),
             "stable-diffusion-cpp" => Some(Self::StableDiffusionCpp),
             "kokoros" => Some(Self::Kokoros),
+            "parakeet-redux" => Some(Self::Parakeet),
+            "moonshine-voice" => Some(Self::Moonshine),
+            "futo-transcribe-cpp" => Some(Self::Asr4all),
             _ => None,
         }
     }
     pub fn media_operation(self) -> Option<Operation> {
         match self {
-            Self::WhisperCpp => Some(Operation::Transcription),
+            Self::WhisperCpp | Self::Parakeet | Self::Moonshine | Self::Asr4all => {
+                Some(Operation::Transcription)
+            }
             Self::StableDiffusionCpp => Some(Operation::ImageGeneration),
             Self::Kokoros => Some(Operation::Speech),
             Self::ExternalHttp | Self::LlamaCpp => None,
@@ -286,11 +297,25 @@ impl Provider {
     pub fn readiness_path(self) -> &'static str {
         match self {
             Self::StableDiffusionCpp | Self::Kokoros => "/v1/models",
-            Self::ExternalHttp | Self::LlamaCpp | Self::WhisperCpp => "/health",
+            Self::ExternalHttp
+            | Self::LlamaCpp
+            | Self::WhisperCpp
+            | Self::Parakeet
+            | Self::Moonshine
+            | Self::Asr4all => "/health",
         }
     }
     pub fn accepts_companions(self) -> bool {
-        matches!(self, Self::StableDiffusionCpp | Self::Kokoros)
+        matches!(
+            self,
+            Self::StableDiffusionCpp | Self::Kokoros | Self::Moonshine
+        )
+    }
+    pub fn transcription_path(self) -> &'static str {
+        match self {
+            Self::Parakeet => "/v1/audio/transcriptions",
+            _ => "/inference",
+        }
     }
 }
 

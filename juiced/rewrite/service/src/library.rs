@@ -711,14 +711,13 @@ impl Library {
             )
         })?;
         let mut variants = quant::group(&info.files);
-        if let Some(bundle) = catalog::catalog()
+        let bundles: Vec<_> = catalog::catalog()
             .models
             .iter()
             .filter(|model| model.repo == request.repo)
-            .find_map(|model| model.bundle(&info.files))
-        {
-            variants.insert(0, bundle);
-        }
+            .filter_map(|model| model.bundle(&info.files))
+            .collect();
+        variants.splice(0..0, bundles);
         let mut selected: Vec<&quant::Variant> = Vec::new();
         for file in &requested {
             let variant = variants
@@ -1184,6 +1183,7 @@ fn entry_json(entry: &Entry, presence: Option<&Presence>, pullable: bool) -> Val
         "source": entry.source,
         "catalog_id": entry.catalog.map(|model| model.id.as_str()),
         "native_id": entry.catalog.map(|model| model.native_id.as_str()),
+        "engine": entry.catalog.and_then(|model| model.engine),
         "recommended_quant": entry.catalog.and_then(|model| model.recommended_quant.as_deref()),
         "recommended_file": entry.catalog.and_then(|model| model.recommended_file.as_deref()),
         "license": entry.catalog.and_then(|model| model.license.clone()).or_else(|| summary.and_then(|summary| summary.license.clone())),

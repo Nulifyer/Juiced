@@ -410,6 +410,88 @@
       "license": "apache-2.0",
       "native_id": "kokoro-v1",
       "companions": [{ "file": "voices-v1.0.bin", "role": "voice" }]
+    },
+    {
+      "id": "parakeet-redux",
+      "name": "Parakeet Redux",
+      "repo": "mudler/parakeet-cpp-gguf",
+      "family": "parakeet",
+      "task": "transcription",
+      "recommended_quant": null,
+      "recommended_file": "redux-packed.gguf",
+      "variant_stem": "redux-packed",
+      "license": "cc-by-4.0",
+      "native_id": "parakeet-cpp-gguf-redux-packed",
+      "engine": "parakeet.cpp"
+    },
+    {
+      "id": "moonshine-tiny-streaming",
+      "name": "Moonshine Tiny Streaming",
+      "repo": "moonshine-ai/moonshine-streaming",
+      "family": "moonshine",
+      "task": "transcription",
+      "recommended_quant": null,
+      "recommended_file": "onnx/tiny/encoder.ort",
+      "variant_stem": null,
+      "license": "mit",
+      "native_id": "Moonshine-Tiny-Streaming",
+      "engine": "moonshine",
+      "companions": [
+        { "file": "onnx/tiny/adapter.ort", "role": "encoder" },
+        { "file": "onnx/tiny/cross_kv.ort", "role": "decoder" },
+        { "file": "onnx/tiny/decoder.ort", "role": "decoder" },
+        { "file": "onnx/tiny/decoder_kv.ort", "role": "decoder" },
+        { "file": "onnx/tiny/frontend.ort", "role": "encoder" },
+        { "file": "onnx/tiny/ten-vad.onnx", "role": "processor" },
+        { "file": "onnx/tiny/streaming_config.json", "role": "configuration", "sha256": "74fe5ddebd63b17caf59e8a3b18c17547ff7bce1642050edbb1c3962674f8950" },
+        { "file": "onnx/tiny/tokenizer.json", "role": "tokenizer", "sha256": "b68b995a58b3373db6c4f46864a9db50cd1333d086150ffa2c1096581ede9c10" }
+      ]
+    },
+    {
+      "id": "moonshine-small-streaming",
+      "name": "Moonshine Small Streaming",
+      "repo": "moonshine-ai/moonshine-streaming",
+      "family": "moonshine",
+      "task": "transcription",
+      "recommended_quant": null,
+      "recommended_file": "onnx/small/encoder.ort",
+      "variant_stem": null,
+      "license": "mit",
+      "native_id": "Moonshine-Small-Streaming",
+      "engine": "moonshine",
+      "companions": [
+        { "file": "onnx/small/adapter.ort", "role": "encoder" },
+        { "file": "onnx/small/cross_kv.ort", "role": "decoder" },
+        { "file": "onnx/small/decoder.ort", "role": "decoder" },
+        { "file": "onnx/small/decoder_kv.ort", "role": "decoder" },
+        { "file": "onnx/small/frontend.ort", "role": "encoder" },
+        { "file": "onnx/small/ten-vad.onnx", "role": "processor" },
+        { "file": "onnx/small/streaming_config.json", "role": "configuration", "sha256": "26f02b6afb22d60871a5efd85c3d38e569cc0ddb6c5eb6e93d3260152ae8a47a" },
+        { "file": "onnx/small/tokenizer.json", "role": "tokenizer", "sha256": "b68b995a58b3373db6c4f46864a9db50cd1333d086150ffa2c1096581ede9c10" }
+      ]
+    },
+    {
+      "id": "moonshine-medium-streaming",
+      "name": "Moonshine Medium Streaming",
+      "repo": "moonshine-ai/moonshine-streaming",
+      "family": "moonshine",
+      "task": "transcription",
+      "recommended_quant": null,
+      "recommended_file": "onnx/medium/encoder.ort",
+      "variant_stem": null,
+      "license": "mit",
+      "native_id": "Moonshine-Medium-Streaming",
+      "engine": "moonshine",
+      "companions": [
+        { "file": "onnx/medium/adapter.ort", "role": "encoder" },
+        { "file": "onnx/medium/cross_kv.ort", "role": "decoder" },
+        { "file": "onnx/medium/decoder.ort", "role": "decoder" },
+        { "file": "onnx/medium/decoder_kv.ort", "role": "decoder" },
+        { "file": "onnx/medium/frontend.ort", "role": "encoder" },
+        { "file": "onnx/medium/ten-vad.onnx", "role": "processor" },
+        { "file": "onnx/medium/streaming_config.json", "role": "configuration", "sha256": "28e83b7a28e91472692a035e0dae3116422ae43aeb2bef5ed822c44ce89b88af" },
+        { "file": "onnx/medium/tokenizer.json", "role": "tokenizer", "sha256": "b68b995a58b3373db6c4f46864a9db50cd1333d086150ffa2c1096581ede9c10" }
+      ]
     }
   ]
 }

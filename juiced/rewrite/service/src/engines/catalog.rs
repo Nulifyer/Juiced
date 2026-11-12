@@ -9,7 +9,7 @@ pub enum ArchiveFormat {
     Zip,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Engine {
     #[serde(rename = "llama.cpp")]
@@ -20,14 +20,23 @@ pub enum Engine {
     StableDiffusionCpp,
     #[serde(rename = "kokoros")]
     Kokoros,
+    #[serde(rename = "parakeet.cpp")]
+    Parakeet,
+    #[serde(rename = "moonshine")]
+    Moonshine,
+    #[serde(rename = "futo-transcribe.cpp")]
+    Asr4all,
 }
 
 impl Engine {
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 7] = [
         Self::LlamaCpp,
         Self::WhisperCpp,
         Self::StableDiffusionCpp,
         Self::Kokoros,
+        Self::Parakeet,
+        Self::Moonshine,
+        Self::Asr4all,
     ];
     pub fn parse(value: &str) -> Option<Self> {
         match value {
@@ -37,6 +46,9 @@ impl Engine {
                 Some(Self::StableDiffusionCpp)
             }
             "kokoros" | "kokoro" => Some(Self::Kokoros),
+            "parakeet.cpp" | "parakeet" | "parakeet-redux" => Some(Self::Parakeet),
+            "moonshine" | "moonshine-voice" => Some(Self::Moonshine),
+            "futo-transcribe.cpp" | "futo-transcribe-cpp" | "asr4all" => Some(Self::Asr4all),
             _ => None,
         }
     }
@@ -46,6 +58,9 @@ impl Engine {
             Self::WhisperCpp => "whisper.cpp",
             Self::StableDiffusionCpp => "sd.cpp",
             Self::Kokoros => "kokoros",
+            Self::Parakeet => "parakeet.cpp",
+            Self::Moonshine => "moonshine",
+            Self::Asr4all => "futo-transcribe.cpp",
         }
     }
     pub fn recipe(self) -> &'static str {
@@ -54,6 +69,9 @@ impl Engine {
             Self::WhisperCpp => "whispercpp",
             Self::StableDiffusionCpp => "sd-cpp",
             Self::Kokoros => "kokoro",
+            Self::Parakeet => "parakeet",
+            Self::Moonshine => "moonshine",
+            Self::Asr4all => "asr4all",
         }
     }
     pub fn provider(self) -> crate::config::Provider {
@@ -62,6 +80,9 @@ impl Engine {
             Self::WhisperCpp => crate::config::Provider::WhisperCpp,
             Self::StableDiffusionCpp => crate::config::Provider::StableDiffusionCpp,
             Self::Kokoros => crate::config::Provider::Kokoros,
+            Self::Parakeet => crate::config::Provider::Parakeet,
+            Self::Moonshine => crate::config::Provider::Moonshine,
+            Self::Asr4all => crate::config::Provider::Asr4all,
         }
     }
     pub fn entrypoint(self) -> &'static str {
@@ -70,7 +91,15 @@ impl Engine {
             Self::WhisperCpp => "whisper-server",
             Self::StableDiffusionCpp => "sd-server",
             Self::Kokoros => "koko",
+            Self::Parakeet => "parakeet-server",
+            Self::Moonshine => "moonshine-server",
+            Self::Asr4all => "futo-server",
         }
+    }
+    /// The model format alone selects these engines and their only native support row is
+    /// experimental, so no core backend exists that automatic selection could prefer.
+    pub fn accepts_experimental(self) -> bool {
+        matches!(self, Self::Parakeet | Self::Asr4all)
     }
 }
 
@@ -121,6 +150,10 @@ const SD: &str = "lemonade-sdk/stable-diffusion.cpp";
 const SD_TAG: &str = "master-957-90e86d1";
 const KOKOROS: &str = "lemonade-sdk/Kokoros";
 const KOKOROS_TAG: &str = "b21";
+const PARAKEET: &str = "mudler/parakeet.cpp";
+const PARAKEET_TAG: &str = "v0.6.1";
+const MOONSHINE: &str = "lemonade-sdk/moonshine-server-rocm";
+const MOONSHINE_TAG: &str = "moonshine0.0.62";
 
 const fn linux(
     engine: Engine,
@@ -433,7 +466,37 @@ pub const BUILDS: &[Build] = &[
         ),
         ArchiveFormat::TarGz,
     ),
+    // v0.6.1 is five commits past the native image's da8bb4c4 (= v0.6.0, which has no
+    // assets); none of them touch the server.
+    linux(
+        Engine::Parakeet,
+        "cpu",
+        None,
+        (PARAKEET, PARAKEET_TAG),
+        (
+            "parakeet-v0.6.1-bin-linux-cpu-x64.tar.gz",
+            2727511,
+            "cce60d122ab72e1068cd0d164e54a21655a0b83f1b9c21befc20124f5a972c10",
+        ),
+        ArchiveFormat::TarGz,
+    ),
+    linux(
+        Engine::Moonshine,
+        "cpu",
+        None,
+        (MOONSHINE, MOONSHINE_TAG),
+        (
+            "moonshine-server-moonshine0.0.62-linux-x64.tar.gz",
+            132320778,
+            "c19d6f333002af3209ee029be0e4f5967926edf29395de7401c83b5f9fc21191",
+        ),
+        ArchiveFormat::TarGz,
+    ),
 ];
+
+/// Engines with a native support row but no published release asset; they install only
+/// through a runtime-package import.
+pub const UNPUBLISHED: &[(Engine, &str)] = &[(Engine::Asr4all, "cpu")];
 
 /// Concrete ISAs that releases publish under a family asset; others ship verbatim.
 pub fn rocm_asset_family(target: &str) -> &str {
@@ -457,6 +520,7 @@ pub enum Unresolved {
     HostUnsupported,
     BackendUnknown,
     NoMatchingGpu,
+    NotPublished,
 }
 
 /// Multi-GPU hosts get the highest CUDA compute capability with a published build and a
@@ -467,7 +531,11 @@ pub fn resolve(engine: Engine, backend: &str, host: &HostReport) -> Result<Build
         .filter(|build| build.engine == engine && build.backend == backend)
         .collect();
     if candidates.is_empty() {
-        return Err(Unresolved::BackendUnknown);
+        return Err(if UNPUBLISHED.contains(&(engine, backend)) {
+            Unresolved::NotPublished
+        } else {
+            Unresolved::BackendUnknown
+        });
     }
     let candidates: Vec<&Build> = candidates
         .into_iter()
