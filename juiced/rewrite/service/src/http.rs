@@ -225,6 +225,7 @@ define_routes! {
     (post, "/juiced/library/upload", library_upload, "operator"),
     (get, "/juiced/library/import-path", library_import_candidates, "operator"),
     (post, "/juiced/library/import-path", library_import_path, "operator"),
+    (post, "/juiced/import/native", native_import, "operator"),
 }
 async fn residency(State(state): State<AppState>) -> impl IntoResponse {
     (
@@ -1708,4 +1709,18 @@ async fn forward_prioritized(
         .headers_mut()
         .insert(header::CACHE_CONTROL, "no-store".parse().unwrap());
     Ok(response)
+}
+async fn native_import(
+    State(state): State<AppState>,
+    ApiJson(request): ApiJson<crate::supervisor::NativeImportRequest>,
+) -> Result<Json<Value>, ApiError> {
+    tokio::spawn(async move { state.manager.native_import(request).await.map(Json) })
+        .await
+        .map_err(|_| {
+            ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "native_import_interrupted",
+                "The native import was interrupted. Inspect the current catalog before retrying.",
+            )
+        })?
 }

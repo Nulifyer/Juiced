@@ -368,9 +368,11 @@ pub struct Config {
     pub aliases: ModelAliases,
     #[serde(skip_serializing_if = "upload_maximum_is_default")]
     pub upload_max_bytes: u64,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub import_roots: Vec<PathBuf>,
 }
+
+pub const MAXIMUM_IMPORT_ROOTS: usize = 16;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -629,7 +631,12 @@ impl Config {
         }
         if self.import_roots.len() > MAXIMUM_IMPORT_ROOTS
             || self.import_roots.iter().any(|root| {
-                !root.is_absolute() || root.as_os_str().len() > 4096 || root.parent().is_none()
+                !root.is_absolute()
+                    || root.as_os_str().len() > 4096
+                    || root.parent().is_none()
+                    || root
+                        .to_str()
+                        .is_none_or(|text| text.chars().any(char::is_control))
             })
         {
             return Err(format!(
@@ -781,7 +788,6 @@ impl Config {
 }
 
 pub const DEFAULT_UPLOAD_MAX_BYTES: u64 = 256 * 1024 * 1024 * 1024;
-const MAXIMUM_IMPORT_ROOTS: usize = 16;
 
 fn default_upload_max_bytes() -> u64 {
     DEFAULT_UPLOAD_MAX_BYTES

@@ -63,7 +63,7 @@ pub const OPERATOR_READ_ROUTES: [&str; 22] = [
     "/juiced/residency",
     "/juiced/library/import-path",
 ];
-pub const WRITE_ROUTES: [&str; 28] = [
+pub const WRITE_ROUTES: [&str; 29] = [
     "/juiced/runtime-packages/import",
     "/juiced/engines/install",
     "/juiced/models/add",
@@ -92,6 +92,7 @@ pub const WRITE_ROUTES: [&str; 28] = [
     "/juiced/residency",
     "/juiced/library/upload",
     "/juiced/library/import-path",
+    "/juiced/import/native",
 ];
 pub const INFERENCE_ROUTES: [&str; 4] = [
     "/chat/completions",

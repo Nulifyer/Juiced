@@ -37,6 +37,8 @@ mod intake;
 pub use intake::{ImportListQuery, ImportPathRequest, UploadQuery};
 mod host;
 mod native;
+mod native_import;
+pub use native_import::{NativeImportModel, NativeImportRequest};
 mod physical;
 mod publication;
 mod residency;
