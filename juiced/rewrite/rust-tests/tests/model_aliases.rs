@@ -129,7 +129,7 @@ async fn aliases_route_every_protocol_swap_without_interrupting_in_flight_work_a
         .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
-        listed(&tags["models"], "name", "chat").expect("alias in Ollama tags")["aliased_to"],
+        listed(&tags["models"], "name", "chat:latest").expect("alias in Ollama tags")["aliased_to"],
         "fixture.one"
     );
 
@@ -256,7 +256,7 @@ async fn alias_targets_keep_their_policy_and_cannot_be_removed_or_shadowed() {
         .json(Method::GET, "/api/tags", None, server.read_key())
         .await;
     assert_eq!(status, StatusCode::OK);
-    assert!(listed(&tags["models"], "name", "assistant").is_none());
+    assert!(listed(&tags["models"], "name", "assistant:latest").is_none());
     let (status, error) = inference(
         &server,
         "/v1/chat/completions",
