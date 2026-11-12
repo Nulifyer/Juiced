@@ -217,12 +217,14 @@ fn detect_candidate(inspection: &Inspection, candidate: &Candidate) -> Detected 
 fn recipe_format(engine: Engine, detected: models::ModelFormat) -> models::ModelFormat {
     use models::ModelFormat;
     match (engine, detected) {
-        (Engine::StableDiffusionCpp, ModelFormat::Gguf { declared, .. }) => ModelFormat::Diffusion {
-            container: models::Container::Gguf,
-            architecture: declared.architecture,
-            includes_vae: false,
-            includes_text_encoder: false,
-        },
+        (Engine::StableDiffusionCpp, ModelFormat::Gguf { declared, .. }) => {
+            ModelFormat::Diffusion {
+                container: models::Container::Gguf,
+                architecture: declared.architecture,
+                includes_vae: false,
+                includes_text_encoder: false,
+            }
+        }
         (Engine::Asr4all, ModelFormat::Gguf { .. } | ModelFormat::ParakeetGguf {}) => {
             ModelFormat::Asr4allGguf {}
         }
@@ -245,7 +247,9 @@ fn merge_arguments(arguments: &mut Vec<Value>, groups: &[Vec<String>]) {
                 if arguments
                     .get(position + 1)
                     .and_then(Value::as_str)
-                    .is_some_and(|value| !value.starts_with('-') || value.parse::<f64>().is_ok()) =>
+                    .is_some_and(|value| {
+                        !value.starts_with('-') || value.parse::<f64>().is_ok()
+                    }) =>
             {
                 arguments[position + 1] = json!(group[1]);
             }
@@ -257,8 +261,12 @@ fn merge_arguments(arguments: &mut Vec<Value>, groups: &[Vec<String>]) {
 
 fn companion_view(companion: &Resolved) -> Value {
     match &companion.found {
-        Ok(found) => json!({"role": companion.role, "checkpoint": companion.checkpoint, "found": true, "path": found.path, "bytes": found.bytes}),
-        Err(code) => json!({"role": companion.role, "checkpoint": companion.checkpoint, "found": false, "reason": code}),
+        Ok(found) => {
+            json!({"role": companion.role, "checkpoint": companion.checkpoint, "found": true, "path": found.path, "bytes": found.bytes})
+        }
+        Err(code) => {
+            json!({"role": companion.role, "checkpoint": companion.checkpoint, "found": false, "reason": code})
+        }
     }
 }
 
@@ -509,7 +517,9 @@ impl Manager {
                             mapped.arguments.retain(|group| {
                                 !matches!(
                                     group[0].as_str(),
-                                    "--device" | "-dev" | crate::hybrid::DEVICE_FLAG
+                                    "--device"
+                                        | "-dev"
+                                        | crate::hybrid::DEVICE_FLAG
                                         | crate::hybrid::MEMORY_FLAG
                                         | crate::hybrid::MIN_PROMPT_FLAG
                                 )
@@ -531,7 +541,8 @@ impl Manager {
                             .map(|found| found.bytes)
                             .sum();
                         let bytes = found.bytes.saturating_add(companion_bytes);
-                        let estimate_for = |context: Option<u64>| models::estimate(format, bytes, context);
+                        let estimate_for =
+                            |context: Option<u64>| models::estimate(format, bytes, context);
                         let estimate = match format {
                             models::ModelFormat::Gguf { declared, .. } => {
                                 match mapped.options.context_tokens {
@@ -545,7 +556,8 @@ impl Manager {
                                         while estimate.resident_bytes > base.resident_budget_bytes
                                             && context > models::DEFAULT_CONTEXT_TOKENS
                                         {
-                                            context = (context / 2).max(models::DEFAULT_CONTEXT_TOKENS);
+                                            context =
+                                                (context / 2).max(models::DEFAULT_CONTEXT_TOKENS);
                                             estimate = estimate_for(Some(context));
                                         }
                                         estimate
@@ -590,7 +602,11 @@ impl Manager {
                         let profile = &mut value["execution_profile"];
                         if let Some(arguments) = profile["args"].as_array_mut() {
                             if engine == Engine::StableDiffusionCpp {
-                                let flag = if bound.len() == 2 { "--diffusion-model" } else { "--model" };
+                                let flag = if bound.len() == 2 {
+                                    "--diffusion-model"
+                                } else {
+                                    "--model"
+                                };
                                 if let Some(position) = arguments.iter().position(|argument| {
                                     argument == "--model" || argument == "--diffusion-model"
                                 }) {
@@ -598,7 +614,9 @@ impl Manager {
                                 }
                             }
                             if engine == Engine::LlamaCpp {
-                                arguments.extend(companion_arguments.iter().map(|argument| json!(argument)));
+                                arguments.extend(
+                                    companion_arguments.iter().map(|argument| json!(argument)),
+                                );
                             }
                             merge_arguments(arguments, &mapped.arguments);
                         }
@@ -694,18 +712,30 @@ impl Manager {
             );
             row.insert(
                 "companions".into(),
-                json!(companions.iter().map(|companion| {
-                    let mut view = companion_view(companion);
-                    view["bound"] = json!(bound.iter().any(|(held, _)| std::ptr::eq(*held, companion)));
-                    view
-                }).collect::<Vec<_>>()),
+                json!(
+                    companions
+                        .iter()
+                        .map(|companion| {
+                            let mut view = companion_view(companion);
+                            view["bound"] =
+                                json!(bound.iter().any(|(held, _)| std::ptr::eq(*held, companion)));
+                            view
+                        })
+                        .collect::<Vec<_>>()
+                ),
             );
             row.insert("format".into(), json!(format));
             row.insert("engine".into(), engine_view);
             row.insert("options".into(), json!(mapped.options));
             row.insert(
                 "argument_flags".into(),
-                json!(mapped.arguments.iter().map(|group| &group[0]).collect::<Vec<_>>()),
+                json!(
+                    mapped
+                        .arguments
+                        .iter()
+                        .map(|group| &group[0])
+                        .collect::<Vec<_>>()
+                ),
             );
             row.insert("settings".into(), json!(settings));
             row.insert(
@@ -788,15 +818,8 @@ impl Manager {
                 aliases,
                 expected_generation,
             } => {
-                self.native_import_apply(
-                    source,
-                    weights,
-                    models,
-                    aliases,
-                    expected_generation,
-                    &[],
-                )
-                .await
+                self.native_import_apply(source, weights, models, aliases, expected_generation, &[])
+                    .await
             }
         }
     }
@@ -807,7 +830,9 @@ impl Manager {
         weights: Option<PathBuf>,
         extra_roots: &[PathBuf],
     ) -> Result<Value, ApiError> {
-        let plan = self.native_import_plan(source, weights, extra_roots).await?;
+        let plan = self
+            .native_import_plan(source, weights, extra_roots)
+            .await?;
         let config = self.config.lock().await.clone();
         let mut rows = Vec::with_capacity(plan.models.len());
         let mut proposed: BTreeMap<String, String> = BTreeMap::new();
@@ -921,7 +946,9 @@ impl Manager {
                 "The configuration changed. Preview the import again before applying it.",
             ));
         }
-        let plan = self.native_import_plan(source, weights, extra_roots).await?;
+        let plan = self
+            .native_import_plan(source, weights, extra_roots)
+            .await?;
         let mut by_native: BTreeMap<String, Planned> = plan
             .models
             .into_iter()

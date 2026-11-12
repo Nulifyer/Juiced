@@ -1655,7 +1655,11 @@ mod tests {
         let error = validate(Provider::LlamaCpp, &input).unwrap_err();
         assert_eq!(error.code, "invalid_runtime_binding");
         let mut input = base();
-        input.extend(args(&["--mmproj", "{member:mmproj}", "--no-mmproj-offload"]));
+        input.extend(args(&[
+            "--mmproj",
+            "{member:mmproj}",
+            "--no-mmproj-offload",
+        ]));
         let template = validate(Provider::LlamaCpp, &input).unwrap();
         assert_eq!(
             template.member_requirements().collect::<Vec<_>>(),
@@ -1679,12 +1683,30 @@ mod tests {
                 .windows(2)
                 .any(|pair| pair == ["--mmproj", "/p/mmproj.gguf"])
         );
-        assert_eq!(passthrough(Provider::LlamaCpp, "--mmproj"), Passthrough::Companion);
-        assert_eq!(passthrough(Provider::LlamaCpp, "--host"), Passthrough::ManagerOwned);
-        assert_eq!(passthrough(Provider::LlamaCpp, "--lora"), Passthrough::Forbidden);
-        assert_eq!(passthrough(Provider::LlamaCpp, "--spec-type"), Passthrough::Accepted(1));
-        assert_eq!(passthrough(Provider::LlamaCpp, "--jinja"), Passthrough::Accepted(0));
-        assert_eq!(passthrough(Provider::LlamaCpp, "--made-up"), Passthrough::Unknown);
+        assert_eq!(
+            passthrough(Provider::LlamaCpp, "--mmproj"),
+            Passthrough::Companion
+        );
+        assert_eq!(
+            passthrough(Provider::LlamaCpp, "--host"),
+            Passthrough::ManagerOwned
+        );
+        assert_eq!(
+            passthrough(Provider::LlamaCpp, "--lora"),
+            Passthrough::Forbidden
+        );
+        assert_eq!(
+            passthrough(Provider::LlamaCpp, "--spec-type"),
+            Passthrough::Accepted(1)
+        );
+        assert_eq!(
+            passthrough(Provider::LlamaCpp, "--jinja"),
+            Passthrough::Accepted(0)
+        );
+        assert_eq!(
+            passthrough(Provider::LlamaCpp, "--made-up"),
+            Passthrough::Unknown
+        );
         assert_eq!(
             passthrough(Provider::StableDiffusionCpp, "--params-backend"),
             Passthrough::Forbidden

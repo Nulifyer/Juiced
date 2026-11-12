@@ -32,7 +32,8 @@ impl Manager {
             return Ok(Vec::new());
         }
         let store = self.artifacts().ok();
-        let requests: Vec<(String, Option<String>, Option<String>, Option<PathBuf>)> = workers
+        type Request = (String, Option<String>, Option<String>, Option<PathBuf>);
+        let requests: Vec<Request> = workers
             .iter()
             .map(|worker| {
                 (
@@ -53,11 +54,14 @@ impl Manager {
                 .into_iter()
                 .map(|(id, artifact, set, in_place)| {
                     if let Some(path) = in_place {
-                        let listed = crate::engines::models::voices(&path).map_err(|error| match error {
-                            crate::engines::models::FormatError::Invalid(code) => code,
-                            crate::engines::models::FormatError::Unavailable => "voice_pack_missing",
-                            _ => "invalid_voice_pack",
-                        });
+                        let listed =
+                            crate::engines::models::voices(&path).map_err(|error| match error {
+                                crate::engines::models::FormatError::Invalid(code) => code,
+                                crate::engines::models::FormatError::Unavailable => {
+                                    "voice_pack_missing"
+                                }
+                                _ => "invalid_voice_pack",
+                            });
                         return match listed {
                             Ok(voices) => json!({"model": id, "voices": voices, "error": null}),
                             Err(code) => json!({"model": id, "voices": [], "error": code}),

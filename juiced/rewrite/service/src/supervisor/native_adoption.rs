@@ -109,7 +109,8 @@ impl Manager {
             .native_adoption
             .target
             .lock()
-            .unwrap_or_else(|error| error.into_inner()) = Some((source.clone(), extra_roots.clone()));
+            .unwrap_or_else(|error| error.into_inner()) =
+            Some((source.clone(), extra_roots.clone()));
         let manager = self.clone();
         tokio::spawn(async move {
             manager.run_adoption(source, extra_roots).await;
@@ -215,8 +216,11 @@ impl Manager {
                 .unwrap_or_default()
                 .into_iter()
                 .filter(|row| {
-                    only.as_ref()
-                        .is_none_or(|only| row["native_id"].as_str().is_some_and(|id| only.contains(id)))
+                    only.as_ref().is_none_or(|only| {
+                        row["native_id"]
+                            .as_str()
+                            .is_some_and(|id| only.contains(id))
+                    })
                 })
                 .collect();
             let mut installs: Vec<(String, String)> = Vec::new();
@@ -360,7 +364,10 @@ impl Manager {
         }
         if let Some(only) = &only {
             for native_id in only {
-                if !rows.iter().any(|row| row["native_id"] == native_id.as_str()) {
+                if !rows
+                    .iter()
+                    .any(|row| row["native_id"] == native_id.as_str())
+                {
                     pending.push(native_id.clone());
                 }
             }
@@ -375,12 +382,18 @@ impl Manager {
             pending: pending.clone(),
         };
         self.record_adoption(marker.clone()).await?;
-        let counts = models.iter().fold(BTreeMap::<String, u64>::new(), |mut counts, row| {
-            *counts
-                .entry(row["outcome"].as_str().unwrap_or_default().to_owned())
-                .or_default() += 1;
-            counts
-        });
+        if !applied.is_empty() {
+            let manager = self.clone();
+            tokio::spawn(async move { manager.start_hot().await });
+        }
+        let counts = models
+            .iter()
+            .fold(BTreeMap::<String, u64>::new(), |mut counts, row| {
+                *counts
+                    .entry(row["outcome"].as_str().unwrap_or_default().to_owned())
+                    .or_default() += 1;
+                counts
+            });
         log(
             crate::logs::Level::Info,
             format!(
@@ -423,7 +436,11 @@ impl Manager {
         Ok(())
     }
 
-    async fn adoption_install(self: &Arc<Self>, engine: &str, backend: &str) -> Result<(), ApiError> {
+    async fn adoption_install(
+        self: &Arc<Self>,
+        engine: &str,
+        backend: &str,
+    ) -> Result<(), ApiError> {
         let deadline = Instant::now() + INSTALL_WAIT;
         let job = loop {
             let generation = self.package_inventory().await?["generation"]
@@ -440,8 +457,10 @@ impl Manager {
                 Ok((_, reply)) if reply["already_installed"] == true => return Ok(()),
                 Ok((_, reply)) => break reply["job"]["id"].as_str().unwrap_or_default().to_owned(),
                 Err(error)
-                    if matches!(error.code, "engine_install_busy" | "manifest_revision_conflict")
-                        && Instant::now() < deadline =>
+                    if matches!(
+                        error.code,
+                        "engine_install_busy" | "manifest_revision_conflict"
+                    ) && Instant::now() < deadline =>
                 {
                     tokio::time::sleep(INSTALL_POLL).await;
                 }

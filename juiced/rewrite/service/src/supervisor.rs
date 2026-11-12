@@ -40,7 +40,10 @@ pub use flm::{FlmModelAdd, FlmPull};
 mod host;
 mod native;
 mod native_adoption;
-pub use native_adoption::{ROOTS_ENV as NATIVE_ADOPTION_ROOTS_ENV, SOURCE_ENV as NATIVE_ADOPTION_SOURCE_ENV, from_env as native_adoption_from_env};
+pub use native_adoption::{
+    ROOTS_ENV as NATIVE_ADOPTION_ROOTS_ENV, SOURCE_ENV as NATIVE_ADOPTION_SOURCE_ENV,
+    from_env as native_adoption_from_env,
+};
 mod native_import;
 pub use native_import::{NativeImportModel, NativeImportRequest};
 mod physical;

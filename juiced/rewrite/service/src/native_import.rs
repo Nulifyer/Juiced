@@ -483,7 +483,10 @@ fn definition(row: &RawValue) -> Option<Definition> {
             if role == "main" || role.len() > 32 {
                 continue;
             }
-            if let Some(path) = path.as_str().filter(|path| !path.is_empty() && path.len() <= 1024) {
+            if let Some(path) = path
+                .as_str()
+                .filter(|path| !path.is_empty() && path.len() <= 1024)
+            {
                 checkpoints.insert(role.clone(), qualify(path, checkpoint.as_deref()));
             }
         }
@@ -1045,7 +1048,11 @@ impl Inspection {
     /// Resolves a companion checkpoint (projector, VAE, text encoder, ...) like native's
     /// default resolver: the exact relative path, or a file with that name anywhere in the
     /// snapshot, falling back to the main repository for older flat downloads.
-    pub fn find_checkpoint(&self, checkpoint: &str, main: Option<&str>) -> Result<Weights, &'static str> {
+    pub fn find_checkpoint(
+        &self,
+        checkpoint: &str,
+        main: Option<&str>,
+    ) -> Result<Weights, &'static str> {
         if Path::new(checkpoint).is_absolute() {
             return self.local_file(checkpoint);
         }
@@ -1098,7 +1105,9 @@ impl Inspection {
         let (repo, _) = split_checkpoint(checkpoint);
         let mut voices = None;
         let weights = self.search(repo, candidate.downloaded_index.as_ref(), |files| {
-            let (_, index, _) = files.iter().find(|(name, ..)| name.rsplit('/').next() == Some("index.json"))?;
+            let (_, index, _) = files
+                .iter()
+                .find(|(name, ..)| name.rsplit('/').next() == Some("index.json"))?;
             let directory = index.parent()?;
             let bytes = observe_bounded(directory, "index.json", 64 * 1024).ok()??;
             let index: Index = serde_json::from_slice(&bytes).ok()?;
@@ -1132,7 +1141,8 @@ impl Inspection {
         if !path.exists() {
             return Err("weights_missing");
         }
-        let (path, bytes) = confine_file(path, &self.roots).ok_or("weights_outside_import_roots")?;
+        let (path, bytes) =
+            confine_file(path, &self.roots).ok_or("weights_outside_import_roots")?;
         Ok(Weights {
             files: vec![(path.clone(), bytes)],
             path,
@@ -1161,7 +1171,10 @@ impl Inspection {
                 .filter(|index| index.directory == repo_directory)
                 .and_then(|index| index.snapshot.clone());
             for snapshot in snapshots(&repo_directory, preferred) {
-                let files = list_files(&repo_directory.join("snapshots").join(&snapshot), &self.roots);
+                let files = list_files(
+                    &repo_directory.join("snapshots").join(&snapshot),
+                    &self.roots,
+                );
                 if let Some(mut found) = matcher(&files) {
                     found.snapshot = Some(snapshot);
                     return Ok(found);

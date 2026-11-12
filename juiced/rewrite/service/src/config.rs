@@ -492,8 +492,8 @@ impl From<LegacyModelSpec> for ModelSpec {
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum ModelWire {
-    Current(ModelSpec),
-    Legacy(LegacyModelSpec),
+    Current(Box<ModelSpec>),
+    Legacy(Box<LegacyModelSpec>),
 }
 
 #[derive(Deserialize)]
@@ -560,8 +560,8 @@ impl<'de> Deserialize<'de> for Config {
             .into_iter()
             .map(|model| {
                 let model = match (wire.schema_version, model) {
-                    (1, ModelWire::Legacy(model)) => model.into(),
-                    (2 | 3, ModelWire::Current(model)) => model,
+                    (1, ModelWire::Legacy(model)) => (*model).into(),
+                    (2 | 3, ModelWire::Current(model)) => *model,
                     _ => {
                         return Err(D::Error::custom(
                             "Configuration model fields do not match its schema version",
@@ -609,8 +609,8 @@ pub struct Registration(pub ModelSpec);
 impl<'de> Deserialize<'de> for Registration {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let model = match ModelWire::deserialize(deserializer)? {
-            ModelWire::Current(model) => model,
-            ModelWire::Legacy(model) => model.into(),
+            ModelWire::Current(model) => *model,
+            ModelWire::Legacy(model) => (*model).into(),
         };
         if model.execution_profile.native_model_id().is_some() {
             return Err(D::Error::custom(

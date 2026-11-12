@@ -549,10 +549,14 @@ pub fn map_options(
     if engine == Some(Engine::LlamaCpp)
         && merge_args
         && labels.iter().any(|label| label == "mtp")
-        && !mapped.arguments.iter().any(|group| group[0] == "--spec-type")
+        && !mapped
+            .arguments
+            .iter()
+            .any(|group| group[0] == "--spec-type")
     {
         mapped
-            .arguments.push(vec!["--spec-type".to_owned(), "draft-mtp".to_owned()]);
+            .arguments
+            .push(vec!["--spec-type".to_owned(), "draft-mtp".to_owned()]);
         mapped.rows.push(row(
             "default",
             "merge_args:mtp",
