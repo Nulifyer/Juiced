@@ -1429,6 +1429,19 @@ pub struct RequestRecord {
     pub status: Option<u16>,
     pub elapsed_ms: u64,
     pub queue_wait_ms: u64,
+    #[serde(flatten)]
+    pub usage: crate::engine_usage::Observation,
+}
+
+#[derive(Clone, Serialize)]
+pub struct LastInference {
+    pub request_id: u64,
+    pub model: Arc<str>,
+    pub operation: &'static str,
+    pub completed_at_ms: u64,
+    pub elapsed_ms: u64,
+    #[serde(flatten)]
+    pub usage: crate::engine_usage::Observation,
 }
 
 pub struct RequestLease {
@@ -1559,6 +1572,11 @@ impl RequestLease {
             record.status = status;
         }
     }
+    pub fn observe_usage(&mut self, usage: crate::engine_usage::Observation) {
+        if let Some(record) = self.record.as_mut() {
+            record.usage = usage;
+        }
+    }
     pub fn bind_cache(&mut self, context: &RequestContext, session: &str, protocol: &str) {
         self.cache_identity = Some(snapshot_identity(
             &self.fingerprint,
@@ -1586,6 +1604,20 @@ impl Drop for RequestLease {
                 .unwrap_or_else(|e| e.into_inner()) = self.cache_identity.take();
         }
         record.elapsed_ms = self.started.elapsed().as_millis().min(u64::MAX as u128) as u64;
+        if record.outcome == "completed" && !record.usage.is_empty() {
+            *self
+                .manager
+                .last_inference
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = Some(LastInference {
+                request_id: record.id,
+                model: record.model.clone(),
+                operation: record.operation,
+                completed_at_ms: unix_time_ms(),
+                elapsed_ms: record.elapsed_ms,
+                usage: record.usage,
+            });
+        }
         let mut records = self
             .manager
             .records
@@ -1795,6 +1827,9 @@ pub struct Manager {
     startup_wait: Duration,
     pub request_timeout: Duration,
     records: Mutex<VecDeque<RequestRecord>>,
+    last_inference: Mutex<Option<LastInference>>,
+    logs: Arc<crate::logs::LogBuffer>,
+    system_stats: crate::system_stats::Sampler,
     next_request: AtomicU64,
     shutting_down: std::sync::atomic::AtomicBool,
     paused: std::sync::atomic::AtomicBool,
@@ -2090,6 +2125,9 @@ impl Manager {
             artifacts,
             cache_directory,
             records: Mutex::new(VecDeque::new()),
+            last_inference: Mutex::new(None),
+            logs: crate::logs::LogBuffer::new(),
+            system_stats: crate::system_stats::Sampler::default(),
             next_request: AtomicU64::new(1),
             shutting_down: std::sync::atomic::AtomicBool::new(false),
             paused: std::sync::atomic::AtomicBool::new(false),
@@ -3149,7 +3187,73 @@ impl Manager {
             "power": self.power.snapshot(), "host_memory": self.host_memory.observation(),
             "runtime_control_memory": self.runtime_control.projection(),
             "cache_control_memory": self.cache.as_ref().and_then(|cache| cache.control_memory()).map(|memory| memory.projection()).unwrap_or_else(|| serde_json::json!({"state":if self.cache_memory_unavailable.is_some() { "unavailable" } else { "legacy" },"reason":self.cache_memory_unavailable,"metadata_bytes":0,"scratch_bytes":0,"reserved_bytes":0,"outstanding_bytes":0,"active_operations":0})),
-            "active_requests": self.workers.read().unwrap_or_else(|e| e.into_inner()).values().map(|worker| worker.active.load(Ordering::Acquire) as u64).sum::<u64>() })
+            "active_requests": self.active_requests() })
+    }
+
+    fn active_requests(&self) -> u64 {
+        self.workers
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .values()
+            .map(|worker| worker.active.load(Ordering::Acquire) as u64)
+            .sum()
+    }
+
+    pub fn logs(&self) -> &Arc<crate::logs::LogBuffer> {
+        &self.logs
+    }
+
+    fn capture_worker_output(
+        &self,
+        worker: &Worker,
+        child: &mut crate::process::ManagedChild<WorkerResources>,
+    ) {
+        use crate::logs::{Level, Origin, Stream};
+        let origin = Origin::Worker {
+            model: worker.record_model.clone(),
+            generation: child.generation(),
+        };
+        let (stdout, stderr) = child.take_output();
+        let captured = [
+            stdout.map(|pipe| self.logs.capture(origin.clone(), Stream::Stdout, pipe)),
+            stderr.map(|pipe| self.logs.capture(origin, Stream::Stderr, pipe)),
+        ];
+        if captured
+            .iter()
+            .any(|result| !matches!(result, Some(Ok(()))))
+        {
+            self.logs.service(
+                Level::Warning,
+                &format!("Worker {} output capture is incomplete", worker.spec.id),
+            );
+        }
+        self.logs.service(
+            Level::Info,
+            &format!(
+                "Worker {} generation {} started with pid {}",
+                worker.spec.id,
+                child.generation(),
+                child
+                    .id()
+                    .map_or_else(|| "unknown".to_owned(), |pid| pid.to_string())
+            ),
+        );
+    }
+
+    pub async fn system_stats(&self) -> serde_json::Value {
+        let sample = self.system_stats.current().await;
+        let mut stats =
+            crate::system_stats::projection(sample.as_deref(), self.system_stats.interval());
+        stats["active_requests"] = self.active_requests().into();
+        stats["queued_requests"] = (self.admission.pending_count() as u64).into();
+        stats["last_inference"] = serde_json::to_value(
+            self.last_inference
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone(),
+        )
+        .unwrap_or_default();
+        stats
     }
 
     pub fn admission(&self) -> serde_json::Value {
@@ -3702,8 +3806,8 @@ impl Manager {
             .map_err(|error| ApiError::new(StatusCode::BAD_GATEWAY, error.code, error.message))?;
         command
             .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
         #[cfg(target_os = "linux")]
         {
             let parent = unsafe { libc::getpid() };
@@ -3749,12 +3853,17 @@ impl Manager {
             .spawn(worker.record_model.clone(), &mut command, resources)
             .map_err(|error| {
                 state.error = Some(error.code);
+                self.logs.service(
+                    crate::logs::Level::Error,
+                    &format!("Worker {} could not start: {}", worker.spec.id, error.code),
+                );
                 ApiError::new(
                     StatusCode::from_u16(error.status).unwrap_or(StatusCode::BAD_GATEWAY),
                     error.code,
                     error.message,
                 )
             })?;
+        self.capture_worker_output(worker, &mut child);
         child
             .resources()
             .writer_generation
@@ -3790,6 +3899,14 @@ impl Manager {
             .await
             .unwrap_or(false);
         if !ready {
+            self.logs.service(
+                crate::logs::Level::Error,
+                &format!(
+                    "Worker {} generation {} exited or missed its readiness deadline",
+                    worker.spec.id,
+                    child.generation()
+                ),
+            );
             let _ = child.stop().await;
             state.error = Some("worker_not_ready");
             Self::publish(worker, state);
@@ -3949,6 +4066,14 @@ impl Manager {
         child.resources().startup.release_startup();
         drop(preparation);
         worker.speech_retiring.store(0, Ordering::Release);
+        self.logs.service(
+            crate::logs::Level::Info,
+            &format!(
+                "Worker {} generation {} is ready",
+                worker.spec.id,
+                child.generation()
+            ),
+        );
         state.running = Some(Running {
             child,
             plan,
@@ -4281,6 +4406,7 @@ impl Manager {
                     status: None,
                     elapsed_ms: 0,
                     queue_wait_ms,
+                    usage: Default::default(),
                 }),
             },
         ))
@@ -4304,6 +4430,7 @@ impl Manager {
 
     pub async fn shutdown(&self) -> ShutdownReport {
         self.shutting_down.store(true, Ordering::Release);
+        self.system_stats.close();
         self.publications.close();
         self.startup.shutdown();
         self.admission.shutdown();

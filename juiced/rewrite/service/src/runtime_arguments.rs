@@ -837,7 +837,7 @@ fn fixture_arity(flag: &str) -> Option<u8> {
     #[cfg(feature = "test-fixture")]
     {
         match flag {
-            "--finite-stream" => Some(0),
+            "--finite-stream" | "--report-timings" => Some(0),
             "--parallel"
             | "-np"
             | "--ctx-size"
@@ -852,7 +852,9 @@ fn fixture_arity(flag: &str) -> Option<u8> {
             | "--speech-response-mode"
             | "--speech-release-file"
             | "--speech-physical-release-file"
-            | "--speech-status" => Some(1),
+            | "--speech-status"
+            | "--startup-log"
+            | "--chatty-bytes" => Some(1),
             _ => None,
         }
     }

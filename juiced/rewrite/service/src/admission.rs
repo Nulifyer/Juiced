@@ -501,6 +501,14 @@ impl Admission {
         Self::reject_waiters(&mut state, STOPPED, |_| true);
     }
 
+    pub fn pending_count(&self) -> usize {
+        self.state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .pending
+            .len()
+    }
+
     pub fn snapshot(&self) -> Snapshot {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         state.pools.retain(|pool| pool.strong_count() != 0);

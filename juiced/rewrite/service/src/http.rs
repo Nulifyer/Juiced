@@ -204,6 +204,60 @@ define_routes! {
     (post, "/responses", responses, "inference"),
     (post, "/embeddings", embeddings, "inference"),
     (post, "/audio/transcriptions", transcription, "inference"),
+    (get, "/system-stats", system_stats, "operator"),
+    (get, "/juiced/logs", logs, "operator"),
+}
+async fn system_stats(State(state): State<AppState>) -> impl IntoResponse {
+    (
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(state.manager.system_stats().await),
+    )
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LogQuery {
+    after: Option<u64>,
+    limit: Option<usize>,
+    source: Option<String>,
+}
+async fn logs(
+    State(state): State<AppState>,
+    ApiQuery(query): ApiQuery<LogQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    let limit = query.limit.unwrap_or(crate::logs::DEFAULT_PAGE);
+    if !(1..=crate::logs::MAXIMUM_PAGE).contains(&limit) {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_log_limit",
+            format!(
+                "Request between 1 and {} log lines.",
+                crate::logs::MAXIMUM_PAGE
+            ),
+        ));
+    }
+    if query.source.as_deref().is_some_and(|source| {
+        source.is_empty() || source.len() > 256 || source.chars().any(char::is_control)
+    }) {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_log_source",
+            "Use service or a bounded model ID as the log source.",
+        ));
+    }
+    let page = state
+        .manager
+        .logs()
+        .read(query.after.unwrap_or(0), limit, query.source.as_deref());
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(json!({
+            "schema_version": 1, "data": page.data, "next": page.next,
+            "dropped": page.dropped, "oldest": page.oldest, "latest": page.latest,
+            "cursor_reset": page.cursor_reset,
+            "capacity": {"lines": crate::logs::CAPACITY_LINES, "bytes": crate::logs::CAPACITY_BYTES, "line_bytes": crate::logs::LINE_BYTES},
+            "contains_request_content": false,
+        })),
+    ))
 }
 async fn health() -> impl IntoResponse {
     (
@@ -1181,14 +1235,33 @@ async fn forward_prioritized(
         })?;
     let status = upstream.status();
     let content_type = upstream.headers().get(header::CONTENT_TYPE).cloned();
+    let tail = (status.is_success()
+        && matches!(
+            operation,
+            Operation::Chat | Operation::Completion | Operation::Responses
+        ))
+    .then(crate::engine_usage::Tail::default);
     let tracked = stream::unfold(
-        (upstream.bytes_stream(), lease, false),
-        move |(mut upstream, mut lease, failed): (_, RequestLease, bool)| async move {
+        (upstream.bytes_stream(), lease, false, tail),
+        move |(mut upstream, mut lease, failed, mut tail): (
+            _,
+            RequestLease,
+            bool,
+            Option<crate::engine_usage::Tail>,
+        )| async move {
             if failed {
                 return None;
             }
             match upstream.next().await {
-                Some(Ok(bytes)) => Some((Ok::<_, std::io::Error>(bytes), (upstream, lease, false))),
+                Some(Ok(bytes)) => {
+                    if let Some(tail) = tail.as_mut() {
+                        tail.push(&bytes);
+                    }
+                    Some((
+                        Ok::<_, std::io::Error>(bytes),
+                        (upstream, lease, false, tail),
+                    ))
+                }
                 Some(Err(error)) => {
                     lease.finish(
                         if error.is_timeout() {
@@ -1200,11 +1273,14 @@ async fn forward_prioritized(
                     );
                     Some((
                         Err(std::io::Error::other("The engine response was interrupted")),
-                        (upstream, lease, true),
+                        (upstream, lease, true, None),
                     ))
                 }
                 None => {
                     lease.text_reply_eof();
+                    if let Some(tail) = tail {
+                        lease.observe_usage(tail.observe());
+                    }
                     lease.finish(
                         if status.is_success() {
                             "completed"

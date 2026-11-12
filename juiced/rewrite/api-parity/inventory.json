@@ -185,6 +185,11 @@
       "path": "juiced/rewrite/rust-tests/tests/artifact_sets.rs",
       "sha256": "1acd83970fd5b1a57dbb1a4d1cc0992ed41f6588c4ac792e028f327770de3e21",
       "hash_check": "snapshot_only"
+    },
+    {
+      "path": "juiced/rewrite/rust-tests/tests/telemetry.rs",
+      "sha256": "ff680e009cc7e187c00e95c3506a1f7d88db07c2415acf060a0b2a338ee5ea3d",
+      "hash_check": "snapshot_only"
     }
   ],
   "prefix_schemes": {
@@ -3573,7 +3578,7 @@
       "category": "native",
       "native_behavior": "handler",
       "disposition": "retained",
-      "status": "planned",
+      "status": "partial",
       "native_evidence": [
         {
           "path": "src/cpp/server/server.cpp",
@@ -3587,12 +3592,26 @@
         "F134"
       ],
       "rust_equivalent": {
-        "relationship": "none",
-        "routes": [],
-        "scenario_files": [],
-        "authorities": []
+        "relationship": "same_path",
+        "routes": [
+          {
+            "method": "GET",
+            "path": "/system-stats",
+            "prefix_scheme": "native_quad"
+          }
+        ],
+        "scenario_files": [
+          "juiced/rewrite/rust-tests/tests/telemetry.rs"
+        ],
+        "authorities": [
+          {
+            "method": "GET",
+            "path": "/system-stats",
+            "authority": "operator"
+          }
+        ]
       },
-      "semantic_boundary": "No Rust handler implements this native path. Add request, response, authority, persistence and failure scenarios before claiming parity.",
+      "semantic_boundary": "Rust keeps the native cpu_percent, memory_gb, gpu_percent, vram_gb, primary_gpu_id, gpus and npu_percent field names from one background sampler (2 s interval, idle stop) and adds byte counts, source states, active/queued requests and the last completed text inference's engine-reported usage and decode rate. Unknown values are null. Rust requires operator authority where native accepts regular API keys, omits memory_budget and cgroup accounting, reads NVIDIA through bounded nvidia-smi and AMD through amdgpu sysfs only on Linux, and does not observe NPU utilization.",
       "documentation": "docs/api/juiced.md",
       "native_authority": "regular_api"
     },
@@ -7587,12 +7606,26 @@
         "F131"
       ],
       "rust_equivalent": {
-        "relationship": "none",
-        "routes": [],
-        "scenario_files": [],
-        "authorities": []
+        "relationship": "related_operation",
+        "routes": [
+          {
+            "method": "GET",
+            "path": "/juiced/logs",
+            "prefix_scheme": "native_quad"
+          }
+        ],
+        "scenario_files": [
+          "juiced/rewrite/rust-tests/tests/telemetry.rs"
+        ],
+        "authorities": [
+          {
+            "method": "GET",
+            "path": "/juiced/logs",
+            "authority": "operator"
+          }
+        ]
       },
-      "semantic_boundary": "No Rust WebSocket listener/upgrade handler is published. Preserve handshake authentication, origin checks, frame/event schemas, disconnect cleanup and native bare plus quad-prefix path acceptance.",
+      "semantic_boundary": "Rust does not serve the native WebSocket log stream. Operators poll GET /juiced/logs with an after cursor over a bounded in-memory ring (4096 lines, 8 MiB, 4 KiB per line) of service lines and drained worker stdout/stderr, with a dropped count when the cursor fell out of the ring. Request bodies are not logged.",
       "documentation": "docs/api/README.md",
       "native_authority": "websocket_handshake_policy"
     },
@@ -10294,6 +10327,46 @@
         "juiced/rewrite/rust-tests/tests/api_end_to_end.rs",
         "juiced/rewrite/rust-tests/tests/runtime_packages.rs"
       ]
+    },
+    {
+      "method": "GET",
+      "path": "/system-stats",
+      "prefix_scheme": "native_quad",
+      "authority": "operator",
+      "evidence": {
+        "path": "juiced/rewrite/service/src/http.rs",
+        "line": 207,
+        "text": "(get, \"/system-stats\", system_stats, \"operator\"),",
+        "role": "registration"
+      },
+      "native_route_ids": [
+        "http:GET:native_quad:/system-stats"
+      ],
+      "scenario_files": [
+        "juiced/rewrite/rust-tests/tests/telemetry.rs",
+        "juiced/rewrite/rust-tests/tests/api_end_to_end.rs"
+      ],
+      "native_same_path": true
+    },
+    {
+      "method": "GET",
+      "path": "/juiced/logs",
+      "prefix_scheme": "native_quad",
+      "authority": "operator",
+      "evidence": {
+        "path": "juiced/rewrite/service/src/http.rs",
+        "line": 208,
+        "text": "(get, \"/juiced/logs\", logs, \"operator\"),",
+        "role": "registration"
+      },
+      "native_route_ids": [
+        "websocket:GET:bare_and_native_quad:/logs/stream"
+      ],
+      "scenario_files": [
+        "juiced/rewrite/rust-tests/tests/telemetry.rs",
+        "juiced/rewrite/rust-tests/tests/api_end_to_end.rs"
+      ],
+      "native_same_path": false
     }
   ],
   "other_transport_boundaries": [
@@ -10308,11 +10381,11 @@
     "native_websocket_routes": 4,
     "auxiliary_http_route_families": 41,
     "native_registration_sites": 143,
-    "rust_published_routes": 58,
-    "rust_native_same_path_rows": 37,
+    "rust_published_routes": 60,
+    "rust_native_same_path_rows": 38,
     "native_http_status_counts": {
-      "partial": 38,
-      "planned": 88,
+      "partial": 39,
+      "planned": 87,
       "conditional": 2,
       "excluded": 7,
       "implemented": 0

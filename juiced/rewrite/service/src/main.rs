@@ -253,6 +253,10 @@ async fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
         listener.local_addr()?
     );
     let bound = listener.local_addr()?;
+    manager.logs().service(
+        juiced_service::logs::Level::Info,
+        &format!("Service listening on http://{bound}"),
+    );
     let beacon = if broadcast
         && bound.is_ipv4()
         && (bound.ip().is_loopback() || bound.ip().is_unspecified())

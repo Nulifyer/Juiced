@@ -74,6 +74,8 @@ struct Fixture {
     _identity_map: Option<IdentityMapping>,
     events: Option<PathBuf>,
     finite_stream: bool,
+    report_timings: bool,
+    chatty_bytes: usize,
     inference_delay: u64,
     slot_delay: u64,
     speech_mode: String,
@@ -417,6 +419,13 @@ async fn inference(
     if delay > 0 {
         tokio::time::sleep(Duration::from_millis(delay)).await;
     }
+    if observation.fixture.chatty_bytes > 0 {
+        let bytes = observation.fixture.chatty_bytes;
+        let id = observation.id.clone();
+        tokio::task::spawn_blocking(move || chatter(&id, bytes))
+            .await
+            .unwrap();
+    }
     if let Some(status) = body["fixture_status"].as_u64() {
         observation.completed = true;
         return (
@@ -433,10 +442,13 @@ async fn inference(
                         "data: {}\n\n",
                         json!({"id":"fixture-stream","model":"fixture","choices":[{"index":0,"delta":{"content":"λ "},"text":"λ ","finish_reason":null}]})
                     ),
-                    2 => format!(
-                        "data: {}\n\n",
-                        json!({"id":"fixture-stream","choices":[{"index":0,"delta":{},"text":"","finish_reason":"stop"}],"usage":{"prompt_tokens":7,"completion_tokens":2,"total_tokens":9}})
-                    ),
+                    2 => {
+                        let mut event = json!({"id":"fixture-stream","choices":[{"index":0,"delta":{},"text":"","finish_reason":"stop"}],"usage":{"prompt_tokens":7,"completion_tokens":2,"total_tokens":9}});
+                        if observation.fixture.report_timings {
+                            event["timings"] = json!({"prompt_n":7,"prompt_ms":20.0,"prompt_per_second":350.0,"predicted_n":2,"predicted_ms":53.3,"predicted_per_second":37.5});
+                        }
+                        format!("data: {event}\n\n")
+                    }
                     3 => "data: [DONE]\n\n".to_owned(),
                     _ => {
                         observation.completed = true;
@@ -468,14 +480,18 @@ async fn inference(
     observation.completed = true;
     *observation.fixture.slot.lock().unwrap() = body_sha256.as_bytes().to_vec();
     let restored = observation.fixture.restores.load(Ordering::Acquire);
-    Json(json!({"id": "fixture-completion", "object": "chat.completion", "model": body["model"],
+    let mut reply = json!({"id": "fixture-completion", "object": "chat.completion", "model": body["model"],
         "usage":{"prompt_tokens":7,"completion_tokens":2,"total_tokens":9},
         "choices": [{"index": 0, "text":"Rust fixture reply.", "message": {"role": "assistant", "content": "Rust fixture reply. This is not model inference."}, "finish_reason": "stop"}],
         "received_authorization": headers.contains_key("authorization"),
         "received_body_sha256": body_sha256,
         "fixture_restores": restored,
         "manager_key_present": std::env::var_os("LEMONADE_API_KEY").is_some() || std::env::var_os("LEMONADE_ADMIN_API_KEY").is_some()
-    })).into_response()
+    });
+    if observation.fixture.report_timings {
+        reply["timings"] = json!({"prompt_n":7,"prompt_ms":10.0,"prompt_per_second":700.0,"predicted_n":2,"predicted_ms":47.06,"predicted_per_second":42.5});
+    }
+    Json(reply).into_response()
 }
 
 async fn transcription(
@@ -833,6 +849,21 @@ async fn wait_for_release(path: &std::path::Path) -> bool {
     .is_ok()
 }
 
+fn chatter(id: &str, bytes: usize) {
+    let line = format!("I fixture chatter {id} {}\n", "x".repeat(240));
+    let mut stdout = std::io::stdout().lock();
+    let mut stderr = std::io::stderr().lock();
+    let mut written = 0;
+    while written < bytes {
+        if stdout.write_all(line.as_bytes()).is_err() || stderr.write_all(line.as_bytes()).is_err()
+        {
+            return;
+        }
+        written += line.len();
+    }
+    let _ = stdout.flush();
+}
+
 #[tokio::main]
 async fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -863,6 +894,11 @@ async fn main() {
         std::process::exit(12);
     }
     let port: u16 = arg("--port").unwrap().parse().unwrap();
+    if let Some(marker) = arg("--startup-log") {
+        println!("fixture stdout {marker}");
+        eprintln!("W fixture stderr {marker}");
+        eprintln!("{}", "L".repeat(10 * 1024));
+    }
     let fixture = Arc::new(Fixture {
         #[cfg(target_os = "linux")]
         _identity_map: arg("--identity-map").map(|path| {
@@ -870,6 +906,10 @@ async fn main() {
         }),
         events: arg("--events").map(PathBuf::from),
         finite_stream: args.iter().any(|value| value == "--finite-stream"),
+        report_timings: args.iter().any(|value| value == "--report-timings"),
+        chatty_bytes: arg("--chatty-bytes")
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(0),
         inference_delay: arg("--inference-delay-ms")
             .and_then(|value| value.parse().ok())
             .unwrap_or(0),

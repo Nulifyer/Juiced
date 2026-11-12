@@ -536,6 +536,16 @@ impl<R: Send + 'static> ManagedChild<R> {
     pub fn generation(&self) -> u64 {
         self.generation
     }
+    pub fn take_output(
+        &mut self,
+    ) -> (
+        Option<std::process::ChildStdout>,
+        Option<std::process::ChildStderr>,
+    ) {
+        self.owned.as_mut().map_or((None, None), |owned| {
+            (owned.child.stdout.take(), owned.child.stderr.take())
+        })
+    }
     pub fn resources(&self) -> &R {
         &self
             .owned
