@@ -1,5 +1,25 @@
 use super::*;
+use crate::{engines::catalog::Engine, profiles::LaunchOptions};
 use std::fs;
+
+fn layers<'a>(
+    definition: &'a BTreeMap<String, Box<RawValue>>,
+    saved: &'a crate::native_settings::SavedOptions,
+) -> Vec<Layer<'a>> {
+    vec![
+        Layer {
+            scope: "registration",
+            values: definition
+                .iter()
+                .map(|(key, value)| (key.as_str(), value.as_ref()))
+                .collect(),
+        },
+        Layer {
+            scope: "saved",
+            values: saved.iter().collect(),
+        },
+    ]
+}
 
 const MARKER: &str = "JUICED_SYNTHETIC_IMPORT_MARKER";
 const REVISION: &str = "0123456789abcdef0123456789abcdef01234567";
@@ -85,7 +105,7 @@ fn good() -> Fixture {
     fixture.file(
         "recipe_options.json",
         format!(
-            r#"{{"builtin.Qwen3-0.6B-GGUF":{{"ctx_size":4096,"llamacpp_args":"-ngl 20 --flash-attn on --rope-scale {MARKER}","llamacpp_backend":"cpu","pinned":true,"evict_idle_timeout":30,"unknown_option":"{MARKER}"}},"unrelated":"{MARKER}","builtin.Removed-Model":{{}}}}"#
+            r#"{{"builtin.Qwen3-0.6B-GGUF":{{"ctx_size":4096,"llamacpp_args":"-ngl 20 --flash-attn on --lora {MARKER} --made-up --host 0.0.0.0 --chat-template-kwargs '{{\"enable_thinking\":false}}'","llamacpp_backend":"cpu","pinned":true,"evict_idle_timeout":30,"unknown_option":"{MARKER}"}},"unrelated":"{MARKER}","builtin.Removed-Model":{{}}}}"#
         ),
     );
     fixture.file(
@@ -186,8 +206,8 @@ fn good_source_maps_models_options_policies_aliases_and_weights_without_writes()
         Some(Engine::LlamaCpp),
         "llamacpp",
         &inspection.config,
-        &definition.registered,
-        qwen.saved.as_ref().unwrap(),
+        &layers(&definition.registered, qwen.saved.as_ref().unwrap()),
+        &[],
     );
     assert_eq!(
         mapped.options,
@@ -213,15 +233,31 @@ fn good_source_maps_models_options_policies_aliases_and_weights_without_writes()
     let unsupported = mapped
         .rows
         .iter()
-        .find(|row| row.key == "llamacpp_args" && row.state == "unsupported")
+        .find(|row| row.key == "llamacpp_args:unsupported")
         .unwrap();
     assert_eq!(
         unsupported.value,
-        Some(serde_json::json!(["--flash-attn", "--rope-scale"]))
+        Some(serde_json::json!(["--lora", "--made-up"]))
+    );
+    let managed = mapped
+        .rows
+        .iter()
+        .find(|row| row.key == "llamacpp_args:managed")
+        .unwrap();
+    assert_eq!(managed.value, Some(serde_json::json!(["--host"])));
+    assert_eq!(
+        mapped.arguments,
+        vec![
+            vec!["--flash-attn".to_owned(), "on".to_owned()],
+            vec![
+                "--chat-template-kwargs".to_owned(),
+                r#"{"enable_thinking":false}"#.to_owned()
+            ],
+        ]
     );
 
     let mine = candidate(&inspection, "user.MyModel");
-    assert_eq!(mine.public_name, "user.MyModel");
+    assert_eq!(mine.public_name, "MyModel");
     assert_eq!(
         mine.previous_policy,
         Some(("on-demand", "native-juiced-state"))
@@ -233,17 +269,24 @@ fn good_source_maps_models_options_policies_aliases_and_weights_without_writes()
         Some(Engine::LlamaCpp),
         "llamacpp",
         &inspection.config,
-        &definition.registered,
-        mine.saved.as_ref().unwrap(),
+        &layers(&definition.registered, mine.saved.as_ref().unwrap()),
+        &[],
     );
     assert_eq!(mapped.options.context_tokens, None);
+    assert!(mapped.automatic_context);
     assert_eq!(mapped.backend.as_deref(), Some("vulkan"));
 
     let vision = candidate(&inspection, "user.Vision");
     let weights = inspection.find_weights(vision).unwrap();
     assert!(weights.path.ends_with("Vision-F16.gguf"));
     assert_eq!(weights.selection, "repository-name");
-    assert!(inspection.find_companion("acme/Vision-GGUF:mmproj-f16.gguf"));
+    let projector = inspection
+        .find_checkpoint(
+            vision.definition.as_ref().unwrap().mmproj.as_deref().unwrap(),
+            Some("acme/Vision-GGUF"),
+        )
+        .unwrap();
+    assert!(projector.path.ends_with("mmproj-f16.gguf"));
     assert_eq!(
         inspection
             .find_weights(candidate(&inspection, "user.Npu"))
@@ -261,7 +304,7 @@ fn good_source_maps_models_options_policies_aliases_and_weights_without_writes()
         inspection.aliases,
         BTreeMap::from([
             ("chat".into(), "Qwen3-0.6B-GGUF".into()),
-            ("mine".into(), "user.MyModel".into())
+            ("mine".into(), "MyModel".into())
         ])
     );
     let global = global_rows(&inspection.config);
@@ -348,12 +391,13 @@ fn profile_owned_settings_are_the_saved_authority() {
     assert_eq!(qwen.selected_profile.as_deref(), Some("custom"));
     let saved = qwen.saved.as_ref().unwrap();
     assert_eq!(saved.get("ctx_size").unwrap().get(), "2048");
+    let empty = BTreeMap::new();
     let mapped = map_options(
         Some(Engine::LlamaCpp),
         "llamacpp",
         &inspection.config,
-        &BTreeMap::new(),
-        saved,
+        &layers(&empty, saved),
+        &[],
     );
     assert_eq!(mapped.options.context_tokens, Some(2048));
     assert!(

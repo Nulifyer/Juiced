@@ -61,6 +61,7 @@ impl Harness {
             policy: Policy::OnDemand,
             revision: 0,
             idle_unload_after_ms: None,
+            companions: Vec::new(),
         };
         let mut config = Config {
             schema_version: 2,
@@ -80,6 +81,7 @@ impl Harness {
             upload_max_bytes: juiced_service::config::DEFAULT_UPLOAD_MAX_BYTES,
             import_roots: Vec::new(),
             wyoming: Default::default(),
+            native_adoption: None,
         };
         change(&mut config);
         let path = dir.path().join("config.json");

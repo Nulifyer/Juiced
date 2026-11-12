@@ -74,7 +74,7 @@ pub struct EngineJobs {
 }
 
 impl EngineJobs {
-    fn views(&self) -> Vec<Value> {
+    pub(super) fn views(&self) -> Vec<Value> {
         self.jobs
             .lock()
             .unwrap_or_else(|error| error.into_inner())

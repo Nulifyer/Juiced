@@ -396,6 +396,37 @@ impl LaunchPlan {
         if managed_cache {
             digest.update(b"\0juiced-launch-managed-slot-save-v1\0");
         }
+        for companion in &spec.companions {
+            let metadata = std::fs::metadata(&companion.path)
+                .ok()
+                .filter(std::fs::Metadata::is_file)
+                .ok_or_else(|| {
+                    Error::new(
+                        "companion_missing",
+                        "A registered companion file is missing or is not a regular file.",
+                    )
+                })?;
+            digest.update(b"\0juiced-launch-in-place-companion-v1\0");
+            digest.update(
+                serde_json::to_vec(&(
+                    &companion.name,
+                    companion.role,
+                    &companion.path,
+                    metadata.len(),
+                    metadata
+                        .modified()
+                        .ok()
+                        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|time| time.as_nanos()),
+                ))
+                .map_err(|_| {
+                    Error::new(
+                        "launch_identity",
+                        "The semantic launch identity could not be encoded.",
+                    )
+                })?,
+            );
+        }
         let hybrid_root = crate::hybrid::root(profile.adapter, bindings.bundle.as_deref());
         let mut adapter_arguments = template.arguments().to_vec();
         let hybrid = crate::hybrid::apply(hybrid_root, &mut adapter_arguments)
@@ -438,11 +469,26 @@ impl LaunchPlan {
                     "The selected worker needs a UTF-8 snapshot path.",
                 )
             })?;
-        let companions = bindings
-            .artifact
-            .as_ref()
-            .map(|artifact| artifact.companions())
-            .unwrap_or_default();
+        let companions = match bindings.artifact.as_ref() {
+            Some(_) if !spec.companions.is_empty() => {
+                return Err(Error::new(
+                    "artifact_set_binding_mismatch",
+                    "In-place companions cannot be combined with a managed artifact.",
+                ));
+            }
+            Some(artifact) => artifact.companions(),
+            None => spec
+                .companions
+                .iter()
+                .map(|companion| {
+                    (
+                        companion.name.as_str(),
+                        companion.role,
+                        companion.path.as_path(),
+                    )
+                })
+                .collect(),
+        };
         let members = companions
             .iter()
             .map(|(name, role, path)| {

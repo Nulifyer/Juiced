@@ -279,6 +279,8 @@ async fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
         None
     };
     manager.start_residency();
+    let adoption = juiced_service::supervisor::native_adoption_from_env()
+        .map(|(source, roots)| manager.start_native_adoption(source, roots));
     let startup_manager = manager.clone();
     let startup = tokio::spawn(async move { startup_manager.start_hot().await });
     let shutdown_manager = manager.clone();
@@ -302,6 +304,9 @@ async fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
     let graceful_completed = served.is_some();
     let serve_error = served.and_then(Result::err);
     startup.abort();
+    if let Some(adoption) = adoption {
+        adoption.abort();
+    }
     let deadline = deadline.unwrap_or_else(|| tokio::time::Instant::now() + Duration::from_secs(5));
     let _ = tokio::time::timeout_at(deadline, startup).await;
     if let Some(beacon) = beacon {

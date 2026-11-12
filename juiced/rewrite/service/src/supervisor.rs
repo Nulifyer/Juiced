@@ -39,6 +39,8 @@ mod flm;
 pub use flm::{FlmModelAdd, FlmPull};
 mod host;
 mod native;
+mod native_adoption;
+pub use native_adoption::{ROOTS_ENV as NATIVE_ADOPTION_ROOTS_ENV, SOURCE_ENV as NATIVE_ADOPTION_SOURCE_ENV, from_env as native_adoption_from_env};
 mod native_import;
 pub use native_import::{NativeImportModel, NativeImportRequest};
 mod physical;
@@ -1841,6 +1843,7 @@ pub struct Manager {
     runtime_definitions: crate::catalog::Catalog,
     hardware: crate::hardware::Detector,
     engine_jobs: engines::EngineJobs,
+    native_adoption: native_adoption::Status,
     flm_jobs: flm::FlmJobs,
     engine_releases: crate::engines::ReleaseEndpoints,
     runtime_packages: std::sync::OnceLock<Arc<crate::runtime_packages::Store>>,
@@ -2147,6 +2150,7 @@ impl Manager {
             runtime_definitions,
             hardware: crate::hardware::Detector::from_environment(),
             engine_jobs: engines::EngineJobs::default(),
+            native_adoption: native_adoption::Status::default(),
             flm_jobs: flm::FlmJobs::default(),
             engine_releases: crate::engines::ReleaseEndpoints::from_environment(),
             runtime_packages,
@@ -2545,17 +2549,27 @@ impl Manager {
         } else {
             None
         };
-        if spec.execution_profile.adapter.accepts_companions() {
+        if spec.execution_profile.adapter.accepts_companions() || !spec.companions.is_empty() {
             let (template, _) = spec
                 .execution_profile
                 .resolved_arguments()
                 .map_err(|error| {
                     ApiError::new(StatusCode::BAD_REQUEST, error.code, error.message)
                 })?;
-            let companions = artifact
-                .as_ref()
-                .map(|held| held.companions())
-                .unwrap_or_default();
+            let companions = match artifact.as_ref() {
+                Some(held) => held.companions(),
+                None => spec
+                    .companions
+                    .iter()
+                    .map(|companion| {
+                        (
+                            companion.name.as_str(),
+                            companion.role,
+                            companion.path.as_path(),
+                        )
+                    })
+                    .collect(),
+            };
             template
                 .verify_members(companions.iter().map(|(name, role, _)| (*name, *role)))
                 .map_err(|error| ApiError::new(StatusCode::CONFLICT, error.code, error.message))?;

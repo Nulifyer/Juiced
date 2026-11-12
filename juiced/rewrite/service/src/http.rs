@@ -1139,7 +1139,7 @@ async fn models(State(state): State<AppState>) -> Json<Value> {
 
 async fn service_state(State(state): State<AppState>) -> Json<Value> {
     Json(
-        json!({"schema_version": 1, "version": env!("CARGO_PKG_VERSION"), "implementation": "rust-experiment", "resources": state.manager.resources(), "residency": state.manager.residency_settings()}),
+        json!({"schema_version": 1, "version": env!("CARGO_PKG_VERSION"), "implementation": "rust-experiment", "resources": state.manager.resources(), "residency": state.manager.residency_settings(), "native_adoption": state.manager.native_adoption_status()}),
     )
 }
 
