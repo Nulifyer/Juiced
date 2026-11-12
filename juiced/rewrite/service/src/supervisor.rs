@@ -37,6 +37,8 @@ mod host;
 mod native;
 mod physical;
 mod publication;
+mod residency;
+pub use residency::{KeepAlive, ResidencyChange, ResidencyView, UnloadReason, parse_keep_alive};
 mod sessions;
 mod state;
 mod voices;
@@ -1428,6 +1430,8 @@ pub struct ModelView {
     pub uncertain_state_operations: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub request_limits: Option<crate::resource_profile::Limits>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub residency: Option<ResidencyView>,
 }
 
 #[derive(Clone, Serialize)]
@@ -1616,6 +1620,7 @@ impl Drop for RequestLease {
             record.session_cache = Some(ticket.record);
             ticket.settle(&self.manager, &self.worker, completed, &record.usage);
         }
+        self.manager.residency.touch(&self.worker.spec.id);
         if completed {
             *self
                 .worker
@@ -1861,6 +1866,7 @@ pub struct Manager {
     next_request: AtomicU64,
     shutting_down: std::sync::atomic::AtomicBool,
     paused: std::sync::atomic::AtomicBool,
+    residency: residency::Residency,
 }
 
 impl Manager {
@@ -2149,6 +2155,7 @@ impl Manager {
             session_settings: RwLock::new(Arc::new(config.session_cache.clone())),
             session_used: Mutex::new(std::collections::HashMap::new()),
             session_saves: Arc::new(tokio::sync::Semaphore::new(2)),
+            residency: residency::Residency::new(&config),
             config: Arc::new(AsyncMutex::new(config)),
             publications: publication::Publications::new(),
             config_path,
@@ -2995,6 +3002,7 @@ impl Manager {
                         .map(|profile| profile.request_limits.clone())
                 })
                 .flatten(),
+            residency: None,
             preparation_pending: worker.preparing.load(Ordering::Acquire),
             startup_waiting: worker.startup_waiting.load(Ordering::Acquire),
             id: worker.spec.id.clone(),
@@ -3161,6 +3169,7 @@ impl Manager {
                 .clone();
             Self::overlay_process(&worker, &mut view, running);
             view.active_requests = worker.active.load(Ordering::Acquire);
+            self.residency_overlay(&mut view);
             result.push(view);
         }
         result
@@ -3478,6 +3487,9 @@ impl Manager {
                 "The policy was committed, but directory durability is unconfirmed. Refresh its current revision and check storage health.",
             ));
         }
+        if policy == Policy::OnDemand {
+            self.residency.touch(id);
+        }
         Ok(outcome.model.expect("published model policy"))
     }
 
@@ -3611,12 +3623,22 @@ impl Manager {
                     ));
                 }
                 self.verify_storage().await?;
-                let host = self.reserve_load_memory(worker).await?;
-                let preparation = Preparation::begin(
-                    attempt.clone(),
-                    self.budget.reserve(if self.memory_protected() {0} else {worker.spec.resident_bytes})?,
-                    permit,
-                );
+                let host = self
+                    .reserve_with_eviction(
+                        worker,
+                        |error| error.code == "host_memory_exhausted",
+                        || self.reserve_load_memory(worker),
+                    )
+                    .await?;
+                let bytes = if self.memory_protected() { 0 } else { worker.spec.resident_bytes };
+                let reservation = self
+                    .reserve_with_eviction(
+                        worker,
+                        |error| error.code == "resident_budget",
+                        || std::future::ready(self.budget.reserve(bytes)),
+                    )
+                    .await?;
+                let preparation = Preparation::begin(attempt.clone(), reservation, permit);
                 *preparation.resources.host.lock().unwrap_or_else(|error| error.into_inner()) = host;
                 let dispatch_deadline = Instant::now()
                     .checked_add(self.startup_timeout)
@@ -4098,6 +4120,7 @@ impl Manager {
             .cache_identity
             .lock()
             .unwrap_or_else(|e| e.into_inner()) = None;
+        self.residency.touch(&worker.spec.id);
         Self::publish(worker, state);
         Ok(())
     }
@@ -4107,7 +4130,9 @@ impl Manager {
         let mut state = worker.state.lock().await;
         self.ensure_registered(&worker)?;
         state = self.ensure_loaded(&worker, state, None).await?;
-        Ok(Self::view(&worker, &state))
+        let mut view = Self::view(&worker, &state);
+        self.residency_overlay(&mut view);
+        Ok(view)
     }
 
     async fn retire_speech_generation(&self, worker: &Arc<Worker>, generation: u64) {
@@ -4188,12 +4213,14 @@ impl Manager {
             ));
         }
         if let Some(run) = state.running.as_mut() {
+            let generation = run.child.generation();
             if let Err(error) = run.child.stop().await {
                 state.error = Some("worker_cleanup_pending");
                 Self::publish(&worker, &state);
                 return Err(process_error(error));
             }
             state.running = None;
+            self.record_unload(&worker, UnloadReason::Operator, generation);
         } else if let Err(error) = self.processes.retry_cleanup(id).await {
             Self::publish(&worker, &state);
             return Err(process_error(error));
@@ -4201,7 +4228,9 @@ impl Manager {
         worker.speech_retiring.store(0, Ordering::Release);
         state.error = None;
         Self::publish(&worker, &state);
-        Ok(Self::view(&worker, &state))
+        let mut view = Self::view(&worker, &state);
+        self.residency_overlay(&mut view);
+        Ok(view)
     }
 
     pub async fn begin(

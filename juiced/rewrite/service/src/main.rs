@@ -278,6 +278,7 @@ async fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
     } else {
         None
     };
+    manager.start_residency();
     let startup_manager = manager.clone();
     let startup = tokio::spawn(async move { startup_manager.start_hot().await });
     let shutdown_manager = manager.clone();

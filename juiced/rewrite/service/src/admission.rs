@@ -720,6 +720,20 @@ impl Admission {
 }
 
 impl SlotPool {
+    pub fn in_use(&self) -> bool {
+        let state = self
+            .pool
+            .admission
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        self.pool.active.load(Ordering::Acquire) != 0
+            || state
+                .pending
+                .iter()
+                .any(|entry| Arc::ptr_eq(&entry.pool, &self.pool))
+    }
+
     pub fn try_acquire(&self, priority: Priority) -> Result<Slot, Error> {
         self.try_acquire_inner(priority, None)
     }

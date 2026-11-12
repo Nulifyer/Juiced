@@ -459,7 +459,28 @@ async fn ollama(
     operation: OllamaOperation,
 ) -> Response {
     let result = async {
-        let request = protocols::ollama_request(parse_body(&headers, body)?, operation)?;
+        let mut input = parse_body(&headers, body)?;
+        let keep_alive = input
+            .as_object_mut()
+            .and_then(|input| input.remove("keep_alive"))
+            .filter(|value| !value.is_null())
+            .map(|value| {
+                crate::supervisor::parse_keep_alive(&value).ok_or_else(|| {
+                    codec(
+                        400,
+                        "invalid_request",
+                        "keep_alive must be seconds or a duration such as 5m.",
+                    )
+                })
+            })
+            .transpose()?;
+        let request = protocols::ollama_request(input, operation)?;
+        if let (Some(keep_alive), Some(model)) = (keep_alive, request.body["model"].as_str()) {
+            state
+                .manager
+                .set_keep_alive(model, keep_alive)
+                .map_err(from_api)?;
+        }
         let response = forward(&state, &headers, &request, &context).await?;
         let model = request.body["model"].as_str().unwrap_or_default();
         let created_at = utc_now();

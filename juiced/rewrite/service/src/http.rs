@@ -220,6 +220,29 @@ define_routes! {
     (post, "/images/generations", image_generation, "inference"),
     (post, "/audio/speech", speech, "inference"),
     (get, "/juiced/voices", voices, "read"),
+    (get, "/juiced/residency", residency, "operator"),
+    (post, "/juiced/residency", residency_set, "operator"),
+}
+async fn residency(State(state): State<AppState>) -> impl IntoResponse {
+    (
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(state.manager.residency_view().await),
+    )
+}
+async fn residency_set(
+    State(state): State<AppState>,
+    ApiJson(change): ApiJson<crate::supervisor::ResidencyChange>,
+) -> Result<Json<Value>, ApiError> {
+    // A client disconnect must not separate the durable write from its in-memory publication.
+    tokio::spawn(async move { state.manager.set_residency(change).await.map(Json) })
+        .await
+        .map_err(|_| {
+            ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "residency_interrupted",
+                "The idle unload change was interrupted. Refresh before retrying.",
+            )
+        })?
 }
 async fn aliases(State(state): State<AppState>) -> Json<Value> {
     Json(state.manager.aliases_view().await)
@@ -1043,7 +1066,7 @@ async fn models(State(state): State<AppState>) -> Json<Value> {
 
 async fn service_state(State(state): State<AppState>) -> Json<Value> {
     Json(
-        json!({"schema_version": 1, "version": env!("CARGO_PKG_VERSION"), "implementation": "rust-experiment", "resources": state.manager.resources()}),
+        json!({"schema_version": 1, "version": env!("CARGO_PKG_VERSION"), "implementation": "rust-experiment", "resources": state.manager.resources(), "residency": state.manager.residency_settings()}),
     )
 }
 
