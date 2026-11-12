@@ -3,6 +3,8 @@ pub mod catalog;
 pub mod download;
 pub mod models;
 #[cfg(test)]
+mod rocm_runtime_tests;
+#[cfg(test)]
 mod speech_engine_tests;
 #[cfg(test)]
 mod tests;
@@ -19,6 +21,7 @@ pub const GITHUB_API: &str = "https://api.github.com";
 pub struct ReleaseEndpoints {
     pub downloads: String,
     pub api: String,
+    pub runtimes: String,
     pub pinned_digests: bool,
 }
 
@@ -31,6 +34,7 @@ impl ReleaseEndpoints {
             let base = base.trim_end_matches('/').to_owned();
             return Self {
                 api: format!("{base}/api"),
+                runtimes: format!("{base}/runtimes"),
                 downloads: base,
                 pinned_digests: false,
             };
@@ -38,6 +42,7 @@ impl ReleaseEndpoints {
         Self {
             downloads: GITHUB.into(),
             api: GITHUB_API.into(),
+            runtimes: catalog::THEROCK_HOST.into(),
             pinned_digests: true,
         }
     }
@@ -184,6 +189,8 @@ pub fn choose(
 ) -> Result<Choice, ChoiceError> {
     let mut unpublished = None;
     let mut fallback = false;
+    let native = requested;
+    let requested = requested.map(|backend| catalog::canonical_backend(engine, backend));
     let backend = match requested {
         Some(backend) if selectable(inventory, engine, backend) => backend.to_owned(),
         Some(backend) => return Err(ChoiceError::NotSelectable(backend.to_owned())),
@@ -224,7 +231,9 @@ pub fn choose(
         .as_deref()
         .map(|target| format!(" for {target}"))
         .unwrap_or_default();
-    let basis = if requested.is_some() {
+    let basis = if let Some(native) = native.filter(|native| Some(*native) != requested) {
+        format!("was requested as native {native}")
+    } else if requested.is_some() {
         "was requested".to_owned()
     } else if fallback {
         "is the only available".to_owned()

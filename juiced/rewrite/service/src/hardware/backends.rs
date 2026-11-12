@@ -521,6 +521,8 @@ fn evaluate(backend: &str, row: &NativeSupportRow, host: &HostReport) -> Evaluat
     evaluation
 }
 
+/// Native Juiced ranks Vulkan above ROCm for every engine. llama.cpp keeps ROCm first because
+/// its chat models run there on AMD; image generation and transcription keep native's order.
 pub fn preference(variant: &BackendVariant) -> Option<u8> {
     if variant.state != Availability::Available
         || variant.tier != "core"
@@ -529,8 +531,10 @@ pub fn preference(variant: &BackendVariant) -> Option<u8> {
     {
         return None;
     }
+    let vulkan_first = matches!(variant.recipe.as_str(), "sd-cpp" | "whispercpp");
     match variant.backend.as_str() {
         "cuda" => Some(0),
+        "rocm" if vulkan_first => Some(4),
         "rocm" => Some(1),
         "metal" => Some(2),
         "npu" => Some(3),
@@ -540,7 +544,7 @@ pub fn preference(variant: &BackendVariant) -> Option<u8> {
                 .iter()
                 .any(|device| *device == "amd_gpu" || *device == "nvidia_gpu") =>
         {
-            Some(4)
+            Some(if vulkan_first { 1 } else { 4 })
         }
         "cpu" => Some(5),
         _ => None,

@@ -124,6 +124,39 @@ pub struct Build {
     pub archive_bytes: u64,
     pub sha256: Option<&'static str>,
     pub format: ArchiveFormat,
+    pub runtime: Option<&'static Runtime>,
+}
+
+/// A vendor runtime the engine archive links against but does not ship. It is extracted
+/// into `directory` inside the engine bundle so the package stays self-contained.
+#[derive(Debug, Serialize)]
+pub struct Runtime {
+    pub name: &'static str,
+    pub version: &'static str,
+    pub gpu_target: &'static str,
+    pub path: &'static str,
+    pub asset: &'static str,
+    pub archive_bytes: u64,
+    pub sha256: &'static str,
+    pub format: ArchiveFormat,
+    pub directory: &'static str,
+    #[serde(skip)]
+    pub members: &'static [&'static str],
+}
+
+impl Runtime {
+    pub fn download_url(&self, base: &str) -> String {
+        format!(
+            "{}/{}/{}",
+            base.trim_end_matches('/'),
+            self.path,
+            self.asset
+        )
+    }
+    pub fn keeps(&self, path: &std::path::Path) -> bool {
+        path.to_str()
+            .is_some_and(|path| self.members.iter().any(|member| path.starts_with(member)))
+    }
 }
 
 impl Build {
@@ -147,9 +180,10 @@ impl Build {
 }
 
 const LLAMA_GGML: &str = "ggml-org/llama.cpp";
-const LLAMA_GGML_TAG: &str = "b11393";
-const LLAMA_CUDA: &str = "lemonade-sdk/llama.cpp";
+const LLAMA_GGML_TAG: &str = "b12032";
+const LLAMA_LEMONADE: &str = "lemonade-sdk/llama.cpp";
 const LLAMA_CUDA_TAG: &str = "b11395";
+const LLAMA_ROCM_STABLE_TAG: &str = "b11580";
 const LLAMA_ROCM: &str = "lemonade-sdk/llamacpp-rocm";
 const LLAMA_ROCM_TAG: &str = "b1338";
 const WHISPER: &str = "lemonade-sdk/whisper.cpp-rocm";
@@ -188,8 +222,61 @@ const fn linux(
         archive_bytes,
         sha256: Some(sha256),
         format,
+        runtime: None,
     }
 }
+
+const fn with_runtime(build: Build, runtime: &'static Runtime) -> Build {
+    Build {
+        runtime: Some(runtime),
+        ..build
+    }
+}
+
+pub const THEROCK_HOST: &str = "https://stable.repo.amd.com";
+
+/// The shared libraries `libggml-hip.so` of the TheRock-linked llama.cpp and sd.cpp builds
+/// needs (transitive `DT_NEEDED`), the rocBLAS/hipBLASLt kernel data, and the device-code
+/// archives rocBLAS and rocSOLVER resolve at `../.kpack/` beside their library directory.
+const THEROCK_MEMBERS: &[&str] = &[
+    ".info/version",
+    ".kpack/blas_lib_",
+    ".kpack/solver_lib_",
+    "lib/libamd_comgr.so",
+    "lib/libamdhip64.so",
+    "lib/libhipblas.so",
+    "lib/libhipblaslt.so",
+    "lib/libhsa-runtime64.so",
+    "lib/liborigami.so",
+    "lib/librocblas.so",
+    "lib/librocm_kpack.so",
+    "lib/librocprofiler-register.so",
+    "lib/librocroller.so",
+    "lib/librocsolver.so",
+    "lib/libroctx64.so",
+    "lib/hipblaslt/library/",
+    "lib/rocblas/library/",
+    "lib/llvm/lib/libLLVM.so",
+    "lib/llvm/lib/libclang-cpp.so",
+    "lib/rocm_sysdeps/lib/librocm_sysdeps_",
+    "share/doc/",
+];
+
+/// The native `rocm-stable` channel's runtime (backend_versions.json `therock.version`),
+/// downloaded from AMD's tarball repository. AMD publishes no digest; this one was
+/// computed from the downloaded tarball.
+pub const THEROCK_GFX1150: Runtime = Runtime {
+    name: "therock",
+    version: "10.1.0",
+    gpu_target: "gfx1150",
+    path: "rocm/core/tarball",
+    asset: "therock-dist-linux-gfx1150-10.1.0.tar.gz",
+    archive_bytes: 1972096149,
+    sha256: "515df1170721668427a602807043719e59937109863e0baa7566875e9fccf070",
+    format: ArchiveFormat::TarGz,
+    directory: "rocm",
+    members: THEROCK_MEMBERS,
+};
 
 macro_rules! cuda {
     ($sm:literal, $bytes:literal, $sha:literal) => {
@@ -197,7 +284,7 @@ macro_rules! cuda {
             Engine::LlamaCpp,
             "cuda",
             Some($sm),
-            (LLAMA_CUDA, LLAMA_CUDA_TAG),
+            (LLAMA_LEMONADE, LLAMA_CUDA_TAG),
             (
                 concat!("llama-b11395-ubuntu-cuda-", $sm, "-x64.tar.xz"),
                 $bytes,
@@ -265,9 +352,9 @@ pub const BUILDS: &[Build] = &[
         None,
         (LLAMA_GGML, LLAMA_GGML_TAG),
         (
-            "llama-b11393-bin-ubuntu-x64.tar.gz",
-            17635134,
-            "c9752767461bfba667d011f2f92657789b896dae0ad69d8d2af8b8018c38a097",
+            "llama-b12032-bin-ubuntu-x64.tar.gz",
+            22886629,
+            "9f10432ca3f66ef003a7a540aaffb9da0acadaefd05404521b9ab7a2436af304",
         ),
         ArchiveFormat::TarGz,
     ),
@@ -277,9 +364,9 @@ pub const BUILDS: &[Build] = &[
         None,
         (LLAMA_GGML, LLAMA_GGML_TAG),
         (
-            "llama-b11393-bin-ubuntu-vulkan-x64.tar.gz",
-            31580852,
-            "ef5566ca69b8905b4fbec789fff1129fd8eb5e1f19aa3ced6840fa36da2c1542",
+            "llama-b12032-bin-ubuntu-vulkan-x64.tar.gz",
+            35669614,
+            "f75e7107f9450034c5467492c41e9ed91816e2d815fc4b802c6bd58de7d5b126",
         ),
         ArchiveFormat::TarGz,
     ),
@@ -333,10 +420,20 @@ pub const BUILDS: &[Build] = &[
         546622892,
         "a43dcd359cfb069c3bb7c7e2012bf35f87ee14a5448635bbbe581128bff038da"
     ),
-    rocm!(
-        "gfx1150",
-        399329044,
-        "2f62764db35b1662c7f652bbb6fbfd49cb12b058a269469f4a9577d6405adf52"
+    with_runtime(
+        linux(
+            Engine::LlamaCpp,
+            "rocm",
+            Some("gfx1150"),
+            (LLAMA_LEMONADE, LLAMA_ROCM_STABLE_TAG),
+            (
+                "llama-b11580-bin-ubuntu-rocm-10.1-x64.tar.gz",
+                287482076,
+                "7655f6799c85f62801051b375e3ac4da98e34712f98279f8d300b1586a0325bd",
+            ),
+            ArchiveFormat::TarGz,
+        ),
+        &THEROCK_GFX1150,
     ),
     rocm!(
         "gfx1151",
@@ -413,6 +510,21 @@ pub const BUILDS: &[Build] = &[
             "763058cdf90250c0cd9d351b3c3c71d36962150d2e02d85948ac9bb40038527e",
         ),
         ArchiveFormat::Zip,
+    ),
+    with_runtime(
+        linux(
+            Engine::StableDiffusionCpp,
+            "rocm",
+            Some("gfx1150"),
+            (SD, SD_TAG),
+            (
+                "sd-master-90e86d1-bin-Linux-Ubuntu-24.04-x86_64-rocm-10.1.0.zip",
+                236552254,
+                "8c5605c92fc2605f1c96653d76e1ccb6c1a6aa998ba63d581de41143071ac720",
+            ),
+            ArchiveFormat::Zip,
+        ),
+        &THEROCK_GFX1150,
     ),
     linux(
         Engine::StableDiffusionCpp,
@@ -533,6 +645,15 @@ pub const BUILDS: &[Build] = &[
 /// Engines with a native support row but no published release asset; they install only
 /// through a runtime-package import.
 pub const UNPUBLISHED: &[(Engine, &str)] = &[(Engine::Asr4all, "cpu")];
+
+/// Native `system` runs a llama.cpp the operator placed on the host; the native image put its
+/// Vulkan build there (`/opt/juiced/llama`), so the managed Vulkan build stands in for it.
+pub fn canonical_backend(engine: Engine, backend: &str) -> &str {
+    match (engine, backend) {
+        (Engine::LlamaCpp, "system") => "vulkan",
+        _ => backend,
+    }
+}
 
 /// Concrete ISAs that releases publish under a family asset; others ship verbatim.
 pub fn rocm_asset_family(target: &str) -> &str {

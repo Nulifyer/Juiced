@@ -136,10 +136,17 @@ fn resolve_symlink(link: &Path, target: &str) -> Result<PathBuf, ArchiveError> {
     Ok(parts.iter().collect())
 }
 
+/// Vendor runtime tarballs carry far more entries than the members a bundle keeps.
+pub const RUNTIME_LIMITS: Limits = Limits {
+    entries: 65536,
+    ..LIMITS
+};
+
 struct Writer<'a> {
     root: &'a Path,
     limits: &'a Limits,
     cancelled: &'a AtomicBool,
+    keep: &'a dyn Fn(&Path) -> bool,
     entries: usize,
     seen: BTreeSet<PathBuf>,
     files: BTreeSet<PathBuf>,
@@ -149,11 +156,17 @@ struct Writer<'a> {
 }
 
 impl<'a> Writer<'a> {
-    fn new(root: &'a Path, limits: &'a Limits, cancelled: &'a AtomicBool) -> Self {
+    fn new(
+        root: &'a Path,
+        limits: &'a Limits,
+        cancelled: &'a AtomicBool,
+        keep: &'a dyn Fn(&Path) -> bool,
+    ) -> Self {
         Self {
             root,
             limits,
             cancelled,
+            keep,
             entries: 0,
             seen: BTreeSet::new(),
             files: BTreeSet::new(),
@@ -212,6 +225,9 @@ impl<'a> Writer<'a> {
                 _ => Err(ArchiveError::UnsafePath),
             };
         };
+        if !(self.keep)(&path) {
+            return Ok(());
+        }
         match kind {
             Kind::Ignored => Ok(()),
             Kind::Directory => {
@@ -431,10 +447,22 @@ pub fn extract(
     limits: &Limits,
     cancelled: &AtomicBool,
 ) -> Result<Extracted, ArchiveError> {
+    extract_members(archive, format, destination, limits, cancelled, &|_| true)
+}
+
+/// Entries outside `keep` are skipped, and links to them are dropped like dangling ones.
+pub fn extract_members(
+    archive: &Path,
+    format: ArchiveFormat,
+    destination: &Path,
+    limits: &Limits,
+    cancelled: &AtomicBool,
+    keep: &dyn Fn(&Path) -> bool,
+) -> Result<Extracted, ArchiveError> {
     if fs::read_dir(destination)?.next().is_some() {
         return Err(ArchiveError::UnsafePath);
     }
-    let mut writer = Writer::new(destination, limits, cancelled);
+    let mut writer = Writer::new(destination, limits, cancelled, keep);
     let input = BufReader::with_capacity(1024 * 1024, File::open(archive)?);
     match format {
         ArchiveFormat::TarGz => read_tar(flate2::read::GzDecoder::new(input), &mut writer)?,
@@ -521,10 +549,18 @@ pub struct Described {
     pub sizes: Vec<(PathBuf, u64)>,
 }
 
+/// Toolchain libraries such as `libLLVM.so.24.0git` carry non-numeric version suffixes.
 fn shared_library(path: &Path) -> bool {
     path.file_name()
         .and_then(|name| name.to_str())
-        .is_some_and(|name| name.ends_with(".so") || soname_rank(Path::new(name)).is_some())
+        .is_some_and(|name| {
+            name.ends_with(".so")
+                || name.find(".so.").is_some_and(|index| {
+                    name.as_bytes()
+                        .get(index + 4)
+                        .is_some_and(u8::is_ascii_digit)
+                })
+        })
 }
 
 pub fn bundle_root(tree: &Path) -> Result<PathBuf, ArchiveError> {
@@ -537,6 +573,39 @@ pub fn bundle_root(tree: &Path) -> Result<PathBuf, ArchiveError> {
         return Ok(first.path());
     }
     Ok(tree.to_owned())
+}
+
+/// Extracts the engine archive into the empty `tree`, then its vendor runtime beneath the
+/// bundle root, and describes the combined bundle.
+pub fn assemble(
+    build: &super::catalog::Build,
+    archive: &Path,
+    runtime_archive: Option<&Path>,
+    tree: &Path,
+    cancelled: &AtomicBool,
+) -> Result<Described, ArchiveError> {
+    extract(archive, build.format, tree, &LIMITS, cancelled)?;
+    let root = bundle_root(tree)?;
+    match (build.runtime, runtime_archive) {
+        (None, None) => {}
+        (Some(runtime), Some(runtime_archive)) => {
+            let destination = root.join(runtime.directory);
+            fs::create_dir(&destination).map_err(|error| match error.kind() {
+                io::ErrorKind::AlreadyExists => ArchiveError::Layout,
+                _ => ArchiveError::Io(error),
+            })?;
+            extract_members(
+                runtime_archive,
+                runtime.format,
+                &destination,
+                &RUNTIME_LIMITS,
+                cancelled,
+                &|path| runtime.keeps(path),
+            )?;
+        }
+        _ => return Err(ArchiveError::Layout),
+    }
+    describe(&root, build.engine, &LIMITS, cancelled)
 }
 
 pub fn describe(

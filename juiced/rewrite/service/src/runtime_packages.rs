@@ -49,6 +49,24 @@ pub struct ReleaseSource {
     pub archive_sha256: String,
     pub archive_bytes: u64,
     pub digest_source: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime: Option<RuntimeSource>,
+}
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeSource {
+    pub name: String,
+    pub version: String,
+    pub gpu_target: String,
+    pub url: String,
+    pub archive_sha256: String,
+    pub archive_bytes: u64,
+}
+fn sha256_text(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 impl ReleaseSource {
     pub(crate) fn valid(&self) -> bool {
@@ -66,11 +84,14 @@ impl ReleaseSource {
             && text(&self.tag)
             && text(&self.asset)
             && text(&self.digest_source)
-            && self.archive_sha256.len() == 64
-            && self
-                .archive_sha256
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            && sha256_text(&self.archive_sha256)
+            && self.runtime.as_ref().is_none_or(|runtime| {
+                text(&runtime.name)
+                    && text(&runtime.version)
+                    && text(&runtime.gpu_target)
+                    && text(&runtime.url)
+                    && sha256_text(&runtime.archive_sha256)
+            })
     }
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]

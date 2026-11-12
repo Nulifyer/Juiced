@@ -21,8 +21,8 @@ use tokio::{
 };
 
 const LLAMA_CPU_REPOSITORY: &str = "ggml-org/llama.cpp";
-const LLAMA_CPU_TAG: &str = "b11393";
-const LLAMA_CPU_ASSET: &str = "llama-b11393-bin-ubuntu-x64.tar.gz";
+const LLAMA_CPU_TAG: &str = "b12032";
+const LLAMA_CPU_ASSET: &str = "llama-b12032-bin-ubuntu-x64.tar.gz";
 const WHISPER_REPOSITORY: &str = "lemonade-sdk/whisper.cpp-rocm";
 const WHISPER_TAG: &str = "v1.8.4";
 const WHISPER_ASSET: &str = "whisper-v1.8.4-linux-cpu-x86_64.tar.gz";
@@ -227,7 +227,7 @@ async fn engine_server() -> EngineServer {
 
 async fn engine_server_with(edit: impl FnOnce(&mut Value)) -> EngineServer {
     let worker = std::fs::read(binary("juiced-test-worker", "JUICED_TEST_WORKER")).unwrap();
-    let llama = release_archive("llama-b11393", &worker);
+    let llama = release_archive("llama-b12032", &worker);
     let whisper = release_archive("whisper-v1.8.4-linux-cpu-x86_64", b"not published");
     let mut releases = BTreeMap::new();
     releases.insert(

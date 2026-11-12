@@ -29,6 +29,7 @@ pub(super) struct EngineJob {
     build: Build,
     started_at_unix_ms: u64,
     downloaded: AtomicU64,
+    runtime_downloaded: AtomicU64,
     status: Mutex<JobStatus>,
 }
 
@@ -50,7 +51,12 @@ impl EngineJob {
             "id": self.id, "engine": self.build.engine, "backend": self.build.backend,
             "gpu_target": self.build.gpu_target, "repository": self.build.repository,
             "tag": self.build.tag, "asset": self.build.asset, "state": status.state,
-            "downloaded_bytes": self.downloaded.load(Ordering::Acquire),
+            "runtime": self.build.runtime.map(|runtime| json!({
+                "name": runtime.name, "version": runtime.version, "asset": runtime.asset,
+                "archive_bytes": runtime.archive_bytes, "archive_sha256": runtime.sha256,
+            })),
+            "downloaded_bytes": self.downloaded.load(Ordering::Acquire)
+                + self.runtime_downloaded.load(Ordering::Acquire),
             "total_bytes": status.total_bytes, "archive_sha256": status.archive_sha256,
             "digest_source": status.digest_source, "package": status.package,
             "error": status.error, "started_at_unix_ms": self.started_at_unix_ms,
@@ -110,13 +116,16 @@ impl EngineJobs {
             build,
             started_at_unix_ms: unix_time_ms(),
             downloaded: AtomicU64::new(0),
+            runtime_downloaded: AtomicU64::new(0),
             status: Mutex::new(JobStatus {
                 state: "queued",
                 error: None,
                 package: None,
                 archive_sha256: None,
                 digest_source: None,
-                total_bytes: Some(build.archive_bytes),
+                total_bytes: Some(
+                    build.archive_bytes + build.runtime.map_or(0, |runtime| runtime.archive_bytes),
+                ),
                 finished_at_unix_ms: None,
             }),
         });
@@ -400,7 +409,8 @@ impl Manager {
             status.state = "downloading";
             status.archive_sha256 = Some(sha256.clone());
             status.digest_source = Some(source);
-            status.total_bytes = Some(bytes);
+            status.total_bytes =
+                Some(bytes + build.runtime.map_or(0, |runtime| runtime.archive_bytes));
         });
         let staging = self
             .config_path
@@ -471,6 +481,28 @@ impl Manager {
         )
         .await
         .map_err(DownloadError::code)?;
+        let runtime_path = staging.join("runtime");
+        if let Some(runtime) = build.runtime {
+            if runtime.archive_bytes > MAX_ARCHIVE_BYTES {
+                return Err("engine_size_limit");
+            }
+            let manager = Arc::downgrade(self);
+            download::fetch(
+                &runtime.download_url(&self.engine_releases.runtimes),
+                policy,
+                runtime.sha256,
+                runtime.archive_bytes,
+                &runtime_path,
+                &job.runtime_downloaded,
+                move || {
+                    manager
+                        .upgrade()
+                        .is_none_or(|manager| manager.shutting_down.load(Ordering::Acquire))
+                },
+            )
+            .await
+            .map_err(DownloadError::code)?;
+        }
         job.update(|status| status.state = "extracting");
         let tree = staging.join("tree");
         let specification = staging.join("import.json");
@@ -484,6 +516,16 @@ impl Manager {
             archive_sha256: sha256.to_owned(),
             archive_bytes: bytes,
             digest_source: source.into(),
+            runtime: build
+                .runtime
+                .map(|runtime| crate::runtime_packages::RuntimeSource {
+                    name: runtime.name.into(),
+                    version: runtime.version.into(),
+                    gpu_target: runtime.gpu_target.into(),
+                    url: runtime.download_url(&self.engine_releases.runtimes),
+                    archive_sha256: runtime.sha256.into(),
+                    archive_bytes: runtime.archive_bytes,
+                }),
         };
         let manager = Arc::downgrade(self);
         let written = specification.clone();
@@ -496,13 +538,12 @@ impl Manager {
             {
                 stop.store(true, Ordering::Release);
             }
-            archive::extract(&archive_path, build.format, &tree, &archive::LIMITS, &stop)
+            let runtime_archive = build.runtime.map(|_| runtime_path.as_path());
+            let described = archive::assemble(&build, &archive_path, runtime_archive, &tree, &stop)
                 .map_err(archive_failure)?;
             let _ = std::fs::remove_file(&archive_path);
+            let _ = std::fs::remove_file(&runtime_path);
             job_state.update(|status| status.state = "verifying");
-            let root = archive::bundle_root(&tree).map_err(archive_failure)?;
-            let described = archive::describe(&root, build.engine, &archive::LIMITS, &stop)
-                .map_err(archive_failure)?;
             let licenses = match (build.engine, build.backend) {
                 (Engine::Kokoros, _) => {
                     vec!["Apache-2.0".into(), "GPL-3.0-or-later".into()]

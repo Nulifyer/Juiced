@@ -18,8 +18,8 @@ use tokio::{
 };
 
 const LLAMA_REPOSITORY: &str = "ggml-org/llama.cpp";
-const LLAMA_TAG: &str = "b11393";
-const LLAMA_ASSET: &str = "llama-b11393-bin-ubuntu-x64.tar.gz";
+const LLAMA_TAG: &str = "b12032";
+const LLAMA_ASSET: &str = "llama-b12032-bin-ubuntu-x64.tar.gz";
 const REVISION: &str = "50968a4468ef4233ed78cd7c3de230dd1d61a56b";
 const MARKER: &str = "JUICED_SYNTHETIC_ONLINE_IMPORT_MARKER";
 
@@ -40,8 +40,8 @@ fn digest(bytes: &[u8]) -> String {
 fn release_archive(server: &[u8]) -> Vec<u8> {
     let mut builder = tar::Builder::new(Vec::new());
     for (path, mode, data) in [
-        ("llama-b11393/llama-server", 0o755, server),
-        ("llama-b11393/LICENSE", 0o644, b"MIT fixture".as_slice()),
+        ("llama-b12032/llama-server", 0o755, server),
+        ("llama-b12032/LICENSE", 0o644, b"MIT fixture".as_slice()),
     ] {
         let mut header = tar::Header::new_gnu();
         header.set_size(data.len() as u64);
