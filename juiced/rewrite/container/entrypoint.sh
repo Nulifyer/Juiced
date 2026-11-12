@@ -49,6 +49,7 @@ write_default_config() {
   "resident_budget_bytes": $budget,
   "startup_timeout_ms": 120000,
   "request_timeout_ms": 300000,
+  "import_roots": ["$data/import"],
   "models": []
 }
 EOF
@@ -87,7 +88,7 @@ if [ ! -w "$data" ]; then
 fi
 
 umask 077
-mkdir -p "$data/home"
+mkdir -p "$data/home" "$data/import"
 [ -e "$config" ] || write_default_config
 
 case "$host" in *:*) listen="[$host]:$port" ;; *) listen="$host:$port" ;; esac

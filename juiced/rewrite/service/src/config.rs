@@ -1630,4 +1630,36 @@ mod tests {
         );
         assert_eq!(fs::read(target).unwrap(), b"{}");
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn local_import_settings_default_validate_and_stay_out_of_saved_defaults() {
+        let base = json!({
+            "schema_version":2, "resident_budget_bytes":1, "startup_timeout_ms":1,
+            "request_timeout_ms":1, "models":[],
+        });
+        let config: Config = serde_json::from_value(base.clone()).unwrap();
+        assert_eq!(config.upload_max_bytes, DEFAULT_UPLOAD_MAX_BYTES);
+        assert!(config.import_roots.is_empty());
+        let saved = serde_json::to_value(&config).unwrap();
+        assert!(saved.get("upload_max_bytes").is_none() && saved.get("import_roots").is_none());
+        let mut custom = base.clone();
+        custom["upload_max_bytes"] = json!(1024);
+        custom["import_roots"] = json!(["/data/import"]);
+        let config: Config = serde_json::from_value(custom).unwrap();
+        config.validate().unwrap();
+        let saved = serde_json::to_value(&config).unwrap();
+        assert_eq!(saved["upload_max_bytes"], 1024);
+        assert_eq!(saved["import_roots"], json!(["/data/import"]));
+        for (key, value) in [
+            ("upload_max_bytes", json!(0)),
+            ("import_roots", json!(["relative/import"])),
+            ("import_roots", json!(["/"])),
+        ] {
+            let mut invalid = base.clone();
+            invalid[key] = value;
+            let config: Config = serde_json::from_value(invalid).unwrap();
+            assert!(config.validate().is_err(), "{key}");
+        }
+    }
 }

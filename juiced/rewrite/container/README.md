@@ -35,8 +35,11 @@ Everything that persists lives in `/data`:
 | `runtime-packages/` | Installed engines (llama.cpp, whisper.cpp, stable-diffusion.cpp, Kokoros) |
 | `cache/` | Slot snapshots and computation cache |
 | `home/` | `$HOME` and `$XDG_CACHE_HOME` for engines, such as Mesa shader caches |
+| `import/` | Server-side model files to import. Bind-mount a host directory here, for example `-v /srv/models:/data/import:ro`. |
 
 The service runs as uid 10001 and needs to own `/data`. A named volume gets the right owner automatically. For a host directory, use `-v /srv/juiced:/data:U` under Podman, or start the container once with `--user 0` so the entrypoint can `chown` the top directory.
+
+To add a model file that is not on Hugging Face, upload it from the console or with `curl -X POST -T model.gguf -H 'Content-Type: application/octet-stream' "http://HOST:13305/v1/juiced/library/upload?filename=model.gguf&size=$(stat -c %s model.gguf)"`. A file already on the host can be mounted under `/data/import` and imported with `POST /v1/juiced/library/import-path`, either copied into `artifacts/` or linked in place. A linked file must stay mounted at the same path. The first-boot configuration lists `/data/import` in `import_roots`; a configuration created by an older image needs `"import_roots": ["/data/import"]` added by hand.
 
 The default configuration sets `inhibit_suspend` to false, because the container cannot reach the host's logind. It sets `resident_budget_bytes` to three quarters of the smaller of host memory and the container's cgroup memory limit. `JUICED_RESIDENT_BUDGET_BYTES` overrides that value, but only on first boot. Later, edit the value in the console or in `config.json`.
 

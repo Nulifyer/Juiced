@@ -272,7 +272,7 @@ impl Manager {
             json!({
                 "engine": engine.name(), "recipe": engine.recipe(), "ready": ready,
                 "backend": null, "package": null, "gpu": null, "reason": null,
-                "error": error, "install": null,
+                "error": error, "install": null, "installed_backends": [],
             })
         };
         let (snapshot, inventory) = match self.host().await {
@@ -285,6 +285,16 @@ impl Manager {
         };
         let installed = crate::engines::installed_packages(&packages);
         let mut value = row(false, None);
+        let mut backends: Vec<&str> = installed
+            .iter()
+            .filter(|package| {
+                package.installed && package.declared_host_match && package.engine == Some(engine)
+            })
+            .filter_map(|package| package.backend.as_deref())
+            .collect();
+        backends.sort_unstable();
+        backends.dedup();
+        value["installed_backends"] = json!(backends);
         match crate::engines::choose(engine, &inventory, &snapshot.report, &installed, None) {
             Ok(choice) => {
                 value["ready"] = json!(true);
@@ -515,7 +525,7 @@ impl Manager {
                 }
                 entries.push(json!({
                     "name": name, "path": entry.path(), "kind": kind,
-                    "bytes": (kind == "file").then(|| metadata.len()),
+                    "bytes": (kind == "file").then_some(metadata.len()),
                     "modified_unix_ms": modified_ms(&metadata),
                     "split": kind == "file" && split_parts(&name).is_some(),
                 }));

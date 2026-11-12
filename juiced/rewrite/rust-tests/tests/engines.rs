@@ -630,6 +630,7 @@ async fn uploaded_and_linked_local_files_use_the_automatic_add_flow() {
     assert_eq!(option["ready"], false);
     assert_eq!(option["error"], "engine_not_installed");
     assert_eq!(option["install"]["backend"], "cpu");
+    assert_eq!(option["installed_backends"], json!([]));
 
     let (status, accepted) = server
         .post(
@@ -665,6 +666,7 @@ async fn uploaded_and_linked_local_files_use_the_automatic_add_flow() {
     assert_eq!(linked["job"], Value::Null);
     assert_eq!(linked["engines"][0]["ready"], true);
     assert_eq!(linked["engines"][0]["backend"], "cpu");
+    assert_eq!(linked["engines"][0]["installed_backends"], json!(["cpu"]));
     let (status, refused) = server
         .post(
             "juiced/models/add",
