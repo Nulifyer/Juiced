@@ -5,6 +5,7 @@ import { Inspector, ModelList, type Mutate } from "./Models";
 import { ServiceTest, type TestService } from "./ServiceTest";
 import { Library, type LibraryView } from "./Library";
 import { Cache } from "./Cache";
+import { CacheSessions } from "./CacheSessions";
 import { ServiceApis } from "./ServiceApis";
 import { RuntimeCatalog } from "./RuntimeCatalog";
 import { InstalledRuntimes } from "./InstalledRuntimes";
@@ -56,6 +57,7 @@ export function App() {
   const [diagnosticsTab, setDiagnosticsTab] = useState<"performance" | "requests" | "logs">("performance");
   const [backendTab, setBackendTab] = useState<"machine" | "installed" | "catalog">("machine");
   const [connectTab, setConnectTab] = useState<"protocols" | "endpoints">("protocols");
+  const [cacheTab, setCacheTab] = useState<"sessions" | "snapshots">("sessions");
   const [modelsTab, setModelsTab] = useState<"models" | "aliases">("models");
   const client = useMemo(() => new Client(base, key), [base, key]);
   const toasts = useToasts();
@@ -126,6 +128,7 @@ export function App() {
   const status = !online ? "Offline" : resources?.paused ? "Paused" : "Online";
   const gpu = live.stats?.gpus[0];
   const tabs = screen === "models" ? <Tabs label="Models views" value={modelsTab} onChange={(value) => leave(() => { setModelsTab(value); setSelected(""); })} items={[["models", "Models"], ["aliases", "Aliases"]]} />
+    : screen === "cache" ? <Tabs label="Cache views" value={cacheTab} onChange={setCacheTab} items={[["sessions", "Sessions"], ["snapshots", "Snapshots"]]} />
     : screen === "test" ? <Tabs label="Test operation" value={testService} onChange={setTestService} items={[["chat", "Chat"], ["compare", "Compare"], ["embeddings", "Embeddings"], ["transcription", "Transcribe"]]} />
     : screen === "library" ? <Tabs label="Library view" value={libraryView} onChange={setLibraryView} items={[["find", "Find models"], ["files", "Files on disk"]]} />
     : screen === "connect" ? <Tabs label="Connect views" value={connectTab} onChange={setConnectTab} items={[["protocols", "Protocols"], ["endpoints", "Endpoints"]]} />
@@ -163,7 +166,8 @@ export function App() {
         {screen === "backend" && backendTab === "machine" && <Hardware key={epoch} client={client} />}
         {screen === "backend" && backendTab === "installed" && <EngineList key={epoch} client={client} online={online}><InstalledRuntimes client={client} online={online} paused={resources?.paused === true} memory={resources?.runtime_control_memory} importOnly /></EngineList>}
         {screen === "backend" && backendTab === "catalog" && <div className="page-body"><RuntimeCatalog key={epoch} client={client} online={online} /></div>}
-        {screen === "cache" && <Cache key={epoch} client={client} online={online} models={snapshot.models} />}
+        {screen === "cache" && cacheTab === "sessions" && <CacheSessions key={epoch} client={client} online={online} />}
+        {screen === "cache" && cacheTab === "snapshots" && <Cache key={epoch} client={client} online={online} models={snapshot.models} />}
       </>}
     </main>
     <footer className="global-footer" aria-label="Live usage">

@@ -1,4 +1,4 @@
-import { api, expect, largeText, modelId, navigate, noHorizontalOverflow, open, storedText, test } from "./support";
+import { api, expect, largeText, tab, modelId, navigate, noHorizontalOverflow, open, storedText, test } from "./support";
 
 test.afterEach(async ({ request }) => {
   const service = api(request);
@@ -10,6 +10,7 @@ test("snapshots save, restore by session, check storage, forget and recover a re
   const service = api(request);
   await open(page);
   await navigate(page, "Cache");
+  await tab(page, "Cache views", "Snapshots").click();
   const summary = page.getByRole("region", { name: "Prompt snapshots" });
   const toggle = summary.getByRole("switch", { name: "Snapshots" });
   await expect(toggle).toHaveAttribute("aria-checked", "false");
@@ -111,6 +112,7 @@ test("snapshot pages continue with their view and restart after the cache change
   });
   await open(page);
   await navigate(page, "Cache");
+  await tab(page, "Cache views", "Snapshots").click();
   const table = page.getByRole("table", { name: "Snapshots" });
   const pager = page.getByLabel("Snapshot pages");
   await expect(table.getByRole("row")).toHaveCount(128);
