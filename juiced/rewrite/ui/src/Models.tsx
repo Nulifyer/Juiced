@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { bytes, loadReason, matchingModels, offers, policyNames, services, unloadReason, workerState, workerTone, parseSuitability, type Suitability, type Model, type Policy, type Service } from "./domain";
-import { Badge, Button, Empty, HelpTip, Icon } from "./ui";
+import { bytes, loadReason, matchingModels, offers, policyNames, services, unloadReason, workerState, workerTone, type Model, type Policy, type Service } from "./domain";
+import { Badge, Button, Empty, Icon, Switch } from "./ui";
 import type { Client } from "./api";
 import { removalReason } from "./management";
 import { ContextInspector } from "./ContextInspector";
@@ -95,12 +95,14 @@ export function Inspector({ model, busy, online, onClose, onDirty, mutate, clien
   const unloadBlocked = unloadReason(model);
   const cleanupRetry = model.state === "cleanup-pending" && model.cleanup_retry_available === true;
   const [tab, setTab] = useState<"overview" | "settings" | "manage">("overview");
+  const [advanced, setAdvanced] = useState(() => readLocal("juiced.rewrite.inspectorAdvanced") === "1");
   const tabs = [["overview", "Overview", false], ["settings", "Settings", dirty], ["manage", "Manage", false]] as const;
   return <aside className="inspector" aria-label="Model inspector">
     <div className="inspector-top"><Button variant="ghost" className="back-button" onClick={onClose}><Icon name="back" /> Back to models</Button><Button variant="ghost" className="close-inspector" aria-label="Close model inspector" onClick={onClose}><Icon name="close" /></Button></div>
     <div className="inspector-body">
       <div className="inspector-title"><h2>{model.id}</h2><Badge tone={workerTone(model)}>{workerState(model)}</Badge></div>
-      <div className="tabs" role="tablist" aria-label="Model sections">{tabs.map(([id, label, changed]) => <button key={id} role="tab" id={`tab-${id}`} aria-controls={`panel-${id}`} aria-selected={tab === id} onClick={() => setTab(id)}>{label}{changed && <span className="tab-dot" aria-label="unsaved" />}</button>)}</div>
+      <div className="tab-row"><div className="tabs" role="tablist" aria-label="Model sections">{tabs.map(([id, label, changed]) => <button key={id} role="tab" id={`tab-${id}`} aria-controls={`panel-${id}`} aria-selected={tab === id} onClick={() => setTab(id)}>{label}{changed && <span className="tab-dot" aria-label="unsaved" />}</button>)}</div>
+        {tab === "settings" && <Switch checked={advanced} label="Show advanced settings" onChange={(next) => { setAdvanced(next); writeLocal("juiced.rewrite.inspectorAdvanced", next ? "1" : ""); }}>Advanced</Switch>}</div>
       {model.error && <p className={["request_termination_unconfirmed", "state_termination_unconfirmed"].includes(model.error) ? "inline-warning" : "inline-error"} role="alert">{workerFailure(model.error)}</p>}
       <div role="tabpanel" id="panel-overview" aria-labelledby="tab-overview" hidden={tab !== "overview"}>
       <section className="inspector-section"><span className="field-label" id="policy-label">Loading policy</span>
@@ -120,13 +122,12 @@ export function Inspector({ model, busy, online, onClose, onDirty, mutate, clien
       </section>
       </div>
       <div role="tabpanel" id="panel-settings" aria-labelledby="tab-settings" hidden={tab !== "settings"}>
-      {model.operations.includes("audio/transcriptions") ? <section className="inspector-section"><p className="muted">Speech models use one slot. Text context settings don't apply.</p></section> : <ContextInspector model={model} client={client} online={online} busy={busy} policyDirty={artifactDirty || runtimeDirty} onDirty={setProfileDirty} mutate={mutate} />}
+      {model.operations.includes("audio/transcriptions") ? <section className="inspector-section"><p className="muted">Speech models use one slot. Text context settings don't apply.</p></section> : <ContextInspector model={model} client={client} online={online} busy={busy} policyDirty={artifactDirty || runtimeDirty} onDirty={setProfileDirty} mutate={mutate} advanced={advanced} />}
       <QuantSync model={model} client={client} online={online} busy={busy} blocked={dirty} />
-      {model.artifact_set && <ArtifactRevisionInspector model={model} client={client} busy={busy} online={online} otherDirty={profileDirty || runtimeDirty} onDirty={setArtifactDirty} mutate={mutate} />}
-      <RuntimeInspector model={model} client={client} busy={busy} online={online} otherDirty={profileDirty || artifactDirty} onDirty={setRuntimeDirty} mutate={mutate} />
+      {(advanced || artifactDirty) && model.artifact_set && <ArtifactRevisionInspector model={model} client={client} busy={busy} online={online} otherDirty={profileDirty || runtimeDirty} onDirty={setArtifactDirty} mutate={mutate} />}
+      {(advanced || runtimeDirty) && <RuntimeInspector model={model} client={client} busy={busy} online={online} otherDirty={profileDirty || artifactDirty} onDirty={setRuntimeDirty} mutate={mutate} />}
       </div>
       <div role="tabpanel" id="panel-manage" aria-labelledby="tab-manage" hidden={tab !== "manage"}>
-      <HostFit model={model} client={client} dirty={dirty} online={online} />
       <section className="inspector-section"><h3>Operations</h3><div className="chip-row">{model.operations.map((operation) => <code className="chip" key={operation}>{operation}</code>)}</div></section>
       <section className="inspector-section"><h3>Remove registration</h3><p className="muted">Removes the model. Its weight files are kept.</p><Button variant="danger" disabled={busy || !online || dirty || !!removalReason(model)} onClick={() => void mutate("delete", { model: model.id, expected_revision: model.revision }, `Removed ${model.id}. Weight files kept.`)}>Remove registration</Button>{removalReason(model) && <p className="field-help">{removalReason(model)}</p>}</section>
       </div>
@@ -134,45 +135,5 @@ export function Inspector({ model, busy, online, onClose, onDirty, mutate, clien
   </aside>;
 }
 
-
-function HostFit({ model, client, dirty, online }: { model: Model; client: Client; dirty: boolean; online: boolean }) {
-  const [result, setResult] = useState<Suitability | null>(null);
-  const [error, setError] = useState("");
-  const [checking, setChecking] = useState(false);
-  const request = useRef<AbortController | null>(null);
-  useEffect(() => {
-    request.current?.abort();
-    setResult(null); setError(""); setChecking(false);
-    return () => { request.current?.abort(); };
-  }, [model.id, model.revision, model.state, client, dirty]);
-  async function check() {
-    request.current?.abort();
-    const controller = new AbortController(); request.current = controller;
-    setChecking(true); setError(""); setResult(null);
-    try {
-      const observation = parseSuitability(await client.request(`juiced/suitability?model=${encodeURIComponent(model.id)}`, undefined, controller.signal));
-      if (!controller.signal.aborted) setResult(observation);
-    } catch (error) {
-      if (!controller.signal.aborted) setError(error instanceof Error ? error.message : "The suitability check failed. Retry the check.");
-    } finally { if (!controller.signal.aborted) setChecking(false); }
-  }
-  const blockers: Record<string, string> = {
-    model_disabled: "The model is Disabled.", missing_weights: "The model file is unavailable.",
-    worker_transition: "The worker is starting.", shutting_down: "The service is shutting down.",
-    resident_budget: "The declared budget has no room for an additional worker.",
-    unknown_host_capacity: "A complete, fresh host-memory observation is unavailable.",
-    host_memory_exhausted: "The host pool cannot admit this load while preserving its headroom.",
-    resource_profile_required: "This model needs a resource profile before protected execution.",
-    protected_profile_unqualified: "This execution profile has no selected protected resource contract.",
-    state_termination_unconfirmed: "Confirm cleanup of the prior snapshot operation before using this worker.",
-    request_termination_unconfirmed: "Confirm cleanup of the prior request before using this worker.",
-  };
-  return <section className="inspector-section" aria-label="Host fit">
-    <div className="section-heading"><h3>Host fit</h3><HelpTip label="Host fit">Checks the saved settings against the memory budget. Nothing loads or gets reserved. Physical fit on this hardware isn't measured yet.</HelpTip></div>
-    <Button disabled={dirty || checking || !online} onClick={() => void check()}>{checking ? "Checking…" : "Check saved settings"}</Button>
-    {dirty && <p className="field-help">Save or cancel your changes first.</p>}
-    {error && <p className="inline-error" role="alert">{error}</p>}
-    {result && (model.loaded ? <div className="fit-observation" aria-live="polite"><dl className="facts"><div><dt>Holding now</dt><dd>{bytes(model.resident_bytes)}</dd></div><div><dt>Budget left for others</dt><dd>{bytes(result.resources.declared_budget.available_bytes)}</dd></div></dl><p className="field-help">Loaded and running with these settings.</p></div>
-      : <div className="fit-observation" aria-live="polite"><dl className="facts"><div><dt>Budget free</dt><dd>{bytes(result.resources.declared_budget.available_bytes)}</dd></div><div><dt>This model needs</dt><dd>{bytes(result.resources.declared_budget.additional_worker_bytes)}</dd></div><div><dt>Fits budget</dt><dd>{result.resources.declared_budget.fits_additional_reservation === null ? "Unknown" : result.resources.declared_budget.fits_additional_reservation ? "Yes" : "No"}</dd></div></dl>{result.resources.blockers.map((code) => <p className="inline-warning" key={code}>{blockers[code] ?? "The service reported a blocker."}</p>)}</div>)}
-  </section>;
-}
+function readLocal(key: string) { try { return localStorage.getItem(key) ?? ""; } catch { return ""; } }
+function writeLocal(key: string, value: string) { try { if (value) localStorage.setItem(key, value); else localStorage.removeItem(key); } catch { /* Storage can be unavailable in private sessions. */ } }

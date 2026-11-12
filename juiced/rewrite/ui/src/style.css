@@ -486,11 +486,12 @@ legend { font-size: .8rem; font-weight: 500; margin-bottom: 8px; }
 .snapshot-id { display: grid; min-width: 0; }
 .snapshot-id .muted { font-size: .7rem; }
 dialog textarea { margin-bottom: 4px; }
-.switch { display: inline-flex; align-items: center; gap: 8px; border: 0; background: transparent; font-size: .78rem; padding: 4px; }
-.switch-track { width: 32px; height: 18px; border-radius: 999px; background: #33363e; position: relative; transition: background .15s; }
-.switch-thumb { position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: #d7dae1; transition: transform .15s; }
-.switch[aria-checked="true"] .switch-track { background: #3f7d63; }
-.switch[aria-checked="true"] .switch-thumb { transform: translateX(14px); }
+.switch { display: inline-flex; align-items: center; gap: 8px; border: 0; background: transparent; padding: 2px; font-size: .78rem; color: var(--muted); cursor: pointer; }
+.switch:disabled { opacity: .55; cursor: default; }
+.switch-track { position: relative; width: 32px; height: 18px; flex: none; border: 1px solid #3d414b; border-radius: 999px; background: #22242a; transition: background .15s, border-color .15s; }
+.switch-thumb { position: absolute; top: 1px; left: 1px; width: 14px; height: 14px; border-radius: 50%; background: #8d929e; transition: transform .15s, background .15s; }
+.switch[aria-checked="true"] .switch-track { background: #1f3d33; border-color: #2d5a48; }
+.switch[aria-checked="true"] .switch-thumb { transform: translateX(14px); background: var(--good); }
 @media (prefers-reduced-motion: reduce) { .switch-track, .switch-thumb { transition: none; } }
 @media (max-width: 700px) {
   .chat-meta { display: none; }
@@ -687,3 +688,27 @@ html, body { height: 100%; overflow: hidden; }
 .workspace.test-screen > * { flex-shrink: 0; }
 .workspace.test-screen > .service-tests:not(.wide) { flex: 1 1 auto; min-height: 0; }
 .service-tests:not(.wide) > .chat { flex: 1 1 auto; min-height: 280px; height: auto; width: 100%; }
+/* Model inspector: memory fit, context shortcuts, advanced switch. */
+.memory-fit { display: grid; gap: 6px; margin: 4px 0 12px; }
+.memory-bar { display: flex; height: 8px; border-radius: 4px; background: var(--secondary); overflow: hidden; }
+.memory-part { display: block; height: 100%; }
+.memory-part.weights, .memory-dot.weights { background: var(--ring); }
+.memory-part.context, .memory-dot.context { background: var(--good); }
+.memory-part.runtime, .memory-dot.runtime { background: var(--warning); }
+.memory-legend { display: flex; flex-wrap: wrap; gap: 2px 12px; font-size: .72rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+.memory-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 5px; vertical-align: 1px; }
+.memory-total { margin-left: auto; color: var(--foreground); }
+.memory-total.over { color: var(--bad); }
+.context-row { display: flex; gap: 6px; }
+.context-row input { flex: 1; min-width: 0; }
+.setting-line { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 12px 0 4px; }
+.setting-status { font-size: .78rem; color: var(--muted); margin: 8px 0 0; }
+.setting-status strong { color: var(--foreground); font-weight: 500; margin-right: 4px; }
+.provenance { margin-top: 12px; }
+.provenance .data-head, .provenance .data-row { grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, .8fr); font-size: .72rem; padding: 5px 8px; }
+.slot-lines { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 8px; font-size: .72rem; }
+.tab-row { display: flex; align-items: center; gap: 4px; margin: 12px 0 4px; border-bottom: 1px solid var(--border); }
+.tab-row .tabs { flex: 1; margin: 0; border-bottom: 0; }
+.tab-row .tabs button { padding-inline: 8px; }
+.tab-row .switch { flex: none; gap: 6px; padding-inline: 0; }
+@media (pointer: coarse) { .switch-track { width: 44px; height: 26px; } .switch-thumb { top: 2px; left: 2px; width: 20px; height: 20px; } .switch[aria-checked="true"] .switch-thumb { transform: translateX(18px); } }

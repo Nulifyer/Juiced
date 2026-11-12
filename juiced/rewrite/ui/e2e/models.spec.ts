@@ -92,10 +92,11 @@ test("the inspector groups Overview, Settings and Manage tabs and loads from Ove
   await expect(toasts(page).getByRole("status")).toContainText(`${modelId} is now On demand.`);
   await sections.getByRole("tab", { name: "Settings" }).click();
   await expect(inspector.getByRole("region", { name: "Context and launch profile" })).toBeVisible();
+  await expect(inspector.getByRole("region", { name: "Model runtime selection" })).toHaveCount(0);
+  await inspector.getByRole("switch", { name: "Show advanced settings" }).click();
   await expect(inspector.getByRole("region", { name: "Model runtime selection" })).toBeVisible();
-  await expect(inspector.getByRole("region", { name: "Context and launch profile" })).toContainText("Only llama.cpp models have editable launch settings.");
+  await expect(inspector.getByRole("region", { name: "Context and launch profile" })).toContainText("Only llama.cpp models have launch settings here.");
   await sections.getByRole("tab", { name: "Manage" }).click();
-  await expect(inspector.getByRole("region", { name: "Host fit" })).toBeVisible();
   await expect(inspector.getByRole("button", { name: "Remove registration" })).toBeDisabled();
   await expect(inspector).toContainText("Set the model to Disabled before removing its registration.");
   await closeInspector(page);
@@ -115,10 +116,14 @@ test("launch settings drafts survive conflicts and guard navigation", async ({ p
     const inspector = await openModel(page, id);
     await tab(page, "Model sections", "Settings").click();
     const panel = inspector.getByRole("region", { name: "Context and launch profile" });
-    const context = panel.getByLabel("Total context budget in tokens");
+    const context = panel.getByLabel("Context", { exact: true });
+    const save = panel.getByRole("button", { name: "Save", exact: true });
     await expect(context).toHaveValue("1024");
+    await expect(panel.getByLabel("Threads")).toHaveCount(0);
+    await inspector.getByRole("switch", { name: "Show advanced settings" }).click();
     await expect(panel.getByLabel("Threads")).toHaveValue("2");
-    await expect(panel.getByRole("button", { name: "Save launch profile" })).toBeDisabled();
+    await expect(panel.getByRole("table", { name: "Setting sources" })).toBeVisible();
+    await expect(save).toHaveCount(0);
     await context.fill("2048");
     await expect(inspector.getByRole("tab", { name: /^Settings/ }).getByLabel("unsaved")).toBeVisible();
 
@@ -134,19 +139,19 @@ test("launch settings drafts survive conflicts and guard navigation", async ({ p
     await service.post(path, { expected_revision: before.revision, options: { ...options, context_tokens: 3072, threads: 3 } });
     await expect(panel).toContainText("Another client changed this model. Your draft is kept", { timeout: 10000 });
     await expect(context).toHaveValue("2048");
-    await panel.getByRole("button", { name: "Save launch profile" }).click();
+    await save.click();
     await expect(toasts(page).getByRole("alert")).toBeVisible();
     await expect(context).toHaveValue("2048");
     expect((await service.json<{ saved: { context_tokens: number } }>(path)).saved.context_tokens).toBe(3072);
-    await panel.getByRole("button", { name: "Cancel launch draft" }).click();
+    await panel.getByRole("button", { name: "Cancel", exact: true }).click();
     await expect(context).toHaveValue("3072");
     await expect(panel.getByLabel("Threads")).toHaveValue("3");
 
     await context.fill("4096");
     await panel.getByLabel("Threads").fill("");
-    await panel.getByRole("button", { name: "Save launch profile" }).click();
+    await save.click();
     await expect(toasts(page).getByRole("status")).toContainText(`Saved launch settings for ${id}.`);
-    await expect(panel.getByRole("button", { name: "Save launch profile" })).toBeDisabled();
+    await expect(save).toHaveCount(0);
     const saved = await service.json<{ saved: Record<string, number | null> }>(path);
     expect(saved.saved).toMatchObject({ context_tokens: 4096, threads: null, gpu_layers: 0 });
     expect((await service.model(id))).toMatchObject({ policy: "disabled", loaded: false });
@@ -161,24 +166,41 @@ test("launch settings drafts survive conflicts and guard navigation", async ({ p
   }
 });
 
-test("host fit checks the saved settings without reserving anything", async ({ page, request }) => {
+test("the memory estimate follows the context draft and blocks a save that doesn't fit", async ({ page, request }) => {
   const service = api(request);
-  const before = await service.json<{ resources: unknown }>("/v1/juiced/state");
-  await open(page);
-  const inspector = await openModel(page, modelId);
-  await tab(page, "Model sections", "Manage").click();
-  const fit = inspector.getByRole("region", { name: "Host fit" });
-  await page.route("**/v1/juiced/suitability?*", (route) => route.fulfill({ status: 503, json: { error: { message: "Fixture check unavailable. Retry the check." } } }));
-  await fit.getByRole("button", { name: "Check saved settings" }).click();
-  await expect(fit.getByRole("alert")).toContainText("Fixture check unavailable");
-  await page.unroute("**/v1/juiced/suitability?*");
-  await fit.getByRole("button", { name: "Check saved settings" }).click();
-  await expect(fit.getByRole("term").filter({ hasText: "Fits budget" })).toBeVisible();
-  await expect(fit.getByRole("definition").filter({ hasText: /^(Yes|No|Unknown)$/ })).toHaveCount(1);
-  await expect(fit).toContainText("This model needs");
-  await expect(fit).toContainText("2.0 GiB");
-  expect((await service.json<{ resources: unknown }>("/v1/juiced/state")).resources).toEqual(before.resources);
-  expect((await service.model(modelId))!.loaded).toBe(false);
+  const fixture = await service.source();
+  const id = `browser.fit-${test.info().project.name}`;
+  await service.remove(id);
+  await service.register({ id, model_file: fixture.model_file, provider: "llama-cpp", options: { context_tokens: 1024, threads: null, gpu_layers: 0, parallel_slots: 1 }, command: fixture.command, args: [...fixture.args, "--ctx-size", "1024"] });
+  const gib = 1024 ** 3;
+  const asked: string[] = [];
+  await page.route(`**/v1/models/${encodeURIComponent(id)}/fit*`, (route) => {
+    const context = Number(new URL(route.request().url()).searchParams.get("context_tokens") ?? 1024);
+    asked.push(String(context));
+    const total = 2 * gib + context * 1024 * 64;
+    route.fulfill({ json: { schema_version: 1, model: id, source: "llama-fit-params", breakdown: { weights_bytes: 2 * gib, context_bytes: context * 1024 * 64, compute_bytes: 0, projector_bytes: 0, draft_bytes: 0, other_bytes: 0 }, total_bytes: total, budget_bytes: 8 * gib, available_bytes: 8 * gib, loaded: false, fits: total <= 8 * gib, largest_context_that_fits: 32768, trained_context: 131072, warnings: [] } });
+  });
+  try {
+    await open(page);
+    const inspector = await openModel(page, id);
+    await tab(page, "Model sections", "Settings").click();
+    const panel = inspector.getByRole("region", { name: "Context and launch profile" });
+    const estimate = panel.getByRole("group", { name: "Memory estimate" });
+    await expect(estimate).toContainText("2.1 GiB of 8.0 GiB available");
+    const context = panel.getByLabel("Context", { exact: true });
+    await panel.getByRole("button", { name: "Max" }).click();
+    await expect(context).toHaveValue("131072");
+    await expect(estimate).toContainText("doesn't fit");
+    await expect(panel.getByRole("button", { name: "Save", exact: true })).toBeDisabled();
+    await panel.getByRole("button", { name: "Auto" }).click();
+    await expect(context).toHaveValue("32768");
+    await expect(estimate).not.toContainText("doesn't fit");
+    await expect(panel.getByRole("button", { name: "Save", exact: true })).toBeEnabled();
+    expect(asked).toContain("131072");
+    expect((await service.model(id))!.loaded).toBe(false);
+  } finally {
+    await service.remove(id);
+  }
 });
 
 test("removing a registration keeps its weight file", async ({ page, request }) => {
@@ -262,14 +284,15 @@ test("saving launch settings on a loaded model restarts it with the new settings
     const inspector = await openModel(page, id);
     await tab(page, "Model sections", "Settings").click();
     const panel = inspector.getByRole("region", { name: "Context and launch profile" });
+    await inspector.getByRole("switch", { name: "Show advanced settings" }).click();
     await panel.getByLabel("Threads").fill("3");
-    await expect(panel).toContainText("Saving restarts the model with these settings.");
+    await expect(panel.getByRole("button", { name: "Save and reload" })).toBeEnabled();
     await panel.getByRole("button", { name: "Save and reload" }).click();
     await expect(toasts(page).getByRole("status")).toContainText(`Saved launch settings and restarted ${id}.`, { timeout: 15000 });
     expect((await service.json<{ saved: Record<string, number | null> }>(path)).saved).toMatchObject({ threads: 3 });
     await expect.poll(async () => { const now = await service.model(id); return now?.loaded && now.pid !== before; }, { timeout: 15000 }).toBe(true);
     expect((await service.model(id))?.policy).toBe("on-demand");
-    await expect(panel.getByRole("button", { name: "Save and reload" })).toBeDisabled();
+    await expect(panel.getByRole("button", { name: "Save and reload" })).toHaveCount(0);
   } finally {
     await service.remove(id);
   }
@@ -284,6 +307,7 @@ test("the engine section switches between installed engines and rolls back", asy
   await open(page);
   const inspector = await openModel(page, hotModel);
   await tab(page, "Model sections", "Settings").click();
+  await inspector.getByRole("switch", { name: "Show advanced settings" }).click();
   const hot = inspector.getByRole("region", { name: "Model runtime selection" });
   await expect(hot).toContainText("runs a command from its registration");
   await expect(hot.getByRole("button")).toHaveCount(1);

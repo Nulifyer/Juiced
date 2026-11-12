@@ -5,17 +5,13 @@ import { baseUrl, checkText, clientHints, lastRequest, parseHealth, snippets, st
 import type { Model } from "./domain";
 import { parseProtocols } from "./management";
 import { notify } from "./toast";
-import { Badge, Button, HelpTip } from "./ui";
+import { Badge, Button, HelpTip, Switch } from "./ui";
 import { useResource } from "./useResource";
 import { WyomingSettings } from "./Wyoming";
 
 export function Copy({ value, label, text = "Copy" }: { value: string; label: string; text?: string }) {
   const [state, setState] = useState("");
   return <Button aria-label={label} onClick={() => void navigator.clipboard.writeText(value).then(() => setState("Copied")).catch(() => setState("Copy failed")).finally(() => setTimeout(() => setState(""), 1500))}>{state || text}</Button>;
-}
-
-function Switch({ checked, label, disabled, onChange }: { checked: boolean; label: string; disabled?: boolean; onChange: (next: boolean) => void }) {
-  return <button type="button" role="switch" className="switch" aria-checked={checked} aria-label={label} disabled={disabled} onClick={() => onChange(!checked)}><span /></button>;
 }
 
 const operatorOnly = (error: string) => /operator/i.test(error);

@@ -24,13 +24,13 @@ describe("managed runtime observations", () => {
     for (const mutation of [
       (value: ReturnType<typeof inventory>) => value.packages.push(value.packages[0]!),
       (value: ReturnType<typeof inventory>) => { value.packages[0]!.reserved_bytes = 0; },
-      (value: ReturnType<typeof inventory>) => { value.packages[0]!.member_count = 2049; },
+      (value: ReturnType<typeof inventory>) => { value.packages[0]!.member_count = 16385; },
       (value: ReturnType<typeof inventory>) => { (value.packages[0]! as any).declared_host_match = "true"; },
       (value: ReturnType<typeof inventory>) => { value.packages[0]!.declared_target.compute_paths.push("cpu"); },
       (value: ReturnType<typeof inventory>) => { value.packages[0]!.provenance.build_revision = "private\nvalue"; },
     ]) { const changed = structuredClone(base); mutation(changed); expect(() => parseRuntimeInventory(changed)).toThrow(); }
     expect(() => parseRuntimeInventory({ ...base, packages: undefined })).toThrow();
-    const over = inventory(); over.packages = Array.from({ length: 5 }, (_, index) => ({ ...over.packages[0]!, id: `package-${String(index).repeat(64)}`, reserved_bytes: 8 * 1024 ** 3 }));
+    const over = inventory(); over.packages = Array.from({ length: 5 }, (_, index) => ({ ...over.packages[0]!, id: `package-${String(index).repeat(64)}`, reserved_bytes: 60 * 1024 ** 3 }));
     expect(() => parseRuntimeInventory(over)).toThrow();
     expect(() => parseRuntimeInventory({ ...base, compatibility: "qualified" })).toThrow();
   });
@@ -62,7 +62,7 @@ describe("managed runtime observations", () => {
     const receipt = { schema_version: 1, package: packageId, installed: true, newly_installed: true, reserved_bytes: 42, reused_files: 0, bundle_digest: "c".repeat(64), compatibility: "unqualified" };
     expect(parseRuntimeImportReceipt(receipt).newly_installed).toBe(true);
     expect(parseRuntimeImportReceipt({ ...receipt, newly_installed: false, reused_files: 1 }).newly_installed).toBe(false);
-    for (const mutation of [{ installed: false }, { package: "../package" }, { newly_installed: null }, { reserved_bytes: 0 }, { reserved_bytes: 8 * 1024 ** 3 + 1 }, { reused_files: 2049 }, { bundle_digest: "short" }, { compatibility: "qualified" }]) expect(() => parseRuntimeImportReceipt({ ...receipt, ...mutation })).toThrow("could not be verified");
+    for (const mutation of [{ installed: false }, { package: "../package" }, { newly_installed: null }, { reserved_bytes: 0 }, { reserved_bytes: 64 * 1024 ** 3 + 1 }, { reused_files: 2049 }, { bundle_digest: "short" }, { compatibility: "qualified" }]) expect(() => parseRuntimeImportReceipt({ ...receipt, ...mutation })).toThrow("could not be verified");
   });
 
 });

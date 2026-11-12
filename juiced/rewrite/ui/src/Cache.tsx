@@ -2,7 +2,7 @@ import { useState } from "react";
 import { chatTestTokenLimit, type Client } from "./api";
 import { operationEligible, bytes, type Model } from "./domain";
 import { parseCacheView, parseCacheInspection, positiveBytes, sessionValue, type CacheInspection } from "./management";
-import { Badge, Button, Dialog, Empty, HelpTip } from "./ui";
+import { Badge, Button, Dialog, Empty, HelpTip, Switch } from "./ui";
 import { useOperation, useResource } from "./useResource";
 
 type Cursor = { after?: string; expected_generation?: number; expected_view?: string };
@@ -87,7 +87,7 @@ export function Cache({ client, models, online }: { client: Client; models: Mode
       <HelpTip label="Prompt snapshots">A snapshot saves an engine slot's processed prompt for one session, so restoring it skips reprocessing. Works with llama.cpp completions models that have one slot and a slot-save folder. Snapshots made with other API keys aren't listed.</HelpTip>
       <span className="spacer" />
       <Button disabled={blocked} onClick={() => void inspect()}>Check storage</Button>
-      <button type="button" role="switch" className="switch" aria-checked={data?.enabled === true} aria-label="Snapshots" disabled={blocked} onClick={() => data && void operation.run("juiced/cache", { enabled: !data.enabled, expected_generation: data.configuration_generation }, data.enabled ? "Snapshots turned off. Saved files are kept." : "Snapshots turned on.")}><span className="switch-track"><span className="switch-thumb" /></span>{!data ? "Unavailable" : data.enabled ? "On" : "Off"}</button>
+      <Switch checked={data?.enabled === true} label="Snapshots" disabled={blocked} onChange={() => data && void operation.run("juiced/cache", { enabled: !data.enabled, expected_generation: data.configuration_generation }, data.enabled ? "Snapshots turned off. Saved files are kept." : "Snapshots turned on.")}>{!data ? "Unavailable" : data.enabled ? "On" : "Off"}</Switch>
     </section>
     <section className="toolbar" aria-label="Snapshot session">
       <select aria-label="Snapshot model" value={model} disabled={operation.busy} onChange={(event) => { setModel(event.target.value); setContextReady(false); setResponse(""); }}><option value="">Choose a model…</option>{candidates.map((item) => <option key={item.id} value={item.id}>{item.id}</option>)}</select>

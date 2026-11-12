@@ -1,5 +1,9 @@
 import { useEffect, useId, useRef, type ButtonHTMLAttributes, type ReactNode } from "react";
 
+export function Switch({ checked, label, disabled, onChange, children }: { checked: boolean; label: string; disabled?: boolean; onChange: (next: boolean) => void; children?: ReactNode }) {
+  return <button type="button" role="switch" className="switch" aria-checked={checked} aria-label={label} disabled={disabled} onClick={() => onChange(!checked)}><span className="switch-track"><span className="switch-thumb" /></span>{children}</button>;
+}
+
 export function Button({ variant = "outline", className = "", ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: "outline" | "primary" | "ghost" | "danger" }) {
   return <button type="button" className={`button ${variant} ${className}`} {...props} />;
 }

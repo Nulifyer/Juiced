@@ -14,11 +14,6 @@
 .protocol-url { min-width: 0; font-size: .74rem; color: #c3c7d1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .protocol-item .button { min-height: 28px; padding: 3px 10px; }
 .protocol-item.off .protocol-name strong, .protocol-item.off .protocol-url { color: var(--muted); }
-.switch { position: relative; width: 34px; height: 20px; padding: 0; border: 1px solid #3d414b; border-radius: 999px; background: #22242a; flex: none; transition: background .15s, border-color .15s; }
-.switch span { position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: #8d929e; transition: transform .15s, background .15s; }
-.switch[aria-checked="true"] { background: #1f3d33; border-color: #2d5a48; }
-.switch[aria-checked="true"] span { transform: translateX(14px); background: var(--good); }
-.switch:disabled { opacity: .55; }
 .connect-inspector { height: auto; position: sticky; top: 0; max-height: calc(100dvh - 150px); }
 .connect-inspector .inspector-body { display: grid; gap: 12px; padding: 16px 18px 18px; }
 .connect-inspector .inspector-title h2 { font-size: 1.05rem; }
@@ -63,4 +58,4 @@
   .key-table .data-row > :nth-child(n+2):not(.row-end) { order: 3; font-size: .72rem; }
 }
 @media (max-width: 700px) { .key-create { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } .key-create > div:first-child, .key-create > .button { grid-column: 1 / -1; } }
-@media (pointer: coarse) { .protocol-item .button { min-height: 40px; } .switch { width: 44px; height: 26px; } .switch span { width: 20px; height: 20px; } .switch[aria-checked="true"] span { transform: translateX(18px); } }
+@media (pointer: coarse) { .protocol-item .button { min-height: 40px; } }
