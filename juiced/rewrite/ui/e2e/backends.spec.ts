@@ -1,31 +1,95 @@
 import { readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { api, expect, navigate, open, tab, test } from "./support";
+import type { Locator, Page } from "@playwright/test";
+import { api, expect, navigate, noHorizontalOverflow, open, test } from "./support";
 
-test("This machine shows device cards and filters available backends", async ({ page }) => {
+const engines = (page: Page) => page.getByRole("table", { name: "Engines" });
+const row = (page: Page, name: string) => engines(page).getByRole("row", { name, exact: true });
+const chip = (scope: Locator, text: RegExp) => scope.getByRole("listitem").filter({ hasText: text }).locator(".engine-chip");
+const imported = async (page: Page) => Number(/Imported(?: ×(\d+))?/.exec(await row(page, "llama.cpp").innerText())?.[1] ?? 1);
+
+test("one screen shows this machine and the engines it can run, with Show all for the rest", async ({ page }) => {
   await open(page);
-  await navigate(page, "Backends & hardware");
-  await expect(page.getByRole("tablist", { name: "Backend views" }).getByRole("tab")).toHaveText(["This machine", "Engines", "Catalog"]);
-  await expect(tab(page, "Backend views", "This machine")).toHaveAttribute("aria-selected", "true");
-  const devices = page.getByRole("region", { name: "Detected hardware" });
-  await expect(devices.getByRole("article").first()).toContainText("CPU");
-  await expect(devices.getByRole("article").first()).toContainText(/\d+ cores · \d+ threads/);
-  await expect(devices.getByRole("article").filter({ hasText: "Memory" })).toContainText(/\d+(\.\d)? GiB free/);
-  await expect(devices.getByRole("article").filter({ hasText: /GPU/ }).first()).toBeVisible();
-  const filter = page.getByRole("group", { name: "Backend filter" });
-  await expect(filter.getByRole("button", { name: "Available" })).toHaveAttribute("aria-pressed", "true");
-  const rows = page.getByRole("table", { name: "Backends" }).getByRole("row");
-  await expect(rows.first()).toBeVisible();
-  const available = await rows.count();
-  await filter.getByRole("button", { name: "All" }).click();
-  await expect(filter.getByRole("button", { name: "All" })).toHaveAttribute("aria-pressed", "true");
-  await expect.poll(() => rows.count()).toBeGreaterThan(available);
-  await filter.getByRole("button", { name: "Available" }).click();
-  await expect(rows).toHaveCount(available);
+  await navigate(page, "Engines & hardware");
+  await expect(page.getByRole("main").getByRole("tablist")).toHaveCount(0);
+  const machine = page.getByRole("region", { name: "This machine" });
+  await expect(machine.getByRole("group", { name: "CPU" })).toContainText("Fixture CPU");
+  await expect(machine.getByRole("group", { name: "CPU" })).toContainText("4 cores");
+  await expect(machine.getByRole("group", { name: "Memory" })).toContainText(/\d+(\.\d)? GiB free/);
+  await expect(machine.getByRole("group", { name: "GPU" })).toContainText("None");
+  await machine.getByRole("button", { name: "About CPU details" }).click();
+  await expect(page.locator(".help-popup:popover-open")).toContainText("avx2");
+  await page.keyboard.press("Escape");
+
+  const llama = row(page, "llama.cpp");
+  await expect(llama).toContainText("Chat and embeddings");
+  await expect(chip(llama, /CPU/).getByLabel("Recommended", { exact: true })).toHaveCount(1);
+  await expect(llama.getByLabel("Recommended", { exact: true })).toHaveCount(1);
+  await expect(row(page, "whisper.cpp").getByRole("button", { name: /^Install whisper\.cpp CPU, 4\.2 MiB, recommended$/ })).toBeVisible();
+  await expect(row(page, "Moonshine").getByRole("button", { name: /Moonshine CPU, 126 MiB/ })).toBeVisible();
+  await expect(engines(page)).not.toContainText("0.0 GiB");
+  await expect(chip(engines(page), /^CUDA/)).toHaveCount(0);
+  await expect(row(page, "FastFlowLM")).toHaveCount(0);
+  await expect(page.getByText(/Catalog|Lemonade recipe|Delivery treatment/)).toHaveCount(0);
+
+  const visible = await engines(page).getByRole("row").count();
+  const all = page.getByRole("switch", { name: "Show all engines" });
+  await all.click();
+  await expect(all).toHaveAttribute("aria-checked", "true");
+  await expect.poll(() => engines(page).getByRole("row").count()).toBeGreaterThan(visible);
+  const npu = chip(row(page, "FastFlowLM"), /^NPU/);
+  await expect(npu).toHaveAttribute("title", /No AMD NPU detected/);
+  await expect(row(page, "FastFlowLM").getByRole("button")).toHaveCount(0);
+  await expect(engines(page).getByRole("row").filter({ hasText: /No installer yet|Not for this machine/ }).first()).toBeVisible();
+  await expect(chip(row(page, "llama.cpp"), /^CUDA/)).toHaveAttribute("title", "No NVIDIA GPU detected.");
+  await noHorizontalOverflow(page, "Engines & hardware with every engine");
+  await all.click();
+  await expect(engines(page).getByRole("row")).toHaveCount(visible);
   await expect(page.getByRole("button", { name: /refresh/i })).toHaveCount(0);
 });
 
-test("the Engines tab lists engines for this host and imports a local bundle through its dialog", async ({ page, request }) => {
+test("installing a build shows progress, then the installed chip", async ({ page }) => {
+  let started = 0;
+  const job = { id: "browser-install", engine: "parakeet.cpp", backend: "cpu", package: null as string | null };
+  await page.route("**/v1/juiced/engines", async (route) => {
+    const document = await (await route.fetch()).json();
+    const target = document.installable.find((item: any) => item.engine === "parakeet.cpp" && item.backend === "cpu");
+    if (started && Date.now() - started < 2500) document.jobs.push({ ...job, state: "downloading", downloaded_bytes: 1024, total_bytes: 4096 });
+    else if (started) {
+      target.installed_package = "package-browser-install";
+      document.installed.push({ package: "package-browser-install", engine: "parakeet.cpp", backend: null, release: { backend: "cpu" }, models: [{ model: "browser.parakeet" }] });
+      document.jobs.push({ ...job, state: "complete", downloaded_bytes: 4096, total_bytes: 4096, package: "package-browser-install" });
+    }
+    await route.fulfill({ json: document });
+  });
+  await page.route("**/v1/juiced/engines/install", async (route) => {
+    expect(route.request().postDataJSON()).toMatchObject({ engine: "parakeet.cpp", backend: "cpu" });
+    started = Date.now();
+    await route.fulfill({ status: 202, json: { job: { id: job.id } } });
+  });
+  await open(page);
+  await navigate(page, "Engines & hardware");
+  const parakeet = row(page, "Parakeet");
+  await parakeet.getByRole("button", { name: /^Install Parakeet CPU, 2\.6 MiB$/ }).click();
+  await expect(parakeet.getByRole("progressbar", { name: "Installing Parakeet CPU" })).toBeVisible();
+  const installed = parakeet.getByRole("listitem").filter({ hasText: "Installed: CPU" });
+  await expect(installed).toContainText("1 model", { timeout: 10000 });
+  await expect(installed.locator(".engine-chip")).toHaveAttribute("title", "Installed · used by 1 model");
+  await expect(parakeet.getByRole("button")).toHaveCount(0);
+  await expect(page.getByRole("alert")).toHaveCount(0);
+});
+
+test("a failed install says which build failed and leaves it installable", async ({ page }) => {
+  await page.route("**/v1/juiced/engines/install", (route) => route.fulfill({ status: 502, json: { error: { code: "engine_download_failed", message: "The FUTO transcribe CPU download failed. Check the network, then retry." } } }));
+  await open(page);
+  await navigate(page, "Engines & hardware");
+  const futo = row(page, "FUTO transcribe");
+  await futo.getByRole("button", { name: /^Install FUTO transcribe CPU/ }).click();
+  await expect(page.getByRole("alert")).toContainText("The FUTO transcribe CPU download failed.");
+  await expect(futo.getByRole("button", { name: /^Install FUTO transcribe CPU/ })).toBeEnabled();
+});
+
+test("a local engine bundle imports through its dialog and shows on its engine", async ({ page, request }) => {
   test.skip(process.platform === "win32", "Managed runtime installation needs the qualified POSIX file owner.");
   const service = api(request);
   const fixture = await service.source();
@@ -41,10 +105,10 @@ test("the Engines tab lists engines for this host and imports a local bundle thr
   await writeFile(path, JSON.stringify(specification));
   try {
     await open(page);
-    await navigate(page, "Backends & hardware");
-    await tab(page, "Backend views", "Engines").click();
-    await expect(page.getByRole("table", { name: "Engines" }).getByRole("row").nth(1)).toBeVisible();
-    const panel = page.getByRole("region", { name: "Installed runtime packages" });
+    await navigate(page, "Engines & hardware");
+    await expect(row(page, "llama.cpp").getByRole("listitem").filter({ hasText: /Installed: Imported/ })).toBeVisible();
+    const before = await imported(page);
+    const panel = page.getByRole("region", { name: "Local engine bundles" });
     await panel.getByRole("button", { name: "Import a local engine bundle" }).click();
     const dialog = page.getByRole("dialog", { name: "Import engine bundle" });
     const input = dialog.getByLabel("Bundle specification on service host");
@@ -62,33 +126,8 @@ test("the Engines tab lists engines for this host and imports a local bundle thr
     await dialog.getByRole("button", { name: "Close dialog" }).click();
     await expect(dialog).toHaveCount(0);
     expect((await service.json<any>("/v1/juiced/runtime-packages")).packages.some((item: any) => item.provenance.build_revision === build)).toBe(true);
+    await expect.poll(() => imported(page), { timeout: 10000 }).toBe(before + 1);
   } finally {
     await rm(path, { force: true });
   }
-});
-
-test("the Catalog tab resolves a native recipe and searches definitions", async ({ page }) => {
-  await open(page);
-  await navigate(page, "Backends & hardware");
-  await tab(page, "Backend views", "Catalog").click();
-  const catalog = page.getByRole("region", { name: "Runtime catalog" });
-  const resolver = catalog.getByRole("region", { name: "Resolve a native recipe" });
-  await expect(resolver.getByLabel("Native recipe")).toHaveValue("llamacpp");
-  await expect(resolver.getByLabel("Native backend label")).toHaveValue("cpu");
-  await resolver.getByRole("button", { name: "Resolve mapping" }).click();
-  const resolution = resolver.getByRole("region", { name: "Native recipe resolution" });
-  await expect(resolution.getByRole("heading", { name: "llama-cpp" })).toBeVisible();
-  await expect(resolution).toContainText("Not executable");
-  await expect(resolution).toContainText("llamacpp / cpu");
-  await resolver.getByLabel("Native backend label").selectOption("hybrid-rocm");
-  await expect(resolution).toHaveCount(0);
-  await resolver.getByRole("button", { name: "Resolve mapping" }).click();
-  await expect(resolution.getByRole("heading", { name: "llama-xdna-hybrid" })).toBeVisible();
-  const search = catalog.getByLabel("Search runtime definitions");
-  await search.fill("transcribe");
-  await expect(catalog.getByRole("article")).toHaveCount(1);
-  await expect(catalog.getByRole("article").getByRole("link").first()).toBeVisible();
-  await expect(catalog.getByRole("article").getByRole("button")).toHaveCount(0);
-  await search.fill("no-such-runtime-definition");
-  await expect(catalog.getByRole("heading", { name: "No matches" })).toBeVisible();
 });

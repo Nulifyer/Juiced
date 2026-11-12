@@ -6,7 +6,7 @@ The [plan](PLAN.md) and [feature crosswalk](FEATURE-COVERAGE.json) retain all 21
 
 ## Console
 
-The console has nine pages: Dashboard, Models (with Aliases), Loading policy, Library (Find models, Files on disk, Import), Backends & hardware, Cache (Sessions, Snapshots), Test services, Diagnostics and Connect. Each page has at most one tab strip and one side inspector. Data refreshes live, so there are no refresh buttons except Retry after a failure.
+The console has nine pages: Dashboard, Models (with Aliases), Loading policy, Library (Find models, Files on disk, Import), Engines & hardware, Cache (Sessions, Snapshots), Test services, Diagnostics and Connect. Each page has at most one tab strip and one side inspector. Data refreshes live, so there are no refresh buttons except Retry after a failure.
 
 ## Run an isolated preview
 
@@ -395,7 +395,7 @@ The inspector exposes installed runtime selection beside model revisions. A sele
 
 ## Import while serving
 
-In Backends & hardware, use Installed runtimes to review packages and import a local bundle. Enter the absolute specification-file path on the connected service host. This form does not upload files from the browser. Import preserves model registrations and policies. Select an installed package separately in the unloaded model inspector.
+In Engines & hardware, each engine row shows its installed builds and the builds you can install on this machine. Use Import a local engine bundle to add a local bundle. Enter the absolute specification-file path on the connected service host. This form does not upload files from the browser. Import preserves model registrations and policies. Select an installed package separately in the unloaded model inspector.
 
 The equivalent operator request is `POST /v1/juiced/runtime-packages/import` with `{"specification_file":"/host/runtime-import.json","expected_generation":2}`. Read the generation from `GET /v1/juiced/runtime-packages`; all four native prefixes are available. If another client changes that generation, review and explicitly refresh before retrying. Installed retries verify retained payloads and need no original source. Interrupted or conflicting payloads retain their reservation and require inspection.
 

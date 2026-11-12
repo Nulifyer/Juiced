@@ -1,6 +1,6 @@
 import { Sparkline } from "./charts";
 import { policyNames, workerState, workerTone, type Model, type Snapshot } from "./domain";
-import { gib, percent, rate, type StatsPoint, type SystemStats } from "./live";
+import { gib, gpuName, percent, rate, type StatsPoint, type SystemStats } from "./live";
 import { Badge, Button, Empty } from "./ui";
 
 type Props = { snapshot: Snapshot; stats: SystemStats | null; history: StatsPoint[]; onOpenModel: (id: string) => void; onTest: () => void };
@@ -23,7 +23,7 @@ export function Dashboard({ snapshot, stats, history, onOpenModel, onTest }: Pro
   const cards = [
     { label: "CPU", value: percent(stats?.cpu_percent), detail: stats?.supported === false ? "Not available on this OS" : "Utilization", series: history.map((point) => point.cpu) },
     { label: "Memory", value: gib(stats?.memory?.used_bytes), detail: `of ${gib(stats?.memory?.total_bytes)}`, series: history.map((point) => point.memory) },
-    { label: "GPU", value: gpu ? percent(gpu.gpu_percent) : "—", detail: gpu?.name ?? "No GPU detected", series: history.map((point) => point.gpu) },
+    { label: "GPU", value: gpu ? percent(gpu.gpu_percent) : "—", detail: gpu ? gpu.gpu_percent == null ? "Utilization unavailable" : gpuName(gpu) : "No GPU detected", series: history.map((point) => point.gpu) },
     { label: "VRAM", value: gpu ? gib(gpu.memory_used_bytes) : "—", detail: gpu ? `of ${gib(gpu.memory_total_bytes)}` : "No GPU detected", series: history.map((point) => point.vram) },
   ];
   return <div className="dashboard">

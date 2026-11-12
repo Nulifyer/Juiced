@@ -75,6 +75,8 @@ export function useSystemStats(client: Client, enabled: boolean) {
   return { stats, history, error };
 }
 
+export const gpuName = (gpu: GpuStats) => gpu.name ?? (gpu.vendor ? `${gpu.vendor.toUpperCase()} GPU` : "GPU");
+
 export function percent(value: number | null | undefined): string {
   return value == null ? "—" : `${value < 10 ? value.toFixed(1) : Math.round(value)}%`;
 }

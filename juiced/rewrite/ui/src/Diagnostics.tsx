@@ -27,7 +27,7 @@ function Performance({ snapshot, stats, history }: { snapshot: Snapshot; stats: 
   ] as const;
   const cache = resources.cache_control_memory, runtime = resources.runtime_control_memory;
   return <div className="performance">
-    <div className="chart-grid">{charts.map(([label, value, series, max]) => <article className="chart-card" key={label} aria-label={label}><div className="stat-head"><span>{label}</span><strong>{value}</strong></div><Sparkline values={[...series]} max={max} height={72} label={`${label} over the last two minutes`} /></article>)}</div>
+    <div className="stat-grid">{charts.map(([label, value, series, max]) => <article className="chart-card" key={label} aria-label={label}><div className="stat-head"><span>{label}</span><strong>{value}</strong></div><Sparkline values={[...series]} max={max} height={72} label={`${label} over the last two minutes`} /></article>)}</div>
     <section className="panel" aria-label="Reservations">
       <header className="panel-head"><h2>Reservations</h2><span className="muted">Declared limits used to admit work</span></header>
       <dl className="fact-grid">
