@@ -220,6 +220,36 @@ define_routes! {
     (post, "/images/generations", image_generation, "inference"),
     (post, "/audio/speech", speech, "inference"),
     (get, "/juiced/voices", voices, "read"),
+    (get, "/juiced/flm", flm_status, "operator"),
+    (post, "/juiced/flm/pull", flm_pull, "operator"),
+    (post, "/juiced/flm/models/add", flm_model_add, "operator"),
+}
+async fn flm_status(State(state): State<AppState>) -> Result<impl IntoResponse, ApiError> {
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(state.manager.flm_status().await?),
+    ))
+}
+async fn flm_pull(
+    State(state): State<AppState>,
+    ApiJson(request): ApiJson<crate::supervisor::FlmPull>,
+) -> Result<Response, ApiError> {
+    let body = state.manager.flm_pull(request).await?;
+    Ok((StatusCode::ACCEPTED, Json(body)).into_response())
+}
+async fn flm_model_add(
+    State(state): State<AppState>,
+    ApiJson(request): ApiJson<crate::supervisor::FlmModelAdd>,
+) -> Result<Json<Value>, ApiError> {
+    tokio::spawn(async move { state.manager.flm_add_model(request).await.map(Json) })
+        .await
+        .map_err(|_| {
+            ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "model_add_interrupted",
+                "Automatic registration was interrupted. Inspect the current catalog before retrying.",
+            )
+        })?
 }
 async fn aliases(State(state): State<AppState>) -> Json<Value> {
     Json(state.manager.aliases_view().await)
@@ -1547,6 +1577,15 @@ async fn forward_prioritized(
     ) && let Some((context, Some(session), protocol)) = cache_context
     {
         lease.bind_cache(context, session, protocol);
+    }
+    if let Some(checkpoint) = lease.upstream_model() {
+        body = crate::flm::with_model(&body, checkpoint).ok_or_else(|| {
+            ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+                "The request body must be a JSON object.",
+            )
+        })?;
     }
     lease.text_dispatched();
     let upstream = manager

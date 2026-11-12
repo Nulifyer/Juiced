@@ -8,10 +8,11 @@ use std::{
     time::Instant,
 };
 
-pub(crate) const MAX_FILES: usize = 2048;
+pub(crate) const MAX_FILES: usize = 8192;
 pub(crate) const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 pub(crate) const MAX_TOTAL_BYTES: u64 = 8 * 1024 * 1024 * 1024;
-pub(crate) const MAX_ENTRIES: usize = 4096;
+pub(crate) const MAX_ENTRIES: usize = 16384;
+pub(crate) const MAX_LIBRARY_DIRECTORIES: usize = 64;
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -72,7 +73,7 @@ impl BundleSpec {
             || !relative(&self.entrypoint, false)
             || self.files.is_empty()
             || self.files.len() > MAX_FILES
-            || self.library_directories.len() > 16
+            || self.library_directories.len() > MAX_LIBRARY_DIRECTORIES
             || self
                 .library_directories
                 .iter()

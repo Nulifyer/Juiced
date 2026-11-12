@@ -254,6 +254,8 @@ pub enum Provider {
     WhisperCpp,
     StableDiffusionCpp,
     Kokoros,
+    #[serde(rename = "fastflowlm")]
+    FastFlowLm,
 }
 
 impl Provider {
@@ -264,6 +266,7 @@ impl Provider {
             Self::WhisperCpp => Some("whisper-cpp"),
             Self::StableDiffusionCpp => Some("stable-diffusion-cpp"),
             Self::Kokoros => Some("kokoros"),
+            Self::FastFlowLm => Some("fastflowlm"),
         }
     }
     pub fn from_implementation(id: &str) -> Option<Self> {
@@ -272,6 +275,7 @@ impl Provider {
             "whisper-cpp" => Some(Self::WhisperCpp),
             "stable-diffusion-cpp" => Some(Self::StableDiffusionCpp),
             "kokoros" => Some(Self::Kokoros),
+            "fastflowlm" => Some(Self::FastFlowLm),
             _ => None,
         }
     }
@@ -280,12 +284,13 @@ impl Provider {
             Self::WhisperCpp => Some(Operation::Transcription),
             Self::StableDiffusionCpp => Some(Operation::ImageGeneration),
             Self::Kokoros => Some(Operation::Speech),
-            Self::ExternalHttp | Self::LlamaCpp => None,
+            Self::ExternalHttp | Self::LlamaCpp | Self::FastFlowLm => None,
         }
     }
     pub fn readiness_path(self) -> &'static str {
         match self {
             Self::StableDiffusionCpp | Self::Kokoros => "/v1/models",
+            Self::FastFlowLm => "/api/tags",
             Self::ExternalHttp | Self::LlamaCpp | Self::WhisperCpp => "/health",
         }
     }

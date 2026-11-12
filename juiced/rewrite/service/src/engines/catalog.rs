@@ -1,4 +1,4 @@
-use crate::hardware::{GpuVendor, HostReport};
+use crate::hardware::{GpuVendor, HostReport, NpuVendor};
 use serde::Serialize;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -20,14 +20,17 @@ pub enum Engine {
     StableDiffusionCpp,
     #[serde(rename = "kokoros")]
     Kokoros,
+    #[serde(rename = "fastflowlm")]
+    FastFlowLm,
 }
 
 impl Engine {
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 5] = [
         Self::LlamaCpp,
         Self::WhisperCpp,
         Self::StableDiffusionCpp,
         Self::Kokoros,
+        Self::FastFlowLm,
     ];
     pub fn parse(value: &str) -> Option<Self> {
         match value {
@@ -37,6 +40,7 @@ impl Engine {
                 Some(Self::StableDiffusionCpp)
             }
             "kokoros" | "kokoro" => Some(Self::Kokoros),
+            "fastflowlm" | "flm" => Some(Self::FastFlowLm),
             _ => None,
         }
     }
@@ -46,6 +50,7 @@ impl Engine {
             Self::WhisperCpp => "whisper.cpp",
             Self::StableDiffusionCpp => "sd.cpp",
             Self::Kokoros => "kokoros",
+            Self::FastFlowLm => "fastflowlm",
         }
     }
     pub fn recipe(self) -> &'static str {
@@ -54,6 +59,7 @@ impl Engine {
             Self::WhisperCpp => "whispercpp",
             Self::StableDiffusionCpp => "sd-cpp",
             Self::Kokoros => "kokoro",
+            Self::FastFlowLm => "flm",
         }
     }
     pub fn provider(self) -> crate::config::Provider {
@@ -62,6 +68,7 @@ impl Engine {
             Self::WhisperCpp => crate::config::Provider::WhisperCpp,
             Self::StableDiffusionCpp => crate::config::Provider::StableDiffusionCpp,
             Self::Kokoros => crate::config::Provider::Kokoros,
+            Self::FastFlowLm => crate::config::Provider::FastFlowLm,
         }
     }
     pub fn entrypoint(self) -> &'static str {
@@ -70,6 +77,7 @@ impl Engine {
             Self::WhisperCpp => "whisper-server",
             Self::StableDiffusionCpp => "sd-server",
             Self::Kokoros => "koko",
+            Self::FastFlowLm => "flm-real",
         }
     }
 }
@@ -121,6 +129,10 @@ const SD: &str = "lemonade-sdk/stable-diffusion.cpp";
 const SD_TAG: &str = "master-957-90e86d1";
 const KOKOROS: &str = "lemonade-sdk/Kokoros";
 const KOKOROS_TAG: &str = "b21";
+const FLM: &str = "ROCm/FastFlowLM";
+const FLM_TAG: &str = "v1.0.12";
+const HYBRID: &str = "Nulifyer/llama-xdna-hybrid";
+const HYBRID_TAG: &str = "rocm-v0.3.2";
 
 const fn linux(
     engine: Engine,
@@ -433,6 +445,30 @@ pub const BUILDS: &[Build] = &[
         ),
         ArchiveFormat::TarGz,
     ),
+    linux(
+        Engine::FastFlowLm,
+        "npu",
+        None,
+        (FLM, FLM_TAG),
+        (
+            "fastflowlm_1.0.12_linux.tar.gz",
+            45752536,
+            "626fbee5e5206a215a8c2c4d3d961055cbf7289d257d36599e9fef38f2f555a8",
+        ),
+        ArchiveFormat::TarGz,
+    ),
+    linux(
+        Engine::LlamaCpp,
+        "hybrid-rocm",
+        Some("gfx1150"),
+        (HYBRID, HYBRID_TAG),
+        (
+            "llama-xdna-hybrid-linux-rocm-gfx1150-x86_64.tar.gz",
+            1069727615,
+            "f9d2825c59a2c7a755c36a6482a20525ebf16521441e1b3b4860c709c1016a1b",
+        ),
+        ArchiveFormat::TarGz,
+    ),
 ];
 
 /// Concrete ISAs that releases publish under a family asset; others ship verbatim.
@@ -457,6 +493,7 @@ pub enum Unresolved {
     HostUnsupported,
     BackendUnknown,
     NoMatchingGpu,
+    NoMatchingNpu,
 }
 
 /// Multi-GPU hosts get the highest CUDA compute capability with a published build and a
@@ -507,6 +544,26 @@ pub fn resolve(engine: Engine, backend: &str, host: &HostReport) -> Result<Build
                     candidates
                         .iter()
                         .find(|build| build.gpu_target == Some(asset))
+                        .map(|build| **build)
+                })
+                .ok_or(Unresolved::NoMatchingGpu)
+        }
+        "hybrid-rocm" => {
+            if !host
+                .devices
+                .npus
+                .iter()
+                .any(|npu| npu.vendor == NpuVendor::Amd && npu.family == Some("XDNA2"))
+            {
+                return Err(Unresolved::NoMatchingNpu);
+            }
+            gpus.iter()
+                .filter(|gpu| gpu.vendor == GpuVendor::Amd)
+                .filter_map(|gpu| gpu.family.as_deref())
+                .find_map(|family| {
+                    candidates
+                        .iter()
+                        .find(|build| build.gpu_target == Some(family))
                         .map(|build| **build)
                 })
                 .ok_or(Unresolved::NoMatchingGpu)

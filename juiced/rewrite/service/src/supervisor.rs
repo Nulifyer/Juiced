@@ -33,6 +33,8 @@ mod cache_reply;
 pub use artifact_revision::ArtifactRevisionChange;
 mod engines;
 pub use engines::{AddModelError, EngineInstall, ModelAdd};
+mod flm;
+pub use flm::{FlmModelAdd, FlmPull};
 mod host;
 mod native;
 mod physical;
@@ -1570,6 +1572,13 @@ impl RequestLease {
         self.upstream_timeout
     }
 
+    pub fn upstream_model(&self) -> Option<&str> {
+        let profile = &self.worker.spec.execution_profile;
+        (profile.adapter == crate::config::Provider::FastFlowLm)
+            .then(|| crate::flm::checkpoint(&profile.args))
+            .flatten()
+    }
+
     pub fn speech_dispatched(&mut self) {
         if let Some(speech) = self.speech.as_mut() {
             speech.dispatched = true;
@@ -1818,6 +1827,7 @@ pub struct Manager {
     runtime_definitions: crate::catalog::Catalog,
     hardware: crate::hardware::Detector,
     engine_jobs: engines::EngineJobs,
+    flm_jobs: flm::FlmJobs,
     engine_releases: crate::engines::ReleaseEndpoints,
     runtime_packages: std::sync::OnceLock<Arc<crate::runtime_packages::Store>>,
     runtime_importing: AtomicBool,
@@ -2122,6 +2132,7 @@ impl Manager {
             runtime_definitions,
             hardware: crate::hardware::Detector::from_environment(),
             engine_jobs: engines::EngineJobs::default(),
+            flm_jobs: flm::FlmJobs::default(),
             engine_releases: crate::engines::ReleaseEndpoints::from_environment(),
             runtime_packages,
             runtime_importing: AtomicBool::new(false),

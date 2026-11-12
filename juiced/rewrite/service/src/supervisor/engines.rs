@@ -245,10 +245,10 @@ impl Manager {
         let recommendations: BTreeMap<_, _> = Engine::ALL
             .into_iter()
             .map(|engine| {
-                let recipe = engine.recipe();
                 (
-                    recipe,
-                    inventory.recommendations.get(recipe).cloned().flatten(),
+                    engine.recipe(),
+                    crate::engines::recommended(engine, &inventory, &snapshot.report)
+                        .map(|recommendation| recommendation.backend),
                 )
             })
             .collect();
@@ -272,7 +272,7 @@ impl Manager {
         let engine = Engine::parse(&request.engine).ok_or_else(|| {
             invalid(
                 "unknown_engine",
-                "Choose engine llama.cpp, whisper.cpp, sd.cpp or kokoros.",
+                "Choose engine llama.cpp, whisper.cpp, sd.cpp, kokoros or fastflowlm.",
             )
         })?;
         if !catalog::BUILDS
@@ -300,6 +300,7 @@ impl Manager {
                     catalog::Unresolved::HostUnsupported => "No build of this engine backend is published for this operating system and CPU architecture.",
                     catalog::Unresolved::NoMatchingGpu => "No build of this engine backend matches a detected GPU target.",
                     catalog::Unresolved::BackendUnknown => "This engine has no installable build for that backend.",
+                    catalog::Unresolved::NoMatchingNpu => "This engine backend needs an AMD XDNA 2 NPU, and none was detected.",
                 },
             )
         })?;
@@ -501,6 +502,14 @@ impl Manager {
                 (Engine::Kokoros, _) => {
                     vec!["Apache-2.0".into(), "GPL-3.0-or-later".into()]
                 }
+                (Engine::FastFlowLm, _) => {
+                    vec!["LicenseRef-FastFlowLM-Binary".into(), "MIT".into()]
+                }
+                (_, "hybrid-rocm") => vec![
+                    "LicenseRef-AMD-ROCm".into(),
+                    "LicenseRef-AMD-XRT".into(),
+                    "MIT".into(),
+                ],
                 (_, "cuda") => vec![
                     "LicenseRef-NVIDIA-CUDA-Redistributable".into(),
                     "MIT".into(),

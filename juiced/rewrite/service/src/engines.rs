@@ -97,19 +97,65 @@ pub struct Choice {
     pub reason: String,
 }
 
+/// Hybrid backends are experimental and never recommended, but an operator may name one
+/// once detection confirms every device it needs.
 fn selectable(inventory: &Inventory, engine: Engine, backend: &str) -> bool {
     inventory.backends.iter().any(|variant| {
         variant.recipe == engine.recipe()
             && variant.backend == backend
-            && variant.tier == "core"
             && variant.backend != "system"
-            && !variant.backend.starts_with("hybrid")
-            && variant.state != Availability::Unavailable
+            && if variant.backend.starts_with("hybrid") {
+                variant.state == Availability::Available
+            } else {
+                variant.tier == "core" && variant.state != Availability::Unavailable
+            }
     })
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Recommendation {
+    pub backend: String,
+    /// A higher-ranked backend skipped because no build of it is published for this host.
+    pub unpublished: Option<String>,
+}
+
+/// The hardware recommendation, unless no build of it is published for this host; then the
+/// best-ranked available core backend that has one.
+pub fn recommended(
+    engine: Engine,
+    inventory: &Inventory,
+    host: &HostReport,
+) -> Option<Recommendation> {
+    let preferred = inventory
+        .recommendations
+        .get(engine.recipe())
+        .cloned()
+        .flatten()?;
+    if catalog::resolve(engine, &preferred, host).is_ok() {
+        return Some(Recommendation {
+            backend: preferred,
+            unpublished: None,
+        });
+    }
+    inventory
+        .backends
+        .iter()
+        .filter(|variant| variant.recipe == engine.recipe())
+        .filter_map(|variant| crate::hardware::preference(variant).map(|rank| (rank, variant)))
+        .filter(|(_, variant)| catalog::resolve(engine, &variant.backend, host).is_ok())
+        .min_by_key(|(rank, _)| *rank)
+        .map(|(_, variant)| Recommendation {
+            backend: variant.backend.clone(),
+            unpublished: Some(preferred.clone()),
+        })
+        .or(Some(Recommendation {
+            backend: preferred,
+            unpublished: None,
+        }))
+}
+
 /// Uses the host recommendation unless the operator named a backend; never substitutes a
-/// lower-ranked backend because the recommended one is missing.
+/// lower-ranked backend because the recommended one is not installed.
 pub fn choose(
     engine: Engine,
     inventory: &Inventory,
@@ -117,15 +163,16 @@ pub fn choose(
     installed: &[Installed],
     requested: Option<&str>,
 ) -> Result<Choice, ChoiceError> {
+    let mut unpublished = None;
     let backend = match requested {
         Some(backend) if selectable(inventory, engine, backend) => backend.to_owned(),
         Some(backend) => return Err(ChoiceError::NotSelectable(backend.to_owned())),
-        None => inventory
-            .recommendations
-            .get(engine.recipe())
-            .cloned()
-            .flatten()
-            .ok_or(ChoiceError::NoUsableBackend)?,
+        None => {
+            let recommendation =
+                recommended(engine, inventory, host).ok_or(ChoiceError::NoUsableBackend)?;
+            unpublished = recommendation.unpublished;
+            recommendation.backend
+        }
     };
     let build = catalog::resolve(engine, &backend, host).ok();
     let candidates: Vec<_> = installed
@@ -154,9 +201,11 @@ pub fn choose(
         .map(|target| format!(" for {target}"))
         .unwrap_or_default();
     let basis = if requested.is_some() {
-        "was requested"
+        "was requested".to_owned()
+    } else if let Some(skipped) = &unpublished {
+        format!("is the recommended published (no {skipped} build matches this host)")
     } else {
-        "is the recommended"
+        "is the recommended".to_owned()
     };
     Ok(Choice {
         reason: format!(
@@ -169,7 +218,7 @@ pub fn choose(
                 .map(|tag| format!(" ({tag})"))
                 .unwrap_or_default()
         ),
-        gpu: backend != "cpu",
+        gpu: !matches!(backend.as_str(), "cpu" | "npu"),
         backend,
         package: selected.package.clone(),
     })
@@ -215,7 +264,8 @@ pub fn installable(
                 reasons: variant
                     .map(|variant| variant.reasons.clone())
                     .unwrap_or_default(),
-                recommended: variant.is_some_and(|variant| variant.recommended),
+                recommended: recommended(engine, inventory, host)
+                    .is_some_and(|recommendation| recommendation.backend == backend),
                 installed_package: build.and_then(|build| {
                     installed
                         .iter()
