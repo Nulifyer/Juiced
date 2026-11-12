@@ -87,8 +87,8 @@ test("the Catalog tab resolves a native recipe and searches definitions", async 
   const search = catalog.getByLabel("Search runtime definitions");
   await search.fill("transcribe");
   await expect(catalog.getByRole("article")).toHaveCount(1);
-  await catalog.getByRole("article").getByRole("button").first().click();
-  await expect(catalog.getByRole("article")).toContainText("Not established");
+  await expect(catalog.getByRole("article").getByRole("link").first()).toBeVisible();
+  await expect(catalog.getByRole("article").getByRole("button")).toHaveCount(0);
   await search.fill("no-such-runtime-definition");
   await expect(catalog.getByRole("heading", { name: "No matches" })).toBeVisible();
 });

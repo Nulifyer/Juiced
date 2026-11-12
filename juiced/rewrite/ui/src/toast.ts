@@ -9,7 +9,7 @@ const emit = () => listeners.forEach((listener) => listener(items));
 export function notify(text: string, tone: Toast["tone"] = "success") {
   if (!text) return;
   const id = next++;
-  items = [...items.filter((item) => item.text !== text).slice(-3), { id, tone, text }];
+  items = [...items.filter((item) => item.text !== text && item.tone !== "success").slice(-3), { id, tone, text }];
   emit();
   if (tone === "success") setTimeout(() => dismiss(id), 5000);
 }
