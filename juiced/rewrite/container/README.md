@@ -30,6 +30,27 @@ The image ships no engines. Install them from Backends & hardware (or `POST /v1/
 
 Mount a separate volume at `/data/runtime-packages` to keep engines apart from settings and models. An empty volume is claimed on first start; one with unrelated content is refused.
 
+## Conversation cache
+
+llama.cpp models save each conversation's processed prompt to `/data/kv-cache` after every reply. When a client sends that conversation again, the service restores it first and the engine processes only the new message. Restores also work after the model unloads (idle, memory pressure or Unload), after an options reload and after a container restart. This is on by default, with an 8 GiB budget (4 GiB per model). Change the mode and budgets on the Cache page or under `session_cache` in `config.json`.
+
+Give the cache its own volume so it can grow, shrink or be wiped independently of settings and models:
+
+```yaml
+services:
+  juiced:
+    volumes:
+      - juiced-data:/data
+      - juiced-kv-cache:/data/kv-cache
+volumes:
+  juiced-data:
+  juiced-kv-cache:
+```
+
+The image creates `/data/kv-cache` owned by uid 10001 with mode 0700, so a new named volume starts with the right owner. A host directory must be empty and owned by uid 10001 (`chown 10001:10001`, or `:U` under Podman). An empty directory is claimed on first start. A directory that already holds unrelated files is refused, and the service does not start.
+
+Native Juiced kept its engine binaries in `/data/cache`, so the cache uses a different path. A rewrite release before rc.6 saved snapshots in `/data/cache` too. If that directory holds only snapshot files, the service moves it to `/data/kv-cache` on first start. If it also holds native files, the old snapshots stay in place, are no longer used, and a warning in the service log names them. Delete the `kv-*.bin`, `snapshots.json` and `.recovery-*` files there to reclaim the space.
+
 ## Data volume
 
 Everything that persists lives in `/data`:
@@ -39,7 +60,7 @@ Everything that persists lives in `/data`:
 | `config.json` | Service configuration. The entrypoint creates it only when it is missing. |
 | `artifacts/` | Downloaded model weights |
 | `runtime-packages/` | Installed engines (llama.cpp, whisper.cpp, stable-diffusion.cpp, Kokoros, FUTO and others). Can be its own volume. |
-| `cache/` | Slot snapshots and computation cache |
+| `kv-cache/` | Saved conversation state and explicit slot snapshots. Can be its own volume (see [Conversation cache](#conversation-cache)). |
 | `home/` | `$HOME` and `$XDG_CACHE_HOME` for engines, such as Mesa shader caches |
 | `import/` | Server-side model files to import. Bind-mount a host directory here, for example `-v /srv/models:/data/import:ro`. |
 

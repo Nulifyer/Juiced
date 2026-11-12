@@ -144,7 +144,7 @@ async fn all_roots_are_claimed_before_any_store_constructor_publishes_a_manifest
         !candidate
             .directory
             .path()
-            .join("cache/snapshots.json")
+            .join("kv-cache/snapshots.json")
             .exists(),
         "cache opened before the conflicting artifact root was claimed"
     );
@@ -167,7 +167,7 @@ async fn replacement_of_any_claimed_root_blocks_cross_store_mutations_and_keeps_
  {
     let source = Source::gated(0).await;
     let unrelated = Server::new(true).await;
-    for root_name in ["config", "cache", "artifacts"] {
+    for root_name in ["config", "kv-cache", "artifacts"] {
         let mut server = Server::configured(true, configuration).await;
         complete(&server, "scope-baseline").await;
         let cache = server.get("juiced/cache").await;
@@ -329,7 +329,7 @@ async fn lost_root_rejects_waiting_startup_without_a_second_child_or_reservation
     server
         .wait_for(async || server.get("juiced/admission").await["startup"]["pending"] == 1)
         .await;
-    let replacement = ReplacedRoot::replace(&server.directory.path().join("cache"));
+    let replacement = ReplacedRoot::replace(&server.directory.path().join("kv-cache"));
     let before = tree(replacement.original());
     std::fs::write(release.unwrap(), b"release after scope loss").unwrap();
     error(
@@ -414,7 +414,7 @@ async fn paused_range_resume_refuses_cross_root_loss_before_network_or_stage_mut
     let stage_digest = digest(&part);
     let stage_len = std::fs::metadata(&part).unwrap().len();
     let requests = source.requests();
-    let replacement = ReplacedRoot::replace(&server.directory.path().join("cache"));
+    let replacement = ReplacedRoot::replace(&server.directory.path().join("kv-cache"));
     let artifacts_before = tree(&server.directory.path().join("artifacts"));
     error(server.post(&format!("juiced/artifacts/jobs/{id}"),json!({"action":"resume","expected_revision":paused["revision"].as_u64().unwrap()+1})).await,StatusCode::CONFLICT,"artifact_revision_conflict");
     error(
@@ -468,7 +468,7 @@ async fn scope_loss_at_transfer_eof_retains_nonterminal_publication_charge_and_b
         source.download()["expected_sha256"].as_str().unwrap()
     );
     assert_eq!(job(&server, &id).await["writer_active"], true);
-    let replacement = ReplacedRoot::replace(&server.directory.path().join("cache"));
+    let replacement = ReplacedRoot::replace(&server.directory.path().join("kv-cache"));
     source.finish();
     let failed = settled(&server, &id).await;
     assert_eq!(failed["state"], "interrupted");

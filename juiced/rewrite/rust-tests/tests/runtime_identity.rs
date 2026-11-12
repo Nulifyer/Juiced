@@ -297,7 +297,7 @@ async fn changed_owned_mapped_module_refuses_cache_before_engine_dispatch_and_pr
     assert!(status.is_success(), "{saved}");
     let before = cache(server).await;
     let ready = server.model("fixture.one").await;
-    let saved_path = server.directory.path().join("cache").join(format!(
+    let saved_path = server.directory.path().join("kv-cache").join(format!(
         "kv-{}.bin",
         saved["snapshot"]["id"].as_str().unwrap()
     ));
@@ -411,7 +411,7 @@ async fn changed_owned_mapped_module_during_engine_save_retains_uncertain_bytes_
     let path = server
         .directory
         .path()
-        .join("cache")
+        .join("kv-cache")
         .join(format!("kv-{}.bin", snapshot["id"].as_str().unwrap()));
     let bytes = std::fs::read(&path).unwrap();
     assert!(!bytes.is_empty());
@@ -442,7 +442,7 @@ async fn changed_owned_mapped_module_during_engine_restore_keeps_snapshot_and_dr
     assert!(status.is_success(), "{saved}");
     let before = cache(server).await;
     let ready = server.model("fixture.one").await;
-    let path = server.directory.path().join("cache").join(format!(
+    let path = server.directory.path().join("kv-cache").join(format!(
         "kv-{}.bin",
         saved["snapshot"]["id"].as_str().unwrap()
     ));

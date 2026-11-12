@@ -10,6 +10,7 @@ pub(super) struct SlotTable {
     entries: Box<[Arc<AsyncMutex<SlotEntry>>]>,
     shape_bound: std::sync::OnceLock<Option<u64>>,
     learned_bytes_per_token: AtomicU64,
+    learned_overhead_bytes: AtomicU64,
     sequence: AtomicU64,
 }
 
@@ -21,6 +22,7 @@ impl SlotTable {
                 .collect(),
             shape_bound: std::sync::OnceLock::new(),
             learned_bytes_per_token: AtomicU64::new(0),
+            learned_overhead_bytes: AtomicU64::new(0),
             sequence: AtomicU64::new(0),
         }
     }
@@ -551,6 +553,10 @@ impl Manager {
             context,
             shape,
             learned,
+            worker
+                .sessions
+                .learned_overhead_bytes
+                .load(Ordering::Acquire),
             settings.model_budget_bytes,
         );
         let model_tag = crate::sessions::model_tag(&worker.spec.id);
@@ -564,6 +570,7 @@ impl Manager {
             total_bytes: settings.budget_bytes,
             sessions: settings.max_sessions as usize,
         };
+        self.reclaim_sessions().await;
         let rows = self.all_session_rows(&cache).await?;
         let stored = self.stored_rows(&rows, &identity, &model_tag, &superseded, None);
         let estimate = if known {
@@ -593,6 +600,7 @@ impl Manager {
                 slot,
                 None,
                 bound,
+                settings.model_budget_bytes,
                 evictions,
             )
             .await?;
@@ -602,10 +610,18 @@ impl Manager {
             acknowledgement["n_written"].as_u64(),
         ) && tokens > 0
         {
-            worker
-                .sessions
-                .learned_bytes_per_token
-                .fetch_max(bytes.div_ceil(tokens), Ordering::AcqRel);
+            // A known KV shape already bounds per-token growth; what it misses is fixed state
+            // such as recurrent layers and context checkpoints, which must not scale with tokens.
+            match shape {
+                Some(per_token) => worker.sessions.learned_overhead_bytes.fetch_max(
+                    bytes.saturating_sub(tokens.saturating_mul(per_token)),
+                    Ordering::AcqRel,
+                ),
+                None => worker
+                    .sessions
+                    .learned_bytes_per_token
+                    .fetch_max(bytes.div_ceil(tokens), Ordering::AcqRel),
+            };
         }
         self.touch_session(&metadata.id);
         let saved = metadata.id;
@@ -653,6 +669,30 @@ impl Manager {
         })
         .await;
         Ok(())
+    }
+
+    // An interrupted automatic save stays charged against the session budget until its writer
+    // exits. Once the cache can prove that, the space is returned without operator action.
+    pub(super) async fn reclaim_sessions(&self) {
+        let Some(cache) = self.cache.clone() else {
+            return;
+        };
+        let _ = tokio::task::spawn_blocking(move || {
+            let Ok(rows) = cache.session_rows(crate::sessions::PROTOCOL_PREFIX, |_| true, false)
+            else {
+                return;
+            };
+            let control = crate::cache::OperationControl::new(
+                Instant::now() + Duration::from_secs(2),
+                Arc::new(AtomicBool::new(false)),
+            );
+            for row in rows {
+                if row.state != crate::cache::SnapshotState::Saved && !row.busy {
+                    let _ = cache.recover_writer(&row.id, &row.identity, row.revision, &control);
+                }
+            }
+        })
+        .await;
     }
 
     async fn all_session_rows(

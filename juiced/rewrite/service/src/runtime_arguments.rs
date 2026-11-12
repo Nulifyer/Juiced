@@ -1336,6 +1336,7 @@ fn fixture_arity(flag: &str) -> Option<u8> {
             | "--identity-map"
             | "--inference-delay-ms"
             | "--slot-operation-delay-ms"
+            | "--slot-state-overhead-bytes"
             | "--speech-response-mode"
             | "--speech-release-file"
             | "--speech-physical-release-file"

@@ -383,9 +383,9 @@ mod tests {
             worker.spec.execution_profile.runtime_bundle().unwrap().root,
             canonical.join("runtime")
         );
-        assert_eq!(manager.cache_directory, canonical.join("cache"));
+        assert_eq!(manager.cache_directory, canonical.join("kv-cache"));
         assert!(canonical.join("artifacts").is_dir());
-        assert!(!foreign.join("cache").exists());
+        assert!(!foreign.join("kv-cache").exists());
         assert!(!foreign.join("artifacts").exists());
         manager
             .set_policy("owned", Policy::Disabled, 1)
@@ -427,7 +427,7 @@ mod tests {
             original
         );
         assert_eq!(std::fs::read(store.join("config.json")).unwrap(), untouched);
-        assert!(!store.join("cache").exists());
+        assert!(!store.join("kv-cache").exists());
         assert!(!store.join("artifacts").exists());
     }
 
@@ -463,7 +463,7 @@ mod tests {
             original
         );
         assert_eq!(std::fs::read(store.join("config.json")).unwrap(), untouched);
-        assert!(!store.join("cache").exists());
+        assert!(!store.join("kv-cache").exists());
         assert!(!store.join("artifacts").exists());
     }
 
@@ -488,7 +488,7 @@ mod tests {
             std::fs::read(foreign.join("config.json")).unwrap(),
             untouched
         );
-        assert!(!foreign.join("cache").exists());
+        assert!(!foreign.join("kv-cache").exists());
         assert!(!foreign.join("artifacts").exists());
     }
 
@@ -509,7 +509,7 @@ mod tests {
         std::fs::create_dir(store.join("artifacts")).unwrap();
         let sentinel = store.join("artifacts/foreign");
         std::fs::write(&sentinel, b"foreign bytes").unwrap();
-        let cache_before = std::fs::read(store.join("cache/snapshots.json")).unwrap();
+        let cache_before = std::fs::read(store.join("kv-cache/snapshots.json")).unwrap();
 
         assert_eq!(
             manager
@@ -537,7 +537,7 @@ mod tests {
         assert_eq!(manager.catalog().await[0].policy, Policy::OnDemand);
         assert_eq!(std::fs::read(store.join("config.json")).unwrap(), original);
         assert_eq!(
-            std::fs::read(store.join("cache/snapshots.json")).unwrap(),
+            std::fs::read(store.join("kv-cache/snapshots.json")).unwrap(),
             cache_before
         );
         assert_eq!(std::fs::read(&sentinel).unwrap(), b"foreign bytes");
@@ -1976,20 +1976,25 @@ impl Manager {
         if admission.memory_protected() {
             host_memory.sample_bootstrap(&admission);
         }
-        let cache_directory = config_root.as_ref().map_or_else(
-            || {
-                config_path
-                    .parent()
-                    .expect("configuration parent")
-                    .join("cache")
-            },
-            |root| root.root().join("cache"),
-        );
+        let cache_directory = crate::cache::root::store_root(config_root.as_ref().map_or_else(
+            || config_path.parent().expect("configuration parent"),
+            |root| root.root(),
+        ));
+        let mut cache_notice = None;
         let (live_roots, cache, artifacts, native_settings) = if let Some(root) = &config_root {
             root.verify()?;
             let artifact_root = root.claim(root.root().join("artifacts"))?;
             root.verify()?;
             artifact_root.verify()?;
+            let preparation = crate::cache::root::prepare(root.root())?;
+            cache_notice = preparation.notice(root.root()).map(|notice| {
+                let level = if preparation == crate::cache::root::Preparation::Moved {
+                    crate::logs::Level::Info
+                } else {
+                    crate::logs::Level::Warning
+                };
+                (level, notice)
+            });
             let cache_root = root.claim(&cache_directory)?;
             let mut roots = vec![root.clone(), artifact_root.clone(), cache_root.clone()];
             let bootstrap_scope = crate::storage::LiveRoots::new(roots.clone())?;
@@ -2200,7 +2205,13 @@ impl Manager {
             cache_directory,
             records: Mutex::new(VecDeque::new()),
             last_inference: Mutex::new(None),
-            logs: crate::logs::LogBuffer::new(),
+            logs: {
+                let logs = crate::logs::LogBuffer::new();
+                if let Some((level, notice)) = &cache_notice {
+                    logs.service(*level, notice);
+                }
+                logs
+            },
             system_stats: crate::system_stats::Sampler::default(),
             library: Arc::new(crate::library::Library::from_environment(library_policy)),
             next_request: AtomicU64::new(1),
@@ -4507,6 +4518,7 @@ impl Manager {
     }
 
     pub async fn start_hot(&self) {
+        self.reclaim_sessions().await;
         for worker in self.worker_snapshot() {
             let state = worker.state.lock().await;
             if state.policy == Policy::Hot {

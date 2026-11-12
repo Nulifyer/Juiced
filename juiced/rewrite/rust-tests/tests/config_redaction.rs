@@ -64,7 +64,7 @@ async fn reject(server: &Server, source: &[u8], marker: &str, decode: bool) {
     for model in ["fixture.one", "fixture.two", "fixture.disabled"] {
         assert!(!server.event(model, "worker-startup", "started"));
     }
-    for store in ["cache", "artifacts"] {
+    for store in ["kv-cache", "artifacts"] {
         assert!(
             !server.directory.path().join(store).exists(),
             "invalid configuration opened a managed store"

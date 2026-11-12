@@ -270,7 +270,7 @@ async fn corrupted_snapshot_is_discarded_and_the_turn_rebuilds_cold() {
     settled(&server, 1).await;
     chat(&server, &conversation("plateaus"), None).await;
     settled(&server, 2).await;
-    for entry in std::fs::read_dir(server.directory.path().join("cache")).unwrap() {
+    for entry in std::fs::read_dir(server.directory.path().join("kv-cache")).unwrap() {
         let path = entry.unwrap().path();
         if path.extension().is_some_and(|extension| extension == "bin") {
             let mut bytes = std::fs::read(&path).unwrap();
@@ -469,4 +469,172 @@ async fn removing_a_model_forgets_its_saved_sessions() {
     assert_eq!(removed["sessions_forgotten"], 2, "{removed}");
     let view = sessions(&server).await;
     assert_eq!(view["totals"]["sessions"], 0, "{view}");
+}
+
+fn shaped_gguf() -> Vec<u8> {
+    fn string(bytes: &mut Vec<u8>, text: &str) {
+        bytes.extend((text.len() as u64).to_le_bytes());
+        bytes.extend(text.as_bytes());
+    }
+    let numbers = [
+        ("llama.context_length", 4096u32),
+        ("llama.block_count", 1),
+        ("llama.embedding_length", 2),
+        ("llama.attention.head_count", 1),
+        ("llama.attention.head_count_kv", 1),
+        ("llama.attention.key_length", 1),
+        ("llama.attention.value_length", 1),
+    ];
+    let mut bytes = b"GGUF".to_vec();
+    bytes.extend(3u32.to_le_bytes());
+    bytes.extend(0u64.to_le_bytes());
+    bytes.extend((numbers.len() as u64 + 1).to_le_bytes());
+    string(&mut bytes, "general.architecture");
+    bytes.extend(8u32.to_le_bytes());
+    string(&mut bytes, "llama");
+    for (key, value) in numbers {
+        string(&mut bytes, key);
+        bytes.extend(4u32.to_le_bytes());
+        bytes.extend(value.to_le_bytes());
+    }
+    bytes
+}
+
+fn add_model(config: &mut Value, id: &str) {
+    let mut model = config["models"][1].clone();
+    model["id"] = json!(id);
+    let args = model["args"].as_array_mut().unwrap();
+    let events = args
+        .last()
+        .unwrap()
+        .as_str()
+        .unwrap()
+        .replace("fixture.two", id);
+    *args.last_mut().unwrap() = json!(events);
+    config["models"].as_array_mut().unwrap().push(model);
+}
+
+async fn unload_reason(server: &Server) -> Value {
+    server.model(MODEL).await["residency"]["last_unload"]["reason"].clone()
+}
+
+#[tokio::test]
+async fn checkpoint_heavy_slot_state_grows_past_its_kv_estimate_and_still_restores() {
+    const OVERHEAD: u64 = 72 * 1024 * 1024;
+    let server = Server::configured(true, |config| {
+        configure(config, 1, fast());
+        let shaped = std::path::Path::new(config["models"][0]["model_file"].as_str().unwrap())
+            .with_file_name("shaped.gguf");
+        std::fs::write(&shaped, shaped_gguf()).unwrap();
+        config["models"][0]["model_file"] = json!(shaped);
+        let args = config["models"][0]["args"].as_array_mut().unwrap();
+        args.extend([
+            json!("--slot-state-overhead-bytes"),
+            json!(OVERHEAD.to_string()),
+        ]);
+    })
+    .await;
+    let mut a = conversation("reefs");
+    let first = chat(&server, &a, None).await;
+    a.push(json!({"role":"assistant","content":first["choices"][0]["message"]["content"]}));
+    let view = settled(&server, 1).await;
+    assert_eq!(view["sessions"][0]["state"], "saved", "{view}");
+    assert!(view["sessions"][0]["bytes"].as_u64().unwrap() > OVERHEAD);
+    chat(&server, &conversation("dunes"), None).await;
+    settled(&server, 2).await;
+    turn(&server, &mut a, "Deeper?").await;
+    let record = last_record(&server).await;
+    assert_eq!(record["session_cache"]["path"], "restored", "{record}");
+    let warnings = server.get("juiced/logs?limit=500").await.to_string();
+    assert!(!warnings.contains("was not saved"), "{warnings}");
+    let view = settled(&server, 2).await;
+    assert!(
+        view["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row["state"] == "saved"),
+        "{view}"
+    );
+}
+
+#[tokio::test]
+async fn returning_conversations_restore_after_options_reload_and_pressure_eviction() {
+    let server = Server::configured(true, |config| {
+        configure(config, 1, json!({"save_delay_ms": 60000}));
+        config["resident_budget_bytes"] = json!(128);
+        add_model(config, "fixture.three");
+    })
+    .await;
+    let mut a = conversation("harvests");
+    let first = chat(&server, &a, None).await;
+    a.push(json!({"role":"assistant","content":first["choices"][0]["message"]["content"]}));
+    assert_eq!(
+        model_row(&sessions(&server).await)["slots"][0]["state"],
+        "unsaved"
+    );
+    let pid = server.model(MODEL).await["pid"].clone();
+    let before = server.get(&format!("models/{MODEL}/options")).await;
+    let (status, reloaded) = server
+        .post(
+            &format!("models/{MODEL}/options"),
+            json!({"expected_revision":before["revision"],"options":before["saved"],"apply":"reload"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{reloaded}");
+    assert_eq!(reloaded["restarted"], true, "{reloaded}");
+    assert_ne!(server.model(MODEL).await["pid"], pid);
+    let reply = turn(&server, &mut a, "Reloaded?").await;
+    let record = last_record(&server).await;
+    assert_eq!(record["session_cache"]["path"], "restored", "{record}");
+    assert!(processed(&reply) <= 4, "{reply}");
+
+    for model in ["fixture.two", "fixture.three"] {
+        let (status, loaded) = server.post("load", json!({"model":model})).await;
+        assert_eq!(status, StatusCode::OK, "{loaded}");
+    }
+    assert_eq!(server.model(MODEL).await["loaded"], false);
+    assert_eq!(unload_reason(&server).await, "pressure");
+    let reply = turn(&server, &mut a, "Evicted?").await;
+    let record = last_record(&server).await;
+    assert_eq!(record["session_cache"]["path"], "restored", "{record}");
+    assert!(processed(&reply) <= 4, "{reply}");
+}
+
+#[tokio::test]
+async fn returning_conversations_restore_after_idle_unload() {
+    let server = Server::configured(true, |config| {
+        configure(config, 1, fast());
+        config["idle_unload_after_ms"] = json!(600);
+    })
+    .await;
+    let mut a = conversation("orchards");
+    let first = chat(&server, &a, None).await;
+    a.push(json!({"role":"assistant","content":first["choices"][0]["message"]["content"]}));
+    server
+        .wait_for(async || server.model(MODEL).await["loaded"] == false)
+        .await;
+    assert_eq!(unload_reason(&server).await, "idle");
+    assert_eq!(sessions(&server).await["totals"]["sessions"], 1);
+    let reply = turn(&server, &mut a, "Later?").await;
+    let record = last_record(&server).await;
+    assert_eq!(record["session_cache"]["path"], "restored", "{record}");
+    assert!(processed(&reply) <= 4, "{reply}");
+}
+
+#[tokio::test]
+async fn unload_waits_for_a_save_in_flight_instead_of_stranding_it() {
+    let server = Server::configured(true, |config| {
+        configure(config, 1, fast());
+        let args = config["models"][0]["args"].as_array_mut().unwrap();
+        args.extend([json!("--slot-operation-delay-ms"), json!("1500")]);
+    })
+    .await;
+    chat(&server, &conversation("meadows"), None).await;
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    let (status, _) = server.post("unload", json!({"model":MODEL})).await;
+    assert_eq!(status, StatusCode::OK);
+    let view = sessions(&server).await;
+    assert_eq!(view["totals"]["sessions"], 1, "{view}");
+    assert_eq!(view["sessions"][0]["state"], "saved", "{view}");
 }

@@ -939,6 +939,7 @@ impl Manager {
                 request.slot,
                 Some(request.expected_generation),
                 request.maximum_bytes,
+                request.maximum_bytes,
                 Vec::new(),
             )
             .await?;
@@ -957,6 +958,7 @@ impl Manager {
         slot: u32,
         expected_generation: Option<u64>,
         maximum_bytes: u64,
+        growth_ceiling: u64,
         evictions: Vec<(String, SnapshotIdentity, u64)>,
     ) -> Result<
         (
@@ -1058,7 +1060,7 @@ impl Manager {
                     unreachable!()
                 };
                 cache
-                    .publish_controlled(pending, pending.revision(), &owner.control)
+                    .publish_within(pending, pending.revision(), &owner.control, growth_ceiling)
                     .map_err(cache_error)
             })
             .await?;

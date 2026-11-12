@@ -301,7 +301,7 @@ async fn corrupt_cache_bytes_are_detected_without_inspection_mutation_or_removal
     let server = cache_server(true, true).await;
     complete(&server, "corruption-session", "completions").await;
     let snapshot = save(&server, "corruption-session").await;
-    let root = server.directory.path().join("cache");
+    let root = server.directory.path().join("kv-cache");
     let path = root.join(format!("kv-{}.bin", snapshot["id"].as_str().unwrap()));
     let before = std::fs::read(root.join("snapshots.json")).unwrap();
     let size = std::fs::metadata(&path).unwrap().len() as usize;
@@ -414,7 +414,7 @@ async fn exact_writer_exit_authorizes_recovery_without_removing_saved_sibling_al
     let server = cache_server(true, true).await;
     complete(&server, "saved-sibling", "completions").await;
     let sibling = save(&server, "saved-sibling").await;
-    let root = server.directory.path().join("cache");
+    let root = server.directory.path().join("kv-cache");
     let sibling_path = root.join(format!("kv-{}.bin", sibling["id"].as_str().unwrap()));
     let sibling_bytes = std::fs::read(&sibling_path).unwrap();
     let sibling_charge = inspection(&server).await["charged_bytes"].as_u64().unwrap();
@@ -528,7 +528,7 @@ async fn exact_writer_exit_authorizes_recovery_without_removing_saved_sibling_al
 async fn prior_manager_recovery_uses_captured_actor_and_preserves_unavailable_proof() {
     let mut server = cache_server(true, true).await;
     let pending = oversized_write(&server, "prior-manager").await;
-    let root = server.directory.path().join("cache");
+    let root = server.directory.path().join("kv-cache");
     let path = root.join(format!("kv-{}.bin", pending["id"].as_str().unwrap()));
     let bytes = std::fs::read(&path).unwrap();
     let charge = inspection(&server).await["charged_bytes"].clone();
@@ -577,7 +577,7 @@ async fn prior_manager_recovery_uses_captured_actor_and_preserves_unavailable_pr
 async fn credential_transition_cannot_recover_previous_namespace_writer() {
     let mut server = cache_server(true, true).await;
     let pending = oversized_write(&server, "private-writer").await;
-    let root = server.directory.path().join("cache");
+    let root = server.directory.path().join("kv-cache");
     let path = root.join(format!("kv-{}.bin", pending["id"].as_str().unwrap()));
     let bytes = std::fs::read(&path).unwrap();
     let charge = inspection(&server).await["charged_bytes"].clone();
@@ -686,7 +686,7 @@ async fn restore_reader_is_durable_before_effect_and_retained_until_valid_origin
     let session = "reader-held-eof";
     complete(&server, session, "completions").await;
     let snapshot = save(&server, session).await;
-    let root = server.directory.path().join("cache");
+    let root = server.directory.path().join("kv-cache");
     let path = root.join(format!("kv-{}.bin", snapshot["id"].as_str().unwrap()));
     let bytes = std::fs::read(&path).unwrap();
     let charge = inspection(&server).await["charged_bytes"].clone();
@@ -778,7 +778,7 @@ async fn restarted_reader_requires_authenticated_reader_cas_recovery_before_rest
     let session = "reader-restart";
     complete(&server, session, "completions").await;
     let snapshot = save(&server, session).await;
-    let root = server.directory.path().join("cache");
+    let root = server.directory.path().join("kv-cache");
     let path = root.join(format!("kv-{}.bin", snapshot["id"].as_str().unwrap()));
     let bytes = std::fs::read(&path).unwrap();
     let charge = inspection(&server).await["charged_bytes"].clone();
@@ -1271,7 +1271,7 @@ async fn cache_pages_are_authenticated_generation_and_instance_bound_without_mut
         );
     }
     expected.sort();
-    let cache_root = server.directory.path().join("cache");
+    let cache_root = server.directory.path().join("kv-cache");
     for index in [3, 1, 2] {
         std::fs::write(cache_root.join(format!("kv-observed-{index}.bin")), [1u8]).unwrap();
     }
