@@ -2359,7 +2359,7 @@ impl Manager {
             .resolved_arguments()
             .map_err(|error| ApiError::new(StatusCode::CONFLICT, error.code, error.message))?
             .1;
-        let mut view = serde_json::json!({"model":id,"revision":spec.revision,"provider":spec.execution_profile.adapter,"saved":spec.execution_profile.options(),"effective_launch":effective,"physical_slots":spec.max_inflight,"reservation_bytes":spec.resident_bytes,"context_semantics":"context_tokens is a total launch budget; serving context requires engine observation"});
+        let mut view = serde_json::json!({"model":id,"revision":spec.revision,"provider":spec.execution_profile.adapter,"saved":spec.execution_profile.options(),"effective_launch":effective,"physical_slots":spec.max_inflight,"reservation_bytes":self.worker(id)?.spec.resident_bytes,"context_semantics":"context_tokens is a total launch budget; serving context requires engine observation"});
         drop(config);
         if let Some((fields, metrics)) = self.launch_provenance(id).await {
             view["fields"] = fields;

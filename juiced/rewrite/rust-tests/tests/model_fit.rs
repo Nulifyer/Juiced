@@ -309,6 +309,10 @@ async fn generated_reservations_are_corrected_and_saved_options_recompute_them()
     let fit = admin(&server, "models/fixture.one/fit").await;
     assert_eq!(fit["total_bytes"], corrected, "{fit}");
     assert_eq!(fit["reservation_bytes"], corrected);
+    assert_eq!(
+        server.get("models/fixture.one/options").await["reservation_bytes"],
+        corrected
+    );
     assert!(
         !fit["warnings"]
             .as_array()
