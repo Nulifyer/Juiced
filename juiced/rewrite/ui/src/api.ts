@@ -68,6 +68,22 @@ export class Client {
     return state;
   }
 
+  async binary(path: string, body: unknown, signal?: AbortSignal, maximum = 48 * 1024 * 1024): Promise<Blob> {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (this.key) headers.Authorization = `Bearer ${this.key}`;
+    const response = await fetch(`${this.base}/v1/${path}`, { method: "POST", headers, body: JSON.stringify(body), signal, cache: "no-store", redirect: "error" });
+    if (!response.ok) {
+      let value: { error?: { message?: string; code?: string } } | undefined;
+      try { value = await response.json(); } catch { /* Error bodies are optional. */ }
+      throw new ApiError(value?.error?.message ?? `The request failed (${response.status}).`, response.status, value?.error?.code ?? "request_failed", value);
+    }
+    const declared = Number(response.headers.get("content-length") ?? 0);
+    if (declared > maximum) throw new ApiError("The reply exceeds the test size limit.", response.status, "response_limit");
+    const blob = await response.blob();
+    if (blob.size > maximum) throw new ApiError("The reply exceeds the test size limit.", response.status, "response_limit");
+    return blob;
+  }
+
   async multipart<T>(path: string, body: FormData, signal?: AbortSignal): Promise<T> {
     multipartPayloadBytes(body);
     return this.exchange(path, body, undefined, signal);

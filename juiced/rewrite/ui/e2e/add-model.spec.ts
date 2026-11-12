@@ -30,7 +30,9 @@ function library(request: APIRequestContext) {
   async function cleanup(artifact: string) {
     await service.remove(added);
     await expect.poll(async () => (await service.artifacts()).jobs.every((job: any) => !job.writer_active), { timeout: 20000 }).toBe(true);
-    await service.removeArtifact(artifact);
+    await expect.poll(async () => {
+      try { await service.removeArtifact(artifact); return true; } catch { return false; }
+    }, { timeout: 15000 }).toBe(true);
   }
   return { service, sha, engines, cpuEngine, installEngine, pull, cleanup };
 }

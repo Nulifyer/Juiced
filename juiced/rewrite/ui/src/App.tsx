@@ -129,7 +129,7 @@ export function App() {
   const gpu = live.stats?.gpus[0];
   const tabs = screen === "models" ? <Tabs label="Models views" value={modelsTab} onChange={(value) => leave(() => { setModelsTab(value); setSelected(""); })} items={[["models", "Models"], ["aliases", "Aliases"]]} />
     : screen === "cache" ? <Tabs label="Cache views" value={cacheTab} onChange={setCacheTab} items={[["sessions", "Sessions"], ["snapshots", "Snapshots"]]} />
-    : screen === "test" ? <Tabs label="Test operation" value={testService} onChange={setTestService} items={[["chat", "Chat"], ["compare", "Compare"], ["embeddings", "Embeddings"], ["transcription", "Transcribe"]]} />
+    : screen === "test" ? <Tabs label="Test operation" value={testService} onChange={setTestService} items={[["chat", "Chat"], ["compare", "Compare"], ["embeddings", "Embeddings"], ["transcription", "Transcribe"], ["speech", "Speak"], ["images", "Images"]]} />
     : screen === "library" ? <Tabs label="Library view" value={libraryView} onChange={setLibraryView} items={[["find", "Find models"], ["files", "Files on disk"]]} />
     : screen === "connect" ? <Tabs label="Connect views" value={connectTab} onChange={setConnectTab} items={[["protocols", "Protocols"], ["endpoints", "Endpoints"]]} />
     : screen === "backend" ? <Tabs label="Backend views" value={backendTab} onChange={setBackendTab} items={[["machine", "This machine"], ["installed", "Engines"], ["catalog", "Catalog"]]} />

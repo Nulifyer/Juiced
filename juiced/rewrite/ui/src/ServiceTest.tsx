@@ -4,10 +4,11 @@ import { eligible, type Model } from "./domain";
 import { Button, Empty } from "./ui";
 import { TranscriptionTest } from "./TranscriptionTest";
 import { CompareTest, EmbeddingsTest } from "./TestPanels";
+import { ImagesTest, SpeakTest } from "./MediaTests";
 
-export type TestService = "chat" | "compare" | "embeddings" | "transcription";
+export type TestService = "chat" | "compare" | "embeddings" | "transcription" | "speech" | "images";
 export function ServiceTest({ operation, ...props }: { models: Model[]; client: Client; online: boolean; operation: TestService }) {
-  return <section className={`service-tests ${operation === "compare" ? "wide" : ""}`}>{operation === "chat" ? <ChatTest {...props} /> : operation === "compare" ? <CompareTest {...props} /> : operation === "embeddings" ? <EmbeddingsTest {...props} /> : <TranscriptionTest {...props} />}</section>;
+  return <section className={`service-tests ${operation === "compare" || operation === "images" ? "wide" : ""}`}>{operation === "chat" ? <ChatTest {...props} /> : operation === "compare" ? <CompareTest {...props} /> : operation === "embeddings" ? <EmbeddingsTest {...props} /> : operation === "speech" ? <SpeakTest {...props} /> : operation === "images" ? <ImagesTest {...props} /> : <TranscriptionTest {...props} />}</section>;
 }
 
 type Turn = { role: "user" | "assistant"; content: string; reasoning?: string; tokens?: number | null; rate?: number | null; error?: string; streaming?: boolean };

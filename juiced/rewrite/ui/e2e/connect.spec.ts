@@ -13,7 +13,7 @@ test("Protocols list client addresses with Copy and switch example languages", a
     await expect(card).toContainText("partial");
   }
   await expect(page.getByRole("article", { name: "OpenAI", exact: true })).toContainText("chat/completions");
-  await expect(page.getByText("Not available yet: AUTOMATIC1111, Realtime, Wyoming.")).toBeVisible();
+  await expect(page.getByText("Not available yet: Realtime, Wyoming.")).toBeVisible();
   const copy = page.getByRole("button", { name: "Copy OpenAI address" });
   await copy.click();
   await expect(copy).toHaveText("Copied");
