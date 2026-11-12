@@ -545,24 +545,33 @@ impl Manager {
                             |context: Option<u64>| models::estimate(format, bytes, context);
                         let estimate = match format {
                             models::ModelFormat::Gguf { declared, .. } => {
-                                match mapped.options.context_tokens {
-                                    Some(context) => estimate_for(Some(u64::from(context))),
-                                    None => {
-                                        let mut context = declared
-                                            .training_context_tokens
-                                            .unwrap_or(models::UNKNOWN_CONTEXT_TOKENS)
-                                            .clamp(1, i32::MAX as u64);
-                                        let mut estimate = estimate_for(Some(context));
-                                        while estimate.resident_bytes > base.resident_budget_bytes
-                                            && context > models::DEFAULT_CONTEXT_TOKENS
-                                        {
-                                            context =
-                                                (context / 2).max(models::DEFAULT_CONTEXT_TOKENS);
-                                            estimate = estimate_for(Some(context));
-                                        }
-                                        estimate
-                                    }
+                                let explicit = mapped.options.context_tokens.map(u64::from);
+                                let mut context = explicit.unwrap_or_else(|| {
+                                    declared
+                                        .training_context_tokens
+                                        .unwrap_or(models::UNKNOWN_CONTEXT_TOKENS)
+                                        .clamp(1, i32::MAX as u64)
+                                });
+                                let mut estimate = estimate_for(Some(context));
+                                while estimate.resident_bytes > base.resident_budget_bytes
+                                    && context > models::DEFAULT_CONTEXT_TOKENS
+                                {
+                                    context = (context / 2).max(models::DEFAULT_CONTEXT_TOKENS);
+                                    estimate = estimate_for(Some(context));
                                 }
+                                if let Some(saved) = explicit
+                                    && context < saved
+                                {
+                                    settings.push(crate::native_import::SettingRow {
+                                        scope: "saved",
+                                        key: "ctx_size".into(),
+                                        state: "mapped",
+                                        value: Some(json!(context)),
+                                        target: Some("context_tokens"),
+                                        reason: "The saved context does not fit the resident budget, so it was halved until it fits.",
+                                    });
+                                }
+                                estimate
                             }
                             _ => estimate_for(None),
                         };
@@ -809,7 +818,8 @@ impl Manager {
     ) -> Result<Value, ApiError> {
         match request {
             NativeImportRequest::Preview { source, weights } => {
-                self.native_import_preview(source, weights, &[]).await
+                self.native_import_preview(source, weights, &operator_roots())
+                    .await
             }
             NativeImportRequest::Apply {
                 source,
@@ -818,8 +828,15 @@ impl Manager {
                 aliases,
                 expected_generation,
             } => {
-                self.native_import_apply(source, weights, models, aliases, expected_generation, &[])
-                    .await
+                self.native_import_apply(
+                    source,
+                    weights,
+                    models,
+                    aliases,
+                    expected_generation,
+                    &operator_roots(),
+                )
+                .await
             }
         }
     }
@@ -1156,6 +1173,13 @@ impl Manager {
             "weights_copied": false,
         }))
     }
+}
+
+/// Read roots the operator granted for native adoption also serve Library › Import.
+fn operator_roots() -> Vec<PathBuf> {
+    super::native_adoption::from_env()
+        .map(|(_, roots)| roots)
+        .unwrap_or_default()
 }
 
 #[cfg(test)]

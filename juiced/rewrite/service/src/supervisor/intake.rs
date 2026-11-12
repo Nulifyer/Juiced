@@ -253,8 +253,22 @@ async fn write_buffer(mut intake: Intake, buffer: Vec<u8>) -> Result<(Intake, Ve
 }
 
 impl Manager {
+    /// Configured roots plus the read roots the operator granted for native adoption.
+    async fn configured_import_roots(&self) -> Vec<PathBuf> {
+        let mut roots = self.config.lock().await.import_roots.clone();
+        for root in super::native_adoption::from_env()
+            .map(|(_, roots)| roots)
+            .unwrap_or_default()
+        {
+            if !roots.contains(&root) {
+                roots.push(root);
+            }
+        }
+        roots
+    }
+
     async fn canonical_import_roots(&self) -> Vec<PathBuf> {
-        let configured = self.config.lock().await.import_roots.clone();
+        let configured = self.configured_import_roots().await;
         tokio::task::spawn_blocking(move || {
             configured
                 .iter()
@@ -447,7 +461,7 @@ impl Manager {
     }
 
     pub async fn import_candidates(&self, query: ImportListQuery) -> Result<Value, ApiError> {
-        let configured = self.config.lock().await.import_roots.clone();
+        let configured = self.configured_import_roots().await;
         let roots = self.canonical_import_roots().await;
         let root_views: Vec<Value> = configured
             .iter()

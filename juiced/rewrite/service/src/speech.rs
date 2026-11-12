@@ -101,7 +101,7 @@ impl Transcription {
 /// The selected worker's request contract; whisper.cpp receives every OpenAI field.
 pub fn worker_request(
     adapter: crate::config::Provider,
-    request: Transcription,
+    mut request: Transcription,
 ) -> Result<(&'static str, Form), ApiError> {
     use crate::config::Provider;
     let unsupported = |message: &'static str| {
@@ -130,6 +130,12 @@ pub fn worker_request(
             unsupported("FUTO asr4all supports neither prompt biasing nor temperature sampling."),
         ),
         Provider::Parakeet | Provider::Moonshine | Provider::Asr4all => {
+            // These engines read only 16-bit PCM WAV; float, 24-bit or stereo uploads are rewritten.
+            if adapter != Provider::Moonshine
+                && let Some(file) = pcm16_wav(&request.file)
+            {
+                request.file = file;
+            }
             let language = (adapter == Provider::Asr4all).then(|| request.language.clone());
             let mut form = Form::new()
                 .part("file", request.file_part())
@@ -177,6 +183,12 @@ fn upstream_error() -> ApiError {
         "The speech worker returned a malformed or oversized response.",
     )
 }
+fn pcm16_wav(file: &[u8]) -> Option<Bytes> {
+    let decoded = crate::audio::decode_wav(file)?;
+    let samples = crate::audio::resample(&decoded.samples, decoded.rate, 16_000);
+    Some(Bytes::from(crate::audio::wav(&samples, 16_000)))
+}
+
 fn is_wav(bytes: &[u8]) -> bool {
     bytes.len() >= 12
         && matches!(&bytes[..4], b"RIFF" | b"RIFX" | b"RF64" | b"BW64")
@@ -649,6 +661,25 @@ mod tests {
         assert!(!filename(Some("a\r\n\"b.wav")).chars().any(char::is_control));
         assert!(filename(Some(&"界".repeat(200))).len() <= 128);
         assert!(!is_wav(b"pretend.wav"));
+        let mut float = b"RIFF\0\0\0\0WAVEfmt ".to_vec();
+        float.extend(16u32.to_le_bytes());
+        float.extend(3u16.to_le_bytes());
+        float.extend(1u16.to_le_bytes());
+        float.extend(24_000u32.to_le_bytes());
+        float.extend(96_000u32.to_le_bytes());
+        float.extend(4u16.to_le_bytes());
+        float.extend(32u16.to_le_bytes());
+        float.extend(b"data");
+        float.extend(96u32.to_le_bytes());
+        for index in 0..24 {
+            float.extend((index as f32 / 48.0).to_le_bytes());
+        }
+        let converted = pcm16_wav(&float).unwrap();
+        let decoded = crate::audio::decode_wav(&converted).unwrap();
+        assert_eq!(decoded.rate, 16_000);
+        assert_eq!(&converted[20..24], &[1, 0, 1, 0]);
+        assert_eq!(u16::from_le_bytes([converted[34], converted[35]]), 16);
+        assert!(!decoded.samples.is_empty());
     }
     #[test]
     fn response_validation_preserves_verbose_json_and_plain_json_looking_transcripts() {
