@@ -255,7 +255,6 @@ async fn logs(
             "dropped": page.dropped, "oldest": page.oldest, "latest": page.latest,
             "cursor_reset": page.cursor_reset,
             "capacity": {"lines": crate::logs::CAPACITY_LINES, "bytes": crate::logs::CAPACITY_BYTES, "line_bytes": crate::logs::LINE_BYTES},
-            "contains_request_content": false,
         })),
     ))
 }

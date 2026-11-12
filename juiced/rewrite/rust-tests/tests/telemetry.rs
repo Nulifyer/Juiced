@@ -146,7 +146,6 @@ async fn worker_output_appears_in_operator_logs_with_a_working_cursor() {
     let page = logs(&server, "?limit=2").await;
     assert_eq!(page["data"].as_array().unwrap().len(), 2);
     assert_eq!(page["dropped"], 0);
-    assert_eq!(page["contains_request_content"], false);
     let next = page["next"].as_u64().unwrap();
     assert_eq!(page["data"][1]["seq"], next);
     let rest = logs(&server, &format!("?after={next}&limit=500")).await;
