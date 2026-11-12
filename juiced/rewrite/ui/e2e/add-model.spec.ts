@@ -59,10 +59,11 @@ test("Add model downloads a quant, installs the engine when needed and serves ch
     await expect(result(page).getByText("On this machine", { exact: true })).toHaveCount(0);
     await detail.getByRole("button", { name: "Download" }).click();
     await expect(page.getByRole("status").filter({ hasText: "Downloading Tiny-Chat-GGUF Q8_0." })).toBeVisible();
-    await expect(result(page).getByText("On this machine", { exact: true })).toBeVisible({ timeout: 20000 });
-    await expect(detail.getByRole("option", { name: /Q8_0/ })).toContainText("✓ downloaded");
+    await expect(detail.getByRole("option", { name: /Q8_0/ })).toContainText("✓ downloaded", { timeout: 20000 });
+    if (await detail.getByRole("button", { name: "Back to results" }).isHidden()) await expect(result(page).getByText("On this machine", { exact: true })).toBeVisible();
     await expect(detail.getByRole("button", { name: "Download" })).toHaveCount(0);
 
+    await expect(detail.getByRole("radiogroup", { name: "Make available as" }).getByRole("radio", { name: "On demand" })).toHaveAttribute("aria-checked", "true");
     const adding = page.waitForRequest((outgoing) => outgoing.method() === "POST" && new URL(outgoing.url()).pathname === "/v1/juiced/models/add");
     await detail.getByRole("button", { name: "Add model" }).click();
     expect((await adding).postDataJSON()).toEqual({ artifact, id: added, policy: "on-demand" });
@@ -123,9 +124,11 @@ test("Add model with a name that is already registered reports it in the detail 
     const existing = await fixture.service.register({ id: added, model_file: source.model_file, command: source.command, args: source.args });
     const detail = await selectQuant(page);
     await expect(detail.getByRole("option", { name: /Q8_0/ })).toContainText("✓ downloaded");
+    await detail.getByRole("radiogroup", { name: "Make available as" }).getByRole("radio", { name: "Disabled" }).click();
     const answered = page.waitForResponse((response) => response.request().method() === "POST" && new URL(response.url()).pathname === "/v1/juiced/models/add");
     await detail.getByRole("button", { name: "Add model" }).click();
     expect((await answered).status()).toBe(409);
+    expect((await answered).request().postDataJSON()).toMatchObject({ policy: "disabled" });
     await expect(detail.getByRole("alert")).toHaveText("A model with this name is already added. Rename or remove it under Models first.");
     await expect(detail.getByRole("button", { name: "Add model" })).toBeEnabled();
     await expect(detail.getByRole("button", { name: "Open model" })).toHaveCount(0);

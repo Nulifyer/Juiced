@@ -63,11 +63,14 @@ test.describe("Find models", () => {
     await quants.getByRole("option", { name: /BF16/ }).click();
     await expect(quants.getByRole("option", { selected: true })).toContainText("BF16");
     await expect(machine).toHaveText("Likely too big for this machine");
-    await expect(qwen.getByRole("group", { name: "Qwen3 0.6B quants" }).getByRole("button", { name: /^BF16/ })).toHaveAttribute("aria-pressed", "true");
+    const back = detail.getByRole("button", { name: "Back to results" });
+    if (await back.isVisible()) await expect(qwen).toBeHidden();
+    else await expect(qwen.getByRole("group", { name: "Qwen3 0.6B quants" }).getByRole("button", { name: /^BF16/ })).toHaveAttribute("aria-pressed", "true");
     await largeText(page);
     await noHorizontalOverflow(page, "Find models detail");
-    await detail.getByRole("button", { name: "Close detail" }).click();
+    await (await back.isVisible() ? back : detail.getByRole("button", { name: "Close detail" })).click();
     await expect(detail).toHaveCount(0);
+    await expect(qwen).toBeVisible();
   });
 
   test("download shows progress and then marks the quant as on this machine", async ({ page, request }) => {
@@ -86,10 +89,12 @@ test.describe("Find models", () => {
       await expect(page.getByRole("status").filter({ hasText: "Downloading Tiny-Chat-GGUF Q4_K_M." })).toBeVisible();
       await expect(detail.getByRole("progressbar", { name: "Download progress" })).toBeVisible();
       await expect(detail).toContainText(/Downloading… \d+%/);
-      await expect(tiny.getByText("On this machine", { exact: true })).toBeVisible({ timeout: 20000 });
-      await expect(tiny.getByRole("button", { name: /Q4_K_M/ })).toHaveAccessibleName(/^Downloaded\s*Q4_K_M/);
+      await expect(detail.getByRole("option", { name: /Q4_K_M/ })).toContainText("✓ downloaded", { timeout: 20000 });
       await expect(detail.getByRole("progressbar")).toHaveCount(0);
-      await expect(detail.getByRole("option", { name: /Q4_K_M/ })).toContainText("✓ downloaded");
+      if (await detail.getByRole("button", { name: "Back to results" }).isVisible()) await detail.getByRole("button", { name: "Back to results" }).click();
+      await expect(tiny.getByText("On this machine", { exact: true })).toBeVisible();
+      await expect(tiny.getByRole("button", { name: /Q4_K_M/ })).toHaveAccessibleName(/^Downloaded\s*Q4_K_M/);
+      if (await detail.count() === 0) await tiny.getByRole("button", { name: /Q4_K_M/ }).click();
       await expect(detail.getByRole("button", { name: "Download" })).toHaveCount(0);
       expect((await service.artifacts()).artifacts.some((item: any) => item.id === sha)).toBe(true);
     } finally {

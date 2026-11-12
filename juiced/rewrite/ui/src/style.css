@@ -528,7 +528,7 @@ dialog textarea { margin-bottom: 4px; }
 .quant-star { margin-left: 4px; color: var(--warning); }
 .quant-progress { position: absolute; left: 0; bottom: 0; height: 2px; background: var(--ring); }
 .find-detail progress { width: 100%; height: 6px; accent-color: var(--ring); margin-top: 10px; }
-@media (max-width: 960px) { .find-models.has-detail { grid-template-columns: minmax(0, 1fr); } .find-detail { position: static; max-height: none; } }
+@media (max-width: 960px) { .find-models.has-detail { grid-template-columns: minmax(0, 1fr); } .find-models.has-detail .find-main { display: none; } .find-detail { position: static; max-height: none; } .find-detail .inspector-top { justify-content: flex-start; } .find-detail .back-button { display: inline-flex; } .find-detail .close-inspector { display: none; } }
 .quant-chip.more { color: var(--muted); }
 .quant-list { display: grid; margin: 10px 0; max-height: 300px; overflow-y: auto; border: 1px solid var(--border); border-radius: 6px; }
 .quant-option { display: flex; align-items: center; gap: 8px; border: 0; background: transparent; padding: 6px 10px; text-align: left; font-size: .78rem; }
@@ -624,3 +624,4 @@ dialog textarea { margin-bottom: 4px; }
 .image-meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 10px; font-size: .75rem; }
 a.button { color: var(--foreground); text-decoration: none; }
 .sidebar-version { margin: auto 0 0; padding: 10px 10px 2px; font-size: .7rem; color: var(--muted); }
+.add-policy { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-bottom: 10px; }
