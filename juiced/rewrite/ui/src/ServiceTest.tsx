@@ -3,10 +3,11 @@ import { chatTestTokenLimit, type Client } from "./api";
 import { eligible, type Model } from "./domain";
 import { Button, Empty } from "./ui";
 import { TranscriptionTest } from "./TranscriptionTest";
+import { CompareTest, EmbeddingsTest } from "./TestPanels";
 
-export type TestService = "chat" | "transcription";
+export type TestService = "chat" | "compare" | "embeddings" | "transcription";
 export function ServiceTest({ operation, ...props }: { models: Model[]; client: Client; online: boolean; operation: TestService }) {
-  return <section className="service-tests">{operation === "chat" ? <ChatTest {...props} /> : <TranscriptionTest {...props} />}</section>;
+  return <section className={`service-tests ${operation === "compare" ? "wide" : ""}`}>{operation === "chat" ? <ChatTest {...props} /> : operation === "compare" ? <CompareTest {...props} /> : operation === "embeddings" ? <EmbeddingsTest {...props} /> : <TranscriptionTest {...props} />}</section>;
 }
 
 type Turn = { role: "user" | "assistant"; content: string; reasoning?: string; tokens?: number | null; rate?: number | null; error?: string; streaming?: boolean };

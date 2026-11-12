@@ -40,7 +40,12 @@ export function FindModels({ client, online, onRegistered, onOpenModel }: { clie
   const [tick, setTick] = useState(0);
   const info = useResource(client, "system-info", parseSystemInfo, 0);
   const request = useRef<AbortController | null>(null);
+  const lastKey = useRef("");
   useEffect(() => {
+    const key = `${query.trim()}\u0000${task ?? ""}`;
+    const refreshOnly = key === lastKey.current;
+    lastKey.current = key;
+    if (refreshOnly && request.current) return;
     const timer = setTimeout(async () => {
       request.current?.abort();
       const controller = new AbortController(); request.current = controller;
@@ -53,8 +58,8 @@ export function FindModels({ client, online, onRegistered, onOpenModel }: { clie
         if (!controller.signal.aborted) { setResult(next); setError(""); }
       } catch (failure) {
         if (!controller.signal.aborted) setError(failure instanceof Error ? failure.message : "Search failed.");
-      } finally { if (!controller.signal.aborted) setLoading(false); }
-    }, tick ? 0 : 300);
+      } finally { if (!controller.signal.aborted) { setLoading(false); request.current = null; } }
+    }, refreshOnly ? 0 : 300);
     return () => clearTimeout(timer);
   }, [client, query, task, tick]);
   useEffect(() => () => request.current?.abort(), []);
@@ -104,8 +109,9 @@ export function FindModels({ client, online, onRegistered, onOpenModel }: { clie
       </div>
       {error && <div className="action-row"><p className="inline-error" role="alert">{error}</p><Button onClick={() => setTick((value) => value + 1)}>Retry</Button></div>}
       {notice && <p className="inline-success" role="status">{notice}</p>}
+      {loading && <p className="searching muted" role="status">Searching…</p>}
       {result && result.hub !== "ok" && <p className="field-help">{result.offline ? "Offline mode: showing recommended and downloaded models only." : "Hugging Face is unreachable right now; showing recommended and downloaded models."}</p>}
-      {!result ? <p className="muted">{loading ? "Searching…" : ""}</p> : models.length === 0 ? <Empty title="No models found">Try a shorter search or another task.</Empty> : <ul className="model-results" aria-label="Search results" aria-busy={loading}>
+      {!result ? <p className="muted">{loading ? "Searching…" : ""}</p> : models.length === 0 ? <Empty title="No models found">Try a shorter search or another task.</Empty> : <ul className={`model-results ${loading ? "stale" : ""}`} aria-label="Search results" aria-busy={loading}>
         {models.map((item) => <li key={`${item.source}:${item.repo}`} className={`model-result ${item.repo === selected?.repo ? "selected" : ""}`}>
           <div className="result-head">
             <strong className="break-word">{item.name}</strong>
