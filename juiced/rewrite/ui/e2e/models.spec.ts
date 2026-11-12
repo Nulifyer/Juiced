@@ -7,7 +7,7 @@ test("one search and service chips filter the model table", async ({ page }) => 
   await navigate(page, "Models");
   const table = page.getByRole("table", { name: "Registered models" });
   const names = table.getByRole("button", { name: /^fixture\./ });
-  await expect(names).toHaveCount(5);
+  await expect(names).toHaveCount(6);
   await expect(page.getByRole("searchbox")).toHaveCount(1);
   const chips = page.getByRole("group", { name: "Service filter" });
   await chips.getByRole("button", { name: /^Transcription/ }).click();
@@ -24,7 +24,7 @@ test("one search and service chips filter the model table", async ({ page }) => 
   await expect(page.getByRole("heading", { name: "No matches" })).toBeVisible();
   await page.getByRole("searchbox", { name: "Search models" }).fill("");
   await chips.getByRole("button", { name: /^Chat/ }).click();
-  await expect(names).toHaveCount(5);
+  await expect(names).toHaveCount(6);
 });
 
 test("the inline policy select saves immediately and a stale revision fails without corrupting state", async ({ page, request }) => {

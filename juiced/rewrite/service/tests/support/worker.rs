@@ -459,6 +459,17 @@ async fn inference(
                 return Some((Ok::<_, std::io::Error>(event), (index + 1, observation)));
             }
             if index >= 200 {
+                if observation.fixture.report_timings && index < 202 {
+                    let event = if index == 200 {
+                        format!(
+                            "data: {}\n\n",
+                            json!({"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":7,"completion_tokens":200,"total_tokens":207},"timings":{"prompt_n":7,"prompt_ms":20.0,"prompt_per_second":350.0,"predicted_n":200,"predicted_ms":3000.0,"predicted_per_second":66.7}})
+                        )
+                    } else {
+                        "data: [DONE]\n\n".to_owned()
+                    };
+                    return Some((Ok::<_, std::io::Error>(event), (index + 1, observation)));
+                }
                 observation.completed = true;
                 drop(observation);
                 return None;
@@ -492,6 +503,51 @@ async fn inference(
         reply["timings"] = json!({"prompt_n":7,"prompt_ms":10.0,"prompt_per_second":700.0,"predicted_n":2,"predicted_ms":47.06,"predicted_per_second":42.5});
     }
     Json(reply).into_response()
+}
+
+fn text_embedding(text: &str) -> Vec<f64> {
+    let mut vector = vec![0.0; 8];
+    for word in text
+        .split(|character: char| !character.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+    {
+        let hash = word
+            .to_lowercase()
+            .bytes()
+            .fold(0xcbf2_9ce4_8422_2325u64, |hash, byte| {
+                (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
+            });
+        let sign = if hash & 0x100 == 0 { 1.0 } else { -1.0 };
+        vector[(hash % 8) as usize] += sign * (1.0 + (hash >> 16 & 0xff) as f64 / 255.0);
+    }
+    if vector.iter().all(|value| *value == 0.0) {
+        vector[0] = 1.0;
+    }
+    vector
+}
+
+async fn embeddings(Json(body): Json<Value>) -> Json<Value> {
+    let inputs: Vec<&str> = body["input"]
+        .as_array()
+        .map(|items| items.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
+    if inputs.is_empty() {
+        return Json(
+            json!({"object":"list","data":[{"object":"embedding","index":0,"embedding":[0.25,-0.5]}],"usage":{"prompt_tokens":2,"total_tokens":2}}),
+        );
+    }
+    let data: Vec<Value> = inputs
+        .iter()
+        .enumerate()
+        .map(|(index, text)| json!({"object":"embedding","index":index,"embedding":text_embedding(text)}))
+        .collect();
+    let tokens = inputs
+        .iter()
+        .map(|text| text.split_whitespace().count())
+        .sum::<usize>();
+    Json(
+        json!({"object":"list","data":data,"usage":{"prompt_tokens":tokens,"total_tokens":tokens}}),
+    )
 }
 
 async fn transcription(
@@ -1063,7 +1119,7 @@ async fn main() {
         .route("/v1/responses", post(inference))
         .route("/__fixture/state/control",post(state_control).layer(DefaultBodyLimit::max(2048)))
         .route("/__fixture/state",get(state_observation))
-        .route("/v1/embeddings", post(|| async { Json(json!({"object":"list","data":[{"object":"embedding","index":0,"embedding":[0.25,-0.5]}],"usage":{"prompt_tokens":2,"total_tokens":2}})) }))
+        .route("/v1/embeddings", post(embeddings))
         .route("/v1/messages/count_tokens", post(|| async { Json(json!({"input_tokens":7})) }))
         .route("/props", get(|State(fixture): State<Arc<Fixture>>| async move { Json(json!({"total_slots":fixture.parallel,"default_generation_settings":{"n_ctx":fixture.context},"build_info":"fixture"})) }))
         .route("/slots/{slot}", post(slot_action))
