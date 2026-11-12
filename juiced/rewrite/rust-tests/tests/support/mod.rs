@@ -37,7 +37,8 @@ pub const READ_ROUTES: [&str; 10] = [
     "/models/{model}",
     "/models/{model}/options",
 ];
-pub const OPERATOR_READ_ROUTES: [&str; 12] = [
+pub const OPERATOR_READ_ROUTES: [&str; 13] = [
+    "/system-info",
     "/juiced/cache/inspect",
     "/juiced/requests",
     "/juiced/suitability",
