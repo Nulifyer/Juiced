@@ -57,6 +57,25 @@ EOF
     log "created $config with a resident budget of $budget bytes"
 }
 
+# Engines built into the image install as runtime packages, so they need no network. The
+# marker holds the specification digest, so an image with a newer build imports it once.
+import_bundled_engines() {
+    for spec in /opt/juiced/bundled/*.import.json; do
+        [ -f "$spec" ] || continue
+        name=$(basename "$spec" .import.json)
+        digest=$(sha256sum "$spec" | cut -d' ' -f1)
+        mark="$data/bundled-engines/$name"
+        [ "$(cat "$mark" 2>/dev/null)" = "$digest" ] && continue
+        if receipt=$(/usr/local/bin/lemond --config "$config" --import-runtime-bundle "$spec" 2>&1); then
+            mkdir -p "$data/bundled-engines"
+            printf '%s\n' "$digest" >"$mark"
+            log "installed bundled engine $name as $(printf '%s' "$receipt" | grep -o '"package":"[^"]*"' | head -1)"
+        else
+            log "bundled engine $name was not installed: $receipt"
+        fi
+    done
+}
+
 case "${1:-}" in
     "" | -*) ;;
     *) exec "$@" ;;
@@ -90,6 +109,7 @@ fi
 umask 077
 mkdir -p "$data/home" "$data/import"
 [ -e "$config" ] || write_default_config
+import_bundled_engines
 
 case "$host" in *:*) listen="[$host]:$port" ;; *) listen="$host:$port" ;; esac
 exec /usr/local/bin/lemond --config "$config" --ui "$ui" --listen "$listen" "$@"

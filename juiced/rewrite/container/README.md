@@ -1,6 +1,6 @@
 # Juiced rewrite container
 
-This image runs the Rust `lemond` service and the web console as one appliance. On first boot it writes a default configuration into the data volume. It then reports the host's CPU, GPUs and NPUs at `GET /v1/system-info` and offers the engine builds that fit at `GET /v1/juiced/engines`. Engines are not in the image. The service downloads them on demand, checks the pinned SHA-256 digest and unpacks them into the data volume.
+This image runs the Rust `lemond` service and the web console as one appliance. On first boot it writes a default configuration into the data volume. It then reports the host's CPU, GPUs and NPUs at `GET /v1/system-info` and offers the engine builds that fit at `GET /v1/juiced/engines`. Most engines are not in the image. The service downloads them on demand, checks the pinned SHA-256 digest and unpacks them into the data volume.
 
 The image does not include a model. Models you add start Disabled until you enable them.
 
@@ -22,7 +22,11 @@ Open <http://localhost:13305>. Without API keys the service runs in trusted-LAN 
 
 `build.sh` accepts extra `podman build` arguments. `JUICED_IMAGE` changes the tag and `CONTAINER_ENGINE=docker` builds with Docker. Under Podman the script passes `--format docker`, because the OCI format drops the `HEALTHCHECK`.
 
-The build has three stages. A Rust stage runs `cargo build --release --locked` for `lemond` and the `lemonade` CLI. A Bun stage builds `ui/dist`. The runtime stage is `debian:trixie-slim` with the Vulkan loader, Mesa from `trixie-backports`, libgomp, libnuma, ca-certificates, curl and tini. The build context is the repository root, because the service embeds `src/cpp/resources/server_models.json` and the console uses fonts and license files from `juiced/ui`. `Containerfile.dockerignore` keeps the context to those paths.
+The build has four stages. A Rust stage runs `cargo build --release --locked` for `lemond` and the `lemonade` CLI. A Bun stage builds `ui/dist`. A `futo` stage builds FUTO transcribe.cpp and its HTTP adapter (see [Bundled engines](#bundled-engines)). The runtime stage is `debian:trixie-slim` with the Vulkan loader, Mesa from `trixie-backports`, libgomp, libnuma, ca-certificates, curl and tini. The build context is the repository root, because the service embeds `src/cpp/resources/server_models.json` and the console uses fonts and license files from `juiced/ui`. `Containerfile.dockerignore` keeps the context to those paths.
+
+## Bundled engines
+
+FUTO publishes no transcribe.cpp builds, so the image builds one: the pinned source archive (commit `26d75933`, SHA-256 checked) and `juiced/runtime/futo_server.cpp`, CPU only. It adds about 5 MB under `/opt/juiced/bundled/futo`, beside a build-time import specification `futo.import.json`; the image is about 480 MB. On each start the entrypoint runs `lemond --import-runtime-bundle` for every `/opt/juiced/bundled/*.import.json` whose digest differs from the marker in `/data/bundled-engines/`, so the engine installs into `runtime-packages/` without network on first boot and again only when a newer image changes it. `GET /v1/juiced/engines` then lists `futo-transcribe.cpp` with an `installed_package` (its `unresolved` stays `not_published`), and `POST /v1/juiced/models/add` picks it for an asr4all GGUF such as `asr4all-s-gptq-Q8_0.gguf`. A failed import logs a warning and the service starts anyway.
 
 ## Data volume
 
@@ -32,7 +36,8 @@ Everything that persists lives in `/data`:
 | --- | --- |
 | `config.json` | Service configuration. The entrypoint creates it only when it is missing. |
 | `artifacts/` | Downloaded model weights |
-| `runtime-packages/` | Installed engines (llama.cpp, whisper.cpp, stable-diffusion.cpp, Kokoros) |
+| `runtime-packages/` | Installed engines (llama.cpp, whisper.cpp, stable-diffusion.cpp, Kokoros, the bundled FUTO build) |
+| `bundled-engines/` | Digests of the bundled engine specifications already imported |
 | `cache/` | Slot snapshots and computation cache |
 | `home/` | `$HOME` and `$XDG_CACHE_HOME` for engines, such as Mesa shader caches |
 | `import/` | Server-side model files to import. Bind-mount a host directory here, for example `-v /srv/models:/data/import:ro`. |
@@ -208,7 +213,7 @@ The script builds the image, starts it with a throwaway volume and a random admi
 - `/v1/health` answers, and the container healthcheck passes
 - an unauthenticated `/v1/system-info` gets 401
 - `config.json` exists, has no models and does not contain the key
-- `/v1/system-info` and `/v1/juiced/engines` answer, and their summaries are printed
+- `/v1/system-info` and `/v1/juiced/engines` answer, their summaries are printed, and the bundled FUTO engine is installed
 - `/` serves the console and its script
 - a restart leaves `config.json` unchanged
 

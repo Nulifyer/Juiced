@@ -88,9 +88,12 @@ if [ -n "${EXPECT_GPU:-}" ]; then
 fi
 
 step "/v1/juiced/engines"
-admin "$base/v1/juiced/engines" | jq -r '
+engines=$(admin "$base/v1/juiced/engines")
+printf '%s' "$engines" | jq -r '
   .installable[] |
-  "\(.engine) \(.backend): availability=\(.availability) recommended=\(.recommended) build=\(.build.asset // ("unresolved:" + (.unresolved | tostring)))"'
+  "\(.engine) \(.backend): availability=\(.availability) recommended=\(.recommended) build=\(.build.asset // ("unresolved:" + (.unresolved | tostring))) installed=\(.installed_package // "no")"'
+printf '%s' "$engines" | jq -e 'any(.installable[]; .engine == "futo-transcribe.cpp" and .installed_package != null)' >/dev/null ||
+    fail "the bundled FUTO engine was not installed on first boot"
 
 step "console at /"
 page=$(curl -fsS --max-time 10 "$base/")
