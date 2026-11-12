@@ -60,6 +60,7 @@ impl Harness {
             operations: vec![Operation::Chat, Operation::Completion, Operation::Responses],
             policy: Policy::OnDemand,
             revision: 0,
+            idle_unload_after_ms: None,
         };
         let mut config = Config {
             schema_version: 2,
@@ -71,6 +72,7 @@ impl Harness {
             admission: Default::default(),
             artifact_source_policy: juiced_service::artifacts::SourcePolicy::PublicHttps,
             resident_budget_bytes: 128,
+            idle_unload_after_ms: juiced_service::config::DEFAULT_IDLE_UNLOAD_MS,
             startup_timeout_ms: 2000,
             request_timeout_ms: 3000,
             models: vec![model("one"), model("two")],
@@ -553,7 +555,12 @@ async fn unsupported_operations_do_not_launch_workers() {
 async fn competing_loads_cannot_overcommit_the_resident_budget() {
     let h = Harness::configured(|config| config.resident_budget_bytes = 64);
     let (one, two) = tokio::join!(h.manager.load("one"), h.manager.load("two"));
-    assert_ne!(one.is_ok(), two.is_ok());
+    for result in [&one, &two] {
+        if let Err(error) = result {
+            assert_eq!(error.code, "resident_budget");
+        }
+    }
+    assert!(one.is_ok() || two.is_ok());
     assert_eq!(h.manager.resources()["reserved_bytes"], 64);
     assert_eq!(
         h.manager

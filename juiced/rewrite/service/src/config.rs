@@ -317,6 +317,8 @@ pub struct ModelSpec {
     pub policy: Policy,
     #[serde(default)]
     pub revision: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idle_unload_after_ms: Option<u64>,
 }
 
 impl ModelSpec {
@@ -352,6 +354,11 @@ pub struct Config {
     #[serde(default = "default_artifact_policy")]
     pub artifact_source_policy: crate::artifacts::SourcePolicy,
     pub resident_budget_bytes: u64,
+    #[serde(
+        default = "default_idle_unload_after_ms",
+        skip_serializing_if = "is_default_idle_unload_after_ms"
+    )]
+    pub idle_unload_after_ms: u64,
     pub startup_timeout_ms: u64,
     pub request_timeout_ms: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -411,6 +418,7 @@ impl From<LegacyModelSpec> for ModelSpec {
             operations: legacy.operations,
             policy: legacy.policy,
             revision: legacy.revision,
+            idle_unload_after_ms: None,
         }
     }
 }
@@ -439,6 +447,8 @@ struct ConfigWire {
     #[serde(default = "default_artifact_policy")]
     artifact_source_policy: crate::artifacts::SourcePolicy,
     resident_budget_bytes: u64,
+    #[serde(default = "default_idle_unload_after_ms")]
+    idle_unload_after_ms: u64,
     startup_timeout_ms: u64,
     request_timeout_ms: u64,
     #[serde(default, deserialize_with = "deserialize_native_binding")]
@@ -506,6 +516,7 @@ impl<'de> Deserialize<'de> for Config {
             admission: wire.admission,
             artifact_source_policy: wire.artifact_source_policy,
             resident_budget_bytes: wire.resident_budget_bytes,
+            idle_unload_after_ms: wire.idle_unload_after_ms,
             startup_timeout_ms: wire.startup_timeout_ms,
             request_timeout_ms: wire.request_timeout_ms,
             models,
@@ -592,6 +603,17 @@ impl Config {
             .validate()
             .map_err(|error| error.to_string())?;
         self.session_cache.validate()?;
+        if self.idle_unload_after_ms > MAXIMUM_IDLE_UNLOAD_MS
+            || self.models.iter().any(|model| {
+                model
+                    .idle_unload_after_ms
+                    .is_some_and(|value| value > MAXIMUM_IDLE_UNLOAD_MS)
+            })
+        {
+            return Err(format!(
+                "Idle unload delays must be at most {MAXIMUM_IDLE_UNLOAD_MS} milliseconds"
+            ));
+        }
         let mut ids = HashSet::new();
         let mut native_ids = HashSet::new();
         for model in &self.models {
@@ -738,6 +760,17 @@ impl Config {
 
 fn default_inhibit_suspend() -> bool {
     true
+}
+
+pub const DEFAULT_IDLE_UNLOAD_MS: u64 = 900_000;
+pub const MAXIMUM_IDLE_UNLOAD_MS: u64 = 30 * 24 * 60 * 60 * 1000;
+
+fn default_idle_unload_after_ms() -> u64 {
+    DEFAULT_IDLE_UNLOAD_MS
+}
+
+fn is_default_idle_unload_after_ms(value: &u64) -> bool {
+    *value == DEFAULT_IDLE_UNLOAD_MS
 }
 
 fn default_artifact_policy() -> crate::artifacts::SourcePolicy {
