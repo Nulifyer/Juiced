@@ -52,10 +52,12 @@ User decisions to keep: models Disabled by default "until I add them to on-deman
 
 Open, ranked: (1) Rust-rewrite container image (juiced/Dockerfile still builds the C++ lemond); (2) more engines: hybrid ROCm+NPU, FLM/RyzenAI, FUTO, parakeet, moonshine; (3) Wyoming, Realtime; (4) residency: idle TTL, pressure eviction, protected HA reservations; (5) manual GGUF upload; (6) migration import from v0.9.2 native settings, matched benchmarks, review council. Doc drift: PLAN.md/PLATFORM-PLAN.md say eight destinations; UI-DESIGN.md describes the native console; FEATURE-COVERAGE.json predates the redesign.
 
-Open question for the user: one-click Add registers On demand; their rule says Disabled by default.
+Decided 2026-11-12: Add shows a policy choice (Disabled / On demand / Hot), preselected On demand (ab1759f9).
+
+Container: merged 39d38274 (juiced/rewrite/container). Image 473 MB; CPU and RTX 5080 (CDI) smoke tests pass; CUDA llama.cpp install and chat inside the container verified. Not verified: ROCm, Intel/AMD Vulkan hardware, NPU, Docker builds.
 
 ## Next action
 
-Primary: record the gate result (`bun scripts/quick-check.ts --full --real --speech --power --resources`); ask about Add's default policy; then start the container image.
+Primary: engines beyond llama.cpp/whisper/sd.cpp/Kokoros (hybrid ROCm+NPU, FLM, FUTO, parakeet, moonshine); Wyoming then Realtime; idle TTL and pressure eviction; manual GGUF upload; v0.9.2 settings import; doc drift fixes (PLAN.md destinations, UI-DESIGN.md, FEATURE-COVERAGE.json).
 
-Verified 2026-11-12: Rust lib 668, process suites all pass (artifact_sets flaked once under load, 4/4 alone), Clippy clean, inventory 75 routes, Bun 66, Playwright 155 passed / 1 skipped.
+Verified 2026-11-12 06:21 UTC: full gate `quick-check --full --real --speech --power --resources` passed with real llama.cpp, whisper.cpp, power and host-memory lanes, no source change during the run (local/verification/latest.json); Playwright 155 passed / 1 skipped.
