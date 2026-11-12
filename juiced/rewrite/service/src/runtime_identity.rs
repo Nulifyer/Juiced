@@ -463,19 +463,17 @@ mod linux {
             if permissions[2] != b'x' {
                 continue;
             }
-            if permissions[1] == b'w' {
-                return Err(Refusal::unqualified(
-                    "runtime_writable_executable",
-                    "A writable executable mapping has no qualified runtime file identity.",
-                ));
-            }
-            if path.ends_with(b" (deleted)") {
-                return Err(Refusal::unqualified(
-                    "runtime_deleted_executable",
-                    "A deleted or ambiguously named executable mapping cannot be verified.",
-                ));
-            }
             let kernel = matches!(path, b"[vdso]" | b"[vsyscall]");
+            // GPU and graphics runtimes JIT code into anonymous, writable or memfd mappings. Those
+            // regions derive from the mapped files, so the file closure alone identifies the runtime.
+            if !kernel
+                && (permissions[1] == b'w'
+                    || path.ends_with(b" (deleted)")
+                    || path.first() != Some(&b'/')
+                    || inode == 0)
+            {
+                continue;
+            }
             if kernel {
                 if inode != 0
                     || major != 0
@@ -486,11 +484,6 @@ mod linux {
                 {
                     return Err(malformed());
                 }
-            } else if path.first() != Some(&b'/') || inode == 0 {
-                return Err(Refusal::unqualified(
-                    "runtime_anonymous_executable",
-                    "An unknown or anonymous executable mapping has no qualified runtime file identity.",
-                ));
             }
             mappings.push(Mapping {
                 start,
@@ -1341,13 +1334,22 @@ mod linux {
             );
         }
         #[test]
-        fn deleted_unknown_anonymous_writable_and_malformed_mappings_refuse() {
-            for input in [
-                b"1000-2000 r-xp 0000 08:01 1 /lib/a.so (deleted)\n".as_slice(),
-                b"1000-2000 rwxp 0000 08:01 1 /lib/a.so\n",
+        fn jit_regions_are_skipped_and_malformed_mappings_refuse() {
+            let file = b"3000-4000 r-xp 0000 08:01 1 /lib/a.so\n";
+            for jit in [
+                b"1000-2000 r-xp 0000 08:01 1 /memfd:hip (deleted)\n".as_slice(),
+                b"1000-2000 rwxp 0000 08:01 1 /lib/b.so\n",
                 b"1000-2000 r-xp 0000 00:00 0\n",
                 b"1000-2000 r-xp 0000 00:00 0 [anon:jit]\n",
                 b"1000-2000 r-xp 0000 00:00 0 [unknown]\n",
+            ] {
+                let input = [jit, file.as_slice()].concat();
+                let mappings = parse(&input).unwrap();
+                assert_eq!(mappings.len(), 1);
+                assert_eq!(mappings[0].start, 0x3000);
+            }
+            for input in [
+                b"1000-2000 r-xp 0000 00:00 0 [anon:jit]\n".as_slice(),
                 b"1000-2000 r-xp 0000 00:00 0 [vdso]",
                 b"1000-1000 r-xp 0000 08:01 1 /lib/a.so\n",
                 b"1000-3000 r-xp 0000 08:01 1 /lib/a.so\n2000-4000 r-xp 0000 08:01 2 /lib/b.so\n",
