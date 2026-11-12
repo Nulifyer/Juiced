@@ -118,7 +118,7 @@
     },
     {
       "path": "juiced/rewrite/rust-tests/tests/support/mod.rs",
-      "sha256": "e60a87c4f44c0b8f2fdcda7430de992b748a66be1c0863bce2bdbed9b11359a1",
+      "sha256": "7fadf5c473ee669b61c96759ef04dfdbc383dd1eed854779ad58215d1900d4b4",
       "hash_check": "snapshot_only"
     },
     {

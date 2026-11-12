@@ -2707,8 +2707,12 @@ impl Manager {
         } else {
             false
         };
+        let sessions_forgotten = self
+            .forget_session_rows(Some(crate::sessions::model_tag(id)), None)
+            .await
+            .map_or(0, |(forgotten, _)| forgotten);
         Ok(
-            serde_json::json!({"model":id,"registration_removed":true,"weights_retained":true,"artifact_reference_retained":reference_retained}),
+            serde_json::json!({"model":id,"registration_removed":true,"weights_retained":true,"artifact_reference_retained":reference_retained,"sessions_forgotten":sessions_forgotten}),
         )
     }
 

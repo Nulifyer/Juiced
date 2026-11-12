@@ -435,3 +435,38 @@ async fn session_routes_configure_forget_and_own_explicit_slot_operations() {
         serde_json::from_slice(&std::fs::read(&server.config_path).unwrap()).unwrap();
     assert_eq!(saved["session_cache"]["models"][MODEL], "off");
 }
+
+#[tokio::test]
+async fn removing_a_model_forgets_its_saved_sessions() {
+    let server = session_server(1, fast()).await;
+    chat(&server, &conversation("rivers"), None).await;
+    chat(&server, &conversation("glaciers"), None).await;
+    let (status, _) = server.post("unload", json!({"model":MODEL})).await;
+    assert_eq!(status, StatusCode::OK);
+    settled(&server, 2).await;
+    let catalog = server.get("juiced/catalog").await;
+    let model = catalog["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == MODEL)
+        .unwrap()
+        .clone();
+    let (status, disabled) = server
+        .post(
+            "juiced/policy",
+            json!({"model":MODEL,"policy":"disabled","expected_revision":model["revision"]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{disabled}");
+    let (status, removed) = server
+        .post(
+            "delete",
+            json!({"model":MODEL,"expected_revision":disabled["revision"]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{removed}");
+    assert_eq!(removed["sessions_forgotten"], 2, "{removed}");
+    let view = sessions(&server).await;
+    assert_eq!(view["totals"]["sessions"], 0, "{view}");
+}

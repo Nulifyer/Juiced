@@ -873,6 +873,55 @@ impl Manager {
         )
     }
 
+    pub(super) async fn forget_session_rows(
+        &self,
+        tag: Option<String>,
+        session: Option<String>,
+    ) -> Result<(usize, usize), ApiError> {
+        let cache = self.cache_store()?;
+        let (forgotten, busy) = tokio::task::spawn_blocking(move || {
+            let rows = cache.session_rows(
+                crate::sessions::PROTOCOL_PREFIX,
+                |identity| {
+                    crate::sessions::parse_protocol(&identity.protocol).is_some_and(|protocol| {
+                        tag.as_deref().is_none_or(|tag| protocol.model_tag == tag)
+                    }) && session
+                        .as_deref()
+                        .is_none_or(|session| identity.session_digest == session)
+                },
+                false,
+            )?;
+            let mut forgotten = 0usize;
+            let mut busy = 0usize;
+            for row in rows {
+                if !row.busy && row.state == crate::cache::SnapshotState::Uncertain {
+                    let control = crate::cache::OperationControl::new(
+                        Instant::now() + Duration::from_secs(2),
+                        Arc::new(AtomicBool::new(false)),
+                    );
+                    match cache.recover_writer(&row.id, &row.identity, row.revision, &control) {
+                        Ok(outcome) if outcome.recovered => forgotten += 1,
+                        _ => busy += 1,
+                    }
+                    continue;
+                }
+                if row.busy || row.state != crate::cache::SnapshotState::Saved {
+                    busy += 1;
+                    continue;
+                }
+                match cache.forget(&row.id, &row.identity, row.revision) {
+                    Ok(()) => forgotten += 1,
+                    Err(_) => busy += 1,
+                }
+            }
+            Ok::<_, CacheError>((forgotten, busy))
+        })
+        .await
+        .map_err(|_| claims_unavailable())?
+        .map_err(cache_error)?;
+        Ok((forgotten, busy))
+    }
+
     pub async fn session_action(
         self: &Arc<Self>,
         action: SessionAction,
@@ -933,39 +982,9 @@ impl Manager {
                 if let Some(model) = &model {
                     self.worker(model)?;
                 }
-                let cache = self.cache_store()?;
-                let tag = model.as_deref().map(crate::sessions::model_tag);
-                let (forgotten, busy) = tokio::task::spawn_blocking(move || {
-                    let rows = cache.session_rows(
-                        crate::sessions::PROTOCOL_PREFIX,
-                        |identity| {
-                            crate::sessions::parse_protocol(&identity.protocol).is_some_and(
-                                |protocol| {
-                                    tag.as_deref().is_none_or(|tag| protocol.model_tag == tag)
-                                },
-                            ) && session
-                                .as_deref()
-                                .is_none_or(|session| identity.session_digest == session)
-                        },
-                        false,
-                    )?;
-                    let mut forgotten = 0usize;
-                    let mut busy = 0usize;
-                    for row in rows {
-                        if row.busy || row.state != crate::cache::SnapshotState::Saved {
-                            busy += 1;
-                            continue;
-                        }
-                        match cache.forget(&row.id, &row.identity, row.revision) {
-                            Ok(()) => forgotten += 1,
-                            Err(_) => busy += 1,
-                        }
-                    }
-                    Ok::<_, CacheError>((forgotten, busy))
-                })
-                .await
-                .map_err(|_| claims_unavailable())?
-                .map_err(cache_error)?;
+                let (forgotten, busy) = self
+                    .forget_session_rows(model.as_deref().map(crate::sessions::model_tag), session)
+                    .await?;
                 Ok(serde_json::json!({"forgotten":forgotten,"retained_busy":busy}))
             }
         }
