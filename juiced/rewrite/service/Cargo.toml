@@ -1,0 +1,40 @@
+[package]
+name = "juiced-service"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+default-run = "lemond"
+
+[features]
+test-fixture = []
+cpu-profile = ["dep:pprof"]
+
+[dependencies]
+axum = { version = "0.8.9", features = ["multipart"] }
+futures-util = "0.3"
+getrandom = "0.4.3"
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "multipart", "rustls-tls"] }
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = { version = "1", features = ["raw_value"] }
+sha2 = "0.10"
+socket2 = "0.6"
+subtle = "2"
+tempfile = "3"
+tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
+tower-http = { version = "0.6", features = ["cors", "fs"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+pprof = { version = "0.15", features = ["flamegraph"], optional = true }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+
+[[bin]]
+name = "lemond"
+path = "src/main.rs"
+
+[[bin]]
+name = "juiced-test-worker"
+path = "tests/support/worker.rs"
+required-features = ["test-fixture"]

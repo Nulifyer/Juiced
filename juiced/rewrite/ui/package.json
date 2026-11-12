@@ -1,0 +1,25 @@
+{
+  "name": "juiced-rewrite-ui",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun --hot scripts/dev.ts",
+    "fixture": "bun scripts/fixture.ts",
+    "build": "bun run check && bun build index.html --outdir dist --target browser --production && bun scripts/licenses.ts",
+    "check": "tsc --noEmit",
+    "test": "bun test test/",
+    "test:e2e": "playwright test"
+  },
+  "dependencies": {
+    "react": "19.2.0",
+    "react-dom": "19.2.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.65.0",
+    "@types/bun": "^1.3.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "typescript": "^5.9.0"
+  }
+}

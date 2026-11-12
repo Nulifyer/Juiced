@@ -1,0 +1,2430 @@
+{
+  "schema_version": 1,
+  "purpose": "Design input for the Rust rewrite. Not executable configuration, a runtime installer manifest, or a Juiced support declaration.",
+  "reviewed_at": "2026-11-10",
+  "execution_enabled": false,
+  "priority_definitions": {
+    "parity": "Preserve the existing native recipe's selected product disposition and behavior. Native descriptors do not establish Rust or hardware qualification.",
+    "first-expansion": "Recommended first new integrations after shared catalog and worker contracts; additive to existing required scope. Every target still needs its own release decision and evidence.",
+    "conditional": "Add only for a named workload/device gap and selected-provider acceptance.",
+    "attach": "Connect to an explicitly configured independently owned service first. Lifecycle management must be separately negotiated.",
+    "reference-only": "Recognize packaging or client-local execution. No new daemon worker is proposed by this inventory.",
+    "legacy": "Recognize retained installations/artifacts without automatically creating new managed integrations."
+  },
+  "candidate_backend_semantics": "Candidate paths are research/design leads with per-entry constraints. Never construct an OS x backend x model Cartesian product, advertise them as qualified, or activate them from this file.",
+  "backends": [
+    {
+      "id": "cpu",
+      "description": "CPU execution; ISA, math library and thread settings remain separate."
+    },
+    {
+      "id": "cuda",
+      "description": "NVIDIA CUDA execution."
+    },
+    {
+      "id": "hip",
+      "description": "AMD HIP/ROCm execution. rocm is a legacy/configuration alias whose exact acceptance is adapter-owned."
+    },
+    {
+      "id": "vulkan",
+      "description": "Vulkan GPU execution; no vendor-wide support inference."
+    },
+    {
+      "id": "metal",
+      "description": "Apple Metal GPU execution."
+    },
+    {
+      "id": "mps",
+      "description": "PyTorch MPS execution on Apple GPUs; distinct from an MLX/Metal implementation."
+    },
+    {
+      "id": "sycl",
+      "description": "SYCL/oneAPI execution, initially Intel GPU targets."
+    },
+    {
+      "id": "opencl",
+      "description": "OpenCL execution, with device-specific restrictions."
+    },
+    {
+      "id": "xpu",
+      "description": "Intel XPU execution through the selected framework/kernel package."
+    },
+    {
+      "id": "openvino",
+      "description": "OpenVINO engine/provider path with a separately selected CPU/GPU/NPU device."
+    },
+    {
+      "id": "coreml",
+      "description": "Core ML engine/provider path with explicit allowed and observed CPU/GPU/ANE stages."
+    },
+    {
+      "id": "tensorrt",
+      "description": "NVIDIA TensorRT execution provider or engine path."
+    },
+    {
+      "id": "directml",
+      "description": "Windows DirectML execution provider."
+    },
+    {
+      "id": "qnn",
+      "description": "Qualcomm QNN/QAIRT provider path with selected CPU/GPU/HTP target."
+    },
+    {
+      "id": "hexagon",
+      "description": "Direct Qualcomm Hexagon/HTP execution path where supported by the exact runtime."
+    },
+    {
+      "id": "xdna2",
+      "description": "FLM's AMD XDNA2-specific execution path, not a generic NPU API."
+    },
+    {
+      "id": "vitisai",
+      "description": "AMD Ryzen AI vendor execution/provider stack, including separately described hybrid/offload stages."
+    },
+    {
+      "id": "migraphx",
+      "description": "AMD MIGraphX execution provider."
+    },
+    {
+      "id": "cann",
+      "description": "Huawei Ascend CANN execution."
+    },
+    {
+      "id": "musa",
+      "description": "Moore Threads MUSA execution."
+    },
+    {
+      "id": "tpu",
+      "description": "Google TPU execution/plugin path; distinct from Coral Edge TPU."
+    },
+    {
+      "id": "webgpu",
+      "description": "WebGPU execution. Client-browser and daemon-worker locations must remain distinct."
+    },
+    {
+      "id": "wasm",
+      "description": "WebAssembly CPU execution, including explicitly described WASI targets."
+    },
+    {
+      "id": "xnnpack",
+      "description": "XNNPACK CPU execution."
+    },
+    {
+      "id": "rknpu",
+      "description": "Rockchip NPU execution through RKLLM or RKNN-specific packages."
+    },
+    {
+      "id": "hailo",
+      "description": "Hailo accelerator execution with mandatory chip-family identity."
+    },
+    {
+      "id": "edgetpu",
+      "description": "Coral Edge TPU execution with compiled compatible artifacts."
+    },
+    {
+      "id": "hrx",
+      "description": "Existing HRX distribution-specific path. Preserve its implementation identity rather than treating this as a generic accelerator API."
+    }
+  ],
+  "tasks": [
+    "3d-generation",
+    "embeddings",
+    "image-editing",
+    "image-generation",
+    "image-understanding",
+    "image-upscaling",
+    "music-generation",
+    "reranking",
+    "sound-generation",
+    "speaker-diarization",
+    "speaker-identification",
+    "speech-recognition",
+    "speech-synthesis",
+    "speech-to-speech",
+    "speech-translation",
+    "structured-extraction",
+    "text-generation",
+    "tool-calling",
+    "translation",
+    "video-generation",
+    "voice-activity-detection"
+  ],
+  "native_reference": {
+    "source_head": "8e4b338415d0ebad9aad11307815867e24462959",
+    "source_tree_state": "Observed main checkout with concurrent unrelated modifications. Hashes identify the exact reference files; no C++ changes were imported.",
+    "source_files": [
+      {
+        "path": "juiced/BACKENDS.md",
+        "sha256": "8de95e61741eca4de8136a6bee1f36f17b3c9e84ee9fc7883f065c00f99fd515"
+      },
+      {
+        "path": "juiced/Dockerfile",
+        "sha256": "cecbe5345f7f453b19a54994159ffd631e3814e839b05581413874ee15e8f92e"
+      },
+      {
+        "path": "juiced/runtime/futo_server.cpp",
+        "sha256": "6c4e0333b2b9eaca2feb33ddb4b82802578171793d913ff9d1f2b34db8c00766"
+      },
+      {
+        "path": "src/cpp/resources/backend_versions.json",
+        "sha256": "3716032081ff1c0305840271f2a05e9406cfb9bc45a510b81612178377cfd428"
+      }
+    ],
+    "recipe_count": 18,
+    "support_row_count": 44
+  },
+  "native_recipe_migrations": [
+    {
+      "legacy_recipe": "acestep",
+      "display_name": "ACE-Step",
+      "catalog_entry": "acestep-cpp",
+      "native_selectable_backend": true,
+      "native_uses_ctx_size": false,
+      "native_backend_labels": [
+        "cuda",
+        "rocm",
+        "vulkan"
+      ],
+      "migration_rule": "Preserve fixed music pipeline and complete checkpoint set.",
+      "native_support_rows": [
+        {
+          "backend": "cuda",
+          "tier": "experimental",
+          "format": "native",
+          "os": [
+            "linux",
+            "windows"
+          ],
+          "device_declaration": "nvidia_gpu"
+        },
+        {
+          "backend": "vulkan",
+          "tier": "experimental",
+          "format": "native",
+          "os": [
+            "linux",
+            "windows"
+          ],
+          "device_declaration": "amd_gpu; cpu (x86_64); nvidia_gpu"
+        },
+        {
+          "backend": "rocm",
+          "tier": "experimental",
+          "format": "native",
+          "os": [
+            "linux",
+            "windows"
+          ],
+          "device_declaration": "amd_gpu (gfx103X, gfx110X, gfx1150, gfx1151, gfx1152, gfx120X)"
+        }
+      ]
+    },
+    {
+      "legacy_recipe": "asr4all",
+      "display_name": "FUTO transcribe.cpp",
+      "catalog_entry": "futo-transcribe-cpp",
+      "native_selectable_backend": false,
+      "native_uses_ctx_size": false,
+      "native_backend_labels": [
+        "cpu"
+      ],
+      "migration_rule": "Preserve FUTO GitLab origin, CPU worker and ASR4ALL model restriction.",
+      "native_support_rows": [
+        {
+          "backend": "cpu",
+          "tier": "experimental",
+          "format": "native",
+          "os": [
+            "linux"
+          ],
+          "device_declaration": "cpu (x86_64)"
+        }
+      ]
+    },
+    {
+      "legacy_recipe": "ds4",
+      "display_name": "DwarfStar4",
+      "catalog_entry": "dwarfstar4",
+      "native_selectable_backend": false,
+      "native_uses_ctx_size": true,
+      "native_backend_labels": [
+        "rocm"
+      ],
+      "migration_rule": "Keep curated model requirements and selected Linux gfx1151 distribution.",
+      "native_support_rows": [
+        {
+          "backend": "rocm",
+          "tier": "guest",
+          "format": "native",
+          "os": [
+            "linux"
+          ],
+          "device_declaration": "amd_gpu (gfx1151)"
+        }
+      ]
+    },
+    {
+      "legacy_recipe": "flm",
+      "display_name": "FastFlowLM NPU",
+      "catalog_entry": "fastflowlm",
+      "native_selectable_backend": false,
+      "native_uses_ctx_size": true,
+      "native_backend_labels": [
+        "npu"
+      ],
+      "migration_rule": "Resolve legacy npu to the exact FLM XDNA2 build; preserve its package/model contracts.",
+      "native_support_rows": [
+        {
+          "backend": "npu",
+          "tier": "core",
+          "format": "native",
+          "os": [
+            "linux",
+            "windows"
+          ],
+          "device_declaration": "amd_npu (XDNA2)"
+        }
+      ]
+    },
+    {
+      "legacy_recipe": "kokoro",
+      "display_name": "Kokoro",
+      "catalog_entry": "kokoros",
+      "native_selectable_backend": false,
+      "native_uses_ctx_size": false,
+      "native_backend_labels": [
+        "cpu",
+        "metal"
+      ],
+      "migration_rule": "Retain native Kokoros identity. Other Kokoro implementations are new profiles.",
+      "native_support_rows": [
+        {
+          "backend": "metal",
+          "tier": "core",
+          "format": "native",
+          "os": [
+            "macos"
+          ],
+          "device_declaration": "metal"
+        },
+        {
+          "backend": "cpu",
+          "tier": "core",
+          "format": "native",
+          "os": [
+            "linux",
+            "windows"
+          ],
+          "device_declaration": "cpu (x86_64)"
+        }
+      ]
+    },
+    {
+      "legacy_recipe": "llamacpp",
+      "display_name": "Llama.cpp GPU",
+      "catalog_entry": "llama-cpp",
+      "native_selectable_backend": true,
+      "native_uses_ctx_size": true,
+      "native_backend_labels": [
+        "cpu",
+        "cuda",
+        "hybrid-rocm",
+        "metal",
+        "rocm",
+        "system",
+        "vulkan"
+      ],
+      "migration_rule": "cpu/cuda/rocm/vulkan/metal map explicitly. system is installation provenance. hybrid-rocm requires its exact hybrid fork and placement profile.",
+      "native_support_rows": [
+        {
+          "backend": "system",
+          "tier": "core",
+          "format": "native",
+          "os": [
+            "linux"
+          ],
+          "device_declaration": "cpu (arm64, x86_64)"
+        },
+        {
+          "backend": "metal",
+          "tier": "core",
+          "format": "native",
+          "os": [
+            "macos"
+          ],
+          "device_declaration": "metal"
+        },
+        {
+          "backend": "cuda",
+          "tier": "core",
+          "format": "native",
+          "os": [
+            "linux",
+            "windows"
+          ],
+          "device_declaration": "nvidia_gpu (sm_100, sm_120, sm_121, sm_75, sm_80, sm_86, sm_89, sm_90)"
+        },
+        {
+          "backend": "vulkan",
+          "tier": "core",
+          "format": "native",
+          "os": [
+            "linux",
+            "windows"
+          ],
+          "device_declaration": "amd_gpu; cpu (arm64, x86_64)"
+        },
+        {
+          "backend": "rocm",
+          "tier": "core",
+          "format": "native",
+          "os": [
+            "linux",
+            "windows"
+          ],
+          "device_declaration": "amd_gpu (gfx103X, gfx110X, gfx1150, gfx1151, gfx1152, gfx120X, gfx908, gfx90a, gfx942, gfx950)"
+        },
+        {
+          "backend": "hybrid-rocm",
+          "tier": "experimental",
+          "format": "native",
+          "os": [
+            "linux"
+          ],
+          "device_declaration": "amd_gpu (gfx1150); amd_npu (XDNA2)"
+        },
+        {
+          "backend": "cpu",
+          "tier": "core",
+          "format": "native",
+          "os": [
+            "linux",
+            "windows"
+          ],
+          "device_declaration": "cpu (arm64, x86_64)"
+        }
+      ],
+      "profile_overrides": [
+        {
+          "legacy_backend": "hybrid-rocm",
+          "catalog_entry": "llama-xdna-hybrid",
+          "reason": "Pinned hybrid fork and selected NPU/GPU placement require a separate distribution identity."
+        }
+      ]
+    },
+    {
+      "legacy_recipe": "llamacpp-hrx",
+      "display_name": "HRX GPU",
+      "catalog_entry": "llama-hrx",
+      "native_selectable_backend": false,
+      "native_uses_ctx_size": true,
+      "native_backend_labels": [
+        "hrx"
+      ],
+      "migration_rule": "Keep separate fork/build identity and selected device restrictions.",
+      "native_support_rows": [
+        {
+          "backend": "hrx",
+          "tier": "experimental",
+          "format": "native",
+          "os": [
+            "linux"
+          ],
+          "device_declaration": "amd_gpu (gfx1100, gfx1151)"
+        }
+      ]
+    },
+    {
+      "legacy_recipe": "moonshine",
+      "display_name": "Moonshine",
+      "catalog_entry": "moonshine-voice",
+      "native_selectable_backend": false,
+      "native_uses_ctx_size": false,
+      "native_backend_labels": [
+        "cpu"
+      ],
+      "migration_rule": "Keep existing worker/version contract; current upstream packages are not an automatic replacement.",
+      "native_support_rows": [
+        {
+          "backend": "cpu",
+          "tier": "core",
+          "format": "python",
+          "os": [
+            "windows"
+          ],
+          "device_declaration": "cpu (x86_64)"
+        },
+        {
+          "backend": "cpu",
+          "tier": "core",
+          "format": "python",
+          "os": [
+            "linux"
+          ],
+          "device_declaration": "cpu (arm64, x86_64)"
+        },
+        {
+          "backend": "cpu",
+          "tier": "core",
+          "format": "python",
+          "os": [
+            "macos"
+          ],
+          "device_declaration": "cpu (arm64)"
+        }
+      ]
+    },
+    {
+      "legacy_recipe": "onnxruntime",
+      "display_name": "ONNX Runtime",
+      "catalog_entry": "onnxruntime",
+      "native_selectable_backend": false,
+      "native_uses_ctx_size": false,
+      "native_backend_labels": [
+        "cpu"
+      ],
+      "migration_rule": "Retain CPU worker. Additional execution providers require separate selected profiles.",
+      "native_support_rows": [
+        {
+          "backend": "cpu",
+          "tier": "experimental",
+          "format": "native",
+          "os": [
+            "windows"
+          ],
+          "device_declaration": "cpu (x86_64)"
+        },
+        {
+          "backend": "cpu",
+          "tier": "experimental",
+          "format": "native",
+          "os": [
+            "linux"
+          ],
+          "device_declaration": "cpu (arm64, x86_64)"
+        },
+        {
+          "backend": "cpu",
+          "tier": "experimental",
+          "format": "native",
+          "os": [
+            "macos"
+          ],
+          "device_declaration": "cpu (arm64)"
+        }
+      ]
+    },
+    {
+      "legacy_recipe": "openmoss",
+      "display_name": "OpenMOSS TTS",
+      "catalog_entry": "openmoss-cpp",
+      "native_selectable_backend": true,
+      "native_uses_ctx_size": false,
+      "native_backend_labels": [
+        "cuda",
+        "vulkan"
+      ],
+      "migration_rule": "Preserve fixed synthesis and voice-design contracts.",
+      "native_support_rows": [
+        {
+          "backend": "cuda",
+          "tier": "experimental",
+          "format": "native",
+          "os": [
+            "linux",
+            "windows"
+          ],
+          "device_declaration": "nvidia_gpu"
+        },
+        {
+          "backend": "vulkan",
+          "tier": "experimental",
+          "format": "native",
+          "os": [
+            "linux",
+            "windows"
+          ],
+          "device_declaration": "amd_gpu; cpu (x86_64); nvidia_gpu"
+        }
+      ]
+    },
+    {
+      "legacy_recipe": "parakeet",
+      "display_name": "Parakeet Redux",
+      "catalog_entry": "parakeet-redux",
+      "native_selectable_backend": false,
+      "native_uses_ctx_size": false,
+      "native_backend_labels": [
+        "cpu"
+      ],
+      "migration_rule": "Keep the pinned mudler/parakeet.cpp CPU implementation, distinct from other Parakeet implementations.",
+      "native_support_rows": [
+        {
+          "backend": "cpu",
+          "tier": "experimental",
+          "format": "native",
+          "os": [
+            "linux"
+          ],
+          "device_declaration": "cpu (x86_64)"
+        }
+      ]
+    },
+    {
+      "legacy_recipe": "ryzenai-llm",
+      "display_name": "Ryzen AI LLM",
+      "catalog_entry": "ryzenai-oga",
+      "native_selectable_backend": false,
+      "native_uses_ctx_size": true,
+      "native_backend_labels": [
+        "npu"
+      ],
+      "migration_rule": "Keep exact vendor stack and prepared-model identity. No npu-to-rocm string substitution.",
+      "native_support_rows": [
+        {
+          "backend": "npu",
+          "tier": "core",
+          "format": "native",
+          "os": [
+            "windows"
+          ],
+          "device_declaration": "amd_npu (XDNA2)"
+        }
+      ]
+    },
+    {
+      "legacy_recipe": "sd-cpp",
+      "display_name": "StableDiffusion.cpp",
+      "catalog_entry": "stable-diffusion-cpp",
+      "native_selectable_backend": true,
+      "native_uses_ctx_size": false,
+      "native_backend_labels": [
+        "cpu",
+        "cuda",
+        "metal",
+        "rocm",
+        "vulkan"
+      ],
+      "migration_rule": "Preserve native selected image operations and backend packages.",
+      "native_support_rows": [
+        {
+          "backend": "metal",
+          "tier": "core",
+          "format": "native",
+          "os": [
+            "macos"
+          ],
+          "device_declaration": "metal"
+        },
+        {
+          "backend": "cuda",
+          "tier": "core",
+          "format": "native",
+          "os": [
+            "linux",
+            "windows"
+          ],
+          "device_declaration": "nvidia_gpu (sm_100, sm_120, sm_121, sm_75, sm_80, sm_86, sm_89, sm_90)"
+        },
+        {
+          "backend": "vulkan",
+          "tier": "core",
+          "format": "native",
+          "os": [
+            "linux",
+            "windows"
+          ],
+          "device_declaration": "amd_gpu; cpu (x86_64); nvidia_gpu"
+        },
+        {
+          "backend": "rocm",
+          "tier": "core",
+          "format": "native",
+          "os": [
+            "linux",
+            "windows"
+          ],
+          "device_declaration": "amd_gpu (gfx103X, gfx110X, gfx1150, gfx1151, gfx1152, gfx120X)"
+        },
+        {
+          "backend": "cpu",
+          "tier": "core",
+          "format": "native",
+          "os": [
+            "linux",
+            "windows"
+          ],
+          "device_declaration": "cpu (x86_64)"
+        }
+      ]
+    },
+    {
+      "legacy_recipe": "thenoise",
+      "display_name": "TheNoise ROCm",
+      "catalog_entry": "thenoise",
+      "native_selectable_backend": true,
+      "native_uses_ctx_size": false,
+      "native_backend_labels": [
+        "rocm"
+      ],
+      "migration_rule": "Preserve worker plus pinned Python/compiler dependencies and fixed image operations.",
+      "native_support_rows": [
+        {
+          "backend": "rocm",
+          "tier": "core",
+          "format": "python",
+          "os": [
+            "linux",
+            "windows"
+          ],
+          "device_declaration": "amd_gpu (gfx103X, gfx110X, gfx1150, gfx1151, gfx1152, gfx120X)"
+        }
+      ]
+    },
+    {
+      "legacy_recipe": "thinksound",
+      "display_name": "ThinkSound",
+      "catalog_entry": "thinksound-cpp",
+      "native_selectable_backend": true,
+      "native_uses_ctx_size": false,
+      "native_backend_labels": [
+        "cuda",
+        "rocm",
+        "vulkan"
+      ],
+      "migration_rule": "Preserve selected fixed sound-generation service.",
+      "native_support_rows": [
+        {
+          "backend": "cuda",
+          "tier": "experimental",
+          "format": "native",
+          "os": [
+            "linux",
+            "windows"
+          ],
+          "device_declaration": "nvidia_gpu"
+        },
+        {
+          "backend": "vulkan",
+          "tier": "experimental",
+          "format": "native",
+          "os": [
+            "linux",
+            "windows"
+          ],
+          "device_declaration": "amd_gpu; cpu (x86_64); nvidia_gpu"
+        },
+        {
+          "backend": "rocm",
+          "tier": "experimental",
+          "format": "native",
+          "os": [
+            "linux",
+            "windows"
+          ],
+          "device_declaration": "amd_gpu (gfx103X, gfx110X, gfx1150, gfx1151, gfx1152, gfx120X)"
+        }
+      ]
+    },
+    {
+      "legacy_recipe": "trellis",
+      "display_name": "TRELLIS.2",
+      "catalog_entry": "trellis-cpp",
+      "native_selectable_backend": true,
+      "native_uses_ctx_size": false,
+      "native_backend_labels": [
+        "cuda",
+        "rocm",
+        "vulkan"
+      ],
+      "migration_rule": "Preserve selected 3D service disposition and its artifact/output contract.",
+      "native_support_rows": [
+        {
+          "backend": "cuda",
+          "tier": "experimental",
+          "format": "native",
+          "os": [
+            "linux",
+            "windows"
+          ],
+          "device_declaration": "nvidia_gpu"
+        },
+        {
+          "backend": "vulkan",
+          "tier": "experimental",
+          "format": "native",
+          "os": [
+            "linux",
+            "windows"
+          ],
+          "device_declaration": "amd_gpu; cpu (x86_64); nvidia_gpu"
+        },
+        {
+          "backend": "rocm",
+          "tier": "experimental",
+          "format": "native",
+          "os": [
+            "linux",
+            "windows"
+          ],
+          "device_declaration": "amd_gpu (gfx103X, gfx110X, gfx1150, gfx1151, gfx1152, gfx120X)"
+        }
+      ]
+    },
+    {
+      "legacy_recipe": "vllm",
+      "display_name": "vLLM ROCm",
+      "catalog_entry": "vllm",
+      "native_selectable_backend": true,
+      "native_uses_ctx_size": true,
+      "native_backend_labels": [
+        "rocm"
+      ],
+      "migration_rule": "Preserve existing ROCm distribution. New CUDA and plugin targets are additive qualification cells.",
+      "native_support_rows": [
+        {
+          "backend": "rocm",
+          "tier": "experimental",
+          "format": "python",
+          "os": [
+            "linux"
+          ],
+          "device_declaration": "amd_gpu (gfx110X, gfx1150, gfx1151, gfx120X)"
+        }
+      ]
+    },
+    {
+      "legacy_recipe": "whispercpp",
+      "display_name": "Whisper.cpp",
+      "catalog_entry": "whisper-cpp",
+      "native_selectable_backend": true,
+      "native_uses_ctx_size": false,
+      "native_backend_labels": [
+        "cpu",
+        "metal",
+        "npu",
+        "rocm",
+        "vulkan"
+      ],
+      "migration_rule": "Keep native backend pins. npu maps to the exact selected encoder-offload stack, not full-model NPU support.",
+      "native_support_rows": [
+        {
+          "backend": "npu",
+          "tier": "core",
+          "format": "native",
+          "os": [
+            "windows"
+          ],
+          "device_declaration": "amd_npu (XDNA2)"
+        },
+        {
+          "backend": "metal",
+          "tier": "core",
+          "format": "native",
+          "os": [
+            "macos"
+          ],
+          "device_declaration": "metal"
+        },
+        {
+          "backend": "vulkan",
+          "tier": "core",
+          "format": "native",
+          "os": [
+            "linux",
+            "windows"
+          ],
+          "device_declaration": "amd_gpu; cpu (x86_64)"
+        },
+        {
+          "backend": "rocm",
+          "tier": "core",
+          "format": "native",
+          "os": [
+            "linux",
+            "windows"
+          ],
+          "device_declaration": "amd_gpu (gfx110X, gfx1150, gfx1151, gfx120X)"
+        },
+        {
+          "backend": "cpu",
+          "tier": "core",
+          "format": "native",
+          "os": [
+            "linux",
+            "windows"
+          ],
+          "device_declaration": "cpu (x86_64)"
+        }
+      ]
+    }
+  ],
+  "entries": [
+    {
+      "id": "llama-cpp",
+      "name": "llama.cpp",
+      "kind": "engine",
+      "priority": "parity",
+      "candidate_backends": [
+        "cpu",
+        "cuda",
+        "hip",
+        "vulkan",
+        "metal",
+        "sycl",
+        "opencl",
+        "openvino",
+        "hexagon",
+        "cann",
+        "musa"
+      ],
+      "tasks": [
+        "text-generation",
+        "image-understanding",
+        "embeddings",
+        "reranking"
+      ],
+      "sources": [
+        "https://github.com/ggml-org/llama.cpp/blob/master/docs/build.md",
+        "../../BACKENDS.md"
+      ],
+      "notes": "Initial managed builds preserve native CPU/CUDA/HIP/Vulkan/Metal scope. Other paths require separate build/model/platform qualification. Explicitly describe multimodal projectors and architecture coverage.",
+      "upstream_lifecycle": "unknown"
+    },
+    {
+      "id": "llama-xdna-hybrid",
+      "name": "llama.cpp XDNA hybrid distribution",
+      "kind": "engine-distribution",
+      "priority": "parity",
+      "candidate_backends": [
+        "cpu",
+        "hip",
+        "vitisai"
+      ],
+      "tasks": [
+        "text-generation"
+      ],
+      "sources": [
+        "../../RUNTIME-PROFILES.md",
+        "../../../src/cpp/resources/backend_versions.json"
+      ],
+      "notes": "Retain legacy llamacpp/hybrid-rocm as its pinned Nulifyer/llama-xdna-hybrid distribution and explicit NPU/GPU placement. Do not reinterpret it as ordinary upstream llama.cpp HIP.",
+      "upstream_lifecycle": "unknown"
+    },
+    {
+      "id": "llama-hrx",
+      "name": "llama.cpp HRX distribution",
+      "kind": "engine-distribution",
+      "priority": "parity",
+      "candidate_backends": [
+        "hrx"
+      ],
+      "tasks": [
+        "text-generation"
+      ],
+      "sources": [
+        "../../BACKENDS.md"
+      ],
+      "notes": "Preserve recipe llamacpp-hrx, its exact fork/build and Linux gfx1100/gfx1151 restrictions. HRX is distribution-specific, not a hardware class.",
+      "upstream_lifecycle": "unknown"
+    },
+    {
+      "id": "dwarfstar4",
+      "name": "DwarfStar4 / ds4",
+      "kind": "engine",
+      "priority": "parity",
+      "candidate_backends": [
+        "hip"
+      ],
+      "tasks": [
+        "text-generation"
+      ],
+      "sources": [
+        "../../BACKENDS.md"
+      ],
+      "notes": "Preserve the selected Linux gfx1151 package and curated model restrictions. Do not treat arbitrary GGUF as compatible.",
+      "upstream_lifecycle": "unknown"
+    },
+    {
+      "id": "fastflowlm",
+      "name": "FastFlowLM",
+      "kind": "engine",
+      "priority": "parity",
+      "candidate_backends": [
+        "xdna2"
+      ],
+      "tasks": [
+        "text-generation",
+        "image-understanding",
+        "speech-recognition",
+        "embeddings"
+      ],
+      "sources": [
+        "https://github.com/ROCm/FastFlowLM",
+        "../../BACKENDS.md"
+      ],
+      "notes": "Native parity keeps published XDNA2 packages and existing operations. New modalities are upstream discovery claims until an adapter supports them.",
+      "upstream_lifecycle": "unknown"
+    },
+    {
+      "id": "ryzenai-oga",
+      "name": "AMD Ryzen AI OGA stack",
+      "kind": "vendor-stack",
+      "priority": "parity",
+      "candidate_backends": [
+        "vitisai"
+      ],
+      "tasks": [
+        "text-generation"
+      ],
+      "sources": [
+        "https://ryzenai.docs.amd.com/en/latest/hybrid_oga.html",
+        "../../BACKENDS.md"
+      ],
+      "notes": "Keep native recipe ryzenai-llm. Distinguish NPU-only and NPU+iGPU hybrid profiles, exact prepared artifacts, vendor OGA versions and OS restrictions.",
+      "upstream_lifecycle": "unknown"
+    },
+    {
+      "id": "whisper-cpp",
+      "name": "whisper.cpp",
+      "kind": "engine",
+      "priority": "parity",
+      "candidate_backends": [
+        "cpu",
+        "cuda",
+        "hip",
+        "vulkan",
+        "metal",
+        "coreml",
+        "openvino",
+        "vitisai",
+        "cann",
+        "musa"
+      ],
+      "tasks": [
+        "speech-recognition",
+        "speech-translation"
+      ],
+      "sources": [
+        "https://github.com/ggml-org/whisper.cpp",
+        "../../BACKENDS.md"
+      ],
+      "notes": "Preserve native cpu/metal/npu/rocm/vulkan packaging first. CUDA and other upstream paths are additions. Core ML/OpenVINO/VitisAI acceleration can cover only selected stages.",
+      "upstream_lifecycle": "unknown"
+    },
+    {
+      "id": "futo-transcribe-cpp",
+      "name": "FUTO transcribe.cpp ASR4ALL worker",
+      "kind": "engine",
+      "priority": "parity",
+      "candidate_backends": [
+        "cpu"
+      ],
+      "tasks": [
+        "speech-recognition"
+      ],
+      "sources": [
+        "../../Dockerfile",
+        "../../runtime/futo_server.cpp",
+        "https://gitlab.futo.org/keyboard/transcribe.cpp"
+      ],
+      "notes": "Pinned FUTO GitLab project. Native worker forces CPU and ASR4ALL architecture. Keep separate from handy-computer/transcribe.cpp despite the shared project name.",
+      "upstream_lifecycle": "unknown"
+    },
+    {
+      "id": "parakeet-redux",
+      "name": "Parakeet Redux / parakeet.cpp",
+      "kind": "engine",
+      "priority": "parity",
+      "candidate_backends": [
+        "cpu"
+      ],
+      "tasks": [
+        "speech-recognition"
+      ],
+      "sources": [
+        "../../Dockerfile",
+        "../../../src/cpp/server/backends/parakeet/parakeet_server.cpp"
+      ],
+      "notes": "Native container pins mudler/parakeet.cpp. Preserve the selected CPU worker and bounded WAV contract, independently of the Parakeet model family.",
+      "upstream_lifecycle": "unknown"
+    },
+    {
+      "id": "moonshine-voice",
+      "name": "Moonshine Voice",
+      "kind": "implementation",
+      "priority": "parity",
+      "candidate_backends": [
+        "cpu",
+        "wasm"
+      ],
+      "tasks": [
+        "speech-recognition"
+      ],
+      "sources": [
+        "https://github.com/moonshine-ai/moonshine",
+        "../../BACKENDS.md"
+      ],
+      "notes": "Preserve native moonshine CPU worker first. Current upstream toolkit and model revisions need their own adapter/version qualification.",
+      "upstream_lifecycle": "unknown"
+    },
+    {
+      "id": "kokoros",
+      "name": "Kokoros native Kokoro worker",
+      "kind": "implementation",
+      "priority": "parity",
+      "candidate_backends": [
+        "cpu",
+        "metal"
+      ],
+      "tasks": [
+        "speech-synthesis"
+      ],
+      "sources": [
+        "../../../src/cpp/server/backends/kokoro/kokoro_server.cpp",
+        "../../BACKENDS.md"
+      ],
+      "notes": "Native recipe kokoro downloads lemonade-sdk/Kokoros. Model family Kokoro does not identify this implementation.",
+      "upstream_lifecycle": "unknown"
+    },
+    {
+      "id": "onnxruntime",
+      "name": "ONNX Runtime",
+      "kind": "framework",
+      "priority": "parity",
+      "candidate_backends": [
+        "cpu",
+        "cuda",
+        "tensorrt",
+        "directml",
+        "openvino",
+        "coreml",
+        "qnn",
+        "migraphx",
+        "vitisai",
+        "webgpu"
+      ],
+      "tasks": [
+        "text-generation",
+        "embeddings",
+        "reranking",
+        "speech-recognition",
+        "speech-synthesis",
+        "image-understanding"
+      ],
+      "sources": [
+        "https://onnxruntime.ai/docs/execution-providers/",
+        "../../BACKENDS.md"
+      ],
+      "notes": "Preserve existing CPU worker scope. Every additional provider and model pipeline needs an explicit worker, export/companion contract and selected operation.",
+      "upstream_lifecycle": "unknown"
+    },
+    {
+      "id": "stable-diffusion-cpp",
+      "name": "stable-diffusion.cpp",
+      "kind": "engine",
+      "priority": "parity",
+      "candidate_backends": [
+        "cpu",
+        "cuda",
+        "hip",
+        "vulkan",
+        "metal",
+        "sycl",
+        "opencl",
+        "musa"
+      ],
+      "tasks": [
+        "image-generation",
+        "image-editing",
+        "video-generation"
+      ],
+      "sources": [
+        "https://github.com/leejet/stable-diffusion.cpp/blob/master/docs/build.md",
+        "../../BACKENDS.md"
+      ],
+      "notes": "Preserve native sd-cpp cpu/cuda/rocm/vulkan/metal scope. Candidate video and extra backend support does not establish Juiced protocol support.",
+      "upstream_lifecycle": "unknown"
+    },
+    {
+      "id": "thenoise",
+      "name": "TheNoise worker",
+      "kind": "implementation",
+      "priority": "parity",
+      "candidate_backends": [
+        "hip"
+      ],
+      "tasks": [
+        "image-generation",
+        "image-editing",
+        "image-upscaling"
+      ],
+      "sources": [
+        "../../../src/cpp/server/backends/thenoise/thenoise_server.cpp",
+        "../../BACKENDS.md"
+      ],
+      "notes": "Preserve packaged ROCm worker. Represent PyTorch and compiler-cache dependencies in its bundle identity, not a second independent resource reservation.",
+      "upstream_lifecycle": "unknown"
+    },
+    {
+      "id": "openmoss-cpp",
+      "name": "OpenMOSS TTS worker",
+      "kind": "implementation",
+      "priority": "parity",
+      "candidate_backends": [
+        "cuda",
+        "vulkan"
+      ],
+      "tasks": [
+        "speech-synthesis"
+      ],
+      "sources": [
+        "../../../src/cpp/server/backends/openmoss/openmoss_server.cpp",
+        "../../BACKENDS.md"
+      ],
+      "notes": "Preserve selected pwilkin/openmoss package, checkpoints and voice-design behavior as bounded native operations.",
+      "upstream_lifecycle": "unknown"
+    },
+    {
+      "id": "acestep-cpp",
+      "name": "ACE-Step C++ worker",
+      "kind": "implementation",
+      "priority": "parity",
+      "candidate_backends": [
+        "cuda",
+        "hip",
+        "vulkan"
+      ],
+      "tasks": [
+        "music-generation"
+      ],
+      "sources": [
+        "../../../src/cpp/server/backends/acestep/acestep_server.cpp",
+        "../../BACKENDS.md"
+      ],
+      "notes": "Keep multi-checkpoint acquisition and async-job/cancellation requirements. Fixed music service does not authorize arbitrary graphs.",
+      "upstream_lifecycle": "unknown"
+    },
+    {
+      "id": "thinksound-cpp",
+      "name": "ThinkSound C++ worker",
+      "kind": "implementation",
+      "priority": "parity",
+      "candidate_backends": [
+        "cuda",
+        "hip",
+        "vulkan"
+      ],
+      "tasks": [
+        "sound-generation"
+      ],
+      "sources": [
+        "../../../src/cpp/server/backends/thinksound/thinksound_server.cpp",
+        "../../BACKENDS.md"
+      ],
+      "notes": "Preserve selected native provider, artifacts and operations without assuming every upstream model is supported.",
+      "upstream_lifecycle": "unknown"
+    },
+    {
+      "id": "trellis-cpp",
+      "name": "TRELLIS.2 C++ worker",
+      "kind": "implementation",
+      "priority": "parity",
+      "candidate_backends": [
+        "cuda",
+        "hip",
+        "vulkan"
+      ],
+      "tasks": [
+        "3d-generation"
+      ],
+      "sources": [
+        "../../../src/cpp/server/backends/trellis/trellis_server.cpp",
+        "../../BACKENDS.md"
+      ],
+      "notes": "Carry selected existing 3D service scope. Native descriptor presence alone does not change conditional product disposition.",
+      "upstream_lifecycle": "unknown"
+    },
+    {
+      "id": "vllm",
+      "name": "vLLM",
+      "kind": "engine",
+      "priority": "parity",
+      "candidate_backends": [
+        "cuda",
+        "hip",
+        "xpu",
+        "cpu",
+        "metal",
+        "tpu",
+        "cann"
+      ],
+      "tasks": [
+        "text-generation",
+        "image-understanding",
+        "embeddings",
+        "reranking"
+      ],
+      "sources": [
+        "https://docs.vllm.ai/en/latest/getting_started/installation/",
+        "../../BACKENDS.md"
+      ],
+      "notes": "Preserve native ROCm package. CUDA/CPU/XPU additions and Metal/TPU/Ascend plugins are separate bundles and qualification cells.",
+      "upstream_lifecycle": "unknown"
+    },
+    {
+      "id": "ik-llama-cpp",
+      "name": "ik_llama.cpp",
+      "kind": "engine",
+      "priority": "first-expansion",
+      "candidate_backends": [
+        "cpu",
+        "cuda"
+      ],
+      "tasks": [
+        "text-generation"
+      ],
+      "sources": [
+        "https://github.com/ikawrakow/ik_llama.cpp"
+      ],
+      "notes": "Independent fork identity and quantization coverage. Current upstream only calls CPU and CUDA fully functional and performant.",
+      "upstream_lifecycle": "unknown"
+    },
+    {
+      "id": "mlx-lm",
+      "name": "MLX-LM",
+      "kind": "implementation",
+      "priority": "first-expansion",
+      "candidate_backends": [
+        "metal",
+        "cpu",
+        "cuda"
+      ],
+      "tasks": [
+        "text-generation"
+      ],
+      "sources": [
+        "https://github.com/ml-explore/mlx-lm/blob/main/pyproject.toml"
+      ],
+      "notes": "First target Apple Silicon Metal. Linux CPU/CUDA packages remain independent follow-on cells.",
+      "upstream_lifecycle": "unknown"
+    },
+    {
+      "id": "sglang",
+      "name": "SGLang",
+      "kind": "engine",
+      "priority": "first-expansion",
+      "candidate_backends": [
+        "cuda",
+        "hip",
+        "xpu",
+        "cpu",
+        "metal",
+        "tpu",
+        "cann",
+        "musa"
+      ],
+      "tasks": [
+        "text-generation",
+        "image-understanding",
+        "embeddings",
+        "reranking",
+        "image-generation",
+        "video-generation"
+      ],
+      "sources": [
+        "https://github.com/sgl-project/sglang"
+      ],
+      "notes": "Start one exact CUDA or ROCm text-serving target. Other accelerators and diffusion require separate operation suites.",
+      "upstream_lifecycle": "unknown"
+    },
+    {
+      "id": "exllamav3",
+      "name": "ExLlamaV3",
+      "kind": "engine",
+      "priority": "first-expansion",
+      "candidate_backends": [
+        "cuda",
+        "hip"
+      ],
+      "tasks": [
+        "text-generation"
+      ],
+      "sources": [
+        "https://github.com/turboderp-org/exllamav3"
+      ],
+      "notes": "Use EXL3-specific artifact validation. CPU expert offload is a placement mode, not evidence for standalone CPU execution. TabbyAPI is a serving adapter choice.",
+      "upstream_lifecycle": "unknown"
+    },
+    {
+      "id": "ctranslate2",
+      "name": "CTranslate2 / faster-whisper",
+      "kind": "engine",
+      "priority": "first-expansion",
+      "candidate_backends": [
+        "cpu",
+        "cuda"
+      ],
+      "tasks": [
+        "speech-recognition",
+        "translation"
+      ],
+      "sources": [
+        "https://github.com/SYSTRAN/faster-whisper"
+      ],
+      "notes": "First adapter faster-whisper. Preserve CTranslate2 identity separately from the Python model implementation. Do not advertise ROCm/Metal.",
+      "upstream_lifecycle": "unknown"
+    },
+    {
+      "id": "sherpa-onnx",
+      "name": "sherpa-onnx",
+      "kind": "implementation",
+      "priority": "first-expansion",
+      "candidate_backends": [
+        "cpu",
+        "cuda",
+        "directml",
+        "qnn",
+        "rknpu",
+        "cann",
+        "openvino"
+      ],
+      "tasks": [
+        "speech-recognition",
+        "speech-synthesis",
+        "voice-activity-detection",
+        "speaker-diarization",
+        "speaker-identification"
+      ],
+      "sources": [
+        "https://github.com/k2-fsa/sherpa-onnx"
+      ],
+      "notes": "Start CPU recognition/synthesis. Selected GPU/NPU builds and each additional audio operation require their own evidence.",
+      "upstream_lifecycle": "unknown"
+    },
+    {
+      "id": "mlx-audio",
+      "name": "MLX-Audio",
+      "kind": "implementation",
+      "priority": "first-expansion",
+      "candidate_backends": [
+        "metal"
+      ],
+      "tasks": [
+        "speech-recognition",
+        "speech-synthesis",
+        "speech-to-speech",
+        "music-generation"
+      ],
+      "sources": [
+        "https://github.com/Blaizzy/mlx-audio"
+      ],
+      "notes": "First target selected Apple Silicon speech models. Share MLX bundle dependencies with MLX-LM where identical, but keep actual worker/accounting ownership.",
+      "upstream_lifecycle": "unknown"
+    },
+    {
+      "id": "piper",
+      "name": "Piper",
+      "kind": "implementation",
+      "priority": "first-expansion",
+      "candidate_backends": [
+        "cpu",
+        "cuda"
+      ],
+      "tasks": [
+        "speech-synthesis"
+      ],
+      "sources": [
+        "https://github.com/OHF-Voice/piper1-gpl/blob/main/docs/API_PYTHON.md"
+      ],
+      "notes": "CPU-first TTS worker through ONNX Runtime, with optional CUDA. Track phonemizer, voice configuration and voice license companions.",
+      "upstream_lifecycle": "unknown"
+    },
+    {
+      "id": "kokoro-onnx",
+      "name": "kokoro-onnx",
+      "kind": "implementation",
+      "priority": "first-expansion",
+      "candidate_backends": [
+        "cpu",
+        "cuda"
+      ],
+      "tasks": [
+        "speech-synthesis"
+      ],
+      "sources": [
+        "https://github.com/thewh1teagle/kokoro-onnx"
+      ],
+      "notes": "Alternative to Kokoros, not an alias. First qualify CPU. Additional ONNX providers require this implementation to expose and use them.",
+      "upstream_lifecycle": "unknown"
+    },
+    {
+      "id": "tei",
+      "name": "Text Embeddings Inference",
+      "kind": "implementation",
+      "priority": "first-expansion",
+      "candidate_backends": [
+        "cpu",
+        "cuda",
+        "metal",
+        "hip"
+      ],
+      "tasks": [
+        "embeddings",
+        "reranking"
+      ],
+      "sources": [
+        "https://github.com/huggingface/text-embeddings-inference"
+      ],
+      "notes": "CPU/CUDA first. Metal native execution and supported AMD Instinct ROCm packages have separate platform limits.",
+      "upstream_lifecycle": "unknown"
+    },
+    {
+      "id": "openvino-genai",
+      "name": "OpenVINO GenAI",
+      "kind": "implementation",
+      "priority": "first-expansion",
+      "candidate_backends": [
+        "openvino"
+      ],
+      "tasks": [
+        "text-generation",
+        "embeddings",
+        "speech-recognition",
+        "image-generation"
+      ],
+      "sources": [
+        "https://github.com/openvinotoolkit/openvino.genai"
+      ],
+      "notes": "First target selected Intel CPU/GPU text models, then a separately qualified NPU profile. Do not infer every task from the underlying framework.",
+      "upstream_lifecycle": "unknown"
+    },
+    {
+      "id": "cactus-small",
+      "name": "Cactus runtime for Needle / Whistle / Mirage",
+      "kind": "engine",
+      "priority": "first-expansion",
+      "candidate_backends": [
+        "cpu",
+        "wasm"
+      ],
+      "tasks": [
+        "tool-calling",
+        "structured-extraction",
+        "embeddings",
+        "speech-recognition",
+        "image-understanding"
+      ],
+      "sources": [
+        "https://github.com/cactus-compute/cactus",
+        "https://huggingface.co/Cactus-Compute/cactus"
+      ],
+      "notes": "Start native CPU Needle tool proposals and Whistle recognition. Never execute returned tools in the worker adapter. No inherited cloud fallback. Distinct from cactus-engine.",
+      "upstream_lifecycle": "unknown"
+    },
+    {
+      "id": "handy-transcribe-cpp",
+      "name": "Handy transcribe.cpp",
+      "kind": "engine",
+      "priority": "conditional",
+      "candidate_backends": [
+        "cpu",
+        "cuda",
+        "vulkan",
+        "metal"
+      ],
+      "tasks": [
+        "speech-recognition",
+        "speech-translation",
+        "speaker-diarization"
+      ],
+      "sources": [
+        "https://github.com/handy-computer/transcribe.cpp"
+      ],
+      "notes": "Separate origin from FUTO transcribe.cpp. Choose when a concrete model/streaming requirement is not met by retained speech workers.",
+      "upstream_lifecycle": "unknown"
+    },
+    {
+      "id": "cactus-engine",
+      "name": "Cactus Engine general inference SDK",
+      "kind": "engine",
+      "priority": "conditional",
+      "candidate_backends": [
+        "cpu",
+        "metal"
+      ],
+      "tasks": [
+        "text-generation",
+        "image-understanding",
+        "embeddings",
+        "speech-recognition"
+      ],
+      "sources": [
+        "https://github.com/cactus-compute/engine"
+      ],
+      "notes": "Separate package and bundle identity from current cactus-compute. Disable automatic cloud handoff in managed local profiles.",
+      "upstream_lifecycle": "unknown"
+    },
+    {
+      "id": "mistral-rs",
+      "name": "mistral.rs",
+      "kind": "engine",
+      "priority": "conditional",
+      "candidate_backends": [
+        "cpu",
+        "cuda",
+        "metal"
+      ],
+      "tasks": [
+        "text-generation",
+        "image-understanding",
+        "embeddings",
+        "speech-recognition",
+        "speech-synthesis",
+        "image-generation"
+      ],
+      "sources": [
+        "https://github.com/EricLBuehler/mistral.rs"
+      ],
+      "notes": "Select for a concrete model/operation gap. Keep engine libraries in a subprocess worker.",
+      "upstream_lifecycle": "unknown"
+    },
+    {
+      "id": "candle",
+      "name": "Candle",
+      "kind": "framework",
+      "priority": "conditional",
+      "candidate_backends": [
+        "cpu",
+        "cuda",
+        "metal",
+        "wasm"
+      ],
+      "tasks": [
+        "text-generation",
+        "embeddings",
+        "image-understanding",
+        "speech-recognition"
+      ],
+      "sources": [
+        "https://github.com/huggingface/candle"
+      ],
+      "notes": "Often a dependency of an implementation such as TEI. Add a standalone adapter only for a named workload.",
+      "upstream_lifecycle": "unknown"
+    },
+    {
+      "id": "tensorrt-llm",
+      "name": "TensorRT-LLM",
+      "kind": "engine",
+      "priority": "conditional",
+      "candidate_backends": [
+        "cuda",
+        "tensorrt"
+      ],
+      "tasks": [
+        "text-generation",
+        "image-understanding",
+        "image-generation",
+        "video-generation"
+      ],
+      "sources": [
+        "https://github.com/NVIDIA/TensorRT-LLM"
+      ],
+      "notes": "NVIDIA-specific. Acquire existing prepared models; runtime-owned compiled execution caches must not become model export/quantization tooling.",
+      "upstream_lifecycle": "unknown"
+    },
+    {
+      "id": "lmdeploy",
+      "name": "LMDeploy",
+      "kind": "engine",
+      "priority": "conditional",
+      "candidate_backends": [
+        "cuda",
+        "cann"
+      ],
+      "tasks": [
+        "text-generation",
+        "image-understanding"
+      ],
+      "sources": [
+        "https://github.com/InternLM/lmdeploy"
+      ],
+      "notes": "TurboMind and PyTorch engines are distinct implementation choices with different device and model coverage.",
+      "upstream_lifecycle": "unknown"
+    },
+    {
+      "id": "ktransformers",
+      "name": "KTransformers / KT-Kernel",
+      "kind": "implementation",
+      "priority": "conditional",
+      "candidate_backends": [
+        "cpu",
+        "cuda",
+        "xpu",
+        "cann"
+      ],
+      "tasks": [
+        "text-generation"
+      ],
+      "sources": [
+        "https://github.com/kvcache-ai/ktransformers"
+      ],
+      "notes": "Heterogeneous MoE expert placement, selected exact models. Can compose with SGLang, so do not automatically create a second serving process or reserve weights twice.",
+      "upstream_lifecycle": "unknown"
+    },
+    {
+      "id": "mlc-llm",
+      "name": "MLC-LLM",
+      "kind": "engine",
+      "priority": "conditional",
+      "candidate_backends": [
+        "cuda",
+        "hip",
+        "vulkan",
+        "metal",
+        "opencl",
+        "webgpu",
+        "wasm"
+      ],
+      "tasks": [
+        "text-generation",
+        "image-understanding"
+      ],
+      "sources": [
+        "https://github.com/mlc-ai/mlc-llm"
+      ],
+      "notes": "Use externally prepared target-compatible artifacts. Any required model producer stays outside Juiced's scope.",
+      "upstream_lifecycle": "unknown"
+    },
+    {
+      "id": "bitnet-cpp",
+      "name": "bitnet.cpp",
+      "kind": "engine",
+      "priority": "conditional",
+      "candidate_backends": [
+        "cpu",
+        "cuda"
+      ],
+      "tasks": [
+        "text-generation",
+        "embeddings"
+      ],
+      "sources": [
+        "https://github.com/microsoft/BitNet"
+      ],
+      "notes": "Select compatible BitNet models and published artifacts. CPU implementation and GPU kernel paths are separately qualified.",
+      "upstream_lifecycle": "unknown"
+    },
+    {
+      "id": "pytorch-transformers",
+      "name": "PyTorch / Transformers",
+      "kind": "framework",
+      "priority": "conditional",
+      "candidate_backends": [
+        "cpu",
+        "cuda",
+        "hip",
+        "mps",
+        "xpu",
+        "tpu",
+        "cann",
+        "musa"
+      ],
+      "tasks": [
+        "text-generation",
+        "embeddings",
+        "reranking",
+        "speech-recognition",
+        "speech-synthesis",
+        "image-understanding"
+      ],
+      "sources": [
+        "https://github.com/huggingface/transformers/blob/main/docs/source/en/hardware.md"
+      ],
+      "notes": "Framework dependency, not permission to load arbitrary remote code. A selected model worker defines the actual operation and package boundary.",
+      "upstream_lifecycle": "unknown"
+    },
+    {
+      "id": "diffusers",
+      "name": "Diffusers",
+      "kind": "implementation",
+      "priority": "conditional",
+      "candidate_backends": [
+        "cpu",
+        "cuda",
+        "hip",
+        "mps",
+        "xpu"
+      ],
+      "tasks": [
+        "image-generation",
+        "image-editing",
+        "video-generation"
+      ],
+      "sources": [
+        "https://huggingface.co/docs/diffusers/installation"
+      ],
+      "notes": "Fixed pipeline IDs and pinned code/models. No generic Python or workflow execution API.",
+      "upstream_lifecycle": "unknown"
+    },
+    {
+      "id": "sentence-transformers",
+      "name": "Sentence Transformers",
+      "kind": "implementation",
+      "priority": "conditional",
+      "candidate_backends": [
+        "cpu",
+        "cuda",
+        "hip",
+        "mps",
+        "openvino"
+      ],
+      "tasks": [
+        "embeddings",
+        "reranking"
+      ],
+      "sources": [
+        "https://sbert.net/docs/sentence_transformer/usage/efficiency.html"
+      ],
+      "notes": "PyTorch/ONNX/OpenVINO implementation paths require separate model/runtime identities and output-dimension validation.",
+      "upstream_lifecycle": "unknown"
+    },
+    {
+      "id": "onnxruntime-genai",
+      "name": "ONNX Runtime GenAI",
+      "kind": "implementation",
+      "priority": "conditional",
+      "candidate_backends": [
+        "cpu",
+        "cuda",
+        "directml",
+        "tensorrt",
+        "openvino",
+        "qnn",
+        "webgpu"
+      ],
+      "tasks": [
+        "text-generation",
+        "image-understanding",
+        "speech-recognition"
+      ],
+      "sources": [
+        "https://github.com/microsoft/onnxruntime-genai"
+      ],
+      "notes": "Generation layer over ONNX Runtime. Can be a dependency of Ryzen AI OGA, not necessarily another runtime install.",
+      "upstream_lifecycle": "unknown"
+    },
+    {
+      "id": "whisperkit",
+      "name": "WhisperKit / Argmax open-source SDK",
+      "kind": "implementation",
+      "priority": "conditional",
+      "candidate_backends": [
+        "coreml"
+      ],
+      "tasks": [
+        "speech-recognition",
+        "speaker-diarization",
+        "speech-synthesis"
+      ],
+      "sources": [
+        "https://github.com/argmaxinc/argmax-oss-swift"
+      ],
+      "notes": "Separate WhisperKit/SpeakerKit/TTSKit operation contracts. Open-source and Pro SDK capabilities must not be conflated.",
+      "upstream_lifecycle": "unknown"
+    },
+    {
+      "id": "fluidaudio",
+      "name": "FluidAudio",
+      "kind": "implementation",
+      "priority": "conditional",
+      "candidate_backends": [
+        "coreml"
+      ],
+      "tasks": [
+        "speech-recognition",
+        "speech-synthesis",
+        "voice-activity-detection",
+        "speaker-diarization"
+      ],
+      "sources": [
+        "https://github.com/FluidInference/FluidAudio"
+      ],
+      "notes": "Apple Neural Engine-focused Core ML pipelines. Capture actual stage placement instead of promising all-ANE execution.",
+      "upstream_lifecycle": "unknown"
+    },
+    {
+      "id": "vosk",
+      "name": "Vosk",
+      "kind": "implementation",
+      "priority": "conditional",
+      "candidate_backends": [
+        "cpu"
+      ],
+      "tasks": [
+        "speech-recognition",
+        "speaker-identification"
+      ],
+      "sources": [
+        "https://github.com/alphacep/vosk-api"
+      ],
+      "notes": "Small-device streaming recognition candidate when its vocabulary/language coverage is needed.",
+      "upstream_lifecycle": "unknown"
+    },
+    {
+      "id": "nemo-speech",
+      "name": "NVIDIA NeMo Speech",
+      "kind": "implementation",
+      "priority": "conditional",
+      "candidate_backends": [
+        "cuda",
+        "cpu"
+      ],
+      "tasks": [
+        "speech-recognition",
+        "speech-synthesis",
+        "speech-to-speech",
+        "speaker-diarization"
+      ],
+      "sources": [
+        "https://github.com/NVIDIA-NeMo/Speech"
+      ],
+      "notes": "Use fixed inference workers only. Training, fine-tuning and export remain excluded.",
+      "upstream_lifecycle": "unknown"
+    },
+    {
+      "id": "coreml",
+      "name": "Core ML",
+      "kind": "framework",
+      "priority": "conditional",
+      "candidate_backends": [
+        "coreml"
+      ],
+      "tasks": [
+        "text-generation",
+        "image-understanding",
+        "speech-recognition",
+        "speech-synthesis"
+      ],
+      "sources": [
+        "https://developer.apple.com/documentation/coreml"
+      ],
+      "notes": "Usually a dependency of a named implementation. CPU/GPU/ANE compute-unit selection is part of the execution plan.",
+      "upstream_lifecycle": "unknown"
+    },
+    {
+      "id": "qairt",
+      "name": "Qualcomm QAIRT / QNN / Genie",
+      "kind": "vendor-stack",
+      "priority": "conditional",
+      "candidate_backends": [
+        "cpu",
+        "opencl",
+        "qnn",
+        "hexagon"
+      ],
+      "tasks": [
+        "text-generation",
+        "image-understanding",
+        "speech-recognition"
+      ],
+      "sources": [
+        "https://docs.qualcomm.com/bundle/publicresource/topics/80-63442-10/general_overview.html"
+      ],
+      "notes": "Distinguish CPU/Adreno/HTP execution and use selected external prepared models. Keep host firmware/driver ownership outside Juiced.",
+      "upstream_lifecycle": "unknown"
+    },
+    {
+      "id": "executorch",
+      "name": "ExecuTorch",
+      "kind": "deployment-runtime",
+      "priority": "conditional",
+      "candidate_backends": [
+        "xnnpack",
+        "vulkan",
+        "coreml",
+        "qnn",
+        "openvino",
+        "cuda",
+        "metal",
+        "webgpu"
+      ],
+      "tasks": [
+        "text-generation",
+        "image-understanding",
+        "speech-recognition",
+        "speech-synthesis"
+      ],
+      "sources": [
+        "https://github.com/pytorch/executorch"
+      ],
+      "notes": "Pre-exported .pte and target delegate identity. Some desktop backends are experimental. Never expose torch.export as a Juiced producer.",
+      "upstream_lifecycle": "unknown"
+    },
+    {
+      "id": "litert-lm",
+      "name": "LiteRT / LiteRT-LM",
+      "kind": "deployment-runtime",
+      "priority": "conditional",
+      "candidate_backends": [
+        "cpu",
+        "opencl",
+        "metal",
+        "webgpu",
+        "qnn"
+      ],
+      "tasks": [
+        "text-generation",
+        "image-understanding",
+        "speech-recognition",
+        "speech-synthesis",
+        "embeddings"
+      ],
+      "sources": [
+        "https://github.com/google-ai-edge/LiteRT-LM"
+      ],
+      "notes": "Exact GPU/NPU delegates need target-specific confirmation before selection. Candidate backend names are discovery leads.",
+      "upstream_lifecycle": "unknown"
+    },
+    {
+      "id": "mnn",
+      "name": "MNN",
+      "kind": "deployment-runtime",
+      "priority": "conditional",
+      "candidate_backends": [
+        "cpu",
+        "cuda",
+        "vulkan",
+        "metal",
+        "opencl",
+        "coreml",
+        "hexagon",
+        "qnn"
+      ],
+      "tasks": [
+        "text-generation",
+        "image-understanding",
+        "speech-recognition",
+        "speech-synthesis",
+        "image-generation"
+      ],
+      "sources": [
+        "https://github.com/alibaba/MNN"
+      ],
+      "notes": "Acquire prepared MNN artifacts. Operator/quantization coverage and NPU paths vary by build.",
+      "upstream_lifecycle": "unknown"
+    },
+    {
+      "id": "ncnn",
+      "name": "ncnn",
+      "kind": "deployment-runtime",
+      "priority": "conditional",
+      "candidate_backends": [
+        "cpu",
+        "vulkan"
+      ],
+      "tasks": [
+        "image-understanding",
+        "image-upscaling"
+      ],
+      "sources": [
+        "https://github.com/Tencent/ncnn"
+      ],
+      "notes": "Named vision/upscaling pipelines. General graph execution and model conversion are outside scope.",
+      "upstream_lifecycle": "unknown"
+    },
+    {
+      "id": "rkllm",
+      "name": "RKLLM",
+      "kind": "vendor-stack",
+      "priority": "conditional",
+      "candidate_backends": [
+        "rknpu"
+      ],
+      "tasks": [
+        "text-generation",
+        "image-understanding"
+      ],
+      "sources": [
+        "https://github.com/airockchip/rknn-llm"
+      ],
+      "notes": "Rockchip-specific LLM runtime with prepared .rkllm artifacts. Vision companions can require RKNN.",
+      "upstream_lifecycle": "unknown"
+    },
+    {
+      "id": "rknn",
+      "name": "RKNN",
+      "kind": "vendor-stack",
+      "priority": "conditional",
+      "candidate_backends": [
+        "rknpu"
+      ],
+      "tasks": [
+        "image-understanding",
+        "speech-recognition"
+      ],
+      "sources": [
+        "https://github.com/airockchip/rknn-toolkit2"
+      ],
+      "notes": "Selected Rockchip prepared-model pipelines. Separate from RKLLM language execution.",
+      "upstream_lifecycle": "unknown"
+    },
+    {
+      "id": "hailort",
+      "name": "HailoRT",
+      "kind": "vendor-stack",
+      "priority": "conditional",
+      "candidate_backends": [
+        "hailo"
+      ],
+      "tasks": [
+        "image-understanding",
+        "text-generation"
+      ],
+      "sources": [
+        "https://github.com/hailo-ai/hailort"
+      ],
+      "notes": "Chip family is mandatory. Hailo-8/8L capabilities do not imply Hailo-10 language support, or vice versa.",
+      "upstream_lifecycle": "unknown"
+    },
+    {
+      "id": "coral-edgetpu",
+      "name": "Coral Edge TPU runtime",
+      "kind": "vendor-stack",
+      "priority": "conditional",
+      "candidate_backends": [
+        "edgetpu"
+      ],
+      "tasks": [
+        "image-understanding"
+      ],
+      "sources": [
+        "https://github.com/google-coral/libedgetpu"
+      ],
+      "notes": "Compatible precompiled edge vision artifacts and exact USB/PCIe accelerator identity.",
+      "upstream_lifecycle": "unknown"
+    },
+    {
+      "id": "ollama",
+      "name": "Ollama",
+      "kind": "external-service",
+      "priority": "attach",
+      "candidate_backends": [
+        "cpu",
+        "cuda",
+        "hip",
+        "vulkan",
+        "metal"
+      ],
+      "tasks": [
+        "text-generation",
+        "image-understanding",
+        "embeddings"
+      ],
+      "sources": [
+        "https://docs.ollama.com/gpu"
+      ],
+      "notes": "Attach to an explicitly configured service. Observe provider-owned models and lifecycle limits. Do not silently install a second model/cache manager.",
+      "upstream_lifecycle": "unknown"
+    },
+    {
+      "id": "lm-studio",
+      "name": "LM Studio",
+      "kind": "external-service",
+      "priority": "attach",
+      "candidate_backends": [
+        "cpu",
+        "cuda",
+        "hip",
+        "vulkan",
+        "metal"
+      ],
+      "tasks": [
+        "text-generation",
+        "image-understanding",
+        "embeddings"
+      ],
+      "sources": [
+        "https://lmstudio.ai/docs/app"
+      ],
+      "notes": "Attach to its published API. llama.cpp/MLX implementation and actual capabilities must be reported per endpoint/model.",
+      "upstream_lifecycle": "unknown"
+    },
+    {
+      "id": "koboldcpp",
+      "name": "KoboldCpp",
+      "kind": "engine-distribution",
+      "priority": "attach",
+      "candidate_backends": [
+        "cpu",
+        "cuda",
+        "hip",
+        "vulkan",
+        "metal"
+      ],
+      "tasks": [
+        "text-generation",
+        "image-generation",
+        "speech-recognition",
+        "speech-synthesis"
+      ],
+      "sources": [
+        "https://github.com/LostRuins/koboldcpp"
+      ],
+      "notes": "Attach first. A later managed executable adapter needs one lifecycle owner and selected internal-engine qualification.",
+      "upstream_lifecycle": "unknown"
+    },
+    {
+      "id": "tabbyapi",
+      "name": "TabbyAPI",
+      "kind": "external-service",
+      "priority": "attach",
+      "candidate_backends": [
+        "cuda",
+        "hip"
+      ],
+      "tasks": [
+        "text-generation"
+      ],
+      "sources": [
+        "https://github.com/theroyallab/tabbyAPI"
+      ],
+      "notes": "Serving layer for ExLlamaV3. Can serve as its managed worker adapter after qualification, not a duplicate underlying engine.",
+      "upstream_lifecycle": "unknown"
+    },
+    {
+      "id": "localai",
+      "name": "LocalAI",
+      "kind": "external-service",
+      "priority": "attach",
+      "candidate_backends": [
+        "cpu",
+        "cuda",
+        "hip",
+        "vulkan",
+        "metal"
+      ],
+      "tasks": [
+        "text-generation",
+        "embeddings",
+        "speech-recognition",
+        "speech-synthesis",
+        "image-generation"
+      ],
+      "sources": [
+        "https://localai.io/docs/"
+      ],
+      "notes": "Multi-engine service. Attach with explicit models and operation contracts; do not import its entire backend matrix as Juiced support.",
+      "upstream_lifecycle": "unknown"
+    },
+    {
+      "id": "comfyui",
+      "name": "ComfyUI",
+      "kind": "external-service",
+      "priority": "attach",
+      "candidate_backends": [
+        "cpu",
+        "cuda",
+        "hip",
+        "mps",
+        "xpu"
+      ],
+      "tasks": [
+        "image-generation",
+        "image-editing",
+        "video-generation"
+      ],
+      "sources": [
+        "https://github.com/comfyanonymous/ComfyUI"
+      ],
+      "notes": "Only explicitly allowed fixed workflows. No arbitrary graph, node install, filesystem or Python execution through public Juiced APIs.",
+      "upstream_lifecycle": "unknown"
+    },
+    {
+      "id": "llamafile",
+      "name": "llamafile / whisperfile",
+      "kind": "packaging",
+      "priority": "reference-only",
+      "candidate_backends": [
+        "cpu",
+        "cuda",
+        "metal"
+      ],
+      "tasks": [
+        "text-generation",
+        "speech-recognition"
+      ],
+      "sources": [
+        "https://github.com/mozilla-ai/llamafile"
+      ],
+      "notes": "Distribution of llama.cpp/whisper.cpp. Resolve the embedded build and supported platform before reuse.",
+      "upstream_lifecycle": "unknown"
+    },
+    {
+      "id": "webllm",
+      "name": "WebLLM",
+      "kind": "deployment-runtime",
+      "priority": "reference-only",
+      "candidate_backends": [
+        "webgpu",
+        "wasm"
+      ],
+      "tasks": [
+        "text-generation"
+      ],
+      "sources": [
+        "https://github.com/mlc-ai/web-llm"
+      ],
+      "notes": "Browser runs on the client's device, outside daemon resource admission. Requires a separately scoped client-inference design.",
+      "upstream_lifecycle": "unknown"
+    },
+    {
+      "id": "transformers-js",
+      "name": "Transformers.js",
+      "kind": "implementation",
+      "priority": "reference-only",
+      "candidate_backends": [
+        "wasm",
+        "webgpu"
+      ],
+      "tasks": [
+        "text-generation",
+        "embeddings",
+        "speech-recognition",
+        "speech-synthesis",
+        "image-understanding"
+      ],
+      "sources": [
+        "https://github.com/huggingface/transformers.js"
+      ],
+      "notes": "Browser ONNX inference is client-local. A server-side Node worker would require a separate managed adapter.",
+      "upstream_lifecycle": "unknown"
+    },
+    {
+      "id": "exllamav2",
+      "name": "ExLlamaV2",
+      "kind": "engine",
+      "priority": "legacy",
+      "candidate_backends": [
+        "cuda"
+      ],
+      "tasks": [
+        "text-generation"
+      ],
+      "sources": [
+        "https://github.com/turboderp-org/exllamav2"
+      ],
+      "notes": "Archived upstream. Recognize retained EXL2 installations/artifacts; do not automatically reinterpret them as EXL3.",
+      "upstream_lifecycle": "archived"
+    },
+    {
+      "id": "tgi",
+      "name": "Text Generation Inference",
+      "kind": "engine",
+      "priority": "legacy",
+      "candidate_backends": [
+        "cuda",
+        "hip"
+      ],
+      "tasks": [
+        "text-generation"
+      ],
+      "sources": [
+        "https://github.com/huggingface/text-generation-inference"
+      ],
+      "notes": "Maintenance mode upstream. Retain attach/import recognition when needed; prefer current engines for new managed integration.",
+      "upstream_lifecycle": "maintenance"
+    }
+  ],
+  "model_family_examples": [
+    {
+      "id": "futo-asr4all",
+      "runtime_candidates": [
+        "futo-transcribe-cpp",
+        "onnxruntime",
+        "executorch",
+        "pytorch-transformers"
+      ],
+      "notes": "Exports do not establish compatible importers. Keep FUTO speech artifacts distinct from earlier ACFT Whisper artifacts.",
+      "source": "https://futo.tech/blog/asr4all"
+    },
+    {
+      "id": "futo-whisper-acft",
+      "runtime_candidates": [
+        "whisper-cpp"
+      ],
+      "notes": "Earlier FUTO Whisper fine-tunes; preserve the exact ACFT model and implementation compatibility.",
+      "source": "https://github.com/futo-org/voice-input-models"
+    },
+    {
+      "id": "cactus-needle",
+      "runtime_candidates": [
+        "cactus-small"
+      ],
+      "notes": "Tool proposal/extraction model. Juiced's dispatcher owns any authorized tool execution.",
+      "source": "https://github.com/cactus-compute/cactus"
+    },
+    {
+      "id": "cactus-whistle",
+      "runtime_candidates": [
+        "cactus-small"
+      ],
+      "notes": "Speech model, not an independent hardware runtime.",
+      "source": "https://github.com/cactus-compute/cactus"
+    },
+    {
+      "id": "cactus-mirage",
+      "runtime_candidates": [
+        "cactus-small"
+      ],
+      "notes": "Vision/extraction model, distinct from a generic multimodal model importer.",
+      "source": "https://github.com/cactus-compute/cactus"
+    },
+    {
+      "id": "kokoro",
+      "runtime_candidates": [
+        "kokoros",
+        "kokoro-onnx",
+        "sherpa-onnx",
+        "mlx-audio",
+        "fluidaudio"
+      ],
+      "notes": "Different implementations and companion/voice formats must remain separate profiles.",
+      "source": "https://github.com/thewh1teagle/kokoro-onnx"
+    },
+    {
+      "id": "parakeet",
+      "runtime_candidates": [
+        "parakeet-redux",
+        "handy-transcribe-cpp",
+        "sherpa-onnx",
+        "mlx-audio",
+        "fluidaudio",
+        "nemo-speech"
+      ],
+      "notes": "Model revision/export/decoder type must match the selected implementation.",
+      "source": "https://github.com/handy-computer/transcribe.cpp"
+    },
+    {
+      "id": "whisper",
+      "runtime_candidates": [
+        "whisper-cpp",
+        "ctranslate2",
+        "handy-transcribe-cpp",
+        "whisperkit",
+        "mlx-audio"
+      ],
+      "notes": "Do not reuse model artifacts or capability declarations across these implementations without explicit compatibility.",
+      "source": "https://github.com/ggml-org/whisper.cpp"
+    },
+    {
+      "id": "moonshine",
+      "runtime_candidates": [
+        "moonshine-voice",
+        "handy-transcribe-cpp"
+      ],
+      "notes": "Toolkit version, architecture and exported artifacts are independently identified.",
+      "source": "https://github.com/moonshine-ai/moonshine"
+    }
+  ]
+}

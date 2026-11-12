@@ -1,0 +1,69 @@
+name: Juiced Rust and Bun rewrite checks
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'juiced/rewrite/**'
+      - '.github/workflows/juiced-rewrite.yml'
+permissions:
+  contents: read
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: juiced/rewrite
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust stable
+        run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+      - name: Build actual daemon and fixture executables
+        run: cargo +stable build -p juiced-service --bins --features test-fixture --locked
+      - name: Native domain and lifecycle contracts
+        run: cargo +stable test -p juiced-service --features test-fixture --locked
+      - name: Process and socket functional API pipelines
+        run: cargo +stable test -p juiced-rust-tests --locked
+      - name: Formatting and lint
+        run: |
+          cargo +stable fmt --all --check
+          cargo +stable clippy --workspace --all-targets --features test-fixture --locked -- -D warnings
+  web:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: juiced/rewrite/ui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.3
+      - name: Install pinned web dependencies and browser
+        run: |
+          bun install --frozen-lockfile
+          bunx playwright install --with-deps chromium
+      - name: Independent web unit tests and production build
+        run: |
+          bun test test/
+          bun run build
+      - name: Imported product plan integrity
+        working-directory: juiced/rewrite
+        run: |
+          bun test scripts/plan.test.ts
+          bun catalog-design/inventory.ts --check --native-root ../..
+          bun api-parity/inventory.ts --check
+          bun test api-parity/inventory.test.ts
+      - name: Operator browser journeys against the Rust process
+        run: bun run test:e2e
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rewrite-browser-evidence
+          path: |
+            juiced/rewrite/ui/playwright-report/
+            juiced/rewrite/ui/test-results/

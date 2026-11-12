@@ -1,0 +1,11 @@
+{
+  "schema_version": 2,
+  "inhibit_suspend": true,
+  "admission": {
+    "startup": { "concurrent": 1, "pending": 64, "wait_ms": 30000 }
+  },
+  "resident_budget_bytes": 8589934592,
+  "startup_timeout_ms": 120000,
+  "request_timeout_ms": 300000,
+  "models": []
+}

@@ -1,0 +1,808 @@
+{
+  "schema_version": 1,
+  "observed_at": "2026-11-11T09:19:45.474796+00:00",
+  "frozen_source_head": "62e82570d2d5625addff0da636420f68d27b80d7",
+  "main_source_head": "aaed79e8d84d201406a87ed1151e5ec297a200ad",
+  "reference_policy": "Bounded committed-source observation using git show at the recorded main HEAD. Concurrent uncommitted implementation edits are excluded and preserved. Paths are repository-relative labels only. CI does not read that checkout or require main-only files.",
+  "worktree_status_for_observed_paths": [
+    " M juiced/RESOURCE-ADMISSION.md",
+    " M src/cpp/server/utils/platform/process_linux.cpp"
+  ],
+  "source_comparisons": [
+    {
+      "path": "docs/api/README.md",
+      "main_sha256": "2e04ea7e41ae42f972ed250963376e7585e535384dbebd88e9fa4468a9c1c6b0",
+      "frozen_sha256": "2e04ea7e41ae42f972ed250963376e7585e535384dbebd88e9fa4468a9c1c6b0",
+      "equal_to_frozen": true,
+      "present_in_frozen": true,
+      "validation": "snapshot_only_no_main_path_access_in_ci"
+    },
+    {
+      "path": "docs/api/anthropic.md",
+      "main_sha256": "65c7e08e739044d7d1e1195ae316c23ccfe3faf36cf3ccd41982472dfb648385",
+      "frozen_sha256": "65c7e08e739044d7d1e1195ae316c23ccfe3faf36cf3ccd41982472dfb648385",
+      "equal_to_frozen": true,
+      "present_in_frozen": true,
+      "validation": "snapshot_only_no_main_path_access_in_ci"
+    },
+    {
+      "path": "docs/api/automatic1111.md",
+      "main_sha256": "4e2b8c6d092b5243970b85f68ab2c6a18963903555435c38d3e1ef04c36f8155",
+      "frozen_sha256": "4e2b8c6d092b5243970b85f68ab2c6a18963903555435c38d3e1ef04c36f8155",
+      "equal_to_frozen": true,
+      "present_in_frozen": true,
+      "validation": "snapshot_only_no_main_path_access_in_ci"
+    },
+    {
+      "path": "docs/api/juiced.md",
+      "main_sha256": "582862289e484846a234e0613dde730e78c9d2e0338e8928103693dbdaf9227d",
+      "frozen_sha256": "582862289e484846a234e0613dde730e78c9d2e0338e8928103693dbdaf9227d",
+      "equal_to_frozen": true,
+      "present_in_frozen": true,
+      "validation": "snapshot_only_no_main_path_access_in_ci"
+    },
+    {
+      "path": "docs/api/lemonade.md",
+      "main_sha256": "53ddac7356a8e1ef4cdc97ea457ba061301580a6b6a322fdc8efe30e5bdb85b4",
+      "frozen_sha256": "53ddac7356a8e1ef4cdc97ea457ba061301580a6b6a322fdc8efe30e5bdb85b4",
+      "equal_to_frozen": true,
+      "present_in_frozen": true,
+      "validation": "snapshot_only_no_main_path_access_in_ci"
+    },
+    {
+      "path": "docs/api/llamacpp.md",
+      "main_sha256": "f64e088c8cf83d3b4033959c3715b493feba9526fcce2db1ef9c3845c895c620",
+      "frozen_sha256": "f64e088c8cf83d3b4033959c3715b493feba9526fcce2db1ef9c3845c895c620",
+      "equal_to_frozen": true,
+      "present_in_frozen": true,
+      "validation": "snapshot_only_no_main_path_access_in_ci"
+    },
+    {
+      "path": "docs/api/mcp.md",
+      "main_sha256": "ba186881a32cf97f7626c6a63cf2676655e94742b75786ead30c76fd67cda8ad",
+      "frozen_sha256": "ba186881a32cf97f7626c6a63cf2676655e94742b75786ead30c76fd67cda8ad",
+      "equal_to_frozen": true,
+      "present_in_frozen": true,
+      "validation": "snapshot_only_no_main_path_access_in_ci"
+    },
+    {
+      "path": "docs/api/ollama.md",
+      "main_sha256": "72f69342e1fbbe973c1628e64e44970278abb5ce2c9d3c0add3576e9b0ea7e1c",
+      "frozen_sha256": "72f69342e1fbbe973c1628e64e44970278abb5ce2c9d3c0add3576e9b0ea7e1c",
+      "equal_to_frozen": true,
+      "present_in_frozen": true,
+      "validation": "snapshot_only_no_main_path_access_in_ci"
+    },
+    {
+      "path": "docs/api/openai.md",
+      "main_sha256": "f52801b31bf1d2ebe2b90eeecfdbdf516906de4448de0386b1caed05359c1dea",
+      "frozen_sha256": "f52801b31bf1d2ebe2b90eeecfdbdf516906de4448de0386b1caed05359c1dea",
+      "equal_to_frozen": true,
+      "present_in_frozen": true,
+      "validation": "snapshot_only_no_main_path_access_in_ci"
+    },
+    {
+      "path": "juiced/PLATFORM-FEATURES.json",
+      "main_sha256": "b369ba1c3f3c8478eb3706fbafa8b226a9fb712ed51ec3ef150c620f4b01b29d",
+      "frozen_sha256": "b369ba1c3f3c8478eb3706fbafa8b226a9fb712ed51ec3ef150c620f4b01b29d",
+      "equal_to_frozen": true,
+      "present_in_frozen": true,
+      "validation": "snapshot_only_no_main_path_access_in_ci"
+    },
+    {
+      "path": "src/cpp/include/lemon/upgradable_http_server.h",
+      "main_sha256": "01d6d11c2ddae2e5afcefd22bbdbbb4f9b946850f8026c458034b7e7fff46bd0",
+      "frozen_sha256": "01d6d11c2ddae2e5afcefd22bbdbbb4f9b946850f8026c458034b7e7fff46bd0",
+      "equal_to_frozen": true,
+      "present_in_frozen": true,
+      "validation": "snapshot_only_no_main_path_access_in_ci"
+    },
+    {
+      "path": "src/cpp/server/anthropic_api.cpp",
+      "main_sha256": "a6906969e7e7d8515c0fe53affdb40be43ec614041f5ef4af3fb8c5f27567bf7",
+      "frozen_sha256": "a6906969e7e7d8515c0fe53affdb40be43ec614041f5ef4af3fb8c5f27567bf7",
+      "equal_to_frozen": true,
+      "present_in_frozen": true,
+      "validation": "snapshot_only_no_main_path_access_in_ci"
+    },
+    {
+      "path": "src/cpp/server/juiced/compatibility.cpp",
+      "main_sha256": "efc9cc6699d2c16ba5d07f3a4247cf001dc978fa0e5654dd146c9c5ed580a987",
+      "frozen_sha256": "efc9cc6699d2c16ba5d07f3a4247cf001dc978fa0e5654dd146c9c5ed580a987",
+      "equal_to_frozen": true,
+      "present_in_frozen": true,
+      "validation": "snapshot_only_no_main_path_access_in_ci"
+    },
+    {
+      "path": "src/cpp/server/juiced/preparation.cpp",
+      "main_sha256": "dc09c3d5af7f4fcbfab282a172af873c177fe65a1e19a60ff9f02d0c695f0088",
+      "frozen_sha256": "368f18b97283a0d8c57938e121aa00632d7f8c141103bfc36a818df9e42ca4aa",
+      "equal_to_frozen": false,
+      "present_in_frozen": true,
+      "validation": "snapshot_only_no_main_path_access_in_ci"
+    },
+    {
+      "path": "src/cpp/server/juiced/service.cpp",
+      "main_sha256": "8c4e4f4b64cd21542cc09eed8bf2be8d9f06199db399f00b49c82621819e47ab",
+      "frozen_sha256": "58e81dc44831dfc7082c0e4c043e4be81c1969186642ae5d9c572d0125d6223f",
+      "equal_to_frozen": false,
+      "present_in_frozen": true,
+      "validation": "snapshot_only_no_main_path_access_in_ci"
+    },
+    {
+      "path": "src/cpp/server/mcp_server.cpp",
+      "main_sha256": "6a1325ccb8ae14553cbb67a5c3677b024b4cf925b815e7290fd25c6d50d2cd9e",
+      "frozen_sha256": "6a1325ccb8ae14553cbb67a5c3677b024b4cf925b815e7290fd25c6d50d2cd9e",
+      "equal_to_frozen": true,
+      "present_in_frozen": true,
+      "validation": "snapshot_only_no_main_path_access_in_ci"
+    },
+    {
+      "path": "src/cpp/server/ollama_api.cpp",
+      "main_sha256": "c95b5851ba20b1a070d61c43939c99c68d67777b87b2844b7fdc01e5665ca96a",
+      "frozen_sha256": "c95b5851ba20b1a070d61c43939c99c68d67777b87b2844b7fdc01e5665ca96a",
+      "equal_to_frozen": true,
+      "present_in_frozen": true,
+      "validation": "snapshot_only_no_main_path_access_in_ci"
+    },
+    {
+      "path": "src/cpp/server/server.cpp",
+      "main_sha256": "3f7371644e4b929041da5fa7bcb752592dbaae9b48b1cebf49df1a5f5a3137e5",
+      "frozen_sha256": "bf4fc1861e88f93d1c9d0928f872b6a29cc92be7265486985374211ec4c261a1",
+      "equal_to_frozen": false,
+      "present_in_frozen": true,
+      "validation": "snapshot_only_no_main_path_access_in_ci"
+    },
+    {
+      "path": "src/cpp/server/websocket_server.cpp",
+      "main_sha256": "116ed13259b959e06bf6330073a9018945f4e3d2b15474f4da893c18dc3b9c34",
+      "frozen_sha256": "116ed13259b959e06bf6330073a9018945f4e3d2b15474f4da893c18dc3b9c34",
+      "equal_to_frozen": true,
+      "present_in_frozen": true,
+      "validation": "snapshot_only_no_main_path_access_in_ci"
+    },
+    {
+      "path": "juiced/RESOURCE-ADMISSION.md",
+      "main_sha256": "c854c62d97c54f46f7e293b3e02ab28a671b70b12e86c7c27ff3251fc6a25e30",
+      "frozen_sha256": "914c3be65cf6eb02211a561a721e6d2ad5971d8141e4bef3c7e0f5a552499890",
+      "equal_to_frozen": false,
+      "present_in_frozen": true,
+      "validation": "snapshot_only_no_main_path_access_in_ci"
+    },
+    {
+      "path": "juiced/RUNTIME-PROFILES.md",
+      "main_sha256": "4d20aea04f8db2b7671f1a7ec33cbc215c4bb6e8c88f316494e6105b27cff681",
+      "frozen_sha256": "4d20aea04f8db2b7671f1a7ec33cbc215c4bb6e8c88f316494e6105b27cff681",
+      "equal_to_frozen": true,
+      "present_in_frozen": true,
+      "validation": "snapshot_only_no_main_path_access_in_ci"
+    },
+    {
+      "path": "juiced/CAPABILITIES.md",
+      "main_sha256": "18d5feac1c830786f1e4f64ec4a6a995416f81531901afd867f5e1c4eba2e56d",
+      "frozen_sha256": "18d5feac1c830786f1e4f64ec4a6a995416f81531901afd867f5e1c4eba2e56d",
+      "equal_to_frozen": true,
+      "present_in_frozen": true,
+      "validation": "snapshot_only_no_main_path_access_in_ci"
+    },
+    {
+      "path": "src/cpp/server/main.cpp",
+      "main_sha256": "256044ebc6c5513c875ac930d6a134825699e18682787065820504e8d747a081",
+      "frozen_sha256": "23e2585f62fa0e0c9157b855edb358cdfc015270c72b063872d4329eec8b0fcf",
+      "equal_to_frozen": false,
+      "present_in_frozen": true,
+      "validation": "snapshot_only_no_main_path_access_in_ci"
+    },
+    {
+      "path": "src/cpp/include/lemon/juiced/snapshot_recovery.h",
+      "main_sha256": "a1114522ce92c113ac36e93d72d82cdcdfc0e2b54f44f0e54ac1904f9f078771",
+      "frozen_sha256": null,
+      "equal_to_frozen": false,
+      "present_in_frozen": false,
+      "validation": "snapshot_only_no_main_path_access_in_ci"
+    },
+    {
+      "path": "src/cpp/server/juiced/snapshot_recovery.cpp",
+      "main_sha256": "0c9e8db75c89889426164fa0235e4fb221c5bf502ed101a030486324c5ce0686",
+      "frozen_sha256": null,
+      "equal_to_frozen": false,
+      "present_in_frozen": false,
+      "validation": "snapshot_only_no_main_path_access_in_ci"
+    },
+    {
+      "path": "src/cpp/server/juiced/cache.cpp",
+      "main_sha256": "bcc736451480dbe021f289ad55b424759bdd470abf03cd4371f1bdd48ed13e3f",
+      "frozen_sha256": "6e17fbd05387c80038c9f118e96c246dc343647f68fe63683def9c5d77f9dbc8",
+      "equal_to_frozen": false,
+      "present_in_frozen": true,
+      "validation": "snapshot_only_no_main_path_access_in_ci"
+    },
+    {
+      "path": "src/cpp/server/alias_manager.cpp",
+      "main_sha256": "bdc3d91a95823bf6d0670d33327ee97c48fc2b0011160e4a52dfe97bdaed0c5b",
+      "frozen_sha256": "d1d2970631328793cb41c7697286919975126b832f4473322e91e275c2821598",
+      "equal_to_frozen": false,
+      "present_in_frozen": true,
+      "validation": "snapshot_only_no_main_path_access_in_ci"
+    },
+    {
+      "path": "src/cpp/server/utils/platform/process_linux.cpp",
+      "main_sha256": "af9c2a4af82373872387b57c0f99d168825e6e280e40af9f4180687492ed093e",
+      "frozen_sha256": "4a4380daa3e1e4eeec7229b57fac0b0d82224cc1a70076dee0f059709d892cfe",
+      "equal_to_frozen": false,
+      "present_in_frozen": true,
+      "validation": "snapshot_only_no_main_path_access_in_ci"
+    },
+    {
+      "path": "docs/guide/cache.md",
+      "main_sha256": "8f310d54a34d569dc359ae08ea4f0e51d1a6c0218aa268fec92d9318afd67947",
+      "frozen_sha256": "8e91039f51ea1e06a235c6892d2c6df4857b2a66f5a790b0fb6ab5668b97fadc",
+      "equal_to_frozen": false,
+      "present_in_frozen": true,
+      "validation": "snapshot_only_no_main_path_access_in_ci",
+      "imported": false
+    },
+    {
+      "path": "src/cpp/include/lemon/utils/process_platform.h",
+      "main_sha256": "6f1223d8717ef5885027d6dbd9e842057ec24e34228211e00b6fcdb359c0f726",
+      "frozen_sha256": "ef5978e759e5d6bf4846359371b2b8e20cd21199b4fae783b48c4b120bea732d",
+      "equal_to_frozen": false,
+      "present_in_frozen": true,
+      "validation": "snapshot_only_no_main_path_access_in_ci",
+      "imported": false
+    },
+    {
+      "path": "src/cpp/server/utils/platform/process_macos.cpp",
+      "main_sha256": "b2fb2bca3b2f38594ef1ad40e2fb1971334be18811faf1772ec799ad1e8d1727",
+      "frozen_sha256": "27dac285096f83a3f2d8ea265a9fcb0c6ac7b0a6ad6561d04db675e587fbe68b",
+      "equal_to_frozen": false,
+      "present_in_frozen": true,
+      "validation": "snapshot_only_no_main_path_access_in_ci",
+      "imported": false
+    },
+    {
+      "path": "src/cpp/server/utils/platform/process_windows.cpp",
+      "main_sha256": "634e8fe9981a73fb75a7e75a3110fe1e729f904c69b7d39632297c263e843671",
+      "frozen_sha256": "658f49c13e26c00e2980e0f1403394c106fb8b003d9c9a7ab161b8c9a5edf798",
+      "equal_to_frozen": false,
+      "present_in_frozen": true,
+      "validation": "snapshot_only_no_main_path_access_in_ci",
+      "imported": false
+    },
+    {
+      "path": "test/cpp/test_process_exit.cpp",
+      "main_sha256": "f3be5d240b8635847530a365ddebbee5b25a5d93bb75961a366942b3fa2a8059",
+      "frozen_sha256": "e73d99e1643010a1bf7d036f1963dda98a8d90657a18afdf390ecbe9f2e786ee",
+      "equal_to_frozen": false,
+      "present_in_frozen": true,
+      "validation": "snapshot_only_no_main_path_access_in_ci",
+      "imported": false
+    },
+    {
+      "path": "CMakeLists.txt",
+      "main_sha256": "da20667103c3e5710268fff2d24fd5b2925ea2a07491f767dcfce6c46e66d113",
+      "frozen_sha256": "1e3cd3a91f956b7b6a6db5e51ec0fe4c3a3b2f3200a06d1be6ec614ba525a099",
+      "equal_to_frozen": false,
+      "present_in_frozen": true,
+      "validation": "snapshot_only_no_main_path_access_in_ci",
+      "imported": false
+    },
+    {
+      "path": ".github/workflows/juiced-release.yml",
+      "main_sha256": "883cde30616da8e9607fa605cd237d6e85f652604e64dff34a627bf330779ac8",
+      "frozen_sha256": "0f4e56baf969f8900b57778901cf5478ce92167e7f746b9129cb16855bbfafce",
+      "equal_to_frozen": false,
+      "present_in_frozen": true,
+      "validation": "snapshot_only_no_main_path_access_in_ci",
+      "imported": false
+    }
+  ],
+  "registration_scope_comparisons": [
+    {
+      "path": "src/cpp/server/server.cpp",
+      "symbol": "void Server::setup_routes",
+      "frozen_line": 1009,
+      "main_line": 1019,
+      "frozen_scope_sha256": "a4bbee34510b3a6022f669ead1d666ba9c830a3948e569b5ffdf3a190283a0eb",
+      "main_scope_sha256": "a4bbee34510b3a6022f669ead1d666ba9c830a3948e569b5ffdf3a190283a0eb",
+      "equal": true
+    },
+    {
+      "path": "src/cpp/server/server.cpp",
+      "symbol": "void Server::setup_static_files",
+      "frozen_line": 1476,
+      "main_line": 1486,
+      "frozen_scope_sha256": "77aef9d2720dfb8542855ac87b7a82df0d0cd173ab7d9187abb1364e94e3da4b",
+      "main_scope_sha256": "77aef9d2720dfb8542855ac87b7a82df0d0cd173ab7d9187abb1364e94e3da4b",
+      "equal": true
+    },
+    {
+      "path": "src/cpp/server/juiced/service.cpp",
+      "symbol": "void JuicedService::routes",
+      "frozen_line": 809,
+      "main_line": 809,
+      "frozen_scope_sha256": "a7be7572a96da71720789eae767e5c1f639aeea2f5e1e4dd45fbe244b22577c7",
+      "main_scope_sha256": "a7be7572a96da71720789eae767e5c1f639aeea2f5e1e4dd45fbe244b22577c7",
+      "equal": true
+    },
+    {
+      "path": "src/cpp/server/websocket_server.cpp",
+      "symbol": "WebSocketServer::ConnectionKind WebSocketServer::classify_path",
+      "frozen_line": 779,
+      "main_line": 779,
+      "frozen_scope_sha256": "42f278e05dd5cdd1daaef68d69ecfd41029f2f8a430fecdf8cb0b175a483e628",
+      "main_scope_sha256": "42f278e05dd5cdd1daaef68d69ecfd41029f2f8a430fecdf8cb0b175a483e628",
+      "equal": true
+    }
+  ],
+  "conclusion": {
+    "new_http_routes": [],
+    "new_websocket_routes": [],
+    "new_plan_feature_ids": [],
+    "route_set_equal": true,
+    "boundary": "17 of the 35 captured whole-file paths differ from the frozen reference. All four compared HTTP/static/native/WebSocket registration scopes remain byte-identical; cache/recover already existed and its native empty-object request is unchanged. The aaed delta adds native macOS/Windows direct-writer identity references, Windows helper EOF/deadline/cleanup semantics and target-OS evidence requirements. The 211 feature objects, six user requirements, dispositions and revision-4 approval bytes remain unchanged. Concurrent working-tree bytes are excluded. This is committed-source consistency, not wire parity, source import, Rust implementation acceptance or target-native recovery qualification."
+  },
+  "semantic_observations": [
+    {
+      "id": "offline-snapshot-inspection",
+      "http_route": false,
+      "rust_native_http_parity_claim": false,
+      "boundary": "Main adds lemond --inspect-snapshot-store and SnapshotRecovery::inspect_file. This is offline non-atomic inspection, not an HTTP route, writer fence, termination proof or recovery authority. Rust cache inspection is separate; selected diagnostics need independent field and filesystem-identity qualification.",
+      "evidence": [
+        {
+          "path": "src/cpp/server/main.cpp",
+          "line": 134,
+          "text": "auto inspection = parser.add_flag(\"--inspect-snapshot-store\", inspect_snapshot_store,",
+          "authority": "main_snapshot_only"
+        },
+        {
+          "path": "src/cpp/server/main.cpp",
+          "line": 150,
+          "text": "const auto report = SnapshotRecovery::inspect_file(directory / \"state.json\", snapshots);",
+          "authority": "main_snapshot_only"
+        },
+        {
+          "path": "src/cpp/include/lemon/juiced/snapshot_recovery.h",
+          "line": 40,
+          "text": "// This is a non-atomic observation of paths, never a writer fence or recovery",
+          "authority": "main_snapshot_only"
+        }
+      ]
+    },
+    {
+      "id": "exact-directory-identity",
+      "affected_native_paths": [
+        "/internal/set",
+        "/juiced/cache",
+        "/juiced/cache/recover",
+        "/juiced/import/{operation}",
+        "/juiced/removal"
+      ],
+      "boundary": "Main uses ManagedDirectoryLease::resolve_root for configured model/snapshot roots and documents exact retained-directory identity rechecks before claim reuse or descendant creation. Windows uses full128-bit FileIdInfo and fails closed when unavailable. This does not anchor all subsequent path-based writes or establish hierarchy exclusion on Windows. No current API row is promoted by this observation.",
+      "evidence": [
+        {
+          "path": "src/cpp/server/server.cpp",
+          "line": 6818,
+          "text": "const auto next = utils::path_to_utf8(utils::ManagedDirectoryLease::resolve_root(utils::path_from_utf8(",
+          "authority": "main_snapshot_only"
+        },
+        {
+          "path": "src/cpp/server/juiced/service.cpp",
+          "line": 223,
+          "text": "snapshot_directory_ = utils::ManagedDirectoryLease::resolve_root(configured.empty() ? directory_ / \"snapshots\" : utils::path_from_utf8(configured));",
+          "authority": "main_snapshot_only"
+        },
+        {
+          "path": "juiced/RESOURCE-ADMISSION.md",
+          "line": 757,
+          "text": "Before reusing an exact claim or inheriting a POSIX ancestor claim, the owner",
+          "authority": "main_snapshot_only"
+        },
+        {
+          "path": "juiced/RESOURCE-ADMISSION.md",
+          "line": 777,
+          "text": "Windows compares the volume and full 128-bit `FileIdInfo`, failing closed when",
+          "authority": "main_snapshot_only"
+        }
+      ]
+    },
+    {
+      "id": "registered-worker-retirement",
+      "affected_native_paths": [
+        "/load",
+        "/unload",
+        "/juiced/operation",
+        "/juiced/admission",
+        "/juiced/state"
+      ],
+      "boundary": "Main documents exact worker-generation retirement under the registry lock, unlocked process stop, recheck before removal, and retained charges on failed stop. Deferred candidates recheck pin/policy/request state after each unlocked stop. Known different-model loads can reuse eligible same-role workers; same-model and unknown-target loads keep serialization. These are existing endpoint semantics requiring Rust acceptance, not new routes. Fresh startup/retry reserves a registry slot before dispatch and cleanup retains the exact worker, original lease and load slot until confirmed stop. Preserve the initiating failure when cleanup also fails; release final worker references outside the registry lock. Selected Rust startup-permit checks do not establish complete R2 role or physical-resource qualification.",
+      "evidence": [
+        {
+          "path": "juiced/RESOURCE-ADMISSION.md",
+          "line": 910,
+          "text": "Registered-worker retirement claims the exact generation under Router's registry",
+          "authority": "main_snapshot_only"
+        },
+        {
+          "path": "juiced/RESOURCE-ADMISSION.md",
+          "line": 917,
+          "text": "Deferred replacement and idle-retirement candidates recheck generation, current",
+          "authority": "main_snapshot_only"
+        }
+      ]
+    },
+    {
+      "id": "single-profile-settings-authority",
+      "rust_native_http_parity_claim": false,
+      "boundary": "Native first profile selection transfers active saved-option authority into a versioned settings row in execution_profiles.json. Preserve legacy bytes/unknown keys, reject unsupported or incomplete settings, omit internal settings from public profiles, and retain cleanup references. These are native ownership requirements, not a Rust implementation, native wire-parity, complete-generation backup or older-executable restore receipt.",
+      "evidence": [
+        {
+          "path": "juiced/RESOURCE-ADMISSION.md",
+          "line": 209,
+          "text": "A model without profile-owned settings keeps its saved options in",
+          "authority": "main_snapshot_only"
+        },
+        {
+          "path": "juiced/RESOURCE-ADMISSION.md",
+          "line": 212,
+          "text": "row. That row contains `settings: {\"version\": 1, \"saved_options\": {...}}`.",
+          "authority": "main_snapshot_only"
+        },
+        {
+          "path": "juiced/RESOURCE-ADMISSION.md",
+          "line": 219,
+          "text": "Merged option edits retain unknown saved keys. Unsupported settings versions,",
+          "authority": "main_snapshot_only"
+        },
+        {
+          "path": "juiced/RESOURCE-ADMISSION.md",
+          "line": 228,
+          "text": "durability. Restoring an older executable requires its matching complete settings",
+          "authority": "main_snapshot_only"
+        }
+      ]
+    },
+    {
+      "id": "live-roots-and-canonical-startup-inputs",
+      "rust_native_http_parity_claim": false,
+      "boundary": "Native mutation admission and resumed effects validate every live claim outside admission locks, reject replacement with503 storage_root_unavailable, and retain failed-publication ownership with nonthrowing continuation restoration. Startup aliases bind to claimed canonical cache/config paths before reading. Point observations do not create a complete writer fence; Rust needs independent canonical-input/all-live-root acceptance.",
+      "evidence": [
+        {
+          "path": "juiced/RESOURCE-ADMISSION.md",
+          "line": 763,
+          "text": "The native writer gate also validates every live directory claim before new or",
+          "authority": "main_snapshot_only"
+        },
+        {
+          "path": "juiced/RESOURCE-ADMISSION.md",
+          "line": 765,
+          "text": "`storage_root_unavailable`. Directory checks run outside the admission mutex.",
+          "authority": "main_snapshot_only"
+        },
+        {
+          "path": "juiced/RESOURCE-ADMISSION.md",
+          "line": 767,
+          "text": "Deferred sync, downloads and snapshot saves revalidate before resuming effects.",
+          "authority": "main_snapshot_only"
+        },
+        {
+          "path": "juiced/RESOURCE-ADMISSION.md",
+          "line": 772,
+          "text": "Restoring a continuation itself remains nonthrowing so process retirement can",
+          "authority": "main_snapshot_only"
+        },
+        {
+          "path": "juiced/RESOURCE-ADMISSION.md",
+          "line": 781,
+          "text": "Both native startup entrypoints replace cache/config input aliases with the",
+          "authority": "main_snapshot_only"
+        }
+      ]
+    },
+    {
+      "id": "native-model-settings-recovery",
+      "rust_native_http_parity_claim": false,
+      "boundary": "Required R1/R4 acceptance: optional missing native registration/options/profile documents differ from present unreadable, nonregular, malformed or non-object storage. Damaged data rejects activation with model_settings_recovery_required and redacts parser input from errors/logs. Recognized canonical and legacy built-in option rows must be objects; unknown bare metadata remains preserved without model semantics. This captures native ownership requirements, not Rust import or wire parity.",
+      "evidence": [
+        {
+          "path": "juiced/RESOURCE-ADMISSION.md",
+          "line": 680,
+          "text": "ModelManager distinguishes missing optional model metadata from present damaged",
+          "authority": "main_snapshot_only"
+        },
+        {
+          "path": "juiced/RESOURCE-ADMISSION.md",
+          "line": 684,
+          "text": "with `model_settings_recovery_required`. Parser input is omitted from that error.",
+          "authority": "main_snapshot_only"
+        },
+        {
+          "path": "src/cpp/server/model_manager.cpp",
+          "line": 2290,
+          "text": "json ModelManager::load_optional_json(const std::string& path) {",
+          "authority": "main_snapshot_only"
+        },
+        {
+          "path": "src/cpp/server/model_manager.cpp",
+          "line": 188,
+          "text": "static const json& require_saved_options_object(const json& value) {",
+          "authority": "main_snapshot_only"
+        }
+      ]
+    },
+    {
+      "id": "fixed-legacy-configuration-cohort",
+      "http_route": false,
+      "rust_native_http_parity_claim": false,
+      "boundary": "Required R1/R4 migration acceptance: ConfigFile transports six fixed legacy metadata files plus aliases only when the cache moves, through version-1 staging/prepared/active intent with canonical roots, hashes, sizes and permissions. Complete private staging precedes target publication; active requires source/target revalidation; source bytes remain and later target edits are never replayed over. Bounds are 16 MiB/file, 64 MiB/cohort, 64 KiB manifest, depth 128, 100000 events and 30-second cooperative checks, with prescribed free-space headroom. Incomplete/conflicting generations reject with configuration_migration_recovery_required. Source juiced/ or unrelated destination state blocks this lane; no recursive payload move, complete modern-store migration, all-writer fence, prior-helper cleanup, power-loss or candidate recovery is established.",
+      "evidence": [
+        {
+          "path": "juiced/RESOURCE-ADMISSION.md",
+          "line": 693,
+          "text": "Startup metadata relocation belongs to ConfigFile. The path resolver selects the",
+          "authority": "main_snapshot_only"
+        },
+        {
+          "path": "juiced/RESOURCE-ADMISSION.md",
+          "line": 700,
+          "text": "`.juiced-configuration-migration.json` binds the canonical source, configuration",
+          "authority": "main_snapshot_only"
+        },
+        {
+          "path": "juiced/RESOURCE-ADMISSION.md",
+          "line": 718,
+          "text": "The startup transport accepts JSON objects up to 16 MiB per file and 64 MiB combined,",
+          "authority": "main_snapshot_only"
+        },
+        {
+          "path": "juiced/RESOURCE-ADMISSION.md",
+          "line": 726,
+          "text": "The former recursive cache-tree mover is retired. Runtime binaries, model weights",
+          "authority": "main_snapshot_only"
+        },
+        {
+          "path": "src/cpp/server/config_directory_migration.cpp",
+          "line": 20,
+          "text": "constexpr uint64_t maximum_file = 16 * 1024 * 1024, maximum_cohort = 64 * 1024 * 1024;",
+          "authority": "main_snapshot_only"
+        },
+        {
+          "path": "src/cpp/server/config_directory_migration.cpp",
+          "line": 137,
+          "text": "void ConfigFile::migrate_directory(const std::string& cache_name, const std::string& destination_name,",
+          "authority": "main_snapshot_only"
+        }
+      ]
+    },
+    {
+      "id": "embedded-intentional-shutdown",
+      "http_route": false,
+      "rust_native_http_parity_claim": false,
+      "boundary": "Required R7 Windows acceptance: an intentional client shutdown during readiness returns success after owned Server completion if startup did not fail; probe timeout, bind/listen failure and worker exceptions remain failures. Success is not prior-manager helper termination acknowledgement. Preserve helper journals and inspect exit codes/native logs with parser-input redaction. Native Windows execution must be qualified separately from Linux tests or copied source.",
+      "evidence": [
+        {
+          "path": "juiced/RESOURCE-ADMISSION.md",
+          "line": 618,
+          "text": "The embedded readiness probe can finish after a client requests shutdown. That",
+          "authority": "main_snapshot_only"
+        },
+        {
+          "path": "src/cpp/tray/main.cpp",
+          "line": 181,
+          "text": "const bool requested_shutdown = server.should_shutdown();",
+          "authority": "main_snapshot_only"
+        },
+        {
+          "path": "juiced/RESOURCE-ADMISSION.md",
+          "line": 622,
+          "text": "ownership. Configuration-migration acceptance preserves its helper journal across",
+          "authority": "main_snapshot_only"
+        }
+      ]
+    },
+    {
+      "id": "prior-writer-pidfs-observation",
+      "new_http_route": false,
+      "affected_native_paths": [
+        "/juiced/cache/recover"
+      ],
+      "rust_native_http_parity_claim": false,
+      "boundary": "New snapshot saves can capture a direct native writer before dispatch and durably bind store, write key, manager owner, worker generation, model, profile and byte bound. The state-operation lease excludes replacement startup and dispatch rechecks the actor. Supported 64-bit Linux pidfs observation requires the original boot/PID namespace and kernel process-object identity; it neither signals nor collects the process. Unknown support, changed environments, invalid bindings and legacy actorless writes stay charged. Cleanup commits its outcome before file reclamation; failed publication or deletion retains charges. Malformed ownership quarantines unknown disk use without following untrusted paths. Metadata inspection never establishes termination; direct-process exit is not descendant/device exit, and the binding hash is not a same-user-edit signature. cache/recover already existed and still accepts only an empty object. Complete operator, Windows/macOS and cross-environment recovery remain open qualification gates.",
+      "evidence": [
+        {
+          "path": "juiced/RESOURCE-ADMISSION.md",
+          "line": 307,
+          "text": "Native identity observation is capability-checked by the existing process owner:",
+          "authority": "main_snapshot_only"
+        },
+        {
+          "path": "juiced/RESOURCE-ADMISSION.md",
+          "line": 323,
+          "text": "Unavailable native support, changed execution environments, invalid bindings and",
+          "authority": "main_snapshot_only"
+        },
+        {
+          "path": "src/cpp/server/utils/platform/process_linux.cpp",
+          "line": 741,
+          "text": "ProcessIdentityState LinuxProcessPlatform::observe_process_identity(",
+          "authority": "main_snapshot_only"
+        },
+        {
+          "path": "src/cpp/server/juiced/cache.cpp",
+          "line": 79,
+          "text": "if (!current || current->method != actor->method || current->pid != actor->pid ||",
+          "authority": "main_snapshot_only"
+        },
+        {
+          "path": "src/cpp/server/juiced/cache.cpp",
+          "line": 563,
+          "text": "if (!body.is_object() || !body.empty()) throw std::invalid_argument(\"Recovery takes no file paths or overrides\");",
+          "authority": "main_snapshot_only"
+        },
+        {
+          "path": "src/cpp/server/juiced/snapshot_recovery.cpp",
+          "line": 780,
+          "text": "return utils::string_sha256(json::array({pending, store, entry.at(\"owner\"), entry.at(\"generation\"),",
+          "authority": "main_snapshot_only"
+        }
+      ]
+    },
+    {
+      "id": "alias-exact-backup-atomic-publication",
+      "http_route": false,
+      "rust_native_http_parity_claim": false,
+      "boundary": "Native startup binds alias recovery to its writer/root owner before loading. It verifies a byte-exact original backup before atomically replacing a damaged primary while keeping that pathname present, including active migration generations. Supported acyclic bindings survive; invalid shapes, unsupported entries and cycles retain their original bytes. Backups use aliases.json.corrupted, or the SHA256 suffix when that name holds different bytes; verified identical backups can be reused, mismatched occupied names reject, and historical numbered backups are not changed. Failed replacement preserves source, backup and prior live map. Bounds are 16 MiB, depth 128 and 100000 events. Exceeding these limits reports alias_configuration_recovery_required without publishing an empty replacement. Creating a backup requires free space for three source sizes plus 1 MiB. Recovery diagnostics omit parser input. These checks do not establish external-writer exclusion, a hard quota, measured parse peaks, host-crash durability, whole-store maintenance or Rust recovery qualification; an already missing active role still requires validated recovery.",
+      "evidence": [
+        {
+          "path": "juiced/RESOURCE-ADMISSION.md",
+          "line": 649,
+          "text": "Recovery verifies a byte-exact backup before atomically replacing a damaged alias",
+          "authority": "main_snapshot_only"
+        },
+        {
+          "path": "juiced/RESOURCE-ADMISSION.md",
+          "line": 660,
+          "text": "Historical numbered backups remain untouched. Reads are bounded to 16 MiB,",
+          "authority": "main_snapshot_only"
+        },
+        {
+          "path": "src/cpp/server/alias_manager.cpp",
+          "line": 249,
+          "text": "auto backup = cache_path / \"aliases.json.corrupted\";",
+          "authority": "main_snapshot_only"
+        },
+        {
+          "path": "src/cpp/server/alias_manager.cpp",
+          "line": 256,
+          "text": "if (fs::space(cache_path).available < 3 * size + 1024 * 1024)",
+          "authority": "main_snapshot_only"
+        }
+      ]
+    },
+    {
+      "id": "shutdown-intent-retained-through-cleanup",
+      "http_route": false,
+      "rust_native_http_parity_claim": false,
+      "boundary": "Native Server stop retains requested shutdown after owned cleanup so its joining run owner can distinguish intentional cancellation from startup failure even when readiness misses the serving interval. Only explicit set_shutdown_requested(false) clears it. Repeated cleanup must not erase the request. This is a manager-run outcome, never prior-manager/helper/device termination acknowledgement. Native Windows embedded readiness and shutdown still need their separate actual acceptance; copied source and Linux tests do not qualify Windows or Rust.",
+      "evidence": [
+        {
+          "path": "juiced/RESOURCE-ADMISSION.md",
+          "line": 630,
+          "text": "The Server lifecycle owner retains a requested shutdown after `stop()` completes.",
+          "authority": "main_snapshot_only"
+        },
+        {
+          "path": "juiced/RESOURCE-ADMISSION.md",
+          "line": 633,
+          "text": "`set_shutdown_requested(false)` clears that request. This outcome says why the",
+          "authority": "main_snapshot_only"
+        },
+        {
+          "path": "src/cpp/server/server.cpp",
+          "line": 2262,
+          "text": "// The run owner needs the request after joining to distinguish a normal",
+          "authority": "main_snapshot_only"
+        }
+      ]
+    },
+    {
+      "id": "native-platform-writer-identity",
+      "new_http_route": false,
+      "affected_native_paths": [
+        "/juiced/cache/recover"
+      ],
+      "rust_native_http_parity_claim": false,
+      "boundary": "Required F104/F105/F107 and R1/R4/R7 acceptance extends the native direct-writer reference beyond Linux. macOS uses darwin-proc-unique-v1 with a process-unique ID and read-only boot-session UUID. Windows uses windows-start-key-host-v1 with native process-start, boot and session identity; server silos, unverified job visibility and unknown NT layouts fail closed. A loader boot-entry GUID is not a random per-boot nonce. Probes never signal or collect a process. Target-native positive capability, same-context live/exited observation and malformed/cancelled/changed-context refusal must be verified separately. An unsupported-capability pass does not qualify recovery. Rust currently has selected Linux pidfs proof; these native source leads do not implement or qualify macOS/Windows Rust recovery. Legacy/unsupported writes retain charges, and direct-process exit proves neither descendant nor device termination.",
+      "evidence": [
+        {
+          "path": "juiced/RESOURCE-ADMISSION.md",
+          "line": 307,
+          "text": "Native identity observation is capability-checked by the existing process owner:",
+          "authority": "main_snapshot_only"
+        },
+        {
+          "path": "juiced/RESOURCE-ADMISSION.md",
+          "line": 318,
+          "text": "on the target OS; a successful unsupported-capability check is not recovery",
+          "authority": "main_snapshot_only"
+        },
+        {
+          "path": "src/cpp/server/utils/platform/process_macos.cpp",
+          "line": 615,
+          "text": "const auto size = ::proc_pidinfo(pid, 17, 0, &info, sizeof(info));",
+          "authority": "main_snapshot_only"
+        },
+        {
+          "path": "src/cpp/server/utils/platform/process_windows.cpp",
+          "line": 199,
+          "text": "const auto status = query(process, 64, buffer.data(), static_cast<ULONG>(buffer.size()), &size);",
+          "authority": "main_snapshot_only"
+        },
+        {
+          "path": "src/cpp/server/utils/platform/process_windows.cpp",
+          "line": 465,
+          "text": "return ProcessIdentity{\"windows-start-key-host-v1\", handle.pid, *domain, string_sha256(std::to_string(identity->start_key))};",
+          "authority": "main_snapshot_only"
+        },
+        {
+          "path": "test/cpp/test_process_exit.cpp",
+          "line": 120,
+          "text": "check(foreign_running && process.running(), \"another native process observes the live writer without signaling it\");",
+          "authority": "main_snapshot_only"
+        },
+        {
+          "path": ".github/workflows/juiced-release.yml",
+          "line": 76,
+          "text": "run: ctest --test-dir build -C Release --verbose --output-on-failure --repeat until-fail:3 --output-log build/process-identity-repetitions.log -R \"^ProcessExitObservationTest$\"",
+          "authority": "main_snapshot_only"
+        }
+      ]
+    },
+    {
+      "id": "helper-output-eof-and-direct-child-settlement",
+      "http_route": false,
+      "rust_native_http_parity_claim": false,
+      "boundary": "Required helper and writer cleanup acceptance keeps timeout and cancellation active after output EOF. A trailing callback runs once while its direct child can still be live. Callback failure/cancellation uses the confirmed owned-child cleanup path, and normal result collection requires observed process exit. The native Windows implementation and portable owned/unowned output fixtures are references only. Cleanup may outlast the requested timeout; no end-to-end stop deadline, descendant/device/remote termination or Rust platform qualification follows. Native CI records capability and foreign-process observation separately from unsupported checks and preserves process-identity-proof.json plus repetition logs.",
+      "evidence": [
+        {
+          "path": "juiced/RESOURCE-ADMISSION.md",
+          "line": 943,
+          "text": "Output-pipe closure is not process-exit evidence.",
+          "authority": "main_snapshot_only"
+        },
+        {
+          "path": "juiced/RESOURCE-ADMISSION.md",
+          "line": 950,
+          "text": "Cleanup can outlast the requested timeout; these checks do not establish an",
+          "authority": "main_snapshot_only"
+        },
+        {
+          "path": "src/cpp/server/utils/platform/process_windows.cpp",
+          "line": 682,
+          "text": "if (pipe_error != ERROR_BROKEN_PIPE) throw std::runtime_error(\"Failed to read helper output\");",
+          "authority": "main_snapshot_only"
+        },
+        {
+          "path": "src/cpp/server/utils/platform/process_windows.cpp",
+          "line": 782,
+          "text": "if (failure || killed_by_callback) {",
+          "authority": "main_snapshot_only"
+        },
+        {
+          "path": "test/cpp/test_process_exit.cpp",
+          "line": 256,
+          "text": "output_case(\"--output-closed\", 1, false, false, owned);",
+          "authority": "main_snapshot_only"
+        },
+        {
+          "path": "test/cpp/test_process_exit.cpp",
+          "line": 269,
+          "text": "std::ofstream report(\"process-identity-proof.json\"); report << proof.dump(2) << '\\n';",
+          "authority": "main_snapshot_only"
+        }
+      ]
+    }
+  ],
+  "previous_main_source_head": "47fa9622e348475ab96020caa24d56427393a84f",
+  "worktree_status_scope": "The retained status list is the historical 47fa diagnostic. This refresh reads only committed aaed objects and does not inspect current working-tree bytes or assert cleanliness."
+}

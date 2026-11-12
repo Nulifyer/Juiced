@@ -1,0 +1,284 @@
+{
+  "schema_version": 1,
+  "captured_at": "2026-11-11T09:19:45.474796+00:00",
+  "source_checkout": "/home/nulifyer/Projects/Juiced",
+  "source_branch": "feat/operator-console-v0.7",
+  "source_head": "aaed79e8d84d201406a87ed1151e5ec297a200ad",
+  "scope": "Planning and contract snapshot only. Source implementation changes and native acceptance are not ported by copying documentation.",
+  "files": [
+    {
+      "path": "juiced/PLATFORM-PLAN.md",
+      "sha256": "a912826159800f7350fd4482503a2bb22d99c007c487fee9175993fa6bf19847",
+      "source_state": "committed",
+      "updated_in_rewrite": false
+    },
+    {
+      "path": "juiced/PLATFORM-FEATURES.json",
+      "sha256": "b369ba1c3f3c8478eb3706fbafa8b226a9fb712ed51ec3ef150c620f4b01b29d",
+      "source_state": "committed",
+      "updated_in_rewrite": false
+    },
+    {
+      "path": "juiced/PLATFORM-APPROVAL.json",
+      "sha256": "b5847cce0dc2388fcefc72f9a7bace7ff79fc7ea99397c52534d4664259a1285",
+      "source_state": "committed",
+      "updated_in_rewrite": false
+    },
+    {
+      "path": "juiced/BARISTA.md",
+      "sha256": "e348076d7eeb6cfbe41d68bd4a6db6eac6d7e240037283be3f4062920c94e0f6",
+      "source_state": "committed",
+      "updated_in_rewrite": false
+    },
+    {
+      "path": "juiced/BARISTA-OPERATIONS.md",
+      "sha256": "565a5804371a067f33bcd5823afdf289a85ccab38f55cb4ec22e70cb0064780e",
+      "source_state": "committed",
+      "updated_in_rewrite": true
+    },
+    {
+      "path": "juiced/RESOURCE-ADMISSION.md",
+      "sha256": "c854c62d97c54f46f7e293b3e02ab28a671b70b12e86c7c27ff3251fc6a25e30",
+      "source_state": "committed",
+      "updated_in_rewrite": true
+    },
+    {
+      "path": "juiced/RESOURCE-ACCOUNTING.md",
+      "sha256": "96c42877ae65a13ec38d456f707bef9c0836e3eb36f868a18c7edf9c23ae4573",
+      "source_state": "committed",
+      "updated_in_rewrite": false
+    },
+    {
+      "path": "juiced/RESOURCE-SUITABILITY.md",
+      "sha256": "a53a347f41f1d02764f069af31795e6a7a5e3a5298b9880587106587f4d868f2",
+      "source_state": "committed",
+      "updated_in_rewrite": false
+    },
+    {
+      "path": "juiced/RUNTIME-PROFILES.md",
+      "sha256": "4d20aea04f8db2b7671f1a7ec33cbc215c4bb6e8c88f316494e6105b27cff681",
+      "source_state": "committed",
+      "updated_in_rewrite": false
+    },
+    {
+      "path": "juiced/CAPABILITIES.md",
+      "sha256": "18d5feac1c830786f1e4f64ec4a6a995416f81531901afd867f5e1c4eba2e56d",
+      "source_state": "committed",
+      "updated_in_rewrite": false
+    },
+    {
+      "path": "juiced/UI-DESIGN.md",
+      "sha256": "2bd71e60dbef0a2e6030bcf98e5bd47e0b4fa70c67122fc5c60a83ff2de92a5b",
+      "source_state": "committed",
+      "updated_in_rewrite": false
+    },
+    {
+      "path": "docs/guide/maintenance.md",
+      "sha256": "acbf77a155b5868872e2a79874a548920451d17cf28f805dfd028c1e76a096c9",
+      "source_state": "committed",
+      "updated_in_rewrite": true
+    }
+  ],
+  "initial_source_head": "62e82570d2d5625addff0da636420f68d27b80d7",
+  "implementation_leads": [
+    {
+      "path": "src/cpp/include/lemon/juiced/snapshot_recovery.h",
+      "sha256": "a1114522ce92c113ac36e93d72d82cdcdfc0e2b54f44f0e54ac1904f9f078771",
+      "source_state": "committed",
+      "imported": false,
+      "scope": "Native read-only snapshot-inspection reference. Not imported; native acceptance does not qualify Rust."
+    },
+    {
+      "path": "src/cpp/server/juiced/snapshot_recovery.cpp",
+      "sha256": "0c9e8db75c89889426164fa0235e4fb221c5bf502ed101a030486324c5ce0686",
+      "source_state": "committed",
+      "imported": false,
+      "scope": "Native read-only snapshot-inspection reference. Not imported; native acceptance does not qualify Rust."
+    },
+    {
+      "path": "test/cpp/test_snapshot_recovery.cpp",
+      "sha256": "2bc9f6bc132aa99ae2ab6b0f510f348c1f91abf09e4f45b04e89dca0db2fb9db",
+      "source_state": "committed",
+      "imported": false,
+      "scope": "Native read-only snapshot-inspection reference. Not imported; native acceptance does not qualify Rust."
+    },
+    {
+      "path": "src/cpp/server/model_manager.cpp",
+      "sha256": "3ec9856299dcc7d81b080e186483c86b8d0f53154dbaaa1b36d0caf1d40e0c3f",
+      "source_state": "committed",
+      "imported": false,
+      "scope": "Committed native profile-settings/recovery, live-root, canonical-input, migration and shutdown reference only. Not imported Rust implementation or acceptance."
+    },
+    {
+      "path": "src/cpp/server/resource_admission.cpp",
+      "sha256": "f22b2893e8860a21ae3f8b5b9dd26334130645a0ec01a63c1159fd859fb97cb7",
+      "source_state": "committed",
+      "imported": false,
+      "scope": "Committed native profile-settings/recovery, live-root, canonical-input, migration and shutdown reference only. Not imported Rust implementation or acceptance."
+    },
+    {
+      "path": "src/cpp/server/utils/managed_directory_lease.cpp",
+      "sha256": "2088e4c1fe0f4054bcbc3d9f0d75abf9b6d0da9ca44d8e308301ddc89b3f1f5a",
+      "source_state": "committed",
+      "imported": false,
+      "scope": "Committed native profile-settings/recovery, live-root, canonical-input, migration and shutdown reference only. Not imported Rust implementation or acceptance."
+    },
+    {
+      "path": "src/cpp/server/main.cpp",
+      "sha256": "256044ebc6c5513c875ac930d6a134825699e18682787065820504e8d747a081",
+      "source_state": "committed",
+      "imported": false,
+      "scope": "Committed native profile-settings/recovery, live-root, canonical-input, migration and shutdown reference only. Not imported Rust implementation or acceptance."
+    },
+    {
+      "path": "src/cpp/tray/main.cpp",
+      "sha256": "52f10cd387cd36fd9a9e5ce64d9a16d48d812b414ea298b53edb3e54eff63b2b",
+      "source_state": "committed",
+      "imported": false,
+      "scope": "Committed native profile-settings/recovery, live-root, canonical-input, migration and shutdown reference only. Not imported Rust implementation or acceptance."
+    },
+    {
+      "path": "test/cpp/test_model_settings_publication.cpp",
+      "sha256": "0592d59b2f0ecdac370b667d00f59120c47cc47351231bdecee0ca0406dc1fc6",
+      "source_state": "committed",
+      "imported": false,
+      "scope": "Committed native profile-settings/recovery, live-root, canonical-input, migration and shutdown reference only. Not imported Rust implementation or acceptance."
+    },
+    {
+      "path": "docs/guide/models.md",
+      "sha256": "859ff7b61185a1b7bfbf25dd2e71f4b26481da363f81a105d0a335a0e14d0c42",
+      "source_state": "committed",
+      "imported": false,
+      "scope": "Committed native profile-settings/recovery, live-root, canonical-input, migration and shutdown reference only. Not imported Rust implementation or acceptance."
+    },
+    {
+      "path": "src/cpp/server/config_directory_migration.cpp",
+      "sha256": "0da46f85f9dc41305b519f9c7ff7ff696f08c33cfe91326ebd25ebf715dfa5cd",
+      "source_state": "committed",
+      "imported": false,
+      "scope": "Committed native fixed-cohort configuration migration, model-settings recovery and activation reference only. Not imported Rust implementation, complete backup or OS qualification."
+    },
+    {
+      "path": "src/cpp/server/config_file.cpp",
+      "sha256": "32f8c2cd387d54cd6772d7594e6b780860302c1d6ccbfdc223d2cd293317ea14",
+      "source_state": "committed",
+      "imported": false,
+      "scope": "Committed native fixed-cohort configuration migration, model-settings recovery and activation reference only. Not imported Rust implementation, complete backup or OS qualification."
+    },
+    {
+      "path": "src/cpp/include/lemon/config_file.h",
+      "sha256": "2a80d9fdaf65d0599a6481a4d5999d21a7f79516127659617fa8654a6a1841dd",
+      "source_state": "committed",
+      "imported": false,
+      "scope": "Committed native fixed-cohort configuration migration, model-settings recovery and activation reference only. Not imported Rust implementation, complete backup or OS qualification."
+    },
+    {
+      "path": "src/cpp/server/model_helpers.cpp",
+      "sha256": "b92ff5d2c39efdfb2eb242b3e9a79b1fef65a958847b0ed1eb94733ae01b0193",
+      "source_state": "committed",
+      "imported": false,
+      "scope": "Committed native fixed-cohort configuration migration, model-settings recovery and activation reference only. Not imported Rust implementation, complete backup or OS qualification."
+    },
+    {
+      "path": "src/cpp/server/jobs/job_manager.cpp",
+      "sha256": "21fa7fc6e913556e0186eae85a5aab0c736223decee23ac9589ad6b4b5adb389",
+      "source_state": "committed",
+      "imported": false,
+      "scope": "Committed native fixed-cohort configuration migration, model-settings recovery and activation reference only. Not imported Rust implementation, complete backup or OS qualification."
+    },
+    {
+      "path": "src/cpp/server/alias_manager.cpp",
+      "sha256": "bdc3d91a95823bf6d0670d33327ee97c48fc2b0011160e4a52dfe97bdaed0c5b",
+      "source_state": "committed",
+      "imported": false,
+      "scope": "Committed native fixed-cohort configuration migration, model-settings recovery and activation reference only. Not imported Rust implementation, complete backup or OS qualification."
+    },
+    {
+      "path": "src/cpp/server/utils/path_utils.cpp",
+      "sha256": "14c33370c62f696f506a6a688f9723fc2a063d117847f92be38a758e8d404aa7",
+      "source_state": "committed",
+      "imported": false,
+      "scope": "Committed native fixed-cohort configuration migration, model-settings recovery and activation reference only. Not imported Rust implementation, complete backup or OS qualification."
+    },
+    {
+      "path": "src/cpp/include/lemon/utils/path_utils.h",
+      "sha256": "6015bf23efb4a65c4eff442584334725642d7770db4c97609324a38c9bf7cd13",
+      "source_state": "committed",
+      "imported": false,
+      "scope": "Committed native fixed-cohort configuration migration, model-settings recovery and activation reference only. Not imported Rust implementation, complete backup or OS qualification."
+    },
+    {
+      "path": "test/cpp/test_config_dir_migration.cpp",
+      "sha256": "2f9e0d652963690abe690245a81b503e7976f38285770e1f277c3b47086202b9",
+      "source_state": "committed",
+      "imported": false,
+      "scope": "Committed native fixed-cohort configuration migration, model-settings recovery and activation reference only. Not imported Rust implementation, complete backup or OS qualification."
+    },
+    {
+      "path": "juiced/tests/test_config_directory_migration.py",
+      "sha256": "f05c3a5941d346cf59738073dd044ea28843f287b7d143edac28de9c25148b60",
+      "source_state": "committed",
+      "imported": false,
+      "scope": "Committed native fixed-cohort configuration migration, model-settings recovery and activation reference only. Not imported Rust implementation, complete backup or OS qualification."
+    }
+  ],
+  "previous_source_head": "47fa9622e348475ab96020caa24d56427393a84f",
+  "additional_reference_leads": [
+    {
+      "path": "docs/guide/cache.md",
+      "sha256": "8f310d54a34d569dc359ae08ea4f0e51d1a6c0218aa268fec92d9318afd67947",
+      "source_state": "committed",
+      "imported": false,
+      "scope": "Committed native process identity, helper EOF and target-OS evidence reference only. No source port, Rust support or native execution qualification follows from this snapshot."
+    },
+    {
+      "path": "src/cpp/include/lemon/utils/process_platform.h",
+      "sha256": "6f1223d8717ef5885027d6dbd9e842057ec24e34228211e00b6fcdb359c0f726",
+      "source_state": "committed",
+      "imported": false,
+      "scope": "Committed native process identity, helper EOF and target-OS evidence reference only. No source port, Rust support or native execution qualification follows from this snapshot."
+    },
+    {
+      "path": "src/cpp/server/utils/platform/process_linux.cpp",
+      "sha256": "af9c2a4af82373872387b57c0f99d168825e6e280e40af9f4180687492ed093e",
+      "source_state": "committed",
+      "imported": false,
+      "scope": "Committed native process identity, helper EOF and target-OS evidence reference only. No source port, Rust support or native execution qualification follows from this snapshot."
+    },
+    {
+      "path": "src/cpp/server/utils/platform/process_macos.cpp",
+      "sha256": "b2fb2bca3b2f38594ef1ad40e2fb1971334be18811faf1772ec799ad1e8d1727",
+      "source_state": "committed",
+      "imported": false,
+      "scope": "Committed native process identity, helper EOF and target-OS evidence reference only. No source port, Rust support or native execution qualification follows from this snapshot."
+    },
+    {
+      "path": "src/cpp/server/utils/platform/process_windows.cpp",
+      "sha256": "634e8fe9981a73fb75a7e75a3110fe1e729f904c69b7d39632297c263e843671",
+      "source_state": "committed",
+      "imported": false,
+      "scope": "Committed native process identity, helper EOF and target-OS evidence reference only. No source port, Rust support or native execution qualification follows from this snapshot."
+    },
+    {
+      "path": "test/cpp/test_process_exit.cpp",
+      "sha256": "f3be5d240b8635847530a365ddebbee5b25a5d93bb75961a366942b3fa2a8059",
+      "source_state": "committed",
+      "imported": false,
+      "scope": "Committed native process identity, helper EOF and target-OS evidence reference only. No source port, Rust support or native execution qualification follows from this snapshot."
+    },
+    {
+      "path": "CMakeLists.txt",
+      "sha256": "da20667103c3e5710268fff2d24fd5b2925ea2a07491f767dcfce6c46e66d113",
+      "source_state": "committed",
+      "imported": false,
+      "scope": "Committed native process identity, helper EOF and target-OS evidence reference only. No source port, Rust support or native execution qualification follows from this snapshot."
+    },
+    {
+      "path": ".github/workflows/juiced-release.yml",
+      "sha256": "883cde30616da8e9607fa605cd237d6e85f652604e64dff34a627bf330779ac8",
+      "source_state": "committed",
+      "imported": false,
+      "scope": "Committed native process identity, helper EOF and target-OS evidence reference only. No source port, Rust support or native execution qualification follows from this snapshot."
+    }
+  ]
+}
