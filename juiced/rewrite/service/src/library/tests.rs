@@ -282,6 +282,7 @@ fn store(directory: &tempfile::TempDir, policy: SourcePolicy) -> Arc<ArtifactSto
 fn query(q: &str) -> SearchQuery {
     SearchQuery {
         q: Some(q.to_owned()),
+        hub: None,
         task: None,
         limit: None,
         cursor: None,
@@ -1115,5 +1116,51 @@ async fn pull_rejects_ambiguous_incomplete_unverifiable_and_unknown_files() {
             .unwrap_err()
             .code,
         "library_pull_not_found"
+    );
+}
+
+#[tokio::test]
+async fn hub_skipped_search_reads_only_the_cache() {
+    let fixture = fixture().await;
+    let library = library(&fixture, SourcePolicy::AllowLoopbackHttp, None);
+    let directory = tempfile::tempdir().unwrap();
+    let store = store(&directory, SourcePolicy::AllowLoopbackHttp);
+    let fast = |q: &str| SearchQuery {
+        hub: Some(false),
+        ..query(q)
+    };
+    let cold = library
+        .search(Some(store.clone()), fast("fixture"))
+        .await
+        .unwrap();
+    assert_eq!(cold["sources"]["huggingface"]["status"], "skipped");
+    assert_eq!(fixture.fake.search_requests.load(Ordering::Acquire), 0);
+    assert_eq!(fixture.fake.info_requests.load(Ordering::Acquire), 0);
+    assert!(
+        cold["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|entry| entry["source"] != "huggingface")
+    );
+    library
+        .search(Some(store.clone()), query("fixture"))
+        .await
+        .unwrap();
+    let requests = (
+        fixture.fake.search_requests.load(Ordering::Acquire),
+        fixture.fake.info_requests.load(Ordering::Acquire),
+    );
+    let warm = library
+        .search(Some(store.clone()), fast("fixture"))
+        .await
+        .unwrap();
+    assert_eq!(warm["sources"]["huggingface"]["status"], "skipped");
+    assert_eq!(
+        (
+            fixture.fake.search_requests.load(Ordering::Acquire),
+            fixture.fake.info_requests.load(Ordering::Acquire),
+        ),
+        requests
     );
 }

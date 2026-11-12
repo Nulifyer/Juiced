@@ -142,6 +142,7 @@ fn hub_api_error(error: HubError) -> ApiError {
 #[serde(deny_unknown_fields)]
 pub struct SearchQuery {
     pub q: Option<String>,
+    pub hub: Option<bool>,
     pub task: Option<Task>,
     pub limit: Option<usize>,
     pub cursor: Option<String>,
@@ -448,9 +449,10 @@ impl Library {
             Vec::new()
         };
         let blocked = self.hub.blocked();
+        let skip_hub = query.hub == Some(false);
         let mut hub_error = blocked;
         let mut cached = None;
-        let page = if blocked.is_none() {
+        let page = if blocked.is_none() && !skip_hub {
             match self
                 .hub
                 .search(&text, task, limit, query.cursor.as_deref())
@@ -489,7 +491,15 @@ impl Library {
             .map(|repo| (*repo).to_owned())
             .collect();
         wanted.extend(hub_repos.iter().map(|repo| repo.id.clone()));
-        let infos = if blocked.is_none() {
+        let infos = if skip_hub {
+            wanted
+                .into_iter()
+                .filter_map(|repo| {
+                    let info = self.hub.cached_info(&repo)?;
+                    Some((repo, Ok(info)))
+                })
+                .collect()
+        } else if blocked.is_none() {
             self.infos(wanted).await
         } else {
             BTreeMap::new()
@@ -570,6 +580,7 @@ impl Library {
             .map(|entry| entry_json(entry, presence.as_ref(), pullable))
             .collect();
         let hub_status = match hub_error {
+            None if skip_hub => "skipped",
             None => "ok",
             Some(HubError::Offline) => "offline",
             Some(HubError::SourcePolicy | HubError::Unconfigured) => "blocked",

@@ -36,9 +36,9 @@ impl Default for HubLimits {
             info_bytes: 8 * 1024 * 1024,
             maximum_repos: 20,
             maximum_files: 256,
-            ttl: Duration::from_secs(120),
-            cache_entries: 128,
-            cache_bytes: 8 * 1024 * 1024,
+            ttl: Duration::from_secs(900),
+            cache_entries: 512,
+            cache_bytes: 32 * 1024 * 1024,
             concurrency: 4,
         }
     }
@@ -382,6 +382,15 @@ impl Hub {
         let page = Arc::new(page);
         self.searches.insert(key, page.clone(), weight);
         Ok((page, false))
+    }
+
+    pub fn cached_info(&self, repo: &str) -> Option<Arc<RepoInfo>> {
+        if !valid_repo(repo) {
+            return None;
+        }
+        let mut url = self.url(&["api", "models", repo]).ok()?;
+        url.query_pairs_mut().append_pair("blobs", "true");
+        self.infos.get(url.as_str())
     }
 
     pub async fn info(

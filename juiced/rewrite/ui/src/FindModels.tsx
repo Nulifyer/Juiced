@@ -23,6 +23,7 @@ function featured(quants: Quant[]): Quant[] {
 }
 const compact = (value: number | null) => value === null ? null : value >= 1e6 ? `${(value / 1e6).toFixed(1)}M` : value >= 1e3 ? `${Math.round(value / 1e3)}k` : String(value);
 
+const searchTimeout = 45000;
 type Install = { engine: string; backend: string; size: number | null };
 export function FindModels({ client, online, onRegistered, onOpenModel }: { client: Client; online: boolean; onRegistered: () => Promise<void>; onOpenModel: (id: string) => void }) {
   const [needs, setNeeds] = useState<Install | null>(null);
@@ -34,6 +35,7 @@ export function FindModels({ client, online, onRegistered, onOpenModel }: { clie
   const [result, setResult] = useState<SearchResult | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [hubPending, setHubPending] = useState(false);
   const [selected, setSelected] = useState<{ repo: string; label: string } | null>(null);
   const [notice, setNotice] = useState("");
   const [adding, setAdding] = useState(false);
@@ -50,16 +52,26 @@ export function FindModels({ client, online, onRegistered, onOpenModel }: { clie
     const timer = setTimeout(async () => {
       request.current?.abort();
       const controller = new AbortController(); request.current = controller;
-      setLoading(true);
+      const limit = setTimeout(() => controller.abort(), searchTimeout);
+      setLoading(true); setHubPending(true);
+      const params = new URLSearchParams({ limit: "12" });
+      if (query.trim()) params.set("q", query.trim());
+      if (task) params.set("task", task);
+      let full = false;
+      const fast = refreshOnly ? Promise.resolve() : client.request(`juiced/library/search?${params}&hub=false`, undefined, controller.signal).then((value) => {
+        if (!full && !controller.signal.aborted) { setResult(parseSearch(value)); setLoading(false); }
+      }).catch(() => undefined);
       try {
-        const params = new URLSearchParams({ limit: "12" });
-        if (query.trim()) params.set("q", query.trim());
-        if (task) params.set("task", task);
         const next = parseSearch(await client.request(`juiced/library/search?${params}`, undefined, controller.signal));
+        full = true;
         if (!controller.signal.aborted) { setResult(next); setError(""); }
       } catch (failure) {
-        if (!controller.signal.aborted) setError(failure instanceof Error ? failure.message : "Search failed.");
-      } finally { if (!controller.signal.aborted) { setLoading(false); request.current = null; } }
+        if (request.current === controller) setError(controller.signal.aborted ? "Hugging Face didn't answer within 45 seconds. Recommended and downloaded models are still shown." : failure instanceof Error ? failure.message : "Search failed.");
+      } finally {
+        clearTimeout(limit);
+        await fast;
+        if (request.current === controller) { setLoading(false); setHubPending(false); request.current = null; }
+      }
     }, refreshOnly ? 0 : 300);
     return () => clearTimeout(timer);
   }, [client, query, task, tick]);
@@ -109,9 +121,9 @@ export function FindModels({ client, online, onRegistered, onOpenModel }: { clie
         <div className="chip-filter" role="group" aria-label="Task"><button aria-pressed={task === null} onClick={() => setTask(null)}>All</button>{tasks.map(([id, label]) => <button key={id} aria-pressed={task === id} onClick={() => setTask(task === id ? null : id)}>{label}</button>)}</div>
       </div>
       {error && <div className="action-row"><p className="inline-error" role="alert">{error}</p><Button onClick={() => setTick((value) => value + 1)}>Retry</Button></div>}
-      {loading && <p className="searching muted" role="status">Searching…</p>}
-      {result && result.hub !== "ok" && <p className="field-help">{result.offline ? "Offline mode: showing recommended and downloaded models only." : "Hugging Face is unreachable right now; showing recommended and downloaded models."}</p>}
-      {!result ? <p className="muted">{loading ? "Searching…" : ""}</p> : models.length === 0 ? <Empty title="No models found">Try a shorter search or another task.</Empty> : <ul className={`model-results ${loading ? "stale" : ""}`} aria-label="Search results" aria-busy={loading}>
+      {result && hubPending && <p className="searching muted" role="status">Searching Hugging Face…</p>}
+      {result && !hubPending && result.hub !== "ok" && result.hub !== "skipped" && <p className="field-help">{result.offline ? "Offline mode: showing recommended and downloaded models only." : "Hugging Face is unreachable right now; showing recommended and downloaded models."}</p>}
+      {!result ? <p className="muted" role="status">{loading ? "Searching…" : ""}</p> : models.length === 0 ? <Empty title="No models found">Try a shorter search or another task.</Empty> : <ul className={`model-results ${loading ? "stale" : ""}`} aria-label="Search results" aria-busy={loading}>
         {models.map((item) => <li key={`${item.source}:${item.repo}`} className={`model-result ${item.repo === selected?.repo ? "selected" : ""}`}>
           <div className="result-head">
             <strong className="break-word">{item.name}</strong>
