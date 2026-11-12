@@ -198,6 +198,8 @@ const MOONSHINE: &str = "lemonade-sdk/moonshine-server-rocm";
 const MOONSHINE_TAG: &str = "moonshine0.0.62";
 const FLM: &str = "ROCm/FastFlowLM";
 const FLM_TAG: &str = "v1.0.12";
+const FUTO: &str = "Nulifyer/Juiced";
+const FUTO_TAG: &str = "engine-futo-26d75933c16b";
 const HYBRID: &str = "Nulifyer/llama-xdna-hybrid";
 const HYBRID_TAG: &str = "rocm-v0.3.2";
 
@@ -604,6 +606,19 @@ pub const BUILDS: &[Build] = &[
         ),
         ArchiveFormat::TarGz,
     ),
+    // FUTO publishes no builds; Juiced's engine release workflow builds the pinned source.
+    linux(
+        Engine::Asr4all,
+        "cpu",
+        None,
+        (FUTO, FUTO_TAG),
+        (
+            "engine-futo-26d75933c16b-linux-x86_64.tar.gz",
+            2167861,
+            "17202f6584a42ad428cd7217f94a9adfdecd30bb75046e1fe4a267bcd126b1f4",
+        ),
+        ArchiveFormat::TarGz,
+    ),
     linux(
         Engine::Moonshine,
         "cpu",
@@ -644,7 +659,7 @@ pub const BUILDS: &[Build] = &[
 
 /// Engines with a native support row but no published release asset; they install only
 /// through a runtime-package import.
-pub const UNPUBLISHED: &[(Engine, &str)] = &[(Engine::Asr4all, "cpu")];
+pub const UNPUBLISHED: &[(Engine, &str)] = &[];
 
 /// Native `system` runs a llama.cpp the operator placed on the host; the native image put its
 /// Vulkan build there (`/opt/juiced/llama`), so the managed Vulkan build stands in for it.

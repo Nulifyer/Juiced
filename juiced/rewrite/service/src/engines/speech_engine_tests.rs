@@ -64,9 +64,12 @@ fn parakeet_and_moonshine_resolve_pinned_cpu_releases_and_futo_is_unpublished() 
         moonshine.sha256,
         Some("c19d6f333002af3209ee029be0e4f5967926edf29395de7401c83b5f9fc21191")
     );
+    let futo = resolve(Engine::Asr4all, "cpu", &host).unwrap();
+    assert_eq!(futo.repository, "Nulifyer/Juiced");
+    assert_eq!(futo.tag, "engine-futo-26d75933c16b");
     assert_eq!(
-        resolve(Engine::Asr4all, "cpu", &host).unwrap_err(),
-        Unresolved::NotPublished
+        futo.sha256,
+        Some("17202f6584a42ad428cd7217f94a9adfdecd30bb75046e1fe4a267bcd126b1f4")
     );
     assert_eq!(
         resolve(Engine::Parakeet, "cuda", &host).unwrap_err(),
@@ -107,7 +110,7 @@ fn parakeet_and_moonshine_resolve_pinned_cpu_releases_and_futo_is_unpublished() 
 }
 
 #[test]
-fn installable_rows_list_the_unpublished_engine_and_its_imported_package() {
+fn installable_rows_list_the_futo_engine_release() {
     let host = report(&cpu_only_host());
     let inventory = inventory(&host);
     let imported = package("package-futo", Engine::Asr4all, "26d75933");
@@ -116,9 +119,11 @@ fn installable_rows_list_the_unpublished_engine_and_its_imported_package() {
         .iter()
         .find(|row| row.engine == Engine::Asr4all && row.backend == "cpu")
         .unwrap();
-    assert!(futo.build.is_none());
-    assert_eq!(futo.unresolved, Some(Unresolved::NotPublished));
-    assert_eq!(futo.installed_package.as_deref(), Some("package-futo"));
+    assert_eq!(
+        futo.build.map(|build| build.tag),
+        Some("engine-futo-26d75933c16b")
+    );
+    assert!(futo.unresolved.is_none());
     let parakeet = rows
         .iter()
         .find(|row| row.engine == Engine::Parakeet && row.backend == "cpu")
@@ -175,7 +180,7 @@ fn experimental_only_speech_engines_are_chosen_without_changing_whisper_recommen
         Err(ChoiceError::NotInstalled {
             backend: "cpu".into(),
             gpu_target: None,
-            installable: false,
+            installable: true,
         })
     );
     assert!(matches!(

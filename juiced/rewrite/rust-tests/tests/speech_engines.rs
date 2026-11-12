@@ -183,20 +183,12 @@ async fn speech_engine_rows_are_listed_with_their_install_sources() {
             .unwrap()
     };
     let futo = row("futo-transcribe.cpp");
-    assert_eq!(futo["unresolved"], "not_published");
-    assert!(futo["build"].is_null());
+    assert_eq!(futo["build"]["repository"], "Nulifyer/Juiced");
+    assert_eq!(futo["build"]["tag"], "engine-futo-26d75933c16b");
     let parakeet = row("parakeet.cpp");
     assert_eq!(parakeet["build"]["repository"], "mudler/parakeet.cpp");
     assert_eq!(parakeet["build"]["tag"], "v0.6.1");
     let moonshine = row("moonshine");
     assert_eq!(moonshine["build"]["tag"], "moonshine0.0.62");
     assert!(engines["recommendations"].get("parakeet").is_some());
-    let (status, refused) = server
-        .post(
-            "juiced/engines/install",
-            json!({"engine":"futo-transcribe.cpp","backend":"cpu","expected_generation":engines["generation"]}),
-        )
-        .await;
-    assert_eq!(status, StatusCode::CONFLICT);
-    assert_eq!(refused["error"]["code"], "engine_not_published");
 }

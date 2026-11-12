@@ -19,8 +19,8 @@ use tokio::{
 
 const LLAMA: (&str, &str, &str) = (
     "ggml-org/llama.cpp",
-    "b11393",
-    "llama-b11393-bin-ubuntu-x64.tar.gz",
+    "b12032",
+    "llama-b12032-bin-ubuntu-x64.tar.gz",
 );
 const SD: (&str, &str, &str) = (
     "lemonade-sdk/stable-diffusion.cpp",
@@ -176,8 +176,8 @@ async fn releases(worker: &[u8]) -> Releases {
     assets.insert(
         LLAMA,
         tar_gz(&[
-            ("llama-b11393/llama-server", 0o755, worker),
-            ("llama-b11393/LICENSE", 0o644, b"MIT"),
+            ("llama-b12032/llama-server", 0o755, worker),
+            ("llama-b12032/LICENSE", 0o644, b"MIT"),
         ]),
     );
     assets.insert(
