@@ -23,6 +23,8 @@ fn concrete_route(path: &str) -> &str {
         "/juiced/artifacts/sets/{set}" => {
             "/juiced/artifacts/sets/set-0000000000000000000000000000000000000000000000000000000000000000"
         }
+        "/juiced/library/pulls/{pull}" => "/juiced/library/pulls/00000000000000000000000000000000",
+        "/juiced/library/search" => "/juiced/library/search?q=qwen3",
         _ => path,
     }
 }
@@ -163,9 +165,12 @@ async fn all_prefixes_enforce_read_inference_and_operator_authority() {
                     .request(method.clone(), &path, None, Some(ADMIN_KEY))
                     .await
                     .unwrap();
+                let missing = suffix.ends_with("/{job}")
+                    || suffix.ends_with("/{set}")
+                    || suffix.ends_with("/{pull}");
                 assert_eq!(
                     response.status(),
-                    if suffix.ends_with("/{job}") || suffix.ends_with("/{set}") {
+                    if missing {
                         StatusCode::NOT_FOUND
                     } else {
                         StatusCode::OK
@@ -176,7 +181,9 @@ async fn all_prefixes_enforce_read_inference_and_operator_authority() {
                     assert!(response.bytes().await.unwrap().is_empty());
                 } else {
                     let value = response.json::<Value>().await.unwrap();
-                    if suffix.ends_with("/{job}") || suffix.ends_with("/{set}") {
+                    if suffix.ends_with("/{pull}") {
+                        assert_eq!(value["error"]["code"], "library_pull_not_found");
+                    } else if missing {
                         assert_eq!(value["error"]["code"], "artifact_not_found");
                     }
                 }

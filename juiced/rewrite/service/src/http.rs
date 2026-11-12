@@ -206,6 +206,31 @@ define_routes! {
     (post, "/audio/transcriptions", transcription, "inference"),
     (get, "/system-stats", system_stats, "operator"),
     (get, "/juiced/logs", logs, "operator"),
+    (get, "/juiced/library/search", library_search, "operator"),
+    (post, "/juiced/library/pull", library_pull, "operator"),
+    (get, "/juiced/library/pulls/{pull}", library_pull_status, "operator"),
+}
+async fn library_search(
+    State(state): State<AppState>,
+    ApiQuery(query): ApiQuery<crate::library::SearchQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    let store = state.manager.artifacts().ok();
+    let result = state.manager.library().search(store, query).await?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(result)))
+}
+async fn library_pull(
+    State(state): State<AppState>,
+    ApiJson(request): ApiJson<crate::library::PullRequest>,
+) -> Result<Json<Value>, ApiError> {
+    let store = state.manager.artifacts()?;
+    state.manager.library().pull(store, request).await.map(Json)
+}
+async fn library_pull_status(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    let view = state.manager.library().pull_view(&id)?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(view)))
 }
 async fn system_stats(State(state): State<AppState>) -> impl IntoResponse {
     (

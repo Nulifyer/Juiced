@@ -1830,6 +1830,7 @@ pub struct Manager {
     last_inference: Mutex<Option<LastInference>>,
     logs: Arc<crate::logs::LogBuffer>,
     system_stats: crate::system_stats::Sampler,
+    library: Arc<crate::library::Library>,
     next_request: AtomicU64,
     shutting_down: std::sync::atomic::AtomicBool,
     paused: std::sync::atomic::AtomicBool,
@@ -2085,6 +2086,7 @@ impl Manager {
             slot
         };
         let power = crate::power::Controller::new(config.inhibit_suspend);
+        let library_policy = config.artifact_source_policy;
         Ok(Arc::new(Self {
             runtime_definitions,
             runtime_packages,
@@ -2128,6 +2130,7 @@ impl Manager {
             last_inference: Mutex::new(None),
             logs: crate::logs::LogBuffer::new(),
             system_stats: crate::system_stats::Sampler::default(),
+            library: Arc::new(crate::library::Library::from_environment(library_policy)),
             next_request: AtomicU64::new(1),
             shutting_down: std::sync::atomic::AtomicBool::new(false),
             paused: std::sync::atomic::AtomicBool::new(false),
@@ -2156,6 +2159,10 @@ impl Manager {
                     error.message,
                 )
             })
+    }
+
+    pub fn library(&self) -> &Arc<crate::library::Library> {
+        &self.library
     }
 
     pub fn artifacts(&self) -> Result<Arc<crate::artifacts::ArtifactStore>, ApiError> {

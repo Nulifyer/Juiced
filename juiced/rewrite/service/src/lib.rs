@@ -13,6 +13,7 @@ pub mod extract;
 pub mod host_memory;
 pub mod http;
 pub mod identity;
+pub mod library;
 pub mod logs;
 pub mod native_execution;
 pub mod native_settings;

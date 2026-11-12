@@ -73,7 +73,7 @@
     },
     {
       "path": "juiced/rewrite/rust-tests/tests/api_end_to_end.rs",
-      "sha256": "d7609422a906f8c8e8bcc519eb1db804fa6d62947886f023f5b2239ef75ed2da",
+      "sha256": "0d725c41efe455346cdf30f8248eba2b51c23990b66de6f9e2f963d3e80c30e8",
       "hash_check": "snapshot_only"
     },
     {
@@ -113,7 +113,7 @@
     },
     {
       "path": "juiced/rewrite/rust-tests/tests/support/mod.rs",
-      "sha256": "da5077b7a9add69dbe0f94a6af70ade5ce9d739d11eda66e679c78d0c7af96db",
+      "sha256": "dc3987749d4a5955632668f45f12090a2bc5c9892c51e92fce6b4639ba9b6b8c",
       "hash_check": "snapshot_only"
     },
     {
@@ -128,7 +128,7 @@
     },
     {
       "path": "juiced/rewrite/service/src/http.rs",
-      "sha256": "ebd0376061bd0c047e14729bc87784beed7a32128b83013d3da1a60d9b1d67e0",
+      "sha256": "b78b1e10bf4e9c8aa1349ef358d69f03f9f62a9c320c50db49579c863ce82849",
       "hash_check": "snapshot_only"
     },
     {
@@ -189,6 +189,11 @@
     {
       "path": "juiced/rewrite/rust-tests/tests/telemetry.rs",
       "sha256": "ff680e009cc7e187c00e95c3506a1f7d88db07c2415acf060a0b2a338ee5ea3d",
+      "hash_check": "snapshot_only"
+    },
+    {
+      "path": "juiced/rewrite/rust-tests/tests/library_pipeline.rs",
+      "sha256": "40b5ff2df5514f841814fa2d2d67761b99e41ea32f00f83f4f6649cac478f732",
       "hash_check": "snapshot_only"
     }
   ],
@@ -2994,20 +2999,31 @@
             "method": "POST",
             "path": "/juiced/artifacts/pull",
             "prefix_scheme": "native_quad"
+          },
+          {
+            "method": "POST",
+            "path": "/juiced/library/pull",
+            "prefix_scheme": "native_quad"
           }
         ],
         "scenario_files": [
-          "juiced/rewrite/rust-tests/tests/artifact_pipeline.rs"
+          "juiced/rewrite/rust-tests/tests/artifact_pipeline.rs",
+          "juiced/rewrite/rust-tests/tests/library_pipeline.rs"
         ],
         "authorities": [
           {
             "method": "POST",
             "path": "/juiced/artifacts/pull",
             "authority": "operator"
+          },
+          {
+            "method": "POST",
+            "path": "/juiced/library/pull",
+            "authority": "operator"
           }
         ]
       },
-      "semantic_boundary": "Native accepts model/model_name, checkpoint, recipe, registry source, subscribe/stream and import semantics. Rust artifact acquisition requires an explicit source URL, digest and size; it does not implement the native pull request or streamed progress contract.",
+      "semantic_boundary": "Native accepts model/model_name, checkpoint, recipe, registry source, subscribe/stream and import semantics. Rust artifact acquisition requires an explicit source URL, digest and size; it does not implement the native pull request or streamed progress contract. Rust POST /juiced/library/pull resolves a Hugging Face repository file or complete split group to a commit-pinned URL with hub-published SHA-256 and size, then starts verified artifact pulls; it does not accept native model, recipe or streaming fields.",
       "documentation": "docs/api/juiced.md",
       "native_authority": "operator"
     },
@@ -3033,12 +3049,26 @@
         "F134"
       ],
       "rust_equivalent": {
-        "relationship": "none",
-        "routes": [],
-        "scenario_files": [],
-        "authorities": []
+        "relationship": "related_operation",
+        "routes": [
+          {
+            "method": "GET",
+            "path": "/juiced/library/search",
+            "prefix_scheme": "native_quad"
+          }
+        ],
+        "scenario_files": [
+          "juiced/rewrite/rust-tests/tests/library_pipeline.rs"
+        ],
+        "authorities": [
+          {
+            "method": "GET",
+            "path": "/juiced/library/search",
+            "authority": "operator"
+          }
+        ]
       },
-      "semantic_boundary": "No Rust handler implements this native path. Add request, response, authority, persistence and failure scenarios before claiming parity.",
+      "semantic_boundary": "Rust GET /juiced/library/search is an operator-only related operation, not this native route. It returns grouped curated-catalog, Hugging Face and local-artifact results with per-quant SHA-256, size and local presence, under bounded upstream reads and the artifact source policy. Native request parameters, regular-API authority, registry source selection and response shape are not implemented.",
       "documentation": "docs/api/juiced.md",
       "native_authority": "regular_api"
     },
@@ -3064,12 +3094,26 @@
         "F134"
       ],
       "rust_equivalent": {
-        "relationship": "none",
-        "routes": [],
-        "scenario_files": [],
-        "authorities": []
+        "relationship": "related_operation",
+        "routes": [
+          {
+            "method": "GET",
+            "path": "/juiced/library/search",
+            "prefix_scheme": "native_quad"
+          }
+        ],
+        "scenario_files": [
+          "juiced/rewrite/rust-tests/tests/library_pipeline.rs"
+        ],
+        "authorities": [
+          {
+            "method": "GET",
+            "path": "/juiced/library/search",
+            "authority": "operator"
+          }
+        ]
       },
-      "semantic_boundary": "No Rust handler implements this native path. Add request, response, authority, persistence and failure scenarios before claiming parity.",
+      "semantic_boundary": "Rust GET /juiced/library/search returns per-repository quant variants, split-part grouping, digests and sizes as a related operator-only operation. Native checkpoint selection, registry source, suggested labels, mmproj/draft companion fields and regular-API authority are not implemented.",
       "documentation": "docs/api/juiced.md",
       "native_authority": "regular_api"
     },
@@ -10367,6 +10411,65 @@
         "juiced/rewrite/rust-tests/tests/api_end_to_end.rs"
       ],
       "native_same_path": false
+    },
+    {
+      "method": "GET",
+      "path": "/juiced/library/search",
+      "prefix_scheme": "native_quad",
+      "authority": "operator",
+      "evidence": {
+        "path": "juiced/rewrite/service/src/http.rs",
+        "line": 209,
+        "text": "(get, \"/juiced/library/search\", library_search, \"operator\"),",
+        "role": "registration"
+      },
+      "native_route_ids": [
+        "http:GET:native_quad:/registry/search",
+        "http:GET:native_quad:/pull/variants"
+      ],
+      "scenario_files": [
+        "juiced/rewrite/rust-tests/tests/library_pipeline.rs",
+        "juiced/rewrite/rust-tests/tests/api_end_to_end.rs"
+      ],
+      "native_same_path": false
+    },
+    {
+      "method": "POST",
+      "path": "/juiced/library/pull",
+      "prefix_scheme": "native_quad",
+      "authority": "operator",
+      "evidence": {
+        "path": "juiced/rewrite/service/src/http.rs",
+        "line": 210,
+        "text": "(post, \"/juiced/library/pull\", library_pull, \"operator\"),",
+        "role": "registration"
+      },
+      "native_route_ids": [
+        "http:POST:native_quad:/pull"
+      ],
+      "scenario_files": [
+        "juiced/rewrite/rust-tests/tests/library_pipeline.rs",
+        "juiced/rewrite/rust-tests/tests/api_end_to_end.rs"
+      ],
+      "native_same_path": false
+    },
+    {
+      "method": "GET",
+      "path": "/juiced/library/pulls/{pull}",
+      "prefix_scheme": "native_quad",
+      "authority": "operator",
+      "evidence": {
+        "path": "juiced/rewrite/service/src/http.rs",
+        "line": 211,
+        "text": "(get, \"/juiced/library/pulls/{pull}\", library_pull_status, \"operator\"),",
+        "role": "registration"
+      },
+      "native_route_ids": [],
+      "scenario_files": [
+        "juiced/rewrite/rust-tests/tests/library_pipeline.rs",
+        "juiced/rewrite/rust-tests/tests/api_end_to_end.rs"
+      ],
+      "native_same_path": false
     }
   ],
   "other_transport_boundaries": [
@@ -10381,7 +10484,7 @@
     "native_websocket_routes": 4,
     "auxiliary_http_route_families": 41,
     "native_registration_sites": 143,
-    "rust_published_routes": 60,
+    "rust_published_routes": 63,
     "rust_native_same_path_rows": 38,
     "native_http_status_counts": {
       "partial": 39,
