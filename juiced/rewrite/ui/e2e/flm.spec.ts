@@ -1,6 +1,6 @@
-import { expect, navigate, open, test, toasts } from "./support";
+import { expect, modelsView, open, test, toasts } from "./support";
 
-test("NPU models from FastFlowLM download and add from Library when FLM is installed", async ({ page }) => {
+test("NPU models from FastFlowLM download and add from Discover when FLM is installed", async ({ page }) => {
   let state = { installed: false, registered: [] as string[], pulling: false };
   const posts: { path: string; body: any }[] = [];
   await page.route("**/v1/juiced/flm**", async (route) => {
@@ -17,7 +17,7 @@ test("NPU models from FastFlowLM download and add from Library when FLM is insta
       jobs: state.pulling && !state.installed ? [{ id: "flm-1", checkpoint: "gemma3:1b", state: "pulling", percent: 40 }] : [] } });
   });
   await open(page);
-  await navigate(page, "Library");
+  await modelsView(page, "Discover");
   const section = page.getByRole("region", { name: "NPU models" });
   await expect(section).toContainText("Memlock limits are too low.");
   await expect(section).not.toContainText("embed-gemma");
@@ -38,7 +38,7 @@ test("NPU models from FastFlowLM download and add from Library when FLM is insta
 
 test("the NPU section stays hidden when FastFlowLM is not installed", async ({ page }) => {
   await open(page);
-  await navigate(page, "Library");
+  await modelsView(page, "Discover");
   await expect(page.getByRole("list", { name: "Search results" })).toBeVisible();
   await expect(page.getByRole("region", { name: "NPU models" })).toHaveCount(0);
 });

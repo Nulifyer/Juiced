@@ -1,5 +1,5 @@
 import type { APIRequestContext, Page } from "@playwright/test";
-import { api, closeInspector, expect, navigate, open, tab, test, toasts, tryModel } from "./support";
+import { api, closeInspector, expect, modelsView, navigate, open, test, toasts, tryModel } from "./support";
 
 const repo = "fixture-labs/Tiny-Chat-GGUF";
 const file = "Tiny-Chat-Q8_0.gguf";
@@ -39,8 +39,7 @@ function library(request: APIRequestContext) {
 
 async function selectQuant(page: Page) {
   await open(page);
-  await navigate(page, "Library");
-  await expect(tab(page, "Library view", "Search")).toHaveAttribute("aria-selected", "true");
+  await modelsView(page, "Discover");
   await result(page).getByRole("button", { name: /Q8_0/ }).click();
   const detail = page.getByRole("complementary", { name: "Model detail" });
   await expect(detail.getByRole("heading", { name: "Tiny-Chat-GGUF" })).toBeVisible();

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { Client } from "./api";
 import { notify } from "./toast";
 
-export function useResource<T>(client: Client, path: string, parse: (value: unknown) => T, period = 2000, retain = false) {
+export function useResource<T>(client: Client, path: string, parse: (value: unknown) => T, period = 2000, retain = false, enabled = true) {
   const [data, setData] = useState<{ client: Client; path: string; value: T } | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -22,10 +22,11 @@ export function useResource<T>(client: Client, path: string, parse: (value: unkn
   useEffect(() => {
     if (!retain) setData(null);
     setError(""); failures.current = 0; nextPoll.current = 0;
+    if (!enabled) return;
     void reload();
     const timer = period ? setInterval(() => { if (!request.current && performance.now() >= nextPoll.current) void reload(); }, period) : undefined;
     return () => { clearInterval(timer); request.current?.abort(); };
-  }, [reload, period, retain]);
+  }, [reload, period, retain, enabled]);
   return { data: data?.client === client && (retain || data.path === path) ? data.value : null, current: data?.client === client && data.path === path, error, loading, reload };
 }
 

@@ -631,15 +631,6 @@ a.button { color: var(--foreground); text-decoration: none; }
 .protocol-row[aria-label="Wyoming"] { grid-column: 1 / -1; }
 .wyoming { display: grid; gap: 10px; }
 .wyoming-grid { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
-.native-import { display: grid; gap: 12px; }
-.import-table .data-head, .import-table .data-row { grid-template-columns: 28px minmax(0, 2.4fr) minmax(70px, .6fr) minmax(0, 1fr) minmax(130px, .8fr); }
-.import-table .field-help { display: block; }
-@media (max-width: 760px) {
-  .import-table .data-head { display: none; }
-  .import-table .data-row { grid-template-columns: 28px minmax(0, 1fr); }
-  .import-table .data-row > :nth-child(n+3) { grid-column: 2; }
-}
-.import-table input[type="checkbox"], .native-import .inline-field input[type="checkbox"] { width: 16px; height: 16px; min-height: 0; padding: 0; accent-color: var(--ring); }
 .idle-default { white-space: nowrap; }
 .idle-default select { width: auto; min-height: 28px; padding-block: 3px; }
 .flm-models { display: grid; gap: 8px; padding: 12px 14px; margin-bottom: 12px; }

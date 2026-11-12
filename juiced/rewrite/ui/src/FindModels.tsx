@@ -123,7 +123,7 @@ export function FindModels({ client, online, onRegistered, onOpenModel, onDownlo
         </Menu>
         <input ref={picker} type="file" hidden accept=".gguf,.bin,.safetensors,.onnx" aria-label="Model file" onChange={(event) => { const picked = event.target.files?.[0]; event.target.value = ""; if (picked) { setSelected(null); void local.upload(picked); } }} />
       </div>
-      {urlOpen && <UrlDownload client={client} onClose={() => setUrlOpen(false)} onStarted={() => { setUrlOpen(false); notify("Download started. Follow it under Downloading."); onDownloads(); }} />}
+      {urlOpen && <UrlDownload client={client} onClose={() => setUrlOpen(false)} onStarted={() => { setUrlOpen(false); notify("Download started. Follow it under Downloads."); onDownloads(); }} />}
       {folderOpen && <ServerFolder client={client} onClose={() => setFolderOpen(false)} onPick={(entry, mode) => { setFolderOpen(false); setSelected(null); void local.pick(entry, mode); }} />}
       {error && <div className="action-row"><p className="inline-error" role="alert">{error}</p><Button onClick={() => setTick((value) => value + 1)}>Retry</Button></div>}
       {(task === null || task === "chat") && <FlmModels client={client} online={online} query={query} onAdded={onRegistered} />}

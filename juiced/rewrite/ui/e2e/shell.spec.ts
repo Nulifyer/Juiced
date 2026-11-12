@@ -1,6 +1,6 @@
-import { api, expect, hotModel, largeText, modelId, navigate, noHorizontalOverflow, open, openModel, serviceMenu, storedText, test, toasts } from "./support";
+import { api, expect, hotModel, largeText, modelId, modelsTab, navigate, noHorizontalOverflow, open, openModel, serviceMenu, storedText, test, toasts } from "./support";
 
-const destinations = ["Dashboard", "Models", "Loading policy", "Library", "Engines & hardware", "Cache", "Test services", "Diagnostics", "Connect"];
+const destinations = ["Dashboard", "Models", "Loading policy", "Engines & hardware", "Cache", "Test services", "Diagnostics", "Connect"];
 
 test("every destination opens from the navigation without page errors", async ({ page }) => {
   const failures: string[] = [];
@@ -141,4 +141,13 @@ test("a failed refresh keeps the last observation and disables mutations", async
   await page.unroute("**/v1/juiced/catalog");
   await expect(banner).toHaveCount(0, { timeout: 10000 });
   await expect(page.getByLabel(`Loading policy for ${modelId}`)).toBeEnabled();
+});
+
+test("a saved Library page opens Models", async ({ page }) => {
+  await open(page);
+  await page.evaluate(() => localStorage.setItem("juiced.rewrite.screen", "library"));
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "Models", level: 1, exact: true })).toBeVisible();
+  await expect(modelsTab(page, "Installed")).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("navigation", { name: "Destinations", includeHidden: true }).getByRole("button", { name: "Library", includeHidden: true })).toHaveCount(0);
 });
