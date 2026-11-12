@@ -43,6 +43,10 @@ Request source: user, 2026-11-12. The homelab switched stack 83 to `rewrite-prev
 
 rc.1, rc.2 and rc.4 were stopped by release checks (fixture compile timeout and a set-publication race; runner Rust newer than the builder; 150-250 ms startup allowances on a 2-core runner) and never published. rc.5 deployed through Portainer: Hot models ready; three Qwen3.8-27B variants imported through `/juiced/import/native` with context 262144 halved to 131072 (catalog 43); Ornith ROCm chat 22.9 tok/s; Kokoro float WAV transcribed by FUTO over HTTP; z-image 768x768 8 steps cold in 64 s on sd.cpp Vulkan; Wyoming info/synthesize/transcribe from the HA container correct. Release page created; Homelab compose matches live (uncommitted, other session's untracked file).
 
+## Live verification (v1.0.0-rc.9, 2026-11-12 20:50 UTC)
+
+rc.6 to rc.8 were stopped by release checks and never published: a touch-drag test helper that dispatched dragend to a card's old lane, and two tests that reopened a flock-guarded store while a concurrent test's forked child still held the inherited descriptor. rc.9 deployed through Portainer with a new `juiced_kv_cache` volume at `/data/kv-cache`. Session cache persistent for all llama.cpp models; an Ornith Q6_K conversation saved 199 MB and restored 20 cached tokens after another session took the single slot; Ornith ROCm 25.6 tok/s; seven protocols enabled with passing probes; Library local lists 48 groups (945 GiB) over the owned and read-only hubs; Wyoming info/synthesize/transcribe from the HA container exact in 0.74 s + 0.26 s; live Settings tab shows the llama-fit-params memory bar (38.0 of 64.6 GiB). Release page created; Homelab compose matches live (uncommitted).
+
 ## Next action
 
 Engine-management round agreed with the user: version catalog as data with tested pins per release, update checks against release sources, nightly opt-in, remove, admin-added release sources, custom OpenAI-compatible engine in the UI. Then a real NPU check (FastFlowLM, hybrid) on mage.
