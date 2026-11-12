@@ -1017,18 +1017,16 @@ mod tests {
                 scope,
             }
         }
+        // A process forked by a concurrent test holds the inherited lock descriptor until exec,
+        // so a reopen right after drop can briefly report Busy.
         fn open(&self, active: Option<&Binding>, initialize: bool) -> Result<Store, Error> {
-            Store::open(self.root.clone(), self.scope.clone(), active, initialize)
-        }
-        // A process forked by a concurrent test holds the inherited lock descriptor until exec.
-        fn reopen(&self, active: Option<&Binding>) -> Result<Store, Error> {
-            for _ in 0..200 {
-                match self.open(active, false) {
+            for _ in 0..50 {
+                match Store::open(self.root.clone(), self.scope.clone(), active, initialize) {
                     Err(Error::Busy) => std::thread::sleep(std::time::Duration::from_millis(5)),
                     other => return other,
                 }
             }
-            self.open(active, false)
+            Store::open(self.root.clone(), self.scope.clone(), active, initialize)
         }
         fn entries(&self) -> BTreeMap<String, u64> {
             self.root
@@ -1515,7 +1513,7 @@ mod tests {
         drop(store);
         let before = fixture.entries();
         assert_eq!(
-            fixture.reopen(Some(&binding)).err().unwrap(),
+            fixture.open(Some(&binding), false).err().unwrap(),
             Error::BlobChanged
         );
         assert_eq!(fixture.entries(), before);
@@ -1524,7 +1522,7 @@ mod tests {
         let other = Fixture::new();
         drop(other.open(None, true).unwrap());
         assert_eq!(
-            other.reopen(Some(&binding)).err().unwrap(),
+            other.open(Some(&binding), false).err().unwrap(),
             Error::IdentityMismatch
         );
     }

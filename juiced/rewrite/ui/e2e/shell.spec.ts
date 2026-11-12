@@ -65,7 +65,8 @@ test("pausing new requests shows the maintenance bar on every page until resumed
   expect((await service.json<{ paused: boolean }>("/v1/juiced/admission")).paused).toBe(false);
 });
 
-test("connection settings keep the API key in memory and never in local storage", async ({ page }) => {
+test("connection settings keep the API key in memory and never in local storage", async ({ page, baseURL }) => {
+  const origin = new URL(baseURL!).origin;
   await open(page);
   await serviceMenu(page, "Connection settings");
   const dialog = page.getByRole("dialog", { name: "Connection settings" });
@@ -73,7 +74,7 @@ test("connection settings keep the API key in memory and never in local storage"
   await dialog.getByLabel("Service origin").fill("not a url");
   await dialog.getByRole("button", { name: "Connect" }).click();
   await expect(dialog.getByRole("alert")).toBeVisible();
-  await dialog.getByLabel("Service origin").fill("http://127.0.0.1:13307");
+  await dialog.getByLabel("Service origin").fill(origin);
   await dialog.getByLabel("API key").fill("browser-memory-only-key");
   const authorized = page.waitForRequest((outgoing) => outgoing.url().includes("/v1/juiced/catalog") && outgoing.headers().authorization === "Bearer browser-memory-only-key");
   await dialog.getByRole("button", { name: "Connect" }).click();
@@ -82,11 +83,11 @@ test("connection settings keep the API key in memory and never in local storage"
   await expect(page.getByRole("region", { name: "Running models" })).toContainText(hotModel);
   const stored = await storedText(page);
   expect(stored).not.toContain("browser-memory-only-key");
-  expect(stored).toContain("juiced.rewrite.base=http://127.0.0.1:13307");
+  expect(stored).toContain(`juiced.rewrite.base=${origin}`);
   await page.reload();
   await serviceMenu(page, "Connection settings");
   await expect(dialog.getByLabel("API key")).toHaveValue("");
-  await expect(dialog.getByLabel("Service origin")).toHaveValue("http://127.0.0.1:13307");
+  await expect(dialog.getByLabel("Service origin")).toHaveValue(origin);
   await dialog.getByLabel("Service origin").fill("");
   await dialog.getByRole("button", { name: "Connect" }).click();
   await expect(dialog).toHaveCount(0);
