@@ -1,14 +1,56 @@
 import { useState } from "react";
 import type { Client } from "./api";
 import { parseEndpoints, parseProtocols } from "./management";
-import { Badge, Button } from "./ui";
+import { Badge, Button, Empty } from "./ui";
 import { useResource } from "./useResource";
 
-export function ServiceApis({ base, client }: { base: string; client: Client }) {
+const addresses: Record<string, (origin: string) => string> = {
+  openai: (origin) => `${origin}/v1`, anthropic: (origin) => `${origin}/v1/messages`, ollama: (origin) => `${origin}/api`, mcp: (origin) => `${origin}/mcp`, automatic1111: (origin) => `${origin}/sdapi/v1`,
+};
+const names: Record<string, string> = { openai: "OpenAI", anthropic: "Anthropic", ollama: "Ollama", mcp: "MCP", automatic1111: "AUTOMATIC1111", realtime: "Realtime", wyoming: "Wyoming" };
+
+function snippets(origin: string): [string, string][] {
+  const model = "YOUR_MODEL_ID";
+  return [
+    ["curl", `curl ${origin}/v1/chat/completions \\\n  -H 'Content-Type: application/json' \\\n  -d '{"model":"${model}","messages":[{"role":"user","content":"Hello"}]}'`],
+    ["Python", `from openai import OpenAI\n\nclient = OpenAI(base_url="${origin}/v1", api_key="unused")\nreply = client.chat.completions.create(\n    model="${model}",\n    messages=[{"role": "user", "content": "Hello"}],\n)\nprint(reply.choices[0].message.content)`],
+    ["JavaScript", `import OpenAI from "openai";\n\nconst client = new OpenAI({ baseURL: "${origin}/v1", apiKey: "unused" });\nconst reply = await client.chat.completions.create({\n  model: "${model}",\n  messages: [{ role: "user", content: "Hello" }],\n});\nconsole.log(reply.choices[0].message.content);`],
+  ];
+}
+
+function Copy({ value, label }: { value: string; label: string }) {
+  const [state, setState] = useState("");
+  return <Button aria-label={label} onClick={() => void navigator.clipboard.writeText(value).then(() => setState("Copied")).catch(() => setState("Copy failed")).finally(() => setTimeout(() => setState(""), 1500))}>{state || "Copy"}</Button>;
+}
+
+export function ServiceApis({ base, client, tab }: { base: string; client: Client; tab: "protocols" | "endpoints" }) {
   const origin = base || location.origin;
-  const [copied, setCopied] = useState("");
   const protocols = useResource(client, "juiced/protocols", parseProtocols, 0);
   const endpoints = useResource(client, "juiced/endpoints", parseEndpoints, 0);
-  const command = `curl ${origin}/v1/chat/completions \\\n  -H 'Content-Type: application/json' \\\n  -d '{"model":"YOUR_ENABLED_MODEL","messages":[{"role":"user","content":"Hello"}]}'`;
-  return <section className="content-pane service-apis"><h2>Connect a client</h2><p className="muted">Use an enabled model's exact registered ID. Each operation requires support from its configured engine.</p><label htmlFor="api-base">OpenAI API base URL</label><div className="copy-row"><input id="api-base" readOnly value={`${origin}/v1`} /><Button onClick={() => void navigator.clipboard.writeText(`${origin}/v1`).then(() => setCopied("Copied API base URL.")).catch(() => setCopied("Clipboard unavailable. Select and copy the URL manually."))}>Copy URL</Button></div><p className="field-help">Supply your API key as a Bearer token when authentication is configured.</p><p role="status">{copied}</p><div className="section-heading"><h2>Reported protocol support</h2><Button onClick={() => { void protocols.reload(); void endpoints.reload(); }}>Refresh capabilities</Button></div>{protocols.error && <p role="alert" className="inline-error">{protocols.error}</p>}<div className="endpoint-list">{protocols.data?.map((protocol) => <article className="protocol-row" key={protocol.id}><div className="row-heading"><h3>{protocol.id}</h3><Badge tone={protocol.support === "not-implemented" ? "quiet" : "warning"}>{protocol.support === "not-implemented" ? "Not implemented" : protocol.support}</Badge></div>{protocol.note && <p className="field-help">{protocol.note}</p>}{protocol.operations && <p className="field-help">Declared subset: {protocol.operations.join(", ")}</p>}</article>)}</div><h2>Temporary connection test</h2><pre className="code-block">{command}</pre><p className="field-help">If authentication is enabled, add the Authorization header locally. This example never contains your key.</p><details className="management-section"><summary>Registered API endpoints</summary><p className="field-help">Native routes use /api/v0, /api/v1, /v0 and /v1 prefixes. Protocol-specific routes retain their required path. Operator actions require operator authority.</p>{endpoints.error && <p role="alert" className="inline-error">{endpoints.error}</p>}<div className="endpoint-list">{endpoints.data?.map((endpoint) => <div key={endpoint.method + endpoint.path}><code className="break-word">{endpoint.method} {endpoint.prefixes.includes("/v1") ? "/v1" : endpoint.prefixes[0]}{endpoint.path}</code><Badge>{endpoint.authority}</Badge></div>)}</div></details></section>;
+  const [language, setLanguage] = useState(0);
+  const examples = snippets(origin);
+  if (tab === "endpoints") return <section className="page-body" aria-label="All endpoints">
+    {endpoints.error && <div className="action-row"><p role="alert" className="inline-error">{endpoints.error}</p><Button onClick={() => void endpoints.reload()}>Retry</Button></div>}
+    <p className="field-help">Management routes also answer under /api/v0, /api/v1 and /v0. Operator routes need an operator key when keys are configured.</p>
+    {endpoints.data && <div className="data-table endpoint-table" role="table" aria-label="Endpoints">{endpoints.data.map((endpoint) => <div className="data-row" role="row" key={endpoint.method + endpoint.path}><code role="cell" className="break-word">{endpoint.method} {endpoint.prefixes.includes("/v1") ? "/v1" : endpoint.prefixes[0]}{endpoint.path}</code><span role="cell"><Badge>{endpoint.authority}</Badge></span></div>)}</div>}
+  </section>;
+  return <div className="page-body connect">
+    {protocols.error && <div className="action-row"><p role="alert" className="inline-error">{protocols.error}</p><Button onClick={() => void protocols.reload()}>Retry</Button></div>}
+    {protocols.data?.length === 0 && <Empty title="No protocols reported">The service didn't report any client protocols.</Empty>}
+    <div className="protocol-grid">{protocols.data?.filter((protocol) => protocol.support !== "not-implemented").map((protocol) => {
+      const address = addresses[protocol.id]?.(origin);
+      return <article className="panel protocol-row" key={protocol.id} aria-label={names[protocol.id] ?? protocol.id}>
+        <header className="panel-head"><h3>{names[protocol.id] ?? protocol.id}</h3><Badge tone={protocol.support === "supported" ? "good" : "warning"}>{protocol.support}</Badge></header>
+        {address && <div className="copy-row"><input readOnly aria-label={`${names[protocol.id] ?? protocol.id} address`} value={address} /><Copy value={address} label={`Copy ${names[protocol.id] ?? protocol.id} address`} /></div>}
+        {protocol.note && <p className="field-help">{protocol.note}</p>}
+        {protocol.operations && <div className="chip-row">{protocol.operations.map((operation) => <code className="chip" key={operation}>{operation}</code>)}</div>}
+      </article>;
+    })}</div>
+    {protocols.data?.some((protocol) => protocol.support === "not-implemented") && <p className="field-help">Not available yet: {protocols.data.filter((protocol) => protocol.support === "not-implemented").map((protocol) => names[protocol.id] ?? protocol.id).join(", ")}.</p>}
+    <section className="panel" aria-label="Example request">
+      <header className="panel-head"><h3>Example</h3><div className="segmented" role="group" aria-label="Example language">{examples.map(([name], index) => <button key={name} aria-pressed={language === index} onClick={() => setLanguage(index)}>{name}</button>)}</div></header>
+      <pre className="code-block">{examples[language]![1]}</pre>
+      <div className="action-row"><Copy value={examples[language]![1]} label="Copy example" /><span className="field-help">Replace YOUR_MODEL_ID with a model ID from Models. Send your key as a Bearer token if the service uses one.</span></div>
+    </section>
+  </div>;
 }

@@ -21,7 +21,7 @@ export type Model = {
   uncertain_state_operations?: number;
   request_limits?: { input_bytes: number; batch: number; output_tokens: number };
 };
-export type RequestRecord = { id: number; model: string; operation: string; outcome: string; status: number | null; elapsed_ms: number };
+export type RequestRecord = { id: number; model: string; operation: string; outcome: string; status: number | null; elapsed_ms: number; input_tokens?: number | null; output_tokens?: number | null; decode_tokens_per_second?: number | null };
 export type CacheControlMemory = { state: "accounted" | "unavailable" | "legacy"; reason: string | null; metadata_bytes: number; scratch_bytes: number; reserved_bytes: number; outstanding_bytes: number; active_operations: number; bounds?: { bootstrap_bytes: number; metadata_bytes: number; scratch_bytes: number; state_scratch_bytes: number; page_scratch_bytes: number; response_bytes: number } };
 export type RuntimeControlMemory = { state: "accounted" | "legacy"; metadata_bytes: number; binding_bytes: number; binding_count: number; scratch_bytes: number; active_operations: number; reserved_bytes: number; outstanding_bytes: number; bounds: { metadata_bytes: number; bootstrap_bytes: number; import_bytes: number; response_work_bytes: number; response_bytes: number; binding_work_bytes: number } };
 export type Resources = { resident_budget_bytes: number | null; reserved_bytes: number; measured_memory_bytes: number | null; reservation_source: string; active_requests: number; paused?: boolean; cache_control_memory?: CacheControlMemory; runtime_control_memory?: RuntimeControlMemory };
@@ -72,6 +72,13 @@ export function unloadReason(model: Model): string | undefined {
   if (!model.loaded) return "This worker is not loaded.";
   if (model.active_requests > 0) return "Wait for active requests to finish.";
   if (model.policy === "hot") return "Change to On demand before unloading.";
+}
+
+export const services = [["chat", "Chat"], ["transcription", "Transcription"], ["embeddings", "Embeddings"]] as const;
+export type Service = typeof services[number][0];
+const serviceOperations: Record<Service, string[]> = { chat: ["chat/completions", "completions", "responses"], transcription: ["audio/transcriptions"], embeddings: ["embeddings"] };
+export function offers(model: Model, service: Service): boolean {
+  return model.operations.some((operation) => serviceOperations[service].includes(operation));
 }
 
 export function matchingModels(models: Model[], query: string): Model[] {

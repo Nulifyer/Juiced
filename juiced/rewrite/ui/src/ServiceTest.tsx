@@ -4,44 +4,67 @@ import { eligible, type Model } from "./domain";
 import { Button, Empty } from "./ui";
 import { TranscriptionTest } from "./TranscriptionTest";
 
-export function ServiceTest(props: { models: Model[]; client: Client; online: boolean }) {
-  const [operation, setOperation] = useState<"chat" | "transcription">("chat");
-  return <section className="service-tests"><div className="service-switcher" role="group" aria-label="Test operation"><Button aria-pressed={operation === "chat"} onClick={() => setOperation("chat")}>Chat</Button><Button aria-pressed={operation === "transcription"} onClick={() => setOperation("transcription")}>Transcription</Button></div>{operation === "chat" ? <ChatTest {...props} /> : <TranscriptionTest {...props} />}</section>;
+export type TestService = "chat" | "transcription";
+export function ServiceTest({ operation, ...props }: { models: Model[]; client: Client; online: boolean; operation: TestService }) {
+  return <section className="service-tests">{operation === "chat" ? <ChatTest {...props} /> : <TranscriptionTest {...props} />}</section>;
+}
+
+type Turn = { role: "user" | "assistant"; content: string; reasoning?: string; tokens?: number | null; rate?: number | null; error?: string; streaming?: boolean };
+
+function inline(text: string) {
+  return text.split(/(`[^`\n]+`|\*\*[^*\n]+\*\*)/).map((piece, index) => piece.startsWith("`") && piece.endsWith("`") && piece.length > 2 ? <code key={index}>{piece.slice(1, -1)}</code> : piece.startsWith("**") && piece.endsWith("**") && piece.length > 4 ? <strong key={index}>{piece.slice(2, -2)}</strong> : piece);
+}
+function Message({ text }: { text: string }) {
+  const parts = text.split(/```[^\n]*\n?/);
+  return <div className="message-text">{parts.map((part, index) => index % 2 ? <pre key={index} className="code-block">{part.replace(/\n$/, "")}</pre> : <p key={index}>{inline(part)}</p>)}</div>;
 }
 
 function ChatTest({ models, client, online }: { models: Model[]; client: Client; online: boolean }) {
+  const ready = models.filter(eligible);
   const [id, setId] = useState("");
   const [prompt, setPrompt] = useState("");
-  const [result, setResult] = useState("");
-  const [error, setError] = useState("");
+  const [turns, setTurns] = useState<Turn[]>([]);
   const [busy, setBusy] = useState(false);
   const request = useRef<AbortController | null>(null);
-  const ready = models.filter(eligible);
+  const thread = useRef<HTMLDivElement>(null);
+  const selected = ready.find((model) => model.id === id) ?? (ready.length === 1 && !id ? ready[0] : undefined);
   useEffect(() => () => { request.current?.abort(); }, [client]);
-  const selected = ready.find((model) => model.id === id);
-  async function run() {
-    if (!selected || !prompt.trim()) return;
-    const controller = new AbortController();
-    request.current = controller;
-    setBusy(true); setError(""); setResult("");
+  useEffect(() => { thread.current?.scrollTo({ top: thread.current.scrollHeight }); }, [turns]);
+  async function send() {
+    const text = prompt.trim();
+    if (!selected || !text || busy) return;
+    const history = [...turns.filter((turn) => !turn.error).map(({ role, content }) => ({ role, content })), { role: "user", content: text }];
+    setTurns((current) => [...current, { role: "user", content: text }, { role: "assistant", content: "", streaming: true }]);
+    setPrompt(""); setBusy(true);
+    const controller = new AbortController(); request.current = controller;
+    const update = (patch: Partial<Turn>) => setTurns((current) => current.map((turn, index) => index === current.length - 1 ? { ...turn, ...patch } : turn));
     try {
-      const response = await client.testChat(selected, prompt, controller.signal);
-      if (!controller.signal.aborted) setResult(response || "The request completed without text content.");
+      const final = await client.streamChat(selected.id, history, chatTestTokenLimit(selected), (state) => update({ content: state.content, reasoning: state.reasoning }), controller.signal);
+      update({ content: final.content || "The model returned no text.", reasoning: final.reasoning, tokens: final.outputTokens, rate: final.decodeRate, streaming: false });
     } catch (error) {
-      if (!controller.signal.aborted) setError(error instanceof Error ? error.message : "The test failed. Retry when the service is available.");
+      update({ streaming: false, error: controller.signal.aborted ? "Stopped." : error instanceof Error ? error.message : "The request failed." });
     } finally {
-      if (request.current === controller) { setBusy(false); request.current = null; }
+      if (request.current === controller) { request.current = null; setBusy(false); }
     }
   }
-  return <section className="service-test">
-    {ready.length === 0 ? <Empty title="No eligible chat models">Enable a downloaded model with the chat/completions operation in Loading policy. Tests never enable models or change saved settings.</Empty> : <>
-      <div className="test-controls"><label htmlFor="test-model">Model</label><select id="test-model" value={id} disabled={busy} onChange={(event) => { setId(event.target.value); setResult(""); setError(""); }}><option value="">Choose a model…</option>{ready.map((model) => <option key={model.id} value={model.id}>{model.id}</option>)}</select><p className="field-help">An On demand model loads when the test begins. This uses a shared worker.</p></div>
-      {selected && <p className="field-help">This test requests at most {chatTestTokenLimit(selected)} output tokens.</p>}
-      <label htmlFor="test-prompt">Temporary prompt</label><textarea id="test-prompt" rows={6} value={prompt} disabled={busy} onChange={(event) => setPrompt(event.target.value)} placeholder="Send a small request to verify the selected model." />
-      <div className="test-action"><span className="muted">Nothing is saved after leaving this screen.</span><div className="action-row"><Button disabled={busy || (!result && !prompt && !error)} onClick={() => { setPrompt(""); setResult(""); setError(""); }}>Reset</Button>{busy ? <Button variant="danger" onClick={() => { request.current?.abort(); setError("Test stopped."); }}>Stop test</Button> : <Button variant="primary" disabled={!selected || !prompt.trim() || !online} onClick={() => void run()}>Run test</Button>}</div></div>
-      {!selected && id && <p className="inline-warning">The selected model is no longer eligible. Choose an enabled model.</p>}
-      {error && <p className="inline-error" role="alert">{error}</p>}
-      <div className="test-output" aria-live="polite" aria-busy={busy}><h2>Response</h2>{busy ? <p className="muted">Waiting for the selected worker…</p> : result ? <pre>{result}</pre> : <p className="muted">Run a test to inspect its response.</p>}</div>
-    </>}
+  if (ready.length === 0) return <Empty title="No chat models available">Set a chat model to Hot or On demand in Loading policy.</Empty>;
+  return <section className="chat" aria-label="Chat test">
+    <div className="toolbar">
+      <select aria-label="Model" value={selected?.id ?? ""} disabled={busy} onChange={(event) => setId(event.target.value)}><option value="">Choose a model…</option>{ready.map((model) => <option key={model.id} value={model.id}>{model.id}</option>)}</select>
+      {selected && <span className="muted chat-meta">{selected.loaded ? "Loaded" : "Loads on first message"} · up to {chatTestTokenLimit(selected)} tokens per reply</span>}
+      <Button disabled={busy || turns.length === 0} onClick={() => setTurns([])}>New chat</Button>
+    </div>
+    <div ref={thread} className="chat-thread" aria-live="polite" aria-busy={busy}>
+      {turns.length === 0 ? <p className="muted chat-empty">Messages stay in this tab and aren't saved.</p> : turns.map((turn, index) => <article key={index} className={`chat-turn ${turn.role}`} aria-label={turn.role === "user" ? "You" : "Model reply"}>
+        {turn.reasoning && <div className="chat-reasoning"><Message text={turn.reasoning} /></div>}
+        {turn.content ? <Message text={turn.content} /> : turn.streaming && <p className="muted">Thinking…</p>}
+        {turn.error && <p className="inline-error" role="alert">{turn.error}</p>}
+        {turn.role === "assistant" && !turn.streaming && !turn.error && <span className="chat-stats">{turn.tokens ?? "—"} tokens{turn.rate ? ` · ${Math.round(turn.rate)} tok/s` : ""}</span>}
+      </article>)}
+    </div>
+    <form className="composer" onSubmit={(event) => { event.preventDefault(); void send(); }}>
+      <textarea aria-label="Prompt" rows={2} value={prompt} placeholder={selected ? "Message the model" : "Choose a model first"} disabled={!selected} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); } }} />
+      {busy ? <Button variant="danger" onClick={() => request.current?.abort()}>Stop</Button> : <Button variant="primary" type="submit" disabled={!selected || !prompt.trim() || !online}>Send</Button>}
+    </form>
   </section>;
 }

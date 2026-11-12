@@ -4,7 +4,7 @@ import type { Mutate } from "./Models";
 import { parseRuntimeInventory, parseRuntimeSelection, runtimeCandidate } from "./runtimePackages";
 import { useResource } from "./useResource";
 import { useRevisionSelection } from "./useRevisionSelection";
-import { Button } from "./ui";
+import { Button, HelpTip, Icon } from "./ui";
 
 export function RuntimeInspector({ model, client, busy, online, otherDirty, onDirty, mutate }: { model: Model; client: Client; busy: boolean; online: boolean; otherDirty: boolean; onDirty: (dirty: boolean) => void; mutate: Mutate }) {
   const path = `models/${encodeURIComponent(model.id)}/runtime`;
@@ -24,30 +24,27 @@ export function RuntimeInspector({ model, client, busy, online, otherDirty, onDi
   }
   async function change(rollback: boolean) {
     if (blocked || (!rollback && (!eligibleTarget || inventory.error))) return;
-    if (await mutate(path, { expected_revision: rollback ? view!.revision : draft.draftRevision, change: rollback ? { action: "rollback" } : { action: "promote", package: draft.selected } }, `Changed ${model.id} runtime. Weights and policy preserved; worker remains unloaded.`)) {
+    if (await mutate(path, { expected_revision: rollback ? view!.revision : draft.draftRevision, change: rollback ? { action: "rollback" } : { action: "promote", package: draft.selected } }, `Changed the engine for ${model.id}.`)) {
       draft.clear(); await revision.reload(); await inventory.reload();
     }
   }
   return <section className="inspector-section" aria-label="Model runtime selection">
-    <div className="section-heading"><h3>Installed runtime</h3><Button disabled={busy || revision.loading || inventory.loading} onClick={() => void refresh()}>Refresh runtimes</Button></div>
-    <p className="field-help">Select an installed engine while the worker is unloaded. One previous managed runtime stays available for rollback. Weights, worker settings and loading policy are preserved.</p>
+    <div className="section-heading"><div className="page-title"><h3>Engine</h3><HelpTip label="Engine">Switch to another installed engine package while the model is unloaded. The previous one stays available for rollback. Weights, settings and policy don't change. Saved snapshots only restore with the engine that made them.</HelpTip></div><Button variant="ghost" aria-label="Refresh runtimes" disabled={busy || revision.loading || inventory.loading} onClick={() => void refresh()}><Icon name="refresh" size={16} /></Button></div>
     {revision.error && <p role="alert" className="inline-error">{revision.error}</p>}
     {inventory.error && <p role="alert" className="inline-error">{inventory.error}</p>}
-    <p className="field-help break-word">Current runtime: {view ? view.current ?? "Configured outside managed runtime storage" : "Reading selection…"}</p>
-    {view?.previous && <p className="field-help break-word">Previous runtime: {view.previous}</p>}
-    {view && !view.supported && <p className="inline-warning">This profile needs its external, native settings or protected resource authority before its runtime can change here.</p>}
-    {(view?.worker_in_use || model.loaded) && <p className="field-help">{draft.selected ? "Cancel this runtime draft, then unload the worker before changing its engine." : "Unload the worker and finish active requests before changing its engine."}</p>}
-    <label htmlFor="runtime-package">Replacement installed runtime</label><select id="runtime-package" value={draft.selected} disabled={busy || !online || otherDirty || !view?.supported || view.worker_in_use || model.loaded || model.state === "loading" || model.active_requests > 0 || revision.loading || inventory.loading} onChange={(event) => draft.select(event.target.value, view?.revision ?? null)}>
-      <option value="">Choose an installed runtime</option>
+    <dl className="facts"><div><dt>Current</dt><dd className="break-word">{view ? view.current ?? "Set in config" : "Loading…"}</dd></div>{view?.previous && <div><dt>Previous</dt><dd className="break-word">{view.previous}</dd></div>}</dl>
+    {view && !view.supported && <p className="field-help">This model's engine can't be switched here.</p>}
+    {(view?.worker_in_use || model.loaded) && <p className="field-help">Unload the model to switch engines.</p>}
+    <label htmlFor="runtime-package">Switch engine to</label><select id="runtime-package" value={draft.selected} disabled={busy || !online || otherDirty || !view?.supported || view.worker_in_use || model.loaded || model.state === "loading" || model.active_requests > 0 || revision.loading || inventory.loading} onChange={(event) => draft.select(event.target.value, view?.revision ?? null)}>
+      <option value="">Choose an installed engine</option>
       {!!draft.selected && !eligibleTarget && <option value={draft.selected}>Selected runtime needs review</option>}
       {candidates.map((item) => <option value={item.id} key={item.id}>{item.provenance.build_revision} · {item.id.slice(8, 20)}</option>)}
     </select>
-    {target && <><p className="field-help break-word">Selected runtime: {target.id}</p><dl className="facts"><div><dt>Declared build</dt><dd>{target.provenance.build_revision}</dd></div><div><dt>Declared target</dt><dd>{target.declared_target.operating_system} / {target.declared_target.architecture} / {target.declared_target.abi}</dd></div><div><dt>Installed payload</dt><dd>{bytes(target.reserved_bytes)} / {target.member_count} {target.member_count === 1 ? "member" : "members"}</dd></div></dl></>}
-    {(stale || (view && view.revision !== model.revision)) && <p className="inline-warning">The model changed. Your runtime selection is kept. Review the model changes, then refresh runtimes or cancel this draft.</p>}
-    {draft.selected && !eligibleTarget && <p className="inline-warning">The selected runtime is unavailable, already selected or does not match this adapter and service target. Choose a different installed runtime or cancel this draft.</p>}
-    {inventory.data && candidates.length === 0 && view?.supported && <p className="field-help">No replacement runtime matches this adapter and service target. Import a matching local bundle in Backends &amp; hardware, then refresh runtimes here.</p>}
-    {otherDirty && <p className="field-help">Save or cancel other model drafts before changing its runtime.</p>}
-    <p className="field-help">Target filtering compares declared OS and CPU labels with this service. Recorded builds and matching target labels remain unqualified. Selection does not load a worker. Saved computation snapshots require the exact selected package. The first managed selection has no managed rollback history.</p>
+    {target && <dl className="facts"><div><dt>Build</dt><dd>{target.provenance.build_revision}</dd></div><div><dt>Target</dt><dd>{target.declared_target.operating_system} / {target.declared_target.architecture}</dd></div><div><dt>Size</dt><dd>{bytes(target.reserved_bytes)}</dd></div></dl>}
+    {(stale || (view && view.revision !== model.revision)) && <p className="inline-warning">The model changed. Your selection is kept; refresh or cancel it.</p>}
+    {draft.selected && !eligibleTarget && <p className="inline-warning">That engine can't be used for this model. Pick another or cancel.</p>}
+    {inventory.data && candidates.length === 0 && view?.supported && <p className="field-help">No other installed engine fits this model.</p>}
+    {otherDirty && <p className="field-help">Save or cancel your other changes first.</p>}
     <div className="action-row wrap"><Button disabled={busy || !draft.selected} onClick={draft.clear}>Cancel runtime draft</Button><Button disabled={blocked || !eligibleTarget || !!inventory.error} onClick={() => void change(false)}>Use selected runtime</Button><Button disabled={blocked || !!draft.selected || !view?.previous} onClick={() => void change(true)}>Roll back runtime</Button></div>
   </section>;
 }

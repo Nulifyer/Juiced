@@ -68,7 +68,7 @@ test("temporary chat uses an explicit reply bound within the service profile and
     const request_limits = limit === undefined ? undefined : { input_bytes: 65536, batch: 1, output_tokens: limit };
     expect(await client.testChat({ id: "one", request_limits }, "  preserve this prompt  ", controller.signal)).toBe("fixture");
   }
-  expect(calls.map((call) => JSON.parse(String(call.body)).max_tokens)).toEqual([64, 8, 64]);
+  expect(calls.map((call) => JSON.parse(String(call.body)).max_tokens)).toEqual([1024, 8, 128]);
   for (const call of calls) {
     expect(JSON.parse(String(call.body)).messages).toEqual([{ role: "user", content: "  preserve this prompt  " }]);
     expect(call.signal).toBe(controller.signal);

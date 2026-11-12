@@ -6,9 +6,9 @@ export class ApiError extends Error {
 }
 
 export function chatTestTokenLimit(model: Pick<Model, "request_limits">): number {
-  const limit = model.request_limits?.output_tokens ?? 64;
+  const limit = model.request_limits?.output_tokens ?? 1024;
   if (!Number.isSafeInteger(limit) || limit <= 0) throw new ApiError("The model's test limit is invalid. Refresh service state.", 0, "invalid_model_limits");
-  return Math.min(64, limit);
+  return Math.min(1024, limit);
 }
 
 export class Client {
@@ -24,6 +24,48 @@ export class Client {
     const content = Array.isArray(choices) ? choices[0]?.message?.content : undefined;
     if (content === null || typeof content === "string") return content;
     throw new ApiError("The worker returned an unsupported chat response. Check the selected service's compatibility.", 200, "invalid_chat_response");
+  }
+
+  async streamChat(model: string, messages: { role: string; content: string }[], maxTokens: number, onUpdate: (update: ChatStreamUpdate) => void, signal?: AbortSignal): Promise<ChatStreamUpdate> {
+    const headers: Record<string, string> = { "Content-Type": "application/json", Accept: "text/event-stream" };
+    if (this.key) headers.Authorization = `Bearer ${this.key}`;
+    const response = await fetch(`${this.base}/v1/chat/completions`, { method: "POST", headers, signal, cache: "no-store", redirect: "error", body: JSON.stringify({ model, messages, stream: true, max_tokens: maxTokens, stream_options: { include_usage: true } }) });
+    if (!response.ok || !response.body) {
+      let message = `The request failed (${response.status}).`;
+      try { const value = await response.json(); message = value?.error?.message ?? message; } catch { /* Error bodies are optional. */ }
+      throw new ApiError(message, response.status, "chat_failed");
+    }
+    const state: ChatStreamUpdate = { content: "", reasoning: "", done: false, outputTokens: null, decodeRate: null };
+    const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
+    let buffer = "", received = 0;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        received += value.length;
+        if (received > 4 * 1024 * 1024) throw new ApiError("The reply exceeds the 4 MiB test limit.", 200, "response_limit");
+        buffer += value;
+        let boundary;
+        while ((boundary = buffer.indexOf("\n\n")) >= 0) {
+          const event = buffer.slice(0, boundary); buffer = buffer.slice(boundary + 2);
+          for (const line of event.split("\n")) {
+            if (!line.startsWith("data:")) continue;
+            const data = line.slice(5).trim();
+            if (data === "[DONE]") { state.done = true; continue; }
+            let chunk: any;
+            try { chunk = JSON.parse(data); } catch { continue; }
+            const delta = chunk?.choices?.[0]?.delta;
+            if (typeof delta?.content === "string") state.content += delta.content;
+            if (typeof delta?.reasoning_content === "string") state.reasoning += delta.reasoning_content;
+            if (typeof chunk?.usage?.completion_tokens === "number") state.outputTokens = chunk.usage.completion_tokens;
+            if (typeof chunk?.timings?.predicted_per_second === "number") state.decodeRate = chunk.timings.predicted_per_second;
+          }
+          onUpdate({ ...state });
+        }
+      }
+    } finally { reader.releaseLock(); }
+    state.done = true;
+    return state;
   }
 
   async multipart<T>(path: string, body: FormData, signal?: AbortSignal): Promise<T> {
@@ -66,3 +108,5 @@ export class Client {
     return parseSnapshot(catalog, state, requests);
   }
 }
+
+export type ChatStreamUpdate = { content: string; reasoning: string; done: boolean; outputTokens: number | null; decodeRate: number | null };
