@@ -43,7 +43,7 @@
     },
     {
       "path": "docs/api/mcp.md",
-      "sha256": "ba186881a32cf97f7626c6a63cf2676655e94742b75786ead30c76fd67cda8ad",
+      "sha256": "cc787951654e0700481d462a8fc0374d29bb23510f6762b9250d6270cacd9bd4",
       "hash_check": "snapshot_only"
     },
     {
@@ -123,7 +123,7 @@
     },
     {
       "path": "juiced/rewrite/service/src/compat.rs",
-      "sha256": "f981b3b828f3aec77b71024867d5f5113255109675d8c8d507b114eaed763e46",
+      "sha256": "542d2852c6a830455d1e6a3df673dfa9285f2c15fd0dc3f1977e3606b3de4885",
       "hash_check": "snapshot_only"
     },
     {
@@ -133,7 +133,7 @@
     },
     {
       "path": "juiced/rewrite/service/src/http.rs",
-      "sha256": "4ad9dcfd8ef27eebe910128799e0defc31ce8d15831abfc8b16e31648eda629b",
+      "sha256": "a1b77b6bef940b516eb0be0ae1e695f45f395f17394587c35c0a64c7acdf0f9e",
       "hash_check": "snapshot_only"
     },
     {
