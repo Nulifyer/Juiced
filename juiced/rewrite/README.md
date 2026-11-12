@@ -6,7 +6,7 @@ The [plan](PLAN.md) and [feature crosswalk](FEATURE-COVERAGE.json) retain all 21
 
 ## Console
 
-The console has nine pages: Dashboard, Models (with Aliases), Loading policy, Library (Find models, Files on disk, Import), Backends & hardware, Cache (Sessions, Snapshots), Test services, Diagnostics and Connect. Each page has at most one tab strip and one side inspector. Data refreshes live, so there are no refresh buttons except Retry after a failure.
+The console has nine pages: Dashboard, Models (with Aliases), Loading policy, Library (Find models, Files on disk, Import), Backends & hardware, Cache, Test services, Diagnostics and Connect. Each page has at most one tab strip and one side inspector. Data refreshes live, so there are no refresh buttons except Retry after a failure.
 
 ## Run an isolated preview
 
