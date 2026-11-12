@@ -78,6 +78,7 @@ struct Fixture {
     chatty_bytes: usize,
     inference_delay: u64,
     slot_delay: u64,
+    slot_overhead: usize,
     speech_mode: String,
     speech_status: u16,
     speech_release: Option<PathBuf>,
@@ -949,7 +950,8 @@ fn slot_effect(
             if tokens.is_empty() {
                 return Err(StatusCode::CONFLICT);
             }
-            let data = serde_json::to_vec(&tokens).unwrap();
+            let mut data = serde_json::to_vec(&tokens).unwrap();
+            data.resize(data.len() + fixture.slot_overhead, b' ');
             if maximum.is_some_and(|maximum| data.len() > maximum) {
                 return Err(StatusCode::PAYLOAD_TOO_LARGE);
             }
@@ -1299,6 +1301,9 @@ async fn main() {
             .and_then(|value| value.parse().ok())
             .unwrap_or(512),
         slot_delay: arg("--slot-operation-delay-ms")
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(0),
+        slot_overhead: arg("--slot-state-overhead-bytes")
             .and_then(|value| value.parse().ok())
             .unwrap_or(0),
         speech_mode: arg("--speech-response-mode").unwrap_or_default(),

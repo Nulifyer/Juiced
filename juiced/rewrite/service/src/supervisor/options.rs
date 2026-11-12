@@ -121,6 +121,9 @@ impl Manager {
             .validate()
             .map_err(|error| ApiError::new(StatusCode::BAD_REQUEST, error.code, error.message))?;
         let worker = self.worker(id)?;
+        if apply == OptionsApply::Reload {
+            self.flush_sessions(&worker).await;
+        }
         let mut state = worker.state.clone().lock_owned().await;
         self.ensure_registered(&worker)?;
         if state.revision != expected_revision {

@@ -94,7 +94,7 @@ impl Stores {
             serde_json::to_vec_pretty(&config).unwrap(),
         )
         .unwrap();
-        for name in ["cache", "artifacts"] {
+        for name in ["kv-cache", "artifacts"] {
             std::fs::create_dir(foreign.path().join(name)).unwrap();
             std::fs::write(
                 foreign.path().join(name).join("foreign-marker"),
@@ -296,7 +296,7 @@ async fn retargeted_config_alias_cannot_redirect_default_cache_or_artifact_pipel
     stores.server.start().await;
     stores.retarget();
     infer(&stores.server, "fixture.one", "alias-cache").await;
-    assert!(stores.original.join("cache").is_dir());
+    assert!(stores.original.join("kv-cache").is_dir());
     assert!(stores.original.join("artifacts").is_dir());
     #[cfg(target_os = "linux")]
     let snapshot = {
@@ -305,7 +305,7 @@ async fn retargeted_config_alias_cannot_redirect_default_cache_or_artifact_pipel
         assert_eq!(status, StatusCode::OK, "{saved}");
         assert!(saved["engine"]["n_saved"].as_u64().unwrap() > 0);
         assert!(saved["engine"]["n_written"].as_u64().unwrap() > 0);
-        let path = stores.original.join("cache").join(format!(
+        let path = stores.original.join("kv-cache").join(format!(
             "kv-{}.bin",
             saved["snapshot"]["id"].as_str().unwrap()
         ));

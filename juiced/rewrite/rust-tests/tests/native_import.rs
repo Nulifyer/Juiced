@@ -2106,7 +2106,11 @@ mod protected_state {
             .find(|model| model["id"] == MODEL)
             .unwrap()["resource_profile"]["state_bytes"] = json!(STATE_BYTES);
         write_config(&inputs, &config);
-        let manifest = inputs.server.directory.path().join("cache/snapshots.json");
+        let manifest = inputs
+            .server
+            .directory
+            .path()
+            .join("kv-cache/snapshots.json");
         std::fs::write(&manifest, b"UNOPENED_CACHE_METADATA_MUST_NOT_BE_PARSED").unwrap();
         inputs.server.start().await;
         let (cache_status, cache) = inputs
@@ -2120,7 +2124,7 @@ mod protected_state {
             .await;
         assert_eq!(cache_status, StatusCode::SERVICE_UNAVAILABLE, "{cache}");
         assert_eq!(cache["error"]["code"], "unknown_host_capacity");
-        let files = tree(&inputs.server.directory.path().join("cache"));
+        let files = tree(&inputs.server.directory.path().join("kv-cache"));
         let source = inputs.source_image();
         let bytes = std::fs::read(&inputs.server.config_path).unwrap();
         let (status, error) = inputs
@@ -2141,7 +2145,10 @@ mod protected_state {
             .await;
         assert_eq!(status, cache_status);
         assert_eq!(after, cache);
-        assert_eq!(tree(&inputs.server.directory.path().join("cache")), files);
+        assert_eq!(
+            tree(&inputs.server.directory.path().join("kv-cache")),
+            files
+        );
         assert_eq!(inputs.source_image(), source);
         assert_eq!(std::fs::read(&inputs.server.config_path).unwrap(), bytes);
     }
@@ -2354,7 +2361,7 @@ mod protected_state {
             .server
             .directory
             .path()
-            .join("cache")
+            .join("kv-cache")
             .join(format!("kv-{id}.bin"));
         let checksum = digest(&path);
         let restore_id = control
@@ -2493,7 +2500,7 @@ mod protected_state {
             .server
             .directory
             .path()
-            .join("cache")
+            .join("kv-cache")
             .join(format!("kv-{}.bin", pending["id"].as_str().unwrap()));
         assert_eq!(std::fs::metadata(&staging).unwrap().len(), 0);
         drop(request);
@@ -2539,7 +2546,7 @@ mod protected_state {
         let (inputs, control) = inputs().await;
         let cache = inputs.server.get("juiced/cache").await;
         assert_eq!(cache["data"], json!([]));
-        let tree_before = tree(&inputs.server.directory.path().join("cache"));
+        let tree_before = tree(&inputs.server.directory.path().join("kv-cache"));
         let stats = control.observe(&inputs.server).await;
         let id = control
             .arm(
@@ -2568,7 +2575,7 @@ mod protected_state {
         retained(&inputs, control.pid).await;
         assert_eq!(inputs.server.get("juiced/cache").await, cache);
         assert_eq!(
-            tree(&inputs.server.directory.path().join("cache")),
+            tree(&inputs.server.directory.path().join("kv-cache")),
             tree_before
         );
         assert_eq!(
@@ -2764,7 +2771,11 @@ async fn protected_cache_metadata_and_socket_responses_share_host_claims_without
     let entries = (0..16000)
         .map(|index| (format!("{index:032x}"), record.clone()))
         .collect::<serde_json::Map<_, _>>();
-    let manifest = inputs.server.directory.path().join("cache/snapshots.json");
+    let manifest = inputs
+        .server
+        .directory
+        .path()
+        .join("kv-cache/snapshots.json");
     std::fs::write(
         &manifest,
         serde_json::to_vec(&json!({"schema_version":1,"generation":1,"entries":entries})).unwrap(),

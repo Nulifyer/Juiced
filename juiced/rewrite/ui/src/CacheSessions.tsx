@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { Client } from "./api";
 import { bytes } from "./domain";
 import { Meter } from "./charts";
@@ -6,8 +7,7 @@ import { useOperation, useResource } from "./useResource";
 
 export type SessionMode = "off" | "memory" | "persistent";
 type Settings = { mode: SessionMode; budget_bytes: number; model_budget_bytes: number; max_sessions: number; save_delay_ms: number; models: Record<string, SessionMode> };
-type Slot = { slot: number; state: string; tokens: number | null };
-type ModelRow = { model: string; mode: string; effective: string; reason: string | null; sessions: number; used_bytes: number; budget_bytes: number; slots: Slot[] };
+type ModelRow = { model: string; mode: string; effective: string; reason: string | null; sessions: number; used_bytes: number; budget_bytes: number };
 type Session = { session: string; model: string; protocol: string; kind: string; bytes: number; last_used_unix_ms: number; execution_current: boolean; state: string };
 export type SessionView = { generation: number; settings: Settings; models: ModelRow[]; sessions: Session[]; totalBytes: number; totalSessions: number; explicit: boolean };
 export type Turn = { id: number; model: string; path: string; restoreMs: number | null; cached: number | null; processed: number | null; elapsedMs: number | null };
@@ -26,7 +26,7 @@ export function parseSessions(value: unknown): SessionView {
   return {
     generation: num(body.configuration_generation)!, explicit: body.explicit_snapshots_enabled === true,
     settings: { mode: mode(settings.mode), budget_bytes: num(settings.budget_bytes) ?? 0, model_budget_bytes: num(settings.model_budget_bytes) ?? 0, max_sessions: num(settings.max_sessions) ?? 0, save_delay_ms: num(settings.save_delay_ms) ?? 0, models: Object.fromEntries(Object.entries(record(settings.models)).map(([key, item]) => [key, mode(item)])) },
-    models: body.models.map((item) => { const row = record(item); return { model: str(row.model) ?? "", mode: str(row.mode) ?? "off", effective: str(row.effective) ?? "off", reason: str(row.reason), sessions: num(row.sessions) ?? 0, used_bytes: num(row.used_bytes) ?? 0, budget_bytes: num(row.budget_bytes) ?? 0, slots: (Array.isArray(row.slots) ? row.slots : []).map((slot) => { const entry = record(slot); return { slot: num(entry.slot) ?? 0, state: str(entry.state) ?? "empty", tokens: num(entry.tokens) }; }) }; }),
+    models: body.models.map((item) => { const row = record(item); return { model: str(row.model) ?? "", mode: str(row.mode) ?? "off", effective: str(row.effective) ?? "off", reason: str(row.reason), sessions: num(row.sessions) ?? 0, used_bytes: num(row.used_bytes) ?? 0, budget_bytes: num(row.budget_bytes) ?? 0 }; }),
     sessions: body.sessions.map((item) => { const row = record(item); return { session: str(row.session) ?? "", model: str(row.model) ?? "", protocol: str(row.protocol) ?? "", kind: str(row.kind) ?? "", bytes: num(row.bytes) ?? 0, last_used_unix_ms: num(row.last_used_unix_ms) ?? 0, execution_current: row.execution_current === true, state: str(row.state) ?? "" }; }),
     totalBytes: num(totals.bytes) ?? 0, totalSessions: num(totals.sessions) ?? 0,
   };
@@ -49,25 +49,39 @@ function ago(ms: number) {
   return `${Math.round(seconds / 86400)}d ago`;
 }
 
+const reasons: Record<string, string> = {
+  engine_unsupported: "This engine does not save prompt state.",
+  protected_memory: "Protected memory keeps sessions off.",
+  cache_storage_unavailable: "Cache storage is unavailable, so only memory is used.",
+};
+
 export function CacheSessions({ client, online }: { client: Client; online: boolean }) {
   const view = useResource(client, "juiced/cache/sessions", parseSessions, 3000);
   const turns = useResource(client, "juiced/requests", parseTurns, 3000);
   const operation = useOperation(client, async () => { await view.reload(); await turns.reload(); });
+  const [adding, setAdding] = useState("");
+  const [addMode, setAddMode] = useState<SessionMode | "">("");
   const data = view.data;
   if (!data) return view.error ? <div className="action-row"><p className="inline-error" role="alert">{view.error}</p><Button onClick={() => void view.reload()}>Retry</Button></div> : <p className="muted">Loading sessions…</p>;
   const blocked = !online || operation.busy;
-  const configure = (settings: Settings, success: string) => void operation.run("juiced/cache/sessions", { action: "configure", expected_generation: data.generation, settings }, success);
+  const fallback = data.settings.mode;
+  const configure = (settings: Settings, success: string) => operation.run("juiced/cache/sessions", { action: "configure", expected_generation: data.generation, settings }, success);
   const forget = (target: { model?: string; session?: string }, success: string) => void operation.run("juiced/cache/sessions", { action: "forget", ...target }, success);
-  const setModelMode = (model: string, value: string) => {
+  const setModelMode = (model: string, value: SessionMode | null) => {
     const models = { ...data.settings.models };
-    if (value === "inherit") delete models[model]; else models[model] = value as SessionMode;
-    configure({ ...data.settings, models }, value === "inherit" ? `${model} follows the default mode.` : `${model} uses ${modeNames[value as SessionMode]} sessions.`);
+    if (value === null || value === fallback) delete models[model]; else models[model] = value;
+    return configure({ ...data.settings, models }, value === null || value === fallback ? `${model} follows the default mode.` : `${model} uses ${modeNames[value]} sessions.`);
   };
+  const rows = new Map(data.models.map((row) => [row.model, row]));
+  const overrides = Object.entries(data.settings.models).filter(([, value]) => value !== fallback).sort(([left], [right]) => left.localeCompare(right));
+  const addable = data.models.filter((row) => row.reason !== "engine_unsupported" && !(row.model in data.settings.models)).map((row) => row.model).sort((left, right) => left.localeCompare(right));
+  const otherModes = modes.filter((item) => item !== fallback);
+  const chosenMode = addMode && addMode !== fallback ? addMode : otherModes[0];
   return <div className="page-body cache-sessions">
     <section className="panel session-summary" aria-label="Session continuation">
       <div className="summary-mode">
-        <div className="page-title"><h2>Continue conversations</h2><HelpTip label="Session continuation">When a client sends an older conversation again, Juiced restores the engine's saved state for it so only the new message is processed. Persistent keeps that state on disk across unloads and restarts; Memory only routes each conversation back to the slot that still holds it. Only fingerprints of the messages are stored, never their text.</HelpTip></div>
-        <div className="segmented" role="radiogroup" aria-label="Default session mode">{modes.map((item) => <button key={item} role="radio" aria-checked={data.settings.mode === item} disabled={blocked} onClick={() => data.settings.mode !== item && configure({ ...data.settings, mode: item }, `Session continuation is ${modeNames[item]}.`)}>{modeNames[item]}</button>)}</div>
+        <div className="page-title"><h2>Continue conversations</h2><HelpTip label="Session continuation">When a client sends an older conversation again, Juiced restores the engine's saved state for it so only the new message is processed. Persistent keeps that state on disk across unloads, reloads and restarts; Memory only routes each conversation back to the slot that still holds it. Only fingerprints of the messages are stored, never their text.</HelpTip></div>
+        <div className="segmented" role="radiogroup" aria-label="Default session mode">{modes.map((item) => <button key={item} role="radio" aria-checked={fallback === item} disabled={blocked} onClick={() => fallback !== item && void configure({ ...data.settings, mode: item, models: Object.fromEntries(Object.entries(data.settings.models).filter(([, value]) => value !== item)) }, `Session continuation is ${modeNames[item]}.`)}>{modeNames[item]}</button>)}</div>
       </div>
       <div className="summary-usage">
         <Meter label="Saved state" value={data.settings.budget_bytes ? data.totalBytes / data.settings.budget_bytes * 100 : null} />
@@ -76,15 +90,23 @@ export function CacheSessions({ client, online }: { client: Client; online: bool
     </section>
     {operation.error && <p className="inline-error" role="alert">{operation.error}</p>}
     {view.error && <p className="inline-warning">Showing the last observation. {view.error}</p>}
-    <section aria-label="Models">
-      <div className="data-table session-models" role="table" aria-label="Session models">
-        <div role="row" className="data-head"><span role="columnheader">Model</span><span role="columnheader">Mode</span><span role="columnheader">Slots</span><span role="columnheader" className="numeric">Saved</span></div>
-        {data.models.map((row) => <div role="row" className="data-row" key={row.model} aria-label={row.model}>
-          <span role="cell" className="break-word"><strong>{row.model}</strong>{row.reason && <span className="field-help">{row.reason}</span>}</span>
-          <span role="cell"><select aria-label={`Session mode for ${row.model}`} value={data.settings.models[row.model] ?? "inherit"} disabled={blocked} onChange={(event) => setModelMode(row.model, event.target.value)}><option value="inherit">Default ({modeNames[data.settings.mode]})</option>{modes.map((item) => <option key={item} value={item}>{modeNames[item]}</option>)}</select></span>
-          <span role="cell" className="slot-chips">{row.slots.map((slot) => <span key={slot.slot} className="slot-chip" data-state={slot.state} title={slot.tokens ? `${slot.tokens.toLocaleString()} tokens` : undefined}>{slot.slot}: {slot.state}</span>)}</span>
-          <span role="cell" className="numeric">{row.sessions ? `${bytes(row.used_bytes)} · ${row.sessions}` : "—"}</span>
-        </div>)}
+    <section aria-label="Model overrides" className="session-overrides">
+      <div className="toolbar"><h2 className="toolbar-title">Model overrides</h2><HelpTip label="Model overrides">Models without an override use the default mode. Only llama.cpp models save conversation state.</HelpTip>{overrides.length === 0 && <span className="muted">None. Every model uses {modeNames[fallback]}.</span>}</div>
+      {overrides.length > 0 && <div className="data-table override-table" role="table" aria-label="Session overrides">
+        {overrides.map(([model, value]) => {
+          const row = rows.get(model);
+          const note = !row ? "Not installed" : row.effective !== value && row.reason ? reasons[row.reason] ?? row.reason : null;
+          return <div role="row" className="data-row" key={model} aria-label={model}>
+            <span role="cell" className="break-word"><strong>{model}</strong>{note && <span className="field-help">{note}</span>}</span>
+            <span role="cell"><select aria-label={`Session mode for ${model}`} value={value} disabled={blocked} onChange={(event) => void setModelMode(model, event.target.value as SessionMode)}>{modes.map((item) => <option key={item} value={item}>{modeNames[item]}{item === fallback ? " (default)" : ""}</option>)}</select></span>
+            <span role="cell" className="row-end"><Button variant="ghost" disabled={blocked} onClick={() => void setModelMode(model, null)}>Remove</Button></span>
+          </div>;
+        })}
+      </div>}
+      <div className="toolbar override-add" aria-label="Add an override">
+        <select aria-label="Model to override" value={adding} disabled={blocked || addable.length === 0} onChange={(event) => setAdding(event.target.value)}><option value="">{addable.length ? "Choose a model…" : "No other llama.cpp models"}</option>{addable.map((model) => <option key={model} value={model}>{model}</option>)}</select>
+        <select aria-label="Override mode" value={chosenMode} disabled={blocked} onChange={(event) => setAddMode(event.target.value as SessionMode)}>{otherModes.map((item) => <option key={item} value={item}>{modeNames[item]}</option>)}</select>
+        <Button disabled={blocked || !adding} onClick={async () => { if (await setModelMode(adding, chosenMode) !== undefined) setAdding(""); }}>Add override</Button>
       </div>
     </section>
     <section aria-label="Recent turns">
@@ -94,11 +116,11 @@ export function CacheSessions({ client, online }: { client: Client; online: bool
     </section>
     <section aria-label="Saved sessions">
       <div className="toolbar"><h2 className="toolbar-title">Saved sessions</h2>{data.sessions.length > 0 && <Button variant="danger" disabled={blocked} onClick={() => forget({}, "Forgot every saved session.")}>Forget all</Button>}</div>
-      {data.sessions.length === 0 ? <Empty title="No saved sessions">{data.settings.mode === "persistent" ? "Conversations are saved here automatically after each reply." : "Set the mode to Persistent to keep conversations across unloads and restarts."}</Empty>
+      {data.sessions.length === 0 ? <Empty title="No saved sessions">{fallback === "persistent" ? "Conversations are saved here automatically after each reply." : "Set the mode to Persistent to keep conversations across unloads and restarts."}</Empty>
         : <div className="data-table session-table" role="table" aria-label="Saved session list">
           <div role="row" className="data-head"><span role="columnheader">Session</span><span role="columnheader">Model</span><span role="columnheader">Used</span><span role="columnheader" className="numeric">Size</span><span role="columnheader"><span className="sr-only">Actions</span></span></div>
-          {data.sessions.map((session) => <div role="row" className="data-row" key={session.session} aria-label={`Session ${session.session.slice(0, 8)}`}>
-            <span role="cell"><code title={session.session}>{session.session.slice(0, 8)}</code> <span className="muted">{session.protocol}</span>{!session.execution_current && <Badge tone="warning">Stale</Badge>}</span>
+          {data.sessions.map((session) => <div role="row" className="data-row" key={`${session.session}-${session.model}-${session.last_used_unix_ms}`} aria-label={`Session ${session.session.slice(0, 8)}`}>
+            <span role="cell"><code title={session.session}>{session.session.slice(0, 8)}</code> <span className="muted">{session.protocol}</span>{!session.execution_current && <Badge tone="warning">Stale</Badge>}{session.state !== "saved" && <span title="The save did not finish. Its space is returned once the engine that wrote it has exited."><Badge tone="warning">Incomplete</Badge></span>}</span>
             <span role="cell" className="break-word">{session.model}</span>
             <span role="cell" className="muted">{ago(session.last_used_unix_ms)}</span>
             <span role="cell" className="numeric">{bytes(session.bytes)}</span>

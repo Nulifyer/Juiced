@@ -6,7 +6,7 @@ const view = (mode: string, models: Record<string, string> = {}, sessions = 2) =
   settings: { mode, budget_bytes: 8 * 1024 ** 3, model_budget_bytes: 4 * 1024 ** 3, max_sessions: 1024, save_delay_ms: 1000, ...(Object.keys(models).length ? { models } : {}) },
   models: [
     { model: "fixture.chat-small-q4", mode: models["fixture.chat-small-q4"] ?? mode, effective: mode, reason: null, sessions, used_bytes: 12 * 1024 ** 2, budget_bytes: 4 * 1024 ** 3, slots: [{ slot: 0, state: "holding", tokens: 3187, units: 1 }, { slot: 1, state: "empty", tokens: null, units: null }] },
-    { model: "fixture.speech-tiny", mode, effective: "off", reason: "This engine does not save prompt state.", sessions: 0, used_bytes: 0, budget_bytes: 4 * 1024 ** 3, slots: [] },
+    { model: "fixture.speech-tiny", mode, effective: "off", reason: "engine_unsupported", sessions: 0, used_bytes: 0, budget_bytes: 4 * 1024 ** 3, slots: [] },
   ],
   sessions: Array.from({ length: sessions }, (_, index) => ({ session: digest(String.fromCharCode(97 + index)), kind: "prefix", model: "fixture.chat-small-q4", principal: "operator", protocol: "chat", bytes: 6 * 1024 ** 2, last_used_unix_ms: Date.now() - (index + 1) * 90_000, execution_current: index === 0, state: "saved", model_tag: "abc" })),
   totals: { budget_bytes: 8 * 1024 ** 3, bytes: sessions * 6 * 1024 ** 2, listed: sessions, sessions },
@@ -42,20 +42,30 @@ test("Sessions shows continuation per turn and changes modes and forgets session
   await expect(recent.getByRole("listitem").first()).toContainText("Restored");
   await expect(recent.getByRole("listitem").first()).toContainText("1 new · 3,202 reused · restore 93 ms · 0.19 s");
   await expect(recent.getByRole("listitem").nth(1)).toContainText("Cold");
-  const models = page.getByRole("table", { name: "Session models" });
-  await expect(models.getByRole("row", { name: "fixture.chat-small-q4" })).toContainText("0: holding");
-  await expect(models.getByRole("row", { name: "fixture.speech-tiny" })).toContainText("This engine does not save prompt state.");
+  const overrides = page.getByRole("region", { name: "Model overrides" });
+  await expect(overrides.getByRole("table", { name: "Session overrides" })).toHaveCount(0);
+  await expect(overrides).toContainText("None. Every model uses Persistent.");
+  await expect(overrides.getByLabel("Model to override").getByRole("option")).toHaveText(["Choose a model…", "fixture.chat-small-q4"]);
 
   await summary.getByRole("radio", { name: "Memory" }).click();
   await expect(toasts(page).getByRole("status")).toContainText("Session continuation is Memory.");
   expect(posts.at(-1)).toMatchObject({ action: "configure", expected_generation: 7, settings: { mode: "memory" } });
   await expect(summary.getByRole("radio", { name: "Memory" })).toHaveAttribute("aria-checked", "true");
 
-  await models.getByLabel("Session mode for fixture.chat-small-q4").selectOption("off");
+  await overrides.getByLabel("Model to override").selectOption("fixture.chat-small-q4");
+  await overrides.getByLabel("Override mode").selectOption("off");
+  await overrides.getByRole("button", { name: "Add override" }).click();
   await expect(toasts(page).getByRole("status")).toContainText("fixture.chat-small-q4 uses Off sessions.");
   expect(posts.at(-1)).toMatchObject({ action: "configure", settings: { mode: "memory", models: { "fixture.chat-small-q4": "off" } } });
-  await models.getByLabel("Session mode for fixture.chat-small-q4").selectOption("inherit");
+  const row = overrides.getByRole("table", { name: "Session overrides" }).getByRole("row", { name: "fixture.chat-small-q4" });
+  await expect(row.getByLabel("Session mode for fixture.chat-small-q4")).toHaveValue("off");
+  await expect(overrides.getByLabel("Model to override")).toBeDisabled();
+  await row.getByLabel("Session mode for fixture.chat-small-q4").selectOption("persistent");
+  expect(posts.at(-1)).toMatchObject({ action: "configure", settings: { models: { "fixture.chat-small-q4": "persistent" } } });
+  await row.getByRole("button", { name: "Remove" }).click();
+  await expect(toasts(page).getByRole("status")).toContainText("fixture.chat-small-q4 follows the default mode.");
   expect((posts.at(-1) as { settings: { models?: object } }).settings.models ?? {}).toEqual({});
+  await expect(overrides.getByRole("table", { name: "Session overrides" })).toHaveCount(0);
 
   const saved = page.getByRole("table", { name: "Saved session list" });
   await expect(saved.getByRole("row", { name: /^Session [a-f0-9]{8}$/ })).toHaveCount(2);
@@ -69,10 +79,13 @@ test("Sessions shows continuation per turn and changes modes and forgets session
   await noHorizontalOverflow(page, "Cache sessions");
 });
 
-test("Sessions on the real fixture lists every model and keeps manual snapshots on their own tab", async ({ page }) => {
+test("Sessions on the real fixture shows the default once and keeps manual snapshots on their own tab", async ({ page }) => {
   await open(page);
   await navigate(page, "Cache");
-  await expect(page.getByRole("table", { name: "Session models" }).getByRole("row", { name: "fixture.chat-small-q4" })).toBeVisible();
+  await expect(page.getByRole("radiogroup", { name: "Default session mode" })).toHaveCount(1);
+  const overrides = page.getByRole("region", { name: "Model overrides" });
+  await expect(overrides.getByRole("table", { name: "Session overrides" })).toHaveCount(0);
+  await expect(overrides.getByLabel("Model to override").getByRole("option")).toHaveText(["Choose a model…", "fixture.managed-runtime"]);
   await tab(page, "Cache views", "Snapshots").click();
   await expect(page.getByRole("region", { name: "Prompt snapshots" })).toBeVisible();
 });

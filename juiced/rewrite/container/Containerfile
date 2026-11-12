@@ -53,7 +53,7 @@ RUN apt-get update \
 RUN groupadd --gid 10001 juiced \
     && useradd --uid 10001 --gid 10001 --home-dir /data/home --no-create-home \
         --shell /usr/sbin/nologin juiced \
-    && install -d -o 10001 -g 10001 -m 0700 /data /data/runtime-packages
+    && install -d -o 10001 -g 10001 -m 0700 /data /data/runtime-packages /data/kv-cache
 
 COPY --from=service /out/lemond /out/lemonade /usr/local/bin/
 COPY --from=ui /src/juiced/rewrite/ui/dist/ /opt/juiced/ui/

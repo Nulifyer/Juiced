@@ -390,7 +390,7 @@ async fn selected_llama_user_configuration_is_checked_without_loading_or_reading
             .await;
         let pid = server.model("fixture.one").await["pid"].clone();
         let before = server.get("juiced/cache").await;
-        let cache_root = server.config_path.parent().unwrap().join("cache");
+        let cache_root = server.config_path.parent().unwrap().join("kv-cache");
         let files = || {
             std::fs::read_dir(&cache_root)
                 .unwrap()

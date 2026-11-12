@@ -701,13 +701,13 @@ async fn tiny_gguf_artifact_set_load_cache_restart_restore_pipeline() {
         promoted_context["applied"]["launch_plan"]["semantic_fingerprint"],
         first["applied"]["launch_plan"]["semantic_fingerprint"]
     );
-    let cache_before = support::filesystem::tree(&server.directory.path().join("cache"));
+    let cache_before = support::filesystem::tree(&server.directory.path().join("kv-cache"));
     let restore = json!({"model":MODEL,"slot":0,"session":"real-artifact-set-session","snapshot":saved["snapshot"]["id"]});
     let (status, mismatch) = server.post("juiced/cache/restore", restore.clone()).await;
     assert_eq!(status, StatusCode::CONFLICT, "{mismatch}");
     assert_eq!(mismatch["error"]["code"], "snapshot_identity_mismatch");
     assert_eq!(
-        support::filesystem::tree(&server.directory.path().join("cache")),
+        support::filesystem::tree(&server.directory.path().join("kv-cache")),
         cache_before
     );
     assert_eq!(
@@ -846,5 +846,74 @@ async fn tiny_gguf_automatic_sessions_restore_older_conversations_after_switch_a
     println!(
         "real-session-receipt {}",
         json!({"first_prompt_tokens":prompt,"restored_cached":cached,"restored_processed":processed,"after_restart":record})
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+#[ignore = "requires JUICED_TEST_LLAMA_SERVER and JUICED_TEST_GGUF; automatic session snapshots, not output quality"]
+async fn tiny_gguf_sessions_restore_after_options_reload_and_idle_unload() {
+    use serde_json::Value;
+    const MODEL: &str = "tiny-real-reloads";
+    async fn chat(server: &Server, messages: &mut Vec<Value>, question: &str) -> Value {
+        messages.push(json!({"role":"user","content":question}));
+        let (status, reply) = server
+            .json(
+                reqwest::Method::POST,
+                "/v1/chat/completions",
+                Some(json!({"model":MODEL,"messages":messages,"max_tokens":2,"temperature":0,"stream":false})),
+                server.read_key(),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{reply}");
+        messages
+            .push(json!({"role":"assistant","content":reply["choices"][0]["message"]["content"]}));
+        server.get("juiced/requests").await["data"][0].clone()
+    }
+    fn restored(record: &Value, earlier: u64) -> u64 {
+        assert_eq!(record["session_cache"]["path"], "restored", "{record}");
+        let cached = record["cached_tokens"].as_u64().unwrap();
+        assert!(cached > earlier, "{record}");
+        cached
+    }
+    let engine = PathBuf::from(
+        std::env::var_os("JUICED_TEST_LLAMA_SERVER").expect("set JUICED_TEST_LLAMA_SERVER"),
+    );
+    let model = PathBuf::from(std::env::var_os("JUICED_TEST_GGUF").expect("set JUICED_TEST_GGUF"));
+    let server = Server::configured(true, |config| {
+        config["session_cache"] = json!({"save_delay_ms": 60000});
+        config["resident_budget_bytes"] = json!(1024u64 * 1024 * 1024);
+        config["idle_unload_after_ms"] = json!(1500);
+        config["startup_timeout_ms"] = json!(60000);
+        config["request_timeout_ms"] = json!(60000);
+        config["models"] = json!([{"id":MODEL,"model_file":model,"command":engine,"provider":"llama-cpp","args":["--host","127.0.0.1","--port","{port}","--model","{model}","--ctx-size","1024","--parallel","1","--slots","--n-gpu-layers","0","--chat-template","chatml"],"options":{"threads":4},"resident_bytes":512u64 * 1024 * 1024,"max_inflight":1,"operations":["chat/completions"],"policy":"on-demand"}]);
+    })
+    .await;
+    let mut conversation: Vec<Value> = Vec::new();
+    let first = chat(&server, &mut conversation, "River?").await;
+    assert_eq!(first["session_cache"]["path"], "cold", "{first}");
+    let before = server.get(&format!("models/{MODEL}/options")).await;
+    let (status, reloaded) = server
+        .post(
+            &format!("models/{MODEL}/options"),
+            json!({"expected_revision":before["revision"],"options":before["saved"],"apply":"reload"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{reloaded}");
+    assert_eq!(reloaded["restarted"], true, "{reloaded}");
+    let after_reload = chat(&server, &mut conversation, "Second?").await;
+    let cached = restored(&after_reload, 0);
+    server
+        .wait_for(async || server.model(MODEL).await["loaded"] == false)
+        .await;
+    assert_eq!(
+        server.model(MODEL).await["residency"]["last_unload"]["reason"],
+        "idle"
+    );
+    let after_idle = chat(&server, &mut conversation, "Third?").await;
+    restored(&after_idle, cached);
+    println!(
+        "real-reload-session-receipt {}",
+        json!({"cold":first,"after_options_reload":after_reload,"after_idle_unload":after_idle})
     );
 }

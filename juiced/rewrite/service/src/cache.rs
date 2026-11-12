@@ -18,6 +18,7 @@ const MANIFEST: &str = "snapshots.json";
 pub(crate) mod memory;
 mod page;
 mod reader;
+pub mod root;
 pub use page::{DEFAULT_PAGE_SIZE, OrphanPageInfo, PageInfo, PageRequest};
 mod writer;
 pub use reader::{BoundSnapshotRead, ReaderMetadata, ReaderRecoveryOutcome, ReaderSettlement};
@@ -677,7 +678,7 @@ impl CacheStore {
         pending: &PendingSnapshot,
         expected_revision: u64,
     ) -> Result<SnapshotMetadata, CacheError> {
-        self.publish_inner(pending, expected_revision, None)
+        self.publish_inner(pending, expected_revision, None, 0)
     }
 
     pub fn publish_controlled(
@@ -686,7 +687,19 @@ impl CacheStore {
         expected_revision: u64,
         control: &OperationControl,
     ) -> Result<SnapshotMetadata, CacheError> {
-        self.publish_inner(pending, expected_revision, Some(control))
+        self.publish_inner(pending, expected_revision, Some(control), 0)
+    }
+
+    // Engines append state the reservation cannot predict, such as recurrent-layer context
+    // checkpoints, so automatic saves may grow their reservation to the written size.
+    pub fn publish_within(
+        &self,
+        pending: &PendingSnapshot,
+        expected_revision: u64,
+        control: &OperationControl,
+        ceiling: u64,
+    ) -> Result<SnapshotMetadata, CacheError> {
+        self.publish_inner(pending, expected_revision, Some(control), ceiling)
     }
 
     fn publish_inner(
@@ -694,6 +707,7 @@ impl CacheStore {
         pending: &PendingSnapshot,
         expected_revision: u64,
         control: Option<&OperationControl>,
+        ceiling: u64,
     ) -> Result<SnapshotMetadata, CacheError> {
         if let Some(control) = control {
             control.check()?;
@@ -732,7 +746,8 @@ impl CacheStore {
             control.check()?;
         }
         sync.sync_all()?;
-        let (bytes, sha256) = hash_file(&pending.path, reserved, &mut budget)
+        let maximum = reserved.max(ceiling.min(self.limits.maximum_snapshot_bytes));
+        let (bytes, sha256) = hash_file(&pending.path, maximum, &mut budget)
             .map_err(|error| writer::controlled_error(error, &budget, control))?;
         if let Ok(metadata) = validated.metadata()
             && metadata.len() == bytes
@@ -764,6 +779,15 @@ impl CacheStore {
         record.state = SnapshotState::Saved;
         record.bytes = Some(bytes);
         record.sha256 = Some(sha256);
+        if bytes > record.reserved_bytes {
+            record.reserved_bytes = bytes;
+            if let Some(writer) = record.writer.as_mut() {
+                writer.rebind(&pending.id, &pending.identity, bytes)?;
+            }
+            if self.charged(&next)? > self.limits.maximum_total_bytes {
+                return Err(CacheError::Limit);
+            }
+        }
         if let Some(control) = control {
             control.check()?;
         }

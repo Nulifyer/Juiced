@@ -481,7 +481,7 @@ async fn changed_loaded_weights_refuse_cache_before_engine_dispatch_and_reloadin
     assert_eq!(status, StatusCode::OK, "{saved}");
     assert!(saved["engine"]["n_saved"].as_u64().unwrap() > 0);
     assert!(saved["engine"]["n_written"].as_u64().unwrap() > 0);
-    let snapshot_path = server.directory.path().join("cache").join(format!(
+    let snapshot_path = server.directory.path().join("kv-cache").join(format!(
         "kv-{}.bin",
         saved["snapshot"]["id"].as_str().unwrap()
     ));

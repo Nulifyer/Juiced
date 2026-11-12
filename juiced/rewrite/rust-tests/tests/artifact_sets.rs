@@ -273,12 +273,12 @@ async fn model_set_promotion_and_rollback_preserve_policy_identity_references_an
         original["applied"]["launch_plan"]["semantic_fingerprint"],
         changed["applied"]["launch_plan"]["semantic_fingerprint"]
     );
-    let cache_tree = tree(&server.directory.path().join("cache"));
+    let cache_tree = tree(&server.directory.path().join("kv-cache"));
     let restore = json!({"model":"revision-model","slot":0,"session":"revision-session","snapshot":saved["snapshot"]["id"]});
     let (status, mismatch) = server.post("juiced/cache/restore", restore.clone()).await;
     assert_eq!(status, StatusCode::CONFLICT, "{mismatch}");
     assert_eq!(mismatch["error"]["code"], "snapshot_identity_mismatch");
-    assert_eq!(tree(&server.directory.path().join("cache")), cache_tree);
+    assert_eq!(tree(&server.directory.path().join("kv-cache")), cache_tree);
     assert_eq!(
         server
             .post("unload", json!({"model":"revision-model"}))
@@ -759,7 +759,7 @@ async fn primary_set_registration_inference_cache_restart_and_revision_change_pr
         changed["applied"]["launch_plan"]["semantic_fingerprint"],
         before["applied"]["launch_plan"]["semantic_fingerprint"]
     );
-    let root = server.directory.path().join("cache");
+    let root = server.directory.path().join("kv-cache");
     let retained = tree(&root);
     let(status,mismatch)=server.post("juiced/cache/restore",json!({"model":"set-bound-model","slot":0,"session":session,"snapshot":saved["snapshot"]["id"]})).await;
     assert_eq!(status, StatusCode::CONFLICT, "{mismatch}");

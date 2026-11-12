@@ -191,6 +191,16 @@ impl ActorBinding {
         ))
     }
 
+    pub(super) fn rebind(
+        &mut self,
+        id: &str,
+        identity: &SnapshotIdentity,
+        reserved: u64,
+    ) -> Result<(), CacheError> {
+        self.binding_digest = self.digest(id, identity, reserved)?;
+        Ok(())
+    }
+
     pub(super) fn reader_digest(
         &self,
         reader: &str,
@@ -272,8 +282,10 @@ pub(super) fn binding_digest<T: Serialize + ?Sized>(value: &T) -> Result<String,
 
 pub(super) fn hash_budget(limits: &CacheLimits, control: Option<&OperationControl>) -> HashBudget {
     let mut budget = HashBudget::new(limits);
+    // Publication and restore hash the whole snapshot; a session near the per-model budget can
+    // take longer than the inspection timeout, so bounded operations use their own deadline.
     if let Some(control) = control {
-        budget.deadline = budget.deadline.min(control.deadline);
+        budget.deadline = control.deadline;
         budget.cancelled = Some(control.cancelled.clone());
     }
     budget
@@ -977,6 +989,38 @@ mod tests {
     }
     fn reopen(store: &Arc<CacheStore>) -> Arc<CacheStore> {
         CacheStore::open(store.lease.clone()).unwrap()
+    }
+
+    #[test]
+    fn automatic_publication_grows_its_reservation_to_the_written_state_within_the_ceiling() {
+        let (_directory, store) = fixture();
+        let pending = bound(&store);
+        fs::write(pending.path(), vec![7u8; 4096]).unwrap();
+        assert!(matches!(
+            store.publish_controlled(&pending, pending.revision(), &control()),
+            Err(CacheError::Limit)
+        ));
+        let pending = bound(&store);
+        fs::write(pending.path(), vec![7u8; 4096]).unwrap();
+        assert!(matches!(
+            store.publish_within(&pending, pending.revision(), &control(), 2048),
+            Err(CacheError::Limit)
+        ));
+        let saved = store
+            .publish_within(&pending, pending.revision(), &control(), 8192)
+            .unwrap();
+        assert_eq!(saved.bytes, Some(4096));
+        assert_eq!(saved.reserved_bytes, 4096);
+        drop(pending);
+        let reopened = reopen(&store);
+        let restored = reopened.restore(&saved.id, &identity()).unwrap();
+        assert_eq!(fs::read(restored.path()).unwrap().len(), 4096);
+        let small = bound(&store);
+        fs::write(small.path(), b"short").unwrap();
+        let kept = store
+            .publish_within(&small, small.revision(), &control(), 8192)
+            .unwrap();
+        assert_eq!(kept.reserved_bytes, 1024);
     }
 
     #[test]

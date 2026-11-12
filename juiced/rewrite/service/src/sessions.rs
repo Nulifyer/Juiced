@@ -485,6 +485,7 @@ pub fn reservation(
     context: Option<u64>,
     shape_bound: Option<u64>,
     learned: Option<u64>,
+    overhead: u64,
     fallback: u64,
 ) -> u64 {
     let per_token = match (shape_bound, learned) {
@@ -496,6 +497,7 @@ pub fn reservation(
     match (tokens.or(context), per_token) {
         (Some(tokens), Some(per_token)) => tokens
             .saturating_mul(per_token)
+            .saturating_add(overhead)
             .saturating_add(RESERVATION_HEADROOM_BYTES)
             .min(fallback),
         _ => fallback,
@@ -743,21 +745,28 @@ mod tests {
     #[test]
     fn reservations_use_shape_or_learned_bounds_and_cap_at_the_budget() {
         let fallback = 1 << 30;
-        assert_eq!(reservation(Some(10), None, None, None, fallback), fallback);
         assert_eq!(
-            reservation(Some(10), None, Some(100), None, fallback),
+            reservation(Some(10), None, None, None, 0, fallback),
+            fallback
+        );
+        assert_eq!(
+            reservation(Some(10), None, Some(100), None, 0, fallback),
             1000 + RESERVATION_HEADROOM_BYTES
         );
         assert_eq!(
-            reservation(None, Some(20), None, Some(100), fallback),
+            reservation(Some(10), None, Some(100), None, 7, fallback),
+            1007 + RESERVATION_HEADROOM_BYTES
+        );
+        assert_eq!(
+            reservation(None, Some(20), None, Some(100), 0, fallback),
             2500 + RESERVATION_HEADROOM_BYTES
         );
         assert_eq!(
-            reservation(Some(10), None, Some(100), Some(400), fallback),
+            reservation(Some(10), None, Some(100), Some(400), 0, fallback),
             5000 + RESERVATION_HEADROOM_BYTES
         );
         assert_eq!(
-            reservation(Some(u64::MAX), None, Some(2), None, fallback),
+            reservation(Some(u64::MAX), None, Some(2), None, 0, fallback),
             fallback
         );
         let shape = crate::profiles::ModelShape {

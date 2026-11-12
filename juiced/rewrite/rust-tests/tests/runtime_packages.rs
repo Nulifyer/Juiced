@@ -401,7 +401,7 @@ async fn online_runtime_import_refuses_another_replaced_live_store_without_writi
     let packages = tree(&package_root);
     let configured = fs::read(&server.config_path).unwrap();
     let foreign =
-        support::filesystem::ReplacedRoot::replace(&server.directory.path().join("cache"));
+        support::filesystem::ReplacedRoot::replace(&server.directory.path().join("kv-cache"));
     let (status, error) = server
         .post(
             "juiced/runtime-packages/import",
