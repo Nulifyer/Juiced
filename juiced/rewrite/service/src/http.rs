@@ -21,6 +21,9 @@ use tower_http::{cors::CorsLayer, services::ServeDir};
 
 pub use crate::auth::Auth;
 use crate::auth::{Authority, Authorization, RequestContext};
+use crate::barista::{
+    call as barista_call, settings_set as barista_set, settings_view as barista_view,
+};
 use crate::connect::{access, health as protocol_health, key_create, key_revoke, protocol_set};
 
 #[derive(Clone)]
@@ -269,6 +272,9 @@ define_routes! {
     (post, "/juiced/access/keys/revoke", key_revoke, "operator"),
     (post, "/juiced/protocols", protocol_set, "operator"),
     (get, "/juiced/protocols/health", protocol_health, "operator"),
+    (get, "/juiced/barista", barista_view, "operator"),
+    (post, "/juiced/barista", barista_set, "operator"),
+    (post, "/juiced/barista/tools/call", barista_call, "operator"),
 }
 async fn residency(State(state): State<AppState>) -> impl IntoResponse {
     (
@@ -1244,10 +1250,7 @@ pub fn router(manager: Arc<Manager>, auth: Auth, ui: Option<PathBuf>) -> Router 
         .with_state(state.clone())
         .layer(Extension(wyoming))
         .layer(Extension(Arc::new(crate::realtime::Sessions::default())))
-        .merge(crate::compat::router(
-            state.manager.clone(),
-            state.probe.clone(),
-        ))
+        .merge(crate::compat::router(state.manager.clone()))
         .layer(DefaultBodyLimit::max(crate::admission::JSON_INGRESS_BYTES))
         .layer(middleware::from_fn_with_state(state.clone(), authorize));
     let _ = state.probe.set(app.clone());

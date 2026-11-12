@@ -13,7 +13,7 @@ import { Dashboard } from "./Dashboard";
 import { Engines } from "./Backends";
 import { Diagnostics } from "./Diagnostics";
 import { Aliases } from "./Aliases";
-import { Assistant } from "./Assistant";
+import { Barista, BaristaInvite, invitationKey, useBarista } from "./Barista";
 import { IdleDefault } from "./Residency";
 import { gib, percent, rate, useSystemStats } from "./live";
 import { clearToasts, dismiss, notify, useToasts } from "./toast";
@@ -43,7 +43,7 @@ export function App() {
   const [key, setKey] = useState("");
   const [connectionOpen, setConnectionOpen] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [assistantOpen, setAssistantOpen] = useState(false);
+  const [baristaOpen, setBaristaOpen] = useState(false);
   const [selected, setSelected] = useState("");
   const [selectedFile, setSelectedFile] = useState("");
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
@@ -62,6 +62,11 @@ export function App() {
   const client = useMemo(() => new Client(base, key), [base, key]);
   const toasts = useToasts();
   const live = useSystemStats(client, online);
+  const barista = useBarista(client, online);
+  const inviteKey = invitationKey(base);
+  const [dismissed, setDismissed] = useState(() => readLocal(inviteKey) === "dismissed");
+  useEffect(() => { setDismissed(readLocal(inviteKey) === "dismissed"); }, [inviteKey]);
+  useEffect(() => { if (!barista.settings) setBaristaOpen(false); }, [barista.settings]);
   const workspace = useRef<HTMLElement>(null);
   useLayoutEffect(() => { workspace.current?.scrollTo(0, 0); }, [screen, client]);
   const poll = useRef<AbortController | null>(null);
@@ -94,7 +99,7 @@ export function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [mobileOpen]);
 
-  const closeAssistant = useCallback(() => setAssistantOpen(false), []);
+  const closeBarista = useCallback(() => setBaristaOpen(false), []);
   const leave = (action: () => void) => { if (dirty) setPending(() => action); else action(); };
   const mutate: Mutate = async (path, body, success) => {
     if (mutation.current && !mutation.current.controller.signal.aborted) return false;
@@ -148,7 +153,9 @@ export function App() {
     <a className="skip-link" href="#workspace">Skip to workspace</a>
     <header className="topbar">
       <div className="brand"><Button variant="ghost" className="mobile-menu" aria-label="Toggle navigation" aria-expanded={mobileOpen} onClick={() => setMobileOpen(!mobileOpen)}><Icon name="menu" /></Button><img src={logo} alt="" width="22" height="22" /><span>Juiced</span><Badge tone="warning">Preview</Badge></div>
-      <div className="topbar-actions"><Button variant="ghost" className="assistant-toggle" aria-label="Assistant" aria-expanded={assistantOpen} onClick={() => setAssistantOpen(!assistantOpen)}><Icon name="chat" size={16} /><span className="assistant-toggle-label">Assistant</span></Button>
+      <div className="topbar-actions">{barista.settings && (barista.settings.enabled || dismissed
+        ? <Button variant="ghost" className="barista-toggle" aria-label="Barista" aria-expanded={baristaOpen} onClick={() => { setBaristaOpen(!baristaOpen); if (!baristaOpen) void barista.reload(); }}><Icon name="chat" size={16} /><span className="barista-toggle-label">Barista</span></Button>
+        : <BaristaInvite onEnable={() => { setBaristaOpen(true); void barista.reload(); }} onDismiss={() => { writeLocal(inviteKey, "dismissed"); setDismissed(true); }} />)}
       <Menu label="Service status" trigger={<><span className={`status-dot ${status === "Online" ? "good" : status === "Paused" ? "warning" : "bad"}`} /><span>{status}</span><Icon name="chevron" size={14} /></>}>
         <div className="menu-note">{snapshot ? `Juiced ${snapshot.version}` : connectionError || "Not connected"}</div>
         <button role="menuitem" disabled={!online || busy} onClick={togglePause}>{resources?.paused ? "Resume requests" : "Pause new requests"}</button>
@@ -193,7 +200,7 @@ export function App() {
     <div className="toasts" aria-live="polite">
       {toasts.map((toast) => <div key={toast.id} className={`toast ${toast.tone}`} role={toast.tone === "error" ? "alert" : "status"}><span>{toast.text}</span><Button variant="ghost" aria-label={toast.tone === "error" ? "Dismiss error" : "Dismiss notification"} onClick={() => dismiss(toast.id)}><Icon name="close" size={14} /></Button></div>)}
     </div>
-    <Assistant open={assistantOpen} onClose={closeAssistant} models={snapshot?.models ?? []} client={client} online={online} onChanged={() => { if (!dirty) setEpoch((value) => value + 1); void refresh(); }} />
+    {barista.settings && <Barista open={baristaOpen} onClose={closeBarista} models={snapshot?.models ?? []} client={client} online={online} settings={barista.settings} onSettings={barista.setSettings} onChanged={() => { if (!dirty) setEpoch((value) => value + 1); void refresh(); }} />}
     {connectionOpen && <ConnectionDialog base={base} apiKey={key} version={snapshot?.version} onClose={() => setConnectionOpen(false)} onSave={(nextBase, nextKey) => { setBase(nextBase); setKey(nextKey); setEpoch((value) => value + 1); writeLocal("juiced.rewrite.base", nextBase); setConnectionOpen(false); }} />}
     {pending && <Dialog title="Discard unsaved changes?" onClose={() => setPending(null)}><p>Your model changes have not been saved.</p><div className="dialog-actions"><Button onClick={() => setPending(null)}>Keep editing</Button><Button variant="danger" onClick={() => { setDirty(false); setEpoch(epoch + 1); pending(); setPending(null); }}>Discard changes</Button></div></Dialog>}
   </div>;

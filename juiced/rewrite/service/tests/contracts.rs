@@ -82,6 +82,7 @@ impl Harness {
             import_roots: Vec::new(),
             wyoming: Default::default(),
             protocols: Default::default(),
+            barista: Default::default(),
             native_adoption: None,
         };
         change(&mut config);

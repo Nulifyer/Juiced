@@ -1,7 +1,9 @@
 import { ApiError, type Client } from "./api";
-import { policyNames, type Policy } from "./domain";
+import { bytes, policyNames, type Model, type Policy } from "./domain";
 
-export type McpTool = { name: string; title?: string; description?: string; inputSchema?: unknown; annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean } };
+export type Permission = "full" | "ask" | "read_only";
+export type BaristaTool = { name: string; title?: string; description?: string; inputSchema?: unknown; annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean }; requires_confirmation?: boolean };
+export type BaristaSettings = { enabled: boolean; model: string | null; permission: Permission; revision: number; qualified: boolean; tools: BaristaTool[] };
 export type ToolCall = { id: string; name: string; arguments: string };
 export type ChatMessage =
   | { role: "system" | "user"; content: string }
@@ -13,25 +15,51 @@ export type Reply = { content: string; reasoning: string; toolCalls: ToolCall[] 
 export const MAX_STEPS = 8;
 const MAX_TOOL_TEXT = 16000;
 
-export function managementTools(tools: McpTool[]): McpTool[] {
-  return tools.filter((tool) => tool.name.startsWith("juiced_"));
-}
+export const permissionNames: Record<Permission, string> = { full: "Full control", ask: "Ask before changes", read_only: "Read only" };
+export const permissionHelp: Record<Permission, string> = {
+  full: "Barista makes changes without asking. Each one shows in the chat.",
+  ask: "Barista waits for you to approve each change.",
+  read_only: "Barista can look but cannot change anything.",
+};
 
-export function readOnly(tool: McpTool | undefined): boolean {
+export function readOnly(tool: BaristaTool | undefined): boolean {
   return tool?.annotations?.readOnlyHint === true;
 }
 
-export function functionTools(tools: McpTool[]) {
+/** Downloaded chat models that Barista can use, including Disabled ones that setup can make available. */
+export function candidates(models: Model[]): Model[] {
+  return models.filter((model) => model.downloaded && model.operations.includes("chat/completions")).sort((left, right) => Number(right.loaded) - Number(left.loaded) || left.id.localeCompare(right.id));
+}
+
+/** What choosing this model means for loading, in one line. */
+export function implication(model: Model): string {
+  const size = model.resident_bytes ? ` It reserves about ${bytes(model.resident_bytes)} while loaded.` : "";
+  if (model.policy === "disabled") return `${model.id} is Disabled. Turning Barista on sets it to On demand.${size}`;
+  if (model.policy === "hot") return `Hot, so Juiced keeps it loaded.${size}`;
+  if (model.loaded) return `Loaded now. Barista uses it with its saved settings.${size}`;
+  return `Loads with its saved settings when you send the first message.${size}`;
+}
+
+export function functionTools(tools: BaristaTool[]) {
   return tools.map((tool) => ({ type: "function" as const, function: { name: tool.name, description: tool.description ?? tool.title ?? tool.name, parameters: tool.inputSchema ?? { type: "object", properties: {} } } }));
 }
 
 const gib = (value: unknown) => typeof value === "number" ? `${(value / 1024 ** 3).toFixed(1)} GiB` : "unknown";
 
-export function systemPrompt(status: Record<string, any> | null): string {
+const authority: Record<Permission, string> = {
+  full: "Full control. Your changes run without asking, so make only the change the operator asked for.",
+  ask: "Ask before changes. The operator approves or skips each change before it runs.",
+  read_only: "Read only. You can inspect Juiced but cannot change anything. Explain what the operator could do instead.",
+};
+
+export function systemPrompt(model: string, permission: Permission, status: Record<string, any> | null): string {
   const lines = [
-    "You are the assistant inside the Juiced console. Juiced runs local AI models on this machine. You help the operator set it up and manage it by calling the juiced_ tools.",
-    "Call read tools first to learn the current state, then propose one change at a time. The operator approves every change before it runs, and may skip it.",
-    "Use exact model ids and revisions from juiced_list_models. After a revision_conflict, read the model again and retry once. Keep replies short and plain.",
+    `You are Barista, the operator assistant built into Juiced. Your only job is to inspect and manage this Juiced service with the juiced_ tools. You run on the model ${model}.`,
+    `Permission: ${authority[permission]}`,
+    "Read the current state with a tool before you change anything. Use exact model ids and revisions from the tools. After a revision_conflict, read again and retry once.",
+    "Say a task is done only when a tool result shows it. A saved setting is not the running state, so check the model state after a change.",
+    "Never invent model sizes, commands, benchmark results or cache hits. Say when you do not know.",
+    "Ask the operator only when a choice that matters is still open. Do not ask for facts a tool can give you. Keep replies short and plain.",
   ];
   if (status) {
     const cpu = status.cpu ?? {};
@@ -63,7 +91,7 @@ export function accumulate(reply: Reply, chunk: any): Reply {
   return next;
 }
 
-export async function streamReply(client: Client, model: string, messages: ChatMessage[], tools: McpTool[], maxTokens: number, onUpdate: (reply: Reply) => void, signal?: AbortSignal): Promise<Reply> {
+export async function streamReply(client: Client, model: string, messages: ChatMessage[], tools: BaristaTool[], maxTokens: number, onUpdate: (reply: Reply) => void, signal?: AbortSignal): Promise<Reply> {
   const response = await client.stream("chat/completions", { model, messages, tools: functionTools(tools), stream: true, max_tokens: maxTokens }, signal);
   if (!response.ok || !response.body) {
     let message = `The model request failed (${response.status}).`;
@@ -97,15 +125,19 @@ export async function streamReply(client: Client, model: string, messages: ChatM
   return reply;
 }
 
-export async function callTool(client: Client, name: string, args: unknown, signal?: AbortSignal): Promise<ToolResult> {
+/** Settings changes that end the current request instead of going back to the model. */
+export const stopCodes = new Set(["assistant_disabled", "assistant_settings_changed", "operator_required", "unauthorized"]);
+
+export async function callTool(client: Client, name: string, args: unknown, revision: number, confirmed: boolean, signal?: AbortSignal): Promise<ToolResult> {
   try {
-    const result = await client.mcp<{ content?: { type: string; text?: string }[]; structuredContent?: unknown; isError?: boolean }>("tools/call", { name, arguments: args }, signal);
-    const text = (result.content ?? []).filter((part) => part.type === "text").map((part) => part.text ?? "").join("\n");
-    return { ok: result.isError !== true, text: text.slice(0, MAX_TOOL_TEXT), value: result.structuredContent ?? null };
+    const reply = await client.request<{ ok: boolean; result: unknown }>("juiced/barista/tools/call", { name, arguments: args, revision, confirmed }, signal);
+    return { ok: reply.ok === true, text: JSON.stringify(reply.result ?? null).slice(0, MAX_TOOL_TEXT), value: reply.result ?? null };
   } catch (error) {
     if (signal?.aborted) throw error;
+    if (error instanceof ApiError && stopCodes.has(error.code)) throw error;
     const message = error instanceof Error ? error.message : "The tool call failed.";
-    return { ok: false, text: JSON.stringify({ error: { message } }), value: { error: { message } } };
+    const code = error instanceof ApiError ? error.code : "tool_failed";
+    return { ok: false, text: JSON.stringify({ error: { code, message } }), value: { error: { code, message } } };
   }
 }
 
@@ -117,7 +149,7 @@ export function parseArguments(text: string): Record<string, unknown> | null {
 const policyName = (value: unknown) => typeof value === "string" && value in policyNames ? policyNames[value as Policy] : String(value);
 const quoted = (value: unknown) => typeof value === "string" ? value : JSON.stringify(value);
 
-/** A short line for an automatic read, or the question on an approval card. */
+/** A short line for a read, or the question on an approval card. */
 export function describe(name: string, args: Record<string, unknown>): string {
   const model = quoted(args.model ?? "");
   switch (name) {
@@ -142,6 +174,11 @@ export function describe(name: string, args: Record<string, unknown>): string {
   }
 }
 
+/** The action line for a change that runs without a prompt. */
+export function action(name: string, args: Record<string, unknown>): string {
+  return describe(name, args).replace(/\?$/, "");
+}
+
 /** One line telling the operator what a finished change did. */
 export function outcome(name: string, args: Record<string, unknown>, result: ToolResult): string {
   if (!result.ok) {
@@ -154,7 +191,7 @@ export function outcome(name: string, args: Record<string, unknown>, result: Too
     case "juiced_load_model": return `${model} is loaded.`;
     case "juiced_unload_model": return `${model} is unloaded.`;
     case "juiced_set_model_settings": return `Saved settings for ${model}.`;
-    case "juiced_download_model": return "Download started. Library shows its progress.";
+    case "juiced_download_model": return "Download started. Models, Downloads shows its progress.";
     case "juiced_add_model": return "Model added.";
     case "juiced_install_engine": return "Engine install started.";
     default: return "Done.";

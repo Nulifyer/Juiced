@@ -78,13 +78,20 @@ export function api(request: APIRequestContext) {
     await expect.poll(async () => (await artifacts()).artifacts.some((item: any) => item.id === fixture.sha256), { timeout: 15000 }).toBe(true);
     await forgetCompleteJobs();
   }
-  return { acquire, json, post, catalog, model, policy, unload, remove, register, source, artifacts, removeArtifact, forgetCompleteJobs, createSet, removeSet, paused };
+  const barista = () => json<{ enabled: boolean; model: string | null; permission: "full" | "ask" | "read_only"; revision: number; tools: { name: string }[] }>("/v1/juiced/barista");
+  async function setBarista(enabled: boolean, model: string | null = hotModel, permission: "full" | "ask" | "read_only" = "full") {
+    const current = await barista();
+    if (current.enabled === enabled && (!enabled || (current.model === model && current.permission === permission))) return current;
+    return post<Awaited<ReturnType<typeof barista>>>("/v1/juiced/barista", { expected_revision: current.revision, enabled, model: model ?? current.model, permission });
+  }
+  return { acquire, json, post, catalog, model, policy, unload, remove, register, source, artifacts, removeArtifact, forgetCompleteJobs, createSet, removeSet, paused, barista, setBarista };
 }
 
 export const test = base.extend<{ baseline: void }>({
   baseline: [async ({ request }, use) => {
     const service = api(request);
     await service.paused(false);
+    await service.setBarista(false);
     await service.policy(modelId, "on-demand");
     await service.unload(modelId);
     await service.policy(speechModel, "on-demand");
