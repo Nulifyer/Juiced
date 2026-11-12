@@ -39,6 +39,10 @@ Request source: user, 2026-11-12. The homelab switched stack 83 to `rewrite-prev
 - From the HA container (official wyoming lib over `juiced-speech:10300`): info = openai 0.8.0, asr4all-l-gptq-Q8_0, Kokoro voices incl. af_heart; Wyoming TTS 0.56 s then STT returned "Turn on the kitchen lights." exactly.
 - Found and fixed for rc.4: float WAV rejected by FUTO over HTTP; three Disabled Qwen3.8-27B variants left out (saved 262144 context over budget); Library › Import could not read /data on a volume whose config predates the /data,/library default. Noise: 45 `user.*` rows from native state/options without definitions report `native_row_unrecognized` (native ignores them too).
 
+## Live verification (v1.0.0-rc.5, 2026-11-12 17:30 UTC)
+
+rc.1, rc.2 and rc.4 were stopped by release checks (fixture compile timeout and a set-publication race; runner Rust newer than the builder; 150-250 ms startup allowances on a 2-core runner) and never published. rc.5 deployed through Portainer: Hot models ready; three Qwen3.8-27B variants imported through `/juiced/import/native` with context 262144 halved to 131072 (catalog 43); Ornith ROCm chat 22.9 tok/s; Kokoro float WAV transcribed by FUTO over HTTP; z-image 768x768 8 steps cold in 64 s on sd.cpp Vulkan; Wyoming info/synthesize/transcribe from the HA container correct. Release page created; Homelab compose matches live (uncommitted, other session's untracked file).
+
 ## Next action
 
-Deploy rc.4, re-import the three Qwen3.8-27B variants through `/juiced/import/native`, re-check. Then rc.N for the engine-management round (version catalog as data, update checks, nightly, remove, custom sources) agreed with the user.
+Engine-management round agreed with the user: version catalog as data with tested pins per release, update checks against release sources, nightly opt-in, remove, admin-added release sources, custom OpenAI-compatible engine in the UI. Then a real NPU check (FastFlowLM, hybrid) on mage.
