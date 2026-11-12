@@ -128,12 +128,12 @@
     },
     {
       "path": "juiced/rewrite/service/src/config.rs",
-      "sha256": "a8662d3b5ddd23fbba637336ae82165a6be44a44d65243810fc52b43dbbcca7f",
+      "sha256": "66f6c580a8ef029c432a8b5e40e21efbfdf0db8b82f44eca1ee5f3e5aa5944a5",
       "hash_check": "snapshot_only"
     },
     {
       "path": "juiced/rewrite/service/src/http.rs",
-      "sha256": "c349b2a58cd16586fc8625d58467d3d4acb697d3c114986340c6841ed872bee6",
+      "sha256": "500622569f5e2cf8f276713bcd3bbf08ff1b2e535654323a29f04a228de78f68",
       "hash_check": "snapshot_only"
     },
     {

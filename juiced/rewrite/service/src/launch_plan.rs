@@ -128,6 +128,66 @@ pub(crate) fn phoneme_workspace(
     Ok(workspace)
 }
 
+/// Moonshine loads a directory by file name and writes `tokenizer.bin` beside its inputs,
+/// so a retained set is linked into the private workspace under its member names. An
+/// unmanaged registration uses the model file's own directory.
+fn moonshine_directory(
+    bindings: &VerifiedLaunchBindings,
+    companions: Vec<(&str, &Path)>,
+) -> Result<PathBuf, Error> {
+    let workspace = || {
+        Error::new(
+            "moonshine_workspace",
+            "The Moonshine worker needs its private model directory.",
+        )
+    };
+    let Some(primary) = bindings
+        .artifact
+        .as_ref()
+        .and_then(|artifact| artifact.primary_name())
+    else {
+        return bindings
+            .model
+            .path()
+            .parent()
+            .map(Path::to_owned)
+            .ok_or_else(workspace);
+    };
+    let root = bindings.workspace.as_ref().ok_or_else(workspace)?.path();
+    let directory = root.join("model");
+    std::fs::create_dir(&directory).map_err(|_| workspace())?;
+    for (name, path) in std::iter::once((primary, bindings.model.path())).chain(companions) {
+        let link = directory.join(name);
+        if link.parent() != Some(directory.as_path()) {
+            return Err(workspace());
+        }
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(path, &link).map_err(|_| workspace())?;
+        #[cfg(not(unix))]
+        std::fs::hard_link(path, &link).map_err(|_| workspace())?;
+    }
+    Ok(directory)
+}
+
+/// The WebSocket and TCP streaming listeners are manager-owned loopback ports outside the
+/// semantic launch identity, like the HTTP port.
+fn auxiliary_ports() -> Result<[u16; 2], Error> {
+    let unavailable = || {
+        Error::new(
+            "worker_port",
+            "A private worker streaming port could not be allocated.",
+        )
+    };
+    let first = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+        .map_err(|_| unavailable())?;
+    let second = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+        .map_err(|_| unavailable())?;
+    Ok([
+        first.local_addr().map_err(|_| unavailable())?.port(),
+        second.local_addr().map_err(|_| unavailable())?.port(),
+    ])
+}
+
 pub(crate) struct VerifiedLaunchBindings {
     pub model: VerifiedFile,
     pub executable: VerifiedFile,
@@ -357,6 +417,26 @@ impl LaunchPlan {
                     })
             })
             .collect::<Result<Vec<_>, _>>()?;
+        let directory = if profile.adapter == Provider::Moonshine {
+            Some(moonshine_directory(
+                &bindings,
+                companions
+                    .iter()
+                    .map(|(name, _, path)| (*name, *path))
+                    .collect(),
+            )?)
+        } else {
+            None
+        };
+        let model = match &directory {
+            Some(directory) => directory.as_os_str().to_str().ok_or_else(|| {
+                Error::new(
+                    "launch_path_encoding",
+                    "The selected worker needs a UTF-8 model directory.",
+                )
+            })?,
+            None => model,
+        };
         let mut args = template
             .resolve(crate::runtime_arguments::Bindings {
                 model,
@@ -395,6 +475,15 @@ impl LaunchPlan {
                 )
             })?;
             args.extend(["--public".to_owned(), public.to_owned()]);
+        }
+        if profile.adapter == Provider::Moonshine {
+            let [websocket, tcp] = auxiliary_ports()?;
+            args.extend([
+                "--ws-port".to_owned(),
+                websocket.to_string(),
+                "--tcp-port".to_owned(),
+                tcp.to_string(),
+            ]);
         }
         let args = args.into_boxed_slice();
         Ok(Self {

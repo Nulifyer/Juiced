@@ -1570,6 +1570,10 @@ impl RequestLease {
         self.upstream_timeout
     }
 
+    pub fn adapter(&self) -> crate::config::Provider {
+        self.worker.spec.execution_profile.adapter
+    }
+
     pub fn speech_dispatched(&mut self) {
         if let Some(speech) = self.speech.as_mut() {
             speech.dispatched = true;
@@ -3761,6 +3765,12 @@ impl Manager {
                     ),
                     crate::config::Provider::Kokoros => Some(
                         crate::profiles::phoneme_workspace(bundle.as_deref())
+                            .map_err(preparation_identity_error)?,
+                    ),
+                    crate::config::Provider::Moonshine => Some(
+                        tempfile::Builder::new()
+                            .prefix("juiced-moonshine-")
+                            .tempdir()
                             .map_err(preparation_identity_error)?,
                     ),
                     _ => None,

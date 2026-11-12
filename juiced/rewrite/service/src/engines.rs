@@ -3,6 +3,8 @@ pub mod catalog;
 pub mod download;
 pub mod models;
 #[cfg(test)]
+mod speech_engine_tests;
+#[cfg(test)]
 mod tests;
 
 use crate::hardware::{Availability, HostReport, Inventory};
@@ -101,11 +103,27 @@ fn selectable(inventory: &Inventory, engine: Engine, backend: &str) -> bool {
     inventory.backends.iter().any(|variant| {
         variant.recipe == engine.recipe()
             && variant.backend == backend
-            && variant.tier == "core"
+            && (variant.tier == "core"
+                || (variant.tier == "experimental" && engine.accepts_experimental()))
             && variant.backend != "system"
             && !variant.backend.starts_with("hybrid")
             && variant.state != Availability::Unavailable
     })
+}
+
+fn fallback_backend(inventory: &Inventory, engine: Engine) -> Option<String> {
+    if !engine.accepts_experimental() {
+        return None;
+    }
+    inventory
+        .backends
+        .iter()
+        .find(|variant| {
+            variant.recipe == engine.recipe()
+                && variant.state == Availability::Available
+                && selectable(inventory, engine, &variant.backend)
+        })
+        .map(|variant| variant.backend.clone())
 }
 
 /// Uses the host recommendation unless the operator named a backend; never substitutes a
@@ -117,14 +135,17 @@ pub fn choose(
     installed: &[Installed],
     requested: Option<&str>,
 ) -> Result<Choice, ChoiceError> {
+    let recommended = inventory
+        .recommendations
+        .get(engine.recipe())
+        .cloned()
+        .flatten();
     let backend = match requested {
         Some(backend) if selectable(inventory, engine, backend) => backend.to_owned(),
         Some(backend) => return Err(ChoiceError::NotSelectable(backend.to_owned())),
-        None => inventory
-            .recommendations
-            .get(engine.recipe())
-            .cloned()
-            .flatten()
+        None => recommended
+            .clone()
+            .or_else(|| fallback_backend(inventory, engine))
             .ok_or(ChoiceError::NoUsableBackend)?,
     };
     let build = catalog::resolve(engine, &backend, host).ok();
@@ -155,8 +176,10 @@ pub fn choose(
         .unwrap_or_default();
     let basis = if requested.is_some() {
         "was requested"
-    } else {
+    } else if recommended.is_some() {
         "is the recommended"
+    } else {
+        "is the only available"
     };
     Ok(Choice {
         reason: format!(
@@ -198,6 +221,7 @@ pub fn installable(
             seen.push((build.engine, build.backend));
         }
     }
+    seen.extend(catalog::UNPUBLISHED.iter().copied());
     seen.into_iter()
         .map(|(engine, backend)| {
             let resolved = catalog::resolve(engine, backend, host);
@@ -216,19 +240,21 @@ pub fn installable(
                     .map(|variant| variant.reasons.clone())
                     .unwrap_or_default(),
                 recommended: variant.is_some_and(|variant| variant.recommended),
-                installed_package: build.and_then(|build| {
-                    installed
-                        .iter()
-                        .rev()
-                        .find(|package| {
-                            package.installed
-                                && package.engine == Some(engine)
-                                && package.backend.as_deref() == Some(backend)
-                                && package.gpu_target.as_deref() == build.gpu_target
-                                && package.tag.as_deref() == Some(build.tag)
-                        })
-                        .map(|package| package.package.clone())
-                }),
+                installed_package: installed
+                    .iter()
+                    .rev()
+                    .find(|package| {
+                        package.installed
+                            && package.engine == Some(engine)
+                            && package.backend.as_deref() == Some(backend)
+                            && build.is_none_or(|build| {
+                                package.gpu_target.as_deref() == build.gpu_target
+                                    && package.tag.as_deref() == Some(build.tag)
+                            })
+                            && (build.is_some()
+                                || catalog::UNPUBLISHED.contains(&(engine, backend)))
+                    })
+                    .map(|package| package.package.clone()),
             }
         })
         .collect()

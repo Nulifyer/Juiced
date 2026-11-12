@@ -324,6 +324,16 @@ fn owned(
             ("--ip", true) => Some((2, "--ip")),
             _ => None,
         },
+        Provider::Moonshine => match flag {
+            "--model-path" => Some((0, "--model-path")),
+            "--port" => Some((1, "--port")),
+            _ => None,
+        },
+        Provider::Asr4all => match flag {
+            "-m" | "--model" => Some((0, "--model")),
+            "--port" => Some((1, "--port")),
+            _ => None,
+        },
         _ => match flag {
             "-m" | "--model" => Some((0, "--model")),
             "--port" => Some((1, "--port")),
@@ -336,11 +346,13 @@ fn owned(
     }
 }
 
-fn host_flag(adapter: Provider) -> &'static str {
+/// Moonshine and the FUTO adapter always bind loopback and reject a host argument.
+fn host_flag(adapter: Provider) -> Option<&'static str> {
     match adapter {
-        Provider::StableDiffusionCpp => "--listen-ip",
-        Provider::Kokoros => "--ip",
-        _ => "--host",
+        Provider::StableDiffusionCpp => Some("--listen-ip"),
+        Provider::Kokoros => Some("--ip"),
+        Provider::Moonshine | Provider::Asr4all => None,
+        _ => Some("--host"),
     }
 }
 
@@ -390,6 +402,14 @@ impl ArgumentTemplate {
         &self,
         companions: impl IntoIterator<Item = (&'a str, ArtifactRole)>,
     ) -> Result<(), Error> {
+        if self.adapter == Provider::Moonshine {
+            // Without a retained set, the worker reads the registered file's own directory.
+            let mut companions = companions.into_iter().peekable();
+            if companions.peek().is_none() {
+                return Ok(());
+            }
+            return verify_directory_members(companions);
+        }
         let mismatch = || {
             Error::new(
                 "artifact_set_binding_mismatch",
@@ -412,6 +432,39 @@ impl ArgumentTemplate {
         }
         Ok(())
     }
+}
+
+/// Moonshine reads its model directory by file name, so the launch links every retained
+/// member into a private directory; each must be a distinct file with a model-input role.
+pub fn verify_directory_members<'a>(
+    companions: impl IntoIterator<Item = (&'a str, ArtifactRole)>,
+) -> Result<(), Error> {
+    let mismatch = || {
+        Error::new(
+            "artifact_set_binding_mismatch",
+            "A Moonshine set needs distinct encoder, decoder, tokenizer, configuration or processor members, including streaming_config.json and tokenizer.json.",
+        )
+    };
+    let mut names = std::collections::BTreeMap::new();
+    for (name, role) in companions {
+        if !matches!(
+            role,
+            ArtifactRole::Encoder
+                | ArtifactRole::Decoder
+                | ArtifactRole::Tokenizer
+                | ArtifactRole::Configuration
+                | ArtifactRole::Processor
+        ) || names.insert(name, role).is_some()
+        {
+            return Err(mismatch());
+        }
+    }
+    if names.get(crate::engines::models::MOONSHINE_CONFIG) != Some(&ArtifactRole::Configuration)
+        || names.get(crate::engines::models::MOONSHINE_TOKENIZER) != Some(&ArtifactRole::Tokenizer)
+    {
+        return Err(mismatch());
+    }
+    Ok(())
 }
 
 fn validate_selected(
@@ -512,6 +565,15 @@ fn validate_selected(
                 Provider::WhisperCpp => whisper_arity(&flag),
                 Provider::StableDiffusionCpp => stable_diffusion_arity(&flag),
                 Provider::Kokoros if !server_phase => kokoros_arity(&flag),
+                Provider::Parakeet => {
+                    matches!(flag.as_str(), "--threads" | "--concurrency").then_some(1)
+                }
+                Provider::Moonshine => (flag == "--model-arch").then_some(1),
+                Provider::Asr4all => matches!(
+                    flag.as_str(),
+                    "-t" | "--threads" | "--futo-commit" | "--futo-right"
+                )
+                .then_some(1),
                 Provider::Kokoros | Provider::ExternalHttp => None,
             })
             .ok_or_else(|| {
@@ -556,8 +618,10 @@ fn validate_selected(
             "The Kokoros worker needs its server subcommand and one voices companion binding.",
         ));
     }
-    if !seen[2] {
-        result.extend([host_flag(adapter).into(), "127.0.0.1".into()]);
+    if !seen[2]
+        && let Some(flag) = host_flag(adapter)
+    {
+        result.extend([flag.into(), "127.0.0.1".into()]);
     }
     bounded(&result)?;
     Ok(ArgumentTemplate {
@@ -608,6 +672,9 @@ fn forbidden(flag: &str, adapter: Provider) -> bool {
                 | "--list-devices"
         ),
         Provider::Kokoros => matches!(flag, "--timestamps"),
+        Provider::Parakeet => matches!(flag, "--cache-dir" | "--sound-model"),
+        Provider::Moonshine => matches!(flag, "--ws-port" | "--tcp-port"),
+        Provider::Asr4all => false,
         Provider::WhisperCpp => matches!(
             flag,
             "-tr"

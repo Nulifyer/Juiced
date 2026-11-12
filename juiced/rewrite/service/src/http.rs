@@ -1321,12 +1321,14 @@ async fn transcription(
         .begin_queued(&request.model, Operation::Transcription, priority)
         .await?;
     let format = request.response_format;
+    let (path, form) = crate::speech::worker_request(lease.adapter(), request)
+        .inspect_err(|_| lease.finish("rejected", Some(400)))?;
     lease.speech_dispatched();
     let mut upstream = state
         .manager
         .client
-        .post(format!("{base}/inference"))
-        .multipart(request.form())
+        .post(format!("{base}{path}"))
+        .multipart(form)
         .timeout(state.manager.request_timeout)
         .send()
         .await

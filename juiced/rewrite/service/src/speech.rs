@@ -68,17 +68,22 @@ pub struct Transcription {
     pub prompt: String,
 }
 impl Transcription {
-    pub fn form(self) -> Form {
+    fn file_part(&self) -> Part {
         let mime = if is_wav(&self.file) {
             "audio/wav"
         } else {
             "application/octet-stream"
         };
-        let length = self.file.len() as u64;
-        let file = Part::stream_with_length(reqwest::Body::from(self.file), length)
-            .file_name(self.filename)
-            .mime_str(mime)
-            .expect("The adapter's constant MIME types are valid");
+        Part::stream_with_length(
+            reqwest::Body::from(self.file.clone()),
+            self.file.len() as u64,
+        )
+        .file_name(self.filename.clone())
+        .mime_str(mime)
+        .expect("The adapter's constant MIME types are valid")
+    }
+    pub fn form(self) -> Form {
+        let file = self.file_part();
         let temperature = if self.temperature == 0.0 {
             "0.0".to_owned()
         } else {
@@ -90,6 +95,51 @@ impl Transcription {
             .text("temperature", temperature)
             .text("language", self.language)
             .text("prompt", self.prompt)
+    }
+}
+
+/// The selected worker's request contract; whisper.cpp receives every OpenAI field.
+pub fn worker_request(
+    adapter: crate::config::Provider,
+    request: Transcription,
+) -> Result<(&'static str, Form), ApiError> {
+    use crate::config::Provider;
+    let unsupported = |message: &'static str| {
+        ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "unsupported_transcription_option",
+            message,
+        )
+    };
+    let format = request.response_format;
+    let path = adapter.transcription_path();
+    match adapter {
+        Provider::Parakeet | Provider::Asr4all if !is_wav(&request.file) => {
+            Err(unsupported("This speech engine accepts WAV uploads only."))
+        }
+        Provider::Parakeet if matches!(format, ResponseFormat::Srt | ResponseFormat::Vtt) => Err(
+            unsupported("parakeet.cpp supports response_format json, verbose_json or text."),
+        ),
+        Provider::Asr4all if !matches!(format, ResponseFormat::Json | ResponseFormat::Text) => Err(
+            unsupported("FUTO asr4all supports response_format json or text."),
+        ),
+        Provider::Asr4all if !matches!(request.language.as_str(), "auto" | "en") => {
+            Err(unsupported("FUTO asr4all transcribes English only."))
+        }
+        Provider::Asr4all if !request.prompt.is_empty() || request.temperature != 0.0 => Err(
+            unsupported("FUTO asr4all supports neither prompt biasing nor temperature sampling."),
+        ),
+        Provider::Parakeet | Provider::Moonshine | Provider::Asr4all => {
+            let language = (adapter == Provider::Asr4all).then(|| request.language.clone());
+            let mut form = Form::new()
+                .part("file", request.file_part())
+                .text("response_format", format.as_str());
+            if let Some(language) = language {
+                form = form.text("language", language);
+            }
+            Ok((path, form))
+        }
+        _ => Ok((path, request.form())),
     }
 }
 
@@ -653,6 +703,106 @@ mod tests {
                 ResponseFormat::Text
             )
             .is_err()
+        );
+    }
+    #[test]
+    fn speech_engines_receive_their_worker_contracts() {
+        use crate::config::Provider;
+        let wav = Bytes::from_static(b"RIFF\0\0\0\0WAVEdata");
+        let request =
+            |file: &Bytes, format, language: &str, prompt: &str, temperature| Transcription {
+                model: "speech".into(),
+                file: file.clone(),
+                filename: "audio.wav".into(),
+                response_format: format,
+                temperature,
+                language: language.into(),
+                prompt: prompt.into(),
+            };
+        let code = |adapter, request| {
+            worker_request(adapter, request)
+                .err()
+                .map(|error| error.code)
+        };
+        let opaque = Bytes::from_static(b"OggSaudio");
+        for (adapter, path) in [
+            (Provider::Parakeet, "/v1/audio/transcriptions"),
+            (Provider::Asr4all, "/inference"),
+            (Provider::Moonshine, "/inference"),
+            (Provider::WhisperCpp, "/inference"),
+        ] {
+            let (selected, _) = worker_request(
+                adapter,
+                request(&wav, ResponseFormat::Json, "auto", "", 0.0),
+            )
+            .unwrap();
+            assert_eq!(selected, path);
+        }
+        let rejected = Some("unsupported_transcription_option");
+        for adapter in [Provider::Parakeet, Provider::Asr4all] {
+            assert_eq!(
+                code(
+                    adapter,
+                    request(&opaque, ResponseFormat::Json, "auto", "", 0.0)
+                ),
+                rejected
+            );
+        }
+        assert_eq!(
+            code(
+                Provider::Moonshine,
+                request(&opaque, ResponseFormat::Srt, "auto", "", 0.0)
+            ),
+            None
+        );
+        assert_eq!(
+            code(
+                Provider::Parakeet,
+                request(&wav, ResponseFormat::Vtt, "auto", "", 0.0)
+            ),
+            rejected
+        );
+        assert_eq!(
+            code(
+                Provider::Parakeet,
+                request(&wav, ResponseFormat::VerboseJson, "de", "x", 0.4)
+            ),
+            None
+        );
+        assert_eq!(
+            code(
+                Provider::Asr4all,
+                request(&wav, ResponseFormat::VerboseJson, "auto", "", 0.0)
+            ),
+            rejected
+        );
+        assert_eq!(
+            code(
+                Provider::Asr4all,
+                request(&wav, ResponseFormat::Text, "de", "", 0.0)
+            ),
+            rejected
+        );
+        assert_eq!(
+            code(
+                Provider::Asr4all,
+                request(&wav, ResponseFormat::Text, "en", "bias", 0.0)
+            ),
+            rejected
+        );
+        assert_eq!(
+            code(
+                Provider::Asr4all,
+                request(&wav, ResponseFormat::Text, "en", "", 0.5)
+            ),
+            rejected
+        );
+        assert_eq!(
+            code(
+                Provider::Asr4all,
+                request(&wav, ResponseFormat::Text, "en", "", 0.0)
+            ),
+            None
         );
     }
 }

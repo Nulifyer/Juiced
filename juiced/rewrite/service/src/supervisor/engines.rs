@@ -272,9 +272,12 @@ impl Manager {
         let engine = Engine::parse(&request.engine).ok_or_else(|| {
             invalid(
                 "unknown_engine",
-                "Choose engine llama.cpp, whisper.cpp, sd.cpp or kokoros.",
+                "Choose engine llama.cpp, whisper.cpp, sd.cpp, kokoros, parakeet.cpp, moonshine or futo-transcribe.cpp.",
             )
         })?;
+        if catalog::UNPUBLISHED.contains(&(engine, request.backend.as_str())) {
+            return Err(not_published());
+        }
         if !catalog::BUILDS
             .iter()
             .any(|build| build.engine == engine && build.backend == request.backend)
@@ -299,7 +302,7 @@ impl Manager {
                 match reason {
                     catalog::Unresolved::HostUnsupported => "No build of this engine backend is published for this operating system and CPU architecture.",
                     catalog::Unresolved::NoMatchingGpu => "No build of this engine backend matches a detected GPU target.",
-                    catalog::Unresolved::BackendUnknown => "This engine has no installable build for that backend.",
+                    catalog::Unresolved::BackendUnknown | catalog::Unresolved::NotPublished => "This engine has no installable build for that backend.",
                 },
             )
         })?;
@@ -501,6 +504,9 @@ impl Manager {
                 (Engine::Kokoros, _) => {
                     vec!["Apache-2.0".into(), "GPL-3.0-or-later".into()]
                 }
+                (Engine::Moonshine, _) => {
+                    vec!["BSD-3-Clause".into(), "MIT".into(), "PSF-2.0".into()]
+                }
                 (_, "cuda") => vec![
                     "LicenseRef-NVIDIA-CUDA-Redistributable".into(),
                     "MIT".into(),
@@ -615,6 +621,21 @@ impl Manager {
                     role,
                 });
             }
+            let format = match format {
+                models::ModelFormat::MoonshineOrt { .. } => models::ModelFormat::MoonshineOrt {
+                    model_arch: lease
+                        .companions()
+                        .into_iter()
+                        .find(|(name, role, _)| {
+                            *name == models::MOONSHINE_CONFIG
+                                && *role == crate::artifacts::ArtifactRole::Configuration
+                        })
+                        .map(|(_, _, path)| models::moonshine_arch(path))
+                        .transpose()
+                        .map_err(format_error)?,
+                },
+                other => other,
+            };
             Ok::<_, ApiError>((format, total, path, companions))
         })
         .await
@@ -632,9 +653,8 @@ impl Manager {
             })?;
         let id = match request.id {
             Some(id) => id,
-            None => name
-                .as_deref()
-                .and_then(models::default_id)
+            None => models::native_default_id(&format)
+                .or_else(|| name.as_deref().and_then(models::default_id))
                 .ok_or_else(|| {
                     invalid(
                         "model_id_required",
@@ -752,7 +772,7 @@ fn format_error(error: models::FormatError) -> ApiError {
         models::FormatError::Unsupported => ApiError::new(
             StatusCode::UNSUPPORTED_MEDIA_TYPE,
             "unsupported_model_format",
-            "Only GGUF (llama.cpp or sd.cpp), whisper.cpp ggml, diffusion safetensors and Kokoro ONNX weights can be added automatically.",
+            "Only GGUF (llama.cpp, sd.cpp, parakeet.cpp or FUTO asr4all), whisper.cpp ggml, diffusion safetensors, Kokoro ONNX and Moonshine ORT weights can be added automatically.",
         ),
         models::FormatError::Invalid(code) => ApiError::new(
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -795,6 +815,14 @@ fn companion_set(
         }
     }
     Ok(found)
+}
+
+fn not_published() -> ApiError {
+    ApiError::new(
+        StatusCode::CONFLICT,
+        "engine_not_published",
+        "This engine has no published release build. Import a locally built runtime package with POST /juiced/runtime-packages/import.",
+    )
 }
 
 fn interrupted() -> ApiError {
