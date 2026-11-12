@@ -118,7 +118,7 @@ pub fn estimate(format: &ModelFormat, file_bytes: u64, context: Option<u64>) -> 
     }
 }
 
-fn kv_bytes(shape: &ModelShape, context: u64) -> Option<u64> {
+pub fn kv_bytes(shape: &ModelShape, context: u64) -> Option<u64> {
     let layers = shape.block_count?;
     let heads = shape.head_count;
     let width = shape

@@ -167,6 +167,17 @@ pub struct SnapshotMetadata {
     pub cleanup_eligible: bool,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct SessionRow {
+    pub id: String,
+    pub revision: u64,
+    pub state: SnapshotState,
+    pub charged: u64,
+    pub identity: SnapshotIdentity,
+    pub busy: bool,
+    pub modified_ms: Option<u64>,
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct SnapshotInspection {
     pub snapshot: SnapshotMetadata,
@@ -723,6 +734,11 @@ impl CacheStore {
         sync.sync_all()?;
         let (bytes, sha256) = hash_file(&pending.path, reserved, &mut budget)
             .map_err(|error| writer::controlled_error(error, &budget, control))?;
+        if let Ok(metadata) = validated.metadata()
+            && metadata.len() == bytes
+        {
+            crate::identity::remember_digest(&metadata, &sha256);
+        }
         if bytes == 0 {
             return Err(CacheError::Corrupt("An empty snapshot cannot be published"));
         }
@@ -823,9 +839,26 @@ impl CacheStore {
         };
         self.verify_scope()?;
         let mut budget = writer::hash_budget(&self.limits, control);
-        let (bytes, sha256) =
-            hash_file(&held.path, self.limits.maximum_snapshot_bytes, &mut budget)
-                .map_err(|error| writer::controlled_error(error, &budget, control))?;
+        let observed = fs::symlink_metadata(&held.path)
+            .ok()
+            .filter(|metadata| metadata.file_type().is_file())
+            .and_then(|metadata| {
+                Some((metadata.len(), crate::identity::cached_digest(&metadata)?))
+            });
+        let (bytes, sha256) = match observed {
+            Some(observed) => observed,
+            None => {
+                let (bytes, sha256) =
+                    hash_file(&held.path, self.limits.maximum_snapshot_bytes, &mut budget)
+                        .map_err(|error| writer::controlled_error(error, &budget, control))?;
+                if let Ok(metadata) = fs::symlink_metadata(&held.path)
+                    && metadata.len() == bytes
+                {
+                    crate::identity::remember_digest(&metadata, &sha256);
+                }
+                (bytes, sha256)
+            }
+        };
         if held.metadata.bytes != Some(bytes) || held.metadata.sha256.as_ref() != Some(&sha256) {
             return Err(CacheError::Corrupt("Snapshot size or checksum changed"));
         }
@@ -1102,6 +1135,55 @@ impl CacheStore {
         }
         self.lease.verify()?;
         Ok(inspection)
+    }
+
+    pub(crate) fn session_rows(
+        &self,
+        protocol_prefix: &str,
+        filter: impl Fn(&SnapshotIdentity) -> bool,
+        with_modified: bool,
+    ) -> Result<Vec<SessionRow>, CacheError> {
+        self.lease.verify()?;
+        let mut rows = {
+            let runtime = self
+                .runtime
+                .lock()
+                .map_err(|_| CacheError::Corrupt("Cache ownership state is unavailable"))?;
+            runtime
+                .manifest
+                .entries
+                .iter()
+                .filter(|(_, record)| {
+                    record.identity.protocol.starts_with(protocol_prefix)
+                        && filter(&record.identity)
+                })
+                .map(|(id, record)| SessionRow {
+                    id: id.clone(),
+                    revision: record.revision,
+                    state: effective_state(id, record, &runtime),
+                    charged: record_charge(record, 0),
+                    identity: record.identity.clone(),
+                    busy: runtime.writing(id)
+                        || runtime.reader_count(id) > 0
+                        || runtime
+                            .manifest
+                            .reader_intents
+                            .values()
+                            .any(|reader| reader.snapshot == *id),
+                    modified_ms: None,
+                })
+                .collect::<Vec<_>>()
+        };
+        if with_modified {
+            for row in &mut rows {
+                row.modified_ms = fs::symlink_metadata(self.path(&row.id))
+                    .ok()
+                    .and_then(|metadata| metadata.modified().ok())
+                    .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|elapsed| elapsed.as_millis().min(u64::MAX as u128) as u64);
+            }
+        }
+        Ok(rows)
     }
 
     fn path(&self, id: &str) -> PathBuf {

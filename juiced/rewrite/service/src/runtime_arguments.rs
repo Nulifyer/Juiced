@@ -837,7 +837,7 @@ fn fixture_arity(flag: &str) -> Option<u8> {
     #[cfg(feature = "test-fixture")]
     {
         match flag {
-            "--finite-stream" | "--report-timings" => Some(0),
+            "--finite-stream" | "--report-timings" | "--emulate-prompt-cache" => Some(0),
             "--parallel"
             | "-np"
             | "--ctx-size"

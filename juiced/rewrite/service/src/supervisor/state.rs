@@ -6,14 +6,17 @@ use tokio::sync::OwnedMutexGuard;
 pub(super) struct RetainedStates(Mutex<Option<RetainedState>>);
 
 struct StateClaims {
-    physical: PhysicalClaims,
+    physical: Option<PhysicalClaims>,
     uncertain: bool,
 }
 
 impl Drop for StateClaims {
     fn drop(&mut self) {
         if self.uncertain
-            && let Some(worker) = self.physical.worker.upgrade()
+            && let Some(worker) = self
+                .physical
+                .as_ref()
+                .and_then(|physical| physical.worker.upgrade())
         {
             worker
                 .uncertain_state_operations
@@ -105,7 +108,14 @@ impl Drop for CacheActivity {
     }
 }
 
-struct Cancellation(Arc<AtomicBool>);
+pub(super) struct Cancellation(Arc<AtomicBool>);
+
+pub(super) type ClaimCell = Arc<Mutex<Option<PhysicalClaims>>>;
+
+enum PhysicalSlot {
+    Lent,
+    Owned(crate::admission::Slot),
+}
 
 impl Drop for Cancellation {
     fn drop(&mut self) {
@@ -113,7 +123,7 @@ impl Drop for Cancellation {
     }
 }
 
-struct StateOperation {
+pub(super) struct StateOperation {
     worker: Arc<Worker>,
     file: Option<FileOwner>,
     claims: Option<StateClaims>,
@@ -121,10 +131,19 @@ struct StateOperation {
     exchange_pending: bool,
     control: OperationControl,
     _activity: Arc<CacheActivity>,
+    lender: Option<ClaimCell>,
     guard: OwnedMutexGuard<WorkerState>,
 }
 
 impl StateOperation {
+    pub(super) fn generation(&self) -> u64 {
+        self.run().child.generation()
+    }
+
+    pub(super) fn fingerprint(&self) -> Arc<str> {
+        self.run().fingerprint.clone()
+    }
+
     fn capture_actor(&mut self) -> Result<WriterRequest, ApiError> {
         let run = self.guard.running.as_mut().expect("owned generation");
         let pid = run.child.id().ok_or_else(|| {
@@ -353,6 +372,14 @@ impl StateOperation {
 impl Drop for StateOperation {
     fn drop(&mut self) {
         if !self.exchange_pending {
+            if let Some(cell) = &self.lender
+                && let Some(physical) = self
+                    .claims
+                    .as_mut()
+                    .and_then(|claims| claims.physical.take())
+            {
+                *cell.lock().unwrap_or_else(|error| error.into_inner()) = Some(physical);
+            }
             return;
         }
         if let Some(mut claims) = self.claims.take() {
@@ -459,13 +486,13 @@ fn acknowledgement(
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum StateAction {
+pub(super) enum StateAction {
     Inspect,
     Save,
     Restore,
 }
 
-struct StateBudget {
+pub(super) struct StateBudget {
     bytes: Option<u64>,
     priority: crate::admission::Priority,
     deadline: Instant,
@@ -549,6 +576,8 @@ impl Manager {
                         StateAction::Inspect,
                         self.state_budget(&worker)?,
                         activity.clone(),
+                        None,
+                        false,
                     )
                     .await?;
                 let (mut owner, declared) = owner
@@ -635,7 +664,7 @@ impl Manager {
         })?
     }
 
-    fn state_budget(&self, worker: &Worker) -> Result<StateBudget, ApiError> {
+    pub(super) fn state_budget(&self, worker: &Worker) -> Result<StateBudget, ApiError> {
         let profile = self.protected_profile(worker)?;
         let (bytes, priority, timeout) = if let Some(profile) = profile {
             let bytes = profile.state_bytes.ok_or_else(|| {
@@ -665,7 +694,8 @@ impl Manager {
         })
     }
 
-    async fn state_operation(
+    #[allow(clippy::too_many_arguments)]
+    pub(super) async fn state_operation(
         &self,
         worker: Arc<Worker>,
         slot: u32,
@@ -673,8 +703,12 @@ impl Manager {
         action: StateAction,
         budget: StateBudget,
         activity: Arc<CacheActivity>,
+        lender: Option<ClaimCell>,
+        automatic: bool,
     ) -> Result<(StateOperation, Cancellation), ApiError> {
-        if action != StateAction::Inspect {
+        if automatic {
+            Self::automatic_eligible(&worker, slot)?;
+        } else if action != StateAction::Inspect {
             Self::cache_eligible(&worker, slot, session)?;
         }
         let StateBudget {
@@ -685,7 +719,7 @@ impl Manager {
         let cancelled = Arc::new(AtomicBool::new(false));
         let cancellation = Cancellation(cancelled.clone());
         let control = OperationControl::new(deadline, cancelled);
-        if action != StateAction::Inspect {
+        if action != StateAction::Inspect && !automatic {
             let config = tokio::time::timeout_at(deadline.into(), self.config.lock())
                 .await
                 .map_err(|_| state_deadline_error())?;
@@ -712,25 +746,28 @@ impl Manager {
         })
         .await
         .map_err(|_| state_observation_error())??;
-        let physical_slot = if let Some(bytes) = bytes {
+        let lent_claims = lender.is_some();
+        let physical_slot = if lent_claims {
+            PhysicalSlot::Lent
+        } else if let Some(bytes) = bytes {
             self.host_memory.refresh(&self.admission).await?;
             let acquire = worker.slots.acquire_with_memory(priority, bytes);
             tokio::pin!(acquire);
             loop {
                 tokio::select! {
-                    slot = &mut acquire => break slot.map_err(ApiError::from)?,
+                    slot = &mut acquire => break PhysicalSlot::Owned(slot.map_err(ApiError::from)?),
                     _ = tokio::time::sleep_until(deadline.into()) => return Err(state_deadline_error()),
                     _ = tokio::time::sleep(Duration::from_millis(250)) => self.host_memory.refresh(&self.admission).await?,
                 }
             }
         } else {
-            worker.slots.try_acquire(priority).map_err(|_| {
+            PhysicalSlot::Owned(worker.slots.try_acquire(priority).map_err(|_| {
                 ApiError::new(
                     StatusCode::CONFLICT,
                     "worker_busy",
                     "Wait for active requests before a slot state operation.",
                 )
-            })?
+            })?)
         };
         let cache = self.cache.clone();
         let model = worker.record_model.clone();
@@ -747,7 +784,7 @@ impl Manager {
         })
         .await
         .map_err(|_| state_observation_error())??;
-        if action == StateAction::Restore {
+        if action == StateAction::Restore && !automatic {
             tokio::time::timeout_at(deadline.into(), self.load(&worker.spec.id))
                 .await
                 .map_err(|_| state_deadline_error())??;
@@ -797,25 +834,46 @@ impl Manager {
                 )
             })?
             .clone();
-        let power = self.power.activity(deadline).await;
         control.check().map_err(cache_error)?;
-        if self.shutting_down.load(Ordering::Acquire) || self.paused.load(Ordering::Acquire) {
+        if self.shutting_down.load(Ordering::Acquire)
+            || (self.paused.load(Ordering::Acquire) && !lent_claims)
+        {
             return Err(ApiError::new(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "admission_closed",
                 "Snapshot admission is closed.",
             ));
         }
-        worker.active.fetch_add(1, Ordering::AcqRel);
+        let physical = match physical_slot {
+            PhysicalSlot::Lent => lender
+                .as_ref()
+                .and_then(|cell| {
+                    cell.lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .take()
+                })
+                .ok_or_else(|| {
+                    ApiError::new(
+                        StatusCode::CONFLICT,
+                        "worker_busy",
+                        "The request slot was released before its state operation.",
+                    )
+                })?,
+            PhysicalSlot::Owned(slot) => {
+                let power = self.power.activity(deadline).await;
+                worker.active.fetch_add(1, Ordering::AcqRel);
+                PhysicalClaims {
+                    worker: Arc::downgrade(&worker),
+                    _slot: slot,
+                    _power: power,
+                    uncertain: false,
+                }
+            }
+        };
         Ok((
             StateOperation {
                 claims: Some(StateClaims {
-                    physical: PhysicalClaims {
-                        worker: Arc::downgrade(&worker),
-                        _slot: physical_slot,
-                        _power: power,
-                        uncertain: false,
-                    },
+                    physical: Some(physical),
                     uncertain: false,
                 }),
                 worker,
@@ -825,6 +883,7 @@ impl Manager {
                 exchange_pending: false,
                 control,
                 _activity: activity,
+                lender,
             },
             cancellation,
         ))
@@ -837,6 +896,7 @@ impl Manager {
     ) -> Result<CacheReply<serde_json::Value>, ApiError> {
         let cache = self.cache_store()?;
         let worker = self.worker(&request.model)?;
+        self.refuse_session_owned(&worker)?;
         let budget = self.state_budget(&worker)?;
         let (owner, _cancellation) = self
             .state_operation(
@@ -847,6 +907,8 @@ impl Manager {
                 budget,
                 self.cache_activity(true, crate::cache::memory::Work::Bounded)
                     .await?,
+                None,
+                false,
             )
             .await?;
         let identity = snapshot_identity(
@@ -869,15 +931,50 @@ impl Manager {
                 "The idle slot does not belong to this completed credential/session context.",
             ));
         }
+        let (owner, metadata, acknowledgement) = self
+            .save_slot(
+                owner,
+                cache,
+                identity,
+                request.slot,
+                Some(request.expected_generation),
+                request.maximum_bytes,
+                Vec::new(),
+            )
+            .await?;
+        Ok(CacheReply::new(
+            serde_json::json!({"snapshot":metadata,"worker_generation_qualified":false,"saved":true,"engine":acknowledgement}),
+            owner._activity.clone(),
+        ))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) async fn save_slot(
+        &self,
+        owner: StateOperation,
+        cache: Arc<CacheStore>,
+        identity: SnapshotIdentity,
+        slot: u32,
+        expected_generation: Option<u64>,
+        maximum_bytes: u64,
+        evictions: Vec<(String, SnapshotIdentity, u64)>,
+    ) -> Result<
+        (
+            StateOperation,
+            crate::cache::SnapshotMetadata,
+            serde_json::Value,
+        ),
+        ApiError,
+    > {
         let roots = self.live_roots.clone();
         let (owner, (cache, identity)) = owner
             .blocking(move |_| {
+                for (id, identity, revision) in &evictions {
+                    let _ = cache.forget(id, identity, *revision);
+                }
+                let generation = expected_generation.unwrap_or_else(|| cache.generation());
                 cache
-                    .check_reservation(
-                        &identity,
-                        request.expected_generation,
-                        request.maximum_bytes,
-                    )
+                    .check_reservation(&identity, generation, maximum_bytes)
                     .map_err(cache_error)?;
                 if let Some(roots) = &roots {
                     roots.verify().map_err(|_| storage_root_error())?;
@@ -892,21 +989,31 @@ impl Manager {
         let (owner, writer) = owner
             .blocking(move |owner| {
                 let writer = owner.capture_actor()?;
-                let pending = cache
-                    .begin_bound(
-                        identity,
-                        request.expected_generation,
-                        request.maximum_bytes,
+                let mut attempts = 0;
+                let pending = loop {
+                    let generation = expected_generation.unwrap_or_else(|| cache.generation());
+                    match cache.begin_bound(
+                        identity.clone(),
+                        generation,
+                        maximum_bytes,
                         writer.clone(),
                         &owner.control,
-                    )
-                    .map_err(cache_error)?;
+                    ) {
+                        Err(CacheError::Conflict)
+                            if expected_generation.is_none() && attempts < 4 =>
+                        {
+                            attempts += 1;
+                        }
+                        result => break result.map_err(cache_error)?,
+                    }
+                };
                 owner.file = Some(FileOwner::Pending(pending));
                 Ok((cache, writer))
             })
             .await?;
         let (cache, writer) = writer;
         let roots = self.live_roots.clone();
+        let validator = cache.clone();
         let (mut owner, filename) = owner
             .blocking(move |owner| {
                 if let Some(roots) = &roots {
@@ -916,7 +1023,7 @@ impl Manager {
                 let Some(FileOwner::Pending(pending)) = &owner.file else {
                     unreachable!()
                 };
-                cache
+                validator
                     .validate_writer(pending, &writer, &owner.control)
                     .map_err(cache_error)?;
                 Ok(pending
@@ -932,7 +1039,7 @@ impl Manager {
             .exchange(
                 &self.client,
                 self.client
-                    .post(format!("{base}/slots/{}?action=save", request.slot))
+                    .post(format!("{base}/slots/{slot}?action=save"))
                     .json(&serde_json::json!({"filename":filename})),
             )
             .await?;
@@ -943,11 +1050,9 @@ impl Manager {
                 "The engine rejected the slot save. Its staging reservation remains retained.",
             ));
         }
-        let acknowledgement =
-            acknowledgement(&bytes, &filename, request.slot, "n_saved", "n_written")?;
+        let acknowledgement = acknowledgement(&bytes, &filename, slot, "n_saved", "n_written")?;
         owner = owner.verify().await?;
-        let cache = self.cache_store()?;
-        let (_owner, metadata) = owner
+        let (owner, metadata) = owner
             .blocking(move |owner| {
                 let Some(FileOwner::Pending(pending)) = &owner.file else {
                     unreachable!()
@@ -957,10 +1062,7 @@ impl Manager {
                     .map_err(cache_error)
             })
             .await?;
-        Ok(CacheReply::new(
-            serde_json::json!({"snapshot":metadata,"worker_generation_qualified":false,"saved":true,"engine":acknowledgement}),
-            _owner._activity.clone(),
-        ))
+        Ok((owner, metadata, acknowledgement))
     }
 
     pub async fn restore_snapshot(
@@ -972,6 +1074,7 @@ impl Manager {
         let cache = self.cache_store()?;
         let worker = self.worker(&request.model)?;
         Self::cache_eligible(&worker, request.slot, &request.session)?;
+        self.refuse_session_owned(&worker)?;
         let budget = self.state_budget(&worker)?;
         let observer = cache.clone();
         let id = request.snapshot.clone();
@@ -1014,6 +1117,8 @@ impl Manager {
                 StateAction::Restore,
                 budget,
                 activity,
+                None,
+                false,
             )
             .await?;
         let identity = snapshot_identity(
@@ -1022,6 +1127,39 @@ impl Manager {
             &request.session,
             "openai.completions",
         );
+        let (owner, metadata, acknowledgement, settlement) = self
+            .restore_slot(
+                owner,
+                cache,
+                request.snapshot,
+                identity,
+                request.slot,
+                false,
+            )
+            .await?;
+        Ok(CacheReply::new(
+            serde_json::json!({"restored":true,"snapshot":metadata,"qualification":"unqualified","model":request.model,"engine":acknowledgement,"retained_reader_cleanup_pending":settlement.journal_cleanup_pending}),
+            owner._activity.clone(),
+        ))
+    }
+
+    pub(super) async fn restore_slot(
+        &self,
+        owner: StateOperation,
+        cache: Arc<CacheStore>,
+        snapshot: String,
+        identity: SnapshotIdentity,
+        slot: u32,
+        automatic: bool,
+    ) -> Result<
+        (
+            StateOperation,
+            crate::cache::SnapshotMetadata,
+            serde_json::Value,
+            crate::cache::ReaderSettlement,
+        ),
+        ApiError,
+    > {
         let expected = identity.clone();
         let roots = self.live_roots.clone();
         let mut owner = owner
@@ -1040,7 +1178,7 @@ impl Manager {
         let (owner, (filename, writer, cache)) = owner
             .blocking(move |owner| {
                 let lease = cache
-                    .restore_controlled(&request.snapshot, &expected, &owner.control)
+                    .restore_controlled(&snapshot, &expected, &owner.control)
                     .map_err(cache_error)?;
                 let writer = owner.capture_actor()?;
                 let lease = cache
@@ -1083,19 +1221,28 @@ impl Manager {
             .exchange(
                 &self.client,
                 self.client
-                    .post(format!("{base}/slots/{}?action=restore", request.slot))
+                    .post(format!("{base}/slots/{slot}?action=restore"))
                     .json(&serde_json::json!({"filename":filename})),
             )
             .await?;
         if !status.is_success() {
+            if automatic {
+                let _ = owner
+                    .blocking(move |owner| {
+                        if let Some(FileOwner::Reader(lease)) = &owner.file {
+                            let _ = cache.settle_reader(lease, &owner.control);
+                        }
+                        Ok(())
+                    })
+                    .await;
+            }
             return Err(ApiError::new(
                 StatusCode::BAD_GATEWAY,
                 "cache_restore_rejected",
                 "The engine rejected this snapshot. Rebuild the context cold.",
             ));
         }
-        let acknowledgement =
-            acknowledgement(&bytes, &filename, request.slot, "n_restored", "n_read")?;
+        let acknowledgement = acknowledgement(&bytes, &filename, slot, "n_restored", "n_read")?;
         let (owner, (identity, metadata, settlement)) = owner
             .blocking(move |owner| {
                 let Some(FileOwner::Reader(lease)) = &owner.file else {
@@ -1115,15 +1262,14 @@ impl Manager {
             })
             .await?;
         let owner = owner.verify().await?;
-        *owner
-            .worker
-            .cache_identity
-            .lock()
-            .unwrap_or_else(|error| error.into_inner()) = Some(identity);
-        Ok(CacheReply::new(
-            serde_json::json!({"restored":true,"snapshot":metadata,"qualification":"unqualified","model":request.model,"engine":acknowledgement,"retained_reader_cleanup_pending":settlement.journal_cleanup_pending}),
-            owner._activity.clone(),
-        ))
+        if !automatic {
+            *owner
+                .worker
+                .cache_identity
+                .lock()
+                .unwrap_or_else(|error| error.into_inner()) = Some(identity);
+        }
+        Ok((owner, metadata, acknowledgement, settlement))
     }
 }
 
@@ -1145,7 +1291,7 @@ mod tests {
                 worker,
                 guard,
                 claims: Some(StateClaims {
-                    physical,
+                    physical: Some(physical),
                     uncertain: false,
                 }),
                 generation: generation.clone(),
@@ -1153,6 +1299,7 @@ mod tests {
                 exchange_pending: false,
                 control: OperationControl::new(Instant::now() + Duration::from_secs(10), cancelled),
                 _activity: activity,
+                lender: None,
             },
             cancellation,
             generation,

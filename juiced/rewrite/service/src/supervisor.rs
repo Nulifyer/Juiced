@@ -33,8 +33,10 @@ mod host;
 mod native;
 mod physical;
 mod publication;
+mod sessions;
 mod state;
 pub use cache_reply::CacheReply;
+pub use sessions::{SessionAction, SessionRecord};
 
 fn unix_time_ms() -> u64 {
     std::time::SystemTime::now()
@@ -1378,6 +1380,7 @@ struct Worker {
     attempt: Mutex<Weak<PreparationFlag>>,
     observation: Mutex<Option<ModelView>>,
     cache_identity: Mutex<Option<SnapshotIdentity>>,
+    sessions: sessions::SlotTable,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1433,6 +1436,8 @@ pub struct RequestRecord {
     pub queue_wait_ms: u64,
     #[serde(flatten)]
     pub usage: crate::engine_usage::Observation,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_cache: Option<SessionRecord>,
 }
 
 #[derive(Clone, Serialize)]
@@ -1453,6 +1458,8 @@ pub struct RequestLease {
     record: Option<RequestRecord>,
     cache_identity: Option<SnapshotIdentity>,
     fingerprint: Arc<str>,
+    generation: u64,
+    session: Option<sessions::Ticket>,
     _physical: Option<PhysicalClaims>,
     speech: Option<SpeechTransfer>,
     protected: Option<physical::ProtectedTransfer>,
@@ -1594,11 +1601,15 @@ impl Drop for RequestLease {
         let Some(mut record) = self.record.take() else {
             return;
         };
-        if record.outcome == "completed"
+        let completed = record.outcome == "completed"
             && record
                 .status
-                .is_some_and(|status| (200..300).contains(&status))
-        {
+                .is_some_and(|status| (200..300).contains(&status));
+        if let Some(ticket) = self.session.take() {
+            record.session_cache = Some(ticket.record);
+            ticket.settle(&self.manager, &self.worker, completed, &record.usage);
+        }
+        if completed {
             *self
                 .worker
                 .cache_identity
@@ -1825,6 +1836,9 @@ pub struct Manager {
     cache: Option<Arc<CacheStore>>,
     cache_memory_unavailable: Option<&'static str>,
     cache_operations: Arc<state::Operations>,
+    session_settings: RwLock<Arc<crate::sessions::Settings>>,
+    session_used: Mutex<std::collections::HashMap<String, u64>>,
+    session_saves: Arc<tokio::sync::Semaphore>,
     artifacts: Option<Arc<crate::artifacts::ArtifactStore>>,
     cache_directory: PathBuf,
     pub client: reqwest::Client,
@@ -2119,6 +2133,9 @@ impl Manager {
             startup_timeout: Duration::from_millis(config.startup_timeout_ms),
             startup_wait: Duration::from_millis(config.admission.startup.wait_ms),
             request_timeout: Duration::from_millis(config.request_timeout_ms),
+            session_settings: RwLock::new(Arc::new(config.session_cache.clone())),
+            session_used: Mutex::new(std::collections::HashMap::new()),
+            session_saves: Arc::new(tokio::sync::Semaphore::new(2)),
             config: Arc::new(AsyncMutex::new(config)),
             publications: publication::Publications::new(),
             config_path,
@@ -2229,6 +2246,7 @@ impl Manager {
             running: None,
             error: None,
         };
+        let max_inflight = spec.max_inflight;
         let worker = Arc::new(Worker {
             processes: processes.clone(),
             record_model: Arc::from(spec.id.as_str()),
@@ -2256,6 +2274,7 @@ impl Manager {
             attempt: Mutex::new(Weak::new()),
             observation: Mutex::new(None),
             cache_identity: Mutex::new(None),
+            sessions: sessions::SlotTable::new(max_inflight),
         });
         let state = worker.state.try_lock().expect("new worker is unlocked");
         Self::publish(&worker, &state);
@@ -2908,7 +2927,8 @@ impl Manager {
             .resolved_arguments()
             .map_err(|error| ApiError::new(StatusCode::CONFLICT, error.code, error.message))?
             .0
-            .has_cache_binding();
+            .has_cache_binding()
+            || worker.spec.execution_profile.adapter == crate::config::Provider::LlamaCpp;
         if worker.spec.max_inflight != 1 || slot != 0 || !binding {
             return Err(ApiError::new(
                 StatusCode::NOT_IMPLEMENTED,
@@ -4180,6 +4200,7 @@ impl Manager {
 
     pub async fn unload(&self, id: &str) -> Result<ModelView, ApiError> {
         let worker = self.worker(id)?;
+        self.flush_sessions(&worker).await;
         let mut state = worker.state.lock().await;
         let prior_uncertain = worker.uncertain_requests.load(Ordering::Acquire)
             + worker.uncertain_state_operations.load(Ordering::Acquire);
@@ -4371,6 +4392,12 @@ impl Manager {
             .expect("loaded worker")
             .fingerprint
             .clone();
+        let generation = state
+            .running
+            .as_ref()
+            .expect("loaded worker")
+            .child
+            .generation();
         *worker
             .cache_identity
             .lock()
@@ -4445,6 +4472,8 @@ impl Manager {
                 protected,
                 upstream_timeout,
                 fingerprint,
+                generation,
+                session: None,
                 cache_identity: None,
                 record: Some(RequestRecord {
                     id: self.next_request.fetch_add(1, Ordering::Relaxed),
@@ -4455,6 +4484,7 @@ impl Manager {
                     elapsed_ms: 0,
                     queue_wait_ms,
                     usage: Default::default(),
+                    session_cache: None,
                 }),
             },
         ))
@@ -4477,6 +4507,9 @@ impl Manager {
     }
 
     pub async fn shutdown(&self) -> ShutdownReport {
+        for worker in self.worker_snapshot() {
+            self.flush_sessions(&worker).await;
+        }
         self.shutting_down.store(true, Ordering::Release);
         self.system_stats.close();
         self.publications.close();

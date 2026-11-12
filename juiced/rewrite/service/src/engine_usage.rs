@@ -9,6 +9,10 @@ pub struct Observation {
     pub output_tokens: Option<u64>,
     pub decode_tokens_per_second: Option<f64>,
     pub prompt_tokens_per_second: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt_processed_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cached_tokens: Option<u64>,
 }
 
 impl Observation {
@@ -142,6 +146,17 @@ pub fn observe(tail: &[u8]) -> Observation {
         prompt_tokens_per_second: timings
             .as_ref()
             .and_then(|timings| rate(timings, "prompt_per_second")),
+        prompt_processed_tokens: timings
+            .as_ref()
+            .and_then(|timings| count(timings, &["prompt_n"])),
+        cached_tokens: timings
+            .as_ref()
+            .and_then(|timings| count(timings, &["cache_n"]))
+            .or_else(|| {
+                usage.as_ref().and_then(|usage| {
+                    count(usage.get("prompt_tokens_details")?, &["cached_tokens"])
+                })
+            }),
     }
 }
 
@@ -165,6 +180,8 @@ mod tests {
                 output_tokens: Some(12),
                 decode_tokens_per_second: Some(95.25),
                 prompt_tokens_per_second: Some(812.5),
+                prompt_processed_tokens: Some(26),
+                cached_tokens: Some(4),
             }
         );
     }
@@ -181,6 +198,8 @@ mod tests {
                 output_tokens: Some(9),
                 decode_tokens_per_second: Some(41.5),
                 prompt_tokens_per_second: None,
+                prompt_processed_tokens: Some(5),
+                cached_tokens: Some(2),
             }
         );
     }
@@ -192,6 +211,12 @@ mod tests {
         assert_eq!(observed.input_tokens, Some(3));
         assert_eq!(observed.output_tokens, Some(4));
         assert_eq!(observed.decode_tokens_per_second, None);
+        let details =
+            json!({"usage":{"prompt_tokens":9,"prompt_tokens_details":{"cached_tokens":6}}});
+        assert_eq!(
+            observe(details.to_string().as_bytes()).cached_tokens,
+            Some(6)
+        );
         assert!(observe(b"{\"choices\":[]}").is_empty());
         assert!(observe(b"{\"timings\":{\"predicted_per_second\":").is_empty());
         assert!(observe(b"{\"timings\":\"none\"}").is_empty());

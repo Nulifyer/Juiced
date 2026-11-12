@@ -87,6 +87,10 @@ impl VerifiedFile {
         }
         check()?;
         verified.verify_current()?;
+        #[cfg(unix)]
+        if stamp::Stamp::of(&verified.file.metadata()?) == stamp::Stamp::of(&before) {
+            stamp::remember(stamp::Stamp::of(&before), &verified.digest);
+        }
         Ok(verified)
     }
 
@@ -120,7 +124,91 @@ impl VerifiedFile {
 }
 
 pub fn file_digest(path: &Path, deadline: Instant) -> io::Result<String> {
-    Ok(VerifiedFile::open(path, deadline)?.digest)
+    #[cfg(unix)]
+    {
+        let before = stamp::Stamp::of(&std::fs::metadata(std::fs::canonicalize(path)?)?);
+        if let Some(digest) = stamp::cached(&before) {
+            return Ok(digest);
+        }
+        let verified = VerifiedFile::open(path, deadline)?;
+        if stamp::Stamp::of(&verified.file.metadata()?) == before {
+            stamp::remember(before, &verified.digest);
+        }
+        Ok(verified.digest)
+    }
+    #[cfg(not(unix))]
+    {
+        Ok(VerifiedFile::open(path, deadline)?.digest)
+    }
+}
+
+pub(crate) fn cached_digest(metadata: &std::fs::Metadata) -> Option<String> {
+    #[cfg(unix)]
+    {
+        stamp::cached(&stamp::Stamp::of(metadata))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = metadata;
+        None
+    }
+}
+
+pub(crate) fn remember_digest(metadata: &std::fs::Metadata, digest: &str) {
+    #[cfg(unix)]
+    stamp::remember(stamp::Stamp::of(metadata), digest);
+    #[cfg(not(unix))]
+    let _ = (metadata, digest);
+}
+
+#[cfg(unix)]
+mod stamp {
+    use std::{
+        collections::HashMap,
+        os::unix::fs::MetadataExt,
+        sync::{Mutex, OnceLock},
+    };
+
+    const ENTRIES: usize = 4096;
+
+    #[derive(Clone, Debug, Eq, Hash, PartialEq)]
+    pub(super) struct Stamp {
+        device: u64,
+        inode: u64,
+        bytes: u64,
+        modified: (i64, i64),
+        changed: (i64, i64),
+    }
+
+    impl Stamp {
+        pub(super) fn of(metadata: &std::fs::Metadata) -> Self {
+            Self {
+                device: metadata.dev(),
+                inode: metadata.ino(),
+                bytes: metadata.len(),
+                modified: (metadata.mtime(), metadata.mtime_nsec()),
+                changed: (metadata.ctime(), metadata.ctime_nsec()),
+            }
+        }
+    }
+
+    fn digests() -> &'static Mutex<HashMap<Stamp, String>> {
+        static DIGESTS: OnceLock<Mutex<HashMap<Stamp, String>>> = OnceLock::new();
+        DIGESTS.get_or_init(Mutex::default)
+    }
+
+    pub(super) fn cached(stamp: &Stamp) -> Option<String> {
+        digests().lock().ok()?.get(stamp).cloned()
+    }
+
+    pub(super) fn remember(stamp: Stamp, digest: &str) {
+        if let Ok(mut digests) = digests().lock() {
+            if digests.len() >= ENTRIES {
+                digests.clear();
+            }
+            digests.insert(stamp, digest.to_owned());
+        }
+    }
 }
 
 pub fn executable_path(command: &str) -> io::Result<PathBuf> {
@@ -142,4 +230,28 @@ pub fn executable_path(command: &str) -> io::Result<PathBuf> {
         io::ErrorKind::NotFound,
         "Engine executable was not found",
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn repeated_digests_reuse_unchanged_stamps_and_rehash_rewritten_bytes() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("weights.bin");
+        std::fs::write(&path, b"first content").unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let first = file_digest(&path, deadline).unwrap();
+        assert_eq!(first, format!("{:x}", Sha256::digest(b"first content")));
+        assert_eq!(file_digest(&path, deadline).unwrap(), first);
+        std::fs::write(&path, b"other content").unwrap();
+        assert_eq!(
+            file_digest(&path, deadline).unwrap(),
+            format!("{:x}", Sha256::digest(b"other content"))
+        );
+        let verified = VerifiedFile::open(&path, deadline).unwrap();
+        assert_eq!(file_digest(&path, deadline).unwrap(), verified.digest());
+    }
 }

@@ -37,6 +37,8 @@ Unix configuration-binding cases start through a parent-directory alias from a p
 
 Cache cases save actual fixture slot bytes, verify their checksum, restart the manager, restore and continue. They cover principal, credential epoch, protocol and session isolation; disabled policy; generation/revision conflicts; corruption; and retained, charged uncertain writes. Engine acknowledgement counters must be positive.
 
+Session cases enable automatic conversation snapshots, which ordinary fixtures turn off. The fixture's `--emulate-prompt-cache` mode keeps per-slot word tokens, honours `id_slot`, saves and restores them through `/slots`, and reports `prompt_n`, `cache_n` and `cached_tokens`. Conversation A, then B on one slot, then A again must restore with only the new turn processed. The same must hold after a service restart. Other cases cover header precedence, unload flush, count-budget eviction, `cache_prompt: false` bypass, identity-change discard, multi-slot affinity, the session routes under all prefixes and explicit-operation refusal.
+
 Artifact cases use a controlled loopback HTTP source with chunked delivery, byte ranges and a stable validator. They exercise download/hash publication, pause/resume across manager restart, cancellation, quarantine/retry, generation conflicts, removal and source policy rejection. A managed-artifact case acquires weights, registers a model, loads and infers, restarts, then releases registration and worker holds before deletion. Inventory paging walks each section under every prefix, keeps off-page selections, and refuses stale views and malformed cursors without changing configuration or storage.
 
 Library cases run the service against a loopback fake Hugging Face Hub selected by `JUICED_HUGGINGFACE_URL`. They search, pull one quant under each native prefix with operator credentials, verify the completed artifact digest and job source URL, publish a two-part split as one artifact set, and check local presence after restart. A synthetic `HF_TOKEN` must reach only Hub API requests, never downloads or responses. Offline and public-HTTPS policies must serve catalog results without contacting the fake Hub. The harness defaults `JUICED_HUGGINGFACE_URL` to a closed loopback port, so no test contacts the real Hub.
@@ -79,7 +81,7 @@ It refuses an occupied port or unrelated traffic, checks the actual daemon beaco
 
 ## Tiny real-engine pipeline
 
-These separate opt-in tests load an existing GGUF through an installed CPU `llama-server`, check structural result/token data, unload and restart. A cache case saves native slot bytes, restarts, restores and continues inference. It requires positive engine save/write/restore/read counters and matching byte counts. The tests do not score output wording or download weights.
+These separate opt-in tests load an existing GGUF through an installed CPU `llama-server`, check structural result/token data, unload and restart. A cache case saves native slot bytes, restarts, restores and continues inference. A session case switches between two chat conversations on one slot and restarts the service. Both resumptions must report `restored`, cached tokens covering the earlier prompt and fewer than 32 processed prompt tokens. It requires positive engine save/write/restore/read counters and matching byte counts. The tests do not score output wording or download weights.
 
 ```bash
 JUICED_TEST_LLAMA_SERVER=/path/to/llama-server \
