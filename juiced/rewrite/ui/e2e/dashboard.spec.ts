@@ -56,3 +56,21 @@ test("recent requests list completed work and link to the test page", async ({ p
   await recent.getByRole("button", { name: "Try a model" }).click();
   await expect(page.getByRole("heading", { name: "Test services", level: 1 })).toBeVisible();
 });
+
+test("the GPU card names the GPU and says when utilization has no reading", async ({ page }) => {
+  let gpu: Record<string, unknown> | null = { id: "amdgpu:0000:c7:00.0", vendor: "amd", name: null, gpu_percent: 0, memory_used_bytes: 5 * 1024 ** 3, memory_total_bytes: 16 * 1024 ** 3 };
+  await page.route("**/v1/system-stats", async (route) => {
+    const stats = await (await route.fetch()).json();
+    await route.fulfill({ json: { ...stats, gpus: gpu ? [gpu] : [] } });
+  });
+  await open(page);
+  const card = page.getByRole("region", { name: "Live resources" }).getByRole("article", { name: "GPU" });
+  await expect(card).toContainText("0.0%");
+  await expect(card).toContainText("AMD GPU");
+  await expect(page.getByRole("article", { name: "VRAM" })).toContainText("of 16 GiB");
+  gpu = { ...gpu, name: "AMD Radeon 890M", gpu_percent: null };
+  await expect(card).toContainText("Utilization unavailable");
+  await expect(card).not.toContainText("No GPU detected");
+  gpu = null;
+  await expect(card).toContainText("No GPU detected");
+});

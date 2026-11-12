@@ -12,6 +12,10 @@ test("Performance shows live charts and declared reservations", async ({ page })
   await expect(page.getByRole("article", { name: "CPU" })).toContainText(/\d+(\.\d)?%/);
   await expect(page.getByRole("article", { name: "Memory" })).toContainText(/GiB \/ \d+(\.\d)? GiB/);
   const reservations = page.getByRole("region", { name: "Reservations" });
+  const panel = (await reservations.boundingBox())!;
+  const cards = await Promise.all(["CPU", "VRAM"].map(async (chart) => (await page.getByRole("article", { name: chart }).boundingBox())!));
+  expect(Math.abs(cards[0]!.x - panel.x), "the cards start with the panel below").toBeLessThan(2);
+  expect(Math.abs(cards[1]!.x + cards[1]!.width - (panel.x + panel.width)), "the cards fill the row like the Dashboard").toBeLessThan(2);
   await expect(reservations).toContainText("Budget");
   await expect(reservations).toContainText("6.0 GiB");
   await expect(reservations).toContainText("Active requests");

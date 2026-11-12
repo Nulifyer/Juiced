@@ -1,6 +1,6 @@
 import { api, expect, hotModel, largeText, modelId, navigate, noHorizontalOverflow, open, openModel, serviceMenu, storedText, test, toasts } from "./support";
 
-const destinations = ["Dashboard", "Models", "Loading policy", "Library", "Backends & hardware", "Cache", "Test services", "Diagnostics", "Connect"];
+const destinations = ["Dashboard", "Models", "Loading policy", "Library", "Engines & hardware", "Cache", "Test services", "Diagnostics", "Connect"];
 
 test("every destination opens from the navigation without page errors", async ({ page }) => {
   const failures: string[] = [];

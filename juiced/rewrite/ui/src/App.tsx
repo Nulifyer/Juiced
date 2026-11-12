@@ -6,10 +6,9 @@ import { ServiceTest, type TestMode } from "./ServiceTest";
 import { Library, libraryViews, type LibraryView } from "./Library";
 import { Cache } from "./Cache";
 import { ServiceApis, type ConnectTab } from "./ServiceApis";
-import { RuntimeCatalog } from "./RuntimeCatalog";
 import { InstalledRuntimes } from "./InstalledRuntimes";
 import { Dashboard } from "./Dashboard";
-import { EngineList, Hardware } from "./Backends";
+import { Engines } from "./Backends";
 import { Diagnostics } from "./Diagnostics";
 import { Aliases } from "./Aliases";
 import { IdleDefault } from "./Residency";
@@ -20,7 +19,7 @@ import logo from "../../../ui/public/juiced-icon.svg";
 
 const destinations = [
   ["dashboard", "Dashboard", "dashboard"], ["models", "Models", "models"], ["policy", "Loading policy", "policy"], ["library", "Library", "library"],
-  ["backend", "Backends & hardware", "backend"], ["cache", "Cache", "cache"], ["test", "Test services", "test"],
+  ["backend", "Engines & hardware", "backend"], ["cache", "Cache", "cache"], ["test", "Test services", "test"],
   ["diagnostics", "Diagnostics", "diagnostics"], ["connect", "Connect", "api"],
 ] as const satisfies readonly (readonly [string, string, IconName])[];
 type Screen = typeof destinations[number][0];
@@ -54,7 +53,6 @@ export function App() {
   const [testMode, setTestMode] = useState<TestMode>("try");
   const [libraryView, setLibraryView] = useState<LibraryView>("search");
   const [diagnosticsTab, setDiagnosticsTab] = useState<"performance" | "requests" | "logs">("performance");
-  const [backendTab, setBackendTab] = useState<"machine" | "installed" | "catalog">("machine");
   const [connectTab, setConnectTab] = useState<ConnectTab>("protocols");
   const [modelsTab, setModelsTab] = useState<"models" | "aliases">("models");
   const client = useMemo(() => new Client(base, key), [base, key]);
@@ -132,7 +130,6 @@ export function App() {
     : screen === "test" ? <Tabs label="Test mode" value={testMode} onChange={setTestMode} items={[["try", "Try a model"], ["compare", "Compare"]]} />
     : screen === "library" ? <Tabs label="Library view" value={libraryView} onChange={setLibraryView} items={libraryViews} />
     : screen === "connect" ? <Tabs label="Connect views" value={connectTab} onChange={setConnectTab} items={[["protocols", "Protocols"], ["keys", "API keys"], ["endpoints", "Endpoints"]]} />
-    : screen === "backend" ? <Tabs label="Backend views" value={backendTab} onChange={setBackendTab} items={[["machine", "This machine"], ["installed", "Engines"], ["catalog", "Catalog"]]} />
     : screen === "diagnostics" ? <Tabs label="Diagnostics views" value={diagnosticsTab} onChange={setDiagnosticsTab} items={[["performance", "Performance"], ["requests", "Requests"], ["logs", "Logs"]]} />
     : null;
 
@@ -166,9 +163,7 @@ export function App() {
         {screen === "diagnostics" && <Diagnostics client={client} snapshot={snapshot} stats={live.stats} history={live.history} tab={diagnosticsTab} />}
         {screen === "test" && <ServiceTest key={`${epoch}:${testMode}`} mode={testMode} models={snapshot.models} client={client} online={online} />}
         {screen === "connect" && <ServiceApis key={epoch} base={base} client={client} tab={connectTab} models={snapshot.models} online={online} consoleKey={key} onAdoptKey={(next) => { adoptingKey.current = true; setKey(next); }} />}
-        {screen === "backend" && backendTab === "machine" && <Hardware key={epoch} client={client} />}
-        {screen === "backend" && backendTab === "installed" && <EngineList key={epoch} client={client} online={online}><InstalledRuntimes client={client} online={online} paused={resources?.paused === true} memory={resources?.runtime_control_memory} importOnly /></EngineList>}
-        {screen === "backend" && backendTab === "catalog" && <div className="page-body"><RuntimeCatalog key={epoch} client={client} online={online} /></div>}
+        {screen === "backend" && <Engines key={epoch} client={client} online={online} importer={<InstalledRuntimes client={client} online={online} paused={resources?.paused === true} />} />}
         {screen === "cache" && <Cache key={epoch} client={client} online={online} models={snapshot.models} />}
       </>}
     </main>

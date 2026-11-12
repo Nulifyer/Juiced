@@ -26,7 +26,7 @@ The build has three stages. A Rust stage runs `cargo build --release --locked` f
 
 ## Engines
 
-The image ships no engines. Install them from Backends & hardware (or `POST /v1/juiced/engines/install`); each one downloads a pinned release, checks its SHA-256 and lands in `/data/runtime-packages`. FUTO publishes no transcribe.cpp builds, so Juiced publishes its own: pushing an `engine-futo-*` tag runs `.github/workflows/juiced-engine-release.yml`, which builds `juiced/rewrite/engines/futo/Containerfile` (the pinned source archive, commit `26d75933`, and `juiced/runtime/futo_server.cpp`, CPU only) and attaches the tarball to a GitHub release that the engine catalog pins like any other.
+The image ships no engines. Install them from Engines & hardware (or `POST /v1/juiced/engines/install`); each one downloads a pinned release, checks its SHA-256 and lands in `/data/runtime-packages`. FUTO publishes no transcribe.cpp builds, so Juiced publishes its own: pushing an `engine-futo-*` tag runs `.github/workflows/juiced-engine-release.yml`, which builds `juiced/rewrite/engines/futo/Containerfile` (the pinned source archive, commit `26d75933`, and `juiced/runtime/futo_server.cpp`, CPU only) and attaches the tarball to a GitHub release that the engine catalog pins like any other.
 
 Mount a separate volume at `/data/runtime-packages` to keep engines apart from settings and models. An empty volume is claimed on first start; one with unrelated content is refused.
 
