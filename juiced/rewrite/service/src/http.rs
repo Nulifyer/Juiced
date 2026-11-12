@@ -1213,7 +1213,7 @@ async fn protocols() -> Json<Value> {
         {"id": "openai", "support": "partial", "operations": ["models", "chat/completions", "completions", "responses", "embeddings", "audio/transcriptions", "audio/speech", "images/generations"], "note": "Forwarded only when the configured worker declares support."},
         {"id": "anthropic", "support": "partial", "note":"Selected text/tool Messages codecs and engine-native token counts; native usage required; advanced hosted tools unsupported."}, {"id": "ollama", "support": "partial", "note":"Chat, raw generate, embeddings and discovery; unsupported options are rejected."},
         {"id": "mcp", "support": "partial", "note":"Stateless JSON Streamable HTTP, explicit-model inference tools and credential/session-scoped cancellation."}, {"id": "automatic1111", "support": "partial", "note":"POST /sdapi/v1/txt2img only, one image per request through sd.cpp workers."},
-        {"id": "realtime", "support": "not-implemented"}, {"id": "wyoming", "support": "not-implemented"}
+        {"id": "realtime", "support": "partial", "note": "WebSocket transcription only: pcm16 at 24 kHz with server VAD."}, {"id": "wyoming", "support": "partial", "note": "Speech to text and text to speech for Home Assistant on its own TCP port. No authentication: listen on a trusted network only."}
     ]}))
 }
 

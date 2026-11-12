@@ -635,3 +635,6 @@ a.button { color: var(--foreground); text-decoration: none; }
 .folder-list button:hover:not(:disabled) { background: var(--secondary); }
 .folder-list button .numeric { margin-left: auto; }
 .add-name { display: grid; gap: 4px; margin: 10px 0; }
+.protocol-row[aria-label="Wyoming"] { grid-column: 1 / -1; }
+.wyoming { display: grid; gap: 10px; }
+.wyoming-grid { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }

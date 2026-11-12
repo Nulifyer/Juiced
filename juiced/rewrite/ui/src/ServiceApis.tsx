@@ -3,9 +3,12 @@ import type { Client } from "./api";
 import { parseEndpoints, parseProtocols } from "./management";
 import { Badge, Button, Empty } from "./ui";
 import { useResource } from "./useResource";
+import type { Model } from "./domain";
+import { WyomingSettings } from "./Wyoming";
 
 const addresses: Record<string, (origin: string) => string> = {
   openai: (origin) => `${origin}/v1`, anthropic: (origin) => `${origin}/v1/messages`, ollama: (origin) => `${origin}/api`, mcp: (origin) => `${origin}/mcp`, automatic1111: (origin) => `${origin}/sdapi/v1`,
+  realtime: (origin) => `${origin.replace(/^http/, "ws")}/v1/realtime?intent=transcription`,
 };
 const names: Record<string, string> = { openai: "OpenAI", anthropic: "Anthropic", ollama: "Ollama", mcp: "MCP", automatic1111: "AUTOMATIC1111", realtime: "Realtime", wyoming: "Wyoming" };
 
@@ -23,7 +26,7 @@ function Copy({ value, label }: { value: string; label: string }) {
   return <Button aria-label={label} onClick={() => void navigator.clipboard.writeText(value).then(() => setState("Copied")).catch(() => setState("Copy failed")).finally(() => setTimeout(() => setState(""), 1500))}>{state || "Copy"}</Button>;
 }
 
-export function ServiceApis({ base, client, tab }: { base: string; client: Client; tab: "protocols" | "endpoints" }) {
+export function ServiceApis({ base, client, tab, models, online }: { base: string; client: Client; tab: "protocols" | "endpoints"; models: Model[]; online: boolean }) {
   const origin = base || location.origin;
   const protocols = useResource(client, "juiced/protocols", parseProtocols, 0);
   const endpoints = useResource(client, "juiced/endpoints", parseEndpoints, 0);
@@ -43,6 +46,7 @@ export function ServiceApis({ base, client, tab }: { base: string; client: Clien
         <header className="panel-head"><h3>{names[protocol.id] ?? protocol.id}</h3><Badge tone={protocol.support === "supported" ? "good" : "warning"}>{protocol.support}</Badge></header>
         {address && <div className="copy-row"><input readOnly aria-label={`${names[protocol.id] ?? protocol.id} address`} value={address} /><Copy value={address} label={`Copy ${names[protocol.id] ?? protocol.id} address`} /></div>}
         {protocol.note && <p className="field-help">{protocol.note}</p>}
+        {protocol.id === "wyoming" && <WyomingSettings client={client} models={models} online={online} />}
         {protocol.operations && <div className="chip-row">{protocol.operations.map((operation) => <code className="chip" key={operation}>{operation}</code>)}</div>}
       </article>;
     })}</div>

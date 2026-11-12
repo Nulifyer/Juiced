@@ -164,7 +164,7 @@ export function App() {
         {screen === "library" && libraryView === "files" && <Library key={epoch} view={libraryView} client={client} online={online} models={snapshot.models} refreshModels={refresh} onInspect={openModel} />}
         {screen === "diagnostics" && <Diagnostics client={client} snapshot={snapshot} stats={live.stats} history={live.history} tab={diagnosticsTab} />}
         {screen === "test" && <ServiceTest key={`${epoch}:${testService}`} operation={testService} models={snapshot.models} client={client} online={online} />}
-        {screen === "connect" && <ServiceApis key={epoch} base={base} client={client} tab={connectTab} />}
+        {screen === "connect" && <ServiceApis key={epoch} base={base} client={client} tab={connectTab} models={snapshot.models} online={online} />}
         {screen === "backend" && backendTab === "machine" && <Hardware key={epoch} client={client} />}
         {screen === "backend" && backendTab === "installed" && <EngineList key={epoch} client={client} online={online}><InstalledRuntimes client={client} online={online} paused={resources?.paused === true} memory={resources?.runtime_control_memory} importOnly /></EngineList>}
         {screen === "backend" && backendTab === "catalog" && <div className="page-body"><RuntimeCatalog key={epoch} client={client} online={online} /></div>}
