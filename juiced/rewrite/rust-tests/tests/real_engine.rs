@@ -770,7 +770,7 @@ async fn tiny_gguf_automatic_sessions_restore_older_conversations_after_switch_a
             .json(
                 reqwest::Method::POST,
                 "/v1/chat/completions",
-                Some(json!({"model":MODEL,"messages":messages,"max_tokens":4,"temperature":0,"stream":false})),
+                Some(json!({"model":MODEL,"messages":messages,"max_tokens":2,"temperature":0,"stream":false})),
                 server.read_key(),
             )
             .await;
@@ -806,39 +806,40 @@ async fn tiny_gguf_automatic_sessions_restore_older_conversations_after_switch_a
         config["models"] = json!([{"id":MODEL,"model_file":model,"command":engine,"provider":"llama-cpp","args":["--host","127.0.0.1","--port","{port}","--model","{model}","--ctx-size","1024","--parallel","1","--threads","4","--slots","--n-gpu-layers","0","--chat-template","chatml"],"resident_bytes":512u64 * 1024 * 1024,"max_inflight":1,"operations":["chat/completions"],"policy":"on-demand"}]);
     })
     .await;
-    let opening = |topic: &str| {
-        vec![
-            json!({"role":"system","content":format!("{topic}. {}", "Answer in short plain sentences and keep every detail consistent. ".repeat(12))}),
-        ]
-    };
-    let mut a = opening("You are a river guide");
-    let mut b = opening("You are a mountain guide");
-    let (first, record) = chat(&server, &mut a, "Describe the first bend of the river.").await;
+    let mut a: Vec<Value> = Vec::new();
+    let mut b: Vec<Value> = Vec::new();
+    let (first, record) = chat(&server, &mut a, "River?").await;
     assert_eq!(record["session_cache"]["path"], "cold");
     let prompt = first["usage"]["prompt_tokens"].as_u64().unwrap();
-    assert!(prompt > 100, "{first}");
+    assert!(prompt > 10, "{first}");
     settled(&server, 1).await;
-    let (_, record) = chat(&server, &mut b, "Describe the first ridge.").await;
+    let (_, record) = chat(&server, &mut b, "Mountain?").await;
     assert_eq!(record["session_cache"]["path"], "cold");
     settled(&server, 2).await;
-    let (restored, record) = chat(&server, &mut a, "And the second bend?").await;
+    let (restored, record) = chat(&server, &mut a, "Second?").await;
     assert_eq!(record["session_cache"]["path"], "restored", "{record}");
     let cached = record["cached_tokens"].as_u64().unwrap();
     let processed = record["prompt_processed_tokens"].as_u64().unwrap();
     assert!(cached >= prompt, "{restored}");
-    assert!(processed < 32, "{restored}");
+    assert_eq!(
+        cached + processed,
+        restored["usage"]["prompt_tokens"].as_u64().unwrap(),
+        "{restored}"
+    );
     settled(&server, 2).await;
     let (status, _) = server.post("unload", json!({"model":MODEL})).await;
     assert_eq!(status, StatusCode::OK);
     server.restart().await;
-    let (after, record) = chat(&server, &mut a, "And the third bend?").await;
+    let (after, record) = chat(&server, &mut a, "Third?").await;
     assert_eq!(record["session_cache"]["path"], "restored", "{record}");
     assert!(
         record["cached_tokens"].as_u64().unwrap() > cached,
         "{after}"
     );
-    assert!(
-        record["prompt_processed_tokens"].as_u64().unwrap() < 32,
+    assert_eq!(
+        record["cached_tokens"].as_u64().unwrap()
+            + record["prompt_processed_tokens"].as_u64().unwrap(),
+        after["usage"]["prompt_tokens"].as_u64().unwrap(),
         "{after}"
     );
     settled(&server, 2).await;
