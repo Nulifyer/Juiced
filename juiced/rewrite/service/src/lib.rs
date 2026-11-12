@@ -32,6 +32,7 @@ pub mod runtime_bundle;
 pub mod runtime_identity;
 pub mod runtime_inputs;
 pub mod runtime_packages;
+pub mod sessions;
 pub mod settings_backup;
 pub mod speech;
 pub mod startup;

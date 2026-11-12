@@ -39,9 +39,10 @@ pub const READ_ROUTES: [&str; 11] = [
     "/models/{model}/options",
     "/juiced/voices",
 ];
-pub const OPERATOR_READ_ROUTES: [&str; 19] = [
+pub const OPERATOR_READ_ROUTES: [&str; 20] = [
     "/system-info",
     "/juiced/cache/inspect",
+    "/juiced/cache/sessions",
     "/juiced/requests",
     "/juiced/suitability",
     "/juiced/context",
@@ -60,7 +61,7 @@ pub const OPERATOR_READ_ROUTES: [&str; 19] = [
     "/juiced/library/pulls/{pull}",
     "/juiced/aliases",
 ];
-pub const WRITE_ROUTES: [&str; 24] = [
+pub const WRITE_ROUTES: [&str; 25] = [
     "/juiced/runtime-packages/import",
     "/juiced/engines/install",
     "/juiced/models/add",
@@ -78,6 +79,7 @@ pub const WRITE_ROUTES: [&str; 24] = [
     "/juiced/cache/restore",
     "/juiced/cache/forget",
     "/juiced/cache/recover",
+    "/juiced/cache/sessions",
     "/juiced/artifacts/pull",
     "/juiced/artifacts/jobs/{job}",
     "/juiced/artifacts/remove",
@@ -395,7 +397,7 @@ impl Server {
         };
         let mut config = json!({
             "schema_version":1, "inhibit_suspend":false, "resident_budget_bytes":128,
-            "startup_timeout_ms":2000, "request_timeout_ms":3000,
+            "startup_timeout_ms":2000, "request_timeout_ms":3000, "session_cache":{"mode":"off"},
             "models":[model("fixture.one", "on-demand"), model("fixture.two", "on-demand"), model("fixture.disabled", "disabled")],
         });
         edit(&mut config);

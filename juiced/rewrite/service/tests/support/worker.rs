@@ -86,6 +86,7 @@ struct Fixture {
     context: u32,
     cache: Option<PathBuf>,
     slot: Mutex<Vec<u8>>,
+    prompt_cache: Option<Mutex<Vec<Vec<String>>>>,
     restores: AtomicU64,
     state_controls: StateControls,
     inference_started: AtomicU64,
@@ -426,6 +427,11 @@ async fn inference(
             .await
             .unwrap();
     }
+    let emulated = observation
+        .fixture
+        .prompt_cache
+        .as_ref()
+        .map(|slots| emulate_prompt(slots, &body));
     if let Some(status) = body["fixture_status"].as_u64() {
         observation.completed = true;
         return (
@@ -435,52 +441,59 @@ async fn inference(
             .into_response();
     }
     if body["stream"] == true {
-        let events = stream::unfold((0u32, observation), |(index, mut observation)| async move {
-            if observation.fixture.finite_stream {
-                let event = match index {
-                    0 | 1 => format!(
-                        "data: {}\n\n",
-                        json!({"id":"fixture-stream","model":"fixture","choices":[{"index":0,"delta":{"content":"λ "},"text":"λ ","finish_reason":null}]})
-                    ),
-                    2 => {
-                        let mut event = json!({"id":"fixture-stream","choices":[{"index":0,"delta":{},"text":"","finish_reason":"stop"}],"usage":{"prompt_tokens":7,"completion_tokens":2,"total_tokens":9}});
-                        if observation.fixture.report_timings {
-                            event["timings"] = json!({"prompt_n":7,"prompt_ms":20.0,"prompt_per_second":350.0,"predicted_n":2,"predicted_ms":53.3,"predicted_per_second":37.5});
-                        }
-                        format!("data: {event}\n\n")
-                    }
-                    3 => "data: [DONE]\n\n".to_owned(),
-                    _ => {
-                        observation.completed = true;
-                        drop(observation);
-                        return None;
-                    }
-                };
-                return Some((Ok::<_, std::io::Error>(event), (index + 1, observation)));
-            }
-            if index >= 200 {
-                if observation.fixture.report_timings && index < 202 {
-                    let event = if index == 200 {
-                        format!(
+        let events = stream::unfold((0u32, observation), move |(index, mut observation)| {
+            let emulated = emulated.clone();
+            async move {
+                if observation.fixture.finite_stream {
+                    let event = match index {
+                        0 | 1 => format!(
                             "data: {}\n\n",
-                            json!({"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":7,"completion_tokens":200,"total_tokens":207},"timings":{"prompt_n":7,"prompt_ms":20.0,"prompt_per_second":350.0,"predicted_n":200,"predicted_ms":3000.0,"predicted_per_second":66.7}})
-                        )
-                    } else {
-                        "data: [DONE]\n\n".to_owned()
+                            json!({"id":"fixture-stream","model":"fixture","choices":[{"index":0,"delta":{"content":"λ "},"text":"λ ","finish_reason":null}]})
+                        ),
+                        2 => {
+                            let mut event = json!({"id":"fixture-stream","choices":[{"index":0,"delta":{},"text":"","finish_reason":"stop"}],"usage":{"prompt_tokens":7,"completion_tokens":2,"total_tokens":9}});
+                            if observation.fixture.report_timings {
+                                event["timings"] = json!({"prompt_n":7,"prompt_ms":20.0,"prompt_per_second":350.0,"predicted_n":2,"predicted_ms":53.3,"predicted_per_second":37.5});
+                            }
+                            if let Some((usage, timings)) = &emulated {
+                                event["usage"] = usage.clone();
+                                event["timings"] = timings.clone();
+                            }
+                            format!("data: {event}\n\n")
+                        }
+                        3 => "data: [DONE]\n\n".to_owned(),
+                        _ => {
+                            observation.completed = true;
+                            drop(observation);
+                            return None;
+                        }
                     };
                     return Some((Ok::<_, std::io::Error>(event), (index + 1, observation)));
                 }
-                observation.completed = true;
-                drop(observation);
-                return None;
+                if index >= 200 {
+                    if observation.fixture.report_timings && index < 202 {
+                        let event = if index == 200 {
+                            format!(
+                                "data: {}\n\n",
+                                json!({"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":7,"completion_tokens":200,"total_tokens":207},"timings":{"prompt_n":7,"prompt_ms":20.0,"prompt_per_second":350.0,"predicted_n":200,"predicted_ms":3000.0,"predicted_per_second":66.7}})
+                            )
+                        } else {
+                            "data: [DONE]\n\n".to_owned()
+                        };
+                        return Some((Ok::<_, std::io::Error>(event), (index + 1, observation)));
+                    }
+                    observation.completed = true;
+                    drop(observation);
+                    return None;
+                }
+                tokio::time::sleep(Duration::from_millis(15)).await;
+                Some((
+                    Ok::<_, std::io::Error>(format!(
+                        "data: {{\"choices\":[{{\"delta\":{{\"content\":\"{index} \"}}}}]}}\n\n"
+                    )),
+                    (index + 1, observation),
+                ))
             }
-            tokio::time::sleep(Duration::from_millis(15)).await;
-            Some((
-                Ok::<_, std::io::Error>(format!(
-                    "data: {{\"choices\":[{{\"delta\":{{\"content\":\"{index} \"}}}}]}}\n\n"
-                )),
-                (index + 1, observation),
-            ))
         });
         return (
             [("content-type", "text/event-stream")],
@@ -501,6 +514,10 @@ async fn inference(
     });
     if observation.fixture.report_timings {
         reply["timings"] = json!({"prompt_n":7,"prompt_ms":10.0,"prompt_per_second":700.0,"predicted_n":2,"predicted_ms":47.06,"predicted_per_second":42.5});
+    }
+    if let Some((usage, timings)) = emulated {
+        reply["usage"] = usage;
+        reply["timings"] = timings;
     }
     Json(reply).into_response()
 }
@@ -547,6 +564,77 @@ async fn embeddings(Json(body): Json<Value>) -> Json<Value> {
         .sum::<usize>();
     Json(
         json!({"object":"list","data":data,"usage":{"prompt_tokens":tokens,"total_tokens":tokens}}),
+    )
+}
+
+const EMULATED_REPLY: &str = "Rust fixture reply. This is not model inference.";
+
+fn words(text: &str) -> impl Iterator<Item = String> + '_ {
+    text.split_whitespace().map(str::to_owned)
+}
+
+fn content_words(value: &Value, tokens: &mut Vec<String>) {
+    match value {
+        Value::String(text) => tokens.extend(words(text)),
+        Value::Array(parts) => {
+            for part in parts {
+                content_words(part.get("text").unwrap_or(part), tokens);
+            }
+        }
+        Value::Null => {}
+        other => tokens.push(other.to_string()),
+    }
+}
+
+fn prompt_tokens(body: &Value) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut message = |message: &Value| {
+        tokens.push(format!("<{}>", message["role"].as_str().unwrap_or("item")));
+        content_words(&message["content"], &mut tokens);
+    };
+    if let Some(messages) = body["messages"].as_array() {
+        messages.iter().for_each(&mut message);
+    } else if let Some(items) = body["input"].as_array() {
+        items.iter().for_each(&mut message);
+    } else {
+        content_words(
+            if body["prompt"].is_null() {
+                &body["input"]
+            } else {
+                &body["prompt"]
+            },
+            &mut tokens,
+        );
+    }
+    tokens
+}
+
+fn emulate_prompt(slots: &Mutex<Vec<Vec<String>>>, body: &Value) -> (Value, Value) {
+    let prompt = prompt_tokens(body);
+    let mut slots = slots.lock().unwrap();
+    let index = body["id_slot"]
+        .as_u64()
+        .map_or(0, |slot| slot as usize)
+        .min(slots.len() - 1);
+    let cached = if body["cache_prompt"] == false {
+        0
+    } else {
+        slots[index]
+            .iter()
+            .zip(&prompt)
+            .take_while(|(left, right)| left == right)
+            .count()
+    };
+    let mut generated = vec!["<assistant>".to_owned()];
+    generated.extend(words(EMULATED_REPLY));
+    let processed = prompt.len() - cached;
+    let output = generated.len() - 1;
+    let total = prompt.len();
+    slots[index] = prompt;
+    slots[index].extend(generated);
+    (
+        json!({"prompt_tokens":total,"completion_tokens":output,"total_tokens":total + output,"prompt_tokens_details":{"cached_tokens":cached}}),
+        json!({"prompt_n":processed,"cache_n":cached,"prompt_ms":processed as f64,"predicted_n":output,"predicted_ms":1.0,"predicted_per_second":1000.0,"id_slot":index}),
     )
 }
 
@@ -789,7 +877,7 @@ async fn slot_action(
     Query(action): Query<SlotAction>,
     Json(body): Json<Value>,
 ) -> Response {
-    if slot != 0 {
+    if slot != 0 && (fixture.prompt_cache.is_none() || slot >= fixture.parallel) {
         return StatusCode::NOT_FOUND.into_response();
     }
     let Some(root) = &fixture.cache else {
@@ -855,6 +943,37 @@ fn slot_effect(
 ) -> Result<(Value, u64), StatusCode> {
     match action {
         StateOperation::InspectSlots => Ok((slot_inventory(fixture), 0)),
+        StateOperation::Save if fixture.prompt_cache.is_some() => {
+            let tokens =
+                fixture.prompt_cache.as_ref().unwrap().lock().unwrap()[slot as usize].clone();
+            if tokens.is_empty() {
+                return Err(StatusCode::CONFLICT);
+            }
+            let data = serde_json::to_vec(&tokens).unwrap();
+            if maximum.is_some_and(|maximum| data.len() > maximum) {
+                return Err(StatusCode::PAYLOAD_TOO_LARGE);
+            }
+            std::fs::write(path, &data).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            Ok((
+                json!({"id_slot":slot,"filename":name,"n_saved":tokens.len(),"n_written":data.len()}),
+                data.len() as u64,
+            ))
+        }
+        StateOperation::Restore if fixture.prompt_cache.is_some() => {
+            let tokens: Vec<String> = std::fs::read(path)
+                .ok()
+                .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+                .filter(|tokens: &Vec<String>| !tokens.is_empty())
+                .ok_or(StatusCode::BAD_REQUEST)?;
+            let bytes = serde_json::to_vec(&tokens).unwrap().len();
+            let count = tokens.len();
+            fixture.prompt_cache.as_ref().unwrap().lock().unwrap()[slot as usize] = tokens;
+            fixture.restores.fetch_add(1, Ordering::AcqRel);
+            Ok((
+                json!({"id_slot":slot,"filename":name,"n_restored":count,"n_read":bytes}),
+                bytes as u64,
+            ))
+        }
         StateOperation::Save => {
             let data = {
                 let data = fixture.slot.lock().unwrap();
@@ -1067,7 +1186,7 @@ async fn main() {
         eprintln!("W fixture stderr {marker}");
         eprintln!("{}", "L".repeat(10 * 1024));
     }
-    let fixture = Arc::new(Fixture {
+    let mut fixture = Fixture {
         #[cfg(target_os = "linux")]
         _identity_map: arg("--identity-map").map(|path| {
             IdentityMapping::open(std::path::Path::new(&path)).expect("open owned identity mapping")
@@ -1100,13 +1219,18 @@ async fn main() {
             .unwrap_or(200),
         cache: arg("--slot-save-path").map(PathBuf::from),
         slot: Mutex::new(Vec::new()),
+        prompt_cache: None,
         restores: AtomicU64::new(0),
         state_controls: StateControls::default(),
         inference_started: AtomicU64::new(0),
         saves_started: AtomicU64::new(0),
         restores_started: AtomicU64::new(0),
         inspections_started: AtomicU64::new(0),
-    });
+    };
+    if args.iter().any(|value| value == "--emulate-prompt-cache") {
+        fixture.prompt_cache = Some(Mutex::new(vec![Vec::new(); fixture.parallel as usize]));
+    }
+    let fixture = Arc::new(fixture);
     let app = Router::new()
         .route("/health", get(|| async { "ok" }))
         .route("/v1/models", get(|| async { Json(json!({"object":"list","data":[{"id":"fixture-media","object":"model"}]})) }))

@@ -343,6 +343,8 @@ pub struct Config {
     pub generation: u64,
     #[serde(default)]
     pub cache_enabled: bool,
+    #[serde(default, skip_serializing_if = "crate::sessions::Settings::is_default")]
+    pub session_cache: crate::sessions::Settings,
     #[serde(default = "default_inhibit_suspend")]
     pub inhibit_suspend: bool,
     #[serde(default)]
@@ -428,6 +430,8 @@ struct ConfigWire {
     generation: u64,
     #[serde(default)]
     cache_enabled: bool,
+    #[serde(default)]
+    session_cache: crate::sessions::Settings,
     #[serde(default = "default_inhibit_suspend")]
     inhibit_suspend: bool,
     #[serde(default)]
@@ -497,6 +501,7 @@ impl<'de> Deserialize<'de> for Config {
             native_settings,
             generation: wire.generation,
             cache_enabled: wire.cache_enabled,
+            session_cache: wire.session_cache,
             inhibit_suspend: wire.inhibit_suspend,
             admission: wire.admission,
             artifact_source_policy: wire.artifact_source_policy,
@@ -586,6 +591,7 @@ impl Config {
         self.admission
             .validate()
             .map_err(|error| error.to_string())?;
+        self.session_cache.validate()?;
         let mut ids = HashSet::new();
         let mut native_ids = HashSet::new();
         for model in &self.models {

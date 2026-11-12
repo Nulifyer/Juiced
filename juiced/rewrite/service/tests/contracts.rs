@@ -66,6 +66,7 @@ impl Harness {
             native_settings: None,
             generation: 0,
             cache_enabled: false,
+            session_cache: Default::default(),
             inhibit_suspend: false,
             admission: Default::default(),
             artifact_source_policy: juiced_service::artifacts::SourcePolicy::PublicHttps,

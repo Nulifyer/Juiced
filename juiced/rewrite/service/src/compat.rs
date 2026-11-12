@@ -3,7 +3,7 @@ use crate::{
     auth::RequestContext,
     config::Operation,
     extract::ApiBytes,
-    http::{Endpoint, forward_request, request_session},
+    http::{Endpoint, automatic_session, forward_request, request_session},
     protocols::{self, CodecError, McpDispatch, OllamaOperation, ProtocolRequest, SseEvent},
     supervisor::Manager,
 };
@@ -333,8 +333,10 @@ async fn forward(
     state: &Gateway,
     headers: &HeaderMap,
     request: &ProtocolRequest,
+    context: &RequestContext,
 ) -> Result<Response, CodecError> {
     request_session(headers).map_err(from_api)?;
+    let automatic = automatic_session(headers).map_err(from_api)?;
     let body = serde_json::to_vec(&request.body)
         .map_err(|_| codec(400, "invalid_request", "The request cannot be encoded."))?;
     // A successful HTTP transfer cannot establish semantic validity for converted protocols.
@@ -342,7 +344,8 @@ async fn forward(
         state.manager.clone(),
         Bytes::from(body),
         operation(request)?,
-        None,
+        Some((context, None, "gateway")),
+        automatic,
     )
     .await
     .map_err(from_api)
@@ -384,22 +387,23 @@ async fn collect(response: Response) -> Result<Value, CodecError> {
 
 async fn messages(
     State(state): State<Gateway>,
-    Extension(_context): Extension<RequestContext>,
+    Extension(context): Extension<RequestContext>,
     headers: HeaderMap,
     body: Result<ApiBytes, ApiError>,
 ) -> Response {
-    anthropic(state, headers, body, false).await
+    anthropic(state, context, headers, body, false).await
 }
 async fn count_tokens(
     State(state): State<Gateway>,
-    Extension(_context): Extension<RequestContext>,
+    Extension(context): Extension<RequestContext>,
     headers: HeaderMap,
     body: Result<ApiBytes, ApiError>,
 ) -> Response {
-    anthropic(state, headers, body, true).await
+    anthropic(state, context, headers, body, true).await
 }
 async fn anthropic(
     state: Gateway,
+    context: RequestContext,
     headers: HeaderMap,
     body: Result<ApiBytes, ApiError>,
     count: bool,
@@ -407,7 +411,7 @@ async fn anthropic(
     let result = async {
         let input = parse_body(&headers, body)?;
         let request = protocols::anthropic_request(input, count)?;
-        let response = forward(&state, &headers, &request).await?;
+        let response = forward(&state, &headers, &request, &context).await?;
         if request.stream && response.status().is_success() {
             return Ok(stream_response(
                 response,
@@ -434,11 +438,11 @@ macro_rules! ollama_handler {
     ($name:ident, $operation:ident) => {
         async fn $name(
             State(state): State<Gateway>,
-            Extension(_context): Extension<RequestContext>,
+            Extension(context): Extension<RequestContext>,
             headers: HeaderMap,
             body: Result<ApiBytes, ApiError>,
         ) -> Response {
-            ollama(state, headers, body, OllamaOperation::$operation).await
+            ollama(state, context, headers, body, OllamaOperation::$operation).await
         }
     };
 }
@@ -449,13 +453,14 @@ ollama_handler!(ollama_legacy_embed, LegacyEmbed);
 
 async fn ollama(
     state: Gateway,
+    context: RequestContext,
     headers: HeaderMap,
     body: Result<ApiBytes, ApiError>,
     operation: OllamaOperation,
 ) -> Response {
     let result = async {
         let request = protocols::ollama_request(parse_body(&headers, body)?, operation)?;
-        let response = forward(&state, &headers, &request).await?;
+        let response = forward(&state, &headers, &request, &context).await?;
         let model = request.body["model"].as_str().unwrap_or_default();
         let created_at = utc_now();
         if request.stream && response.status().is_success() {
@@ -633,7 +638,7 @@ async fn mcp_message(
                 let key = cancellation_key(&context, session, &id)?;
                 let (_pending, mut cancellation) = state.pending.register(key)?;
                 let work = async {
-                    let response = forward(&state, &headers, &request).await?;
+                    let response = forward(&state, &headers, &request, &context).await?;
                     collect(response).await
                 };
                 tokio::select! {

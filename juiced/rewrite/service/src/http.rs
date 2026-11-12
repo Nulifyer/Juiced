@@ -200,6 +200,8 @@ define_routes! {
     (post, "/juiced/cache/forget", cache_forget, "operator"),
     (post, "/juiced/cache/recover", cache_recover, "operator"),
     (get, "/juiced/cache/inspect", cache_inspect, "operator"),
+    (get, "/juiced/cache/sessions", cache_sessions, "operator"),
+    (post, "/juiced/cache/sessions", cache_sessions_change, "operator"),
     (post, "/juiced/policy", policy, "operator"),
     (post, "/load", load, "operator"),
     (post, "/unload", unload, "operator"),
@@ -726,6 +728,25 @@ async fn cache_recover(
         .into_response()
         .await
 }
+async fn cache_sessions(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
+    Ok(Json(state.manager.sessions_view().await?))
+}
+async fn cache_sessions_change(
+    State(state): State<AppState>,
+    ApiJson(action): ApiJson<crate::supervisor::SessionAction>,
+) -> Result<Json<Value>, ApiError> {
+    let manager = state.manager.clone();
+    tokio::spawn(async move { manager.session_action(action).await })
+        .await
+        .map_err(|_| {
+            ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "session_cache_interrupted",
+                "The session cache change was interrupted. Refresh before retrying.",
+            )
+        })?
+        .map(Json)
+}
 async fn cache_inspect(
     State(state): State<AppState>,
     ApiQuery(page): ApiQuery<crate::cache::PageRequest>,
@@ -1187,12 +1208,14 @@ async fn chat(
     ApiBytes(body): ApiBytes,
 ) -> Result<Response, ApiError> {
     let session = request_session(&headers)?;
+    let automatic = automatic_session(&headers)?;
     forward(
         state,
         body,
         Operation::Chat,
         request_priority(&context, &headers)?,
         Some((&context, session, "openai.chat")),
+        automatic,
     )
     .await
 }
@@ -1203,12 +1226,14 @@ async fn completion(
     ApiBytes(body): ApiBytes,
 ) -> Result<Response, ApiError> {
     let session = request_session(&headers)?;
+    let automatic = automatic_session(&headers)?;
     forward(
         state,
         body,
         Operation::Completion,
         request_priority(&context, &headers)?,
         Some((&context, session, "openai.completions")),
+        automatic,
     )
     .await
 }
@@ -1219,12 +1244,14 @@ async fn responses(
     ApiBytes(body): ApiBytes,
 ) -> Result<Response, ApiError> {
     let session = request_session(&headers)?;
+    let automatic = automatic_session(&headers)?;
     forward(
         state,
         body,
         Operation::Responses,
         request_priority(&context, &headers)?,
         Some((&context, session, "openai.responses")),
+        automatic,
     )
     .await
 }
@@ -1236,12 +1263,14 @@ async fn embeddings(
     ApiBytes(body): ApiBytes,
 ) -> Result<Response, ApiError> {
     let session = request_session(&headers)?;
+    let automatic = automatic_session(&headers)?;
     forward(
         state,
         body,
         Operation::Embeddings,
         request_priority(&context, &headers)?,
         Some((&context, session, "openai.embeddings")),
+        automatic,
     )
     .await
 }
@@ -1390,6 +1419,37 @@ pub(crate) fn request_session(headers: &HeaderMap) -> Result<Option<&str>, ApiEr
         .transpose()
 }
 
+pub(crate) fn automatic_session(headers: &HeaderMap) -> Result<Option<&str>, ApiError> {
+    for name in crate::sessions::SESSION_HEADERS {
+        let mut values = headers.get_all(name).iter();
+        let Some(value) = values.next() else {
+            continue;
+        };
+        if values.next().is_some() {
+            return Err(ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "invalid_session",
+                "Provide only one opaque session identifier.",
+            ));
+        }
+        return value
+            .to_str()
+            .ok()
+            .filter(|value| {
+                !value.is_empty() && value.len() <= 512 && !value.chars().any(char::is_control)
+            })
+            .map(Some)
+            .ok_or_else(|| {
+                ApiError::new(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_session",
+                    "Provide a bounded opaque session identifier.",
+                )
+            });
+    }
+    Ok(None)
+}
+
 pub fn request_model(body: &[u8]) -> Result<std::borrow::Cow<'_, str>, ApiError> {
     #[derive(Deserialize)]
     struct Routing<'a> {
@@ -1419,8 +1479,17 @@ async fn forward(
     operation: Operation,
     priority: crate::admission::Priority,
     cache_context: Option<(&RequestContext, Option<&str>, &str)>,
+    automatic: Option<&str>,
 ) -> Result<Response, ApiError> {
-    forward_prioritized(state.manager, body, operation, priority, cache_context).await
+    forward_prioritized(
+        state.manager,
+        body,
+        operation,
+        priority,
+        cache_context,
+        automatic,
+    )
+    .await
 }
 
 pub(crate) async fn forward_request(
@@ -1428,6 +1497,7 @@ pub(crate) async fn forward_request(
     body: Bytes,
     operation: Operation,
     cache_context: Option<(&RequestContext, Option<&str>, &str)>,
+    automatic: Option<&str>,
 ) -> Result<Response, ApiError> {
     forward_prioritized(
         manager,
@@ -1435,6 +1505,7 @@ pub(crate) async fn forward_request(
         operation,
         crate::admission::Priority::Interactive,
         cache_context,
+        automatic,
     )
     .await
 }
@@ -1444,6 +1515,7 @@ async fn forward_prioritized(
     operation: Operation,
     priority: crate::admission::Priority,
     cache_context: Option<(&RequestContext, Option<&str>, &str)>,
+    automatic: Option<&str>,
 ) -> Result<Response, ApiError> {
     let original_body = body;
     let model = request_model(&original_body)?;
@@ -1456,7 +1528,19 @@ async fn forward_prioritized(
         (base, lease, None)
     };
     drop(model);
-    let body = body.unwrap_or(original_body);
+    let mut body = body.unwrap_or(original_body);
+    if let Some(routed) = manager
+        .prepare_session(
+            &mut lease,
+            operation,
+            &body,
+            automatic,
+            cache_context.map(|(context, _, _)| context),
+        )
+        .await?
+    {
+        body = routed;
+    }
     if matches!(
         operation,
         Operation::Chat | Operation::Completion | Operation::Responses

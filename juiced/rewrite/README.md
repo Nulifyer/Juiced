@@ -174,7 +174,7 @@ Receipts under `local/verification/speech/` retain identities, response shapes, 
 | Model operations | Disabled registration, policy CAS, load/unload, typed-option CAS applied on the next load or by reload, model alias CAS and registration removal retaining weights |
 | Artifact store | Inventory, bounded SHA256 pull, job inspection/pause/resume/retry/cancel, confirmed terminal-history forgetting and reference-safe weight removal |
 | Library | Operator-only catalog, Hugging Face and local search; commit-pinned one-step quant pull; pull status |
-| Slot snapshots | Explicit cache opt-in CAS, scoped inventory, save/restore/forget and bounded operator inspection |
+| Slot snapshots | Automatic conversation snapshots with session listing, settings and forget; explicit cache opt-in CAS, scoped inventory, save/restore/forget and bounded operator inspection |
 | OpenAI | Chat completions, completions, Responses and embeddings through one forwarding owner; bounded selected whisper.cpp multipart transcription |
 | Anthropic | Fixed `/v1/messages` and `/v1/messages/count_tokens`, selected text/tools/SSE and native token counts |
 | Ollama | Fixed inference, embedding and discovery subset under `/api/*` |
@@ -221,7 +221,23 @@ Managed registrations use an artifact ID and retain durable references plus vali
 
 Linux snapshots bind the resolved profile, model/executable content, bundle, captured child environment and observed executable/shared-library/kernel closure. Model content and runtime closure are checked again before and after save/restore. This introduces a new execution-fingerprint namespace: older snapshots remain retained and inspectable but cannot restore into a different identity. Mutations reject without automatic reload; uncertain saves retain their bytes and charges. This does not establish complete device/driver or non-executable companion identity. Retained file handles and metadata/hash checks do not freeze external bytes against other writers. These checks also add startup/cache I/O; immutable package ownership and production-scale measurements remain open.
 
-Persistent snapshots are off by default. Enable the cache explicitly, configure one actual engine slot and a slot-save argument containing `{cache}`, and complete a `/completions` request with `X-Juiced-Session`. Saving/restoring requires the same principal, credential epoch, opaque session, protocol and execution fingerprint. Engine acknowledgements and checksums must confirm the operation. Uncertain writes remain charged; inspection never grants repair authority. Multi-slot ownership, other protocol cache publication and full engine-family qualification remain open.
+### Automatic conversation snapshots
+
+llama.cpp profiles continue older conversations from saved engine state by default. Every llama.cpp launch receives a managed `--slot-save-path` in the cache root when its profile has none. Chat Completions, Completions, Responses and the Anthropic, Ollama and MCP gateways share this path.
+
+A conversation key comes from `X-Juiced-Session`, then `X-Juiced-Session-Id`, then `X-Juiced-Thread-Id`. Without a header, Juiced uses a chain of SHA-256 digests over normalized messages, Responses input items or 512-byte prompt blocks. Clients that resend the full history therefore need no header. Only digests are stored. Snapshots also bind the principal, credential epoch, protocol, model and execution fingerprint.
+
+Each request takes a slot that already holds its conversation, then an empty slot, then the least recently used slot. Multi-slot workers receive `id_slot`. If the slot holds another conversation and a saved snapshot covers a longer prefix, Juiced restores that snapshot first; llama.cpp then reuses the matching prompt prefix. Unsaved state of another conversation is saved before the slot is reused. After a completed response, the slot is saved after `save_delay_ms` without blocking the response. Unload and service shutdown also flush unsaved slots. The new snapshot replaces the conversation's earlier snapshots. Snapshots survive unload, worker restart and service restart. A changed execution fingerprint discards the old snapshot and rebuilds cold. A restore failure also continues cold. A request with `"cache_prompt": false` bypasses session reuse.
+
+Settings live under `session_cache` in configuration: `mode` (`off`, `memory` or `persistent`, default `persistent`), `budget_bytes` (8 GiB), `model_budget_bytes` (4 GiB), `max_sessions` (1024), `save_delay_ms` (1000) and per-model `models` overrides. `memory` keeps slot affinity only. Least recently used snapshots are evicted to fit the budgets. Reservations use the GGUF KV shape or the observed bytes per token. Protected-memory profiles and non-llama.cpp engines stay off.
+
+`GET /v1/juiced/cache/sessions` lists settings, per-model effective mode and slot state, and up to 256 snapshot rows (digest, kind, model, bytes, last use). It contains no prompt text. `POST` the same path with `{"action":"configure","expected_generation":N,"settings":{...}}` or `{"action":"forget","model":"id","session":"digest"}`. Both forget fields are optional. Each `/juiced/requests` record reports `session_cache.path` (`slot-hit`, `restored`, `cold` or `bypass`), `restore_ms`, `prompt_processed_tokens` and `cached_tokens`.
+
+Model and bundle verification reuses a SHA-256 when the file's device, inode, size, modification and change times are unchanged. Snapshot restores reuse the checksum computed at publication in the same way. Other changes trigger a full rehash.
+
+### Explicit snapshots
+
+Explicit save and restore return `409 cache_sessions_managed` while automatic persistent sessions own the model. Set the model's mode to `memory` or `off` first. Then enable the cache explicitly and complete a `/completions` request with `X-Juiced-Session` on one engine slot. Saving and restoring requires the same principal, credential epoch, opaque session, protocol and execution fingerprint. Engine acknowledgements and checksums must confirm the operation. Uncertain writes remain charged. Inspection never grants repair authority.
 
 ## Offline snapshot inspection
 

@@ -275,7 +275,8 @@ impl LaunchPlan {
         } else {
             None
         };
-        let cache_binding = template.has_cache_binding();
+        let managed_cache = profile.adapter == Provider::LlamaCpp && !template.has_cache_binding();
+        let cache_binding = template.has_cache_binding() || managed_cache;
         let identity = serde_json::to_vec(&(
             "juiced-launch-plan-v3",
             profile.schema_version,
@@ -312,6 +313,9 @@ impl LaunchPlan {
         if let Some(held) = &runtime_package {
             digest.update(b"\0juiced-launch-runtime-package-v1\0");
             digest.update(held.id().as_bytes());
+        }
+        if managed_cache {
+            digest.update(b"\0juiced-launch-managed-slot-save-v1\0");
         }
         let fingerprint = Arc::from(format!("{:x}", digest.finalize()));
         let model = bindings.model.path().as_os_str().to_str().ok_or_else(|| {
@@ -363,6 +367,9 @@ impl LaunchPlan {
             .map_err(|error| Error::new(error.code, error.message))?;
         if let Some(alias) = public_alias {
             args.extend(["--alias".to_owned(), alias.to_owned()]);
+        }
+        if managed_cache {
+            args.extend(["--slot-save-path".to_owned(), cache.to_owned()]);
         }
         if profile.adapter == Provider::WhisperCpp {
             let workspace = bindings.workspace.as_ref().ok_or_else(|| {
