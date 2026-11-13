@@ -36,6 +36,8 @@ h2 { font-size: 1rem; font-weight: 600; }
 h3 { font-size: .875rem; font-weight: 600; }
 input, select, textarea { min-width: 0; border: 1px solid var(--border); border-radius: 6px; padding: 7px 10px; background: var(--surface); width: 100%; }
 input, select { min-height: 34px; }
+select option, select optgroup { background-color: var(--surface); color: var(--foreground); }
+select option:disabled { color: var(--muted); }
 input[type="search"] { background: var(--background); }
 textarea { resize: vertical; line-height: 1.6; }
 label { display: block; font-weight: 500; margin-bottom: 6px; }
