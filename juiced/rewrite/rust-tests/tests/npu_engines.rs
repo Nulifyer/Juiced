@@ -490,7 +490,17 @@ async fn flm_install_pull_register_load_and_chat_on_a_fixture_npu_host() {
     assert_eq!(finished["state"], "complete", "{finished}");
     assert_eq!(finished["percent"], 100);
     let store = server.directory.path().join("flm");
-    let helpers = launches(&store.join("helpers.log"));
+    // The job reports complete before the follow-up list/validate helper runs finish writing.
+    let mut helpers = String::new();
+    for _ in 0..200 {
+        helpers = launches(&store.join("helpers.log"));
+        if helpers.contains("argv:validate --json\n")
+            && helpers.contains("argv:list --json --quiet\n")
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
     assert!(
         helpers.contains("argv:pull gemma3:1b --force\n"),
         "{helpers}"
