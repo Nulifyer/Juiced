@@ -1,5 +1,7 @@
 import type { Page, Route } from "@playwright/test";
-import { api, expect, hotModel, modelId, noHorizontalOverflow, open, speechModel, test } from "./support";
+import { api, capture, expect, hotModel, modelId, noHorizontalOverflow, open, picture, speechModel, test, withVision } from "./support";
+
+const shots = (page: Page, name: string, ready: () => Promise<void>) => capture(page, `barista-${name}`, ready);
 
 const sse = (chunks: unknown[]) => chunks.map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`).join("") + "data: [DONE]\n\n";
 const toolCall = (calls: { id: string; name: string; arguments: unknown }[]) => [
@@ -8,6 +10,9 @@ const toolCall = (calls: { id: string; name: string; arguments: unknown }[]) => 
   { choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] },
 ];
 const text = (content: string) => [{ choices: [{ index: 0, delta: { role: "assistant", content } }] }, { choices: [{ index: 0, delta: {}, finish_reason: "stop" }] }];
+const thought = (reasoning: string, content: string) => [{ choices: [{ index: 0, delta: { role: "assistant", reasoning_content: reasoning } }] }, ...text(content)];
+const rich = "Two models fit:\n\n| Model | Policy | Size |\n| --- | --- | ---: |\n| fixture.chat-small-q4 | Hot | 1.0 MiB |\n| fixture.chat-long-context-q8 | On demand | 1.0 MiB |\n\nTo load one from a shell:\n\n```bash\ncurl -X POST http://localhost:8080/v1/load -d '{\"model\":\"fixture.chat-long-context-q8\"}'\n```\n\nThe **Hot** model stays loaded.";
+
 
 /** Scripts the chat model: each request gets the next reply. */
 async function script(page: Page, replies: ((body: any) => unknown[])[]) {
@@ -27,18 +32,6 @@ function dispatches(page: Page) {
     if (new URL(outgoing.url()).pathname === "/v1/juiced/barista/tools/call") { const body = outgoing.postDataJSON(); calls.push({ name: body.name, confirmed: body.confirmed }); }
   });
   return calls;
-}
-
-async function shots(page: Page, name: string, ready: () => Promise<void>) {
-  const directory = process.env.JUICED_BARISTA_SHOTS;
-  if (!directory) return;
-  const original = page.viewportSize()!;
-  for (const [width, height] of [[390, 844], [1280, 900], [2000, 1195]] as const) {
-    await page.setViewportSize({ width, height });
-    await ready();
-    await page.screenshot({ path: `${directory}/barista-${name}-${width}x${height}.png` });
-  }
-  await page.setViewportSize(original);
 }
 
 async function ask(page: Page, message: string) {
@@ -146,7 +139,7 @@ test.describe("Barista", () => {
     await shots(page, "panel", async () => { await expect(change).toBeVisible(); });
     await noHorizontalOverflow(page, "panel open");
     await page.reload();
-    await page.getByRole("button", { name: "Barista", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Barista", exact: true })).toHaveAttribute("aria-expanded", "true");
     await expect(panel.getByRole("article", { name: "You" })).toContainText("Disable the speech model");
     await panel.getByRole("button", { name: "Clear" }).click();
     await expect(panel.getByRole("article", { name: "You" })).toHaveCount(0);
@@ -239,5 +232,145 @@ test.describe("Barista", () => {
     await setup.getByRole("button", { name: "Turn on Barista" }).click();
     await expect(panel.getByRole("status").filter({ hasText: "Stopped. Changes that already finished stay in place." })).toBeVisible();
     await expect(load).toContainText("Not run.");
+  });
+  test("renders tables and code, folds reasoning into one row and keeps tool steps compact", async ({ page, request }) => {
+    const service = api(request);
+    await service.setBarista(true, hotModel, "full");
+    await script(page, [
+      () => [...thought("The operator wants sizes. I should list models first.", "").slice(0, 1), ...toolCall([{ id: "read", name: "juiced_list_models", arguments: {} }])],
+      () => thought("Both chat models are registered. A table is clearest.", rich),
+    ]);
+    await open(page);
+    const panel = await ask(page, "Which chat models fit?");
+    const reply = panel.getByRole("article", { name: "Barista reply" }).last();
+    const table = reply.getByRole("table");
+    await expect(table.getByRole("columnheader", { name: "Policy" })).toBeVisible();
+    await expect(table.getByRole("row")).toHaveCount(3);
+    await expect(reply).not.toContainText("| --- |");
+    await expect(reply.locator(".md-code")).toContainText("curl -X POST");
+    await expect(reply.getByRole("button", { name: "Copy code" })).toBeVisible();
+    await expect(reply.locator("strong")).toHaveText("Hot");
+    const step = panel.getByLabel("Tool step");
+    await expect(step).toHaveText("Checked models");
+    const reasoning = reply.getByRole("button", { name: /^Thought/ });
+    await expect(reasoning).toHaveAttribute("aria-expanded", "false");
+    await expect(reply).not.toContainText("A table is clearest.");
+    await expect(panel.getByRole("button", { name: /^Thought/ })).toHaveCount(2);
+    await shots(page, "rich", async () => { await expect(table).toBeVisible(); });
+    await noHorizontalOverflow(page, "rich reply");
+    await reasoning.click();
+    await expect(reply).toContainText("A table is clearest.");
+    await shots(page, "reasoning", async () => { await expect(reply).toContainText("A table is clearest."); });
+  });
+
+  test("opens straight to the chat once set up, and settings only behind the gear or when the model is gone", async ({ page, request }) => {
+    const service = api(request);
+    await service.setBarista(true, hotModel, "ask");
+    await open(page);
+    await page.getByRole("button", { name: "Barista", exact: true }).click();
+    const panel = page.getByRole("complementary", { name: "Barista" });
+    await expect(panel.getByLabel("Message Barista")).toBeFocused();
+    await expect(panel.getByRole("form", { name: "Barista settings" })).toHaveCount(0);
+    await panel.getByRole("button", { name: "Barista settings" }).click();
+    await expect(panel.getByRole("form", { name: "Barista settings" })).toBeVisible();
+    await expect(panel.getByLabel("Message Barista")).toHaveCount(0);
+    await panel.getByRole("button", { name: "Barista settings" }).click();
+    await expect(panel.getByLabel("Message Barista")).toBeVisible();
+
+    await page.route("**/v1/juiced/catalog", async (route) => {
+      const response = await route.fetch();
+      const body = await response.json();
+      await route.fulfill({ response, json: { ...body, data: body.data.filter((model: any) => model.id !== hotModel) } });
+    });
+    const settings = panel.getByRole("form", { name: "Barista settings" });
+    await expect(settings).toBeVisible();
+    await expect(panel.getByRole("status").filter({ hasText: `${hotModel} is no longer registered. Pick another model.` })).toBeVisible();
+    await expect(panel.getByRole("button", { name: "Barista settings" })).toHaveCount(0);
+    await settings.getByLabel("Model", { exact: true }).selectOption(modelId);
+    await settings.getByRole("button", { name: "Save" }).click();
+    await expect(panel.getByLabel("Barista status")).toContainText(modelId);
+    await expect(panel.getByLabel("Message Barista")).toBeVisible();
+    expect((await service.barista()).model).toBe(modelId);
+  });
+
+  test("pinning docks Barista beside the workspace and the choice stays on this client", async ({ page, request }, info) => {
+    const service = api(request);
+    await service.setBarista(true, hotModel, "full");
+    await open(page);
+    await page.getByRole("button", { name: "Barista", exact: true }).click();
+    const panel = page.getByRole("complementary", { name: "Barista" });
+    const pin = panel.getByRole("button", { name: "Pin Barista" });
+    if (info.project.name !== "desktop") {
+      await expect(pin).toHaveCount(0);
+      const box = (await panel.boundingBox())!;
+      expect(box.x).toBeLessThanOrEqual(page.viewportSize()!.width - box.width + 1);
+      await shots(page, "unpinned", async () => { await expect(panel).toBeVisible(); });
+      return;
+    }
+    const workspace = page.locator("main#workspace");
+    const overlayWidth = (await workspace.boundingBox())!.width;
+    await shots(page, "unpinned", async () => { await expect(panel).toBeVisible(); });
+    await pin.click();
+    await expect(pin).toHaveAttribute("aria-pressed", "true");
+    await expect(page.locator(".app-shell")).toHaveClass(/barista-docked/);
+    const docked = (await workspace.boundingBox())!;
+    const box = (await panel.boundingBox())!;
+    expect(docked.width).toBeLessThan(overlayWidth - 300);
+    expect(docked.x + docked.width).toBeLessThanOrEqual(box.x + 1);
+    expect(Math.round(box.x + box.width)).toBe(page.viewportSize()!.width);
+    await page.keyboard.press("Escape");
+    await expect(panel).toBeVisible();
+    await noHorizontalOverflow(page, "pinned");
+    await shots(page, "pinned", async () => { await expect(panel).toBeVisible(); });
+    await page.setViewportSize({ width: 1280, height: 800 });
+
+    await page.reload();
+    await expect(panel).toBeVisible();
+    await expect(page.locator(".app-shell")).toHaveClass(/barista-docked/);
+    await page.setViewportSize({ width: 820, height: 900 });
+    await expect(page.locator(".app-shell")).not.toHaveClass(/barista-docked/);
+    await expect(panel.getByRole("button", { name: "Pin Barista" })).toHaveCount(0);
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await panel.getByRole("button", { name: "Close Barista" }).click();
+    await expect(panel).toBeHidden();
+    await expect(page.locator(".app-shell")).not.toHaveClass(/barista-docked/);
+    await page.reload();
+    await expect(page.getByRole("heading", { name: "Dashboard", level: 1 })).toBeVisible();
+    await expect(panel).toBeHidden();
+    await page.getByRole("button", { name: "Barista", exact: true }).click();
+    await expect(page.locator(".app-shell")).toHaveClass(/barista-docked/);
+    await panel.getByRole("button", { name: "Pin Barista" }).click();
+    await expect(page.locator(".app-shell")).not.toHaveClass(/barista-docked/);
+    expect(await service.barista()).toMatchObject({ enabled: true, model: hotModel });
+  });
+
+  test("a vision model takes images as content parts, other models offer no image input", async ({ page, request }) => {
+    const service = api(request);
+    await service.setBarista(true, hotModel, "full");
+    await open(page);
+    await page.getByRole("button", { name: "Barista", exact: true }).click();
+    const panel = page.getByRole("complementary", { name: "Barista" });
+    await expect(panel.getByLabel("Message Barista")).toBeVisible();
+    await expect(panel.getByRole("button", { name: "Add images" })).toHaveCount(0);
+
+    await withVision(page, hotModel);
+    const bodies = await script(page, [() => text("That screenshot shows the GPU at **72%**.")]);
+    await expect(panel.getByRole("button", { name: "Add images" })).toBeVisible();
+    await expect(panel.getByLabel("Barista status")).toContainText("Images");
+    await panel.getByLabel("Image files").setInputFiles({ name: "usage.png", mimeType: "image/png", buffer: await picture(page) });
+    const strip = panel.getByRole("list", { name: "Images to send" });
+    await expect(strip.getByRole("img", { name: "usage.png" })).toBeVisible();
+    await panel.getByLabel("Message Barista").fill("What does this show?");
+    await shots(page, "image-attached", async () => { await expect(strip).toBeVisible(); });
+    await panel.getByLabel("Message Barista").press("Enter");
+    await expect(panel.getByRole("article", { name: "Barista reply" })).toContainText("That screenshot shows the GPU at 72%.");
+    await expect(strip).toHaveCount(0);
+    await expect(panel.getByRole("article", { name: "You" }).getByRole("img")).toBeVisible();
+    const sent = bodies[0].messages.at(-1);
+    expect(sent.role).toBe("user");
+    expect(sent.content[0]).toEqual({ type: "text", text: "What does this show?" });
+    expect(sent.content[1].type).toBe("image_url");
+    expect(sent.content[1].image_url.url).toMatch(/^data:image\/jpeg;base64,/);
+    await shots(page, "image-sent", async () => { await expect(panel.getByRole("article", { name: "You" }).getByRole("img")).toBeVisible(); });
   });
 });

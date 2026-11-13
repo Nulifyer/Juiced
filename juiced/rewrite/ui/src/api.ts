@@ -1,5 +1,6 @@
 import { parseSnapshot, type Snapshot, type Model } from "./domain";
 import { multipartPayloadBytes } from "./speech";
+import { REQUEST_LIMIT_BYTES, requestBytes, tooLarge, type MessageContent } from "./chatImages";
 
 export class ApiError extends Error {
   constructor(message: string, readonly status: number, readonly code: string, readonly body?: unknown) { super(message); }
@@ -26,10 +27,12 @@ export class Client {
     throw new ApiError("The worker returned an unsupported chat response. Check the selected service's compatibility.", 200, "invalid_chat_response");
   }
 
-  async streamChat(model: string, messages: { role: string; content: string }[], maxTokens: number, onUpdate: (update: ChatStreamUpdate) => void, signal?: AbortSignal): Promise<ChatStreamUpdate> {
+  async streamChat(model: string, messages: { role: string; content: MessageContent }[], maxTokens: number, onUpdate: (update: ChatStreamUpdate) => void, signal?: AbortSignal): Promise<ChatStreamUpdate> {
     const headers: Record<string, string> = { "Content-Type": "application/json", Accept: "text/event-stream" };
     if (this.key) headers.Authorization = `Bearer ${this.key}`;
-    const response = await fetch(`${this.base}/v1/chat/completions`, { method: "POST", headers, signal, cache: "no-store", redirect: "error", body: JSON.stringify({ model, messages, stream: true, max_tokens: maxTokens, stream_options: { include_usage: true } }) });
+    const body = { model, messages, stream: true, max_tokens: maxTokens, stream_options: { include_usage: true } };
+    if (requestBytes(body) > REQUEST_LIMIT_BYTES) throw new ApiError(tooLarge, 413, "request_too_large");
+    const response = await fetch(`${this.base}/v1/chat/completions`, { method: "POST", headers, signal, cache: "no-store", redirect: "error", body: JSON.stringify(body) });
     if (!response.ok || !response.body) {
       let message = `The request failed (${response.status}).`;
       try { const value = await response.json(); message = value?.error?.message ?? message; } catch { /* Error bodies are optional. */ }

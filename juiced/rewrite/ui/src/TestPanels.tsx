@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { chatTestTokenLimit, type Client } from "./api";
 import { eligible, offers, type Model } from "./domain";
 import { Button, Empty } from "./ui";
+import { AssistantBody, Composer, thinkingClock, useAttachments } from "./ChatParts";
+import { withImages } from "./chatImages";
 
 type Vector = { values: number[]; norm: number };
 const cosine = (left: Vector, right: Vector) => left.values.reduce((sum, value, index) => sum + value * (right.values[index] ?? 0), 0) / (left.norm * right.norm || 1);
@@ -39,7 +41,7 @@ export function EmbeddingsTest({ model: selected, client, online }: { model: Mod
   </section>;
 }
 
-type Column = { model: string; content: string; tokens: number | null; rate: number | null; firstToken: number | null; total: number | null; error: string; streaming: boolean };
+type Column = { model: string; content: string; reasoning: string; since?: number; thoughtMs?: number; tokens: number | null; rate: number | null; firstToken: number | null; total: number | null; error: string; streaming: boolean };
 
 export function CompareTest({ models, client, online }: { models: Model[]; client: Client; online: boolean }) {
   const ready = models.filter((model) => eligible(model) && offers(model, "chat"));
@@ -49,33 +51,34 @@ export function CompareTest({ models, client, online }: { models: Model[]; clien
   const controllers = useRef<AbortController[]>([]);
   useEffect(() => () => controllers.current.forEach((controller) => controller.abort()), [client]);
   const busy = columns.some((column) => column.streaming);
+  const chosen = picked.filter((id, index) => id && picked.indexOf(id) === index).map((id) => ready.find((model) => model.id === id)).filter((model): model is Model => !!model);
+  const vision = chosen.length >= 2 && chosen.every((model) => model.vision === true);
+  const attachments = useAttachments(vision);
   async function run() {
-    const chosen = picked.filter((id, index) => id && picked.indexOf(id) === index).map((id) => ready.find((model) => model.id === id)).filter((model): model is Model => !!model);
-    if (busy || chosen.length < 2 || !prompt.trim()) return;
+    if (busy || chosen.length < 2 || (!prompt.trim() && attachments.list.length === 0)) return;
     controllers.current = chosen.map(() => new AbortController());
-    setColumns(chosen.map((model) => ({ model: model.id, content: "", tokens: null, rate: null, firstToken: null, total: null, error: "", streaming: true })));
-    const messages = [{ role: "user", content: prompt.trim() }];
+    setColumns(chosen.map((model) => ({ model: model.id, content: "", reasoning: "", tokens: null, rate: null, firstToken: null, total: null, error: "", streaming: true })));
+    const messages = [{ role: "user", content: withImages(prompt.trim(), attachments.list) }];
     await Promise.all(chosen.map(async (model, index) => {
       const started = performance.now();
+      const clock = thinkingClock();
       const update = (patch: Partial<Column>) => setColumns((current) => current.map((column, at) => at === index ? { ...column, ...patch } : column));
       let first: number | null = null;
       try {
-        const final = await client.streamChat(model.id, messages, chatTestTokenLimit(model), (state) => { if (first === null && (state.content || state.reasoning)) { first = performance.now() - started; update({ firstToken: first }); } update({ content: state.content || state.reasoning }); }, controllers.current[index]!.signal);
-        update({ content: final.content, tokens: final.outputTokens, rate: final.decodeRate, total: performance.now() - started, streaming: false });
-      } catch (failure) { update({ streaming: false, error: controllers.current[index]?.signal.aborted ? "Stopped." : failure instanceof Error ? failure.message : "The request failed." }); }
+        const final = await client.streamChat(model.id, messages, chatTestTokenLimit(model), (state) => { if (first === null && (state.content || state.reasoning)) { first = performance.now() - started; update({ firstToken: first }); } update({ content: state.content, reasoning: state.reasoning, ...clock.observe(state.reasoning, !!state.content) }); }, controllers.current[index]!.signal);
+        update({ content: final.content, reasoning: final.reasoning, thoughtMs: clock.finish(), tokens: final.outputTokens, rate: final.decodeRate, total: performance.now() - started, streaming: false });
+      } catch (failure) { update({ streaming: false, thoughtMs: clock.finish(), error: controllers.current[index]?.signal.aborted ? "Stopped." : failure instanceof Error ? failure.message : "The request failed." }); }
     }));
   }
   if (ready.length < 2) return <Empty title="Add another chat model to compare">Compare needs at least two chat models that are Hot or On demand.</Empty>;
   return <section className="test-panel compare" aria-label="Compare models">
     <div className="toolbar">{[0, 1, 2].slice(0, Math.min(3, ready.length)).map((slot) => <select key={slot} aria-label={`Model ${slot + 1}`} value={picked[slot] ?? ""} disabled={busy} onChange={(event) => setPicked((current) => { const next = [...current]; next[slot] = event.target.value; return next; })}><option value="">{slot < 2 ? "Choose a model…" : "Optional third model"}</option>{ready.map((model) => <option key={model.id} value={model.id}>{model.id}</option>)}</select>)}</div>
-    <form className="composer" onSubmit={(event) => { event.preventDefault(); void run(); }}>
-      <textarea aria-label="Prompt" rows={2} value={prompt} placeholder="Ask all selected models the same thing" onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void run(); } }} />
-      {busy ? <Button key="stop" type="button" variant="danger" onClick={() => controllers.current.forEach((controller) => controller.abort())}>Stop</Button> : <Button key="compare" variant="primary" type="submit" disabled={!prompt.trim() || !online || new Set(picked.filter(Boolean)).size < 2}>Compare</Button>}
-    </form>
+    <Composer label="Prompt" placeholder={vision ? "Ask all selected models, or add images" : "Ask all selected models the same thing"} value={prompt} onChange={setPrompt} onSubmit={() => void run()} busy={busy} onStop={() => controllers.current.forEach((controller) => controller.abort())} canSend={(!!prompt.trim() || attachments.list.length > 0) && online && new Set(picked.filter(Boolean)).size >= 2} attachments={attachments} vision={vision} submitLabel="Compare" />
     {columns.length > 0 && <div className="compare-grid" style={{ gridTemplateColumns: `repeat(${columns.length}, minmax(0, 1fr))` }}>{columns.map((column) => <article className="panel compare-column" key={column.model} aria-label={column.model}>
       <header className="panel-head"><h3 className="break-word">{column.model}</h3></header>
       <dl className="compare-stats"><div><dt>First token</dt><dd>{column.firstToken === null ? "—" : `${Math.round(column.firstToken)} ms`}</dd></div><div><dt>Total</dt><dd>{column.total === null ? "—" : `${(column.total / 1000).toFixed(1)} s`}</dd></div><div><dt>Speed</dt><dd>{column.rate ? `${Math.round(column.rate)} tok/s` : "—"}</dd></div></dl>
-      {column.error ? <p className="inline-error" role="alert">{column.error}</p> : <p className="compare-text">{column.content || (column.streaming ? "Waiting…" : "")}</p>}
+      {column.error && <p className="inline-error" role="alert">{column.error}</p>}
+      {!column.error && <div className="compare-text"><AssistantBody text={column.content} reasoning={column.reasoning} streaming={column.streaming} since={column.since} thoughtMs={column.thoughtMs} empty="Waiting…" /></div>}
     </article>)}</div>}
   </section>;
 }

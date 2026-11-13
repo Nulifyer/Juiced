@@ -13,7 +13,7 @@ import { Dashboard } from "./Dashboard";
 import { Engines } from "./Backends";
 import { Diagnostics } from "./Diagnostics";
 import { Aliases } from "./Aliases";
-import { Barista, BaristaInvite, invitationKey, useBarista } from "./Barista";
+import { Barista, BaristaInvite, invitationKey, useBarista, useBaristaPanel } from "./Barista";
 import { IdleDefault } from "./Residency";
 import { gib, percent, rate, useSystemStats } from "./live";
 import { clearToasts, dismiss, notify, useToasts } from "./toast";
@@ -43,7 +43,6 @@ export function App() {
   const [key, setKey] = useState("");
   const [connectionOpen, setConnectionOpen] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [baristaOpen, setBaristaOpen] = useState(false);
   const [selected, setSelected] = useState("");
   const [selectedFile, setSelectedFile] = useState("");
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
@@ -63,10 +62,12 @@ export function App() {
   const toasts = useToasts();
   const live = useSystemStats(client, online);
   const barista = useBarista(client, online);
+  const panel = useBaristaPanel();
+  const baristaOpen = panel.open && !!barista.settings;
+  const setBaristaOpen = panel.setOpen;
   const inviteKey = invitationKey(base);
   const [dismissed, setDismissed] = useState(() => readLocal(inviteKey) === "dismissed");
   useEffect(() => { setDismissed(readLocal(inviteKey) === "dismissed"); }, [inviteKey]);
-  useEffect(() => { if (!barista.settings) setBaristaOpen(false); }, [barista.settings]);
   const workspace = useRef<HTMLElement>(null);
   useLayoutEffect(() => { workspace.current?.scrollTo(0, 0); }, [screen, client]);
   const poll = useRef<AbortController | null>(null);
@@ -99,7 +100,7 @@ export function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [mobileOpen]);
 
-  const closeBarista = useCallback(() => setBaristaOpen(false), []);
+  const closeBarista = useCallback(() => setBaristaOpen(false), [setBaristaOpen]);
   const leave = (action: () => void) => { if (dirty) setPending(() => action); else action(); };
   const mutate: Mutate = async (path, body, success) => {
     if (mutation.current && !mutation.current.controller.signal.aborted) return false;
@@ -149,7 +150,7 @@ export function App() {
     : screen === "diagnostics" ? <Tabs label="Diagnostics views" value={diagnosticsTab} onChange={setDiagnosticsTab} items={[["performance", "Performance"], ["requests", "Requests"], ["logs", "Logs"]]} />
     : null;
 
-  return <div className={`app-shell ${hasInspector ? "has-inspector" : ""}`}>
+  return <div className={`app-shell ${hasInspector ? "has-inspector" : ""} ${baristaOpen && panel.docked ? "barista-docked" : ""}`}>
     <a className="skip-link" href="#workspace">Skip to workspace</a>
     <header className="topbar">
       <div className="brand"><Button variant="ghost" className="mobile-menu" aria-label="Toggle navigation" aria-expanded={mobileOpen} onClick={() => setMobileOpen(!mobileOpen)}><Icon name="menu" /></Button><img src={logo} alt="" width="22" height="22" /><span>Juiced</span><Badge tone="warning">Preview</Badge></div>
@@ -200,7 +201,7 @@ export function App() {
     <div className="toasts" aria-live="polite">
       {toasts.map((toast) => <div key={toast.id} className={`toast ${toast.tone}`} role={toast.tone === "error" ? "alert" : "status"}><span>{toast.text}</span><Button variant="ghost" aria-label={toast.tone === "error" ? "Dismiss error" : "Dismiss notification"} onClick={() => dismiss(toast.id)}><Icon name="close" size={14} /></Button></div>)}
     </div>
-    {barista.settings && <Barista open={baristaOpen} onClose={closeBarista} models={snapshot?.models ?? []} client={client} online={online} settings={barista.settings} onSettings={barista.setSettings} onChanged={() => { if (!dirty) setEpoch((value) => value + 1); void refresh(); }} />}
+    {barista.settings && <Barista open={baristaOpen} onClose={closeBarista} models={snapshot?.models ?? []} ready={!!snapshot} layout={panel.layout} client={client} online={online} settings={barista.settings} onSettings={barista.setSettings} onChanged={() => { if (!dirty) setEpoch((value) => value + 1); void refresh(); }} />}
     {connectionOpen && <ConnectionDialog base={base} apiKey={key} version={snapshot?.version} onClose={() => setConnectionOpen(false)} onSave={(nextBase, nextKey) => { setBase(nextBase); setKey(nextKey); setEpoch((value) => value + 1); writeLocal("juiced.rewrite.base", nextBase); setConnectionOpen(false); }} />}
     {pending && <Dialog title="Discard unsaved changes?" onClose={() => setPending(null)}><p>Your model changes have not been saved.</p><div className="dialog-actions"><Button onClick={() => setPending(null)}>Keep editing</Button><Button variant="danger" onClick={() => { setDirty(false); setEpoch(epoch + 1); pending(); setPending(null); }}>Discard changes</Button></div></Dialog>}
   </div>;

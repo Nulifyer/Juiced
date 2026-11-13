@@ -23,6 +23,8 @@ export type Model = {
   uncertain_state_operations?: number;
   request_limits?: { input_bytes: number; batch: number; output_tokens: number };
   residency?: Residency;
+  /** The worker binds a vision projector, so chat messages may include images. */
+  vision?: boolean;
 };
 export type RequestRecord = { id: number; model: string; operation: string; outcome: string; status: number | null; elapsed_ms: number; input_tokens?: number | null; output_tokens?: number | null; decode_tokens_per_second?: number | null };
 export type CacheControlMemory = { state: "accounted" | "unavailable" | "legacy"; reason: string | null; metadata_bytes: number; scratch_bytes: number; reserved_bytes: number; outstanding_bytes: number; active_operations: number; bounds?: { bootstrap_bytes: number; metadata_bytes: number; scratch_bytes: number; state_scratch_bytes: number; page_scratch_bytes: number; response_bytes: number } };
@@ -136,7 +138,7 @@ export function parseSnapshot(catalog: unknown, state: unknown, requests: unknow
     return positive(limits.input_bytes) && positive(limits.batch) && positive(limits.output_tokens);
   };
   for (const model of c.data) {
-    if (!model || typeof model.id !== "string" || !Object.hasOwn(policyNames, model.policy) || !Number.isSafeInteger(model.revision) || !limitsValid(model.request_limits) || (model.artifact_set !== undefined && (typeof model.artifact_set !== "string" || !/^set-[a-f0-9]{64}$/.test(model.artifact_set))) || (model.runtime_package !== undefined && (typeof model.runtime_package !== "string" || !/^package-[a-f0-9]{64}$/.test(model.runtime_package))) || (model.startup_waiting !== undefined && typeof model.startup_waiting !== "boolean") || (model.cleanup_retry_available !== undefined && typeof model.cleanup_retry_available !== "boolean") || (model.uncertain_requests !== undefined && (!Number.isSafeInteger(model.uncertain_requests) || model.uncertain_requests < 0)) || (model.uncertain_state_operations !== undefined && (!Number.isSafeInteger(model.uncertain_state_operations) || model.uncertain_state_operations < 0)) || !Array.isArray(model.operations) || !model.operations.every((operation: unknown) => typeof operation === "string")) {
+    if (!model || typeof model.id !== "string" || !Object.hasOwn(policyNames, model.policy) || !Number.isSafeInteger(model.revision) || !limitsValid(model.request_limits) || (model.artifact_set !== undefined && (typeof model.artifact_set !== "string" || !/^set-[a-f0-9]{64}$/.test(model.artifact_set))) || (model.runtime_package !== undefined && (typeof model.runtime_package !== "string" || !/^package-[a-f0-9]{64}$/.test(model.runtime_package))) || (model.startup_waiting !== undefined && typeof model.startup_waiting !== "boolean") || (model.vision !== undefined && typeof model.vision !== "boolean") || (model.cleanup_retry_available !== undefined && typeof model.cleanup_retry_available !== "boolean") || (model.uncertain_requests !== undefined && (!Number.isSafeInteger(model.uncertain_requests) || model.uncertain_requests < 0)) || (model.uncertain_state_operations !== undefined && (!Number.isSafeInteger(model.uncertain_state_operations) || model.uncertain_state_operations < 0)) || !Array.isArray(model.operations) || !model.operations.every((operation: unknown) => typeof operation === "string")) {
       throw new Error("The service returned an invalid model catalog. Refresh or check the service version.");
     }
   }

@@ -174,3 +174,37 @@ export function rowFor(table: Locator, id: string) {
 export async function tryModel(page: Page, id: string) {
   await page.getByRole("region", { name: "Try a model" }).getByLabel("Model").selectOption(id);
 }
+
+/** Reports the model as accepting images, as a llama.cpp worker with a vision projector does. */
+export async function withVision(page: Page, id: string) {
+  await page.route("**/v1/juiced/catalog", async (route) => {
+    const response = await route.fetch();
+    const body = await response.json();
+    for (const model of body.data) if (model.id === id) model.vision = true;
+    await route.fulfill({ response, json: body });
+  });
+}
+
+export async function picture(page: Page) {
+  return Buffer.from(await page.evaluate(() => {
+    const canvas = document.createElement("canvas"); canvas.width = 320; canvas.height = 200;
+    const context = canvas.getContext("2d")!;
+    const gradient = context.createLinearGradient(0, 0, 320, 200); gradient.addColorStop(0, "#8cacf1"); gradient.addColorStop(1, "#e5bd7b");
+    context.fillStyle = gradient; context.fillRect(0, 0, 320, 200);
+    context.fillStyle = "#0d0e10"; context.font = "bold 40px sans-serif"; context.fillText("GPU 72%", 70, 115);
+    return canvas.toDataURL("image/png").split(",")[1]!;
+  }), "base64");
+}
+
+/** Screenshots at the four review sizes when JUICED_BARISTA_SHOTS names a directory. */
+export async function capture(page: Page, name: string, ready: () => Promise<void>) {
+  const directory = process.env.JUICED_BARISTA_SHOTS;
+  if (!directory) return;
+  const original = page.viewportSize()!;
+  for (const [width, height] of [[390, 844], [820, 1180], [1280, 900], [2359, 1409]] as const) {
+    await page.setViewportSize({ width, height });
+    await ready();
+    await page.screenshot({ path: `${directory}/${name}-${width}x${height}.png` });
+  }
+  await page.setViewportSize(original);
+}

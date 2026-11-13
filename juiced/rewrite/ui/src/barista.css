@@ -1,5 +1,12 @@
 .barista-panel { position: fixed; top: 50px; right: 0; bottom: 0; z-index: 12; width: min(420px, 100vw); display: flex; flex-direction: column; gap: 10px; padding: 10px 14px 14px; background: #121317; border-left: 1px solid var(--border); box-shadow: -12px 0 32px #0006; }
 .barista-panel[hidden] { display: none; }
+.barista-panel.docked { position: static; grid-row: 2; grid-column: 3; width: auto; min-width: 0; min-height: 0; z-index: auto; box-shadow: none; background: #111215; }
+.app-shell.barista-docked { --barista-width: 400px; grid-template-columns: 216px minmax(0, 1fr) var(--barista-width); }
+@media (max-width: 1150px) { .app-shell.barista-docked { grid-template-columns: 190px minmax(0, 1fr) 360px; } }
+@media (min-width: 1700px) { .app-shell.barista-docked { --barista-width: 440px; } }
+@media (min-width: 2200px) { .app-shell.barista-docked { --barista-width: 480px; } }
+.barista-icon { padding: 6px; min-width: 32px; }
+.barista-icon[aria-pressed="true"] { background: var(--secondary); color: var(--foreground); }
 .barista-head { display: flex; align-items: center; gap: 4px; min-height: 34px; }
 .barista-spacer { flex: 1; }
 .barista-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: .75rem; color: var(--muted); margin-top: -6px; }
@@ -11,12 +18,22 @@
 .barista-unqualified { display: flex; align-items: center; gap: 4px; margin-top: 6px; color: var(--muted); font-size: .75rem; }
 .barista-thread { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding: 4px 2px; }
 .barista-thread > .empty { margin: auto 0; }
-.barista-panel .chat-turn { max-width: 92%; font-size: .82rem; }
-.barista-step { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: .75rem; color: var(--muted); }
-.barista-detail { flex-basis: 100%; padding-left: 14px; color: var(--bad); overflow-wrap: anywhere; }
+.barista-panel .chat-turn { font-size: .82rem; }
+.barista-panel .chat-turn.user { max-width: 88%; }
+.barista-step { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: .74rem; line-height: 1.35; color: var(--muted); }
+.barista-step + .barista-step { margin-top: -6px; }
+.barista-step-label { min-width: 0; overflow-wrap: anywhere; }
+.barista-detail { flex-basis: 100%; padding-left: 19px; color: var(--bad); overflow-wrap: anywhere; }
+.step-icon { display: inline-grid; place-items: center; width: 13px; flex: none; }
+.step-icon.done { color: var(--good); }
+.step-icon.failed { color: var(--bad); }
+.step-icon.skipped { color: var(--muted); }
+.step-spinner { width: 11px; height: 11px; margin: 0 1px; flex: none; border-radius: 50%; border: 1.5px solid var(--border); border-top-color: var(--warning); animation: step-spin .8s linear infinite; }
+@keyframes step-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .step-spinner { animation: none; border-color: var(--warning); } }
 .barista-change { display: grid; gap: 8px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); font-size: .8rem; }
 .barista-change.pending { border-color: #655037; background: #1a1814; }
-.barista-question { font-weight: 500; overflow-wrap: anywhere; }
+.barista-question { display: flex; align-items: center; gap: 6px; font-weight: 500; overflow-wrap: anywhere; }
 .barista-result { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; color: var(--muted); font-size: .78rem; }
 .barista-change.failed .barista-result span:last-child { color: var(--bad); }
 .barista-note { color: var(--muted); font-size: .75rem; text-align: center; }

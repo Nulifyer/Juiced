@@ -1,0 +1,15 @@
+{
+  "repository": "https://github.com/pingdotgg/t3code",
+  "revision": "59e64eef881632a23f89c4138bcf37f23d92bf93",
+  "license": "MIT; LICENSE.t3code",
+  "files": {
+    "apps/web/src/components/chat/markdownStreamBlocks.ts": {
+      "sha256": "ba8e8c070e9c3bce8811d70b499e132aa967f9ad22d07d343fd1471fce30b236",
+      "use": "src/markdownBlocks.ts: streaming Markdown block splitter, insight callouts removed"
+    },
+    "apps/web/src/components/chat/composerAttachmentFiles.ts": {
+      "sha256": "c482acfc9bdbc69e84025f8b92fbc729fa00eebee0951d91dd6701d1d9e707b4",
+      "use": "src/chatImages.ts: image MIME inference from file extensions"
+    }
+  }
+}

@@ -1,4 +1,4 @@
-import { api, expect, hotModel, modelId, navigate, open, sourceOrigin, speechModel, storedText, tab, test, tryModel } from "./support";
+import { api, capture, expect, hotModel, modelId, navigate, noHorizontalOverflow, open, picture, sourceOrigin, speechModel, storedText, tab, test, tryModel, withVision } from "./support";
 
 test.describe("Chat", () => {
   test("a streamed reply fills the thread, Stop cancels and New chat clears", async ({ page }) => {
@@ -43,6 +43,53 @@ test.describe("Chat", () => {
     await navigate(page, "Dashboard");
     await navigate(page, "Test services");
     await expect(page.getByRole("region", { name: "Chat test" }).getByRole("article")).toHaveCount(0);
+  });
+
+  test("renders Markdown replies with a reasoning row, and a vision model takes images", async ({ page }) => {
+    await withVision(page, hotModel);
+    const bodies: any[] = [];
+    const reply = "| Engine | Backend |\n| --- | --- |\n| llama.cpp | ROCm |\n| whisper.cpp | CPU |\n\n```json\n{\"backend\": \"rocm\"}\n```";
+    await page.route("**/v1/chat/completions", async (route) => {
+      bodies.push(route.request().postDataJSON());
+      const chunks = [{ choices: [{ index: 0, delta: { reasoning_content: "The picture shows a chart." } }] }, { choices: [{ index: 0, delta: { content: reply } }] }, { choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: { completion_tokens: 42 } }];
+      await route.fulfill({ status: 200, headers: { "content-type": "text/event-stream" }, body: chunks.map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`).join("") + "data: [DONE]\n\n" });
+    });
+    await open(page);
+    await navigate(page, "Test services");
+    await tryModel(page, hotModel);
+    await expect(page.getByRole("region", { name: "Try a model" })).toContainText("accepts images");
+    const chat = page.getByRole("region", { name: "Chat test" });
+    await chat.getByLabel("Image files").setInputFiles([{ name: "a.png", mimeType: "image/png", buffer: await picture(page) }, { name: "notes.txt", mimeType: "text/plain", buffer: Buffer.from("x") }]);
+    await expect(chat.getByRole("list", { name: "Images to send" }).getByRole("img")).toHaveCount(1);
+    await chat.getByRole("button", { name: "Remove a.png" }).click();
+    await expect(chat.getByRole("list", { name: "Images to send" })).toHaveCount(0);
+    await chat.getByLabel("Image files").setInputFiles({ name: "chart.png", mimeType: "image/png", buffer: await picture(page) });
+    await expect(chat.getByRole("button", { name: "Send" })).toBeEnabled();
+    await chat.getByRole("button", { name: "Send" }).click();
+    const answer = chat.getByRole("article", { name: "Model reply" });
+    await expect(answer.getByRole("table").getByRole("row")).toHaveCount(3);
+    await expect(answer.getByRole("button", { name: "Copy code" })).toBeVisible();
+    await expect(answer.getByRole("button", { name: /^Thought/ })).toHaveAttribute("aria-expanded", "false");
+    await expect(answer).toContainText("42 tokens");
+    expect(bodies[0].messages).toEqual([{ role: "user", content: [{ type: "image_url", image_url: { url: expect.stringMatching(/^data:image\/jpeg;base64,/) } }] }]);
+    await noHorizontalOverflow(page, "chat markdown");
+    await capture(page, "try-chat", async () => { await expect(answer.getByRole("table")).toBeVisible(); });
+
+    await chat.getByLabel("Prompt").fill("And now?");
+    await chat.getByLabel("Prompt").press("Enter");
+    await expect(answer).toHaveCount(2);
+    expect(bodies[1].messages[0].content[0].type).toBe("image_url");
+    expect(bodies[1].messages[2]).toEqual({ role: "user", content: "And now?" });
+  });
+
+  test("a model without vision offers no image input", async ({ page }) => {
+    await open(page);
+    await navigate(page, "Test services");
+    await tryModel(page, hotModel);
+    const chat = page.getByRole("region", { name: "Chat test" });
+    await expect(chat.getByLabel("Prompt")).toBeVisible();
+    await expect(chat.getByRole("button", { name: "Add images" })).toHaveCount(0);
+    await expect(page.getByRole("region", { name: "Try a model" })).not.toContainText("accepts images");
   });
 
   test("an On demand model loads on its first message", async ({ page, request }) => {

@@ -5,15 +5,20 @@ Enable the model and wait for its worker to load first.
 
 ## Test chat
 
-1. Open **Test services → Chat**.
-2. Choose a loaded model.
-3. Send a short prompt.
-4. Check that the answer completes.
-5. Use **Stop generation** if you need to cancel the request.
+1. Open **Test services → Try a model**.
+2. Choose a chat model. One that is not loaded loads on the first message.
+3. Send a short prompt and check that the answer completes.
+4. Use **Stop** to cancel the request.
 
-Attach an image only when the selected model has working vision support and its
-required components. Recording from the microphone requires browser permission
-and a secure browser context, normally HTTPS or localhost.
+Replies render as Markdown: tables, lists, links and code blocks with a copy
+button. When the model reasons first, a **Thinking** line shows while it works
+and becomes **Thought for Ns**; select it to read the reasoning.
+
+When the model line says **accepts images**, you can paste, drop or pick up to
+four images per message. Only llama.cpp models with a vision projector accept
+images. The browser shrinks each image to at most 1280 pixels on the long edge
+and sends it as JPEG. A chat request, images included, must stay under 2 MiB, so
+start a new chat if earlier images fill it.
 
 Chat results clear when you leave, change models, or reload. Connected clients
 own saved conversations.
@@ -56,7 +61,8 @@ Check [image API limits](../api/automatic1111.md) before configuring another cli
 
 1. Load at least two compatible chat models.
 2. Open **Test services → Compare**.
-3. Select the models and enter a shared prompt.
+3. Select the models and enter a shared prompt. Images are offered when every
+   selected model accepts them.
 4. Run the comparison and inspect each response and its timing.
 
 Keep prompt, generation settings, and available resources consistent when

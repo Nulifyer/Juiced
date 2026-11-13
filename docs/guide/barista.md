@@ -31,8 +31,19 @@ revision checks.
 
 ## Chat and settings
 
+Once Barista is on, the **Barista** button opens the chat directly. The setup
+appears again only when you select the settings button, or when the chosen
+model is no longer registered.
+
 The chat lives in the browser tab and clears when you close it. **Clear** starts
 over. The panel shows the model, the permission and what Barista is doing.
+Replies render as Markdown. Each tool Barista runs shows as one short line, and
+its reasoning folds into a **Thought for Ns** line that you can expand. When
+Barista's model accepts images, you can paste, drop or pick a screenshot.
+
+On wide screens, the pin button docks Barista beside the page instead of over
+it. This browser remembers whether Barista is pinned and open. On narrow
+screens Barista always opens over the page.
 
 The settings button in the panel changes the model or permissions, or turns
 Barista off. Turning it off stops the current request and refuses later tool
