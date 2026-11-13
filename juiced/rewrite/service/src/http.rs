@@ -25,6 +25,7 @@ use crate::barista::{
     call as barista_call, settings_set as barista_set, settings_view as barista_view,
 };
 use crate::connect::{access, health as protocol_health, key_create, key_revoke, protocol_set};
+use crate::media::{image_edit, image_upscale, image_variation};
 
 #[derive(Clone)]
 pub(crate) struct AppState {
@@ -92,7 +93,7 @@ async fn authorize(State(state): State<AppState>, mut request: Request, next: Ne
         return observe(crate::compat::rejection(raw_path, error));
     }
     let _ingress = if request.method() == axum::http::Method::POST && !admin {
-        let maximum = if path == "/audio/transcriptions" {
+        let maximum = if path == "/audio/transcriptions" || crate::media::upload_route(path) {
             crate::admission::SPEECH_INGRESS_BYTES
         } else {
             crate::admission::JSON_INGRESS_BYTES
@@ -179,7 +180,7 @@ macro_rules! define_routes {
         pub const ENDPOINTS: &[Endpoint] = &[$(Endpoint { method: method_name!($method), path: $path, authority: $authority, prefixes: PREFIXES }),*];
         fn native_routes() -> Router<AppState> {
             let router = Router::new();
-            $(let router = router.route($path, $method($handler).layer(DefaultBodyLimit::max(if $path == "/juiced/library/upload" { usize::MAX } else if $path == "/audio/transcriptions" { crate::admission::SPEECH_INGRESS_BYTES } else { crate::admission::JSON_INGRESS_BYTES })));)*
+            $(let router = router.route($path, $method($handler).layer(DefaultBodyLimit::max(if $path == "/juiced/library/upload" { usize::MAX } else if $path == "/audio/transcriptions" || crate::media::upload_route($path) { crate::admission::SPEECH_INGRESS_BYTES } else { crate::admission::JSON_INGRESS_BYTES })));)*
             router
         }
     };
@@ -254,6 +255,9 @@ define_routes! {
     (get, "/juiced/aliases", aliases, "operator"),
     (post, "/juiced/aliases", alias_set, "operator"),
     (post, "/images/generations", image_generation, "inference"),
+    (post, "/images/edits", image_edit, "inference"),
+    (post, "/images/variations", image_variation, "inference"),
+    (post, "/images/upscale", image_upscale, "inference"),
     (post, "/audio/speech", speech, "inference"),
     (get, "/juiced/voices", voices, "read"),
     (get, "/juiced/residency", residency, "operator"),
@@ -451,13 +455,34 @@ pub(crate) async fn media_exchange(
     body: Vec<u8>,
     limit: usize,
 ) -> Result<(Bytes, RequestLease), ApiError> {
+    media_exchange_with(
+        manager,
+        model,
+        operation,
+        priority,
+        path,
+        limit,
+        |request| {
+            request
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(body)
+        },
+    )
+    .await
+}
+
+pub(crate) async fn media_exchange_with(
+    manager: &Arc<Manager>,
+    model: &str,
+    operation: Operation,
+    priority: crate::admission::Priority,
+    path: &'static str,
+    limit: usize,
+    body: impl FnOnce(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
+) -> Result<(Bytes, RequestLease), ApiError> {
     let (base, mut lease) = manager.begin_queued(model, operation, priority).await?;
     lease.speech_dispatched();
-    let mut upstream = manager
-        .client
-        .post(format!("{base}{path}"))
-        .header(header::CONTENT_TYPE, "application/json")
-        .body(body)
+    let mut upstream = body(manager.client.post(format!("{base}{path}")))
         .timeout(manager.request_timeout)
         .send()
         .await
@@ -1093,7 +1118,10 @@ async fn model_artifacts_set(
 #[serde(deny_unknown_fields)]
 struct OptionsChange {
     expected_revision: u64,
-    options: crate::profiles::LaunchOptions,
+    #[serde(default)]
+    options: Option<crate::profiles::LaunchOptions>,
+    #[serde(default)]
+    image_defaults: Option<serde_json::Map<String, Value>>,
     #[serde(default)]
     apply: crate::supervisor::OptionsApply,
 }
@@ -1103,11 +1131,26 @@ async fn model_options_set(
     ApiJson(change): ApiJson<OptionsChange>,
 ) -> Result<Json<Value>, crate::supervisor::OptionsError> {
     tokio::spawn(async move {
-        state
-            .manager
-            .apply_options(&id, change.expected_revision, change.options, change.apply)
-            .await
-            .map(Json)
+        let manager = &state.manager;
+        match (change.options, change.image_defaults) {
+            (Some(options), None) => {
+                manager
+                    .apply_options(&id, change.expected_revision, options, change.apply)
+                    .await
+            }
+            (None, Some(patch)) => {
+                manager
+                    .apply_image_defaults(&id, change.expected_revision, patch, change.apply)
+                    .await
+            }
+            _ => Err(ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "options_body",
+                "Send either options or image_defaults.",
+            )
+            .into()),
+        }
+        .map(Json)
     })
     .await
     .map_err(|_| {
@@ -1260,6 +1303,7 @@ pub fn router(manager: Arc<Manager>, auth: Auth, ui: Option<PathBuf>) -> Router 
         .layer(Extension(wyoming))
         .layer(Extension(Arc::new(crate::realtime::Sessions::default())))
         .merge(crate::compat::router(state.manager.clone()))
+        .merge(crate::a1111::router(state.manager.clone()))
         .layer(DefaultBodyLimit::max(crate::admission::JSON_INGRESS_BYTES))
         .layer(middleware::from_fn_with_state(state.clone(), authorize))
         .merge(crate::llama_routes::public());
@@ -1423,9 +1467,9 @@ async fn protocols(State(state): State<AppState>) -> Json<Value> {
 
 pub(crate) fn protocol_inventory() -> Value {
     json!([
-        {"id": "openai", "support": "partial", "operations": ["models", "chat/completions", "completions", "responses", "embeddings", "audio/transcriptions", "audio/speech", "images/generations"], "note": "Forwarded only when the configured worker declares support."},
+        {"id": "openai", "support": "partial", "operations": ["models", "chat/completions", "completions", "responses", "embeddings", "audio/transcriptions", "audio/speech", "images/generations", "images/edits", "images/variations"], "note": "Forwarded only when the configured worker declares support."},
         {"id": "anthropic", "support": "partial", "note":"Selected text/tool Messages codecs and engine-native token counts; native usage required; advanced hosted tools unsupported."}, {"id": "ollama", "support": "partial", "note":"Chat, raw generate, embeddings and discovery; unsupported options are rejected."},
-        {"id": "mcp", "support": "partial", "note":"Stateless JSON Streamable HTTP, explicit-model inference tools and credential/session-scoped cancellation."}, {"id": "automatic1111", "support": "partial", "note":"POST /sdapi/v1/txt2img only, one image per request through sd.cpp workers."},
+        {"id": "mcp", "support": "partial", "note":"Stateless JSON Streamable HTTP, explicit-model inference tools and credential/session-scoped cancellation."}, {"id": "automatic1111", "support": "partial", "note":"sd-models, options, samplers, schedulers, progress and txt2img (up to 4 images) through sd.cpp workers; img2img and interrupt return 501."},
         {"id": "realtime", "support": "partial", "note": "WebSocket transcription only: pcm16 at 24 kHz with server VAD."}, {"id": "wyoming", "support": "partial", "note": "Speech to text and text to speech for Home Assistant on its own TCP port. No authentication: listen on a trusted network only."}
     ])
 }

@@ -1,3 +1,4 @@
+pub mod a1111;
 pub mod admission;
 pub mod api_keys;
 pub mod artifacts;

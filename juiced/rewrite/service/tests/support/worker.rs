@@ -761,6 +761,7 @@ async fn transcription(
 }
 
 const FIXTURE_PNG: &[u8] = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\x01\0\0\0\x01\x08\x06\0\0\0\x1f\x15\xc4\x89\0\0\0\rIDATx\x9cc\xf8\xcf\xc0\xf0\x1f\0\x05\0\x01\xff\x89\x99=\x1d\0\0\0\0IEND\xaeB`\x82";
+const FIXTURE_JPEG: &[u8] = b"\xff\xd8\xff\xe0\0\x10JFIF\0\x01\x01\0\0\x01\0\x01\0\0\xff\xd9";
 
 fn base64(bytes: &[u8]) -> String {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -817,7 +818,46 @@ async fn image_generation(
 
 async fn txt2img(State(fixture): State<Arc<Fixture>>, Json(body): Json<Value>) -> Response {
     media_delay(&fixture, "txt2img-request").await;
-    Json(json!({"images":[base64(FIXTURE_PNG)],"parameters":body,"info":"{}"})).into_response()
+    let images = vec![base64(FIXTURE_PNG); body["batch_size"].as_u64().unwrap_or(1) as usize];
+    Json(json!({"images":images,"parameters":body,"info":"{}"})).into_response()
+}
+
+async fn image_edits(State(fixture): State<Arc<Fixture>>, mut multipart: Multipart) -> Response {
+    media_delay(&fixture, "image-request").await;
+    let mut fields = serde_json::Map::new();
+    let mut files = Vec::new();
+    while let Some(field) = multipart.next_field().await.unwrap() {
+        let name = field.name().unwrap_or("").to_owned();
+        if let Some(filename) = field.file_name().map(str::to_owned) {
+            let content_type = field.content_type().unwrap_or("").to_owned();
+            let bytes = field.bytes().await.unwrap();
+            files.push(json!({"field":name,"filename":filename,"content_type":content_type,"bytes":bytes.len(),"sha256":format!("{:x}",Sha256::digest(&bytes))}));
+        } else {
+            fields.insert(name, Value::String(field.text().await.unwrap()));
+        }
+    }
+    let count = fields["n"]
+        .as_str()
+        .and_then(|n| n.parse().ok())
+        .unwrap_or(1);
+    let format = fields
+        .get("output_format")
+        .and_then(Value::as_str)
+        .unwrap_or("png")
+        .to_owned();
+    let image = if format == "jpeg" {
+        FIXTURE_JPEG
+    } else {
+        FIXTURE_PNG
+    };
+    Json(json!({"created":0,"data":vec![json!({"b64_json":base64(image)}); count],"output_format":format,"received":fields,"files":files}))
+        .into_response()
+}
+
+async fn sdapi_progress(
+    Query(query): Query<std::collections::BTreeMap<String, String>>,
+) -> Response {
+    Json(json!({"progress":0.0,"eta_relative":0.0,"state":{"skipped":false,"interrupted":false,"job":"","job_count":0,"job_no":0,"sampling_step":0,"sampling_steps":0},"textinfo":null,"current_image":null,"query":query})).into_response()
 }
 
 async fn audio_speech(
@@ -1341,6 +1381,10 @@ async fn main() {
         .route("/v1/models", get(|| async { Json(json!({"object":"list","data":[{"id":"fixture-media","object":"model"}]})) }))
         .route("/v1/images/generations", post(image_generation))
         .route("/sdapi/v1/txt2img", post(txt2img))
+        .route("/v1/images/edits", post(image_edits).layer(DefaultBodyLimit::max(8 * 1024 * 1024)))
+        .route("/sdapi/v1/samplers", get(|| async { Json(json!([{"name":"default","aliases":[],"options":{}},{"name":"euler_a","aliases":["Euler a"],"options":{}}])) }))
+        .route("/sdapi/v1/schedulers", get(|| async { Json(json!([{"name":"default","label":"Default"},{"name":"karras","label":"Karras"}])) }))
+        .route("/sdapi/v1/progress", get(sdapi_progress))
         .route("/v1/audio/speech", post(audio_speech))
         .route("/inference", post(transcription).layer(DefaultBodyLimit::max(8 * 1024 * 1024)))
         .route("/v1/audio/transcriptions", post(transcription).layer(DefaultBodyLimit::max(8 * 1024 * 1024)))

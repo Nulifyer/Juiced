@@ -25,6 +25,7 @@ mod access;
 mod aliases;
 mod barista;
 pub use aliases::AliasChange;
+mod images;
 mod options;
 pub use options::{OptionsApply, OptionsError};
 mod artifact_inventory;
@@ -2391,6 +2392,10 @@ impl Manager {
             .map_err(|error| ApiError::new(StatusCode::CONFLICT, error.code, error.message))?
             .1;
         let mut view = serde_json::json!({"model":id,"revision":spec.revision,"provider":spec.execution_profile.adapter,"saved":spec.execution_profile.options(),"effective_launch":effective,"physical_slots":spec.max_inflight,"reservation_bytes":self.worker(id)?.spec.resident_bytes,"context_semantics":"context_tokens is a total launch budget; serving context requires engine observation"});
+        if spec.execution_profile.adapter == crate::config::Provider::StableDiffusionCpp {
+            view["image_defaults"] =
+                crate::media::image_defaults_view(&spec.execution_profile.args);
+        }
         drop(config);
         if let Some((fields, metrics)) = self.launch_provenance(id).await {
             view["fields"] = fields;

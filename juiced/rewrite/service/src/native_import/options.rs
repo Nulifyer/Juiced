@@ -240,39 +240,15 @@ fn passthrough_arguments(
     }
 }
 
-const IMAGE_FLAGS: &[(&str, &str)] = &[
-    ("steps", "--steps"),
-    ("cfg_scale", "--cfg-scale"),
-    ("width", "-W"),
-    ("height", "-H"),
-    ("sampling_method", "--sampling-method"),
-    ("flow_shift", "--flow-shift"),
-    ("scheduler", "--scheduler"),
-    ("seed", "--seed"),
-];
-
+/// Native stores image defaults loosely typed; the shared validator sees canonical JSON so
+/// imported and edited defaults obey the same ranges.
 fn image_default(key: &str, value: &RawValue) -> Option<String> {
-    match key {
-        "sampling_method" | "scheduler" => text(value).filter(|text| {
-            !text.is_empty()
-                && text.len() <= 32
-                && text
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || b"_+-.".contains(&byte))
-        }),
-        "steps" => whole(value)
-            .filter(|steps| (1..=150).contains(steps))
-            .map(|steps| steps.to_string()),
-        "width" | "height" => whole(value)
-            .filter(|side| (64..=2048).contains(side))
-            .map(|side| side.to_string()),
-        "seed" => whole(value)
-            .filter(|seed| *seed >= -1 && *seed <= i64::from(u32::MAX))
-            .map(|seed| seed.to_string()),
-        _ => number(value)
-            .filter(|value| value.is_finite() && (0.0..=100.0).contains(value))
-            .map(|value| value.to_string()),
-    }
+    let canonical = match key {
+        "steps" | "width" | "height" | "seed" => Value::from(whole(value)?),
+        "cfg_scale" | "flow_shift" => Value::from(number(value)?),
+        _ => Value::String(text(value)?),
+    };
+    crate::media::image_default_argument(key, &canonical)
 }
 
 /// Maps the effective native options into launch options and worker arguments. Native
@@ -478,12 +454,12 @@ pub fn map_options(
                 }
             }
             key if engine == Some(Engine::StableDiffusionCpp)
-                && IMAGE_FLAGS.iter().any(|(name, _)| *name == key) =>
+                && crate::media::IMAGE_DEFAULTS.iter().any(|(name, _)| *name == key) =>
             {
-                let flag = IMAGE_FLAGS
+                let flag = crate::media::IMAGE_DEFAULTS
                     .iter()
                     .find(|(name, _)| *name == key)
-                    .map(|(_, flag)| *flag)
+                    .map(|(_, flags)| flags[0])
                     .expect("image flag");
                 match image_default(key, value) {
                     Some(text) => {
@@ -494,7 +470,7 @@ pub fn map_options(
                             "mapped",
                             scalar(value).or_else(|| serde_json::from_str(value.get()).ok()),
                             Some("image_defaults"),
-                            "Passed as the worker's default; requests that set it still override it.",
+                            "Passed as the worker's default and editable as the model's image_defaults; requests that set it still override it.",
                         ));
                     }
                     None => mapped.rows.push(row(
@@ -513,7 +489,7 @@ pub fn map_options(
                 "ignored",
                 scalar(value),
                 None,
-                "Requests are bounded by the service's own image size limits.",
+                "Edits without a size use the first image's size, scaled to at most 2048 pixels per side.",
             )),
             key => {
                 let (state, reason) = unsupported_reason(key).unwrap_or((
