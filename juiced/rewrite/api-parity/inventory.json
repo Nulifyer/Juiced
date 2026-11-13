@@ -28,7 +28,7 @@
     },
     {
       "path": "docs/api/juiced.md",
-      "sha256": "3bea4ee7b70f9b1c12d899121a97b9226814501c3a182197b16eb7f5a69cce7f",
+      "sha256": "16b3a1d672d761d2b47a37a768230775e1a648624c7c5b1a4d29cf065202f309",
       "hash_check": "snapshot_only"
     },
     {
@@ -123,7 +123,7 @@
     },
     {
       "path": "juiced/rewrite/service/src/compat.rs",
-      "sha256": "e28d80c126c6a1d9cff6afe5d58cdc649d53949fd90018b3f2df7b403818be75",
+      "sha256": "061c2268cd33305ca85a2ff699c3377a67de603d8388b7e10319a09d43d34102",
       "hash_check": "snapshot_only"
     },
     {
@@ -133,7 +133,7 @@
     },
     {
       "path": "juiced/rewrite/service/src/http.rs",
-      "sha256": "abaa81c18f639ad5b50125065bda9ea0459e430a1369266f68ef52aff4052b18",
+      "sha256": "d0efbe3ce193c46b1df887c360a96e634b23e5ee40e308936d74a49815b496ac",
       "hash_check": "snapshot_only"
     },
     {
@@ -228,7 +228,7 @@
     },
     {
       "path": "juiced/rewrite/rust-tests/tests/model_discovery.rs",
-      "sha256": "25b5f91fce499103832734e0371f215da2704c5303e09a891477e01e514f5f31",
+      "sha256": "22dce5da6c14f7e3221ae16c44dee6260322856e46c1045d385cffedb02c6d7a",
       "hash_check": "snapshot_only"
     },
     {

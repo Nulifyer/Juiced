@@ -23,14 +23,24 @@ JSON request limit includes any images. Consumer discovery at
 `/v1/models` includes only enabled available models. Native capabilities report
 declared operations, component status, selected execution, and unknowns.
 
-`/.well-known/juiced.json` points clients to native discovery.
+`/.well-known/juiced.json` points clients to native discovery. Its `auth` object
+says whether `read`, `inference` and `operator` routes are `open` or need a `key`.
+Its `credential` object describes the key sent with the request: `presented`,
+`accepted` and the `authority` it grants (`read`, `inference`, `operator` or
+`null`). An open deployment ignores keys, so a mistyped key shows
+`accepted: false` there instead of failing later. When every route needs a key,
+this file needs one too, and a `401` is the answer.
 
 ## Discover models for a client
 
-A client that registers models needs one request: `GET /v1/juiced/catalog`
-(read key). Check `discovery_schema_version` (currently `1`) before parsing the
-fields below; `/.well-known/juiced.json` and `GET /v1/juiced/capabilities`
-carry the same number. Fields not listed here are operator details and may change.
+A client that registers chat models needs one request:
+`GET /v1/models?service=chat` (read key). It lists enabled, downloaded chat models
+with the fields below. Without `service` it lists every enabled model and each
+alias. `GET /v1/juiced/catalog` carries the same fields for every registration,
+disabled ones included, plus operator details; it is the operator view. Check
+`discovery_schema_version` (currently `1`) before parsing;
+`/.well-known/juiced.json` and `GET /v1/juiced/capabilities` carry the same
+number. Fields not listed here are operator details and may change.
 
 | Field | Meaning |
 | --- | --- |
@@ -43,13 +53,15 @@ carry the same number. Fields not listed here are operator details and may chang
 | `context.observed_per_request_tokens`, `observed_slots` | What a loaded llama.cpp worker reported on `/props`; `null` otherwise |
 | `max_output_tokens` | Present only when the launch sets `--predict` |
 | `vision` | `true` when image input is accepted (`image_url` parts) |
-| `thinking.supported` | `true`, `false` or `null` (unknown) |
-| `thinking.request_control` | The per-request switch the template reads, usually `chat_template_kwargs.enable_thinking` |
-| `thinking.default` | `on` or `off` for requests that do not set the switch |
+| `thinking.supported` | `true` when the template has a reasoning switch or starts the reply in a reasoning block; `null` with reason `template_renders_reasoning_only` when it only renders earlier reasoning, which does not show the model reasons; `false` when it has no reasoning markup |
+| `thinking.request_control` | The request field the template reads: `chat_template_kwargs.enable_thinking` (boolean; top-level `enable_thinking` and `thinking: {"type": "disabled"}` also work), or `reasoning_effort` (top-level; llama-server copies it into `chat_template_kwargs.reasoning_effort`, and either place works). `reasoning_effort` sets how much the model reasons; on templates such as gpt-oss it cannot turn reasoning off |
+| `thinking.request_values` | `[false, true]` for `enable_thinking`. For `reasoning_effort`, the levels the loaded engine reports as rendering distinctly (`chat_template_caps.reasoning_effort_levels`), else `null`. A template that echoes any string lists every level llama.cpp probes, not only those the model was trained on |
+| `thinking.default` | `on` or `off` from the launch settings; else `on` for `enable_thinking` (llama-server enables it unless told otherwise) and for templates that start the reply in reasoning; else `null` |
 | `tool_calls.supported` | `true`, `false` or `null` |
 | `thinking.source`, `tool_calls.source` | Evidence: `engine_template_caps` or `engine_chat_template` (the loaded engine), `gguf_chat_template` (the weights' chat template), `launch_chat_template`, `launch_arguments` or `operations`; `reason` explains a `null` |
 | `labels` | Native labels derived from the same evidence: `chat`, `embeddings`, `transcription`, `tts`, `image`, `vision`, `reasoning`, `tool-calling` |
-| `capability_contract` | The native contract entry, including `limits.per_request_context_tokens` and `features` |
+| `capability_contract` | The native contract entry, including `limits.per_request_context_tokens` and `features` (`tools`, `vision`, `reasoning`: `"declared"`, `false` or `null` for unknown) |
+| `resident_bytes` | Memory reserved against the model budget while loaded. An unloaded model shows the reservation its next load takes; it is not the size on disk |
 
 Context is never a naive division of the launch total: llama-server pads the total
 to 256 tokens, divides it between slots unless the cache is unified, pads again and

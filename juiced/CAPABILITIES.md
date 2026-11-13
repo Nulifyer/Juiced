@@ -39,7 +39,7 @@ This endpoint does not install, probe-load, enable or reconfigure a model.
 | `limits.context_tokens` | Native model/config context metadata when known |
 | `limits.context_scope` | `model_or_configured_total_budget`; do not assume it is available independently to each chat |
 | `limits.concurrent_requests`, `per_request_context_tokens` | null where the native rich contract has not yet resolved exact limits |
-| `features` | Declared model tools/vision/reasoning labels or null, not a model behavior guarantee |
+| `features` | `"declared"`, `false` (the evidence says no) or `null` (unknown) for tools, vision and reasoning; not a model behavior guarantee |
 | `scope` | Agent execution and user-authored workflows are false; interaction is temporary service testing |
 
 Unknown values remain null or explicitly unrecorded. Clients must inspect enabled

@@ -358,10 +358,6 @@ fn refusals() -> Router<Gateway> {
 
 pub fn router(manager: Arc<Manager>) -> Router {
     Router::new()
-        .route(
-            "/.well-known/juiced.json",
-            get(|| async { Json(crate::discovery_http::well_known()) }),
-        )
         .route("/v1/messages", post(messages))
         .route("/v1/messages/count_tokens", post(count_tokens))
         .route("/api/chat", post(ollama_chat))

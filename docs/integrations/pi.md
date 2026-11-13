@@ -18,13 +18,16 @@ Use its own provider documentation for the exact configuration file format.
 
 ## Use model discovery
 
-`GET /v1/models` lists enabled models. `GET /v1/juiced/catalog` gives each model's
-per-request context, output limit, image input, thinking and tool-call support in one
-request, with the evidence behind each value. A Juiced-aware integration reads
+`GET /v1/models?service=chat` lists the enabled, downloaded chat models with each
+model's per-request context, output limit, image input, thinking and tool-call
+support, and the evidence behind each value. It is the route a client that
+registers models should use. A Juiced-aware integration reads
 `context.per_request_tokens` instead of dividing a launch total by slots, and
-switches thinking with `chat_template_kwargs.enable_thinking` when
-`thinking.request_control` names it. Send `If-None-Match` with the last `ETag` to
+switches thinking with the field `thinking.request_control` names, using a value
+from `thinking.request_values`. Send `If-None-Match` with the last `ETag` to
 refresh cheaply. It should preserve public model IDs and treat `null` as unknown.
+`/.well-known/juiced.json` says whether each authority needs a key and what the
+key you send grants, so a setup script can check a key before keys are required.
 See [Juiced management](../api/juiced.md#discover-models-for-a-client).
 
 A bundled model label does not establish tool-use quality. Test a small file

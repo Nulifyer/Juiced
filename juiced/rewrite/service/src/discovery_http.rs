@@ -246,14 +246,17 @@ pub async fn capabilities(
     )
 }
 
-pub fn well_known() -> Value {
-    json!({
+pub fn well_known(access: Value) -> Value {
+    let mut body = json!({
         "name": "Juiced", "version": crate::VERSION, "implementation": IMPLEMENTATION,
         "catalog": "/v1/juiced/catalog", "capabilities": "/v1/juiced/capabilities",
         "capability_schema": 1, "discovery_schema_version": SCHEMA_VERSION,
         "models": "/v1/models", "context": "/v1/juiced/context",
         "protocols": "/v1/juiced/protocols", "inference": "/v1", "ui": "/",
-    })
+    });
+    body["auth"] = access["auth"].clone();
+    body["credential"] = access["credential"].clone();
+    body
 }
 
 /// Read callers see the context budget and engine observation, not process details.

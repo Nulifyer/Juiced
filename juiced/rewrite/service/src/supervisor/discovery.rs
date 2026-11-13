@@ -424,12 +424,10 @@ impl Manager {
         if tools["supported"] == true {
             labels.push("tool-calling");
         }
-        let declared = |value: &Value| {
-            if value["supported"] == true {
-                json!("declared")
-            } else {
-                Value::Null
-            }
+        let declared = |value: &Value| match value["supported"].as_bool() {
+            Some(true) => json!("declared"),
+            Some(false) => json!(false),
+            None => Value::Null,
         };
         let operations: Vec<Value> = view
             .operations
@@ -447,7 +445,7 @@ impl Manager {
                     "concurrent_requests": view.max_inflight, "observed_slots": context["observed_slots"],
                     "per_request_context_tokens": per_request},
                 "context": context,
-                "features": {"tools": declared(&tools), "vision": if view.vision { json!("declared") } else { Value::Null }, "reasoning": declared(&thinking)},
+                "features": {"tools": declared(&tools), "vision": if view.vision { json!("declared") } else { json!(false) }, "reasoning": declared(&thinking)},
             }),
         );
         fields.insert("labels".into(), json!(labels));
@@ -526,11 +524,33 @@ fn chat_support(
     engine: Option<&EngineFacts>,
     downloaded: bool,
 ) -> (Value, Value) {
-    let control = |facts: &TemplateFacts| facts.thinking_control;
-    let thinking_view = |facts: &TemplateFacts, source: &str| {
-        let mut value = support(Some(facts.thinking), Some(source), None);
-        value["request_control"] = json!(facts.thinking.then(|| control(facts)).flatten());
-        value["default"] = json!(facts.thinking.then(|| launch.thinking.unwrap_or("on")));
+    let thinking_view = |facts: &TemplateFacts, source: &str, levels: Option<&Vec<String>>| {
+        let mut value = if facts.thinking {
+            support(Some(true), Some(source), None)
+        } else if facts.renders_reasoning {
+            support(None, Some(source), Some("template_renders_reasoning_only"))
+        } else {
+            support(Some(false), Some(source), None)
+        };
+        let control = facts.thinking.then_some(facts.thinking_control).flatten();
+        value["request_control"] = json!(control);
+        value["request_values"] = match control {
+            Some("chat_template_kwargs.enable_thinking") => json!([false, true]),
+            Some(_) => json!(levels),
+            None => Value::Null,
+        };
+        // llama-server enables thinking unless a request or launch setting turns it off.
+        let engine_default = match control {
+            Some("chat_template_kwargs.enable_thinking") => Some("on"),
+            _ if facts.opens_reasoning => Some("on"),
+            _ => None,
+        };
+        value["default"] = json!(
+            facts
+                .thinking
+                .then(|| launch.thinking.or(engine_default))
+                .flatten()
+        );
         value
     };
     if !launch.jinja {
@@ -552,7 +572,14 @@ fn chat_support(
             }),
             None,
         );
-        return (thinking_view(template, "engine_chat_template"), tools);
+        return (
+            thinking_view(
+                template,
+                "engine_chat_template",
+                engine.effort_levels.as_ref(),
+            ),
+            tools,
+        );
     }
     let template = if launch.template_override {
         match launch.inline_template.as_deref() {
@@ -569,7 +596,7 @@ fn chat_support(
     match template {
         Some((facts, source)) => {
             let tools = support(Some(facts.tools), Some(source), None);
-            (thinking_view(&facts, source), tools)
+            (thinking_view(&facts, source, None), tools)
         }
         None => {
             let reason = Some(match file {

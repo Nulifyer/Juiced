@@ -1266,6 +1266,10 @@ pub fn router(manager: Arc<Manager>, auth: Auth, ui: Option<PathBuf>) -> Router 
         .with_state(state.clone())
         .layer(Extension(wyoming))
         .layer(Extension(Arc::new(crate::realtime::Sessions::default())))
+        .route(
+            "/.well-known/juiced.json",
+            get(well_known).with_state(state.clone()),
+        )
         .merge(crate::compat::router(state.manager.clone()))
         .merge(crate::a1111::router(state.manager.clone()))
         .merge(crate::metrics::router(
@@ -1284,6 +1288,19 @@ pub fn router(manager: Arc<Manager>, auth: Auth, ui: Option<PathBuf>) -> Router 
         state.manager.clone(),
         crate::cors::layer,
     ))
+}
+
+async fn well_known(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    (
+        [
+            (header::CACHE_CONTROL, "no-store"),
+            (header::VARY, "authorization, x-api-key"),
+        ],
+        Json(crate::discovery_http::well_known(
+            state.auth.describe(&headers),
+        )),
+    )
+        .into_response()
 }
 
 async fn catalog(State(state): State<AppState>, headers: HeaderMap) -> Response {

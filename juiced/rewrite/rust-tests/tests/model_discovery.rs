@@ -10,6 +10,8 @@ use support::{
 
 const TEMPLATE: &str = "{%- if tools %}<|im_start|>system\n{% for tool in tools %}{{ tool | tojson }}{% endfor %}<|im_end|>\n{% endif %}{%- for message in messages %}<|im_start|>{{ message.role }}\n{{ message.content }}{%- if message.tool_calls %}{% for tool_call in message.tool_calls %}<tool_call>{{ tool_call.function.name }}</tool_call>{% endfor %}{% endif %}<|im_end|>\n{% endfor %}{%- if add_generation_prompt %}<|im_start|>assistant\n{%- if enable_thinking is defined and enable_thinking is false %}\n<think>\n\n</think>\n\n{%- endif %}{%- endif %}";
 
+const EFFORT_TEMPLATE: &str = "{%- if reasoning_effort is defined and reasoning_effort in ['low', 'medium', 'high'] %}<|start|>system<|message|>Reasoning: {{ reasoning_effort }}<|end|>{%- endif %}{%- for message in messages %}<|start|>{{ message.role }}<|message|>{{ message.content }}<|end|>{%- endfor %}{%- if add_generation_prompt %}<|start|>assistant{%- endif %}";
+
 fn entry<'a>(list: &'a Value, id: &str) -> &'a Value {
     list.as_array()
         .unwrap()
@@ -35,6 +37,34 @@ async fn read(server: &Server, path: &str, headers: &[(&str, &str)]) -> reqwest:
         request = request.header(*name, *value);
     }
     request.send().await.unwrap()
+}
+
+#[tokio::test]
+async fn well_known_reports_an_open_deployment_and_a_key_it_does_not_know() {
+    let server = Server::configured(false, |_| {}).await;
+    let known = |key: Option<&'static str>| {
+        let mut request = server
+            .client
+            .get(format!("{}/.well-known/juiced.json", server.base));
+        if let Some(key) = key {
+            request = request.bearer_auth(key);
+        }
+        async move { request.send().await.unwrap().json::<Value>().await.unwrap() }
+    };
+    let open = known(None).await;
+    assert_eq!(
+        open["auth"],
+        json!({"read": "open", "inference": "open", "operator": "open"})
+    );
+    assert_eq!(
+        open["credential"],
+        json!({"presented": false, "accepted": false, "authority": null})
+    );
+    let mistyped = known(Some("juiced_mistyped")).await;
+    assert_eq!(
+        mistyped["credential"],
+        json!({"presented": true, "accepted": false, "authority": null})
+    );
 }
 
 #[tokio::test]
@@ -104,6 +134,10 @@ async fn discovery_routes_publish_native_fields_revalidate_and_answer_read_keys(
         templated["thinking"]["request_control"],
         "chat_template_kwargs.enable_thinking"
     );
+    assert_eq!(
+        templated["thinking"]["request_values"],
+        json!([false, true])
+    );
     assert_eq!(templated["thinking"]["default"], "on");
     assert_eq!(templated["tool_calls"]["supported"], true);
     assert_eq!(templated["vision"], false);
@@ -114,7 +148,7 @@ async fn discovery_routes_publish_native_fields_revalidate_and_answer_read_keys(
     let contract = &templated["capability_contract"];
     assert_eq!(contract["features"]["reasoning"], "declared");
     assert_eq!(contract["features"]["tools"], "declared");
-    assert_eq!(contract["features"]["vision"], Value::Null);
+    assert_eq!(contract["features"]["vision"], false);
     assert_eq!(contract["limits"]["per_request_context_tokens"], 8192);
     let fixture = entry(&catalog["data"], "fixture.one");
     assert_eq!(fixture["recipe"], Value::Null);
@@ -236,6 +270,14 @@ async fn discovery_routes_publish_native_fields_revalidate_and_answer_read_keys(
     assert_eq!(known["capability_schema"], 1);
     assert_eq!(known["catalog"], "/v1/juiced/catalog");
     assert_eq!(known["capabilities"], "/v1/juiced/capabilities");
+    assert_eq!(
+        known["auth"],
+        json!({"read": "key", "inference": "key", "operator": "key"})
+    );
+    assert_eq!(
+        known["credential"],
+        json!({"presented": true, "accepted": true, "authority": "inference"})
+    );
 
     let endpoints = server.get("juiced/endpoints").await;
     let authority = |path: &str| {
@@ -381,6 +423,12 @@ async fn real_llama_server_context_capabilities_and_thinking_control() {
         gguf::with_text(&source, "tokenizer.chat_template", TEMPLATE),
     )
     .unwrap();
+    let effort = directory.path().join("stories-effort.gguf");
+    std::fs::write(
+        &effort,
+        gguf::with_text(&source, "tokenizer.chat_template", EFFORT_TEMPLATE),
+    )
+    .unwrap();
     let longer = directory.path().join("stories-4096.gguf");
     std::fs::write(&longer, with_training_context(source, 4096)).unwrap();
     let args = |context: &str, slots: &str| {
@@ -413,6 +461,8 @@ async fn real_llama_server_context_capabilities_and_thinking_control() {
              "resident_bytes":512u64*1024*1024,"max_inflight":3,"operations":["chat/completions","completions"],"policy":"on-demand"},
             {"id":"stories-plain","model_file":model,"command":engine,"provider":"llama-cpp","args":args("100","1"),
              "resident_bytes":512u64*1024*1024,"max_inflight":1,"operations":["chat/completions","completions"],"policy":"on-demand"},
+            {"id":"stories-effort","model_file":effort,"command":engine,"provider":"llama-cpp","args":args("256","1"),
+             "resident_bytes":256u64*1024*1024,"max_inflight":1,"operations":["chat/completions","completions"],"policy":"on-demand"},
         ]);
     })
     .await;
@@ -428,6 +478,11 @@ async fn real_llama_server_context_capabilities_and_thinking_control() {
     assert_eq!(plain["context"]["per_request_tokens"], 128);
     assert_eq!(plain["thinking"]["supported"], Value::Null);
     assert_eq!(plain["thinking"]["reason"], "no_chat_template");
+    let effort = entry(&catalog["data"], "stories-effort");
+    assert_eq!(effort["thinking"]["supported"], true);
+    assert_eq!(effort["thinking"]["request_control"], "reasoning_effort");
+    assert_eq!(effort["thinking"]["request_values"], Value::Null);
+    assert_eq!(effort["thinking"]["default"], Value::Null);
     let slots = entry(&catalog["data"], "stories-slots");
     assert_eq!(slots["context"]["declared_tokens"], 4096);
     assert_eq!(slots["context"]["per_request_tokens"], 512);
@@ -443,7 +498,12 @@ async fn real_llama_server_context_capabilities_and_thinking_control() {
         );
     }
 
-    for id in ["stories-template", "stories-plain", "stories-slots"] {
+    for id in [
+        "stories-template",
+        "stories-plain",
+        "stories-slots",
+        "stories-effort",
+    ] {
         let (status, loaded) = server.post("load", json!({"model":id})).await;
         assert_eq!(status, StatusCode::OK, "{loaded}");
     }
@@ -464,6 +524,12 @@ async fn real_llama_server_context_capabilities_and_thinking_control() {
     assert_eq!(observed["thinking"]["supported"], true);
     assert_eq!(observed["tool_calls"]["source"], "engine_template_caps");
     assert_eq!(observed["tool_calls"]["supported"], true);
+    let effort = entry(&catalog["data"], "stories-effort");
+    assert_eq!(effort["thinking"]["source"], "engine_chat_template");
+    assert_eq!(
+        effort["thinking"]["request_values"],
+        json!(["low", "medium", "high"])
+    );
     let slots = entry(&catalog["data"], "stories-slots");
     assert_eq!(slots["context"]["observed_per_request_tokens"], 512);
     assert_eq!(slots["context"]["observed_slots"], 3);
@@ -487,7 +553,7 @@ async fn real_llama_server_context_capabilities_and_thinking_control() {
     assert_eq!(context["observed"]["props"]["per_request_tokens"], 128);
     assert_eq!(context["per_request_tokens"], 128);
     let health = server.get("health").await;
-    assert_eq!(health["all_models_loaded"].as_array().unwrap().len(), 3);
+    assert_eq!(health["all_models_loaded"].as_array().unwrap().len(), 4);
     assert_eq!(
         entry(&catalog["data"], "stories-template")["context"]["per_request_tokens"],
         health["all_models_loaded"]

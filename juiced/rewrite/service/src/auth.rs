@@ -164,6 +164,36 @@ impl Authorization {
         self.regular.is_none() && self.operator.is_some() && !self.keys.enforcing()
     }
 
+    /// What each authority needs here and what the presented credential grants, so a client
+    /// can check a key before the deployment starts requiring one.
+    pub fn describe(&self, headers: &HeaderMap) -> serde_json::Value {
+        let level = |authority: Authority| {
+            if !self.enforcing() || (authority != Authority::Operator && self.admin_only()) {
+                "open"
+            } else {
+                "key"
+            }
+        };
+        let presented =
+            headers.contains_key(header::AUTHORIZATION) || headers.contains_key("x-api-key");
+        let accepted = presented
+            .then(|| self.credential(headers).ok())
+            .flatten()
+            .map(|context| match context.role {
+                Role::Read => "read",
+                Role::Inference => "inference",
+                Role::Operator | Role::TrustedLan => "operator",
+            });
+        serde_json::json!({
+            "auth": {
+                "read": level(Authority::Read),
+                "inference": level(Authority::Inference),
+                "operator": level(Authority::Operator),
+            },
+            "credential": {"presented": presented, "accepted": accepted.is_some(), "authority": accepted},
+        })
+    }
+
     pub fn authenticate(
         &self,
         headers: &HeaderMap,

@@ -6,7 +6,9 @@ use serde_json::Value;
 /// Version of the discovery fields on catalog, model list and capability entries.
 pub const SCHEMA_VERSION: u32 = 1;
 
-const THINKING_MARKERS: [&str; 10] = [
+/// Strings a template uses to render reasoning content. Rendering it does not show that the
+/// model reasons: many templates only carry earlier reasoning through the history.
+const REASONING_MARKERS: [&str; 10] = [
     "enable_thinking",
     "<think>",
     "</think>",
@@ -19,17 +21,29 @@ const THINKING_MARKERS: [&str; 10] = [
     "thinking_budget",
 ];
 
+/// Opening tags that, written after `add_generation_prompt`, start the reply in reasoning.
+const REASONING_OPENERS: [&str; 4] = ["<think>", "[THINK]", "<|START_THINKING|>", "<seed:think>"];
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TemplateFacts {
+    /// The template has a reasoning switch or starts the reply in reasoning.
     pub thinking: bool,
+    /// The template renders reasoning content somewhere.
+    pub renders_reasoning: bool,
+    /// The generation prompt opens a reasoning block.
+    pub opens_reasoning: bool,
     pub thinking_control: Option<&'static str>,
     pub tools: bool,
 }
 
 pub fn template_facts(template: &str) -> TemplateFacts {
-    let thinking = THINKING_MARKERS
+    let renders_reasoning = REASONING_MARKERS
         .iter()
         .any(|marker| template.contains(marker));
+    let opens_reasoning = template
+        .rfind("add_generation_prompt")
+        .map(|start| &template[start..])
+        .is_some_and(|prompt| REASONING_OPENERS.iter().any(|tag| prompt.contains(tag)));
     let thinking_control = if template.contains("enable_thinking") {
         Some("chat_template_kwargs.enable_thinking")
     } else if template.contains("reasoning_effort") {
@@ -38,7 +52,11 @@ pub fn template_facts(template: &str) -> TemplateFacts {
         None
     };
     TemplateFacts {
-        thinking,
+        thinking: thinking_control.is_some()
+            || opens_reasoning
+            || template.contains("thinking_budget"),
+        renders_reasoning,
+        opens_reasoning,
         thinking_control,
         tools: template.contains("tools") && template.contains("tool_call"),
     }
@@ -199,6 +217,8 @@ pub struct EngineFacts {
     pub template: Option<TemplateFacts>,
     pub tools: Option<bool>,
     pub vision: Option<bool>,
+    /// Effort values the template renders distinctly, from `chat_template_caps`.
+    pub effort_levels: Option<Vec<String>>,
 }
 
 /// Reads the llama-server `/props` fields that describe one request: the slot context
@@ -220,6 +240,17 @@ pub fn engine_facts(props: &Value) -> EngineFacts {
         tools: tools.or(template.as_ref().map(|facts| facts.tools)),
         template,
         vision: props.pointer("/modalities/vision").and_then(Value::as_bool),
+        effort_levels: caps
+            .and_then(|caps| caps.get("reasoning_effort_levels"))
+            .and_then(Value::as_array)
+            .map(|levels| {
+                levels
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>()
+            })
+            .filter(|levels| !levels.is_empty()),
     }
 }
 
@@ -347,19 +378,19 @@ mod tests {
     #[test]
     fn template_markers_name_thinking_and_tools() {
         let qwen = "{%- if tools %}{{ tool_call }}{% endif %}{%- if enable_thinking is defined and enable_thinking is false %}<think>\n\n</think>{% endif %}";
+        let facts = template_facts(qwen);
+        assert!(facts.thinking && facts.renders_reasoning && facts.tools);
         assert_eq!(
-            template_facts(qwen),
-            TemplateFacts {
-                thinking: true,
-                thinking_control: Some("chat_template_kwargs.enable_thinking"),
-                tools: true
-            }
+            facts.thinking_control,
+            Some("chat_template_kwargs.enable_thinking")
         );
         let plain = "{% for message in messages %}<|im_start|>{{ message.role }}{% endfor %}";
         assert_eq!(
             template_facts(plain),
             TemplateFacts {
                 thinking: false,
+                renders_reasoning: false,
+                opens_reasoning: false,
                 thinking_control: None,
                 tools: false
             }
@@ -368,6 +399,31 @@ mod tests {
             template_facts("{{ reasoning_effort }}<|channel|>analysis").thinking_control,
             Some("reasoning_effort")
         );
+    }
+
+    #[test]
+    fn rendering_reasoning_is_not_evidence_that_the_model_reasons() {
+        let history = "{% for m in messages %}{% if m.reasoning_content %}[THINK]{{ m.reasoning_content }}[/THINK]{% endif %}{{ m.content }}{% endfor %}{% if add_generation_prompt %}[INST]{% endif %}";
+        let facts = template_facts(history);
+        assert!(facts.renders_reasoning && !facts.opens_reasoning && !facts.thinking);
+        assert_eq!(facts.thinking_control, None);
+        let opens = "{% for m in messages %}{{ m.content.split('</think>')[-1] }}{% endfor %}{% if add_generation_prompt %}<|Assistant|><think>\n{% endif %}";
+        let facts = template_facts(opens);
+        assert!(facts.opens_reasoning && facts.thinking);
+        assert_eq!(facts.thinking_control, None);
+    }
+
+    #[test]
+    fn engine_caps_carry_reasoning_effort_levels() {
+        let facts = engine_facts(
+            &json!({"chat_template_caps": {"supports_tools": true, "supports_tool_calls": true, "reasoning_effort_levels": ["low", "medium", "high"]}}),
+        );
+        assert_eq!(
+            facts.effort_levels,
+            Some(vec!["low".into(), "medium".into(), "high".into()])
+        );
+        let none = engine_facts(&json!({"chat_template_caps": {"reasoning_effort_levels": []}}));
+        assert_eq!(none.effort_levels, None);
     }
 
     #[test]
