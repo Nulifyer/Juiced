@@ -1,6 +1,7 @@
 use super::*;
 
-const STORAGE_PENDING: &str = "a storage breakdown waits on the storage owner (helper-storage); use juiced_list_local_files and juiced_list_engines for sizes";
+const STORAGE_PAGE: usize = 12;
+const STORAGE_KINDS: [&str; 4] = ["file", "partial", "engine", "legacy"];
 
 pub(super) const TOOLS: &[Tool] = &[
     Tool {
@@ -20,7 +21,7 @@ pub(super) const TOOLS: &[Tool] = &[
         name: "juiced_hardware",
         group: Group::Inspect,
         title: "Hardware",
-        description: "CPU, RAM, GPUs with memory, NPUs, driver runtimes, and which engine backends this host can run, with the reason for each it cannot.",
+        description: "CPU, RAM, GPUs with memory, NPUs, driver runtimes, which backends this host can run with the reason for each it cannot, and per engine the backends with a build for this host.",
         read_only: true,
         destructive: false,
         idempotent: true,
@@ -42,7 +43,7 @@ pub(super) const TOOLS: &[Tool] = &[
         support: Support::Working,
         input: || {
             json!({"type":"object","properties":{
-                "task":{"type":"string","enum":["chat","embeddings","transcription","tts","image","reranking"]},
+                "task":{"type":"string","enum":["chat","embeddings","transcription","tts","image","reranking","classify","audio_generation","3d"]},
                 "policy":{"type":"string","enum":["disabled","on-demand","hot"]},
                 "loaded":{"type":"boolean"},
                 "query":{"type":"string","maxLength":100,"description":"Words in the model id."},
@@ -68,14 +69,19 @@ pub(super) const TOOLS: &[Tool] = &[
         name: "juiced_list_engines",
         group: Group::Inspect,
         title: "List engines",
-        description: "Installed engine builds and the models using each, installable builds with download size and availability here, and the recommended backend per engine.",
+        description: "Installed engine builds and their models; installable builds with what each runs, availability here and why not, download and disk size, and the recommended backend per engine. Filter by engine.",
         read_only: true,
         destructive: false,
         idempotent: true,
         open_world: false,
         preview: false,
         support: Support::Working,
-        input: no_input,
+        input: || {
+            json!({"type":"object","properties":{
+                "engine":{"type":"string","minLength":1,"maxLength":64,"description":"One engine, such as llama.cpp, vllm or acestep.cpp."},
+                "available_only":{"type":"boolean","default":false,"description":"Hide builds this host cannot run."}
+            },"additionalProperties":false})
+        },
     },
     Tool {
         name: "juiced_requests",
@@ -120,14 +126,21 @@ pub(super) const TOOLS: &[Tool] = &[
         name: "juiced_storage",
         group: Group::Inspect,
         title: "Storage",
-        description: "Disk usage by category (model weights, engines, session cache, partial downloads, unreferenced files) and free space per volume.",
+        description: "Free space per volume and warnings; without summary also usage by category, the storage revision, models on disk with what removing each frees, and reclaimable items with ids for juiced_delete_files.",
         read_only: true,
         destructive: false,
         idempotent: true,
         open_world: false,
         preview: false,
-        support: Support::Pending(STORAGE_PENDING),
-        input: no_input,
+        support: Support::Working,
+        input: || {
+            json!({"type":"object","properties":{
+                "summary":{"type":"boolean","default":false,"description":"true returns only volumes and warnings, which is cheap."},
+                "kind":{"type":"string","enum":["file","partial","engine","legacy"],"description":"List only this kind of reclaimable item."},
+                "include_refused":{"type":"boolean","default":false,"description":"Also list items Juiced refuses to delete, with the reason."},
+                "cursor":{"type":"integer","minimum":0}
+            },"additionalProperties":false})
+        },
     },
     Tool {
         name: "juiced_cache",
@@ -170,6 +183,12 @@ pub(super) fn task_of(model: &Value) -> &'static str {
         "image"
     } else if has("reranking") || serves("rerank") {
         "reranking"
+    } else if serves("classify") {
+        "classify"
+    } else if serves("audio/generations") {
+        "audio_generation"
+    } else if serves("3d/generations") {
+        "3d"
     } else if has("chat")
         || serves("chat/completions")
         || !(has("embeddings") || serves("embeddings"))
@@ -299,6 +318,7 @@ pub(super) async fn run(context: &Context<'_>, name: &str, args: Value) -> Optio
         "juiced_list_engines" => engines(context, args).await,
         "juiced_requests" => requests(context, args).await,
         "juiced_logs" => logs(context, args).await,
+        "juiced_storage" => storage(context, args).await,
         "juiced_cache" => cache(context, args).await,
         "juiced_connections" => connections(context, args).await,
         _ => return None,
@@ -307,13 +327,14 @@ pub(super) async fn run(context: &Context<'_>, name: &str, args: Value) -> Optio
 
 async fn status(context: &Context<'_>, args: Value) -> Result<Outcome> {
     no_arguments(&args)?;
-    let (state, system, catalog, pulls, engines, sessions) = tokio::join!(
+    let (state, system, catalog, pulls, engines, sessions, storage) = tokio::join!(
         context.get("juiced/state"),
         context.get("system-info"),
         context.get("juiced/catalog"),
         context.get("juiced/library/pulls"),
         context.get("juiced/engines"),
         context.get("juiced/cache/sessions"),
+        context.get("juiced/storage?summary=1"),
     );
     let (state, system, catalog) = (state?, system?, catalog?);
     let models = list(&catalog, "data");
@@ -368,6 +389,12 @@ async fn status(context: &Context<'_>, args: Value) -> Result<Outcome> {
     let cache = sessions
         .ok()
         .map(|sessions| json!({"mode":sessions["settings"]["mode"],"sessions":sessions["totals"]["sessions"],"bytes":sessions["totals"]["bytes"]}));
+    let storage = storage.ok().map(|storage| {
+        for warning in list(&storage, "warnings") {
+            alerts.push(json!({"storage":warning["code"],"message":warning["message"]}));
+        }
+        json!({"volumes": list(&storage, "volumes").iter().map(volume_row).collect::<Vec<_>>()})
+    });
     let summary = format!(
         "Juiced {}: {} of {} models loaded, {} free of {} model budget, {} active requests, {}{}.",
         state["version"].as_str().unwrap_or("unknown"),
@@ -408,6 +435,7 @@ async fn status(context: &Context<'_>, args: Value) -> Result<Outcome> {
             "alerts": alerts,
             "jobs": jobs,
             "cache": cache,
+            "storage": storage,
         }),
     );
     if !jobs.is_empty() {
@@ -495,6 +523,41 @@ async fn hardware(context: &Context<'_>, args: Value) -> Result<Outcome> {
     );
     if let Ok(engines) = engines {
         outcome.data["engine_generation"] = engines["generation"].clone();
+        let mut by_engine: Map<String, Value> = Map::new();
+        for row in list(&engines, "installable") {
+            let Some(engine) = row["engine"].as_str() else {
+                continue;
+            };
+            let entry = by_engine
+                .entry(engine.to_owned())
+                .or_insert_with(|| json!({"uses": engine_use(engine), "here": [], "not_here": []}));
+            let backend = row["backend"].clone();
+            let key = if installable_here(&row) {
+                "here"
+            } else {
+                "not_here"
+            };
+            if let Some(backends) = entry[key].as_array_mut()
+                && !backends.contains(&backend)
+            {
+                backends.push(backend);
+            }
+        }
+        let runnable = by_engine
+            .values()
+            .filter(|entry| {
+                entry["here"]
+                    .as_array()
+                    .is_some_and(|here| !here.is_empty())
+            })
+            .count();
+        outcome.summary = format!(
+            "{} {} of {} engines have a build for this host.",
+            outcome.summary,
+            runnable,
+            by_engine.len()
+        );
+        outcome.data["engines"] = Value::Object(by_engine);
     }
     Ok(outcome.next(&["juiced_list_engines"]))
 }
@@ -664,39 +727,178 @@ async fn details(context: &Context<'_>, args: Value) -> Result<Outcome> {
     Ok(outcome)
 }
 
-pub(super) async fn engines(context: &Context<'_>, args: Value) -> Result<Outcome> {
-    no_arguments(&args)?;
-    let engines = context.get("juiced/engines").await?;
-    let installable: Vec<Value> = list(&engines, "installable")
-        .iter()
-        .map(|row| {
-            let mut entry = pick(row, &["engine", "backend", "availability", "recommended"]);
-            if let Some(bytes) = row["build"].get("archive_bytes") {
-                entry["download_bytes"] = bytes.clone();
-            }
-            if let Some(tag) = row["build"].get("tag") {
-                entry["release"] = tag.clone();
-            }
-            let reasons: Vec<Value> = list(row, "reasons")
-                .iter()
-                .map(|reason| reason.get("message").cloned().unwrap_or(reason.clone()))
-                .collect();
-            if !reasons.is_empty() {
-                entry["why_not"] = json!(reasons);
-            }
-            if row["installed_package"].is_string() {
-                entry["installed"] = json!(true);
-            }
-            entry
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EngineFilter {
+    engine: Option<String>,
+    available_only: Option<bool>,
+}
+
+/// What each engine runs, so the model can match a task to an engine without guessing.
+pub(super) fn engine_use(engine: &str) -> &'static str {
+    match engine {
+        "llama.cpp" => "chat and embeddings from GGUF",
+        "fastflowlm" => "chat on the XDNA2 NPU from FLM checkpoints",
+        "vllm" => "chat from Transformers checkpoint folders (safetensors)",
+        "ds4" => "DeepSeek V4 chat from its own GGUFs",
+        "onnxruntime" => "text classification from exported ONNX encoders",
+        "whisper.cpp" | "parakeet.cpp" | "moonshine" => "speech to text",
+        "futo-transcribe.cpp" => "speech to text, English only",
+        "kokoros" => "text to speech",
+        "openmoss" => "text to speech and sound effects",
+        "acestep.cpp" => "music",
+        "thinksound.cpp" => "sound effects",
+        "sd.cpp" => "images",
+        "thenoise" => "images from split diffusion safetensors",
+        "trellis.cpp" => "image to 3D mesh",
+        _ => "",
+    }
+}
+
+fn engine_note(engine: &str) -> Option<&'static str> {
+    match engine {
+        "vllm" => Some(
+            "Installs as a Python environment; the first load compiles kernels and can take several minutes.",
+        ),
+        "thenoise" => Some("The first image after loading is slow while PyTorch compiles kernels."),
+        _ => None,
+    }
+}
+
+/// The engine's public name for any spelling `Engine::parse` accepts.
+pub(super) fn engine_name(engine: &str) -> Option<&'static str> {
+    crate::engines::catalog::Engine::parse(engine)
+        .or_else(|| {
+            crate::engines::catalog::Engine::all().find(|known| {
+                known.name().eq_ignore_ascii_case(engine)
+                    || known.recipe().eq_ignore_ascii_case(engine)
+            })
         })
+        .map(crate::engines::catalog::Engine::name)
+}
+
+/// A build this host could install: not ruled out by detection and resolved to a release.
+pub(super) fn installable_here(row: &Value) -> bool {
+    row["availability"] != "unavailable" && row["unresolved"].is_null() && row["build"].is_object()
+}
+
+fn unresolved_reason(row: &Value) -> Option<&'static str> {
+    Some(match row["unresolved"].as_str()? {
+        "host_unsupported" => {
+            "No build is published for this operating system and CPU architecture."
+        }
+        "no_matching_gpu" => "No build matches a GPU detected here.",
+        "no_matching_npu" => "No build matches an NPU detected here.",
+        "cpu_unsupported" => "This CPU lacks instructions the build needs.",
+        "not_published" => "No build is published yet.",
+        _ => "No build is known for this backend.",
+    })
+}
+
+pub(super) fn installable_row(row: &Value, full: bool) -> Value {
+    let engine = row["engine"].as_str().unwrap_or("");
+    let mut reasons: Vec<Value> = list(row, "reasons")
+        .iter()
+        .map(|reason| reason.get("message").cloned().unwrap_or(reason.clone()))
+        .collect();
+    if let Some(reason) = unresolved_reason(row) {
+        reasons.push(json!(reason));
+    }
+    let available = installable_here(row);
+    let mut entry = pick(row, &["engine", "backend", "availability"]);
+    if !full && !available {
+        if let Some(reason) = reasons.first() {
+            entry["why_not"] = reason.clone();
+        }
+        return entry;
+    }
+    entry["uses"] = json!(engine_use(engine));
+    if row["recommended"] == true {
+        entry["recommended"] = json!(true);
+    }
+    if row["installed_package"].is_string() {
+        entry["installed"] = json!(true);
+    }
+    let build = &row["build"];
+    if let Some(bytes) = build.get("archive_bytes").filter(|bytes| bytes.is_u64()) {
+        entry["download_bytes"] = bytes.clone();
+    }
+    if let Some(tag) = build.get("tag") {
+        entry["release"] = tag.clone();
+    }
+    if let Some(environment) = build.get("environment").filter(|value| value.is_object()) {
+        entry["kind"] = json!("environment");
+        entry["disk_bytes"] = environment["installed_bytes"].clone();
+        if let Some(version) = environment.get("version") {
+            entry["version"] = version.clone();
+        }
+    } else if let Some(environment) = crate::engines::catalog::builds()
+        .filter(|known| known.engine.name() == engine && row["backend"] == known.backend)
+        .find_map(|known| known.environment)
+    {
+        entry["kind"] = json!("environment");
+        entry["disk_bytes"] = json!(environment.installed_bytes);
+        entry["version"] = json!(environment.version);
+    }
+    if let Some(note) = engine_note(engine) {
+        entry["note"] = json!(note);
+    }
+    if !reasons.is_empty() {
+        entry["why_not"] = json!(reasons);
+    }
+    entry
+}
+
+pub(super) async fn engines(context: &Context<'_>, args: Value) -> Result<Outcome> {
+    let filter: EngineFilter = parse(args)?;
+    let wanted = match &filter.engine {
+        Some(engine) => {
+            bounded(engine, 1, 64, "engine")?;
+            Some(engine_name(engine).ok_or_else(|| {
+                Failure::new(
+                    "unknown_engine",
+                    format!(
+                        "{engine} is not an engine. Engines: {}.",
+                        crate::engines::catalog::Engine::all()
+                            .map(crate::engines::catalog::Engine::name)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                    404,
+                )
+            })?)
+        }
+        None => None,
+    };
+    let engines = context.get("juiced/engines").await?;
+    let matches = |row: &Value| wanted.is_none_or(|engine| row["engine"] == engine);
+    let rows: Vec<Value> = list(&engines, "installable")
+        .into_iter()
+        .filter(|row| matches(row))
+        .collect();
+    let installable: Vec<Value> = rows
+        .iter()
+        .filter(|row| filter.available_only != Some(true) || installable_here(row))
+        .map(|row| installable_row(row, wanted.is_some()))
         .collect();
     let installed: Vec<Value> = list(&engines, "installed")
         .iter()
+        .filter(|row| matches(row))
         .map(|row| {
             let mut entry = pick(
                 row,
-                &["engine", "package", "phase", "release", "reserved_bytes"],
+                &["engine", "package", "kind", "phase", "reserved_bytes"],
             );
+            if let Some(release) = row["release"].as_object() {
+                entry["backend"] = release.get("backend").cloned().unwrap_or(Value::Null);
+                entry["release"] = release
+                    .get("tag")
+                    .or(release.get("release"))
+                    .cloned()
+                    .unwrap_or(Value::Null);
+            } else if row["release"].is_string() {
+                entry["release"] = row["release"].clone();
+            }
             entry["models"] = json!(
                 list(row, "models")
                     .iter()
@@ -708,27 +910,47 @@ pub(super) async fn engines(context: &Context<'_>, args: Value) -> Result<Outcom
         .collect();
     let jobs: Vec<Value> = list(&engines, "jobs")
         .iter()
+        .filter(|job| matches(job))
         .map(acquire::engine_job)
         .collect();
-    Ok(Outcome::new(
+    let usable = rows
+        .iter()
+        .filter(|row| installable_here(row) && row["installed_package"].is_null())
+        .count();
+    let recommended: Map<String, Value> = engines["recommendations"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .filter(|(_, backend)| !backend.is_null())
+        .filter(|(recipe, _)| wanted.is_none_or(|engine| engine_name(recipe) == Some(engine)))
+        .map(|(recipe, backend)| (recipe.clone(), backend.clone()))
+        .collect();
+    let mut outcome = Outcome::new(
         format!(
-            "{} installed engine build(s); {} installable here.",
+            "{} installed engine build(s); {} more installable here{}.",
             installed.len(),
-            installable
-                .iter()
-                .filter(|row| row["availability"] == "available" && row["installed"].is_null())
-                .count()
+            usable,
+            match wanted {
+                Some(engine) => format!(" for {engine}"),
+                None => String::new(),
+            }
         ),
         json!({
             "generation": engines["generation"],
             "installation_active": engines["installation_active"],
-            "recommended": present(&engines["recommendations"]),
+            "recommended": recommended,
             "installed": installed,
             "installable": installable,
             "jobs": jobs,
         }),
     )
-    .next(&["juiced_install_engine"]))
+    .next(&["juiced_install_engine"]);
+    if wanted.is_none() {
+        outcome = outcome.warn(
+            "Builds this host cannot run show only the first reason; pass engine for every detail.",
+        );
+    }
+    Ok(outcome)
 }
 
 async fn requests(context: &Context<'_>, args: Value) -> Result<Outcome> {
@@ -1062,4 +1284,187 @@ async fn connections(context: &Context<'_>, args: Value) -> Result<Outcome> {
         "juiced_create_api_key",
         "juiced_set_alias",
     ]))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StorageArgs {
+    summary: Option<bool>,
+    kind: Option<String>,
+    include_refused: Option<bool>,
+    cursor: Option<usize>,
+}
+
+pub(super) fn volume_row(volume: &Value) -> Value {
+    pick(
+        volume,
+        &[
+            "path",
+            "roles",
+            "total_bytes",
+            "available_bytes",
+            "read_only",
+            "low",
+        ],
+    )
+}
+
+pub(super) fn storage_item(item: &Value) -> Value {
+    let mut row = pick(
+        item,
+        &["id", "kind", "title", "bytes", "reclaimable", "message"],
+    );
+    if let Some(references) = item["references"]
+        .as_array()
+        .filter(|references| !references.is_empty())
+    {
+        row["used_by"] = json!(references.iter().take(6).collect::<Vec<_>>());
+    }
+    row
+}
+
+async fn storage(context: &Context<'_>, args: Value) -> Result<Outcome> {
+    let args: StorageArgs = parse(args)?;
+    if let Some(kind) = &args.kind
+        && !STORAGE_KINDS.contains(&kind.as_str())
+    {
+        return Err(Failure::InvalidParams(
+            "kind must be file, partial, engine or legacy.".into(),
+        ));
+    }
+    let volumes =
+        |view: &Value| -> Vec<Value> { list(view, "volumes").iter().map(volume_row).collect() };
+    let free_line = |rows: &[Value]| -> String {
+        rows.iter()
+            .filter(|row| row["read_only"] != true)
+            .map(|row| {
+                format!(
+                    "{} free on {}",
+                    row["available_bytes"].as_u64().map_or("?".into(), size),
+                    row["path"].as_str().unwrap_or("?")
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    if args.summary == Some(true) {
+        if args.kind.is_some() || args.include_refused.is_some() || args.cursor.is_some() {
+            return Err(Failure::InvalidParams(
+                "summary: true takes no other arguments.".into(),
+            ));
+        }
+        let view = context.get("juiced/storage?summary=1").await?;
+        let rows = volumes(&view);
+        let warnings = list(&view, "warnings");
+        let mut outcome = Outcome::new(
+            format!(
+                "{}{}.",
+                free_line(&rows),
+                if warnings.is_empty() {
+                    String::new()
+                } else {
+                    format!("; {} warning(s)", warnings.len())
+                }
+            ),
+            json!({"volumes": rows, "warnings": warnings, "settings": view["settings"]}),
+        );
+        outcome.next.push("juiced_storage");
+        return Ok(outcome);
+    }
+    let view = context.get("juiced/storage").await?;
+    let include_refused = args.include_refused == Some(true);
+    let mut items: Vec<Value> = ["unreferenced", "partials", "engines", "legacy"]
+        .iter()
+        .flat_map(|key| list(&view, key))
+        .filter(|item| args.kind.as_deref().is_none_or(|kind| item["kind"] == kind))
+        .collect();
+    let refused = items
+        .iter()
+        .filter(|item| item["reclaimable"] != true)
+        .count();
+    if !include_refused {
+        items.retain(|item| item["reclaimable"] == true);
+    }
+    items.sort_by(|left, right| right["bytes"].as_u64().cmp(&left["bytes"].as_u64()));
+    let reclaimable_bytes: u64 = items
+        .iter()
+        .filter(|item| item["reclaimable"] == true)
+        .filter_map(|item| item["bytes"].as_u64())
+        .sum();
+    let reclaimable_count = items
+        .iter()
+        .filter(|item| item["reclaimable"] == true)
+        .count();
+    let rows: Vec<Value> = items.iter().map(storage_item).collect();
+    let categories: Vec<Value> = list(&view, "categories")
+        .iter()
+        .filter(|row| row["bytes"].as_u64().unwrap_or(0) > 0)
+        .map(|row| {
+            pick(
+                row,
+                &["id", "title", "bytes", "reclaimable_bytes", "truncated"],
+            )
+        })
+        .collect();
+    let models: Vec<Value> = list(&view, "models")
+        .iter()
+        .take(10)
+        .map(|row| {
+            let mut entry = pick(
+                row,
+                &["model", "bytes", "removal_frees_bytes", "read_only_bytes"],
+            );
+            if let Some(shared) = row["shared_with"]
+                .as_array()
+                .filter(|shared| !shared.is_empty())
+            {
+                entry["shared_with"] = json!(shared);
+            }
+            entry
+        })
+        .collect();
+    let volume_rows = volumes(&view);
+    let warnings = list(&view, "warnings");
+    let legacy_bytes: u64 = list(&view, "legacy")
+        .iter()
+        .filter(|item| item["reclaimable"] == true)
+        .filter_map(|item| item["bytes"].as_u64())
+        .sum();
+    let summary = format!(
+        "{}. {} reclaimable in {} item(s){}.",
+        free_line(&volume_rows),
+        size(reclaimable_bytes),
+        reclaimable_count,
+        if refused > 0 && !include_refused {
+            format!("; {refused} more are in use or kept (include_refused shows why)")
+        } else {
+            String::new()
+        }
+    );
+    let session = &view["session_cache"];
+    let mut outcome = Outcome::new(
+        summary,
+        json!({
+            "revision": view["revision"],
+            "volumes": volume_rows,
+            "warnings": warnings,
+            "categories": categories,
+            "session_cache": pick(session, &["bytes", "session_bytes", "sessions", "budget_bytes", "over_budget"]),
+            "models": models,
+            "items": page(rows, args.cursor.unwrap_or(0), STORAGE_PAGE),
+            "truncated": view["truncated"],
+        }),
+    )
+    .next(&["juiced_delete_files", "juiced_remove_model", "juiced_forget_sessions"]);
+    if legacy_bytes > 0 {
+        outcome = outcome.warn(format!(
+            "v0.9.2 leftovers hold {}. Delete them only when the operator names them; they are what a rollback to v0.9.2 uses.",
+            size(legacy_bytes)
+        ));
+    }
+    if view["truncated"] == true {
+        outcome =
+            outcome.warn("Some folders were too large to measure fully; sizes are lower bounds.");
+    }
+    Ok(outcome)
 }

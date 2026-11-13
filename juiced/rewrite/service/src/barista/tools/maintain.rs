@@ -1,27 +1,25 @@
 use super::*;
 
-const FILES_PENDING: &str =
-    "reference-checked file deletion waits on the storage owner (helper-storage)";
+const RECLAIM_KINDS: [&str; 4] = ["file", "partial", "engine", "legacy"];
 
 pub(super) const TOOLS: &[Tool] = &[
     Tool {
         name: "juiced_remove_model",
         group: Group::Maintain,
         title: "Remove model",
-        description: "Remove a Disabled, unloaded model's registration. Its files stay on disk. Aliases pointing at it block removal.",
+        description: "Remove a Disabled, unloaded model's registration; with delete_files also its weights no other model shares, reporting bytes freed. Aliases pointing at it block removal.",
         read_only: false,
         destructive: true,
         idempotent: false,
         open_world: false,
         preview: true,
-        support: Support::Partial(
-            "removing the registration works; delete_files waits on the storage owner (helper-storage)",
-        ),
+        support: Support::Working,
         input: || {
             json!({"type":"object","required":["model"],"properties":{
                 "model":model_property(),
-                "delete_files":{"type":"boolean","default":false,"description":"Also delete files no other model uses. Not yet supported."},
-                "expected_revision":{"type":"integer","minimum":0}
+                "delete_files":{"type":"boolean","default":false,"description":"Also delete the model's files that no other model uses."},
+                "expected_revision":{"type":"integer","minimum":0,"description":"The model revision you read."},
+                "storage_revision":{"type":"string","minLength":1,"maxLength":64,"description":"With delete_files: the revision from this tool's preview. Required to apply."}
             },"additionalProperties":false})
         },
     },
@@ -29,16 +27,18 @@ pub(super) const TOOLS: &[Tool] = &[
         name: "juiced_delete_files",
         group: Group::Maintain,
         title: "Delete files",
-        description: "Delete model files no registered model, alias or job uses, as listed by juiced_storage. Reports bytes freed.",
+        description: "Delete reclaimable items juiced_storage lists: unused files, partial downloads, unused engines, v0.9.2 leftovers. Preview first, then apply with its revision. Juiced rechecks every reference.",
         read_only: false,
         destructive: true,
         idempotent: false,
         open_world: false,
         preview: true,
-        support: Support::Pending(FILES_PENDING),
+        support: Support::Working,
         input: || {
-            json!({"type":"object","required":["files"],"properties":{
-                "files":{"type":"array","minItems":1,"maxItems":64,"items":{"type":"string","minLength":1,"maxLength":4096},"description":"File ids from juiced_storage."}
+            json!({"type":"object","required":["items"],"properties":{
+                "items":{"type":"array","minItems":1,"maxItems":64,"items":{"type":"string","minLength":3,"maxLength":512,"pattern":"^(file|partial|engine|legacy):"},"description":"Item ids from juiced_storage, such as file:... or partial:...."},
+                "expected_revision":{"type":"string","minLength":1,"maxLength":64,"description":"The revision from this tool's preview. Required to apply."},
+                "legacy":{"type":"boolean","default":false,"description":"Required for legacy: ids. Set it only when the operator asked by name to delete v0.9.2 leftovers."}
             },"additionalProperties":false})
         },
     },
@@ -114,6 +114,16 @@ struct RemoveArgs {
     #[serde(default)]
     delete_files: bool,
     expected_revision: Option<u64>,
+    storage_revision: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DeleteArgs {
+    items: Vec<String>,
+    expected_revision: Option<String>,
+    #[serde(default)]
+    legacy: bool,
 }
 
 #[derive(Deserialize)]
@@ -140,6 +150,7 @@ struct PauseArgs {
 pub(super) async fn run(context: &Context<'_>, name: &str, args: Value) -> Option<Result<Outcome>> {
     Some(match name {
         "juiced_remove_model" => remove(context, args).await,
+        "juiced_delete_files" => delete(context, args).await,
         "juiced_forget_sessions" => forget(context, args).await,
         "juiced_uninstall_engine" => uninstall(context, args).await,
         "juiced_pause_service" => pause(context, args).await,
@@ -154,10 +165,24 @@ async fn remove(context: &Context<'_>, args: Value) -> Result<Outcome> {
     if context.own_model(&remove.model) {
         return Err(configure::own_model_refusal(&remove.model, "remove"));
     }
-    if remove.delete_files {
-        return Err(Failure::unsupported(FILES_PENDING));
+    if let Some(revision) = &remove.storage_revision {
+        storage_revision(revision)?;
+        if !remove.delete_files {
+            return Err(Failure::InvalidParams(
+                "storage_revision goes with delete_files: true.".into(),
+            ));
+        }
     }
     let model = context.model(&remove.model).await?;
+    if let Some(expected) = remove.expected_revision
+        && model["revision"].as_u64() != Some(expected)
+    {
+        return Err(Failure::new(
+            "revision_conflict",
+            format!("{} changed since you read it. Read it again.", remove.model),
+            409,
+        ));
+    }
     let files_path = format!("models/{}/files", encode(&remove.model));
     let (aliases, files) = tokio::join!(context.get("juiced/aliases"), context.get(&files_path));
     let dependents: Vec<Value> = aliases
@@ -199,6 +224,9 @@ async fn remove(context: &Context<'_>, args: Value) -> Result<Outcome> {
     .into_iter()
     .flatten()
     .collect();
+    if remove.delete_files {
+        return remove_with_files(context, &remove, &model, blockers, dependents).await;
+    }
     if context.preview {
         let mut outcome = Outcome::new(
             if blockers.is_empty() {
@@ -257,7 +285,341 @@ async fn remove(context: &Context<'_>, args: Value) -> Result<Outcome> {
         json!("registered"),
         json!(if gone { "removed" } else { "registered" }),
     )
-    .next(&["juiced_list_local_files"]))
+    .next(&["juiced_storage"]))
+}
+
+fn storage_revision(revision: &str) -> Result<()> {
+    bounded(revision, 1, 64, "storage revision")?;
+    if revision.bytes().all(|byte| byte.is_ascii_alphanumeric()) {
+        Ok(())
+    } else {
+        Err(Failure::InvalidParams(
+            "The storage revision is the value a preview returned.".into(),
+        ))
+    }
+}
+
+async fn reclaim_preview(context: &Context<'_>, items: &[String]) -> Result<Value> {
+    context
+        .post(
+            "juiced/storage/reclaim",
+            json!({"items": items, "preview": true}),
+        )
+        .await
+}
+
+fn revision_required(preview: &Value, field: &str) -> Failure {
+    Failure::Route(json!({
+        "error": {
+            "code": "storage_revision_required",
+            "message": format!("Deleting needs the storage revision from a preview. Preview, show the operator what it frees, then pass {field}."),
+            "status": 400,
+        },
+        "revision": preview["revision"],
+        "freed_bytes": preview["freed_bytes"],
+        "refused": preview["refused"],
+    }))
+}
+
+fn refusals(items: &[Value]) -> Vec<String> {
+    items
+        .iter()
+        .filter(|item| item["reclaimable"] != true)
+        .map(|item| {
+            format!(
+                "{}: {}",
+                item["title"].as_str().unwrap_or("item"),
+                item["message"].as_str().unwrap_or("refused")
+            )
+        })
+        .collect()
+}
+
+async fn remove_with_files(
+    context: &Context<'_>,
+    remove: &RemoveArgs,
+    model: &Value,
+    blockers: Vec<String>,
+    dependents: Vec<Value>,
+) -> Result<Outcome> {
+    let item = format!("model:{}", remove.model);
+    let preview = reclaim_preview(context, std::slice::from_ref(&item)).await?;
+    let row = list(&preview, "items")
+        .into_iter()
+        .next()
+        .unwrap_or(Value::Null);
+    let freed = row["bytes"].as_u64().unwrap_or(0);
+    let shared: Vec<Value> = list(&row, "references");
+    let shared_note = if shared.is_empty() {
+        String::new()
+    } else {
+        format!(
+            " Files it shares with {} stay.",
+            shared
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    };
+    if context.preview {
+        let mut outcome = Outcome::new(
+            if blockers.is_empty() {
+                format!(
+                    "Would remove {} and delete its files, freeing {}.{shared_note}",
+                    remove.model,
+                    size(freed)
+                )
+            } else {
+                format!(
+                    "{} cannot be removed yet: {}.",
+                    remove.model,
+                    blockers.join("; ")
+                )
+            },
+            json!({
+                "model": remove.model, "revision": model["revision"], "blockers": blockers,
+                "aliases": dependents, "bytes_freed": freed, "shared_with": shared,
+                "storage_revision": preview["revision"],
+                "apply_with": {"storage_revision": preview["revision"]},
+            }),
+        );
+        if blockers.is_empty() {
+            outcome = outcome
+                .change(
+                    &remove.model,
+                    "registration",
+                    json!("registered"),
+                    json!("removed"),
+                )
+                .change(
+                    &remove.model,
+                    "files",
+                    json!(format!("{} on disk", size(freed))),
+                    json!("deleted"),
+                );
+        } else {
+            outcome = outcome.next(&["juiced_set_policy", "juiced_set_alias"]);
+        }
+        return Ok(outcome);
+    }
+    if !blockers.is_empty() {
+        return Err(Failure::new(
+            "model_in_use",
+            format!(
+                "{} cannot be removed: {}.",
+                remove.model,
+                blockers.join("; ")
+            ),
+            409,
+        ));
+    }
+    let Some(expected) = &remove.storage_revision else {
+        return Err(revision_required(&preview, "storage_revision"));
+    };
+    let applied = context
+        .post(
+            "juiced/storage/reclaim",
+            json!({"items": [item], "expected_revision": expected}),
+        )
+        .await?;
+    let result = list(&applied, "items")
+        .into_iter()
+        .next()
+        .unwrap_or(Value::Null);
+    let bytes = applied["freed_bytes"].as_u64().unwrap_or(0);
+    let gone = context.model(&remove.model).await.is_err();
+    if result["applied"] != true {
+        return Err(Failure::new(
+            result["error"]["code"]
+                .as_str()
+                .unwrap_or("storage_reclaim_failed"),
+            format!(
+                "{} was not removed: {}",
+                remove.model,
+                result["error"]["message"]
+                    .as_str()
+                    .unwrap_or("the removal failed")
+            ),
+            409,
+        ));
+    }
+    Ok(Outcome::new(
+        format!(
+            "Removed {} and freed {}.{shared_note}",
+            remove.model,
+            size(bytes)
+        ),
+        json!({"removed": gone, "bytes_freed": bytes, "shared_with": shared}),
+    )
+    .change(
+        &remove.model,
+        "registration",
+        json!("registered"),
+        json!(if gone { "removed" } else { "registered" }),
+    )
+    .change(
+        &remove.model,
+        "files",
+        json!(format!("{} on disk", size(freed))),
+        json!("deleted"),
+    )
+    .next(&["juiced_storage"]))
+}
+
+async fn delete(context: &Context<'_>, args: Value) -> Result<Outcome> {
+    let mut request: DeleteArgs = parse(args)?;
+    if request.items.is_empty() || request.items.len() > 64 {
+        return Err(Failure::InvalidParams(
+            "items must list 1 to 64 ids from juiced_storage.".into(),
+        ));
+    }
+    for item in &request.items {
+        bounded(item, 3, 512, "item")?;
+        let kind = item.split_once(':').map_or("", |(kind, _)| kind);
+        if kind == "model" {
+            return Err(Failure::InvalidParams(
+                "Remove a model and its files with juiced_remove_model and delete_files: true."
+                    .into(),
+            ));
+        }
+        if !RECLAIM_KINDS.contains(&kind) {
+            return Err(Failure::InvalidParams(format!(
+                "{item} is not a juiced_storage item id; ids start with file:, partial:, engine: or legacy:."
+            )));
+        }
+    }
+    if let Some(revision) = &request.expected_revision {
+        storage_revision(revision)?;
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    request.items.retain(|item| seen.insert(item.clone()));
+    let legacy: Vec<&String> = request
+        .items
+        .iter()
+        .filter(|item| item.starts_with("legacy:"))
+        .collect();
+    if !legacy.is_empty() && !request.legacy {
+        return Err(Failure::new(
+            "legacy_requires_operator",
+            "v0.9.2 leftovers are deleted only when the operator names them, because a rollback to v0.9.2 uses them. Ask the operator, then pass legacy: true.",
+            403,
+        ));
+    }
+    let rollback = (!legacy.is_empty())
+        .then_some("After this, rolling back to v0.9.2 needs its engines downloaded again.");
+    if context.preview {
+        let preview = reclaim_preview(context, &request.items).await?;
+        let items = list(&preview, "items");
+        let refused = refusals(&items);
+        let freed = preview["freed_bytes"].as_u64().unwrap_or(0);
+        let mut outcome = Outcome::new(
+            format!(
+                "Would free {} from {} item(s){}.",
+                size(freed),
+                items.len() - refused.len(),
+                if refused.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        "; {} refused, so applying this set fails until you drop them",
+                        refused.len()
+                    )
+                }
+            ),
+            json!({
+                "revision": preview["revision"], "freed_bytes": freed,
+                "items": items.iter().map(inspect::storage_item).collect::<Vec<_>>(),
+                "apply_with": {"expected_revision": preview["revision"]},
+            }),
+        );
+        for item in items.iter().filter(|item| item["reclaimable"] == true) {
+            outcome = outcome.change(
+                item["id"].as_str().unwrap_or("item"),
+                item["title"].as_str().unwrap_or("item"),
+                json!("on disk"),
+                json!("deleted"),
+            );
+        }
+        outcome.warnings.extend(refused);
+        if let Some(rollback) = rollback {
+            outcome = outcome.warn(rollback);
+        }
+        return Ok(outcome);
+    }
+    let Some(expected) = &request.expected_revision else {
+        let preview = reclaim_preview(context, &request.items).await?;
+        return Err(revision_required(&preview, "expected_revision"));
+    };
+    let applied = match context
+        .post(
+            "juiced/storage/reclaim",
+            json!({"items": request.items, "expected_revision": expected}),
+        )
+        .await
+    {
+        Ok(applied) => applied,
+        Err(Failure::Route(mut failure)) if failure["error"]["code"] == "storage_item_refused" => {
+            if let Ok(preview) = reclaim_preview(context, &request.items).await {
+                failure["refused"] = json!(
+                    list(&preview, "items")
+                        .iter()
+                        .filter(|item| item["reclaimable"] != true)
+                        .map(inspect::storage_item)
+                        .collect::<Vec<_>>()
+                );
+            }
+            return Err(Failure::Route(failure));
+        }
+        Err(failure) => return Err(failure),
+    };
+    let results = list(&applied, "items");
+    let freed = applied["freed_bytes"].as_u64().unwrap_or(0);
+    let failed: Vec<String> = results
+        .iter()
+        .filter(|row| row["applied"] != true)
+        .map(|row| {
+            format!(
+                "{}: {}",
+                row["title"].as_str().unwrap_or("item"),
+                row["error"]["message"].as_str().unwrap_or("not deleted")
+            )
+        })
+        .collect();
+    let mut outcome = Outcome::new(
+        format!(
+            "Freed {} from {} item(s){}.",
+            size(freed),
+            results.len() - failed.len(),
+            if failed.is_empty() {
+                String::new()
+            } else {
+                format!("; {} failed", failed.len())
+            }
+        ),
+        json!({
+            "freed_bytes": freed,
+            "items": results.iter().map(|row| pick(row, &["id", "kind", "title", "applied", "freed_bytes", "error"])).collect::<Vec<_>>(),
+        }),
+    )
+    .next(&["juiced_storage"]);
+    for row in &results {
+        outcome = outcome.change(
+            row["id"].as_str().unwrap_or("item"),
+            row["title"].as_str().unwrap_or("item"),
+            json!("on disk"),
+            json!(if row["applied"] == true {
+                "deleted"
+            } else {
+                "on disk"
+            }),
+        );
+    }
+    outcome.warnings.extend(failed);
+    if let Some(rollback) = rollback {
+        outcome = outcome.warn(rollback);
+    }
+    Ok(outcome)
 }
 
 async fn forget(context: &Context<'_>, args: Value) -> Result<Outcome> {

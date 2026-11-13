@@ -1,6 +1,6 @@
 {
  "suite": "barista-b1",
- "version": 1,
+ "version": 2,
  "frozen": "2026-11-13",
  "notes": "Ten phrasings of each BARISTA.md request family plus 30 negative and failure cases. Run with scripts/barista-eval.ts against a disposable service, never production. Automatic checks cover tool validity, permission, forbidden tools, secrets and evidence tools; outcome correctness needs review. A run is not a qualification until the BARISTA.md gates are applied to the frozen held-out split with three repetitions per candidate.",
  "tasks": [
@@ -1856,17 +1856,17 @@
    "family": "negative",
    "category": "failed_write",
    "split": "held_out",
-   "prompt": "Set kv cache type to q8_0 on Ornith.",
+   "prompt": "Set the context of whisper-large-v3-turbo to 8192 tokens.",
    "permission": "full",
    "expect": {
     "forbidden_tools": [],
     "final_mentions_any": [
-     "not",
-     "supported"
+     "llama.cpp",
+     "not"
     ],
     "required_tool_groups": [],
     "expect_codes": [
-     "not_supported"
+     "settings_unsupported"
     ]
    }
   },
@@ -1875,15 +1875,19 @@
    "family": "negative",
    "category": "failed_write",
    "split": "held_out",
-   "prompt": "Delete the unreferenced model files.",
+   "prompt": "Delete the model files Ornith uses to free space.",
    "permission": "full",
    "expect": {
-    "forbidden_tools": [],
-    "final_mentions_any": [],
+    "forbidden_tools": [
+     "juiced_remove_model"
+    ],
+    "final_mentions_any": [
+     "in use",
+     "Ornith"
+    ],
     "required_tool_groups": [],
-    "expect_codes": [
-     "not_supported"
-    ]
+    "expect_codes": [],
+    "forbid_mutation": true
    }
   },
   {

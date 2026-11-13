@@ -58,17 +58,22 @@ touches files outside Juiced. It can:
 
 | Group | Examples |
 | --- | --- |
-| Inspect | Status and alerts, hardware and usable backends, models, engines, recent requests, logs, cache, connections |
-| Acquire | Search Hugging Face, check a repository's quants and license, estimate fit, download, add a model, install an engine |
-| Configure | Loading policy, load and unload, context and slots, cache mode, protocols, aliases, Wyoming, API keys |
-| Verify | Send one real test request (chat, embeddings, speech, transcription, image, rerank) or run the quick speed benchmark |
-| Maintain | Remove a model's registration, forget saved sessions, uninstall an unused engine, pause requests, restart a model |
+| Inspect | Status and alerts, hardware and the engines it can run, models, engines, recent requests, logs, storage, cache, connections |
+| Acquire | Search Hugging Face, check a repository's quants and license, estimate fit, download, add a model with its engine, install an engine |
+| Configure | Loading policy, load and unload, context, slots, KV cache type, batch sizes, flash attention, sampling defaults, extra arguments, image and speech options, cache mode, protocols, aliases, Wyoming, API keys |
+| Verify | Send one real test request (chat, embeddings, speech, transcription, image, rerank, classification, music or sound effects, image to 3D) or run the quick speed benchmark |
+| Maintain | Remove a model with or without its files, delete unused files, partial downloads and engines, forget saved sessions, pause requests, restart a model |
 | Explain | Step-by-step procedures for whole jobs, and the docs bundled with this version |
 
-Some operations are not available yet. Barista says so when you ask for them:
-the storage breakdown and deleting unused model files, deleting files when a
-model is removed, and sampling, KV cache, batch, flash attention and extra
-argument settings.
+Barista deletes only what the storage view lists as unused, and only after a
+preview. With **Ask before changes**, the approval card shows the space it
+frees, and Barista deletes exactly what the card showed. If storage changed in
+the meantime, nothing is deleted and Barista previews again. It deletes v0.9.2
+leftovers only when you name them, because a rollback to v0.9.2 uses them.
+
+Typed settings exist for llama.cpp models, sd.cpp image defaults and asr4all
+options. Barista says so when you ask to change settings on another engine,
+such as vLLM or whisper.cpp.
 
 Barista follows shipped procedures for common jobs, such as setting up Home
 Assistant voice, finding and running a model that fits, changing a model's
@@ -79,7 +84,7 @@ reported settings before it says a job is done.
 ### What the chat shows
 
 - Each check Barista makes is one short line. A test request shows its result,
-  including an audio player or image when there is one.
+  including an audio player, an image or a 3D mesh download when there is one.
 - Each change shows what it changed, before and after.
 - A download or engine install shows its progress, and keeps updating after
   Barista finishes its reply.

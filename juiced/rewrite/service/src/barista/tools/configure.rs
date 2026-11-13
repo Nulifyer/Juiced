@@ -1,6 +1,8 @@
 use super::*;
 
-const SETTINGS_PENDING: &str = "context_tokens, gpu_layers, threads, parallel_slots and image_defaults apply now; sampling defaults, KV cache type, batch sizes, flash attention and extra arguments wait on typed model settings (helper-b6)";
+const CACHE_TYPES: [&str; 9] = [
+    "f32", "f16", "bf16", "q8_0", "q4_0", "q4_1", "q5_0", "q5_1", "iq4_nl",
+];
 
 pub(super) const TOOLS: &[Tool] = &[
     Tool {
@@ -52,29 +54,41 @@ pub(super) const TOOLS: &[Tool] = &[
         name: "juiced_set_model_settings",
         group: Group::Configure,
         title: "Set model settings",
-        description: "Change one model's saved settings. Omitted keys keep their value; null returns a key to automatic. Preview shows the memory fit. apply reload restarts a loaded worker.",
+        description: "Change one model's saved settings: llama.cpp launch and sampling options with extra_args, image_defaults, or asr_options. Omitted keys keep their value; null returns a key to automatic. Preview shows before -> after and memory fit.",
         read_only: false,
         destructive: false,
         idempotent: true,
         open_world: false,
         preview: true,
-        support: Support::Partial(SETTINGS_PENDING),
+        support: Support::Partial(
+            "typed settings exist for llama.cpp models, sd.cpp image defaults and asr4all options; vLLM, DS4, whisper.cpp and the other engines keep the arguments they were added with",
+        ),
         input: || {
-            let slot = |maximum: u32, description: &str| json!({"type":["integer","null"],"minimum":0,"maximum":maximum,"description":description});
+            let whole = |minimum: i64, maximum: u64, description: &str| json!({"type":["integer","null"],"minimum":minimum,"maximum":maximum,"description":description});
+            let decimal = |maximum: f64, description: &str| json!({"type":["number","null"],"minimum":0,"maximum":maximum,"description":description});
+            let cache = |description: &str| json!({"type":["string","null"],"enum":CACHE_TYPES.iter().map(|kind| json!(kind)).chain([Value::Null]).collect::<Vec<_>>(),"description":description});
             json!({"type":"object","required":["model","changes"],"properties":{
                 "model":model_property(),
                 "changes":{"type":"object","additionalProperties":false,"properties":{
-                    "context_tokens":slot(1_048_576, "Total context, shared by slots."),
-                    "parallel_slots":slot(crate::profiles::MAX_PARALLEL_SLOTS, "Concurrent requests."),
-                    "gpu_layers":slot(1024, "Layers on the GPU."),
-                    "threads":slot(1024, "CPU threads."),
+                    "context_tokens":whole(1, 1_048_576, "Total context, shared by slots."),
+                    "parallel_slots":whole(1, crate::profiles::MAX_PARALLEL_SLOTS.into(), "Concurrent requests."),
+                    "gpu_layers":whole(0, 1024, "Layers on the GPU."),
+                    "threads":whole(1, 1024, "CPU threads for generation."),
+                    "batch_threads":whole(1, 1024, "CPU threads for prompt processing."),
+                    "batch_size":whole(1, 1_048_576, "Logical prompt batch."),
+                    "ubatch_size":whole(1, 1_048_576, "Physical prompt batch."),
+                    "flash_attention":{"type":["string","null"],"enum":["auto","on","off",null]},
+                    "cache_type_k":cache("KV cache type for keys; q8_0 halves KV memory."),
+                    "cache_type_v":cache("KV cache type for values."),
+                    "temperature":decimal(100.0, "Default sampling temperature."),
+                    "top_k":whole(0, 1_000_000, "Default top K."),
+                    "top_p":decimal(1.0, "Default top P."),
+                    "min_p":decimal(1.0, "Default min P."),
+                    "repeat_penalty":decimal(100.0, "Default repetition penalty."),
+                    "reasoning_budget":whole(-1, 1_000_000, "Thinking tokens; -1 unlimited, 0 off."),
+                    "extra_args":{"type":["array","null"],"items":{"type":"string","maxLength":200},"maxItems":32,"description":"Extra engine arguments; null clears them."},
                     "image_defaults":{"type":"object","description":"Image model defaults such as steps or size."},
-                    "kv_cache_type":{"type":["string","null"],"enum":["f16","q8_0","q4_0",null]},
-                    "batch_size":slot(65536, "Prompt batch."),
-                    "ubatch_size":slot(65536, "Physical batch."),
-                    "flash_attention":{"type":["boolean","null"]},
-                    "sampling":{"type":["object","null"],"description":"temperature, top_p, top_k, min_p, repeat_penalty."},
-                    "extra_args":{"type":["array","null"],"items":{"type":"string","maxLength":200},"maxItems":32}
+                    "asr_options":{"type":"object","description":"asr4all speech options threads, commit and right."}
                 }},
                 "apply":{"type":"string","enum":["next_load","reload"],"default":"next_load"},
                 "expected_revision":{"type":"integer","minimum":0}
@@ -431,20 +445,78 @@ async fn unload(context: &Context<'_>, args: Value) -> Result<Outcome> {
     Ok(outcome)
 }
 
-const TYPED: [(&str, u32); 4] = [
-    ("context_tokens", 1_048_576),
-    ("gpu_layers", 1024),
-    ("threads", 1024),
-    ("parallel_slots", crate::profiles::MAX_PARALLEL_SLOTS),
-];
-const PENDING_KEYS: [&str; 6] = [
-    "kv_cache_type",
-    "batch_size",
-    "ubatch_size",
-    "flash_attention",
-    "sampling",
-    "extra_args",
-];
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SettingsGroup {
+    Launch,
+    Image,
+    Asr,
+}
+
+impl SettingsGroup {
+    fn provider(self) -> &'static str {
+        match self {
+            Self::Launch => "llama-cpp",
+            Self::Image => "stable-diffusion-cpp",
+            Self::Asr => "asr4all",
+        }
+    }
+    fn what(self) -> &'static str {
+        match self {
+            Self::Launch => "Launch and sampling settings apply to llama.cpp models",
+            Self::Image => "image_defaults apply to sd.cpp image models",
+            Self::Asr => "asr_options apply to asr4all speech models",
+        }
+    }
+}
+
+fn settings_group(changes: &Map<String, Value>) -> Result<SettingsGroup> {
+    let mut groups = Vec::new();
+    for key in changes.keys() {
+        let group = match key.as_str() {
+            "image_defaults" => SettingsGroup::Image,
+            "asr_options" => SettingsGroup::Asr,
+            "extra_args" => SettingsGroup::Launch,
+            key if crate::profiles::FIELD_KEYS.contains(&key) => SettingsGroup::Launch,
+            key => {
+                return Err(Failure::InvalidParams(format!(
+                    "Unknown setting {key}. Settings: {}, extra_args, image_defaults, asr_options.",
+                    crate::profiles::FIELD_KEYS.join(", ")
+                )));
+            }
+        };
+        if !groups.contains(&group) {
+            groups.push(group);
+        }
+    }
+    match groups.as_slice() {
+        [group] => Ok(*group),
+        [] => Err(Failure::InvalidParams(
+            "changes must name at least one setting.".into(),
+        )),
+        _ => Err(Failure::InvalidParams(
+            "Change launch settings (with extra_args), image_defaults and asr_options in separate calls."
+                .into(),
+        )),
+    }
+}
+
+fn patch(changes: &Map<String, Value>, key: &str) -> Result<Map<String, Value>> {
+    match changes.get(key) {
+        Some(Value::Object(patch)) if !patch.is_empty() => Ok(patch.clone()),
+        _ => Err(Failure::InvalidParams(format!(
+            "{key} must be an object naming at least one option."
+        ))),
+    }
+}
+
+fn text(value: &Value) -> String {
+    match value {
+        Value::Null => "automatic".into(),
+        Value::String(text) => text.clone(),
+        Value::Array(items) if items.is_empty() => "none".into(),
+        other => other.to_string(),
+    }
+}
 
 async fn settings(context: &Context<'_>, args: Value) -> Result<Outcome> {
     let change: SettingsArgs = parse(args)?;
@@ -455,165 +527,187 @@ async fn settings(context: &Context<'_>, args: Value) -> Result<Outcome> {
             "apply must be next_load or reload.".into(),
         ));
     }
-    if change.changes.is_empty() {
-        return Err(Failure::InvalidParams(
-            "changes must name at least one setting.".into(),
-        ));
-    }
-    let known = TYPED
-        .iter()
-        .map(|(key, _)| *key)
-        .chain(PENDING_KEYS)
-        .chain(["image_defaults"]);
-    let known: Vec<&str> = known.collect();
-    if let Some(unknown) = change
-        .changes
-        .keys()
-        .find(|key| !known.contains(&key.as_str()))
-    {
-        return Err(Failure::InvalidParams(format!(
-            "Unknown setting {unknown}."
-        )));
-    }
-    let pending: Vec<&str> = PENDING_KEYS
-        .iter()
-        .copied()
-        .filter(|key| change.changes.contains_key(*key))
-        .collect();
-    if !pending.is_empty() {
-        return Err(Failure::new(
-            "not_supported",
-            format!(
-                "Not yet supported in this build: {} {} on typed model settings (helper-b6). Apply the other changes on their own.",
-                pending.join(", "),
-                if pending.len() == 1 { "waits" } else { "wait" }
-            ),
-            501,
-        ));
-    }
-    let mut typed = Map::new();
-    for (key, maximum) in TYPED {
-        if let Some(value) = change.changes.get(key) {
-            match value {
-                Value::Null => {}
-                Value::Number(number)
-                    if number.as_u64().is_some_and(|value| value <= maximum.into()) => {}
-                _ => {
-                    return Err(Failure::InvalidParams(format!(
-                        "{key} must be null or 0 to {maximum}."
-                    )));
-                }
-            }
-            typed.insert(key.to_owned(), value.clone());
-        }
-    }
-    let image = change.changes.get("image_defaults").cloned();
-    if image.as_ref().is_some_and(|value| !value.is_object()) {
-        return Err(Failure::InvalidParams(
-            "image_defaults must be an object.".into(),
-        ));
-    }
-    if image.is_some() && !typed.is_empty() {
-        return Err(Failure::InvalidParams(
-            "Change image_defaults on its own, apart from launch settings.".into(),
-        ));
-    }
+    let group = settings_group(&change.changes)?;
     let id = encode(&change.model);
-    let current = context.get(&format!("models/{id}/options")).await?;
-    let entry = context.model(&change.model).await?;
-    let saved = current["saved"].clone();
+    let options_path = format!("models/{id}/options");
+    let (current, entry) = tokio::join!(context.get(&options_path), context.model(&change.model));
+    let (current, entry) = (current?, entry?);
+    let provider = current["provider"].as_str().unwrap_or("unknown");
+    if provider != group.provider() {
+        return Err(Failure::new(
+            "settings_unsupported",
+            format!(
+                "{}; {} runs on {provider}. Use juiced_model_details to see what it accepts.",
+                group.what(),
+                change.model
+            ),
+            409,
+        ));
+    }
     let revision = change
         .expected_revision
         .unwrap_or_else(|| current["revision"].as_u64().unwrap_or(0));
     let reload = apply == "reload" && entry["loaded"] == true;
-    let mut outcome_changes = Vec::new();
-    for (key, value) in &typed {
-        outcome_changes.push(change_row(
-            &change.model,
-            key,
-            saved.get(key).cloned().unwrap_or(Value::Null),
-            value.clone(),
-        ));
-    }
-    if let Some(image) = &image {
-        outcome_changes.push(change_row(
-            &change.model,
-            "image_defaults",
-            current["image_defaults"].clone(),
-            image.clone(),
-        ));
-    }
-    let mut merged = Map::new();
-    for (key, _) in TYPED {
-        merged.insert(
-            key.into(),
-            typed
-                .get(key)
-                .cloned()
-                .unwrap_or_else(|| saved.get(key).cloned().unwrap_or(Value::Null)),
-        );
-    }
+    let mut rows = Vec::new();
     let mut warnings = Vec::new();
     let mut data = json!({"model": change.model, "revision": revision, "apply": apply, "loaded": entry["loaded"]});
-    if image.is_none() {
-        let query: Vec<String> = ["context_tokens", "gpu_layers", "parallel_slots"]
-            .iter()
-            .filter_map(|key| {
-                merged
-                    .get(*key)
-                    .and_then(Value::as_u64)
-                    .map(|value| format!("{key}={value}"))
-            })
-            .collect();
-        let path = format!(
-            "models/{id}/fit{}",
-            if query.is_empty() {
-                String::new()
-            } else {
-                format!("?{}", query.join("&"))
+    let body = match group {
+        SettingsGroup::Launch => {
+            let saved = current["saved"].as_object().cloned().unwrap_or_default();
+            let mut merged = saved.clone();
+            let mut launch_changed = false;
+            for key in crate::profiles::FIELD_KEYS {
+                let Some(value) = change.changes.get(key) else {
+                    continue;
+                };
+                launch_changed = true;
+                rows.push(change_row(
+                    &change.model,
+                    key,
+                    saved.get(key).cloned().unwrap_or(Value::Null),
+                    value.clone(),
+                ));
+                if value.is_null() {
+                    merged.remove(key);
+                } else {
+                    merged.insert(key.to_owned(), value.clone());
+                }
             }
-        );
-        match context.get(&path).await {
-            Ok(fit) => {
-                data["fit"] = pick(
-                    &fit,
-                    &[
-                        "fits",
-                        "total_bytes",
-                        "available_bytes",
-                        "largest_context_that_fits",
-                        "trained_context",
-                        "warnings",
-                    ],
-                )
+            let options: crate::profiles::LaunchOptions =
+                serde_json::from_value(Value::Object(merged.clone())).map_err(|error| {
+                    Failure::InvalidParams(format!(
+                        "A setting has the wrong type: {}",
+                        error.to_string().chars().take(160).collect::<String>()
+                    ))
+                })?;
+            options
+                .validate()
+                .map_err(|error| Failure::new(error.code, error.message, 400))?;
+            let extra = match change.changes.get("extra_args") {
+                None => None,
+                Some(Value::Null) => Some(Vec::new()),
+                Some(Value::Array(items)) => {
+                    let mut extras = Vec::with_capacity(items.len());
+                    for item in items {
+                        let item = item.as_str().ok_or_else(|| {
+                            Failure::InvalidParams("extra_args must be strings.".into())
+                        })?;
+                        bounded(item, 1, 200, "extra_args item")?;
+                        extras.push(item.to_owned());
+                    }
+                    if extras.len() > 32 {
+                        return Err(Failure::InvalidParams("Send at most 32 extra_args.".into()));
+                    }
+                    Some(extras)
+                }
+                Some(_) => {
+                    return Err(Failure::InvalidParams(
+                        "extra_args must be a list of strings or null.".into(),
+                    ));
+                }
+            };
+            if let Some(extras) = &extra {
+                rows.push(change_row(
+                    &change.model,
+                    "extra_args",
+                    current["extra_args"].clone(),
+                    json!(extras),
+                ));
             }
-            Err(failure) => warnings.push(format!(
-                "No memory estimate: {}",
-                failure.error()["message"].as_str().unwrap_or("unavailable")
-            )),
-        }
-    }
-    if context.preview {
-        let fits = data["fit"]["fits"].as_bool();
-        let summary = format!(
-            "Would change {} for {}; {}{}.",
-            outcome_changes
+            let draft = |key: &str| merged.get(key).and_then(Value::as_u64);
+            let mut query: Vec<String> = ["context_tokens", "gpu_layers", "parallel_slots"]
                 .iter()
-                .filter_map(|row| row["field"].as_str())
-                .collect::<Vec<_>>()
-                .join(", "),
-            change.model,
-            match fits {
-                Some(true) => "it fits the memory budget".to_owned(),
-                Some(false) => format!(
-                    "it does not fit ({} needed, {} available)",
-                    data["fit"]["total_bytes"].as_u64().map_or("?".into(), size),
-                    data["fit"]["available_bytes"]
-                        .as_u64()
-                        .map_or("?".into(), size)
+                .filter_map(|key| draft(key).map(|value| format!("{key}={value}")))
+                .collect();
+            let cache_k = merged.get("cache_type_k").and_then(Value::as_str);
+            let cache_v = merged.get("cache_type_v").and_then(Value::as_str);
+            match (cache_k, cache_v) {
+                (Some(k), Some(v)) if k == v => query.push(format!("kv_cache_type={k}")),
+                (None, None) => {}
+                _ => warnings.push(
+                    "Keys and values use different KV cache types; the memory estimate uses the saved types.".to_owned(),
                 ),
-                None => "no memory estimate".to_owned(),
-            },
+            }
+            let draft_path = format!("models/{id}/fit?{}", query.join("&"));
+            let current_path = format!("models/{id}/fit");
+            let (before, after) =
+                tokio::join!(context.get(&current_path), context.get(&draft_path));
+            match after {
+                Ok(after) => {
+                    data["memory"] = json!({
+                        "before_bytes": before.ok().and_then(|before| before["total_bytes"].as_u64()),
+                        "after_bytes": after["total_bytes"],
+                        "available_bytes": after["available_bytes"],
+                        "fits": after["fits"],
+                        "largest_context_that_fits": after["largest_context_that_fits"],
+                        "trained_context": after["trained_context"],
+                    });
+                    if let Some(notes) = after["warnings"].as_array() {
+                        warnings.extend(notes.iter().filter_map(Value::as_str).map(str::to_owned));
+                    }
+                }
+                Err(failure) => warnings.push(format!(
+                    "No memory estimate: {}",
+                    failure.error()["message"].as_str().unwrap_or("unavailable")
+                )),
+            }
+            let mut body = json!({"expected_revision": revision, "apply": apply});
+            if launch_changed {
+                body["options"] = Value::Object(merged);
+            }
+            if let Some(extras) = extra {
+                body["extra_args"] = json!(extras);
+            }
+            body
+        }
+        SettingsGroup::Image | SettingsGroup::Asr => {
+            let key = if group == SettingsGroup::Image {
+                "image_defaults"
+            } else {
+                "asr_options"
+            };
+            let patch = patch(&change.changes, key)?;
+            for (field, value) in &patch {
+                rows.push(change_row(
+                    &change.model,
+                    &format!("{key}.{field}"),
+                    current[key].get(field).cloned().unwrap_or(Value::Null),
+                    value.clone(),
+                ));
+            }
+            json!({"expected_revision": revision, key: patch, "apply": apply})
+        }
+    };
+    let described = rows
+        .iter()
+        .map(|row| {
+            format!(
+                "{} {} -> {}",
+                row["field"].as_str().unwrap_or("?"),
+                text(&row["before"]),
+                text(&row["after"])
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    if context.preview {
+        let memory = &data["memory"];
+        let fit = match memory["fits"].as_bool() {
+            Some(true) => format!(
+                "; needs {} of {} available",
+                memory["after_bytes"].as_u64().map_or("?".into(), size),
+                memory["available_bytes"].as_u64().map_or("?".into(), size)
+            ),
+            Some(false) => format!(
+                "; does not fit: needs {}, {} available",
+                memory["after_bytes"].as_u64().map_or("?".into(), size),
+                memory["available_bytes"].as_u64().map_or("?".into(), size)
+            ),
+            None => String::new(),
+        };
+        let summary = format!(
+            "Would set {described} for {}{fit}{}.",
+            change.model,
             if reload {
                 "; the worker restarts"
             } else if entry["loaded"] == true {
@@ -623,18 +717,10 @@ async fn settings(context: &Context<'_>, args: Value) -> Result<Outcome> {
             },
         );
         let mut outcome = Outcome::new(summary, data);
-        outcome.changed = outcome_changes;
+        outcome.changed = rows;
         outcome.warnings = warnings;
         return Ok(outcome);
     }
-    let body = match image {
-        Some(image) => {
-            json!({"expected_revision": revision, "image_defaults": image, "apply": apply})
-        }
-        None => {
-            json!({"expected_revision": revision, "options": Value::Object(merged), "apply": apply})
-        }
-    };
     let saved = context.post(&format!("models/{id}/options"), body).await?;
     let after = context
         .get(&format!("models/{id}/options"))
@@ -643,10 +729,34 @@ async fn settings(context: &Context<'_>, args: Value) -> Result<Outcome> {
     let entry = context.model(&change.model).await.unwrap_or(entry);
     data["saved"] = after["saved"].clone();
     data["effective_launch"] = after["effective_launch"].clone();
+    for key in ["extra_args", "image_defaults", "asr_options"] {
+        if !after[key].is_null() {
+            data[key] = after[key].clone();
+        }
+    }
     data["context"] = present(&entry["context"]);
     data["state"] = entry["state"].clone();
+    if reload {
+        let effective = &after["effective_launch"];
+        let differs: Vec<&str> = crate::profiles::FIELD_KEYS
+            .iter()
+            .copied()
+            .filter(|key| {
+                change
+                    .changes
+                    .get(*key)
+                    .is_some_and(|value| !value.is_null() && effective.get(*key) != Some(value))
+            })
+            .collect();
+        if !differs.is_empty() {
+            warnings.push(format!(
+                "The running worker reports different values for {}; check juiced_model_details.",
+                differs.join(", ")
+            ));
+        }
+    }
     let summary = format!(
-        "Saved settings for {}{}.",
+        "Saved {described} for {}{}.",
         change.model,
         if reload {
             format!("; reloaded, now {}", entry["state"].as_str().unwrap_or("?"))
@@ -656,7 +766,7 @@ async fn settings(context: &Context<'_>, args: Value) -> Result<Outcome> {
     );
     let mut outcome =
         Outcome::new(summary, data).next(&["juiced_model_details", "juiced_test_model"]);
-    outcome.changed = outcome_changes;
+    outcome.changed = rows;
     outcome.warnings = warnings;
     if context.own_model(&change.model) && reload {
         outcome = outcome.warn("This is Barista's own model; it restarted with the new settings.");

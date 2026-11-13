@@ -196,6 +196,38 @@ test.describe("Barista", () => {
     expect((await unconfirmed.json()).error.code).toBe("assistant_confirmation_required");
   });
 
+  test("an approved deletion runs at the storage revision its preview showed", async ({ page, request }) => {
+    const service = api(request);
+    await service.setBarista(true, hotModel, "ask");
+    const tiny = "45957cc9a23e06484db4e445c3ad4250730296d331118687038f4c1d4d403f7f";
+    await service.removeArtifact(tiny);
+    const generation = (await service.artifacts()).generation;
+    const pull = await service.post<{ pull: string }>("/v1/juiced/library/pull", { repo: "fixture-labs/Tiny-Chat-GGUF", file: "Tiny-Chat-Q4_K_M.gguf", expected_generation: generation });
+    await expect.poll(async () => (await service.json<{ state: string }>(`/v1/juiced/library/pulls/${pull.pull}`)).state, { timeout: 20000 }).toBe("complete");
+    const storage = await service.json<{ unreferenced: { id: string; title: string; bytes: number }[] }>("/v1/juiced/storage");
+    const file = storage.unreferenced.find((item) => item.title.includes("Tiny-Chat"))!;
+    expect(file, JSON.stringify(storage.unreferenced)).toBeTruthy();
+    const calls: { name: string; confirmed: boolean; arguments: any }[] = [];
+    page.on("request", (outgoing) => { if (new URL(outgoing.url()).pathname === "/v1/juiced/barista/tools/call") { const body = outgoing.postDataJSON(); calls.push({ name: body.name, confirmed: body.confirmed, arguments: body.arguments }); } });
+    await script(page, [() => toolCall([{ id: "delete", name: "juiced_delete_files", arguments: { items: [file.id] } }]), () => text("Deleted.")]);
+    await open(page);
+    const panel = await ask(page, "Delete the Tiny-Chat download");
+    const card = panel.getByRole("group", { name: "Confirm change" }).filter({ hasText: "Delete 1 storage item?" });
+    await expect(card).toContainText("Would free");
+    await expect(card.getByRole("list", { name: "Changed" })).toHaveText(`${file.title}: on disk → deleted`);
+    await shots(page, "delete-confirmation", async () => { await expect(card.getByRole("button", { name: "Approve" })).toBeVisible(); });
+    await noHorizontalOverflow(page, "delete confirmation");
+    await card.getByRole("button", { name: "Approve" }).click();
+    await expect(panel.getByRole("group", { name: "Change" }).filter({ hasText: "Delete 1 storage item?" })).toContainText("Freed");
+    const deletes = calls.filter((call) => call.name === "juiced_delete_files");
+    expect(deletes.map((call) => [call.confirmed, call.arguments.preview === true])).toEqual([[false, true], [true, false]]);
+    expect(typeof deletes[1]!.arguments.expected_revision).toBe("string");
+    const after = await service.json<{ unreferenced: { id: string }[] }>("/v1/juiced/storage");
+    expect(after.unreferenced.map((item) => item.id)).not.toContain(file.id);
+    await request.post(`/v1/juiced/library/pulls/${pull.pull}`, { data: { action: "dismiss" } });
+    await service.removeArtifact(tiny);
+  });
+
   test("read only offers no change tools and the service refuses one anyway", async ({ page, request }) => {
     const service = api(request);
     await service.setBarista(true, hotModel, "read_only");

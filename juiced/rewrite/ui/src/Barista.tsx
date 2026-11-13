@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, type Client } from "./api";
-import { MAX_STEPS, action, callTool, candidates, changeLines, describe, implication, jobLine, outcome, parseArguments, permissionHelp, permissionNames, readJob, readOnly, stopCodes, streamReply, systemPrompt, type BaristaSettings, type ChatMessage, type Envelope, type Job, type Permission, type ToolResult } from "./baristaTools";
+import { MAX_STEPS, action, approvedArgs, callTool, candidates, changeLines, describe, implication, jobLine, outcome, parseArguments, permissionHelp, permissionNames, readJob, readOnly, stopCodes, streamReply, systemPrompt, type BaristaSettings, type ChatMessage, type Envelope, type Job, type Permission, type ToolResult } from "./baristaTools";
 import { withImages, withoutImages } from "./chatImages";
 import { AssistantBody, Composer, UserBody, thinkingClock, useAttachments } from "./ChatParts";
 import { Copy } from "./Connect";
@@ -171,7 +171,9 @@ function MediaResult({ client, media }: { client: Client; media: { handle: strin
   }, [client, media.handle]);
   if (gone) return <p className="field-help">The test output has expired.</p>;
   if (!url) return null;
-  return media.type.startsWith("image/") ? <img className="barista-media" src={url} alt="Test image result" /> : <audio className="barista-media" controls src={url} aria-label="Test audio result" />;
+  if (media.type.startsWith("image/")) return <img className="barista-media" src={url} alt="Test image result" />;
+  if (media.type.startsWith("audio/")) return <audio className="barista-media" controls src={url} aria-label="Test audio result" />;
+  return <a className="barista-media-link" href={url} download="juiced-test.glb">Download the test mesh (.glb)</a>;
 }
 
 function StepIcon({ step }: { step: Step }) {
@@ -288,7 +290,7 @@ export function Barista({ open, onClose, models, ready, client, online, settings
                 result = JSON.stringify({ ok: false, skipped: true, summary: "The operator skipped this change. Do not retry it unless asked." });
               } else {
                 patch(id, { step: "running" });
-                const value = await callTool(client, call.name, args, current.revision, confirm && !previewing, signal);
+                const value = await callTool(client, call.name, approvedArgs(args, preview), current.revision, confirm && !previewing, signal);
                 patch(id, { step: value.ok ? "done" : "failed", detail: outcome(call.name, args, value), ...details(value.value) });
                 result = value.text;
                 changed ||= value.ok && !previewing;
