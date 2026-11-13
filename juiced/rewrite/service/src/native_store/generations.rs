@@ -1028,6 +1028,19 @@ mod tests {
             }
             Store::open(self.root.clone(), self.scope.clone(), active, initialize)
         }
+        fn open_bound(
+            &self,
+            active: Option<&Binding>,
+            initialize: bool,
+        ) -> Result<(Store, Option<PreparedBinding>), Error> {
+            for _ in 0..400 {
+                match Store::open_bound(self.root.clone(), self.scope.clone(), active, initialize) {
+                    Err(Error::Busy) => std::thread::sleep(std::time::Duration::from_millis(5)),
+                    other => return other,
+                }
+            }
+            Store::open_bound(self.root.clone(), self.scope.clone(), active, initialize)
+        }
         fn entries(&self) -> BTreeMap<String, u64> {
             self.root
                 .private_metadata_entries(&self.scope, MAX_STORE_FILES)
@@ -1808,13 +1821,7 @@ mod tests {
         drop(edited);
         drop(active);
         drop(store);
-        let (_store, active) = Store::open_bound(
-            fixture.root.clone(),
-            fixture.scope.clone(),
-            Some(&binding),
-            false,
-        )
-        .unwrap();
+        let (_store, active) = fixture.open_bound(Some(&binding), false).unwrap();
         let active = active.unwrap();
         assert_eq!(active.binding(), &binding);
         active.verify().unwrap();
@@ -2034,13 +2041,7 @@ mod tests {
             drop(retained);
             drop(active);
             drop(store);
-            let (reopened, retained) = Store::open_bound(
-                fixture.root.clone(),
-                fixture.scope.clone(),
-                Some(&old),
-                false,
-            )
-            .unwrap();
+            let (reopened, retained) = fixture.open_bound(Some(&old), false).unwrap();
             let retained = retained.unwrap();
             retained.verify().unwrap();
             assert_eq!(
