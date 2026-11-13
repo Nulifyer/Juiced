@@ -75,12 +75,14 @@ LLM and media engines, Barista storage/settings tools. Hybrid ROCm and Parakeet 
 
 Checkpoint acquisition. Qwen/Qwen3-0.6B pulled through library/pull in ~20 s (1.5 GB, set published, suggested_id Qwen3-0.6B); vLLM ROCm (0.20.1, ROCm 7.12) installed in 70 s; model added on rocm; engine ready in 33 s; first request 500: Triton launcher compile `fatal error: 'stdlib.h' file not found` (image has no libc headers; CUDA build also needs cc). Worker cleaned up, no orphan processes. TRELLIS ROCm installed in 52 s, TRELLIS.2 Q4 bundle pulled in 71 s (6.5 GB), worker exits: `libomp.so: cannot open shared object file` (TheRock member list dropped it). Bundle added as `ss_flow` (first file name). TRELLIS Vulkan (promoted via /models/ss_flow/runtime): 512 mesh 200 model/gltf-binary 4,800,264 bytes in 590 s. All three fixed in rc.20 (313bf6fd, 5223c0be, 1c21b9b3); vLLM CUDA verified in the rc.20 image on the RTX 5080 (Qwen3-0.6B "Paris", 210.6 s cold incl. start, <0.1 s warm).
 
-## Pending (2026-11-13, after rc.20)
+## Live verification (v1.0.0-rc.21, 2026-11-13)
 
-Homelab checks on rc.20 (test models only; existing policies untouched):
-- vLLM ROCm: retry chat on Qwen3-0.6B (engine and model already installed), unload, confirm no EngineCore left; then delete the test model and its files.
-- TRELLIS: uninstall/reinstall `trellis.cpp rocm` (rc.19 package lacks libomp), promote it on `ss_flow`, compare with Vulkan's 590 s; then delete `ss_flow` with files, re-add from Discover to confirm the name TRELLIS-3D-Q4, delete again.
+rc.20 never published (phone-width URL-download test raced on CI; fixed with expect.poll). rc.21 deployed through Portainer, Hot models ready in 50 s, `cc` and stdlib.h in the image. vLLM ROCm on Qwen3-0.6B: "Paris" 40.1 s cold incl. engine start, follow-up 0.2 s, 34 tok/s decode; unload left no vLLM process, GTT back to 34.6 GiB. TRELLIS ROCm reinstalled (rc.19 package removed, 1,440,756,286 bytes), TRELLIS.2 Q4 re-pulled (70 s, suggested_id TRELLIS-3D-Q4), added as TRELLIS-3D-Q4 on rocm: two 512 meshes 662.2 s and 661.7 s (Vulkan 590 s / 593 s). Test models deleted (6,546,263,488 + 1,519,182,365 bytes); vLLM ROCm, TRELLIS ROCm and Vulkan engines kept installed. Release pages rc.18, rc.19, rc.21 created; Homelab compose synced to rc.21 (uncommitted).
+
+## Pending (2026-11-13, after rc.21)
+
 - Real Barista session with Ornith.
+- TRELLIS on gfx1150: Vulkan measured ~11% faster than ROCm; consider recommending Vulkan for TRELLIS on RDNA 3.5.
 
 Engine gaps found:
 - vLLM starts without `--reasoning-parser` / `--enable-auto-tool-choice --tool-call-parser`: Qwen3 replies keep `<think></think>` in content and tool calls are not parsed. Proposed: pick parsers from the checkpoint's config.json (`model_type`/architectures) with an override in model settings.
@@ -106,4 +108,4 @@ Known gaps:
 
 ## Next action
 
-rc.20 CI, Portainer deploy, then the homelab checks above. After that: vLLM parser defaults, then the engine-management round. v0.9.2 parity batches B1-B6 and round 12 (downloads survive restarts, storage management, Barista tools, engine support for discovered backends) are merged and live.
+Barista session with Ornith on rc.21. After that: vLLM parser defaults, then the engine-management round. v0.9.2 parity batches B1-B6 and round 12 (downloads survive restarts, storage management, Barista tools, engine support for discovered backends) are merged and live.
