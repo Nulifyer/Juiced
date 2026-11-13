@@ -107,6 +107,7 @@ async fn ordinary_queue_is_fifo_and_cancelled_waiters_never_reach_workers() {
         assert!(
             record["elapsed_ms"].as_u64().unwrap() >= record["queue_wait_ms"].as_u64().unwrap()
         );
+        assert!(record["completed_at_ms"].as_u64().is_some_and(|at| at > 0));
     }
 }
 

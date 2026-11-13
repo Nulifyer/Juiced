@@ -23,7 +23,7 @@ export function duration(ms: number): string {
   return `${Number.isInteger(hours) ? hours : hours.toFixed(1)} h`;
 }
 
-function remaining(ms: number): string {
+export function remaining(ms: number): string {
   const minutes = Math.ceil(ms / 60_000);
   return minutes <= 1 ? "under a minute" : minutes < 60 ? `${minutes} min` : `${Math.round(minutes / 60)} h`;
 }

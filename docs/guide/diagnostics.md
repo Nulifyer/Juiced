@@ -1,17 +1,40 @@
 # Inspect runtime activity
 
-Open **Diagnostics** to check performance, completed requests, and logs.
-Use the same model and workload when comparing settings.
+Use **Dashboard** to check what is running now. Use **Diagnostics** to find out
+how requests performed and why. Use the same model and workload when comparing
+settings.
+
+## Check the Dashboard
+
+The Dashboard answers one question: is everything working right now?
+
+- **Protocols** counts the client protocols that are ready and names those in use.
+- **Requests** shows active and queued requests against the loaded request slots.
+- **Model memory** shows memory reserved by loaded models against the admission
+  budget, and how much is free for another model.
+- **GPU memory** shows the first GPU's memory and utilization.
+- **Running** lists loaded and starting models with their busy slots and when
+  each was last used, or when an idle On demand model unloads.
+- **Needs attention** lists failed models, failing protocol self-checks, requests
+  that failed in the last hour, and an unavailable snapshot cache. Select an entry
+  to open the model, protocol, or request list.
+
+The footer shows current CPU, RAM, GPU, VRAM, and NPU use on every page.
 
 ## Read performance
 
 1. Open **Diagnostics → Performance**.
-2. Check host memory and detected accelerator measurements.
-3. Send a representative request.
-4. Inspect the last completed inference and available token timings.
+2. Send a representative request.
+3. Read the model's row under **By model**:
+   - **Typical time** is the median duration of completed requests.
+   - **Prompt time** compares reused prompts with prompts read in full. A reused
+     prompt was still loaded in the engine or restored from disk, so only its new
+     part was processed.
+   - **Cached** is the share of prompt tokens served from the prompt cache.
+   - **Speed** shows generated tokens per second, with prompt tokens per second below.
+4. Check the CPU, memory, GPU, and VRAM charts for the last two minutes.
 
-The footer also reports current runtime measurements. Select **Details** for
-additional values when that control is available in your release.
+**Reservations** lists the declared limits used to admit work.
 Missing or stale measurements remain unknown. A GPU's shared allocation can
 overlap host RAM, so adding the two values can double-count memory.
 Aggregate counters do not establish one worker's cache use or available context.
@@ -19,22 +42,27 @@ Aggregate counters do not establish one worker's cache use or available context.
 ## Inspect requests
 
 1. Open **Diagnostics → Requests**.
-2. Find the completed request using the available filters.
-3. Inspect its protocol, model, status, duration, and recorded usage.
-4. Open the associated model if its runtime needs investigation.
+2. Find the request by its completion time and model.
+3. Read its outcome, prompt and output tokens, and speed.
+4. Use the **Duration** bar to see where the time went: queue, prompt, generate,
+   and other work. Bars share one scale, so a slow request stands out.
 
-Requests appear after completion. The inventory retains a bounded recent history
-of up to 200 request records. It records operational metadata rather than prompts
-or answer content. Missing token usage is not inferred from another request.
-A successful request establishes that operation for that model/profile, not every
-feature advertised by the model publisher.
+The prompt column says whether the prompt was still loaded, restored from disk,
+or processed in full, and how many tokens came from the cache. A long prompt
+processed in full usually explains a slow first reply.
+
+Prompt and generate times come from the engine's token rates. Other covers
+restoring a saved conversation, audio work, and network time. Requests appear
+after completion. The service keeps the latest 128 records. It records
+operational metadata, never prompts or answer content. Missing token usage is
+not inferred from another request.
 
 ## Read logs
 
 1. Open **Diagnostics → Logs**.
-2. Choose the raw or parsed view for the information you need.
-3. Narrow the visible entries around the failed operation.
-4. Check the worker error alongside the management operation state.
+2. Search, or choose a level and a source, to narrow the lines.
+3. Select **Pause** to stop following new lines while you read.
+4. Check the worker error alongside the model's current state.
 
 Buffered warnings can remain after the original condition clears. Check the
 current worker state before treating an old warning as an active failure.
