@@ -116,6 +116,15 @@ test.describe("Barista jobs", () => {
     await b.ok("juiced_set_policy", { model: "tiny-chat-q8", policy: "disabled" });
     const removed = await b.ok("juiced_remove_model", { model: "tiny-chat-q8" });
     expect(removed.data.removed).toBe(true);
+    // Later specs expect the fixture hub's quants to start undownloaded.
+    for (const pull of (await b.service.json<{ data: any[] }>("/v1/juiced/library/pulls")).data) await request.post(`/v1/juiced/library/pulls/${pull.pull}`, { data: { action: "dismiss" } });
+    const q8 = "90385a03c0f9f8ce448ffd8267737c48fc94142a83b5eed787e6e43f97c0d1df";
+    await expect.poll(async () => {
+      const inventory = await b.service.json<any>("/v1/juiced/artifacts?limit=128");
+      if (!inventory.artifacts.some((item: any) => item.id === q8)) return "gone";
+      const response = await request.post("/v1/juiced/artifacts/remove", { data: { artifact: q8, expected_generation: inventory.generation } });
+      return response.ok() ? "gone" : (await response.json()).error.code;
+    }, { timeout: 15000 }).toBe("gone");
   });
 
   test("3. increase a model's context, previewing the fit first", async ({ request }) => {
