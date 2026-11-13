@@ -61,6 +61,8 @@ In progress, round 11 (user feedback after enabling Barista on production):
 - Helper `helper-prefill`: Hot models still pay a full prefill on a new conversation. Live evidence: a cold 6,477-token prompt took 16.9 s vs 1.5-3 s on slot hits; Ornith has 2 slots shared by Home Assistant (~6.5k-token prompt) and Barista (~2.5k); saved prefix sessions never restored (`saved_previous` false). Ornith is a hybrid architecture, so llama.cpp checkpoint/prompt-cache behaviour matters.
 - Then: merge, full gate, `v1.0.0-rc.11`, Portainer deploy, live check (repeat the cold/warm request comparison).
 
+- Model discovery parity (client report from pi-t3-agent, 2026-11-12): the rewrite dropped native discovery. `/health` is only `{"status":"ok"}` (no `version`, `all_models_loaded`), `/v1/models` entries are bare and include speech/image models, `/v1/juiced/capabilities` and `/.well-known/juiced.json` are 404, the catalog has no per-request context or thinking/tools capability fields, no catalog ETag. Helper `helper-discovery` restores the native contract (base v1.0.0-rc.11); ships in rc.12.
+
 Decisions waiting on the user:
 
 - Saved conversations after an image upgrade show "Engine changed" (fingerprint covers every mapped file, image libraries included). Loosen to llama.cpp build + launch plan, or keep strict.
