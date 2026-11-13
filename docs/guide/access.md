@@ -50,6 +50,9 @@ credential to its upstream requests. Keep that proxy entry restricted to trusted
 operators. An inference client's key should not gain access through this operator
 entry point.
 
+`GET /live` answers `{"status":"ok"}` without a key, so load balancers and
+orchestrators can check liveness. It reveals nothing else.
+
 ## Keep Wyoming private
 
 The optional Wyoming speech listener uses TCP port `10300` and has no protocol

@@ -73,7 +73,7 @@
     },
     {
       "path": "juiced/rewrite/rust-tests/tests/api_end_to_end.rs",
-      "sha256": "79721cb95a6fed4dc209ba18036f2c7f71b157932ef0ffd2b0aaf886d1b8afe6",
+      "sha256": "664400adecc8ae8f6af7f9d1874e41842c23c407f86f72d82dc3089b4401e4fa",
       "hash_check": "snapshot_only"
     },
     {
@@ -118,7 +118,7 @@
     },
     {
       "path": "juiced/rewrite/rust-tests/tests/support/mod.rs",
-      "sha256": "189e356b6e4e4380472be832afa9e553c65fda5237014a663dcddafe3c5b8a6f",
+      "sha256": "a7b4a68ffd48fc774e9c33f6df172c27661640021a6729a5f044a5c511ae2c33",
       "hash_check": "snapshot_only"
     },
     {
@@ -128,12 +128,12 @@
     },
     {
       "path": "juiced/rewrite/service/src/config.rs",
-      "sha256": "236905e5b38033d3552a2c51dbf8fbd2cd7707b0133bf2abae4c777c3da4bcf8",
+      "sha256": "ac6df3bf18a059370752aba832c9ac06eaf1747ae04ee03b8dff53d21bd4546e",
       "hash_check": "snapshot_only"
     },
     {
       "path": "juiced/rewrite/service/src/http.rs",
-      "sha256": "cf10b74a91d7de5c1b8d865e4ef700f0a5cc60faddf3c4669bf0cc1bd9f124a4",
+      "sha256": "c4fd633757f01ea96d31a1fca380de0682e1529ffee17bc575dcd4c7c044e96d",
       "hash_check": "snapshot_only"
     },
     {
@@ -229,6 +229,11 @@
     {
       "path": "juiced/rewrite/rust-tests/tests/model_discovery.rs",
       "sha256": "25b5f91fce499103832734e0371f215da2704c5303e09a891477e01e514f5f31",
+      "hash_check": "snapshot_only"
+    },
+    {
+      "path": "juiced/rewrite/rust-tests/tests/llama_routes.rs",
+      "sha256": "f1414de8483d914e6d2dfecaa6e2d89ca8a640a10f0feac8c323d1cae7b3e85f",
       "hash_check": "snapshot_only"
     }
   ],
@@ -2593,7 +2598,7 @@
       "category": "native",
       "native_behavior": "handler",
       "disposition": "retained",
-      "status": "planned",
+      "status": "partial",
       "native_evidence": [
         {
           "path": "src/cpp/server/server.cpp",
@@ -2607,12 +2612,26 @@
         "F134"
       ],
       "rust_equivalent": {
-        "relationship": "none",
-        "routes": [],
-        "scenario_files": [],
-        "authorities": []
+        "relationship": "same_path",
+        "routes": [
+          {
+            "method": "GET",
+            "path": "/slots",
+            "prefix_scheme": "native_quad"
+          }
+        ],
+        "scenario_files": [
+          "juiced/rewrite/rust-tests/tests/llama_routes.rs"
+        ],
+        "authorities": [
+          {
+            "method": "GET",
+            "path": "/slots",
+            "authority": "inference"
+          }
+        ]
       },
-      "semantic_boundary": "No Rust handler implements this native path. Add request, response, authority, persistence and failure scenarios before claiming parity.",
+      "semantic_boundary": "Rust lists /slots of the named (?model=) or most recently used loaded llama.cpp worker, reduced to id, id_task, n_ctx, speculative, is_processing, numeric next_token fields and a derived state; sampling params and prompt text are withheld because they can carry another caller's content. Inference authority; no loaded worker is 400 model_not_loaded.",
       "documentation": "docs/api/juiced.md",
       "native_authority": "operator"
     },
@@ -2624,7 +2643,7 @@
       "category": "native",
       "native_behavior": "handler",
       "disposition": "retained",
-      "status": "planned",
+      "status": "partial",
       "native_evidence": [
         {
           "path": "src/cpp/server/server.cpp",
@@ -2638,12 +2657,26 @@
         "F134"
       ],
       "rust_equivalent": {
-        "relationship": "none",
-        "routes": [],
-        "scenario_files": [],
-        "authorities": []
+        "relationship": "same_path",
+        "routes": [
+          {
+            "method": "POST",
+            "path": "/tokenize",
+            "prefix_scheme": "native_quad"
+          }
+        ],
+        "scenario_files": [
+          "juiced/rewrite/rust-tests/tests/llama_routes.rs"
+        ],
+        "authorities": [
+          {
+            "method": "POST",
+            "path": "/tokenize",
+            "authority": "inference"
+          }
+        ]
       },
-      "semantic_boundary": "No Rust handler implements this native path. Add request, response, authority, persistence and failure scenarios before claiming parity.",
+      "semantic_boundary": "Rust forwards content, add_special, parse_special and with_pieces to /tokenize of the named or most recently used loaded llama.cpp worker without admission or loading; content is required (400 content_required), no loaded worker is 400 model_not_loaded, a non-llama.cpp model is 501. Rust also serves /detokenize. No native differential receipt.",
       "documentation": "docs/api/juiced.md",
       "native_authority": "regular_api"
     },
@@ -3625,7 +3658,7 @@
       "category": "native",
       "native_behavior": "handler",
       "disposition": "retained",
-      "status": "planned",
+      "status": "partial",
       "native_evidence": [
         {
           "path": "src/cpp/server/server.cpp",
@@ -3639,12 +3672,26 @@
         "F134"
       ],
       "rust_equivalent": {
-        "relationship": "none",
-        "routes": [],
-        "scenario_files": [],
-        "authorities": []
+        "relationship": "same_path",
+        "routes": [
+          {
+            "method": "GET",
+            "path": "/stats",
+            "prefix_scheme": "native_quad"
+          }
+        ],
+        "scenario_files": [
+          "juiced/rewrite/rust-tests/tests/llama_routes.rs"
+        ],
+        "authorities": [
+          {
+            "method": "GET",
+            "path": "/stats",
+            "authority": "read"
+          }
+        ]
       },
-      "semantic_boundary": "No Rust handler implements this native path. Add request, response, authority, persistence and failure scenarios before claiming parity.",
+      "semantic_boundary": "Rust reports the last completed text inference (time_to_first_token from engine prompt timings, tokens_per_second, input/output/prompt/cache tokens) and cumulative totals since service start; routing counters are 0 (no collection router) and live generating counts and estimated rate are null. Read authority.",
       "documentation": "docs/api/juiced.md",
       "native_authority": "regular_api"
     },
@@ -3778,7 +3825,7 @@
       "category": "llamacpp",
       "native_behavior": "handler",
       "disposition": "retained",
-      "status": "planned",
+      "status": "partial",
       "native_evidence": [
         {
           "path": "src/cpp/server/server.cpp",
@@ -3798,12 +3845,26 @@
         "F134"
       ],
       "rust_equivalent": {
-        "relationship": "none",
-        "routes": [],
-        "scenario_files": [],
-        "authorities": []
+        "relationship": "same_path",
+        "routes": [
+          {
+            "method": "POST",
+            "path": "/rerank",
+            "prefix_scheme": "native_quad"
+          }
+        ],
+        "scenario_files": [
+          "juiced/rewrite/rust-tests/tests/llama_routes.rs"
+        ],
+        "authorities": [
+          {
+            "method": "POST",
+            "path": "/rerank",
+            "authority": "inference"
+          }
+        ]
       },
-      "semantic_boundary": "No Rust handler implements this native path. Add request, response, authority, persistence and failure scenarios before claiming parity.",
+      "semantic_boundary": "Rust forwards the OpenAI-style rerank body to the named model's llama.cpp worker at /v1/rerank through normal admission (Operation rerank, X-Juiced-Priority honoured) and returns the engine's model/object/results/usage unchanged. Models must declare the rerank operation and start llama-server with --reranking; query string and documents array are required. Native auto-load options and telemetry spans are not reproduced. No native differential receipt.",
       "documentation": "docs/api/llamacpp.md",
       "native_authority": "regular_api"
     },
@@ -3815,7 +3876,7 @@
       "category": "llamacpp",
       "native_behavior": "handler",
       "disposition": "retained",
-      "status": "planned",
+      "status": "partial",
       "native_evidence": [
         {
           "path": "src/cpp/server/server.cpp",
@@ -3835,12 +3896,26 @@
         "F134"
       ],
       "rust_equivalent": {
-        "relationship": "none",
-        "routes": [],
-        "scenario_files": [],
-        "authorities": []
+        "relationship": "same_path",
+        "routes": [
+          {
+            "method": "POST",
+            "path": "/reranking",
+            "prefix_scheme": "native_quad"
+          }
+        ],
+        "scenario_files": [
+          "juiced/rewrite/rust-tests/tests/llama_routes.rs"
+        ],
+        "authorities": [
+          {
+            "method": "POST",
+            "path": "/reranking",
+            "authority": "inference"
+          }
+        ]
       },
-      "semantic_boundary": "No Rust handler implements this native path. Add request, response, authority, persistence and failure scenarios before claiming parity.",
+      "semantic_boundary": "Rust forwards the OpenAI-style rerank body to the named model's llama.cpp worker at /v1/rerank through normal admission (Operation rerank, X-Juiced-Priority honoured) and returns the engine's model/object/results/usage unchanged. Models must declare the rerank operation and start llama-server with --reranking; query string and documents array are required. Native auto-load options and telemetry spans are not reproduced. No native differential receipt.",
       "documentation": "docs/api/llamacpp.md",
       "native_authority": "regular_api"
     },
@@ -3852,7 +3927,7 @@
       "category": "llamacpp",
       "native_behavior": "handler",
       "disposition": "retained",
-      "status": "planned",
+      "status": "partial",
       "native_evidence": [
         {
           "path": "src/cpp/server/server.cpp",
@@ -3872,12 +3947,26 @@
         "F134"
       ],
       "rust_equivalent": {
-        "relationship": "none",
-        "routes": [],
-        "scenario_files": [],
-        "authorities": []
+        "relationship": "same_path",
+        "routes": [
+          {
+            "method": "POST",
+            "path": "/reranker",
+            "prefix_scheme": "native_quad"
+          }
+        ],
+        "scenario_files": [
+          "juiced/rewrite/rust-tests/tests/llama_routes.rs"
+        ],
+        "authorities": [
+          {
+            "method": "POST",
+            "path": "/reranker",
+            "authority": "inference"
+          }
+        ]
       },
-      "semantic_boundary": "No Rust handler implements this native path. Add request, response, authority, persistence and failure scenarios before claiming parity.",
+      "semantic_boundary": "Rust forwards the OpenAI-style rerank body to the named model's llama.cpp worker at /v1/rerank through normal admission (Operation rerank, X-Juiced-Priority honoured) and returns the engine's model/object/results/usage unchanged. Models must declare the rerank operation and start llama-server with --reranking; query string and documents array are required. Native auto-load options and telemetry spans are not reproduced. No native differential receipt.",
       "documentation": "docs/api/llamacpp.md",
       "native_authority": "regular_api"
     },
@@ -4202,7 +4291,7 @@
       "category": "native",
       "native_behavior": "handler",
       "disposition": "retained",
-      "status": "planned",
+      "status": "partial",
       "native_evidence": [
         {
           "path": "src/cpp/server/server.cpp",
@@ -4216,36 +4305,26 @@
         "F134"
       ],
       "rust_equivalent": {
-        "relationship": "related_operation",
+        "relationship": "same_path",
         "routes": [
           {
             "method": "POST",
-            "path": "/juiced/cache/save",
-            "prefix_scheme": "native_quad"
-          },
-          {
-            "method": "POST",
-            "path": "/juiced/cache/restore",
+            "path": "/slots/{slot}",
             "prefix_scheme": "native_quad"
           }
         ],
         "scenario_files": [
-          "juiced/rewrite/rust-tests/tests/cache_pipeline.rs"
+          "juiced/rewrite/rust-tests/tests/llama_routes.rs"
         ],
         "authorities": [
           {
             "method": "POST",
-            "path": "/juiced/cache/save",
-            "authority": "operator"
-          },
-          {
-            "method": "POST",
-            "path": "/juiced/cache/restore",
-            "authority": "operator"
+            "path": "/slots/{slot}",
+            "authority": "inference"
           }
         ]
       },
-      "semantic_boundary": "Rust cache endpoints own qualified slot state through session/digest leases. They do not expose the native llama.cpp slot-action path or its query schema.",
+      "semantic_boundary": "Rust maps save and restore onto the managed snapshot owner: filename is the session identifier, the slot must hold a completed X-Juiced-Session completion from the same credential and execution fingerprint, a new save retires earlier snapshots of that filename, restore finds the caller's own snapshot by filename, and only one-slot workers with cache enabled qualify. Erase forwards to the engine after clearing slot ownership. Persistent session snapshot mode refuses all three with 409 cache_sessions_managed. Responses keep id_slot/filename/n_saved/n_restored/n_erased plus a juiced block.",
       "documentation": "docs/api/juiced.md",
       "native_authority": "operator",
       "native_parameter_patterns": {
@@ -4451,7 +4530,7 @@
       "category": "operations",
       "native_behavior": "handler",
       "disposition": "retained",
-      "status": "planned",
+      "status": "partial",
       "native_evidence": [
         {
           "path": "src/cpp/server/server.cpp",
@@ -4465,12 +4544,26 @@
         "F134"
       ],
       "rust_equivalent": {
-        "relationship": "none",
-        "routes": [],
-        "scenario_files": [],
-        "authorities": []
+        "relationship": "same_path",
+        "routes": [
+          {
+            "method": "GET",
+            "path": "/live",
+            "prefix_scheme": "framework"
+          }
+        ],
+        "scenario_files": [
+          "juiced/rewrite/rust-tests/tests/llama_routes.rs"
+        ],
+        "authorities": [
+          {
+            "method": "GET",
+            "path": "/live",
+            "authority": "public"
+          }
+        ]
       },
-      "semantic_boundary": "No Rust handler implements this native path. Add request, response, authority, persistence and failure scenarios before claiming parity.",
+      "semantic_boundary": "Rust answers GET and HEAD /live with {\"status\":\"ok\"} before authentication, so it stays 200 with API keys set.",
       "documentation": "docs/api/README.md",
       "native_authority": "public_or_pattern_dependent"
     },
@@ -5442,7 +5535,7 @@
       "category": "native",
       "native_behavior": "handler",
       "disposition": "retained",
-      "status": "planned",
+      "status": "partial",
       "native_evidence": [
         {
           "path": "src/cpp/server/juiced/service.cpp",
@@ -5456,12 +5549,26 @@
         "F134"
       ],
       "rust_equivalent": {
-        "relationship": "none",
-        "routes": [],
-        "scenario_files": [],
-        "authorities": []
+        "relationship": "same_path",
+        "routes": [
+          {
+            "method": "GET",
+            "path": "/audio/voices",
+            "prefix_scheme": "native_quad"
+          }
+        ],
+        "scenario_files": [
+          "juiced/rewrite/rust-tests/tests/llama_routes.rs"
+        ],
+        "authorities": [
+          {
+            "method": "GET",
+            "path": "/audio/voices",
+            "authority": "read"
+          }
+        ]
       },
-      "semantic_boundary": "No Rust handler implements this native path. Add request, response, authority, persistence and failure scenarios before claiming parity.",
+      "semantic_boundary": "Rust lists voices from the Kokoro model's retained voice pack without loading it (native returned 409 until loaded); model is required (400), non-Kokoro models are 501, unreadable packs are 502. source is voice-pack instead of backend.",
       "documentation": "docs/api/juiced.md",
       "native_authority": "regular_api"
     },
@@ -7870,7 +7977,8 @@
           }
         ],
         "scenario_files": [
-          "juiced/rewrite/rust-tests/tests/voice_pipeline.rs"
+          "juiced/rewrite/rust-tests/tests/voice_pipeline.rs",
+          "juiced/rewrite/rust-tests/tests/llama_routes.rs"
         ],
         "authorities": [
           {
@@ -7880,7 +7988,7 @@
           }
         ]
       },
-      "semantic_boundary": "Rust serves GET /realtime?intent=transcription under the four native prefixes only (not the bare path) with the regular API-key handshake (Authorization, x-api-key, or one openai-insecure-api-key.<key> subprotocol). Sessions accept beta transcription_session.update and GA session.update, 24 kHz mono pcm16 base64 appends, commit, clear and server_vad energy turn detection, and emit committed, speech_started/stopped and input_audio_transcription completed/failed events through the admitted whisper.cpp path. No conversation/response intent, delta streaming, noise reduction, origin check or native differential receipt exists.",
+      "semantic_boundary": "Rust serves GET /realtime?intent=transcription bare and under the four native prefixes (not on a separate websocket_port) with the regular API-key handshake (Authorization, x-api-key, or one openai-insecure-api-key.<key> subprotocol). Sessions accept beta transcription_session.update and GA session.update, 24 kHz mono pcm16 base64 appends, commit, clear and server_vad energy turn detection, and emit committed, speech_started/stopped and input_audio_transcription completed/failed events through the admitted whisper.cpp path. No conversation/response intent, delta streaming, noise reduction, origin check or native differential receipt exists.",
       "documentation": "docs/api/README.md",
       "native_authority": "websocket_handshake_policy"
     },
@@ -11484,6 +11592,175 @@
         "juiced/rewrite/rust-tests/tests/model_discovery.rs"
       ],
       "native_same_path": true
+    },
+    {
+      "method": "POST",
+      "path": "/rerank",
+      "prefix_scheme": "native_quad",
+      "authority": "inference",
+      "evidence": {
+        "path": "juiced/rewrite/service/src/http.rs",
+        "line": 279,
+        "text": "(post, \"/rerank\", rerank, \"inference\"),",
+        "role": "registration"
+      },
+      "native_route_ids": [
+        "http:POST:native_quad:/rerank"
+      ],
+      "scenario_files": [
+        "juiced/rewrite/rust-tests/tests/llama_routes.rs"
+      ],
+      "native_same_path": true
+    },
+    {
+      "method": "POST",
+      "path": "/reranking",
+      "prefix_scheme": "native_quad",
+      "authority": "inference",
+      "evidence": {
+        "path": "juiced/rewrite/service/src/http.rs",
+        "line": 280,
+        "text": "(post, \"/reranking\", rerank, \"inference\"),",
+        "role": "registration"
+      },
+      "native_route_ids": [
+        "http:POST:native_quad:/reranking"
+      ],
+      "scenario_files": [
+        "juiced/rewrite/rust-tests/tests/llama_routes.rs"
+      ],
+      "native_same_path": true
+    },
+    {
+      "method": "POST",
+      "path": "/reranker",
+      "prefix_scheme": "native_quad",
+      "authority": "inference",
+      "evidence": {
+        "path": "juiced/rewrite/service/src/http.rs",
+        "line": 281,
+        "text": "(post, \"/reranker\", rerank, \"inference\"),",
+        "role": "registration"
+      },
+      "native_route_ids": [
+        "http:POST:native_quad:/reranker"
+      ],
+      "scenario_files": [
+        "juiced/rewrite/rust-tests/tests/llama_routes.rs"
+      ],
+      "native_same_path": true
+    },
+    {
+      "method": "POST",
+      "path": "/tokenize",
+      "prefix_scheme": "native_quad",
+      "authority": "inference",
+      "evidence": {
+        "path": "juiced/rewrite/service/src/http.rs",
+        "line": 282,
+        "text": "(post, \"/tokenize\", tokenize, \"inference\"),",
+        "role": "registration"
+      },
+      "native_route_ids": [
+        "http:POST:native_quad:/tokenize"
+      ],
+      "scenario_files": [
+        "juiced/rewrite/rust-tests/tests/llama_routes.rs"
+      ],
+      "native_same_path": true
+    },
+    {
+      "method": "POST",
+      "path": "/detokenize",
+      "prefix_scheme": "native_quad",
+      "authority": "inference",
+      "evidence": {
+        "path": "juiced/rewrite/service/src/http.rs",
+        "line": 283,
+        "text": "(post, \"/detokenize\", detokenize, \"inference\"),",
+        "role": "registration"
+      },
+      "native_route_ids": [],
+      "scenario_files": [
+        "juiced/rewrite/rust-tests/tests/llama_routes.rs"
+      ],
+      "native_same_path": false
+    },
+    {
+      "method": "GET",
+      "path": "/slots",
+      "prefix_scheme": "native_quad",
+      "authority": "inference",
+      "evidence": {
+        "path": "juiced/rewrite/service/src/http.rs",
+        "line": 284,
+        "text": "(get, \"/slots\", slots, \"inference\"),",
+        "role": "registration"
+      },
+      "native_route_ids": [
+        "http:GET:native_quad:/slots"
+      ],
+      "scenario_files": [
+        "juiced/rewrite/rust-tests/tests/llama_routes.rs"
+      ],
+      "native_same_path": true
+    },
+    {
+      "method": "POST",
+      "path": "/slots/{slot}",
+      "prefix_scheme": "native_quad",
+      "authority": "inference",
+      "evidence": {
+        "path": "juiced/rewrite/service/src/http.rs",
+        "line": 285,
+        "text": "(post, \"/slots/{slot}\", slot_action, \"inference\"),",
+        "role": "registration"
+      },
+      "native_route_ids": [
+        "http:POST:native_quad:/slots/{slot}"
+      ],
+      "scenario_files": [
+        "juiced/rewrite/rust-tests/tests/llama_routes.rs"
+      ],
+      "native_same_path": true
+    },
+    {
+      "method": "GET",
+      "path": "/stats",
+      "prefix_scheme": "native_quad",
+      "authority": "read",
+      "evidence": {
+        "path": "juiced/rewrite/service/src/http.rs",
+        "line": 286,
+        "text": "(get, \"/stats\", stats, \"read\"),",
+        "role": "registration"
+      },
+      "native_route_ids": [
+        "http:GET:native_quad:/stats"
+      ],
+      "scenario_files": [
+        "juiced/rewrite/rust-tests/tests/llama_routes.rs"
+      ],
+      "native_same_path": true
+    },
+    {
+      "method": "GET",
+      "path": "/audio/voices",
+      "prefix_scheme": "native_quad",
+      "authority": "read",
+      "evidence": {
+        "path": "juiced/rewrite/service/src/http.rs",
+        "line": 287,
+        "text": "(get, \"/audio/voices\", audio_voices, \"read\"),",
+        "role": "registration"
+      },
+      "native_route_ids": [
+        "http:GET:native_quad:/audio/voices"
+      ],
+      "scenario_files": [
+        "juiced/rewrite/rust-tests/tests/llama_routes.rs"
+      ],
+      "native_same_path": true
     }
   ],
   "other_transport_boundaries": [
@@ -11498,11 +11775,11 @@
     "native_websocket_routes": 4,
     "auxiliary_http_route_families": 41,
     "native_registration_sites": 143,
-    "rust_published_routes": 104,
-    "rust_native_same_path_rows": 44,
+    "rust_published_routes": 113,
+    "rust_native_same_path_rows": 52,
     "native_http_status_counts": {
-      "partial": 45,
-      "planned": 81,
+      "partial": 54,
+      "planned": 72,
       "conditional": 2,
       "excluded": 7,
       "implemented": 0

@@ -110,6 +110,24 @@ serving or qualify the intended accelerator profile separately.
 Windows and macOS process-image qualification remains unfinished. Existing receipts
 cover only their named model/runtime combinations.
 
+## Save a slot by filename
+
+llama.cpp-style clients can save and restore a slot with
+`POST /v1/slots/0?action=save` or `?action=restore` and a body like
+`{"filename": "story.bin"}`. Juiced keeps the file as a managed snapshot:
+
+1. Set the model's cache mode to **Memory** or **Off**. In **Persistent** mode,
+   automatic session snapshots own the slots and these calls return 409.
+2. Use a model with one slot, and turn on snapshot storage under **Cache**.
+3. Send the completion with `X-Juiced-Session: story.bin`, the same value as
+   the filename, and the same API key you will save with.
+4. Save. Saving the same filename again replaces the earlier snapshot.
+5. Restore later with the same key and filename. Another key cannot see it.
+
+`?action=erase` clears the slot. It also needs **Off** mode on a model with
+several slots. Add `"model"` to the body, or `?model=`, when several llama.cpp
+models are loaded.
+
 ## Retain or forget a snapshot
 
 1. Open **Cache → Snapshots**.

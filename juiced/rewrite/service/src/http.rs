@@ -276,6 +276,15 @@ define_routes! {
     (get, "/juiced/barista", barista_view, "operator"),
     (post, "/juiced/barista", barista_set, "operator"),
     (post, "/juiced/barista/tools/call", barista_call, "operator"),
+    (post, "/rerank", rerank, "inference"),
+    (post, "/reranking", rerank, "inference"),
+    (post, "/reranker", rerank, "inference"),
+    (post, "/tokenize", tokenize, "inference"),
+    (post, "/detokenize", detokenize, "inference"),
+    (get, "/slots", slots, "inference"),
+    (post, "/slots/{slot}", slot_action, "inference"),
+    (get, "/stats", stats, "read"),
+    (get, "/audio/voices", audio_voices, "read"),
 }
 async fn residency(State(state): State<AppState>) -> impl IntoResponse {
     (
@@ -1242,7 +1251,7 @@ pub fn router(manager: Arc<Manager>, auth: Auth, ui: Option<PathBuf>) -> Router 
                 "This endpoint is not implemented by the Rust experiment.",
             )
         });
-    let mut app = Router::new();
+    let mut app = Router::new().route("/realtime", get(realtime));
     for prefix in ["/api/v0", "/api/v1", "/v0", "/v1"] {
         app = app.nest(prefix, routes.clone());
     }
@@ -1252,7 +1261,8 @@ pub fn router(manager: Arc<Manager>, auth: Auth, ui: Option<PathBuf>) -> Router 
         .layer(Extension(Arc::new(crate::realtime::Sessions::default())))
         .merge(crate::compat::router(state.manager.clone()))
         .layer(DefaultBodyLimit::max(crate::admission::JSON_INGRESS_BYTES))
-        .layer(middleware::from_fn_with_state(state.clone(), authorize));
+        .layer(middleware::from_fn_with_state(state.clone(), authorize))
+        .merge(crate::llama_routes::public());
     let _ = state.probe.set(app.clone());
     if let Some(ui) = ui {
         app = app.fallback_service(ServeDir::new(ui).append_index_html_on_directories(true));
@@ -1780,7 +1790,7 @@ pub(crate) async fn forward_request(
     )
     .await
 }
-async fn forward_prioritized(
+pub(crate) async fn forward_prioritized(
     manager: Arc<Manager>,
     body: Bytes,
     operation: Operation,
@@ -1998,3 +2008,4 @@ async fn realtime(
         .max_frame_size(crate::realtime::MAX_MESSAGE_BYTES)
         .on_upgrade(move |socket| crate::realtime::serve(manager, socket, query, slot)))
 }
+use crate::llama_routes::{audio_voices, detokenize, rerank, slot_action, slots, stats, tokenize};

@@ -128,6 +128,17 @@ pub const INFERENCE_ROUTES: [&str; 4] = [
 pub const MULTIPART_INFERENCE_ROUTES: [&str; 1] = ["/audio/transcriptions"];
 pub const MEDIA_INFERENCE_ROUTES: [&str; 2] = ["/images/generations", "/audio/speech"];
 pub const WEBSOCKET_INFERENCE_ROUTES: [&str; 1] = ["/realtime"];
+pub const LLAMA_ROUTES: [(&str, &str, &str); 9] = [
+    ("POST", "/rerank", "inference"),
+    ("POST", "/reranking", "inference"),
+    ("POST", "/reranker", "inference"),
+    ("POST", "/tokenize", "inference"),
+    ("POST", "/detokenize", "inference"),
+    ("GET", "/slots", "inference"),
+    ("POST", "/slots/{slot}", "inference"),
+    ("GET", "/stats", "read"),
+    ("GET", "/audio/voices", "read"),
+];
 pub const COMPAT_ROUTES: [(&str, &str, &str); 13] = [
     ("GET", "/.well-known/juiced.json", "read"),
     ("POST", "/v1/messages", "inference"),
@@ -161,6 +172,7 @@ pub fn route_matrix() -> BTreeSet<(String, String)> {
         .chain(
             COMPAT_ROUTES
                 .iter()
+                .chain(LLAMA_ROUTES.iter())
                 .map(|(method, path, _)| ((*method).into(), (*path).into())),
         )
         .collect()
