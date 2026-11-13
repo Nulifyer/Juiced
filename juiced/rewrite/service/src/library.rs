@@ -76,6 +76,9 @@ pub enum Task {
     Transcription,
     Tts,
     Image,
+    AudioGeneration,
+    #[serde(rename = "3d")]
+    Model3d,
 }
 
 impl Task {
@@ -85,6 +88,8 @@ impl Task {
             Self::Transcription => Some("automatic-speech-recognition"),
             Self::Tts => Some("text-to-speech"),
             Self::Image => Some("text-to-image"),
+            Self::AudioGeneration => Some("text-to-audio"),
+            Self::Model3d => Some("image-to-3d"),
         }
     }
     fn from_pipeline(tag: &str) -> Option<Self> {
@@ -92,8 +97,10 @@ impl Task {
             "text-generation" | "image-text-to-text" | "text2text-generation" => Some(Self::Chat),
             "feature-extraction" | "sentence-similarity" => Some(Self::Embeddings),
             "automatic-speech-recognition" => Some(Self::Transcription),
-            "text-to-speech" | "text-to-audio" => Some(Self::Tts),
+            "text-to-speech" => Some(Self::Tts),
+            "text-to-audio" => Some(Self::AudioGeneration),
             "text-to-image" => Some(Self::Image),
+            "image-to-3d" => Some(Self::Model3d),
             _ => None,
         }
     }

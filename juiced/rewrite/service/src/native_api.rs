@@ -604,6 +604,7 @@ async fn register_download(
         policy: request.policy,
         backend,
         path: None,
+        engine: None,
     };
     let failure = match manager.add_model(retry(None)).await {
         Err(AddModelError::NotInstalled(body)) => body,
@@ -704,6 +705,7 @@ async fn drive(manager: Arc<Manager>, job: Arc<Download>, public: String, select
         policy: Some(Policy::OnDemand),
         backend: None,
         path: None,
+        engine: None,
     };
     let added = register_download(&manager, request).await;
     let _ = manager.library().dismiss_pull(&pull);

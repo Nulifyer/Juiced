@@ -25,6 +25,11 @@ pub enum Engine {
     Parakeet,
     Moonshine,
     Asr4all,
+    AceStep,
+    ThinkSound,
+    Trellis,
+    OpenMoss,
+    TheNoise,
 }
 
 #[derive(Debug)]

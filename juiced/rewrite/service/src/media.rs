@@ -1329,7 +1329,10 @@ pub fn validate_speech_response(bytes: &Bytes, format: AudioFormat) -> Result<()
 }
 
 pub fn upload_route(path: &str) -> bool {
-    matches!(path, "/images/edits" | "/images/variations")
+    matches!(
+        path,
+        "/images/edits" | "/images/variations" | "/3d/generations"
+    )
 }
 
 type Form = Result<Multipart, axum::extract::multipart::MultipartRejection>;

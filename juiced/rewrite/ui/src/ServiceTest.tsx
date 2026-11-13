@@ -8,15 +8,18 @@ import { withImages } from "./chatImages";
 import { TranscriptionTest } from "./TranscriptionTest";
 import { CompareTest, EmbeddingsTest } from "./TestPanels";
 import { ImagesTest, SpeakTest } from "./MediaTests";
+import { AudioGenerationTest, Model3dTest } from "./GenerationTests";
 
 export type TestMode = "try" | "compare";
-type Kind = "chat" | "embeddings" | "transcription" | "speech" | "images";
+type Kind = "chat" | "embeddings" | "transcription" | "speech" | "images" | "audio" | "3d";
 const kinds: [Kind, string, (model: Model) => boolean][] = [
   ["chat", "Chat", (model) => eligible(model)],
   ["embeddings", "Embeddings", (model) => operationEligible(model, "embeddings")],
   ["transcription", "Speech to text", (model) => speechModels([model]).length > 0],
   ["speech", "Text to speech", (model) => operationEligible(model, "audio/speech")],
   ["images", "Images", (model) => operationEligible(model, "images/generations")],
+  ["audio", "Audio", (model) => operationEligible(model, "audio/generations")],
+  ["3d", "3D", (model) => operationEligible(model, "3d/generations")],
 ];
 function readLocal(key: string) { try { return localStorage.getItem(key) ?? ""; } catch { return ""; } }
 function writeLocal(key: string, value: string) { try { localStorage.setItem(key, value); } catch { /* Storage can be unavailable in private sessions. */ } }
@@ -46,6 +49,8 @@ function TryModel({ models, client, online }: { models: Model[]; client: Client;
       : current.kind === "embeddings" ? <EmbeddingsTest {...props} />
       : current.kind === "transcription" ? <TranscriptionTest {...props} />
       : current.kind === "speech" ? <SpeakTest {...props} />
+      : current.kind === "audio" ? <AudioGenerationTest {...props} />
+      : current.kind === "3d" ? <Model3dTest {...props} />
       : <ImagesTest {...props} />}
   </section>;
 }

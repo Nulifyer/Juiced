@@ -492,6 +492,174 @@
         { "file": "onnx/medium/streaming_config.json", "role": "configuration", "sha256": "28e83b7a28e91472692a035e0dae3116422ae43aeb2bef5ed822c44ce89b88af" },
         { "file": "onnx/medium/tokenizer.json", "role": "tokenizer", "sha256": "b68b995a58b3373db6c4f46864a9db50cd1333d086150ffa2c1096581ede9c10" }
       ]
+    },
+    {
+      "id": "ace-step-music",
+      "name": "ACE-Step 1.5 XL Music",
+      "repo": "Serveurperso/ACE-Step-1.5-GGUF",
+      "family": "ace-step",
+      "task": "audio-generation",
+      "recommended_quant": null,
+      "recommended_file": "acestep-v15-xl-sft-Q8_0.gguf",
+      "variant_stem": null,
+      "license": "mit",
+      "native_id": "ACE-Step-Music",
+      "engine": "acestep.cpp",
+      "companions": [
+        { "file": "acestep-5Hz-lm-4B-Q8_0.gguf", "role": "draft-model" },
+        { "file": "Qwen3-Embedding-0.6B-BF16.gguf", "role": "encoder" },
+        { "file": "vae-BF16.gguf", "role": "vae" }
+      ]
+    },
+    {
+      "id": "ace-step-turbo",
+      "name": "ACE-Step 1.5 Turbo",
+      "repo": "Serveurperso/ACE-Step-1.5-GGUF",
+      "family": "ace-step",
+      "task": "audio-generation",
+      "recommended_quant": null,
+      "recommended_file": "acestep-v15-turbo-Q4_K_M.gguf",
+      "variant_stem": null,
+      "license": "mit",
+      "native_id": "ACE-Step-Turbo",
+      "engine": "acestep.cpp",
+      "companions": [
+        { "file": "acestep-5Hz-lm-0.6B-Q8_0.gguf", "role": "draft-model" },
+        { "file": "Qwen3-Embedding-0.6B-Q8_0.gguf", "role": "encoder" },
+        { "file": "vae-BF16.gguf", "role": "vae" }
+      ]
+    },
+    {
+      "id": "thinksound-sfx",
+      "name": "ThinkSound",
+      "repo": "ilintar/thinksound-gguf",
+      "family": "thinksound",
+      "task": "audio-generation",
+      "recommended_quant": null,
+      "recommended_file": "dit-bf16.gguf",
+      "variant_stem": null,
+      "license": "other",
+      "native_id": "ThinkSound-SFX",
+      "engine": "thinksound.cpp",
+      "companions": [
+        { "file": "t5-bf16.gguf", "role": "encoder" },
+        { "file": "metaclip-text-f32.gguf", "role": "encoder" },
+        { "file": "vae-f32.gguf", "role": "vae" },
+        { "file": "t5-tokenizer.gguf", "role": "tokenizer" },
+        { "file": "clip-tokenizer.gguf", "role": "tokenizer" }
+      ]
+    },
+    {
+      "id": "moss-soundeffect",
+      "name": "MOSS-SoundEffect 2.0",
+      "repo": "ilintar/moss-soundeffect-gguf",
+      "family": "openmoss",
+      "task": "audio-generation",
+      "recommended_quant": null,
+      "recommended_file": "moss-soundeffect-2.0.gguf",
+      "variant_stem": null,
+      "license": "apache-2.0",
+      "native_id": "MOSS-SoundEffect",
+      "engine": "openmoss",
+      "companions": [
+        { "file": "moss-soundeffect-2.0.extras.gguf", "role": "external-tensor" }
+      ]
+    },
+    {
+      "id": "openmoss-tts",
+      "name": "MOSS-TTS 1.5",
+      "repo": "ilintar/moss-tts-gguf",
+      "family": "openmoss",
+      "task": "tts",
+      "recommended_quant": null,
+      "recommended_file": "moss-tts-1.5-q8_0.gguf",
+      "variant_stem": null,
+      "license": "apache-2.0",
+      "native_id": "OpenMOSS-TTS",
+      "engine": "openmoss",
+      "companions": [
+        { "file": "moss-tts-1.5-q8_0.extras.gguf", "role": "external-tensor" }
+      ]
+    },
+    {
+      "id": "moss-tts-local",
+      "name": "MOSS-TTS Local 1.5",
+      "repo": "ilintar/moss-tts-local-gguf",
+      "family": "openmoss",
+      "task": "tts",
+      "recommended_quant": null,
+      "recommended_file": "moss-tts-local-1.5-q8_0.gguf",
+      "variant_stem": null,
+      "license": "apache-2.0",
+      "native_id": "MOSS-TTS-Local",
+      "engine": "openmoss",
+      "companions": [
+        { "file": "moss-tts-local-1.5-q8_0.extras.gguf", "role": "external-tensor" }
+      ]
+    },
+    {
+      "id": "moss-voicegen",
+      "name": "MOSS VoiceGen",
+      "repo": "ilintar/moss-voicegen-gguf",
+      "family": "openmoss",
+      "task": "tts",
+      "recommended_quant": null,
+      "recommended_file": "moss-voicegen.gguf",
+      "variant_stem": null,
+      "license": "apache-2.0",
+      "native_id": "MOSS-VoiceGen",
+      "engine": "openmoss",
+      "companions": [
+        { "file": "moss-voicegen.extras.gguf", "role": "external-tensor" }
+      ]
+    },
+    {
+      "id": "trellis-3d",
+      "name": "TRELLIS.2",
+      "repo": "ilintar/trellis2-gguf",
+      "family": "trellis",
+      "task": "3d",
+      "recommended_quant": null,
+      "recommended_file": "ss_flow.gguf",
+      "variant_stem": null,
+      "license": "other",
+      "native_id": "TRELLIS-3D",
+      "engine": "trellis.cpp",
+      "companions": [
+        { "file": "dinov3.gguf", "role": "encoder" },
+        { "file": "ss_dec.gguf", "role": "decoder" },
+        { "file": "shape_flow_512.gguf", "role": "denoiser" },
+        { "file": "shape_flow_1024.gguf", "role": "denoiser" },
+        { "file": "shape_dec.gguf", "role": "decoder" },
+        { "file": "tex_flow_512.gguf", "role": "denoiser" },
+        { "file": "tex_flow_1024.gguf", "role": "denoiser" },
+        { "file": "tex_dec.gguf", "role": "decoder" },
+        { "file": "birefnet.gguf", "role": "processor" }
+      ]
+    },
+    {
+      "id": "trellis-3d-q4",
+      "name": "TRELLIS.2 Q4",
+      "repo": "ilintar/trellis2-gguf",
+      "family": "trellis",
+      "task": "3d",
+      "recommended_quant": null,
+      "recommended_file": "q4/ss_flow.gguf",
+      "variant_stem": null,
+      "license": "other",
+      "native_id": "TRELLIS-3D-Q4",
+      "engine": "trellis.cpp",
+      "companions": [
+        { "file": "q4/dinov3.gguf", "role": "encoder" },
+        { "file": "q4/ss_dec.gguf", "role": "decoder" },
+        { "file": "q4/shape_flow_512.gguf", "role": "denoiser" },
+        { "file": "q4/shape_flow_1024.gguf", "role": "denoiser" },
+        { "file": "q4/shape_dec.gguf", "role": "decoder" },
+        { "file": "q4/tex_flow_512.gguf", "role": "denoiser" },
+        { "file": "q4/tex_flow_1024.gguf", "role": "denoiser" },
+        { "file": "q4/tex_dec.gguf", "role": "decoder" },
+        { "file": "q4/birefnet.gguf", "role": "processor" }
+      ]
     }
   ]
 }

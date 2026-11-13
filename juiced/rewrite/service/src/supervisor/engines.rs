@@ -180,6 +180,10 @@ pub struct ModelAdd {
     pub backend: Option<String>,
     #[serde(default)]
     pub path: Option<String>,
+    /// Picks the engine when more than one reads the detected format (TheNoise or sd.cpp for
+    /// split diffusion safetensors); otherwise it must name the detected engine.
+    #[serde(default)]
+    pub engine: Option<String>,
 }
 
 fn invalid(code: &'static str, message: &'static str) -> ApiError {
@@ -653,6 +657,7 @@ impl Manager {
                     .map_err(|_| interrupted())??;
                 let held_artifact = artifact.clone();
                 let held_set = artifact_set.clone();
+                let held_name = name.clone();
                 let (format, file_bytes, model_file, companions) =
                     tokio::task::spawn_blocking(move || {
                         let lease = store
@@ -691,6 +696,21 @@ impl Manager {
                                         .map_err(format_error)?,
                                 }
                             }
+                            models::ModelFormat::Gguf { .. } => {
+                                let sidecar = held_name.as_deref().map(models::moss_sidecar);
+                                match lease
+                                    .companions()
+                                    .into_iter()
+                                    .find(|(name, _, _)| Some(*name) == sidecar.as_deref())
+                                    .map(|(_, _, path)| models::moss_family(path))
+                                    .transpose()
+                                    .map_err(format_error)?
+                                    .flatten()
+                                {
+                                    Some(family) => models::ModelFormat::MossGguf { family },
+                                    None => format,
+                                }
+                            }
                             other => other,
                         };
                         Ok::<_, ApiError>((format, total, path, companions))
@@ -707,6 +727,26 @@ impl Manager {
                     companions,
                 )
             };
+        let format = match format {
+            models::ModelFormat::Gguf { .. } if request.path.is_some() => {
+                let sidecar = model_file
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .map(|name| model_file.with_file_name(models::moss_sidecar(name)));
+                match sidecar.filter(|sidecar| sidecar.is_file()) {
+                    Some(sidecar) => {
+                        tokio::task::spawn_blocking(move || models::moss_family(&sidecar))
+                            .await
+                            .map_err(|_| interrupted())?
+                            .map_err(format_error)?
+                            .map_or(format, |family| models::ModelFormat::MossGguf { family })
+                    }
+                    None => format,
+                }
+            }
+            other => other,
+        };
+        let format = select_engine(format, request.engine.as_deref())?;
         let companion_arguments =
             models::companion_arguments(&format, &companions).map_err(|error| match error {
                 models::CompanionError::Required(code) => ApiError::new(
@@ -869,8 +909,46 @@ impl Manager {
     }
 }
 
+/// TheNoise and sd.cpp both read split diffusion safetensors, so the caller picks; any other
+/// named engine must be the one the format already selects.
+fn select_engine(
+    format: models::ModelFormat,
+    engine: Option<&str>,
+) -> Result<models::ModelFormat, ApiError> {
+    let Some(name) = engine else {
+        return Ok(format);
+    };
+    let engine = crate::engines::catalog::Engine::parse(name).ok_or_else(|| {
+        invalid(
+            "unknown_engine",
+            "engine must name a Juiced engine such as sd.cpp or thenoise.",
+        )
+    })?;
+    match (engine, format) {
+        (
+            crate::engines::catalog::Engine::TheNoise,
+            models::ModelFormat::Diffusion {
+                container: models::Container::Safetensors,
+                architecture,
+                ..
+            },
+        ) => Ok(models::ModelFormat::TheNoiseDiffusion { architecture }),
+        (engine, format) if engine == format.engine() => Ok(format),
+        _ => Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "engine_format_mismatch",
+            "The named engine cannot run this model file.",
+        )),
+    }
+}
+
 pub(super) fn format_error(error: models::FormatError) -> ApiError {
     match error {
+        models::FormatError::Invalid(models::COMPONENT_NOT_PRIMARY) => ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            models::COMPONENT_NOT_PRIMARY,
+            "This file is one network of a generation model. Add the model's main file (the ACE-Step DiT, the ThinkSound MMDiT or the TRELLIS ss_flow) with its companions as one set.",
+        ),
         models::FormatError::Unavailable => ApiError::new(
             StatusCode::CONFLICT,
             "artifact_unavailable",

@@ -3930,6 +3930,16 @@ impl Manager {
                             .tempdir()
                             .map_err(preparation_identity_error)?,
                     ),
+                    crate::config::Provider::AceStep
+                    | crate::config::Provider::ThinkSound
+                    | crate::config::Provider::Trellis
+                    | crate::config::Provider::OpenMoss
+                    | crate::config::Provider::TheNoise => Some(
+                        tempfile::Builder::new()
+                            .prefix("juiced-generation-")
+                            .tempdir()
+                            .map_err(preparation_identity_error)?,
+                    ),
                     _ => None,
                 };
                 let public_directory = workspace

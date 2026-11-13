@@ -646,6 +646,7 @@ dialog textarea { margin-bottom: 4px; }
 .short-input { width: 120px; flex: 0 1 120px; }
 .audio-result { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
 .audio-result audio { flex: 1 1 280px; max-width: 520px; }
+.mesh-input { display: block; max-width: min(100%, 240px); max-height: 240px; border: 1px solid var(--border); border-radius: 8px; }
 .image-results { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr)); gap: 12px; }
 .image-results li { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--surface); }
 .image-results img { display: block; width: 100%; height: auto; }

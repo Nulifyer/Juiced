@@ -50,6 +50,13 @@ impl Manager {
         }
     }
 
+    /// The adapter of a registered model or alias, so routes can pick a worker contract.
+    pub fn model_adapter(&self, requested: &str) -> Option<crate::config::Provider> {
+        self.resolve_model(requested)
+            .ok()
+            .map(|(worker, _)| worker.spec.execution_profile.adapter)
+    }
+
     pub(super) fn resolve_model(
         &self,
         requested: &str,

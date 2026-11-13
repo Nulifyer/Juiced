@@ -13,6 +13,11 @@ const MOONSHINE: &str = "lemonade-sdk/moonshine-server-rocm";
 const MOONSHINE_TAG: &str = "moonshine0.0.62";
 const FUTO: &str = "Nulifyer/Juiced";
 const FUTO_TAG: &str = "engine-futo-26d75933c16b";
+const ACESTEP: (&str, &str) = ("pwilkin/acestep.cpp", "v0.1.1");
+const THINKSOUND: (&str, &str) = ("pwilkin/thinksound.cpp", "v0.1.2");
+const TRELLIS: (&str, &str) = ("pwilkin/trellis.cpp", "v0.4.3");
+const OPENMOSS: (&str, &str) = ("pwilkin/openmoss", "v0.3.0");
+const THENOISE: (&str, &str) = ("lemonade-sdk/thenoise", "thenoise-0.10.1-rocm10.1.0");
 
 macro_rules! whisper_rocm {
     ($target:literal, $bytes:literal, $sha:literal) => {
@@ -113,6 +118,57 @@ pub(super) const ENGINES: &[EngineInfo] = &[
         entrypoint: "futo-server",
         accepts_experimental: true,
         licenses: &["MIT"],
+    },
+    EngineInfo {
+        engine: Engine::AceStep,
+        name: "acestep.cpp",
+        aliases: &["acestep", "acestep-cpp", "ace-step"],
+        recipe: "acestep",
+        provider: Provider::AceStep,
+        entrypoint: "ace-server",
+        accepts_experimental: true,
+        licenses: &["MIT"],
+    },
+    EngineInfo {
+        engine: Engine::ThinkSound,
+        name: "thinksound.cpp",
+        aliases: &["thinksound", "thinksound-cpp"],
+        recipe: "thinksound",
+        provider: Provider::ThinkSound,
+        entrypoint: "ts-server",
+        accepts_experimental: true,
+        // The repository declares no license.
+        licenses: &["NOASSERTION"],
+    },
+    EngineInfo {
+        engine: Engine::Trellis,
+        name: "trellis.cpp",
+        aliases: &["trellis", "trellis-cpp"],
+        recipe: "trellis",
+        provider: Provider::Trellis,
+        entrypoint: "trellis-server",
+        accepts_experimental: true,
+        licenses: &["MIT"],
+    },
+    EngineInfo {
+        engine: Engine::OpenMoss,
+        name: "openmoss",
+        aliases: &["openmoss-cpp", "moss-tts"],
+        recipe: "openmoss",
+        provider: Provider::OpenMoss,
+        entrypoint: "moss-tts-server",
+        accepts_experimental: true,
+        licenses: &["Apache-2.0"],
+    },
+    EngineInfo {
+        engine: Engine::TheNoise,
+        name: "thenoise",
+        aliases: &[],
+        recipe: "thenoise",
+        provider: Provider::TheNoise,
+        entrypoint: "thenoise",
+        accepts_experimental: false,
+        licenses: &["Apache-2.0"],
     },
 ];
 
@@ -289,6 +345,159 @@ pub(super) const BUILDS: &[Build] = &[
             "moonshine-server-moonshine0.0.62-linux-x64.tar.gz",
             132320778,
             "c19d6f333002af3209ee029be0e4f5967926edf29395de7401c83b5f9fc21191",
+        ),
+        ArchiveFormat::TarGz,
+    ),
+    // The ACE-Step, ThinkSound and OpenMOSS ROCm archives target gfx1030, gfx1100, gfx1151
+    // and gfx1201 against a TheRock nightly, so no pinned runtime matches them; AMD hosts run
+    // their Vulkan builds. TRELLIS also targets gfx1150 and links the pinned TheRock without
+    // shipping it, as the native installer's shared SDK did.
+    linux(
+        Engine::AceStep,
+        "cuda",
+        None,
+        ACESTEP,
+        (
+            "acestep-cuda-linux-x64.tar.gz",
+            649102497,
+            "1b94e862a09b76583ba314a6f49c7cb599a234d6fbf3950adf67c3965af5e1a8",
+        ),
+        ArchiveFormat::TarGz,
+    ),
+    linux(
+        Engine::AceStep,
+        "vulkan",
+        None,
+        ACESTEP,
+        (
+            "acestep-vulkan-linux-x64.tar.gz",
+            24657417,
+            "398520b322058c1a6d7303849354b9d0afffc99b33870a94b50680932e6b2e41",
+        ),
+        ArchiveFormat::TarGz,
+    ),
+    linux(
+        Engine::ThinkSound,
+        "cuda",
+        None,
+        THINKSOUND,
+        (
+            "thinksound-cuda-linux-x64.tar.gz",
+            648136275,
+            "ac3875c6bba8cf0753708e749bdb606006ac6e001f7d78649ede78c5e96bd36a",
+        ),
+        ArchiveFormat::TarGz,
+    ),
+    linux(
+        Engine::ThinkSound,
+        "vulkan",
+        None,
+        THINKSOUND,
+        (
+            "thinksound-vulkan-linux-x64.tar.gz",
+            23779860,
+            "913cb141ff0bcde488474fbba9e911437e2cbf58dd12a0a41251dbe4fa69e61f",
+        ),
+        ArchiveFormat::TarGz,
+    ),
+    linux(
+        Engine::Trellis,
+        "cuda",
+        None,
+        TRELLIS,
+        (
+            "trellis-cuda-linux-x64.tar.gz",
+            727022028,
+            "454c161b2179551db5e80786bba16ae81eaf28ab8fdb685d371b30d58769fbaa",
+        ),
+        ArchiveFormat::TarGz,
+    ),
+    with_runtime(
+        linux(
+            Engine::Trellis,
+            "rocm",
+            Some("gfx1150"),
+            TRELLIS,
+            (
+                "trellis-rocm-linux-x64.tar.gz",
+                167709000,
+                "e8c2fb16cd3ac5e620af1e07a3c002f845c189485dc988b316f469734fbfbc17",
+            ),
+            ArchiveFormat::TarGz,
+        ),
+        &THEROCK_GFX1150,
+    ),
+    linux(
+        Engine::Trellis,
+        "vulkan",
+        None,
+        TRELLIS,
+        (
+            "trellis-vulkan-linux-x64.tar.gz",
+            24501893,
+            "a614549056da47950d7506d73ba923298a85859024b6a2ca782a0f7c9604f602",
+        ),
+        ArchiveFormat::TarGz,
+    ),
+    linux(
+        Engine::OpenMoss,
+        "cuda",
+        None,
+        OPENMOSS,
+        (
+            "moss-tts-cuda-linux-x64.tar.gz",
+            650053528,
+            "3a7a61852bd9fe16a14f262ff99e055739e7bc52c2727749d05f0b4664facb37",
+        ),
+        ArchiveFormat::TarGz,
+    ),
+    linux(
+        Engine::OpenMoss,
+        "vulkan",
+        None,
+        OPENMOSS,
+        (
+            "moss-tts-vulkan-linux-x64.tar.gz",
+            17810759,
+            "1288a22295451d0e5d8bd707ef79ea324e1c7b5f1cd9bfbdab2167a388fe3af7",
+        ),
+        ArchiveFormat::TarGz,
+    ),
+    // TheNoise bundles its Python, PyTorch and ROCm runtime per GPU target. The gfx103X,
+    // gfx110X and gfx120X bundles are split into parts, which the installer does not join.
+    linux(
+        Engine::TheNoise,
+        "rocm",
+        Some("gfx1150"),
+        THENOISE,
+        (
+            "thenoise-0.10.1-rocm10.1.0-gfx1150-x64.tar.gz",
+            1776558343,
+            "31f166eec1ce4d95ccb8484f38537114a503fff689760fb97a19e184fea5c3d7",
+        ),
+        ArchiveFormat::TarGz,
+    ),
+    linux(
+        Engine::TheNoise,
+        "rocm",
+        Some("gfx1151"),
+        THENOISE,
+        (
+            "thenoise-0.10.1-rocm10.1.0-gfx1151-x64.tar.gz",
+            1799006517,
+            "7c64ed264f442c1e899e6996115bbaa78a740ce464f01b0ad00d5eb0fde7c63e",
+        ),
+        ArchiveFormat::TarGz,
+    ),
+    linux(
+        Engine::TheNoise,
+        "rocm",
+        Some("gfx1152"),
+        THENOISE,
+        (
+            "thenoise-0.10.1-rocm10.1.0-gfx1152-x64.tar.gz",
+            1776377795,
+            "c9f1ffc63cdd29299027502d41933cb305a46397582ac6bb565b3c145fb45332",
         ),
         ArchiveFormat::TarGz,
     ),

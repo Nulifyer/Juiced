@@ -387,6 +387,7 @@ fn normalized_flag(adapter: Provider, flag: &str) -> String {
 }
 
 const KOKOROS_SERVER: &str = "openai";
+const THENOISE_SERVER: &str = "serve";
 
 fn owned(
     flag: &str,
@@ -416,6 +417,25 @@ fn owned(
         Provider::Asr4all => match flag {
             "-m" | "--model" => Some((0, "--model")),
             "--port" => Some((1, "--port")),
+            _ => None,
+        },
+        Provider::AceStep | Provider::Trellis => match flag {
+            "-m" | "--models" if adapter == Provider::Trellis => Some((0, "--models")),
+            "--models" => Some((0, "--models")),
+            "--port" => Some((1, "--port")),
+            "--host" => Some((2, "--host")),
+            _ => None,
+        },
+        Provider::ThinkSound => match flag {
+            "--dir" => Some((0, "--dir")),
+            "--port" => Some((1, "--port")),
+            "--host" => Some((2, "--host")),
+            _ => None,
+        },
+        Provider::TheNoise => match flag {
+            "--dit" => Some((0, "--dit")),
+            "--port" => Some((1, "--port")),
+            "--host" => Some((2, "--host")),
             _ => None,
         },
         _ => match flag {
@@ -456,6 +476,11 @@ fn member_flag(flag: &str, adapter: Provider, server_phase: bool) -> Option<Arti
         },
         Provider::LlamaCpp => match flag {
             "-mm" | "--mmproj" => Some(ArtifactRole::Projector),
+            _ => None,
+        },
+        Provider::TheNoise => match flag {
+            "--vae" => Some(ArtifactRole::Vae),
+            "--text-encoder" => Some(ArtifactRole::Encoder),
             _ => None,
         },
         _ => None,
@@ -525,6 +550,12 @@ impl ArgumentTemplate {
         &self,
         companions: impl IntoIterator<Item = (&'a str, ArtifactRole)>,
     ) -> Result<(), Error> {
+        if matches!(
+            self.adapter,
+            Provider::AceStep | Provider::ThinkSound | Provider::Trellis | Provider::OpenMoss
+        ) {
+            return verify_named_members(companions);
+        }
         if self.adapter == Provider::Moonshine {
             // Without a retained set, the worker reads the registered file's own directory.
             let mut companions = companions.into_iter().peekable();
@@ -555,6 +586,36 @@ impl ArgumentTemplate {
         }
         Ok(())
     }
+}
+
+/// ACE-Step, ThinkSound, TRELLIS and OpenMOSS find their companion networks by file name in
+/// one directory, so every member needs a distinct file name and a model-input role.
+pub fn verify_named_members<'a>(
+    companions: impl IntoIterator<Item = (&'a str, ArtifactRole)>,
+) -> Result<(), Error> {
+    let mut names = std::collections::BTreeSet::new();
+    for (name, role) in companions {
+        if !valid_member_name(name)
+            || !matches!(
+                role,
+                ArtifactRole::DraftModel
+                    | ArtifactRole::Encoder
+                    | ArtifactRole::Decoder
+                    | ArtifactRole::Denoiser
+                    | ArtifactRole::Vae
+                    | ArtifactRole::Tokenizer
+                    | ArtifactRole::Processor
+                    | ArtifactRole::ExternalTensor
+            )
+            || !names.insert(name)
+        {
+            return Err(Error::new(
+                "artifact_set_binding_mismatch",
+                "A generation model set needs distinct file names with model-input roles.",
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Moonshine reads its model directory by file name, so the launch links every retained
@@ -604,6 +665,11 @@ fn validate_selected(
     let mut server_phase = false;
     let mut position = 0;
     while let Some(argument) = arguments.get(position) {
+        if adapter == Provider::TheNoise && position == 0 && argument == THENOISE_SERVER {
+            result.push(argument.clone());
+            position += 1;
+            continue;
+        }
         if adapter == Provider::Kokoros && argument == KOKOROS_SERVER {
             if server_phase {
                 return Err(Error::new(
@@ -692,6 +758,11 @@ fn validate_selected(
                     matches!(flag.as_str(), "--threads" | "--concurrency").then_some(1)
                 }
                 Provider::Moonshine => (flag == "--model-arch").then_some(1),
+                Provider::AceStep => acestep_arity(&flag),
+                Provider::ThinkSound => None,
+                Provider::Trellis => trellis_arity(&flag),
+                Provider::OpenMoss => openmoss_arity(&flag),
+                Provider::TheNoise => None,
                 Provider::Asr4all => matches!(
                     flag.as_str(),
                     "-t" | "--threads" | "--futo-commit" | "--futo-right"
@@ -731,6 +802,13 @@ fn validate_selected(
             "The selected worker needs one model binding, one port binding and its required loopback host.",
         ));
     }
+    if adapter == Provider::TheNoise && result.first().map(String::as_str) != Some(THENOISE_SERVER)
+    {
+        return Err(Error::new(
+            "missing_runtime_binding",
+            "The TheNoise worker needs its serve subcommand first.",
+        ));
+    }
     if adapter == Provider::Kokoros
         && !members
             .iter()
@@ -756,6 +834,32 @@ fn validate_selected(
         bindings,
         members,
     })
+}
+
+fn acestep_arity(flag: &str) -> Option<u8> {
+    match flag {
+        "--keep-loaded" | "--no-fsm" | "--no-fa" | "--no-batch-cfg" | "--clamp-fp16" => Some(0),
+        "--vae-chunk" | "--vae-overlap" | "--max-batch" | "--max-seq" => Some(1),
+        _ => None,
+    }
+}
+
+fn trellis_arity(flag: &str) -> Option<u8> {
+    match flag {
+        "--birefnet" | "--no-texture" | "--xatlas" | "--box-uv" | "--f32" | "--no-fa"
+        | "--require-gpu" => Some(0),
+        "--gpu" | "-s" | "--seed" | "--res" | "--max-tokens" | "--bg-removal" | "--decim"
+        | "--atlas" | "--tex-res" | "--gss" | "--gsh" => Some(1),
+        _ => None,
+    }
+}
+
+fn openmoss_arity(flag: &str) -> Option<u8> {
+    match flag {
+        "--no-flash-attn" | "--aux-cpu" | "--no-webui" => Some(0),
+        "--n-gpu-layers" | "--main-gpu" | "--n-batch" | "--n-ctx" | "--template" => Some(1),
+        _ => None,
+    }
 }
 
 fn truncated() -> Error {
@@ -797,6 +901,14 @@ fn forbidden(flag: &str, adapter: Provider) -> bool {
         Provider::Kokoros => matches!(flag, "--timestamps"),
         Provider::Parakeet => matches!(flag, "--cache-dir" | "--sound-model"),
         Provider::Moonshine => matches!(flag, "--ws-port" | "--tcp-port"),
+        Provider::AceStep => matches!(flag, "--adapters"),
+        Provider::ThinkSound => false,
+        Provider::Trellis => matches!(
+            flag,
+            "-i" | "--image" | "-o" | "--output" | "--voxply" | "--dump-slat"
+        ),
+        Provider::OpenMoss => matches!(flag, "--voice-dir" | "--webui-dir" | "--skip-codec"),
+        Provider::TheNoise => matches!(flag, "--lora-dir" | "--upscaler-dir"),
         Provider::Asr4all => false,
         Provider::WhisperCpp => matches!(
             flag,

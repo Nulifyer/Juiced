@@ -20,6 +20,7 @@ pub mod engines;
 pub mod execution_profile;
 pub mod extract;
 pub mod flm;
+pub mod generation;
 pub mod hardware;
 pub mod host_memory;
 pub mod http;

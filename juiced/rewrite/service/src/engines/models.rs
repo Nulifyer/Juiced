@@ -20,6 +20,39 @@ pub const UNKNOWN_CONTEXT_TOKENS: u64 = 4096;
 pub const WORKSPACE_ALLOWANCE_BYTES: u64 = 256 * 1024 * 1024;
 pub const DIFFUSION_WORKSPACE_BYTES: u64 = 1024 * 1024 * 1024;
 pub const SPEECH_WORKSPACE_BYTES: u64 = 512 * 1024 * 1024;
+/// Per-request activations the generation engines allocate beyond their weights: ACE-Step's
+/// VAE tiles, ThinkSound's VAE im2col buffers and TRELLIS' sparse-structure decode.
+pub const AUDIO_GENERATION_WORKSPACE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+pub const SOUND_EFFECT_WORKSPACE_BYTES: u64 = 3 * 1024 * 1024 * 1024;
+pub const MESH_WORKSPACE_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+pub const MOSS_WORKSPACE_BYTES: u64 = 1024 * 1024 * 1024;
+/// The primary GGUF of each generation engine; the other files of its set are companions.
+pub const ACESTEP_PRIMARY: &str = "acestep-dit";
+pub const THINKSOUND_PRIMARY: &str = "thinksound-mmdit";
+pub const TRELLIS_PRIMARY: &str = "trellis2-ss-flow";
+const GENERATION_COMPONENTS: &[&str] = &[
+    "acestep-lm",
+    "acestep-text-enc",
+    "acestep-vae",
+    "thinksound-t5",
+    "thinksound-metaclip-text",
+    "thinksound-vae",
+    "thinksound-t5-tok",
+    "thinksound-clip-tok",
+    "trellis2-ss-dec",
+    "trellis2-shape-flow",
+    "trellis2-shape-dec",
+    "trellis2-slat-flow",
+    "trellis2-tex-dec",
+    "dinov3-vitl16",
+    "birefnet-swinl",
+    "moss_tts_delay",
+    "moss_tts_local",
+    "moss_soundeffect",
+];
+pub const MOSS_SOUND_EFFECT: &str = "moss_soundeffect";
+const MOSS_FAMILIES: &[&str] = &["moss_tts_delay", "moss_tts_local", MOSS_SOUND_EFFECT];
+const TRELLIS_RESOLUTION: &str = "512";
 const KV_ELEMENT_BYTES: u64 = 2;
 const WHISPER_MAGIC: u32 = 0x6767_6d6c;
 const MAX_TENSOR_NAMES: u64 = 65_536;
@@ -105,6 +138,21 @@ pub enum ModelFormat {
     MoonshineOrt {
         model_arch: Option<u32>,
     },
+    #[serde(rename = "acestep-gguf")]
+    AceStepGguf {},
+    #[serde(rename = "thinksound-gguf")]
+    ThinkSoundGguf {},
+    TrellisGguf {},
+    /// An OpenMOSS backbone; `family` comes from its `.extras.gguf` sidecar.
+    #[serde(rename = "openmoss-gguf")]
+    MossGguf {
+        family: String,
+    },
+    /// Split DiT, VAE and text-encoder safetensors that TheNoise serves.
+    #[serde(rename = "thenoise-diffusion")]
+    TheNoiseDiffusion {
+        architecture: Option<String>,
+    },
 }
 
 impl ModelFormat {
@@ -117,7 +165,23 @@ impl ModelFormat {
             Self::ParakeetGguf { .. } => Engine::Parakeet,
             Self::Asr4allGguf { .. } => Engine::Asr4all,
             Self::MoonshineOrt { .. } => Engine::Moonshine,
+            Self::AceStepGguf {} => Engine::AceStep,
+            Self::ThinkSoundGguf {} => Engine::ThinkSound,
+            Self::TrellisGguf {} => Engine::Trellis,
+            Self::MossGguf { .. } => Engine::OpenMoss,
+            Self::TheNoiseDiffusion { .. } => Engine::TheNoise,
         }
+    }
+    /// Engines that read a whole model directory (or a sidecar beside the model) by file name.
+    pub fn directory(&self) -> bool {
+        matches!(
+            self,
+            Self::MoonshineOrt { .. }
+                | Self::AceStepGguf {}
+                | Self::ThinkSoundGguf {}
+                | Self::TrellisGguf {}
+                | Self::MossGguf { .. }
+        )
     }
     pub fn standalone(&self) -> bool {
         match self {
@@ -126,7 +190,13 @@ impl ModelFormat {
                 includes_text_encoder,
                 ..
             } => *includes_vae && *includes_text_encoder,
-            Self::Onnx { .. } | Self::MoonshineOrt { .. } => false,
+            Self::Onnx { .. }
+            | Self::MoonshineOrt { .. }
+            | Self::AceStepGguf {}
+            | Self::ThinkSoundGguf {}
+            | Self::TrellisGguf {}
+            | Self::MossGguf { .. }
+            | Self::TheNoiseDiffusion { .. } => false,
             Self::Gguf { .. }
             | Self::WhisperGgml { .. }
             | Self::ParakeetGguf { .. }
@@ -171,6 +241,12 @@ pub fn detect(path: &Path) -> Result<(ModelFormat, u64), FormatError> {
         match declared.architecture.as_deref() {
             Some("parakeet") => return Ok((ModelFormat::ParakeetGguf {}, bytes)),
             Some("asr4all") => return Ok((ModelFormat::Asr4allGguf {}, bytes)),
+            Some(ACESTEP_PRIMARY) => return Ok((ModelFormat::AceStepGguf {}, bytes)),
+            Some(THINKSOUND_PRIMARY) => return Ok((ModelFormat::ThinkSoundGguf {}, bytes)),
+            Some(TRELLIS_PRIMARY) => return Ok((ModelFormat::TrellisGguf {}, bytes)),
+            Some(component) if GENERATION_COMPONENTS.contains(&component) => {
+                return Err(FormatError::Invalid(COMPONENT_NOT_PRIMARY));
+            }
             _ => {}
         }
         let mut classes = TensorClasses::default();
@@ -231,6 +307,77 @@ pub fn detect(path: &Path) -> Result<(ModelFormat, u64), FormatError> {
         }
     }
     Err(FormatError::Unsupported)
+}
+
+pub const COMPONENT_NOT_PRIMARY: &str = "generation_component_not_primary";
+
+/// The OpenMOSS family a sidecar declares, or `None` for any other GGUF.
+pub fn moss_family(path: &Path) -> Result<Option<String>, FormatError> {
+    let mut file = File::open(path).map_err(|_| FormatError::Unavailable)?;
+    let mut magic = [0; 4];
+    if read_prefix(&mut file, &mut magic)? < 4 || &magic != b"GGUF" {
+        return Ok(None);
+    }
+    file.seek(SeekFrom::Start(0))
+        .map_err(|_| FormatError::Unavailable)?;
+    let (declared, _) = crate::profiles::read_gguf_shape(&mut file)
+        .map_err(|error| FormatError::Invalid(error.code))?;
+    Ok(declared
+        .architecture
+        .filter(|architecture| MOSS_FAMILIES.contains(&architecture.as_str())))
+}
+
+/// Native ThinkSound and TRELLIS checkpoints name a whole repository, so the weights found
+/// may be any of its networks: the primary is the directory's DiT or sparse-structure flow,
+/// and every GGUF beside it is charged as part of the model.
+pub fn generation_directory(found: crate::native_import::Weights) -> crate::native_import::Weights {
+    let Some(directory) = found.path.parent() else {
+        return found;
+    };
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return found;
+    };
+    let mut files: Vec<(std::path::PathBuf, u64)> = entries
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry
+                .path()
+                .extension()
+                .is_some_and(|extension| extension == "gguf")
+        })
+        .filter_map(|entry| Some((entry.path(), std::fs::metadata(entry.path()).ok()?.len())))
+        .filter(|(_, bytes)| *bytes > 0)
+        .take(64)
+        .collect();
+    files.sort();
+    let primary = files.iter().find(|(path, _)| {
+        File::open(path).ok().is_some_and(|mut file| {
+            crate::profiles::read_gguf_shape(&mut file).is_ok_and(|(declared, _)| {
+                matches!(
+                    declared.architecture.as_deref(),
+                    Some(ACESTEP_PRIMARY | THINKSOUND_PRIMARY | TRELLIS_PRIMARY)
+                )
+            })
+        })
+    });
+    match primary {
+        Some((path, _)) => crate::native_import::Weights {
+            path: path.clone(),
+            bytes: files.iter().map(|(_, bytes)| bytes).sum(),
+            files: files.clone(),
+            selection: "generation-directory",
+            snapshot: found.snapshot,
+        },
+        None => found,
+    }
+}
+
+/// The sidecar name moss-tts-server derives from its `--model` path.
+pub fn moss_sidecar(model: &str) -> String {
+    format!(
+        "{}.extras.gguf",
+        model.strip_suffix(".gguf").unwrap_or(model)
+    )
 }
 
 /// Cheap first-bytes screen that [`detect`] would not reject outright, so uploads of
@@ -399,11 +546,21 @@ pub fn estimate_with(
         | ModelFormat::Onnx { .. }
         | ModelFormat::ParakeetGguf {}
         | ModelFormat::Asr4allGguf {}
-        | ModelFormat::MoonshineOrt { .. } => {
-            let workspace = if matches!(format, ModelFormat::Diffusion { .. }) {
-                DIFFUSION_WORKSPACE_BYTES
-            } else {
-                SPEECH_WORKSPACE_BYTES
+        | ModelFormat::MoonshineOrt { .. }
+        | ModelFormat::AceStepGguf {}
+        | ModelFormat::ThinkSoundGguf {}
+        | ModelFormat::TrellisGguf {}
+        | ModelFormat::MossGguf { .. }
+        | ModelFormat::TheNoiseDiffusion { .. } => {
+            let workspace = match format {
+                ModelFormat::Diffusion { .. } | ModelFormat::TheNoiseDiffusion { .. } => {
+                    DIFFUSION_WORKSPACE_BYTES
+                }
+                ModelFormat::AceStepGguf {} => AUDIO_GENERATION_WORKSPACE_BYTES,
+                ModelFormat::ThinkSoundGguf {} => SOUND_EFFECT_WORKSPACE_BYTES,
+                ModelFormat::TrellisGguf {} => MESH_WORKSPACE_BYTES,
+                ModelFormat::MossGguf { .. } => MOSS_WORKSPACE_BYTES,
+                _ => SPEECH_WORKSPACE_BYTES,
             };
             return Estimate {
                 file_bytes,
@@ -503,7 +660,12 @@ pub fn context_tokens(format: &ModelFormat) -> Option<u64> {
         | ModelFormat::Onnx { .. }
         | ModelFormat::ParakeetGguf {}
         | ModelFormat::Asr4allGguf {}
-        | ModelFormat::MoonshineOrt { .. } => None,
+        | ModelFormat::MoonshineOrt { .. }
+        | ModelFormat::AceStepGguf {}
+        | ModelFormat::ThinkSoundGguf {}
+        | ModelFormat::TrellisGguf {}
+        | ModelFormat::MossGguf { .. }
+        | ModelFormat::TheNoiseDiffusion { .. } => None,
     }
 }
 
@@ -567,6 +729,51 @@ pub fn companion_arguments(
                 return Err(CompanionError::Required("diffusion_companions_required"));
             }
             Ok(arguments)
+        }
+        ModelFormat::AceStepGguf {}
+        | ModelFormat::ThinkSoundGguf {}
+        | ModelFormat::TrellisGguf {}
+        | ModelFormat::MossGguf { .. } => {
+            crate::runtime_arguments::verify_named_members(
+                companions
+                    .iter()
+                    .map(|companion| (companion.name.as_str(), companion.role)),
+            )
+            .map_err(|_| CompanionError::Unsupported)?;
+            match format {
+                ModelFormat::AceStepGguf {} | ModelFormat::ThinkSoundGguf {}
+                    if companions.is_empty() =>
+                {
+                    Err(CompanionError::Required("generation_companions_required"))
+                }
+                ModelFormat::TrellisGguf {} if companions.len() < 5 => {
+                    Err(CompanionError::Required("generation_companions_required"))
+                }
+                _ => Ok(Vec::new()),
+            }
+        }
+        ModelFormat::TheNoiseDiffusion { .. } => {
+            let mut vae = None;
+            let mut encoder = None;
+            for companion in companions {
+                let slot = match companion.role {
+                    ArtifactRole::Vae => &mut vae,
+                    ArtifactRole::Encoder => &mut encoder,
+                    _ => return Err(CompanionError::Unsupported),
+                };
+                if slot.replace(&companion.name).is_some() {
+                    return Err(CompanionError::Unsupported);
+                }
+            }
+            match (vae, encoder) {
+                (Some(vae), Some(encoder)) => Ok(vec![
+                    "--vae".into(),
+                    placeholder(vae),
+                    "--text-encoder".into(),
+                    placeholder(encoder),
+                ]),
+                _ => Err(CompanionError::Required("thenoise_companions_required")),
+            }
         }
         ModelFormat::MoonshineOrt { .. } => {
             crate::runtime_arguments::verify_directory_members(
@@ -766,6 +973,72 @@ pub fn registration(inputs: &ProfileInputs<'_>) -> Value {
             json!({}),
             json!(["audio/transcriptions"]),
         ),
+        ModelFormat::AceStepGguf {} => (
+            json!([
+                "--models",
+                "{model}",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                "{port}",
+                "--keep-loaded"
+            ]),
+            json!({}),
+            json!(["audio/generations"]),
+        ),
+        ModelFormat::ThinkSoundGguf {} => (
+            json!([
+                "--dir",
+                "{model}",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                "{port}"
+            ]),
+            json!({}),
+            json!(["audio/generations"]),
+        ),
+        ModelFormat::TrellisGguf {} => {
+            let mut args: Vec<String> = [
+                "--models",
+                "{model}",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                "{port}",
+                "--res",
+                TRELLIS_RESOLUTION,
+            ]
+            .map(str::to_owned)
+            .into();
+            if inputs.gpu {
+                args.push("--require-gpu".into());
+            }
+            (json!(args), json!({}), json!(["3d/generations"]))
+        }
+        ModelFormat::MossGguf { family } => (
+            json!([
+                "--model",
+                "{model}",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                "{port}",
+                "--no-webui"
+            ]),
+            json!({}),
+            if family == MOSS_SOUND_EFFECT {
+                json!(["audio/generations"])
+            } else {
+                json!(["audio/speech"])
+            },
+        ),
+        ModelFormat::TheNoiseDiffusion { .. } => {
+            let mut args: Vec<String> = vec!["serve".into(), "--dit".into(), "{model}".into()];
+            args.extend(inputs.companion_arguments.iter().cloned());
+            args.extend(["--host", "127.0.0.1", "--port", "{port}"].map(str::to_owned));
+            (json!(args), json!({}), json!(["images/generations"]))
+        }
     };
     let mut registration = json!({
         "id": inputs.id,

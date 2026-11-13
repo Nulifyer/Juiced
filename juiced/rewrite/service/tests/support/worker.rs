@@ -912,6 +912,141 @@ async fn audio_speech(
     }
 }
 
+/// A WAV whose data chunk is the JSON the worker received, so tests can read forwarded fields.
+fn echo_wav(received: &Value) -> Vec<u8> {
+    let data = serde_json::to_vec(received).unwrap();
+    let mut bytes = b"RIFF".to_vec();
+    bytes.extend((36 + data.len() as u32).to_le_bytes());
+    bytes.extend(b"WAVEfmt ");
+    bytes.extend(16u32.to_le_bytes());
+    bytes.extend(1u16.to_le_bytes());
+    bytes.extend(2u16.to_le_bytes());
+    bytes.extend(48000u32.to_le_bytes());
+    bytes.extend(288000u32.to_le_bytes());
+    bytes.extend(6u16.to_le_bytes());
+    bytes.extend(24u16.to_le_bytes());
+    bytes.extend(b"data");
+    bytes.extend((data.len() as u32).to_le_bytes());
+    bytes.extend(data);
+    bytes
+}
+
+fn generation_jobs() -> &'static Mutex<std::collections::HashMap<String, (String, Vec<u8>)>> {
+    static JOBS: std::sync::OnceLock<Mutex<std::collections::HashMap<String, (String, Vec<u8>)>>> =
+        std::sync::OnceLock::new();
+    JOBS.get_or_init(Mutex::default)
+}
+
+/// ace-server's asynchronous jobs: `/lm` answers a planned synth request, `/synth` a
+/// `multipart/mixed` result with one audio part and one latent part.
+async fn generation_job(uri: axum::http::Uri, Json(body): Json<Value>) -> Response {
+    let mut jobs = generation_jobs().lock().unwrap();
+    let id = format!("{:016x}", jobs.len() + 1);
+    let (mime, result) = if uri.path() == "/lm" {
+        let mut planned = body.clone();
+        planned["audio_codes"] = json!("1,2,3");
+        (
+            "application/json".to_owned(),
+            serde_json::to_vec(&planned).unwrap(),
+        )
+    } else if body["caption"] == "fail" {
+        jobs.insert(id.clone(), ("failed".into(), Vec::new()));
+        return Json(json!({"id": id})).into_response();
+    } else {
+        let mut result = b"--ace-batch-boundary\r\nContent-Type: audio/wav\r\n\r\n".to_vec();
+        result.extend(echo_wav(&body));
+        result.extend(b"\r\n--ace-batch-boundary\r\nContent-Type: application/octet-stream\r\nContent-Disposition: form-data; name=\"latent\"\r\n\r\n\x01\x02\r\n--ace-batch-boundary--\r\n");
+        (
+            "multipart/mixed; boundary=ace-batch-boundary".to_owned(),
+            result,
+        )
+    };
+    jobs.insert(id.clone(), (mime, result));
+    Json(json!({"id": id})).into_response()
+}
+
+async fn generation_job_status(
+    Query(query): Query<std::collections::HashMap<String, String>>,
+) -> Response {
+    let jobs = generation_jobs().lock().unwrap();
+    let Some((mime, result)) = query.get("id").and_then(|id| jobs.get(id)) else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "Job not found"})),
+        )
+            .into_response();
+    };
+    if mime == "failed" {
+        return Json(json!({"status": "failed"})).into_response();
+    }
+    if query.get("result").map(String::as_str) == Some("1") {
+        return ([("content-type", mime.clone())], result.clone()).into_response();
+    }
+    Json(json!({"status": "done"})).into_response()
+}
+
+/// ts-server and moss-tts-server `/sfx` take JSON and answer WAV; trellis-server's
+/// `/generate` takes a multipart image and answers a GLB whose JSON chunk lists the fields.
+async fn generation_direct(
+    headers: HeaderMap,
+    uri: axum::http::Uri,
+    request: axum::extract::Request,
+) -> Response {
+    let multipart = headers
+        .get("content-type")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.starts_with("multipart/form-data"));
+    if !multipart {
+        let body = axum::body::to_bytes(request.into_body(), 1024 * 1024)
+            .await
+            .unwrap_or_default();
+        let mut received: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+        received["path"] = json!(uri.path());
+        received["tmpdir"] = json!(std::env::var("TMPDIR").ok());
+        return ([("content-type", "audio/wav")], echo_wav(&received)).into_response();
+    }
+    use axum::extract::FromRequest as _;
+    let Ok(mut form) = Multipart::from_request(request, &()).await else {
+        return (StatusCode::BAD_REQUEST, "invalid multipart").into_response();
+    };
+    let mut fields = serde_json::Map::new();
+    while let Ok(Some(field)) = form.next_field().await {
+        let name = field.name().unwrap_or_default().to_owned();
+        let file = field.file_name().map(str::to_owned);
+        let content_type = field.content_type().map(str::to_owned);
+        let bytes = field.bytes().await.unwrap_or_default();
+        fields.insert(
+            name,
+            match file {
+                Some(file) => {
+                    json!({"file": file, "content_type": content_type, "bytes": bytes.len()})
+                }
+                None => json!(String::from_utf8_lossy(&bytes)),
+            },
+        );
+    }
+    fields.insert("tmpdir".into(), json!(std::env::var("TMPDIR").ok()));
+    let mut chunk =
+        serde_json::to_vec(&json!({"asset": {"version": "2.0"}, "fixture": fields})).unwrap();
+    while chunk.len() % 4 != 0 {
+        chunk.push(b' ');
+    }
+    let mut glb = b"glTF".to_vec();
+    glb.extend(2u32.to_le_bytes());
+    glb.extend((12 + 8 + chunk.len() as u32).to_le_bytes());
+    glb.extend((chunk.len() as u32).to_le_bytes());
+    glb.extend(b"JSON");
+    glb.extend(chunk);
+    ([("content-type", "model/gltf-binary")], glb).into_response()
+}
+
+async fn generation_text2image(Json(body): Json<Value>) -> Response {
+    use base64::Engine as _;
+    let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+    png.extend(serde_json::to_vec(&body).unwrap());
+    Json(json!({"b64_json": base64::engine::general_purpose::STANDARD.encode(png)})).into_response()
+}
+
 #[derive(serde::Deserialize)]
 struct SlotAction {
     action: String,
@@ -1391,6 +1526,12 @@ async fn main() {
         .route("/sdapi/v1/schedulers", get(|| async { Json(json!([{"name":"default","label":"Default"},{"name":"karras","label":"Karras"}])) }))
         .route("/sdapi/v1/progress", get(sdapi_progress))
         .route("/v1/audio/speech", post(audio_speech))
+        .route("/lm", post(generation_job))
+        .route("/synth", post(generation_job))
+        .route("/job", get(generation_job_status))
+        .route("/generate", post(generation_direct).layer(DefaultBodyLimit::max(8 * 1024 * 1024)))
+        .route("/sfx", post(generation_direct))
+        .route("/text2image", post(generation_text2image))
         .route("/inference", post(transcription).layer(DefaultBodyLimit::max(8 * 1024 * 1024)))
         .route("/v1/audio/transcriptions", post(transcription).layer(DefaultBodyLimit::max(8 * 1024 * 1024)))
         .route("/v1/chat/completions", post(inference))

@@ -26,6 +26,7 @@ use crate::barista::{
 };
 use crate::connect::{access, health as protocol_health, key_create, key_revoke, protocol_set};
 use crate::docs_api::{document as docs_page, index as docs_index};
+use crate::generation::{audio_generation, model_3d_generation};
 use crate::media::{image_edit, image_upscale, image_variation};
 use crate::native_api::{
     native_delete as unregister, native_download_control, native_downloads, native_install,
@@ -282,6 +283,8 @@ define_routes! {
     (post, "/images/variations", image_variation, "inference"),
     (post, "/images/upscale", image_upscale, "inference"),
     (post, "/audio/speech", speech, "inference"),
+    (post, "/audio/generations", audio_generation, "inference"),
+    (post, "/3d/generations", model_3d_generation, "inference"),
     (get, "/juiced/voices", voices, "read"),
     (get, "/juiced/residency", residency, "operator"),
     (post, "/juiced/residency", residency_set, "operator"),
@@ -416,6 +419,9 @@ async fn image_generation(
     ApiBytes(body): ApiBytes,
 ) -> Result<Response, ApiError> {
     let priority = request_priority(&context, &headers)?;
+    if let Some(reply) = crate::generation::thenoise_image(&state.manager, priority, &body).await {
+        return reply;
+    }
     let request = crate::media::ImageRequest::parse(&body)?;
     let (bytes, mut lease) = media_exchange(
         &state.manager,
@@ -440,6 +446,9 @@ async fn speech(
     ApiBytes(body): ApiBytes,
 ) -> Result<Response, ApiError> {
     let priority = request_priority(&context, &headers)?;
+    if let Some(reply) = crate::generation::openmoss_speech(&state.manager, priority, &body).await {
+        return reply;
+    }
     let request = crate::media::SpeechRequest::parse(&body)?;
     let (bytes, mut lease) = media_exchange(
         &state.manager,

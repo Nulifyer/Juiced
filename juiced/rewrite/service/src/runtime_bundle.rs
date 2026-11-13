@@ -12,6 +12,18 @@ pub(crate) const MAX_FILES: usize = 8192;
 pub(crate) const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 pub(crate) const MAX_TOTAL_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 pub(crate) const MAX_ENTRIES: usize = 16384;
+/// TheNoise ships CPython, PyTorch and the ROCm runtime as about 30,000 files.
+pub(crate) const LARGE_MAX_FILES: usize = 49152;
+pub(crate) const LARGE_MAX_ENTRIES: usize = 65536;
+
+/// The file and directory-entry bounds for one implementation's bundle.
+pub(crate) fn file_limits(implementation_id: &str) -> (usize, usize) {
+    if implementation_id == "thenoise" {
+        (LARGE_MAX_FILES, LARGE_MAX_ENTRIES)
+    } else {
+        (MAX_FILES, MAX_ENTRIES)
+    }
+}
 pub(crate) const MAX_LIBRARY_DIRECTORIES: usize = 64;
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -72,7 +84,7 @@ impl BundleSpec {
             || self.root.as_os_str().is_empty()
             || !relative(&self.entrypoint, false)
             || self.files.is_empty()
-            || self.files.len() > MAX_FILES
+            || self.files.len() > file_limits(&self.implementation_id).0
             || self.library_directories.len() > MAX_LIBRARY_DIRECTORIES
             || self
                 .library_directories
@@ -133,7 +145,7 @@ impl BundleSpec {
         while let Some(directory) = pending.pop() {
             for item in fs::read_dir(directory).map_err(|_| refused())? {
                 entries += 1;
-                if entries > MAX_ENTRIES || Instant::now() >= deadline {
+                if entries > file_limits(&self.implementation_id).1 || Instant::now() >= deadline {
                     return Err(refused());
                 }
                 let item = item.map_err(|_| refused())?;

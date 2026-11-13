@@ -183,12 +183,19 @@ fn detect_candidate(inspection: &Inspection, candidate: &Candidate) -> Detected 
             weights
         })
     } else {
-        inspection.find_weights(candidate)
+        inspection
+            .find_weights(candidate)
+            .map(|weights| match engine {
+                Some(Engine::AceStep | Engine::ThinkSound | Engine::Trellis) => {
+                    models::generation_directory(weights)
+                }
+                _ => weights,
+            })
     };
     if let Some(definition) = definition {
         let roles: &[&str] = match engine {
             Some(Engine::LlamaCpp) => &["mmproj"],
-            Some(Engine::StableDiffusionCpp) => &["text_encoder", "vae"],
+            Some(Engine::StableDiffusionCpp | Engine::TheNoise) => &["text_encoder", "vae"],
             _ => &[],
         };
         for role in roles {
@@ -201,10 +208,31 @@ fn detect_candidate(inspection: &Inspection, candidate: &Candidate) -> Detected 
             }
         }
     }
-    let format = weights
-        .as_ref()
-        .ok()
-        .map(|weights| models::detect(&weights.path).map(|(format, _)| format));
+    let format = weights.as_ref().ok().map(|weights| {
+        models::detect(&weights.path).and_then(|(format, _)| match (engine, format) {
+            (Some(Engine::OpenMoss), models::ModelFormat::Gguf { .. }) => {
+                let sidecar = weights
+                    .path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .map(|name| weights.path.with_file_name(models::moss_sidecar(name)));
+                match sidecar.map(|sidecar| models::moss_family(&sidecar)) {
+                    Some(Ok(Some(family))) => Ok(models::ModelFormat::MossGguf { family }),
+                    Some(Err(error)) => Err(error),
+                    _ => Err(models::FormatError::Invalid("openmoss_sidecar_missing")),
+                }
+            }
+            (
+                Some(Engine::TheNoise),
+                models::ModelFormat::Diffusion {
+                    container: models::Container::Safetensors,
+                    architecture,
+                    ..
+                },
+            ) => Ok(models::ModelFormat::TheNoiseDiffusion { architecture }),
+            (_, format) => Ok(format),
+        })
+    });
     Detected {
         weights,
         format,
@@ -459,6 +487,24 @@ impl Manager {
                         }
                     }
                 }
+                Some(Engine::TheNoise) => {
+                    if companions.len() == 2
+                        && companions.iter().all(|companion| companion.found.is_ok())
+                    {
+                        for companion in &companions {
+                            bound.push((
+                                companion,
+                                if companion.role == "vae" {
+                                    crate::artifacts::ArtifactRole::Vae
+                                } else {
+                                    crate::artifacts::ArtifactRole::Encoder
+                                },
+                            ));
+                        }
+                    } else {
+                        blockers.push(blocker("thenoise_companions_missing"));
+                    }
+                }
                 _ => {}
             }
             if let Some(definition) = &definition {
@@ -600,6 +646,9 @@ impl Manager {
                             let flag = match (engine, role) {
                                 (Engine::LlamaCpp, _) => "--mmproj",
                                 (Engine::Kokoros, _) => "--data",
+                                (Engine::TheNoise, crate::artifacts::ArtifactRole::Encoder) => {
+                                    "--text-encoder"
+                                }
                                 (_, crate::artifacts::ArtifactRole::Vae) => "--vae",
                                 _ => "--llm",
                             };

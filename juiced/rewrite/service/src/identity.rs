@@ -169,7 +169,8 @@ mod stamp {
         sync::{Mutex, OnceLock},
     };
 
-    const ENTRIES: usize = 4096;
+    /// Large enough for the TheNoise bundle's ~30,000 files, so a launch does not rehash them.
+    const ENTRIES: usize = 65536;
 
     #[derive(Clone, Debug, Eq, Hash, PartialEq)]
     pub(super) struct Stamp {
