@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, type Client } from "./api";
-import { MAX_STEPS, action, callTool, candidates, describe, implication, outcome, parseArguments, permissionHelp, permissionNames, readOnly, stopCodes, streamReply, systemPrompt, type BaristaSettings, type ChatMessage, type Permission } from "./baristaTools";
+import { MAX_STEPS, action, callTool, candidates, changeLines, describe, implication, jobLine, outcome, parseArguments, permissionHelp, permissionNames, readJob, readOnly, stopCodes, streamReply, systemPrompt, type BaristaSettings, type ChatMessage, type Envelope, type Job, type Permission, type ToolResult } from "./baristaTools";
 import { withImages, withoutImages } from "./chatImages";
 import { AssistantBody, Composer, UserBody, thinkingClock, useAttachments } from "./ChatParts";
+import { Copy } from "./Connect";
 import type { Model } from "./domain";
 import { Badge, Button, Empty, HelpTip, Icon } from "./ui";
 import "./barista.css";
@@ -11,12 +12,12 @@ type Step = "running" | "pending" | "done" | "failed" | "skipped";
 type Item =
   | { id: number; kind: "user"; text: string; images?: string[] }
   | { id: number; kind: "assistant"; text: string; reasoning: string; streaming: boolean; since?: number; thoughtMs?: number }
-  | { id: number; kind: "tool"; name: string; label: string; change: boolean; step: Step; detail?: string }
+  | { id: number; kind: "tool"; name: string; label: string; change: boolean; step: Step; detail?: string; lines?: string[]; warnings?: string[]; job?: Job; media?: { handle: string; type: string }; secret?: string }
   | { id: number; kind: "note"; text: string };
 type NewItem = Item extends infer Entry ? Entry extends Item ? Omit<Entry, "id"> : never : never;
 type Saved = { items: Item[]; messages: ChatMessage[] };
 
-const storageKey = "juiced.barista.v1";
+const storageKey = "juiced.barista.v2";
 const replyTokens = (model: Model) => Math.max(1, Math.min(4096, model.request_limits?.output_tokens ?? 4096));
 function restore(): Saved {
   try {
@@ -120,6 +121,59 @@ function Setup({ settings, models, client, online, onSaved, onDisable, onChanged
   </form>;
 }
 
+/** What a finished envelope adds to its row: before and after, job, media and a key to reveal. */
+function details(value: Envelope | null | undefined) {
+  const media = value?.data?.media;
+  const secret = value?.data?.secret_handle;
+  return {
+    lines: changeLines(value?.changed),
+    warnings: (value?.warnings ?? []).slice(0, 3),
+    ...(value?.job ? { job: value.job } : {}),
+    ...(media && typeof media.handle === "string" ? { media: { handle: media.handle, type: String(media.type ?? "") } } : {}),
+    ...(typeof secret === "string" ? { secret } : {}),
+  };
+}
+
+function JobProgress({ client, job }: { client: Client; job: Job }) {
+  const [current, setCurrent] = useState(job);
+  useEffect(() => {
+    if (current.done) return;
+    const controller = new AbortController();
+    const timer = setTimeout(() => { readJob(client, current.id, controller.signal).then((next) => { if (next && !controller.signal.aborted) setCurrent(next); }, () => undefined); }, 1000);
+    return () => { clearTimeout(timer); controller.abort(); };
+  }, [client, current]);
+  const percent = typeof current.progress === "number" ? Math.round(current.progress * 100) : null;
+  return <div className={`barista-job ${current.state}`} role="status" aria-label="Job progress">
+    <span className="barista-job-line">{jobLine(current)}</span>
+    {!current.done && <progress max={100} value={percent ?? undefined} aria-label={`${current.label} progress`} />}
+  </div>;
+}
+
+function SecretReveal({ client, handle }: { client: Client; handle: string }) {
+  const [secret, setSecret] = useState("");
+  const [error, setError] = useState("");
+  async function reveal() {
+    try { const value = await client.request<{ secret: string }>(`juiced/barista/handles/${encodeURIComponent(handle)}`, {}); setSecret(value.secret); }
+    catch (failure) { setError(failure instanceof Error ? failure.message : "The key could not be shown."); }
+  }
+  if (secret) return <div className="barista-secret"><div className="copy-row secret-row"><input readOnly aria-label="New API key" value={secret} onFocus={(event) => event.currentTarget.select()} /><Copy value={secret} label="Copy new key" /></div><p className="field-help">Shown once and never sent to the model. Copy it into the client now.</p></div>;
+  return <div className="barista-secret">{error ? <p className="inline-error" role="alert">{error}</p> : <Button onClick={() => void reveal()}>Reveal key</Button>}</div>;
+}
+
+function MediaResult({ client, media }: { client: Client; media: { handle: string; type: string } }) {
+  const [url, setUrl] = useState("");
+  const [gone, setGone] = useState(false);
+  useEffect(() => {
+    const controller = new AbortController();
+    let created = "";
+    client.binary(`juiced/barista/handles/${encodeURIComponent(media.handle)}`, {}, controller.signal).then((blob) => { created = URL.createObjectURL(blob); setUrl(created); }, () => { if (!controller.signal.aborted) setGone(true); });
+    return () => { controller.abort(); if (created) URL.revokeObjectURL(created); };
+  }, [client, media.handle]);
+  if (gone) return <p className="field-help">The test output has expired.</p>;
+  if (!url) return null;
+  return media.type.startsWith("image/") ? <img className="barista-media" src={url} alt="Test image result" /> : <audio className="barista-media" controls src={url} aria-label="Test audio result" />;
+}
+
 function StepIcon({ step }: { step: Step }) {
   if (step === "running" || step === "pending") return <span className="step-spinner" aria-hidden="true" />;
   if (step === "done") return <span className="step-icon done"><Icon name="check" size={13} /></span>;
@@ -187,7 +241,7 @@ export function Barista({ open, onClose, models, ready, client, online, settings
       if (!current.enabled) throw new ApiError("Barista is off.", 409, "assistant_disabled");
       const byName = new Map(current.tools.map((tool) => [tool.name, tool]));
       const status = await callTool(client, "juiced_status", {}, current.revision, false, signal);
-      const system: ChatMessage = { role: "system", content: systemPrompt(model.id, current.permission, status.ok ? status.value as Record<string, unknown> : null) };
+      const system: ChatMessage = { role: "system", content: systemPrompt(model.id, current.permission, status.ok ? status.value.data as Record<string, unknown> : null, current.prompt) };
       let finished = false;
       for (let step = 0; step < MAX_STEPS && !finished; step += 1) {
         const reply = add({ kind: "assistant", text: "", reasoning: "", streaming: true });
@@ -211,22 +265,34 @@ export function Barista({ open, onClose, models, ready, client, online, settings
           } else if (readOnly(tool)) {
             const id = add({ kind: "tool", name: call.name, label: describe(call.name, args), change: false, step: "running" });
             const value = await callTool(client, call.name, args, current.revision, false, signal);
-            patch(id, { step: value.ok ? "done" : "failed", detail: value.ok ? undefined : outcome(call.name, args, value) });
+            const verified = call.name === "juiced_test_model" || call.name === "juiced_wait_job";
+            patch(id, { step: value.ok ? "done" : "failed", detail: !value.ok || verified ? outcome(call.name, args, value) : undefined, ...details(value.value) });
             result = value.text;
           } else {
             const confirm = tool?.requires_confirmation === true;
-            const id = add({ kind: "tool", name: call.name, label: confirm ? describe(call.name, args) : action(call.name, args), change: true, step: confirm ? "pending" : "running" });
-            const approved = !confirm || await approval(id);
-            if (signal.aborted) throw new DOMException("Stopped.", "AbortError");
-            if (!approved) {
-              patch(id, { step: "skipped", detail: "Skipped." });
-              result = JSON.stringify({ skipped: true, message: "The operator skipped this action. Do not retry it unless asked." });
+            const previewing = args.preview === true;
+            const id = add({ kind: "tool", name: call.name, label: confirm && !previewing ? describe(call.name, args) : action(call.name, args), change: !previewing, step: confirm && !previewing ? "pending" : "running" });
+            let preview: ToolResult | null = null;
+            if (confirm && !previewing && tool?.previewable) {
+              preview = await callTool(client, call.name, { ...args, preview: true }, current.revision, false, signal);
+              patch(id, { detail: outcome(call.name, args, preview), ...details(preview.value) });
+            }
+            if (preview && !preview.ok) {
+              patch(id, { step: "failed" });
+              result = preview.text;
             } else {
-              patch(id, { step: "running" });
-              const value = await callTool(client, call.name, args, current.revision, confirm, signal);
-              patch(id, { step: value.ok ? "done" : "failed", detail: outcome(call.name, args, value) });
-              result = value.text;
-              changed ||= value.ok;
+              const approved = !confirm || previewing || await approval(id);
+              if (signal.aborted) throw new DOMException("Stopped.", "AbortError");
+              if (!approved) {
+                patch(id, { step: "skipped", detail: "Skipped." });
+                result = JSON.stringify({ ok: false, skipped: true, summary: "The operator skipped this change. Do not retry it unless asked." });
+              } else {
+                patch(id, { step: "running" });
+                const value = await callTool(client, call.name, args, current.revision, confirm && !previewing, signal);
+                patch(id, { step: value.ok ? "done" : "failed", detail: outcome(call.name, args, value), ...details(value.value) });
+                result = value.text;
+                changed ||= value.ok && !previewing;
+              }
             }
           }
           messages.current = [...messages.current, { role: "tool", tool_call_id: call.id, content: result }];
@@ -265,15 +331,28 @@ export function Barista({ open, onClose, models, ready, client, online, settings
       <Setup key={`${settings.revision}:${settings.enabled}`} settings={settings} models={models} client={client} online={online} onSaved={(next) => { onSettings(next); setShowSettings(false); }} onDisable={stop} onChanged={onChanged} />
     </> : <>
       <div ref={thread} className="barista-thread" aria-live="polite" aria-busy={busy}>
-        {items.length === 0 ? <Empty title="Ask Barista">Try "Which models fit this machine?" or "Load a small chat model". This chat clears when you close the tab.</Empty> : items.map((item) => {
+        {items.length === 0 ? <Empty title="Ask Barista">Try "Set this box up for Home Assistant voice", "Why was my last chat slow?" or "Connect SillyTavern". This chat clears when you close the tab.</Empty> : items.map((item) => {
           if (item.kind === "user") return <article key={item.id} className="chat-turn user" aria-label="You"><UserBody text={item.text} images={item.images} /></article>;
           if (item.kind === "assistant") return <article key={item.id} className="chat-turn assistant" aria-label="Barista reply"><AssistantBody text={item.text} reasoning={item.reasoning} streaming={item.streaming} since={item.since} thoughtMs={item.thoughtMs} /></article>;
           if (item.kind === "note") return <p key={item.id} className="barista-note" role="status">{item.text}</p>;
-          if (!item.change) return <div key={item.id} className={`barista-step ${item.step}`} aria-label="Tool step"><StepIcon step={item.step} /><span className="barista-step-label">{item.label}</span>{item.detail && <span className="barista-detail">{item.detail}</span>}</div>;
-          return <div key={item.id} className={`barista-change ${item.step}`} role="group" aria-label="Change">
+          const lines = item.lines && item.lines.length > 0 && !item.job ? <ul className="barista-lines" aria-label="Changed">{item.lines.map((line) => <li key={line}>{line}</li>)}</ul> : null;
+          const warnings = item.warnings?.map((warning) => <p key={warning} className="barista-warning">{warning}</p>);
+          const results = <>
+            {item.job && <JobProgress client={client} job={item.job} />}
+            {item.media && <MediaResult client={client} media={item.media} />}
+            {item.secret && item.step === "done" && <SecretReveal client={client} handle={item.secret} />}
+          </>;
+          if (!item.change) return <div key={item.id} className={`barista-step ${item.step}`} aria-label="Tool step"><StepIcon step={item.step} /><span className="barista-step-label">{item.label}</span>{item.detail && <span className={`barista-detail ${item.step === "failed" ? "" : "quiet"}`}>{item.detail}</span>}{(item.media || item.job) && <div className="barista-extras">{results}</div>}</div>;
+          const started = item.step === "done" && item.job && !item.job.done;
+          const badge = started ? "Started" : item.step === "done" ? "Done" : item.step === "failed" ? "Failed" : item.step === "running" ? "Running" : "Skipped";
+          return <div key={item.id} className={`barista-change ${item.step}`} role="group" aria-label={item.step === "pending" ? "Confirm change" : "Change"}>
             <p className="barista-question"><StepIcon step={item.step} />{item.label}</p>
+            {item.step === "pending" && item.detail && <p className="barista-preview">{item.detail}</p>}
+            {lines}
+            {warnings}
             {item.step === "pending" ? <div className="action-row"><Button variant="primary" onClick={() => decide(item.id, true)}>Approve</Button><Button onClick={() => decide(item.id, false)}>Skip</Button></div>
-              : <p className="barista-result"><Badge tone={item.step === "done" ? "good" : item.step === "failed" ? "bad" : "quiet"}>{item.step === "done" ? "Done" : item.step === "failed" ? "Failed" : item.step === "running" ? "Running" : "Skipped"}</Badge>{item.detail && <span>{item.detail}</span>}</p>}
+              : <p className="barista-result"><Badge tone={started ? "warning" : item.step === "done" ? "good" : item.step === "failed" ? "bad" : "quiet"}>{badge}</Badge>{item.detail && <span>{item.detail}</span>}</p>}
+            {results}
           </div>;
         })}
       </div>

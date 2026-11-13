@@ -5,6 +5,7 @@ on:
     paths:
       - 'juiced/rewrite/**'
       - 'docs/api/**'
+      - 'docs/guide/**'
       - '.github/workflows/juiced-rewrite.yml'
 permissions:
   contents: read

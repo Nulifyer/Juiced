@@ -22,8 +22,7 @@ use tower_http::services::ServeDir;
 pub use crate::auth::Auth;
 use crate::auth::{Authority, Authorization, RequestContext};
 use crate::barista::{
-    call as barista_call, handle as barista_handle, settings_set as barista_set,
-    settings_view as barista_view,
+    call as barista_call, settings_set as barista_set, settings_view as barista_view,
 };
 use crate::connect::{access, health as protocol_health, key_create, key_revoke, protocol_set};
 use crate::docs_api::{document as docs_page, index as docs_index};
@@ -2015,3 +2014,5 @@ async fn realtime(
         .on_upgrade(move |socket| crate::realtime::serve(manager, socket, query, slot)))
 }
 use crate::llama_routes::{audio_voices, detokenize, rerank, slot_action, slots, stats, tokenize};
+
+use crate::barista::handle as barista_handle;

@@ -50,3 +50,21 @@
   .barista-invite .button svg { display: none; }
   .topbar:has(.barista-invite) .brand > span, .topbar:has(.barista-invite) .brand > .badge { display: none; }
 }
+.barista-detail.quiet { color: var(--muted); }
+.barista-extras { flex-basis: 100%; display: grid; gap: 6px; padding-left: 19px; }
+.barista-lines { margin: 0; padding: 0; list-style: none; display: grid; gap: 2px; color: var(--muted); font-size: .76rem; font-variant-numeric: tabular-nums; }
+.barista-lines li { overflow-wrap: anywhere; }
+.barista-preview { color: var(--foreground); font-size: .78rem; line-height: 1.4; overflow-wrap: anywhere; }
+.barista-warning { color: var(--warning); font-size: .74rem; overflow-wrap: anywhere; }
+.barista-job { display: grid; gap: 4px; font-size: .74rem; color: var(--muted); }
+.barista-job.failed { color: var(--bad); }
+.barista-job-line { overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.barista-job progress { width: 100%; height: 4px; appearance: none; border: 0; border-radius: 2px; background: var(--secondary); overflow: hidden; }
+.barista-job progress::-webkit-progress-bar { background: var(--secondary); }
+.barista-job progress::-webkit-progress-value { background: var(--warning); }
+.barista-job progress::-moz-progress-bar { background: var(--warning); }
+.barista-secret { display: grid; gap: 4px; }
+.barista-secret .copy-row input { min-width: 0; flex: 1; font-family: var(--mono, monospace); font-size: .75rem; }
+.barista-media { max-width: 100%; border-radius: 6px; }
+img.barista-media { max-height: 180px; width: auto; justify-self: start; border: 1px solid var(--border); }
+audio.barista-media { width: 100%; height: 34px; }

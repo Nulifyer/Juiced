@@ -7,7 +7,7 @@ pub(super) const TOOLS: &[Tool] = &[
         name: "juiced_set_policy",
         group: Group::Configure,
         title: "Set loading policy",
-        description: "Set a model to disabled (unloads, refuses requests), on-demand (loads on first request) or hot (loads now and stays loaded).",
+        description: "Set a model to disabled (unloads, refuses requests), on-demand (loads on first request) or hot (loaded at startup and kept loaded; use juiced_load to start it now).",
         read_only: false,
         destructive: false,
         idempotent: true,
@@ -306,7 +306,7 @@ async fn policy(context: &Context<'_>, args: Value) -> Result<Outcome> {
             crate::config::Policy::Hot if current["loaded"] != true => {
                 let reserve = current["resident_bytes"].as_u64();
                 let free = free_budget(context).await;
-                json!({"loads_now": true, "reserves_bytes": reserve, "free_budget_bytes": free, "fits_budget": reserve.zip(free).map(|(reserve, free)| reserve <= free)})
+                json!({"loads_now": false, "loads_at_startup": true, "reserves_bytes": reserve, "free_budget_bytes": free, "fits_budget": reserve.zip(free).map(|(reserve, free)| reserve <= free)})
             }
             crate::config::Policy::Disabled => {
                 json!({"unloads": current["loaded"] == true, "requests_refused": true})
@@ -349,7 +349,11 @@ async fn policy(context: &Context<'_>, args: Value) -> Result<Outcome> {
     if context.own_model(&change.model) {
         outcome = outcome.warn("This is Barista's own model.");
     }
-    Ok(outcome.next(&["juiced_model_details", "juiced_test_model"]))
+    Ok(outcome.next(if loading {
+        &["juiced_load"]
+    } else {
+        &["juiced_model_details", "juiced_test_model"]
+    }))
 }
 
 async fn load(context: &Context<'_>, args: Value) -> Result<Outcome> {

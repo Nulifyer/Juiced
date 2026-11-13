@@ -224,7 +224,7 @@ pub(super) fn search(query: &str) -> Vec<Value> {
         }
         flush(heading, &section, &mut hits);
     }
-    hits.sort_by(|left, right| right.0.cmp(&left.0));
+    hits.sort_by_key(|hit| std::cmp::Reverse(hit.0));
     hits.into_iter()
         .take(MAXIMUM_MATCHES)
         .map(|(_, hit)| hit)
