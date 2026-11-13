@@ -1,5 +1,7 @@
 import type { Client } from "./api";
 import type { Model } from "./domain";
+import { useState } from "react";
+import { Button, HelpTip } from "./ui";
 import { useOperation, useResource } from "./useResource";
 
 export type Residency = {
@@ -11,7 +13,9 @@ export type Residency = {
   idle_unload_at_unix_ms: number | null;
   last_unload: { reason: "idle" | "pressure" | "operator"; at_unix_ms: number } | null;
 };
-type View = { generation: number; idle: number };
+type View = { generation: number; idle: number; budget: number | null };
+
+const GIB = 1024 ** 3;
 
 const choices = [0, 300_000, 900_000, 1_800_000, 3_600_000, 14_400_000];
 
@@ -31,7 +35,7 @@ export function remaining(ms: number): string {
 export function parseResidencyView(value: unknown): View {
   const body = value && typeof value === "object" ? value as Record<string, unknown> : {};
   if (typeof body.configuration_generation !== "number" || typeof body.idle_unload_after_ms !== "number") throw new Error("The service returned unexpected residency settings.");
-  return { generation: body.configuration_generation, idle: body.idle_unload_after_ms };
+  return { generation: body.configuration_generation, idle: body.idle_unload_after_ms, budget: typeof body.resident_budget_bytes === "number" ? body.resident_budget_bytes : null };
 }
 
 function options(current: number) {
@@ -80,4 +84,30 @@ export function ModelIdle({ model, client, online, disabled }: { model: Model; c
     {note && <p className="field-help">{note}</p>}
     {operation.error && <p className="inline-error" role="alert">{operation.error}</p>}
   </div>;
+}
+
+export function MemoryBudget({ client, online }: { client: Client; online: boolean }) {
+  const view = useResource(client, "juiced/residency", parseResidencyView, 5000);
+  const operation = useOperation(client, view.reload);
+  const [draft, setDraft] = useState<string | null>(null);
+  const data = view.data;
+  if (!data || data.budget === null) return null;
+  const current = Math.round(data.budget / GIB * 10) / 10;
+  const value = draft === null ? null : Number(draft);
+  const valid = value !== null && Number.isFinite(value) && value > 0;
+  const save = () => {
+    if (!valid || value === current) { setDraft(null); return; }
+    void operation.run("juiced/residency", { expected_generation: data.generation, resident_budget_bytes: Math.round(value * GIB) }, `Models may now reserve up to ${value} GiB.`).then((result) => { if (result !== undefined) setDraft(null); });
+  };
+  return <span className="inline-field memory-budget">
+    {draft === null
+      ? <Button variant="ghost" disabled={!online} aria-label={`Model memory ${current} GiB. Change`} onClick={() => setDraft(String(current))}>Model memory {current} GiB</Button>
+      : <form onSubmit={(event) => { event.preventDefault(); save(); }}>
+          <label>Model memory <input type="number" min="1" step="1" inputMode="decimal" autoFocus aria-label="Model memory in GiB" value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") setDraft(null); }} /> GiB</label>
+          <Button type="submit" variant="primary" disabled={!valid || operation.busy}>Save</Button>
+          <Button type="button" variant="ghost" onClick={() => setDraft(null)}>Cancel</Button>
+        </form>}
+    <HelpTip label="Model memory">The memory loaded models may reserve together. When a load would go over it, idle On demand models unload first. Hot and busy models stay.</HelpTip>
+    {operation.error && <span className="inline-error" role="alert">{operation.error}</span>}
+  </span>;
 }

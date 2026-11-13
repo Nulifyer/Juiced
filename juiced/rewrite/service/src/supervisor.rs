@@ -85,7 +85,7 @@ fn unix_time_ms() -> u64 {
 }
 
 struct Budget {
-    limit: u64,
+    limit: AtomicU64,
     used: AtomicU64,
 }
 
@@ -95,8 +95,12 @@ struct Reservation {
 }
 
 impl Budget {
+    fn limit(&self) -> u64 {
+        self.limit.load(Ordering::Acquire)
+    }
+
     fn after_reservation(&self, used: u64, bytes: u64) -> Option<u64> {
-        used.checked_add(bytes).filter(|next| *next <= self.limit)
+        used.checked_add(bytes).filter(|next| *next <= self.limit())
     }
 
     fn reserve(self: &Arc<Self>, bytes: u64) -> Result<Reservation, ApiError> {
@@ -2213,7 +2217,7 @@ impl Manager {
             processes,
             workers: RwLock::new(workers),
             budget: Arc::new(Budget {
-                limit: config.resident_budget_bytes,
+                limit: AtomicU64::new(config.resident_budget_bytes),
                 used: AtomicU64::new(0),
             }),
             client: reqwest::Client::builder()
@@ -3290,7 +3294,7 @@ impl Manager {
             || {
                 (
                     "operator-declared",
-                    Some(self.budget.limit),
+                    Some(self.budget.limit()),
                     self.budget.used.load(Ordering::Acquire),
                 )
             },
@@ -3475,9 +3479,9 @@ impl Manager {
             };
             (
                 "operator-declared",
-                Some(self.budget.limit),
+                Some(self.budget.limit()),
                 used,
-                Some(self.budget.limit.saturating_sub(others)),
+                Some(self.budget.limit().saturating_sub(others)),
                 Some(worker.spec.resident_bytes),
                 Some(
                     self.budget

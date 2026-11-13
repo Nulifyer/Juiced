@@ -33,7 +33,7 @@ function workerFailure(code: string): string {
   return "The worker needs attention. Review its current state before retrying.";
 }
 
-type ListProps = { models: Model[]; selected?: string; onSelect: (id: string) => void; mode: "models" | "policy"; mutate: Mutate; busy: boolean; online: boolean; idleControl?: ReactNode; files?: LocalGroup[]; inventory?: LocalInventory | null; selectedFile?: string; onSelectFile?: (id: string) => void; onDiscover?: () => void; client?: Client };
+type ListProps = { models: Model[]; selected?: string; onSelect: (id: string) => void; mode: "models" | "policy"; mutate: Mutate; busy: boolean; online: boolean; idleControl?: ReactNode; budgetControl?: ReactNode; files?: LocalGroup[]; inventory?: LocalInventory | null; selectedFile?: string; onSelectFile?: (id: string) => void; onDiscover?: () => void; client?: Client };
 type SortKey = "name" | "state" | "memory";
 const placeholderClient = new Client("", "");
 
@@ -106,7 +106,7 @@ function FileRow({ group, selected, onSelect }: { group: LocalGroup; selected: b
   </div>;
 }
 
-export function ModelList({ models, selected, onSelect, mode, mutate, busy, online, idleControl, files = [], inventory, selectedFile, onSelectFile, onDiscover, client }: ListProps) {
+export function ModelList({ models, selected, onSelect, mode, mutate, busy, online, idleControl, budgetControl, files = [], inventory, selectedFile, onSelectFile, onDiscover, client }: ListProps) {
   const [query, setQuery] = useState("");
   const [chosen, setChosen] = useState<Set<string>>(() => new Set());
   const [sort, setSort] = useState<{ key: SortKey; descending: boolean } | null>(null);
@@ -147,6 +147,7 @@ export function ModelList({ models, selected, onSelect, mode, mutate, busy, onli
       {(chips.length > 1 || files.length > 0) && <div className="chip-filter" role="group" aria-label="Service filter"><button aria-pressed={service === null} onClick={() => setService(null)}>All <span>{models.length + files.length}</span></button>{chips.map(([id, label, count]) => <button key={id} aria-pressed={service === id} onClick={() => setService(service === id ? null : id)}>{label} <span>{count}</span></button>)}{files.length > 0 && <button aria-pressed={service === "files"} onClick={() => setService(service === "files" ? null : "files")}>Not added <span>{files.length}</span></button>}{disk}{updateAction}</div>}
       {!(chips.length > 1 || files.length > 0) && disk}
       {!(chips.length > 1 || files.length > 0) && updateAction}
+      {budgetControl}
     </div>
     {mode === "models" && chosen.size > 0 && <BulkBar models={models} chosen={chosen} mutate={mutate} disabled={locked} onClear={() => setChosen(new Set())} />}
     {models.length === 0 && files.length === 0 ? <Empty title="No models yet">{onDiscover ? <><button className="link-button" onClick={onDiscover}>Find a model</button> to get started.</> : "Find a model in Discover to get started."}</Empty> : visible.length === 0 && visibleFiles.length === 0 ? <Empty title="No matches">Try another search or filter.</Empty> : mode === "policy" ? <div className="policy-board">

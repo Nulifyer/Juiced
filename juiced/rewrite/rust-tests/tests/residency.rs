@@ -347,6 +347,53 @@ async fn residency_route_publishes_service_and_model_delays() {
 }
 
 #[tokio::test]
+async fn residency_route_changes_the_resident_budget_without_a_restart() {
+    let server = Server::configured(false, |_| {}).await;
+    let view = server.get("juiced/residency").await;
+    assert_eq!(view["resident_budget_bytes"], 128);
+    let generation = view["configuration_generation"].as_u64().unwrap();
+    for invalid in [
+        json!({"expected_generation": generation, "resident_budget_bytes": 0}),
+        json!({"expected_generation": generation, "model": "fixture.one", "resident_budget_bytes": 64}),
+    ] {
+        let (status, error) = server.post("juiced/residency", invalid).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(error["error"]["code"], "invalid_residency");
+    }
+    let (status, view) = server
+        .post(
+            "juiced/residency",
+            json!({"expected_generation": generation, "resident_budget_bytes": 64}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{view}");
+    assert_eq!(view["resident_budget_bytes"], 64);
+    assert_eq!(view["idle_unload_after_ms"], 900000);
+    assert_eq!(
+        server.get("juiced/state").await["resources"]["resident_budget_bytes"],
+        64
+    );
+    assert_eq!(load(&server, "fixture.one").await.0, StatusCode::OK);
+    assert_eq!(load(&server, "fixture.two").await.0, StatusCode::OK);
+    assert_eq!(server.model("fixture.one").await["loaded"], false);
+    assert_eq!(unload_lines(&server, "pressure").await.len(), 1);
+    let generation = view["configuration_generation"].as_u64().unwrap();
+    let (status, view) = server
+        .post(
+            "juiced/residency",
+            json!({"expected_generation": generation, "resident_budget_bytes": 256}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{view}");
+    assert_eq!(load(&server, "fixture.one").await.0, StatusCode::OK);
+    assert_eq!(server.model("fixture.two").await["loaded"], true);
+    assert_eq!(unload_lines(&server, "pressure").await.len(), 1);
+    let saved: Value =
+        serde_json::from_slice(&std::fs::read(&server.config_path).unwrap()).unwrap();
+    assert_eq!(saved["resident_budget_bytes"], 256);
+}
+
+#[tokio::test]
 async fn ollama_keep_alive_overrides_the_idle_delay_until_unload() {
     let server = Server::configured(false, idle(300)).await;
     let ollama = async |keep_alive: Value| {

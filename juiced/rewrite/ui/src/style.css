@@ -668,6 +668,9 @@ a.button { color: var(--foreground); text-decoration: none; }
 .wyoming { display: grid; gap: 10px; }
 .wyoming-grid { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
 .idle-default { white-space: nowrap; }
+.memory-budget { margin-left: auto; white-space: nowrap; }
+.memory-budget form, .memory-budget label { display: inline-flex; align-items: center; gap: 6px; }
+.memory-budget input[type="number"] { width: 5.5em; }
 .idle-default select { width: auto; min-height: 28px; padding-block: 3px; }
 .flm-models { display: grid; gap: 8px; padding: 12px 14px; margin-bottom: 12px; }
 .flm-models .panel-head { display: flex; align-items: center; gap: 10px; }

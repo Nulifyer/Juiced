@@ -326,7 +326,7 @@ impl Manager {
             })
             .map(|worker| worker.spec.resident_bytes)
             .fold(0u64, u64::saturating_add);
-        self.budget.limit.saturating_sub(hot)
+        self.budget.limit().saturating_sub(hot)
     }
 
     /// Budget capacity, and what is free for this worker, counting its own reservation as free
@@ -362,8 +362,8 @@ impl Manager {
             0
         };
         (
-            self.budget.limit,
-            self.budget.limit.saturating_sub(used.saturating_sub(own)),
+            self.budget.limit(),
+            self.budget.limit().saturating_sub(used.saturating_sub(own)),
             loaded,
         )
     }

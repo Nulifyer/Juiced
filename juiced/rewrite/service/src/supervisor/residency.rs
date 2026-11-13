@@ -247,6 +247,8 @@ pub struct ResidencyChange {
     model: Option<String>,
     #[serde(default, deserialize_with = "double_option")]
     idle_unload_after_ms: Option<Option<u64>>,
+    #[serde(default)]
+    resident_budget_bytes: Option<u64>,
 }
 
 fn invalid_residency(message: &'static str) -> ApiError {
@@ -564,6 +566,7 @@ impl Manager {
             "configuration_generation": generation,
             "idle_unload_after_ms": self.residency.default_ms.load(Ordering::Acquire),
             "maximum_idle_unload_after_ms": MAXIMUM_IDLE_UNLOAD_MS,
+            "resident_budget_bytes": self.budget.limit(),
             "models": models,
         })
     }
@@ -572,10 +575,24 @@ impl Manager {
         self: &Arc<Self>,
         change: ResidencyChange,
     ) -> Result<serde_json::Value, ApiError> {
-        let value = change
+        if change.idle_unload_after_ms.is_none() && change.resident_budget_bytes.is_none() {
+            return Err(invalid_residency(
+                "Provide idle_unload_after_ms or resident_budget_bytes.",
+            ));
+        }
+        if change.resident_budget_bytes.is_some() && change.model.is_some() {
+            return Err(invalid_residency(
+                "resident_budget_bytes is a service setting. Omit model.",
+            ));
+        }
+        if change.resident_budget_bytes == Some(0) {
+            return Err(invalid_residency("resident_budget_bytes must be positive."));
+        }
+        if change
             .idle_unload_after_ms
-            .ok_or_else(|| invalid_residency("Provide idle_unload_after_ms."))?;
-        if value.is_some_and(|value| value > MAXIMUM_IDLE_UNLOAD_MS) {
+            .flatten()
+            .is_some_and(|value| value > MAXIMUM_IDLE_UNLOAD_MS)
+        {
             return Err(invalid_residency(
                 "idle_unload_after_ms must be at most 30 days in milliseconds.",
             ));
@@ -585,17 +602,21 @@ impl Manager {
             return Err(ApiError::new(
                 StatusCode::CONFLICT,
                 "revision_conflict",
-                "Configuration changed. Refresh before changing idle unload settings.",
+                "Configuration changed. Refresh before changing residency settings.",
             ));
         }
         let mut next = config.clone();
-        match &change.model {
-            None => {
+        if let Some(budget) = change.resident_budget_bytes {
+            next.resident_budget_bytes = budget;
+        }
+        match (&change.model, change.idle_unload_after_ms) {
+            (_, None) => {}
+            (None, Some(value)) => {
                 next.idle_unload_after_ms = value.ok_or_else(|| {
                     invalid_residency("The service default idle_unload_after_ms must be a number.")
                 })?;
             }
-            Some(id) => {
+            (Some(id), Some(value)) => {
                 let entry = next
                     .models
                     .iter_mut()
@@ -625,7 +646,7 @@ impl Manager {
             return Err(ApiError::new(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "configuration_durability",
-                "Idle unload settings committed but directory durability is unconfirmed.",
+                "Residency settings committed but directory durability is unconfirmed.",
             ));
         }
         Ok(self.residency_view().await)

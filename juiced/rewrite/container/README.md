@@ -69,7 +69,7 @@ The service runs as uid 10001 and needs to own `/data`. A named volume gets the 
 
 To add a model file that is not on Hugging Face, upload it from the console or with `curl -X POST -T model.gguf -H 'Content-Type: application/octet-stream' "http://HOST:8080/v1/juiced/library/upload?filename=model.gguf&size=$(stat -c %s model.gguf)"`. A file already on the host can be mounted under `/data/import` and imported with `POST /v1/juiced/library/import-path`, either copied into `artifacts/` or linked in place. A linked file must stay mounted at the same path. The first-boot configuration lists `/data` and `/library` in `import_roots`, so `/data/import`, an old Juiced data volume and read-only model mounts under `/library` are all reachable.
 
-The default configuration sets `inhibit_suspend` to false, because the container cannot reach the host's logind. It sets `resident_budget_bytes` to three quarters of the smaller of host memory and the container's cgroup memory limit. `JUICED_RESIDENT_BUDGET_BYTES` overrides that value, but only on first boot. Later, edit the value in the console or in `config.json`.
+The default configuration sets `inhibit_suspend` to false, because the container cannot reach the host's logind. It sets `resident_budget_bytes` to three quarters of the smaller of host memory and the container's cgroup memory limit. `JUICED_RESIDENT_BUDGET_BYTES` overrides that value, but only on first boot. Later, change it with Model memory on the Loading policy screen.
 
 ## Ports
 

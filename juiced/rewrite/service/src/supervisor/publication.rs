@@ -307,6 +307,9 @@ impl Manager {
         let old_config = std::mem::replace(&mut **guard, next);
         self.refresh_aliases(&guard.aliases);
         self.residency.refresh(guard);
+        self.budget
+            .limit
+            .store(guard.resident_budget_bytes, Ordering::Release);
         let mut retired = Vec::new();
         let mut old_snapshot = None;
         {

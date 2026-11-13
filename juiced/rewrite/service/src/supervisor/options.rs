@@ -283,7 +283,7 @@ impl Manager {
         }
         let restart = self.restart_needed(&worker, &mut state, apply)?;
         let projector_worker = worker.clone();
-        let budget = (!self.memory_protected()).then_some(self.budget.limit);
+        let budget = (!self.memory_protected()).then_some(self.budget.limit());
         let parent = self
             .config_path
             .parent()

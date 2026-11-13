@@ -32,3 +32,26 @@ test("idle unload is set for the service and for one On demand model", async ({ 
     if (latest.idle_unload_after_ms !== before.idle_unload_after_ms) await service.post("/v1/juiced/residency", { expected_generation: latest.configuration_generation, idle_unload_after_ms: before.idle_unload_after_ms });
   }
 });
+
+test("the model memory budget changes from the Loading policy screen", async ({ page, request }) => {
+  const service = api(request);
+  const before = await service.json<Residency & { resident_budget_bytes: number }>("/v1/juiced/residency");
+  const gib = 1024 ** 3;
+  const current = Math.round(before.resident_budget_bytes / gib * 10) / 10;
+  const next = Math.floor(current) + 2;
+  try {
+    await open(page);
+    await navigate(page, "Loading policy");
+    await page.getByRole("button", { name: `Model memory ${current} GiB. Change` }).click();
+    const field = page.getByLabel("Model memory in GiB");
+    await expect(field).toHaveValue(String(current));
+    await field.fill(String(next));
+    await page.getByRole("button", { name: "Save" }).click();
+    await expect(toasts(page).getByRole("status")).toContainText(`Models may now reserve up to ${next} GiB.`);
+    await expect.poll(async () => (await service.json<{ resident_budget_bytes: number }>("/v1/juiced/residency")).resident_budget_bytes).toBe(next * gib);
+    await expect(page.getByRole("button", { name: `Model memory ${next} GiB. Change` })).toBeVisible();
+  } finally {
+    const latest = await service.json<Residency & { resident_budget_bytes: number }>("/v1/juiced/residency");
+    if (latest.resident_budget_bytes !== before.resident_budget_bytes) await service.post("/v1/juiced/residency", { expected_generation: latest.configuration_generation, resident_budget_bytes: before.resident_budget_bytes });
+  }
+});
