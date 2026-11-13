@@ -232,7 +232,7 @@ async fn all_prefixes_enforce_read_inference_and_operator_authority() {
                 StatusCode::BAD_REQUEST
             );
             let (status, response) = server.json(Method::POST, &path, Some(json!({"model":"fixture.one", "messages":[{"role":"user","content":"pipeline only"}]})), Some(CLIENT_KEY)).await;
-            assert_eq!(status, StatusCode::OK, "POST {path}");
+            assert_eq!(status, StatusCode::OK, "POST {path}: {response}");
             if suffix == "/embeddings" {
                 assert_eq!(
                     response["data"][0]["embedding"].as_array().unwrap().len(),

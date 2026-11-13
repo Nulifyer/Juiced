@@ -73,7 +73,7 @@
     },
     {
       "path": "juiced/rewrite/rust-tests/tests/api_end_to_end.rs",
-      "sha256": "abbad1c424996a5e13cab98d97d0f4c67f9d5b34cfaf82cab3da7ab4aa954171",
+      "sha256": "e94956ef679c3a33db9060c124f7fcb2f8c1d35d06607b5b1e0ef743452b82bd",
       "hash_check": "snapshot_only"
     },
     {
