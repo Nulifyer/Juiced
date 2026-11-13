@@ -253,7 +253,7 @@ impl Manager {
             })
             .unwrap_or_default();
         let report = &snapshot.report;
-        let recommendations: BTreeMap<_, _> = Engine::ALL
+        let recommendations: BTreeMap<_, _> = Engine::all()
             .into_iter()
             .map(|engine| {
                 (
@@ -289,8 +289,7 @@ impl Manager {
         if catalog::UNPUBLISHED.contains(&(engine, request.backend.as_str())) {
             return Err(not_published());
         }
-        if !catalog::BUILDS
-            .iter()
+        if !catalog::builds()
             .any(|build| build.engine == engine && build.backend == request.backend)
         {
             return Err(invalid(
@@ -547,28 +546,7 @@ impl Manager {
             let _ = std::fs::remove_file(&archive_path);
             let _ = std::fs::remove_file(&runtime_path);
             job_state.update(|status| status.state = "verifying");
-            let licenses = match (build.engine, build.backend) {
-                (Engine::Kokoros, _) => {
-                    vec!["Apache-2.0".into(), "GPL-3.0-or-later".into()]
-                }
-                (Engine::Moonshine, _) => {
-                    vec!["BSD-3-Clause".into(), "MIT".into(), "PSF-2.0".into()]
-                }
-                (Engine::FastFlowLm, _) => {
-                    vec!["LicenseRef-FastFlowLM-Binary".into(), "MIT".into()]
-                }
-                (_, "hybrid-rocm") => vec![
-                    "LicenseRef-AMD-ROCm".into(),
-                    "LicenseRef-AMD-XRT".into(),
-                    "MIT".into(),
-                ],
-                (_, "cuda") => vec![
-                    "LicenseRef-NVIDIA-CUDA-Redistributable".into(),
-                    "MIT".into(),
-                ],
-                (_, "rocm") => vec!["LicenseRef-AMD-ROCm".into(), "MIT".into()],
-                _ => vec!["MIT".to_owned()],
-            };
+            let licenses = catalog::licenses(&build);
             let request = crate::runtime_packages::ImportRequest {
                 schema_version: 1,
                 files: described
@@ -982,8 +960,7 @@ impl Manager {
         };
         let (build, supported) = match arch {
             Some(arch) => {
-                let candidates: Vec<&Build> = catalog::BUILDS
-                    .iter()
+                let candidates: Vec<&Build> = catalog::builds()
                     .filter(|build| {
                         build.engine == engine
                             && build.backend == backend

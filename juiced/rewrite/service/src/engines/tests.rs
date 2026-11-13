@@ -267,7 +267,7 @@ fn installed_packages_read_release_provenance_from_the_runtime_inventory() {
 #[test]
 fn every_catalog_build_is_pinned_unique_and_named_for_its_backend() {
     let mut assets = std::collections::BTreeSet::new();
-    for build in catalog::BUILDS {
+    for build in catalog::builds() {
         assert!(assets.insert(build.asset), "{}", build.asset);
         let sha = build.sha256.unwrap();
         assert!(sha.len() == 64 && sha.bytes().all(|byte| byte.is_ascii_hexdigit()));
@@ -1601,8 +1601,7 @@ fn published_npu_archives_extract_and_describe_within_bundle_limits() {
         let Some(path) = std::env::var_os(variable) else {
             continue;
         };
-        let build = catalog::BUILDS
-            .iter()
+        let build = catalog::builds()
             .find(|build| build.backend == backend)
             .unwrap();
         let cancelled = AtomicBool::new(false);

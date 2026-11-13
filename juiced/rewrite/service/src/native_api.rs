@@ -1856,7 +1856,7 @@ pub(crate) async fn native_uninstall(
 /// The native `recipes` block, derived from the engine inventory.
 fn recipes(engines: &Value, system: &Value) -> Value {
     let mut recipes = Map::new();
-    for engine in Engine::ALL {
+    for engine in Engine::all() {
         let recipe = engine.recipe();
         let mut backends = Map::new();
         for row in engines["installable"].as_array().into_iter().flatten() {
