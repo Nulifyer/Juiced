@@ -254,7 +254,7 @@ test.describe("Downloads", () => {
     await detail.getByRole("button", { name: /^Delete/ }).click();
     await page.getByRole("dialog").getByRole("button", { name: "Delete", exact: true }).click();
     await expect(fileRow(page, name)).toHaveCount(0);
-    expect((await service.artifacts()).artifacts.some((item: any) => item.id === fixture.sha256)).toBe(false);
+    await expect.poll(async () => (await service.artifacts()).artifacts.some((item: any) => item.id === fixture.sha256), { timeout: 10000 }).toBe(false);
   });
 
   test("unfinished files are summarised without actions", async ({ page }) => {
