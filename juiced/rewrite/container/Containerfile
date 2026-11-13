@@ -40,7 +40,9 @@ COPY juiced/rewrite/container/backports.sources /etc/apt/sources.list.d/backport
 # libEGL and libXext. Lavapipe is removed so a CPU-only host never reports Vulkan.
 # FastFlowLM and the XDNA hybrid bundle ship XRT, which links libuuid and libprotobuf from
 # the system. The llama.cpp release builds link libssl for their model downloader; the
-# ROCm packages bring TheRock's own libdrm, libnuma and libelf.
+# ROCm packages bring TheRock's own libdrm, libnuma and libelf. vLLM's Triton compiles a
+# C launcher on the first request: the CUDA build calls the system cc, the ROCm build its
+# bundled clang, and both need the libc headers and link objects.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates curl tini \
@@ -48,6 +50,7 @@ RUN apt-get update \
         libuuid1 libprotobuf32t64 \
         libdrm2 libdrm-amdgpu1 libelf1t64 \
         libvulkan1 vulkan-tools libegl1 libxext6 \
+        gcc libc6-dev \
     && apt-get install -y --no-install-recommends -t trixie-backports mesa-vulkan-drivers \
     && rm -f /usr/share/vulkan/icd.d/lvp_icd*.json \
     && rm -rf /var/lib/apt/lists/*

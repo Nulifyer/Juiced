@@ -95,6 +95,12 @@ echo "API key not present under /data"
 "$engine" exec "$name" ls -A /data | tr '\n' ' '
 echo
 
+step "C toolchain"
+# vLLM's Triton compiles a launcher with the system cc (CUDA) or its bundled clang (ROCm) on the first request.
+"$engine" exec "$name" sh -c 'd=$(mktemp -d) && printf "#include <stdlib.h>\nint f(void){return abs(-1);}\n" > "$d/t.c" && cc -O2 -shared -fPIC -o "$d/t.so" "$d/t.c" && rm -r "$d"' \
+    || fail "the image cannot build a shared object, so vLLM fails on its first request"
+echo "cc builds a shared object"
+
 step "/v1/system-info"
 info=$(admin "$base/v1/system-info")
 printf '%s' "$info" | jq -c '{detection: .host.detection, cpu: .devices.cpu.name, threads: .devices.cpu.usable_threads, memory_bytes: .devices.memory.total_bytes}'
