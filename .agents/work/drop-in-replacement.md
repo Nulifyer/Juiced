@@ -55,6 +55,10 @@ Five merged helper rounds: Library folded into Models (Installed, Discover, Down
 
 rc.11 was stopped by a timing-dependent Diagnostics browser test (sub-millisecond prompt phase omitted from the label on the CI runner) and never published; rc.12 is the same code plus the test fix (CI run 43356207377). Deployed through Portainer: Hot models ready (Ornith Q6_K, kokoro-v1, whisper-large-v3-turbo); Ornith Q6_K `vision: true` and read "JUICED 4271" from a 1280x480 PNG in 2.7-3.2 s (a 640x240 copy was misread, model limit); three synthetic clients with ~5.9k-token system prompts alternating new conversations: cold 14.7-15.1 s, then `restored` in 121-171 ms with 20 tokens processed, 1.0-1.1 s per request. Barista opens straight to chat with the Images badge. Release page created; Homelab compose matches live (uncommitted).
 
+## Live verification (v1.0.0-rc.13, 2026-11-12)
+
+Model discovery contract restored (helper-discovery). Deployed through Portainer: `/health` version 1.0.0-rc.13 with `all_models_loaded` (Ornith Q6_K llm ready context 262144, kokoro-v1 tts, whisper-large-v3-turbo transcription); `/v1/models` lists the six enabled models with recipe, labels, context (Ornith observed 262144; Qwen3.5-4B 16384 and Skyfall 32768 configured), thinking/tools from the chat template and vision; `If-None-Match` 304; `/.well-known/juiced.json` and `/v1/juiced/capabilities` 200. Release page created; Homelab compose matches live (uncommitted).
+
 ## Pending (2026-11-12, after rc.12)
 
 In progress, round 11 (user feedback after enabling Barista on production):
