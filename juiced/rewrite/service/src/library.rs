@@ -1198,7 +1198,6 @@ impl Library {
                 Ok(status) => part.status = status,
                 Err(error) if generation.is_some() => return Err(error.into()),
                 Err(ArtifactError::Conflict) => {}
-                Err(ArtifactError::Limit) if store.active_work_full() => {}
                 Err(error) => part.status = PartStatus::Failed(error.code()),
             }
         }
@@ -1253,9 +1252,8 @@ impl Library {
             for (index, status, download) in snapshot {
                 let next = match status {
                     PartStatus::Queued => match start(&store, download, None).await {
+                        Ok(PartStatus::Queued) | Err(ArtifactError::Conflict) => None,
                         Ok(status) => Some(status),
-                        Err(ArtifactError::Conflict) => None,
-                        Err(ArtifactError::Limit) if store.active_work_full() => None,
                         Err(error) => Some(PartStatus::Failed(error.code())),
                     },
                     PartStatus::Job { id, reused, .. } => {
@@ -1467,7 +1465,8 @@ async fn start(
     tokio::task::spawn_blocking(move || {
         let mut attempts = if expected_generation.is_some() { 1 } else { 4 };
         // A finishing transfer frees its slot just after the store refuses a new one, so a
-        // refusal with free slots is retried before it counts as a hard limit.
+        // refusal with free slots is retried before it counts as a hard limit; a refusal
+        // while every slot is busy leaves the part queued for the next pass.
         let mut slot_attempts = 8;
         loop {
             let generation = expected_generation.unwrap_or_else(|| store.generation());
@@ -1481,7 +1480,12 @@ async fn start(
                     });
                 }
                 Err(ArtifactError::Conflict) if attempts > 1 => attempts -= 1,
-                Err(ArtifactError::Limit) if slot_attempts > 1 && !store.active_work_full() => {
+                // Decided here, under the same refusal, so a slot freed between the refusal
+                // and a later check cannot turn a busy store into a failed part.
+                Err(ArtifactError::Limit) if store.active_work_full() => {
+                    return Ok(PartStatus::Queued);
+                }
+                Err(ArtifactError::Limit) if slot_attempts > 1 => {
                     slot_attempts -= 1;
                     std::thread::sleep(Duration::from_millis(25));
                 }

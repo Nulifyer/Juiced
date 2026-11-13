@@ -14,7 +14,7 @@ const weights = Uint8Array.from({ length: 256 * 1024 }, (_, index) => index % 25
 const sha256 = new Bun.CryptoHasher("sha256").update(weights).digest("hex");
 const failed = new Set<string>();
 const hubRevision = "0123456789abcdef0123456789abcdef01234567";
-type HubFile = { path: string; bytes: Uint8Array; declared?: number };
+type HubFile = { path: string; bytes: Uint8Array; declared?: number; small?: boolean };
 const hubBytes = (seed: number, length: number) => Uint8Array.from({ length }, (_, index) => (index % 239) ^ seed);
 function metadataGguf(context: number, length: number) {
   const encoder = new TextEncoder();
@@ -30,7 +30,11 @@ function metadataGguf(context: number, length: number) {
   return bytes;
 }
 const hubDigest = (file: HubFile) => file.declared ? "f".repeat(64) : new Bun.CryptoHasher("sha256").update(file.bytes).digest("hex");
-const hubRepos = new Map<string, { pipeline: string; downloads: number; files: HubFile[] }>([
+const gitBlob = (file: HubFile) => new Bun.CryptoHasher("sha1").update(`blob ${file.bytes.length}\0`).update(file.bytes).digest("hex");
+const smallFile = (path: string, text: string): HubFile => ({ path, bytes: new TextEncoder().encode(text), small: true });
+const hubRepos = new Map<string, { pipeline: string; downloads: number; files: HubFile[]; tags?: string[]; gated?: boolean }>([
+  ["Qwen/Qwen3-0.6B", { pipeline: "text-generation", downloads: 9800000, tags: ["transformers", "safetensors"], files: [smallFile("config.json", '{"architectures":["Qwen3ForCausalLM"],"hidden_size":1024,"num_attention_heads":16,"num_key_value_heads":8,"num_hidden_layers":28,"head_dim":128,"max_position_embeddings":40960,"torch_dtype":"bfloat16"}'), smallFile("generation_config.json", '{"temperature":0.6}'), smallFile("tokenizer_config.json", '{"model_max_length":131072}'), smallFile("merges.txt", "#version: 0.2\n"), smallFile("vocab.json", "{}"), { path: "tokenizer.json", bytes: hubBytes(41, 64 * 1024) }, { path: "model.safetensors", bytes: new Uint8Array(), declared: 1503300328 }, smallFile("README.md", "# Qwen3-0.6B")] }],
+  ["fixture-labs/Tiny-Classifier-ONNX", { pipeline: "text-classification", downloads: 3100, tags: ["onnx", "text-classification"], files: [smallFile("config.json", '{"architectures":["DistilBertForSequenceClassification"],"id2label":{"0":"safe","1":"phishing"}}'), smallFile("tokenizer.json", '{"version":"1.0","model":{"type":"WordPiece"}}'), smallFile("special_tokens_map.json", '{"cls_token":"[CLS]"}'), smallFile("vocab.txt", "[PAD]\n[UNK]\nhello\n"), { path: "model.onnx", bytes: Uint8Array.from({ length: 192 * 1024 }, (_, index) => index < 2 ? [8, 7][index]! : (index % 241) ^ 17) }, smallFile("README.md", "# Tiny classifier")] }],
   ["unsloth/Qwen3-0.6B-GGUF", { pipeline: "text-generation", downloads: 125000, files: ["Q2_K", "Q3_K_M", "Q4_0", "Q4_K_M", "Q5_K_M", "Q6_K", "Q8_0", "F16", "IQ4_NL", "IQ2_XXS"].map((label, index): HubFile => ({ path: `Qwen3-0.6B-${label}.gguf`, bytes: hubBytes(index + 1, 4096 + index * 512) })).concat([{ path: "Qwen3-0.6B-BF16.gguf", bytes: new Uint8Array(), declared: 4 * 1024 ** 4 }]) }],
   ["fixture-labs/Tiny-Chat-GGUF", { pipeline: "text-generation", downloads: 4200, files: [{ path: "Tiny-Chat-Q4_K_M.gguf", bytes: hubBytes(31, 256 * 1024) }, { path: "Tiny-Chat-Q8_0.gguf", bytes: metadataGguf(2048, 96 * 1024) }] }],
 ]);
@@ -52,16 +56,19 @@ function hub(url: URL): Response | undefined {
   if (url.pathname === "/api/models") {
     const search = (url.searchParams.get("search") ?? "").toLowerCase();
     const pipeline = url.searchParams.get("pipeline_tag");
-    return Response.json([...hubRepos].filter(([repo, entry]) => repo.toLowerCase().includes(search) && (!pipeline || entry.pipeline === pipeline)).map(([id, entry]) => ({ id, downloads: entry.downloads, likes: 3, pipeline_tag: entry.pipeline })));
+    const filters = url.searchParams.getAll("filter");
+    const has = (entry: { files: HubFile[] }, format: string) => entry.files.some((file) => file.path.endsWith(`.${format}`));
+    return Response.json([...hubRepos].filter(([repo, entry]) => repo.toLowerCase().includes(search) && (!pipeline || entry.pipeline === pipeline) && filters.every((format) => has(entry, format))).map(([id, entry]) => ({ id, downloads: entry.downloads, likes: 3, pipeline_tag: entry.pipeline, tags: entry.tags ?? ["gguf"] })));
   }
   const info = /^\/api\/models\/([^/]+\/[^/]+)(?:\/revision\/([0-9a-f]{40}))?$/.exec(url.pathname);
   if (info && url.searchParams.get("blobs") === "true") {
     const entry = hubRepos.get(info[1]!);
     if (!entry || (info[2] && info[2] !== hubRevision)) return new Response("{}", { status: 401 });
-    const siblings = entry.files.map((file) => { const size = file.declared ?? file.bytes.length; return { rfilename: file.path, size, lfs: { sha256: hubDigest(file), size, pointerSize: 134 } }; });
-    return Response.json({ id: info[1], sha: hubRevision, downloads: entry.downloads, likes: 3, pipeline_tag: entry.pipeline, cardData: { license: "apache-2.0" }, siblings: [...siblings, { rfilename: ".gitattributes", size: 1519 }] });
+    const siblings = entry.files.map((file) => { const size = file.declared ?? file.bytes.length; return file.small ? { rfilename: file.path, size, blobId: gitBlob(file) } : { rfilename: file.path, size, lfs: { sha256: hubDigest(file), size, pointerSize: 134 } }; });
+    return Response.json({ id: info[1], sha: hubRevision, downloads: entry.downloads, likes: 3, pipeline_tag: entry.pipeline, gated: entry.gated ?? false, tags: entry.tags ?? ["gguf"], cardData: { license: "apache-2.0" }, siblings: [...siblings, { rfilename: ".gitattributes", size: 1519 }] });
   }
   const file = hubFiles.get(url.pathname);
+  if (file?.small) return new Response(new Blob([file.bytes as Uint8Array<ArrayBuffer>]), { headers: { "Content-Length": String(file.bytes.length), ETag: `"${gitBlob(file)}"` } });
   if (file && !file.declared) return new Response(slowBody(file.bytes, 0, 4096, 60), { headers: { "Content-Length": String(file.bytes.length), ETag: `"${hubDigest(file)}"` } });
   if (url.pathname.includes("/resolve/")) return new Response("Not found", { status: 404 });
 }
@@ -86,8 +93,16 @@ async function cacheRepo(hub: string, repo: string, revision: string, files: Cac
 }
 let source: ReturnType<typeof Bun.serve> | undefined;
 let engineArchive = new Uint8Array();
+let ortArchive = new Uint8Array();
 const llamaRelease = { repository: "ggml-org/llama.cpp", tag: "b12032", asset: "llama-b12032-bin-ubuntu-x64.tar.gz" };
+const ortRelease = { repository: "lemonade-sdk/ort-server", tag: "0.3.7", asset: "ort-server-0.3.7-linux-x64.tar.gz" };
 function engineRelease(url: URL): Response | undefined {
+  if (url.pathname === `/api/repos/${ortRelease.repository}/releases/tags/${ortRelease.tag}`) {
+    return Response.json({ tag_name: ortRelease.tag, assets: [{ name: ortRelease.asset, size: ortArchive.length, digest: `sha256:${new Bun.CryptoHasher("sha256").update(ortArchive).digest("hex")}` }] });
+  }
+  if (url.pathname === `/${ortRelease.repository}/releases/download/${ortRelease.tag}/${ortRelease.asset}`) {
+    return new Response(slowBody(ortArchive, 0, 256 * 1024, 70), { headers: { "Content-Length": String(ortArchive.length), "Content-Type": "application/octet-stream" } });
+  }
   if (url.pathname === `/api/repos/${llamaRelease.repository}/releases/tags/${llamaRelease.tag}`) {
     return Response.json({ tag_name: llamaRelease.tag, assets: [{ name: llamaRelease.asset, size: engineArchive.length, digest: `sha256:${new Bun.CryptoHasher("sha256").update(engineArchive).digest("hex")}` }] });
   }
@@ -109,6 +124,12 @@ try {
     const packer = Bun.spawn(["tar", "--format=gnu", "-C", release, "-czf", resolve(release, llamaRelease.asset), "llama-b12032"], { stdout: "inherit", stderr: "inherit" });
     if (await packer.exited !== 0) throw new Error("The engine release fixture could not be packed.");
     engineArchive = new Uint8Array(await Bun.file(resolve(release, llamaRelease.asset)).arrayBuffer());
+    await mkdir(resolve(release, "ort-server-0.3.7"), { recursive: true });
+    await copyFile(executable("juiced-test-worker"), resolve(release, "ort-server-0.3.7/ort-server"));
+    await writeFile(resolve(release, "ort-server-0.3.7/LICENSE"), "MIT fixture\n");
+    const ortPacker = Bun.spawn(["tar", "--format=gnu", "-C", release, "-czf", resolve(release, ortRelease.asset), "ort-server-0.3.7"], { stdout: "inherit", stderr: "inherit" });
+    if (await ortPacker.exited !== 0) throw new Error("The ONNX Runtime release fixture could not be packed.");
+    ortArchive = new Uint8Array(await Bun.file(resolve(release, ortRelease.asset)).arrayBuffer());
     await rm(release, { recursive: true });
   }
 source = Bun.serve({

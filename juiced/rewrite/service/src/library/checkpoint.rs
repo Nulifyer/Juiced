@@ -283,7 +283,7 @@ fn component(path: &str) -> Option<ArtifactRole> {
         return None;
     }
     let folders: Vec<&str> = path.split('/').rev().skip(1).collect();
-    let within = |name: &str| folders.iter().any(|folder| *folder == name);
+    let within = |name: &str| folders.contains(&name);
     if within("diffusion_models") {
         Some(ArtifactRole::Model)
     } else if within("vae") {
@@ -448,12 +448,7 @@ mod tests {
         let complete = &variants(&files, None)[0];
         assert!(complete.complete);
         assert_eq!(complete.parts, 2);
-        assert!(
-            complete
-                .roles
-                .iter()
-                .any(|role| *role == ArtifactRole::WeightIndex)
-        );
+        assert!(complete.roles.contains(&ArtifactRole::WeightIndex));
         files.retain(|file| !file.path.starts_with("model-00002"));
         assert!(!variants(&files, None)[0].complete);
     }

@@ -9,7 +9,7 @@ export type AddTarget = { path: string } | { artifact: string } | { artifact_set
 type Install = { engine: string; backend: string; size: number | null };
 
 /** Policy choice, engine install and the Add model action for one ready source. */
-export function AddModel({ client, online, target, id, ready, blocked, fallback, onRegistered, onOpenModel, resetKey }: { client: Client; online: boolean; target: AddTarget | null; id: string; ready: boolean; blocked?: string; fallback?: ReactNode; onRegistered: () => Promise<void>; onOpenModel: (id: string) => void; resetKey: string }) {
+export function AddModel({ client, online, target, id, engine, ready, blocked, fallback, onRegistered, onOpenModel, resetKey }: { client: Client; online: boolean; target: AddTarget | null; id: string; engine?: string; ready: boolean; blocked?: string; fallback?: ReactNode; onRegistered: () => Promise<void>; onOpenModel: (id: string) => void; resetKey: string }) {
   const [needs, setNeeds] = useState<Install | null>(null);
   const [installing, setInstalling] = useState<EngineJob | null>(null);
   const [added, setAdded] = useState<{ model: string; backend: string; policy: Policy } | null>(null);
@@ -24,7 +24,7 @@ export function AddModel({ client, online, target, id, ready, blocked, fallback,
     try {
       if (install) await installEngine(client, install.engine, install.backend, setInstalling);
       setInstalling(null);
-      const response = await client.request<{ model: string | { id?: string }; backend: string }>("juiced/models/add", { ...target, id, policy });
+      const response = await client.request<{ model: string | { id?: string }; backend: string }>("juiced/models/add", { ...target, id, policy, ...(engine ? { engine } : {}) });
       const created = typeof response.model === "string" ? response.model : response.model?.id ?? "the model";
       setNeeds(null); setAdded({ model: created, backend: response.backend, policy });
       await onRegistered();

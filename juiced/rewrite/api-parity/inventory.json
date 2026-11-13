@@ -28,12 +28,12 @@
     },
     {
       "path": "docs/api/juiced.md",
-      "sha256": "846c4e6d4ea7ffc7c86bf068b911d811ccd0cf16244af948a1bc7a1ad307b342",
+      "sha256": "dd35c8048a11cd0c3a8b463ad4e3a077e6aef7e451d3a178438d3759dceb35ec",
       "hash_check": "snapshot_only"
     },
     {
       "path": "docs/api/lemonade.md",
-      "sha256": "8734c9bbaa2fcf79737de315ce8e861e8c1e73b82e26dfeee97c1a15a4aa403d",
+      "sha256": "e1d5c1f3acb40a0acaf99ddf11a09b904ae1e489921d676e11fe3275883127f4",
       "hash_check": "snapshot_only"
     },
     {
@@ -128,7 +128,7 @@
     },
     {
       "path": "juiced/rewrite/service/src/config.rs",
-      "sha256": "06e46729acb325eb1e6003e4f2702e51a2b85c58c77aaad602a6eb678d7e9425",
+      "sha256": "2e1a0a0d3ea177287ebb7a1fb38d44d87a35927e329f4997ac1ef053c0840754",
       "hash_check": "snapshot_only"
     },
     {
@@ -198,7 +198,7 @@
     },
     {
       "path": "juiced/rewrite/rust-tests/tests/library_pipeline.rs",
-      "sha256": "40b5ff2df5514f841814fa2d2d67761b99e41ea32f00f83f4f6649cac478f732",
+      "sha256": "a2423828a3681c63d5adf405f9b3858a610b09a53741958e2f546213295b1ad6",
       "hash_check": "snapshot_only"
     },
     {
