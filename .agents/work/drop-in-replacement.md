@@ -59,6 +59,10 @@ rc.11 was stopped by a timing-dependent Diagnostics browser test (sub-millisecon
 
 Model discovery contract restored (helper-discovery). Deployed through Portainer: `/health` version 1.0.0-rc.13 with `all_models_loaded` (Ornith Q6_K llm ready context 262144, kokoro-v1 tts, whisper-large-v3-turbo transcription); `/v1/models` lists the six enabled models with recipe, labels, context (Ornith observed 262144; Qwen3.5-4B 16384 and Skyfall 32768 configured), thinking/tools from the chat template and vision; `If-None-Match` 304; `/.well-known/juiced.json` and `/v1/juiced/capabilities` 200. Release page created; Homelab compose matches live (uncommitted).
 
+## Live verification (v1.0.0-rc.16, 2026-11-13)
+
+rc.14 (FLM fixture race on CI) and rc.15 (image smoke test expected 401 on /v1/system-info, superseded by v0.9.2 admin-only semantics) never published. rc.16 = parity batches B1-B5 + integrated-GPU shared memory. Deployed through Portainer: Ollama `think:false` with Ornith Q6_K returns no reasoning (0.7 s) and `think:true` 215 chars of reasoning; Anthropic `metadata` ignored with a warning; A1111 sd-models lists z-image, samplers default; /metrics 39 lines; system-stats integrated true, 37 GiB of 72 GiB GTT; container logs show service and llama.cpp lines. Release page created; Homelab compose matches live (uncommitted). Open: the 66 GiB resident budget was set at first boot under the old compose's memory limit; user to choose a new value (suggested ~80 GiB).
+
 ## Pending (2026-11-12, after rc.12)
 
 In progress, round 11 (user feedback after enabling Barista on production):
