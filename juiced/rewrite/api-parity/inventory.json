@@ -33,7 +33,7 @@
     },
     {
       "path": "docs/api/lemonade.md",
-      "sha256": "57c8f1d3a98f1879d7fe3a8e2cdb8fe44251a68308d9575f1ea3c91f9df93536",
+      "sha256": "565bef6976eaec0bfb8f00828089e98ee0866d9df0ec7c3b2052c68d3c5e807b",
       "hash_check": "snapshot_only"
     },
     {
@@ -53,7 +53,7 @@
     },
     {
       "path": "docs/api/openai.md",
-      "sha256": "22e6d0fbb81ce8f7f5c9b3fe575cd290bc2e64c8ecc46626bbd6b6657e48f70b",
+      "sha256": "9b26763695a456a4b506266c4aafad22bbd2ea66088d97de276a81685316f9a1",
       "hash_check": "snapshot_only"
     },
     {
@@ -118,7 +118,7 @@
     },
     {
       "path": "juiced/rewrite/rust-tests/tests/support/mod.rs",
-      "sha256": "af1911048fc0d1b7aeeff9aab1d95cb10216fc46b13fc5781b0c7127e0658f8e",
+      "sha256": "939db172311e8488d6970a12daa461c9ccd0c5f08f43f6fbe985073ea7d9e6a9",
       "hash_check": "snapshot_only"
     },
     {
@@ -128,7 +128,7 @@
     },
     {
       "path": "juiced/rewrite/service/src/config.rs",
-      "sha256": "ab858e10794a9efbfcce1350ce763a97700c6d493cc4a59cd33d8131fe462eb9",
+      "sha256": "5a08b7cb17a50fb59dfee01eb704a3b2f93de89c87645035f2ff434d044e10ab",
       "hash_check": "snapshot_only"
     },
     {
