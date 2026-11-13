@@ -437,6 +437,8 @@ pub struct Config {
     pub protocols: crate::protocol_access::Settings,
     #[serde(default, skip_serializing_if = "crate::barista::Settings::is_default")]
     pub barista: crate::barista::Settings,
+    #[serde(default, skip_serializing_if = "crate::disk::Settings::is_default")]
+    pub storage: crate::disk::Settings,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native_adoption: Option<NativeAdoption>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -547,6 +549,8 @@ struct ConfigWire {
     #[serde(default)]
     barista: crate::barista::Settings,
     #[serde(default)]
+    storage: crate::disk::Settings,
+    #[serde(default)]
     native_adoption: Option<NativeAdoption>,
     #[serde(default)]
     log_level: Option<String>,
@@ -622,6 +626,7 @@ impl<'de> Deserialize<'de> for Config {
             wyoming: wire.wyoming,
             protocols: wire.protocols,
             barista: wire.barista,
+            storage: wire.storage,
             native_adoption: wire.native_adoption,
             log_level: wire.log_level,
             allowed_origins: wire.allowed_origins,
@@ -707,6 +712,7 @@ impl Config {
             .validate()
             .map_err(|error| error.to_string())?;
         self.session_cache.validate()?;
+        self.storage.validate()?;
         if self.idle_unload_after_ms > MAXIMUM_IDLE_UNLOAD_MS
             || self.models.iter().any(|model| {
                 model

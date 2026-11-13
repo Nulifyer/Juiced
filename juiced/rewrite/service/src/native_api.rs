@@ -4,6 +4,7 @@
 
 use crate::{
     ApiError,
+    acquisitions::Section,
     config::{Policy, Registration},
     engines::catalog::Engine,
     extract::{ApiBytes, ApiQuery},
@@ -165,6 +166,8 @@ enum Stop {
 struct Download {
     id: String,
     model_name: String,
+    public: String,
+    selection: Selection,
     progress: Mutex<Progress>,
     stop: Mutex<Stop>,
     pull: Mutex<Option<String>>,
@@ -636,8 +639,20 @@ async fn register_download(
     Err(AddModelError::NotInstalled(failure))
 }
 
-async fn drive(manager: Arc<Manager>, job: Arc<Download>, public: String, selection: Selection) {
-    let pull = match start_pull(&manager, &selection).await {
+async fn drive(manager: Arc<Manager>, job: Arc<Download>, resumed: Option<String>) {
+    run(&manager, &job, resumed).await;
+    save(&manager, &job);
+}
+
+async fn run(manager: &Arc<Manager>, job: &Arc<Download>, resumed: Option<String>) {
+    let manager = manager.clone();
+    let (public, selection) = (job.public.clone(), job.selection.clone());
+    let resumed = resumed.filter(|pull| manager.library().pull_view(pull).is_ok());
+    let started = match resumed {
+        Some(pull) => Ok(pull),
+        None => start_pull(&manager, &selection).await,
+    };
+    let pull = match started {
         Ok(pull) => pull,
         Err(failure) => {
             job.finish(|progress| {
@@ -649,6 +664,7 @@ async fn drive(manager: Arc<Manager>, job: Arc<Download>, public: String, select
         }
     };
     *job.pull.lock().unwrap_or_else(|error| error.into_inner()) = Some(pull.clone());
+    save(&manager, job);
     control_jobs(&manager, &pull, Stop::None).await;
     let view = loop {
         let view = match manager.library().pull_view(&pull) {
@@ -738,6 +754,7 @@ fn begin(
     name: &str,
     public: String,
     selection: Selection,
+    resumed: Option<String>,
 ) -> Arc<Download> {
     let registry = registry();
     registry.prune();
@@ -762,18 +779,134 @@ fn begin(
     let job = Arc::new(Download {
         id,
         model_name: name.to_owned(),
+        public,
+        selection,
         progress: Mutex::new(Progress {
             status: "downloading",
             running: true,
             ..Progress::default()
         }),
         stop: Mutex::new(Stop::None),
-        pull: Mutex::new(None),
+        pull: Mutex::new(resumed.clone()),
         finished: Mutex::new(None),
     });
     jobs.push(job.clone());
-    tokio::spawn(drive(manager.clone(), job.clone(), public, selection));
+    save(manager, &job);
+    tokio::spawn(drive(manager.clone(), job.clone(), resumed));
     job
+}
+
+/// Journals a native download so a restart can continue it. Completed and cancelled jobs
+/// leave the journal; paused and failed ones stay visible until removed.
+fn save(manager: &Manager, job: &Download) {
+    let Some(journal) = manager.library().journal() else {
+        return;
+    };
+    let progress = job.snapshot();
+    if matches!(progress.status, "completed" | "cancelled") {
+        journal.remove(Section::Native, &job.id);
+        return;
+    }
+    let pull = job
+        .pull
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .clone();
+    journal.put(
+        Section::Native,
+        &job.id,
+        json!({
+            "model_name": job.model_name, "public": job.public,
+            "selection": {
+                "repo": job.selection.repo, "files": job.selection.files,
+                "bytes": job.selection.bytes, "label": job.selection.label,
+            },
+            "pull": pull, "status": progress.status,
+            "error": progress.error, "code": progress.code,
+        }),
+    );
+}
+
+fn forget(manager: &Manager, id: &str) {
+    registry().remove(id);
+    if let Some(journal) = manager.library().journal() {
+        journal.remove(Section::Native, id);
+    }
+}
+
+fn saved_status(status: &str) -> &'static str {
+    match status {
+        "paused" => "paused",
+        "error" => "error",
+        _ => "downloading",
+    }
+}
+
+/// Restores journaled native downloads after a restart; call after the library recovered its
+/// pulls so running jobs reattach to them instead of starting new ones.
+pub(crate) async fn recover(manager: Arc<Manager>) {
+    let Some(journal) = manager.library().journal() else {
+        return;
+    };
+    for (id, saved) in journal.entries(Section::Native) {
+        let text = |value: &Value| value.as_str().map(str::to_owned);
+        let (Some(name), Some(public), Some(repo)) = (
+            text(&saved["model_name"]),
+            text(&saved["public"]),
+            text(&saved["selection"]["repo"]),
+        ) else {
+            journal.remove(Section::Native, &id);
+            continue;
+        };
+        if id != format!("model:{name}") {
+            journal.remove(Section::Native, &id);
+            continue;
+        }
+        let selection = Selection {
+            repo,
+            files: saved["selection"]["files"]
+                .as_array()
+                .map(|files| files.iter().filter_map(text).collect())
+                .unwrap_or_default(),
+            bytes: saved["selection"]["bytes"].as_u64(),
+            label: text(&saved["selection"]["label"]),
+        };
+        let pull = text(&saved["pull"]);
+        let status = saved_status(saved["status"].as_str().unwrap_or_default());
+        if status == "downloading" {
+            begin(&manager, &name, public, selection, pull);
+            continue;
+        }
+        let mut progress = Progress {
+            status,
+            error: text(&saved["error"]),
+            code: text(&saved["code"]),
+            ..Progress::default()
+        };
+        if let Some(view) = pull
+            .as_deref()
+            .and_then(|pull| manager.library().pull_view(pull).ok())
+        {
+            observe(&view, &mut progress);
+        }
+        let job = Arc::new(Download {
+            id,
+            model_name: name,
+            public,
+            selection,
+            progress: Mutex::new(progress),
+            stop: Mutex::new(Stop::None),
+            pull: Mutex::new(pull),
+            finished: Mutex::new(Some(Instant::now())),
+        });
+        let mut jobs = registry()
+            .jobs
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if !jobs.iter().any(|known| known.id == job.id) && jobs.len() < MAXIMUM_JOBS {
+            jobs.push(job);
+        }
+    }
 }
 
 fn event(kind: &str, data: Value) -> Bytes {
@@ -884,7 +1017,7 @@ pub(crate) async fn native_pull(
                 json!({"file_index": 0, "total_files": 0, "percent": 100}),
             )])),
             Ok(Plan::Download { public, selection }) => {
-                job_stream(begin(&state.manager, &name, public, selection))
+                job_stream(begin(&state.manager, &name, public, selection, None))
             }
             Err(failure) => sse(futures_util::stream::iter([event(
                 "error",
@@ -900,7 +1033,7 @@ pub(crate) async fn native_pull(
         .into_response()),
         Plan::Installed(_) => Ok(Json(success(format!("Installed model: {name}"))).into_response()),
         Plan::Download { public, selection } => {
-            let job = begin(&state.manager, &name, public, selection);
+            let job = begin(&state.manager, &name, public, selection, None);
             if body.stream {
                 return Ok(Json(job.view()).into_response());
             }
@@ -956,7 +1089,7 @@ pub(crate) async fn native_download_control(
     };
     if job.terminal() {
         if request.action == "remove" {
-            registry.remove(&job.id);
+            forget(&state.manager, &job.id);
             let pull = job
                 .pull
                 .lock()
@@ -980,6 +1113,7 @@ pub(crate) async fn native_download_control(
                 control_jobs(&state.manager, &pull, Stop::Cancel).await;
             }
             job.update(|progress| progress.status = "cancelled");
+            save(&state.manager, &job);
         }
         return Ok(Json(job.view()));
     }
@@ -1242,7 +1376,7 @@ pub(crate) async fn native_delete(
         .map_err(|_| interrupted("removal_interrupted"))?
 }
 
-async fn delete_model(manager: &Arc<Manager>, name: &str) -> Result<Value, ApiError> {
+pub(crate) async fn delete_model(manager: &Arc<Manager>, name: &str) -> Result<Value, ApiError> {
     let Some(id) = registered(manager, name).await else {
         let public = public_name(name);
         let pending = registry()
@@ -1250,7 +1384,7 @@ async fn delete_model(manager: &Arc<Manager>, name: &str) -> Result<Value, ApiEr
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .remove(public);
-        registry().remove(&format!("model:{name}"));
+        forget(manager, &format!("model:{name}"));
         return match pending {
             Some(_) => Ok(success(format!("Deleted model: {name}"))),
             None => Err(error(
@@ -1278,7 +1412,7 @@ async fn delete_model(manager: &Arc<Manager>, name: &str) -> Result<Value, ApiEr
         .ok_or_else(|| not_found(name))?;
     let removal = manager.unregister(&id, current.view.revision).await?;
     let released = manager.release_native_weights(&model).await;
-    registry().remove(&format!("model:{name}"));
+    forget(manager, &format!("model:{name}"));
     let mut body = success(format!("Deleted model: {name}"));
     body["model"] = json!(id);
     body["registration_removed"] = removal["registration_removed"].clone();
@@ -1468,7 +1602,7 @@ async fn load_model(manager: &Arc<Manager>, name: &str, request: &Map<String, Va
                 match plan(manager, &body).await {
                     Ok(Plan::Installed(id)) => id,
                     Ok(Plan::Download { public, selection }) => {
-                        let job = begin(manager, name, public.clone(), selection);
+                        let job = begin(manager, name, public.clone(), selection, None);
                         outcome(name, settle(&job).await)
                             .map(drop)
                             .map_err(reject)?;

@@ -472,6 +472,46 @@ pub struct Server {
     working_directory: Option<PathBuf>,
 }
 
+/// Published runtime packages are read-only; restore owner write access so `TempDir` cleanup
+/// can remove them instead of leaking the tree.
+pub fn writable_tree(path: &std::path::Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let Ok(metadata) = std::fs::symlink_metadata(path) else {
+            return;
+        };
+        if metadata.file_type().is_symlink() {
+            return;
+        }
+        let mode = metadata.permissions().mode();
+        let wanted = if metadata.is_dir() {
+            mode | 0o700
+        } else {
+            mode | 0o200
+        };
+        if wanted != mode {
+            let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(wanted));
+        }
+        if metadata.is_dir()
+            && let Ok(entries) = std::fs::read_dir(path)
+        {
+            for entry in entries.flatten() {
+                writable_tree(&entry.path());
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+}
+
+impl Drop for Server {
+    fn drop(&mut self) {
+        self.process.take();
+        writable_tree(self.directory.path());
+    }
+}
+
 impl Server {
     pub async fn new(authenticated: bool) -> Self {
         Self::configured(authenticated, |_| {}).await

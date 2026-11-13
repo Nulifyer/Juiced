@@ -42,6 +42,7 @@ mod intake;
 pub use intake::{ImportListQuery, ImportPathRequest, UploadQuery};
 mod local_library;
 pub use local_library::LocalDelete;
+pub use storage::Reclaim;
 mod fit;
 pub use fit::FitQuery;
 mod flm;
@@ -67,6 +68,7 @@ mod residency;
 pub use residency::{KeepAlive, ResidencyChange, ResidencyView, UnloadReason, parse_keep_alive};
 mod sessions;
 mod state;
+mod storage;
 mod voices;
 mod wyoming;
 pub use cache_reply::CacheReply;
@@ -2178,10 +2180,15 @@ impl Manager {
             slot
         };
         let power = crate::power::Controller::new(config.inhibit_suspend);
-        let library_policy = config.artifact_source_policy;
         let (log_threshold, log_warning) =
             crate::logs::Threshold::resolve(config.log_level.as_deref());
         let cors = crate::cors::Policy::resolve(config.allowed_origins.as_deref());
+        let library = storage::library(
+            &config,
+            config_root.as_ref(),
+            live_roots.as_ref(),
+            artifacts.as_ref(),
+        );
         Ok(Arc::new(Self {
             runtime_definitions,
             hardware: crate::hardware::Detector::from_environment(),
@@ -2253,7 +2260,7 @@ impl Manager {
             metrics: crate::metrics::Counters::default(),
             cors,
             system_stats: crate::system_stats::Sampler::default(),
-            library: Arc::new(crate::library::Library::from_environment(library_policy)),
+            library,
             next_request: AtomicU64::new(1),
             shutting_down: std::sync::atomic::AtomicBool::new(false),
             paused: std::sync::atomic::AtomicBool::new(false),

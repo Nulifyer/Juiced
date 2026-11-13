@@ -1,4 +1,5 @@
 pub mod a1111;
+pub mod acquisitions;
 pub mod admission;
 pub mod api_keys;
 pub mod artifacts;
@@ -14,6 +15,7 @@ pub mod connect;
 pub mod cors;
 pub mod discovery;
 mod discovery_http;
+pub mod disk;
 pub mod docs_api;
 pub mod engine_usage;
 pub mod engines;
@@ -54,6 +56,7 @@ pub mod settings_backup;
 pub mod speech;
 pub mod startup;
 pub mod storage;
+mod storage_api;
 pub mod supervisor;
 pub mod system_stats;
 pub mod variants;
@@ -98,6 +101,9 @@ impl IntoResponse for ApiError {
 impl From<crate::artifacts::ArtifactError> for ApiError {
     fn from(error: crate::artifacts::ArtifactError) -> Self {
         use crate::artifacts::ArtifactError as E;
+        if let E::InsufficientSpace(shortfall) = error {
+            return shortfall.into_error("download this file");
+        }
         let status = match error {
             E::RootUnavailable => StatusCode::SERVICE_UNAVAILABLE,
             E::Deadline => StatusCode::GATEWAY_TIMEOUT,

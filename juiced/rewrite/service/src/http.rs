@@ -33,6 +33,7 @@ use crate::native_api::{
     native_pull, native_pull_variants, native_register as register, native_registry_search,
     native_system_info as system_info, native_uninstall, native_unload as unload,
 };
+use crate::storage_api::{storage_reclaim, storage_view};
 
 #[derive(Clone)]
 pub(crate) struct AppState {
@@ -275,6 +276,8 @@ define_routes! {
     (get, "/juiced/library/pulls", library_pulls, "operator"),
     (get, "/juiced/library/local", library_local, "operator"),
     (post, "/juiced/library/local/delete", library_local_delete, "operator"),
+    (get, "/juiced/storage", storage_view, "read"),
+    (post, "/juiced/storage/reclaim", storage_reclaim, "operator"),
     (get, "/juiced/aliases", aliases, "operator"),
     (post, "/juiced/aliases", alias_set, "operator"),
     (post, "/images/generations", image_generation, "inference"),

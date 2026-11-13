@@ -687,6 +687,12 @@ impl Manager {
         };
         let plan = crate::sessions::plan_eviction(&stored, &model_tag, estimate, &budgets)
             .ok_or_else(session_budget_error)?;
+        let evicted: u64 = plan.iter().map(|index| stored[*index].charged).sum();
+        self.require_space(
+            vec![(self.cache_directory(), estimate.saturating_sub(evicted))],
+            "save this session",
+        )
+        .await?;
         let evictions = plan
             .into_iter()
             .map(|index| {

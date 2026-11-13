@@ -897,6 +897,11 @@ impl Manager {
         let cache = self.cache_store()?;
         let worker = self.worker(&request.model)?;
         self.refuse_session_owned(&worker)?;
+        self.require_space(
+            vec![(self.cache_directory(), request.maximum_bytes)],
+            "save this snapshot",
+        )
+        .await?;
         let budget = self.state_budget(&worker)?;
         let (owner, _cancellation) = self
             .state_operation(
