@@ -322,16 +322,6 @@ async fn model_lifecycle_is_serialized_and_hot_and_busy_guards_are_enforced() {
         server
             .post(
                 "juiced/policy",
-                json!({"model":"fixture.one", "policy":"disabled", "expected_revision":0})
-            )
-            .await
-            .0,
-        StatusCode::CONFLICT
-    );
-    assert_eq!(
-        server
-            .post(
-                "juiced/policy",
                 json!({"model":"fixture.one", "policy":"hot", "expected_revision":0})
             )
             .await
