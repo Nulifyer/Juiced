@@ -16,7 +16,7 @@ pub(super) const TOOLS: &[Tool] = &[
         input: || {
             json!({"type":"object","properties":{
                 "query":{"type":"string","maxLength":200,"description":"Words to match. Omit for recommendations."},
-                "task":{"type":"string","enum":["chat","embeddings","transcription","tts","image"]},
+                "task":{"type":"string","enum":["chat","embeddings","transcription","tts","image","audio_generation","3d"]},
                 "max_bytes":{"type":"integer","minimum":1,"description":"Hide quants larger than this."},
                 "limit":{"type":"integer","minimum":1,"maximum":10,"default":5},
                 "hub":{"type":"boolean","default":true,"description":"false searches only the catalog and local files."},
@@ -109,7 +109,7 @@ pub(super) const TOOLS: &[Tool] = &[
         name: "juiced_add_model",
         group: Group::Acquire,
         title: "Add model",
-        description: "Register a downloaded file as a model. Pass exactly one of path, artifact or artifact_set from juiced_list_local_files. Reports engine_not_installed with the engine to install.",
+        description: "Register a downloaded file or folder as a model. Pass exactly one of path, artifact or artifact_set from juiced_list_local_files; engine picks between engines that read the same format. Reports engine_not_installed with the engine to install.",
         read_only: false,
         destructive: false,
         idempotent: false,
@@ -123,7 +123,8 @@ pub(super) const TOOLS: &[Tool] = &[
                 "artifact_set":{"type":"string","minLength":1,"maxLength":128},
                 "id":{"type":"string","minLength":1,"maxLength":MODEL_ID_BYTES,"description":"Model id to create. Omit to derive one."},
                 "policy":{"type":"string","enum":["disabled","on-demand","hot"],"default":"on-demand"},
-                "backend":{"type":"string","minLength":1,"maxLength":64}
+                "backend":{"type":"string","minLength":1,"maxLength":64,"description":"Backend such as cuda, rocm, vulkan or cpu. Omit for the recommended one."},
+                "engine":{"type":"string","minLength":1,"maxLength":64,"description":"Only when several engines read the format: ds4 for DeepSeek V4 GGUFs, thenoise or sd.cpp for split diffusion safetensors."}
             },"additionalProperties":false})
         },
     },
@@ -131,15 +132,13 @@ pub(super) const TOOLS: &[Tool] = &[
         name: "juiced_install_engine",
         group: Group::Acquire,
         title: "Install engine",
-        description: "Download and install one engine build listed as installable by juiced_list_engines. Returns a job.",
+        description: "Download and install one engine build juiced_list_engines lists as installable here. Python engines such as vLLM install a large environment. Preview shows download, disk use and free space. Returns a job.",
         read_only: false,
         destructive: false,
         idempotent: true,
         open_world: true,
         preview: true,
-        support: Support::Partial(
-            "installs the builds in today's engine catalog; engines added by helper-engines appear here once that catalog lands",
-        ),
+        support: Support::Working,
         input: || {
             json!({"type":"object","required":["engine","backend"],"properties":{
                 "engine":{"type":"string","minLength":1,"maxLength":64},
@@ -242,6 +241,7 @@ struct AddArgs {
     id: Option<String>,
     policy: Option<crate::config::Policy>,
     backend: Option<String>,
+    engine: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -848,8 +848,26 @@ async fn download(context: &Context<'_>, args: Value) -> Result<Outcome> {
         if planned["already_downloaded"] == true {
             outcome = outcome.warn("This quant is already on disk; downloading reuses it.");
         }
-        outcome =
-            outcome.warn("Free disk space is not checked here yet; juiced_storage is pending.");
+        if let Ok(storage) = context.get("juiced/storage?summary=1").await {
+            let free = list(&storage, "volumes")
+                .iter()
+                .filter(|volume| volume["read_only"] != true)
+                .filter_map(|volume| volume["available_bytes"].as_u64())
+                .min();
+            let reserve = storage["settings"]["reserve_bytes"].as_u64().unwrap_or(0);
+            outcome.data["free_bytes"] = json!(free);
+            if let (Some(free), Some(bytes)) = (free, planned["bytes"].as_u64())
+                && planned["already_downloaded"] != true
+                && bytes.saturating_add(reserve) > free
+            {
+                outcome = outcome.warn(format!(
+                    "Needs {} plus the {} reserve but only {} is free; the download will refuse. Free space with juiced_storage first.",
+                    size(bytes),
+                    size(reserve),
+                    size(free)
+                ));
+            }
+        }
         return Ok(outcome);
     }
     let mut body = json!({"repo": pull.repo, "expected_generation": generation.unwrap_or(0)});
@@ -942,11 +960,22 @@ async fn add(context: &Context<'_>, args: Value) -> Result<Outcome> {
         (&add.artifact_set, 128, "artifact_set"),
         (&add.id, MODEL_ID_BYTES as usize, "id"),
         (&add.backend, 64, "backend"),
+        (&add.engine, 64, "engine"),
     ] {
         if let Some(value) = value {
             bounded(value, 1, maximum, field)?;
         }
     }
+    let engine = match &add.engine {
+        Some(engine) => Some(inspect::engine_name(engine).ok_or_else(|| {
+            Failure::new(
+                "unknown_engine",
+                format!("{engine} is not an engine. Use juiced_list_engines."),
+                404,
+            )
+        })?),
+        None => None,
+    };
     let mut body = Map::new();
     for (key, value) in [
         ("path", &add.path),
@@ -958,6 +987,9 @@ async fn add(context: &Context<'_>, args: Value) -> Result<Outcome> {
         if let Some(value) = value {
             body.insert(key.into(), json!(value));
         }
+    }
+    if let Some(engine) = engine {
+        body.insert("engine".into(), json!(engine));
     }
     if let Some(policy) = add.policy {
         body.insert("policy".into(), json!(policy));
@@ -988,6 +1020,15 @@ async fn add(context: &Context<'_>, args: Value) -> Result<Outcome> {
                     .collect()
             })
             .unwrap_or_default();
+        if let Some(engine) = engine
+            && !installed.iter().any(|known| known == engine)
+        {
+            return Ok(Outcome::new(
+                format!("{engine} is not installed. Install it with juiced_install_engine, then add the model."),
+                json!({"request": Value::Object(body), "installed_engines": installed}),
+            )
+            .next(&["juiced_list_engines", "juiced_install_engine"]));
+        }
         return Ok(Outcome::new(
             format!(
                 "Would register {} as {} with policy {}.",
@@ -1029,9 +1070,21 @@ async fn add(context: &Context<'_>, args: Value) -> Result<Outcome> {
 }
 
 async fn install(context: &Context<'_>, args: Value) -> Result<Outcome> {
-    let install: EngineArgs = parse(args)?;
+    let mut install: EngineArgs = parse(args)?;
     bounded(&install.engine, 1, 64, "engine")?;
     bounded(&install.backend, 1, 64, "backend")?;
+    install.engine = inspect::engine_name(&install.engine)
+        .ok_or_else(|| {
+            Failure::new(
+                "unknown_engine",
+                format!(
+                    "{} is not an engine. Use juiced_list_engines.",
+                    install.engine
+                ),
+                404,
+            )
+        })?
+        .to_owned();
     let engines = context.get("juiced/engines").await?;
     let row = list(&engines, "installable").into_iter().find(|row| {
         row["engine"] == install.engine.as_str() && row["backend"] == install.backend.as_str()
@@ -1040,31 +1093,83 @@ async fn install(context: &Context<'_>, args: Value) -> Result<Outcome> {
         return Err(Failure::new(
             "engine_build_not_listed",
             format!(
-                "{} {} is not in the engine catalog for this host. Use juiced_list_engines.",
-                install.engine, install.backend
+                "{} has no {} build. Use juiced_list_engines with engine {}.",
+                install.engine, install.backend, install.engine
             ),
             404,
         ));
     };
+    let entry = inspect::installable_row(&row, true);
+    if !inspect::installable_here(&row) && row["installed_package"].is_null() {
+        let reasons: Vec<&str> = entry["why_not"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect();
+        return Err(Failure::Route(json!({
+            "error": {
+                "code": "engine_unavailable_here",
+                "message": format!(
+                    "{} {} cannot run on this host{}",
+                    install.engine,
+                    install.backend,
+                    if reasons.is_empty() { ".".to_owned() } else { format!(": {}", reasons.join(" ")) }
+                ),
+                "status": 409,
+            },
+            "build": entry,
+        })));
+    }
     if context.preview {
+        let download = row["build"]["archive_bytes"].as_u64();
+        let disk = entry["disk_bytes"].as_u64();
+        let storage = context.get("juiced/storage?summary=1").await.ok();
+        let free = storage.as_ref().and_then(|storage| {
+            list(storage, "volumes")
+                .iter()
+                .filter(|volume| volume["read_only"] != true)
+                .filter_map(|volume| volume["available_bytes"].as_u64())
+                .min()
+        });
+        let needed = disk.unwrap_or(0).saturating_add(download.unwrap_or(0));
         let mut outcome = Outcome::new(
-            format!(
-                "Would install {} {} ({} download, {}).",
-                install.engine,
-                install.backend,
-                row["build"]["archive_bytes"]
-                    .as_u64()
-                    .map_or("size unknown".into(), size),
-                row["availability"]
-                    .as_str()
-                    .unwrap_or("unknown availability"),
-            ),
-            json!({"engine": install.engine, "backend": install.backend, "availability": row["availability"], "download_bytes": row["build"]["archive_bytes"], "release": row["build"]["tag"], "already_installed": row["installed_package"].is_string()}),
+            if row["installed_package"].is_string() {
+                format!(
+                    "{} {} is already installed.",
+                    install.engine, install.backend
+                )
+            } else {
+                format!(
+                    "Would install {} {}: {} download{}{}.",
+                    install.engine,
+                    install.backend,
+                    download.map_or("size unknown".into(), size),
+                    disk.map_or(String::new(), |disk| format!(", {} on disk", size(disk))),
+                    free.map_or(String::new(), |free| format!(", {} free", size(free))),
+                )
+            },
+            json!({"build": entry, "free_bytes": free, "already_installed": row["installed_package"].is_string()}),
         );
-        for reason in list(&row, "reasons") {
-            if let Some(message) = reason["message"].as_str() {
-                outcome = outcome.warn(message.to_owned());
-            }
+        if row["installed_package"].is_null() {
+            outcome = outcome.change(
+                &format!("{} {}", install.engine, install.backend),
+                "installed",
+                json!(false),
+                json!(true),
+            );
+        }
+        if let Some(free) = free
+            && needed > free
+        {
+            outcome = outcome.warn(format!(
+                "Needs about {} but only {} is free; the install will refuse. Free space with juiced_storage first.",
+                size(needed),
+                size(free)
+            ));
+        }
+        if let Some(note) = entry["note"].as_str() {
+            outcome = outcome.warn(note.to_owned());
         }
         return Ok(outcome);
     }
@@ -1088,9 +1193,9 @@ async fn install(context: &Context<'_>, args: Value) -> Result<Outcome> {
         ));
     }
     let job = engine_job(&started["job"]);
-    Ok(Outcome::new(
+    let mut outcome = Outcome::new(
         format!("Installing {} {}.", install.engine, install.backend),
-        json!({"engine": install.engine, "backend": install.backend}),
+        json!({"engine": install.engine, "backend": install.backend, "download_bytes": entry["download_bytes"], "disk_bytes": entry["disk_bytes"]}),
     )
     .change(
         &format!("{} {}", install.engine, install.backend),
@@ -1099,7 +1204,11 @@ async fn install(context: &Context<'_>, args: Value) -> Result<Outcome> {
         job["state"].clone(),
     )
     .job(job)
-    .next(&["juiced_wait_job"]))
+    .next(&["juiced_wait_job"]);
+    if let Some(note) = entry["note"].as_str() {
+        outcome = outcome.warn(note.to_owned());
+    }
+    Ok(outcome)
 }
 
 pub(super) async fn job_view(context: &Context<'_>, id: &str) -> Result<Value> {

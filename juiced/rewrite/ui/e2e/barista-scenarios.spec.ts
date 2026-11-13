@@ -131,18 +131,29 @@ test.describe("Barista jobs", () => {
     const b = barista(request);
     await b.start();
     const model = "fixture.managed-runtime";
+    await b.ok("juiced_help", { topic: "increase-context" });
     const before = await b.ok("juiced_model_details", { model });
-    const preview = await b.ok("juiced_set_model_settings", { model, changes: { context_tokens: 4096 }, preview: true });
+    const changes = { context_tokens: 4096, cache_type_k: "q8_0", cache_type_v: "q8_0" };
+    const preview = await b.ok("juiced_set_model_settings", { model, changes, preview: true });
     expect(preview.preview).toBe(true);
-    expect(preview.changed![0]).toMatchObject({ field: "context_tokens", after: 4096 });
+    expect(preview.changed).toEqual([
+      { target: model, field: "context_tokens", before: before.data.settings.saved.context_tokens ?? null, after: 4096 },
+      { target: model, field: "cache_type_k", before: null, after: "q8_0" },
+      { target: model, field: "cache_type_v", before: null, after: "q8_0" },
+    ]);
+    expect(preview.summary).toContain("context_tokens");
+    expect(preview.data.memory ?? preview.warnings?.find((warning) => warning.startsWith("No memory estimate"))).toBeTruthy();
     expect((await b.ok("juiced_model_details", { model })).data.settings.saved).toEqual(before.data.settings.saved);
-    const applied = await b.ok("juiced_set_model_settings", { model, changes: { context_tokens: 4096 }, apply: "next_load" });
-    expect(applied.data.saved.context_tokens).toBe(4096);
+    const applied = await b.ok("juiced_set_model_settings", { model, changes, apply: "next_load" });
+    expect(applied.changed).toEqual(preview.changed);
+    expect(applied.data.saved).toMatchObject(changes);
     const after = await b.ok("juiced_model_details", { model });
     expect(after.data.context.configured_tokens).toBe(4096);
-    const pending = await b.call("juiced_set_model_settings", { model, changes: { kv_cache_type: "q8_0" } });
-    expect(pending.error?.code).toBe("not_supported");
-    await b.ok("juiced_set_model_settings", { model, changes: { context_tokens: null } });
+    expect(after.data.settings.saved.cache_type_k).toBe("q8_0");
+    const speech = await b.call("juiced_set_model_settings", { model: speechModel, changes: { context_tokens: 4096 }, preview: true });
+    expect(speech.error?.code).toBe("settings_unsupported");
+    await b.ok("juiced_set_model_settings", { model, changes: { context_tokens: null, cache_type_k: null, cache_type_v: null } });
+    expect((await b.ok("juiced_model_details", { model })).data.settings.saved).toEqual(before.data.settings.saved);
   });
 
   test("4. explain why the last chat was slow from request records", async ({ request }) => {
@@ -164,18 +175,42 @@ test.describe("Barista jobs", () => {
     const b = barista(request);
     await b.start();
     const before = await b.service.catalog();
-    const storage = await b.call("juiced_storage");
-    expect(storage.error?.code).toBe("not_supported");
-    const local = await b.ok("juiced_list_local_files", { unused: true });
-    expect(local.data.groups.total).toBeGreaterThan(0);
-    await b.ok("juiced_list_engines");
+    const procedure = await b.ok("juiced_help", { topic: "free-disk" });
+    expect(procedure.data.procedure).toContain("expected_revision");
+    const free = await b.ok("juiced_storage", { summary: true });
+    expect(free.data.volumes.length).toBeGreaterThan(0);
+    const tiny = "45957cc9a23e06484db4e445c3ad4250730296d331118687038f4c1d4d403f7f";
+    await b.service.removeArtifact(tiny);
+    const started = await b.ok("juiced_download", { repo: "fixture-labs/Tiny-Chat-GGUF", quant: "Q4_K_M" });
+    await b.wait(started.job.id);
+    const storage = await b.ok("juiced_storage", { kind: "file" });
+    expect(typeof storage.data.revision).toBe("string");
+    const file = storage.data.items.items.find((item: any) => item.title.includes("Tiny-Chat") && item.reclaimable);
+    expect(file, JSON.stringify(storage.data.items)).toBeTruthy();
+    const leftovers = await b.ok("juiced_storage", { kind: "legacy" });
+    expect(leftovers.data.items.items.map((item: any) => item.id)).toContain("legacy:cache");
+    expect(leftovers.warnings?.some((warning) => warning.includes("v0.9.2 leftovers"))).toBe(true);
+    const unnamed = await b.call("juiced_delete_files", { items: ["legacy:cache"], preview: true });
+    expect(unnamed.error?.code).toBe("legacy_requires_operator");
     const sessions = await b.ok("juiced_forget_sessions", { all: true, preview: true });
     expect(sessions.data).toHaveProperty("bytes_freed");
-    const remove = await b.ok("juiced_remove_model", { model: "fixture.missing-weights", preview: true });
+    const remove = await b.ok("juiced_remove_model", { model: "fixture.missing-weights", delete_files: true, preview: true });
     expect(remove.data.blockers).toEqual([]);
-    expect(remove.data.bytes_freed).toBe(0);
-    const files = await b.call("juiced_delete_files", { files: ["anything"], preview: true });
-    expect(files.error?.code).toBe("not_supported");
+    expect(typeof remove.data.storage_revision).toBe("string");
+    const preview = await b.ok("juiced_delete_files", { items: [file.id], preview: true });
+    expect(preview.data.freed_bytes).toBe(file.bytes);
+    expect(preview.changed).toEqual([{ target: file.id, field: file.title, before: "on disk", after: "deleted" }]);
+    const unrevised = await b.call("juiced_delete_files", { items: [file.id] });
+    expect(unrevised.error?.code).toBe("storage_revision_required");
+    const stale = await b.call("juiced_delete_files", { items: [file.id], expected_revision: "0000000000000000" });
+    expect(stale.error?.code).toBe("storage_revision_conflict");
+    const deleted = await b.ok("juiced_delete_files", { items: [file.id], expected_revision: preview.data.apply_with.expected_revision });
+    expect(deleted.data.freed_bytes).toBe(file.bytes);
+    expect(deleted.changed).toEqual(preview.changed);
+    const after = await b.ok("juiced_storage", { kind: "file" });
+    expect(after.data.items.items.map((item: any) => item.id)).not.toContain(file.id);
+    for (const pull of (await b.service.json<{ data: any[] }>("/v1/juiced/library/pulls")).data) await request.post(`/v1/juiced/library/pulls/${pull.pull}`, { data: { action: "dismiss" } });
+    await b.service.removeArtifact(tiny);
     expect(await b.service.catalog()).toEqual(before);
   });
 

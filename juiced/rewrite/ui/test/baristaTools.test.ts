@@ -1,5 +1,5 @@
 import { describe as group, expect, test } from "bun:test";
-import { accumulate, action, candidates, changeLines, describe, functionTools, implication, jobLine, modelText, outcome, parseArguments, readOnly, systemPrompt, type PromptIndex, type Reply } from "../src/baristaTools";
+import { accumulate, action, approvedArgs, candidates, changeLines, describe, functionTools, implication, jobLine, modelText, outcome, parseArguments, readOnly, systemPrompt, type PromptIndex, type Reply } from "../src/baristaTools";
 import type { Model } from "../src/domain";
 
 const empty: Reply = { content: "", reasoning: "", toolCalls: [] };
@@ -52,12 +52,23 @@ group("barista", () => {
     expect(describe("juiced_test_model", { model: "m", kind: "speech" })).toBe("Tested m (speech)");
     expect(describe("juiced_help", { topic: "setup-voice" })).toBe("Read the setup-voice procedure");
     expect(action("juiced_load", { model: "m" })).toBe("Load m");
+    expect(describe("juiced_delete_files", { items: ["file:a", "partial:b"] })).toBe("Delete 2 storage items?");
     expect(outcome("juiced_set_policy", {}, { ok: true, text: "", value: { ok: true, summary: "m is now on-demand (unloaded)." } })).toBe("m is now on-demand (unloaded).");
     expect(outcome("juiced_set_policy", {}, { ok: false, text: "", value: { ok: false, error: { code: "revision_conflict", message: "Refresh first." } } })).toBe("Refresh first.");
   });
 
+  test("binds an approved change to what its preview showed", () => {
+    const args = { items: ["file:a"], expected_revision: "stale" };
+    const preview = { ok: true, text: "", value: { ok: true, data: { apply_with: { expected_revision: "abc123", ignored: { nested: true } } } } };
+    expect(approvedArgs(args, preview)).toEqual({ items: ["file:a"], expected_revision: "abc123" });
+    expect(approvedArgs(args, { ...preview, ok: false })).toBe(args);
+    expect(approvedArgs(args, null)).toBe(args);
+    expect(approvedArgs({ model: "m" }, { ok: true, text: "", value: { ok: true, data: {} } })).toEqual({ model: "m" });
+  });
+
   test("shows before and after, and job progress, in plain words", () => {
     expect(changeLines([{ target: "m", field: "policy", before: "on-demand", after: "hot" }, { target: "m", field: "context_tokens", before: null, after: 131072 }])).toEqual(["policy: On demand → Hot", "context tokens: none → 131,072"]);
+    expect(changeLines([{ target: "file:1", field: "Tiny-Chat-Q4_K_M.gguf", before: "on disk", after: "deleted" }])).toEqual(["Tiny-Chat-Q4_K_M.gguf: on disk → deleted"]);
     expect(changeLines(undefined)).toEqual([]);
     expect(jobLine({ id: "pull:a", kind: "download", label: "o/r Q4_K_M", state: "downloading", done: false, progress: 0.42, done_bytes: 1024, total_bytes: 4096 })).toBe("o/r Q4_K_M: downloading 42% · 1.0 KiB of 4.0 KiB");
     expect(jobLine({ id: "engine:a", kind: "engine_install", label: "llama.cpp cpu", state: "failed", done: true, progress: null, error: "digest_mismatch" })).toBe("llama.cpp cpu: failed (digest_mismatch)");

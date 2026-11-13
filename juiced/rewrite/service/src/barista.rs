@@ -174,7 +174,6 @@ fn pending() -> Vec<Value> {
         .map(|tool| {
             let (status, reason) = match tool.support {
                 tools::Support::Partial(reason) => ("partial", reason),
-                tools::Support::Pending(reason) => ("pending", reason),
                 tools::Support::Working => unreachable!(),
             };
             json!({"name":tool.name,"status":status,"reason":reason})

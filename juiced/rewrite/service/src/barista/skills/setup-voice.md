@@ -1,6 +1,6 @@
 ---
 topic: setup-voice
-version: 2
+version: 3
 title: Set up Home Assistant voice
 summary: Pick speech-to-text, text-to-speech and a chat model that fit together, enable Wyoming, verify each, and hand over the connection details.
 ---
@@ -8,9 +8,9 @@ summary: Pick speech-to-text, text-to-speech and a chat model that fit together,
 
 Preconditions: operator permission to change models; enough memory for three models at once.
 
-1. `juiced_status` and `juiced_hardware`: note the memory budget, free headroom and the recommended backends.
+1. `juiced_status` and `juiced_hardware`: note the memory budget, free headroom and the speech engines with a build here (whisper.cpp, parakeet.cpp, moonshine for speech to text; kokoros, openmoss for text to speech).
 2. `juiced_list_models` with `task` set to `transcription`, `tts` and `chat`. Prefer models that are already downloaded.
-3. Missing a model: `juiced_search_models` for the task, compare `fit` on each quant, then `juiced_download` and `juiced_wait_job`, then `juiced_add_model`. Install a missing engine first with `juiced_install_engine` when `juiced_add_model` reports `engine_not_installed`.
+3. Missing a model: `juiced_search_models` for the task, compare `fit` on each quant, check `juiced_storage` with `summary: true` for room, then `juiced_download` and `juiced_wait_job`, then `juiced_add_model`. Install a missing engine first with `juiced_install_engine` when `juiced_add_model` reports `engine_not_installed`.
 4. Check the three fit together: `juiced_fit` on each, and compare the sum of `total_bytes` with the free budget from `juiced_status`. If they do not fit, pick a smaller chat quant or a lower context. Do not guess sizes.
 5. `juiced_set_policy` the chat model to `hot`, and the speech models to `on-demand` or `hot` as the budget allows. Hot loads at startup; `juiced_load` each Hot model to start it now.
 6. `juiced_set_wyoming` with `enabled: true`, `stt_model`, `tts_model` and a `tts_voice` from `juiced_connections`.

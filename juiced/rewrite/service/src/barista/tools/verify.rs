@@ -3,6 +3,18 @@ use base64::Engine as _;
 use std::time::Instant;
 
 const SPEECH_CHECK: &[u8] = include_bytes!("../assets/speech-check.wav");
+const OBJECT_CHECK: &[u8] = include_bytes!("../assets/object-check.png");
+const KINDS: [&str; 9] = [
+    "chat",
+    "embed",
+    "speech",
+    "transcribe",
+    "image",
+    "rerank",
+    "classify",
+    "audio",
+    "mesh",
+];
 pub(super) const BENCHMARK_PROFILE: &str = "quick-1";
 const QUICK_PROMPTS: [&str; 3] = [
     "In one sentence, what does a local model server do?",
@@ -15,7 +27,7 @@ pub(super) const TOOLS: &[Tool] = &[
         name: "juiced_test_model",
         group: Group::Verify,
         title: "Test model",
-        description: "Send one bounded real request through the normal API: chat, embed, speech, transcribe, image or rerank. Returns an excerpt, timings, speed and cache path. Uses fixed inputs unless input is given.",
+        description: "Send one bounded real request through the normal API: chat, embed, speech, transcribe, image, rerank, classify, audio (music or sound effects) or mesh (image to 3D). Returns an excerpt or media, timings and speed. Uses fixed inputs unless input is given.",
         read_only: true,
         destructive: false,
         idempotent: false,
@@ -25,7 +37,7 @@ pub(super) const TOOLS: &[Tool] = &[
         input: || {
             json!({"type":"object","required":["model"],"properties":{
                 "model":model_property(),
-                "kind":{"type":"string","enum":["chat","embed","speech","transcribe","image","rerank"],"description":"Omit to use the model's task."},
+                "kind":{"type":"string","enum":KINDS,"description":"Omit to use the model's task."},
                 "input":{"type":"string","maxLength":2000,"description":"Prompt, text to speak or query. Optional."},
                 "voice":{"type":"string","maxLength":64}
             },"additionalProperties":false})
@@ -94,6 +106,9 @@ fn default_kind(model: &Value) -> &'static str {
         "transcription" => "transcribe",
         "image" => "image",
         "reranking" => "rerank",
+        "classify" => "classify",
+        "audio_generation" => "audio",
+        "3d" => "mesh",
         _ => "chat",
     }
 }
@@ -201,12 +216,13 @@ async fn test(context: &Context<'_>, args: Value) -> Result<Outcome> {
         ));
     }
     let kind = match test.kind.as_deref() {
-        Some(kind @ ("chat" | "embed" | "speech" | "transcribe" | "image" | "rerank")) => kind,
-        Some(_) => {
-            return Err(Failure::InvalidParams(
-                "kind must be chat, embed, speech, transcribe, image or rerank.".into(),
-            ));
-        }
+        Some(kind) => KINDS
+            .iter()
+            .copied()
+            .find(|known| *known == kind)
+            .ok_or_else(|| {
+                Failure::InvalidParams(format!("kind must be one of {}.", KINDS.join(", ")))
+            })?,
         None => default_kind(&model),
     };
     let was_loaded = model["loaded"] == true;
@@ -346,6 +362,97 @@ async fn test(context: &Context<'_>, args: Value) -> Result<Outcome> {
                     size(bytes.len() as u64)
                 ),
                 json!({"kind": kind, "bytes": bytes.len(), "media": handle.map(|handle| json!({"handle": handle, "type": "image/png"}))}),
+            )
+        }
+        "classify" => {
+            let input = test
+                .input
+                .as_deref()
+                .unwrap_or("Please verify your account now by entering your password here.");
+            let reply = context
+                .post(
+                    "classify",
+                    json!({"model":test.model,"input":input,"top_k":5}),
+                )
+                .await?;
+            let mut labels: Vec<(String, f64)> = reply["labels"]
+                .as_object()
+                .into_iter()
+                .flatten()
+                .filter_map(|(label, score)| Some((label.clone(), score.as_f64()?)))
+                .collect();
+            labels.sort_by(|left, right| right.1.total_cmp(&left.1));
+            (
+                format!(
+                    "{} scored {} label(s); top {}.",
+                    test.model,
+                    labels.len(),
+                    labels
+                        .first()
+                        .map_or("none".to_owned(), |(label, score)| format!(
+                            "{label} ({score:.2})"
+                        ))
+                ),
+                json!({"kind": kind, "labels": labels.iter().map(|(label, score)| json!({"label": label, "score": score})).collect::<Vec<_>>()}),
+            )
+        }
+        "audio" => {
+            let prompt = test.input.as_deref().unwrap_or("a short calm piano phrase");
+            let raw = context
+                .post_raw(
+                    "audio/generations",
+                    json!({"model":test.model,"prompt":prompt,"duration":5,"steps":8}),
+                )
+                .await?;
+            if !(200..300).contains(&raw.status) {
+                return Err(failed(&raw));
+            }
+            let content_type = if raw.content_type.is_empty() {
+                "audio/wav".to_owned()
+            } else {
+                raw.content_type.clone()
+            };
+            let bytes = raw.bytes.len();
+            let handle = super::super::handles::store(super::super::handles::Value::Media {
+                content_type: content_type.clone(),
+                bytes: raw.bytes.to_vec(),
+            });
+            (
+                format!("{} generated {} of audio.", test.model, size(bytes as u64)),
+                json!({"kind": kind, "bytes": bytes, "content_type": content_type, "input": "5 s at 8 steps", "media": handle.map(|handle| json!({"handle": handle, "type": content_type}))}),
+            )
+        }
+        "mesh" => {
+            if test.input.is_some() {
+                return Err(Failure::InvalidParams(
+                    "mesh uses the shipped object image; omit input.".into(),
+                ));
+            }
+            let image = base64::engine::general_purpose::STANDARD.encode(OBJECT_CHECK);
+            let raw = context
+                .post_raw(
+                    "3d/generations",
+                    json!({"model":test.model,"image":format!("data:image/png;base64,{image}"),"resolution":512}),
+                )
+                .await?;
+            if !(200..300).contains(&raw.status) {
+                return Err(failed(&raw));
+            }
+            if !raw.bytes.starts_with(b"glTF") {
+                return Err(Failure::new(
+                    "test_failed",
+                    "The 3D request answered something other than a glTF-binary mesh.",
+                    502,
+                ));
+            }
+            let bytes = raw.bytes.len();
+            let handle = super::super::handles::store(super::super::handles::Value::Media {
+                content_type: "model/gltf-binary".into(),
+                bytes: raw.bytes.to_vec(),
+            });
+            (
+                format!("{} built a {} glTF mesh.", test.model, size(bytes as u64)),
+                json!({"kind": kind, "bytes": bytes, "input": "shipped object-check.png (64x64), resolution 512", "media": handle.map(|handle| json!({"handle": handle, "type": "model/gltf-binary"}))}),
             )
         }
         _ => {

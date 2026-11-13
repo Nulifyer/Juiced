@@ -78,14 +78,12 @@ impl Group {
     }
 }
 
-/// Whether the native operation behind a tool exists in this build.
+/// Whether the native operation behind a tool covers everything it offers in this build.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Support {
     Working,
-    /// Some arguments wait on a native owner that is still being built.
+    /// Some targets have no native operation yet; the reason names them.
     Partial(&'static str),
-    /// The whole operation waits on a native owner; the tool answers `not_supported`.
-    Pending(&'static str),
 }
 
 pub(super) struct Tool {
@@ -136,7 +134,6 @@ pub(super) fn describe(tool: &Tool, permission: Permission) -> Value {
     let (status, pending) = match tool.support {
         Support::Working => ("working", None),
         Support::Partial(reason) => ("partial", Some(reason)),
-        Support::Pending(reason) => ("pending", Some(reason)),
     };
     let mut entry = json!({
         "name":tool.name,"title":tool.title,"group":tool.group,"description":tool.description,
@@ -168,13 +165,6 @@ pub(super) enum Failure {
 impl Failure {
     pub(super) fn new(code: &str, message: impl Into<String>, status: u16) -> Self {
         Self::Route(json!({"error":{"code":code,"message":message.into(),"status":status}}))
-    }
-    pub(super) fn unsupported(reason: &str) -> Self {
-        Self::new(
-            "not_supported",
-            format!("Not yet supported in this build: {reason}."),
-            501,
-        )
     }
     fn error(&self) -> Value {
         match self {
@@ -604,10 +594,7 @@ pub(super) async fn call(
         preview: dispatch.preview,
         sources: Mutex::default(),
     };
-    let result = match tool.support {
-        Support::Pending(reason) => Err(Failure::unsupported(reason)),
-        _ => run(&context, tool, args).await,
-    };
+    let result = run(&context, tool, args).await;
     let sources = std::mem::take(
         &mut *context
             .sources
@@ -677,6 +664,8 @@ fn envelope(tool: &Tool, preview: bool, sources: Vec<Value>, result: Result<Outc
             }
             let next: &[&str] = match failure.code() {
                 "revision_conflict" => &["juiced_list_models"],
+                "storage_revision_conflict" | "storage_item_refused" => &["juiced_storage"],
+                "storage_revision_required" => &["juiced_delete_files"],
                 "unknown_model" => &["juiced_list_models"],
                 "engine_not_installed" => &["juiced_list_engines", "juiced_install_engine"],
                 _ => &[],
@@ -969,6 +958,21 @@ mod tests {
         let last = page(items, 20, 10);
         assert_eq!(last["items"].as_array().unwrap().len(), 5);
         assert!(last.get("next_cursor").is_none());
+    }
+
+    #[test]
+    fn every_engine_says_what_it_runs_and_resolves_by_any_spelling() {
+        for engine in crate::engines::catalog::Engine::all() {
+            assert!(
+                !inspect::engine_use(engine.name()).is_empty(),
+                "{} needs an engine_use line",
+                engine.name()
+            );
+            assert_eq!(inspect::engine_name(engine.name()), Some(engine.name()));
+            assert_eq!(inspect::engine_name(engine.recipe()), Some(engine.name()));
+        }
+        assert_eq!(inspect::engine_name("vLLM"), Some("vllm"));
+        assert_eq!(inspect::engine_name("shell"), None);
     }
 
     #[test]

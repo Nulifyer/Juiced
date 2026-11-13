@@ -210,12 +210,20 @@ const changes: Record<string, (args: Record<string, unknown>) => string> = {
   juiced_cancel_job: () => "Cancel a download",
   juiced_benchmark: (args) => `Benchmark ${quoted(args.model)}`,
   juiced_remove_model: (args) => `Remove ${quoted(args.model)}${args.delete_files ? " and its files" : ""}`,
-  juiced_delete_files: (args) => `Delete ${Array.isArray(args.files) ? args.files.length : 0} file(s)`,
+  juiced_delete_files: (args) => { const count = Array.isArray(args.items) ? args.items.length : 0; return `Delete ${count} storage item${count === 1 ? "" : "s"}`; },
   juiced_forget_sessions: (args) => `Forget saved sessions${args.model ? ` for ${quoted(args.model)}` : args.all ? "" : ""}`,
   juiced_uninstall_engine: (args) => `Uninstall ${quoted(args.engine)} ${quoted(args.backend)}`,
   juiced_pause_service: (args) => args.paused ? "Pause new requests" : "Resume requests",
   juiced_restart_model: (args) => `Restart ${quoted(args.model)}`,
 };
+
+/** The arguments an approved change runs with: what the operator saw in its preview binds the apply, such as the storage revision a deletion was previewed at. */
+export function approvedArgs(args: Record<string, unknown>, preview: ToolResult | null): Record<string, unknown> {
+  const bind = preview?.ok ? preview.value?.data?.apply_with : undefined;
+  if (!bind || typeof bind !== "object" || Array.isArray(bind)) return args;
+  const bound = Object.fromEntries(Object.entries(bind as Record<string, unknown>).filter(([, value]) => typeof value === "string" || typeof value === "number"));
+  return { ...args, ...bound };
+}
 
 /** A short line for a read, or the question on an approval card. */
 export function describe(name: string, args: Record<string, unknown>): string {
@@ -247,7 +255,7 @@ function shown(value: unknown): string {
 
 /** Before and after for each changed field, for the compact change rows. */
 export function changeLines(changed: Change[] | undefined): string[] {
-  return (changed ?? []).slice(0, 6).map((change) => `${change.field.replaceAll("_", " ")}: ${shown(change.before)} → ${shown(change.after)}`);
+  return (changed ?? []).slice(0, 6).map((change) => `${/^[a-z0-9_.]+$/.test(change.field) ? change.field.replaceAll("_", " ") : change.field}: ${shown(change.before)} → ${shown(change.after)}`);
 }
 
 export function jobLine(job: Job): string {
