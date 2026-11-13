@@ -51,11 +51,15 @@ rc.6 to rc.8 were stopped by release checks and never published: a touch-drag te
 
 Five merged helper rounds: Library folded into Models (Installed, Discover, Downloads, Aliases; Import UI removed, adoption API kept), one Engines & hardware screen (AMD GPU names in live stats), one Conversation cache page, and Barista per juiced/BARISTA.md rev 2 (off by default; operator routes /juiced/barista and /juiced/barista/tools/call; /mcp back to four inference tools; B1 qualification not done). Full gate passed (Playwright 215). Deployed through Portainer: Hot models ready, GPU named "AMD Radeon Graphics (RADV STRIX1)", Barista off, /mcp tools unchanged. Open: rc.9-saved Ornith conversations show "Engine changed" after the image upgrade because the execution fingerprint covers the whole mapped-file closure (image libraries included); same-image restarts are unaffected. Release page created; Homelab compose matches live (uncommitted).
 
-## Pending (2026-11-12, after rc.10)
+## Live verification (v1.0.0-rc.12, 2026-11-12)
+
+rc.11 was stopped by a timing-dependent Diagnostics browser test (sub-millisecond prompt phase omitted from the label on the CI runner) and never published; rc.12 is the same code plus the test fix (CI run 43356207377). Deployed through Portainer: Hot models ready (Ornith Q6_K, kokoro-v1, whisper-large-v3-turbo); Ornith Q6_K `vision: true` and read "JUICED 4271" from a 1280x480 PNG in 2.7-3.2 s (a 640x240 copy was misread, model limit); three synthetic clients with ~5.9k-token system prompts alternating new conversations: cold 14.7-15.1 s, then `restored` in 121-171 ms with 20 tokens processed, 1.0-1.1 s per request. Barista opens straight to chat with the Images badge. Release page created; Homelab compose matches live (uncommitted).
+
+## Pending (2026-11-12, after rc.12)
 
 In progress, round 11 (user feedback after enabling Barista on production):
 
-- Committed, not released: disabling a loaded model (Hot included) unloads it; refused only while requests run (`worker_busy`) or the worker is starting (`worker_starting`). e312333b, 9e82e999.
+- Released in rc.12: disabling a loaded model (Hot included) unloads it; refused only while requests run (`worker_busy`) or the worker is starting (`worker_starting`). e312333b, 9e82e999.
 - Helper `helper-chat`: chat rendering adapted from T3 Code (MIT) for Barista and Test services (GFM tables, code blocks, reasoning row, tool rows), image input for vision models, pinnable Barista panel, settings only via the gear once configured.
 - Helper `helper-dashboard`: Dashboard = health at a glance, Diagnostics = performance and causes (per-request cached vs processed tokens).
 - Helper `helper-prefill`: Hot models still pay a full prefill on a new conversation. Live evidence: a cold 6,477-token prompt took 16.9 s vs 1.5-3 s on slot hits; Ornith has 2 slots shared by Home Assistant (~6.5k-token prompt) and Barista (~2.5k); saved prefix sessions never restored (`saved_previous` false). Ornith is a hybrid architecture, so llama.cpp checkpoint/prompt-cache behaviour matters.
