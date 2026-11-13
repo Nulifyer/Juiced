@@ -403,6 +403,7 @@ fn rocm_bundles_carry_the_selected_runtime_members_under_their_own_root() {
             "rocm/lib/libamdhip64.so.7",
             "rocm/lib/librocblas.so.5",
             "rocm/lib/llvm/lib/libLLVM.so.24.0git",
+            "rocm/lib/llvm/lib/libomp.so",
             "rocm/lib/rocblas/library/TensileLibrary.dat",
             "rocm/lib/rocm_sysdeps/lib/librocm_sysdeps_numa.so.1",
             "rocm/share/doc/hip/LICENSE.md",
@@ -498,7 +499,7 @@ fn rocm_runtime_provenance_is_validated_with_the_release() {
 /// Set JUICED_TEST_ROCM_ARCHIVES to a directory holding the pinned gfx1150 ROCm archives
 /// under their release asset names. Nothing in them is executed.
 #[test]
-#[ignore = "needs the downloaded gfx1150 ROCm archives (about 2.5 GB)"]
+#[ignore = "needs the downloaded gfx1150 ROCm archives (about 2.7 GB)"]
 fn real_gfx1150_rocm_archives_match_their_pins_and_assemble_into_bundles() {
     let directory = PathBuf::from(std::env::var_os("JUICED_TEST_ROCM_ARCHIVES").unwrap());
     let host = strix();
@@ -520,6 +521,7 @@ fn real_gfx1150_rocm_archives_match_their_pins_and_assemble_into_bundles() {
     for (engine, entrypoint) in [
         (Engine::LlamaCpp, "llama-server"),
         (Engine::StableDiffusionCpp, "bin/sd-server"),
+        (Engine::Trellis, "trellis-server"),
     ] {
         let build = resolve(engine, "rocm", &host).unwrap();
         let archive_path = directory.join(build.asset);
@@ -542,6 +544,7 @@ fn real_gfx1150_rocm_archives_match_their_pins_and_assemble_into_bundles() {
             "rocm/lib/libhsa-runtime64.so.1",
             "rocm/lib/libamd_comgr.so.3",
             "rocm/lib/llvm/lib/libLLVM.so.24.0git",
+            "rocm/lib/llvm/lib/libomp.so",
             "rocm/.kpack/blas_lib_gfx1150.kpack",
         ] {
             assert!(has(path), "{engine:?} lacks {path}");
