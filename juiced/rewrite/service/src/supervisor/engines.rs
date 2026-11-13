@@ -263,7 +263,6 @@ impl Manager {
         installed_view.extend(self.environment_views(&records, &self.config.lock().await.models));
         let report = &snapshot.report;
         let recommendations: BTreeMap<_, _> = Engine::all()
-            .into_iter()
             .map(|engine| {
                 (
                     engine.recipe(),

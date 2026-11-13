@@ -235,15 +235,14 @@ fn inspect_file(roots: &[PathBuf], raw: &str) -> Result<(Linked, File), ApiError
     // anchor links into `blobs/`, so the opened file is the link target while the
     // registered path stays in the snapshot beside its siblings.
     let mut anchor = None;
-    if path.is_dir() {
-        if let Some(found) = ["model.onnx", "config.json"]
+    if path.is_dir()
+        && let Some(found) = ["model.onnx", "config.json"]
             .into_iter()
             .map(|name| path.join(name))
             .find(|anchor| anchor.is_file())
-        {
-            path = canonical_within(roots, &found.to_string_lossy())?;
-            anchor = Some(found);
-        }
+    {
+        path = canonical_within(roots, &found.to_string_lossy())?;
+        anchor = Some(found);
     }
     let (file, mut bytes) = open_regular(&path)?;
     let path = anchor.unwrap_or(path);

@@ -1,5 +1,5 @@
 use super::{
-    ArchiveFormat, Build, Engine, EngineInfo, Environment, EnvironmentSource, Part,
+    ArchiveFormat, Build, Engine, EngineInfo, Environment, EnvironmentSource, Part, SupportRow,
     THEROCK_GFX1150, arm64, linux, with_environment, with_runtime,
 };
 use crate::config::Provider;
@@ -166,14 +166,14 @@ pub(super) const ENGINES: &[EngineInfo] = &[
 ];
 
 /// vLLM on NVIDIA has no native support row; the CUDA 13 wheels cover these targets.
-pub(super) const SUPPLEMENTAL_SUPPORT_ROWS: &[(&str, &str, &str, &str, &[&str], &str)] = &[(
-    "vllm",
-    "cuda",
-    "experimental",
-    "python",
-    &["linux"],
-    "nvidia_gpu (sm_75, sm_80, sm_86, sm_89, sm_90, sm_100, sm_120, sm_121)",
-)];
+pub(super) const SUPPLEMENTAL_SUPPORT_ROWS: &[SupportRow] = &[SupportRow {
+    recipe: "vllm",
+    backend: "cuda",
+    tier: "experimental",
+    format: "python",
+    os: &["linux"],
+    device_declaration: "nvidia_gpu (sm_75, sm_80, sm_86, sm_89, sm_90, sm_100, sm_120, sm_121)",
+}];
 
 /// Digests are the `sha256:` values GitHub publishes for each release asset.
 pub(super) const BUILDS: &[Build] = &[

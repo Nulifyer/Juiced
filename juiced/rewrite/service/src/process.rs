@@ -73,6 +73,20 @@ impl fmt::Display for Error {
 }
 impl std::error::Error for Error {}
 
+/// Kills what remains of the worker's process group. The group id is the worker's pid,
+/// which the kernel does not hand to a new process while the group has members.
+fn signal_group(child: &Child) {
+    #[cfg(unix)]
+    if let Ok(group) = libc::pid_t::try_from(child.id()) {
+        // SAFETY: kill(2) with a negative pid only sends a signal; it touches no memory.
+        unsafe {
+            libc::kill(-group, libc::SIGKILL);
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = child;
+}
+
 struct Owned<R> {
     child: Child,
     resources: R,
@@ -234,6 +248,10 @@ impl<R: Send + 'static> Registry<R> {
         }?;
         // The registry owns every stop and exit acknowledgement, including outside Tokio runtimes.
         command.kill_on_drop(false);
+        // Engines such as vLLM run their model in child processes; a group of its own lets
+        // stop reach them, since they outlive their parent.
+        #[cfg(unix)]
+        std::os::unix::process::CommandExt::process_group(command.as_std_mut(), 0);
         let child = match command.as_std_mut().spawn() {
             Ok(child) => child,
             Err(_) => {
@@ -375,6 +393,9 @@ impl<R: Send + 'static> Registry<R> {
         }
         let status = owned.child.try_wait()?;
         if let Some(status) = status {
+            if owned.exited.is_none() {
+                signal_group(&owned.child);
+            }
             owned.exited = Some(status);
         }
         Ok(status)
@@ -384,6 +405,7 @@ impl<R: Send + 'static> Registry<R> {
         if self.faults.kill.load(std::sync::atomic::Ordering::Acquire) {
             return Err(io::Error::other("injected owned-child stop failure"));
         }
+        signal_group(&owned.child);
         owned.child.kill()
     }
     async fn stop_owned(&self, owned: &mut Owned<R>) -> Result<ExitStatus, Error> {

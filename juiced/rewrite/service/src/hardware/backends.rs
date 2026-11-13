@@ -559,13 +559,13 @@ pub fn project(catalog: &Catalog, host: &HostReport) -> Inventory {
         let supplemental: Vec<NativeSupportRow> =
             crate::engines::catalog::SUPPLEMENTAL_SUPPORT_ROWS
                 .iter()
-                .filter(|row| row.0 == migration.legacy_recipe)
-                .map(|(_, backend, tier, format, os, device)| NativeSupportRow {
-                    backend: (*backend).into(),
-                    tier: (*tier).into(),
-                    format: (*format).into(),
-                    os: os.iter().map(|os| (*os).into()).collect(),
-                    device_declaration: (*device).into(),
+                .filter(|row| row.recipe == migration.legacy_recipe)
+                .map(|row| NativeSupportRow {
+                    backend: row.backend.into(),
+                    tier: row.tier.into(),
+                    format: row.format.into(),
+                    os: row.os.iter().map(|os| (*os).into()).collect(),
+                    device_declaration: row.device_declaration.into(),
                 })
                 .collect();
         let mut labels = migration.native_backend_labels.clone();

@@ -1018,7 +1018,7 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&root.join("lib"), fs::Permissions::from_mode(0o755)).unwrap();
+            fs::set_permissions(root.join("lib"), fs::Permissions::from_mode(0o755)).unwrap();
             fs::write(root.join("lib/extra.so"), b"planted").unwrap();
             assert_eq!(verify(&entry).err(), Some(Error::Changed));
         }

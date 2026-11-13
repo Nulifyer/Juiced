@@ -118,7 +118,7 @@
     },
     {
       "path": "juiced/rewrite/rust-tests/tests/support/mod.rs",
-      "sha256": "af1911048fc0d1b7aeeff9aab1d95cb10216fc46b13fc5781b0c7127e0658f8e",
+      "sha256": "93a04da6eada8569b31b3bc90c9bd19afa5544ea6b9d65350679c8652049528a",
       "hash_check": "snapshot_only"
     },
     {
@@ -128,12 +128,12 @@
     },
     {
       "path": "juiced/rewrite/service/src/config.rs",
-      "sha256": "719e818cae8598da5fab66bfd9495792422672b19e472780c91159fb809b895a",
+      "sha256": "36f998275c73c00dfa4b93cead2acf18f2e5ad125e49063ce1ab1aee34e8f7eb",
       "hash_check": "snapshot_only"
     },
     {
       "path": "juiced/rewrite/service/src/http.rs",
-      "sha256": "2b2c57735d32aeb85c8855b438c32483fcd6ebe2e821259d2460c79996f67e13",
+      "sha256": "49878da87f85ffb2dfdfb33cf5b9cc933097c25dc5a847f522c9a938e40ad227",
       "hash_check": "snapshot_only"
     },
     {
@@ -218,7 +218,7 @@
     },
     {
       "path": "juiced/rewrite/rust-tests/tests/engines.rs",
-      "sha256": "30a6a5e629f7888c58d58f66b76cae4b9cfbf22a8849f5becdea07392527a369",
+      "sha256": "9aed369574d37064b13f592ae7d51a38411ce35e0f4296a28182616e481e0e5b",
       "hash_check": "snapshot_only"
     },
     {
@@ -234,6 +234,11 @@
     {
       "path": "juiced/rewrite/rust-tests/tests/llama_routes.rs",
       "sha256": "f1414de8483d914e6d2dfecaa6e2d89ca8a640a10f0feac8c323d1cae7b3e85f",
+      "hash_check": "snapshot_only"
+    },
+    {
+      "path": "juiced/rewrite/rust-tests/tests/text_engines.rs",
+      "sha256": "398c4c59b3570f7cb484246143fe4c790260829e187427496a291f8946fe9cdb",
       "hash_check": "snapshot_only"
     },
     {
@@ -2601,7 +2606,7 @@
       "category": "native",
       "native_behavior": "handler",
       "disposition": "retained",
-      "status": "planned",
+      "status": "partial",
       "native_evidence": [
         {
           "path": "src/cpp/server/server.cpp",
@@ -2615,12 +2620,26 @@
         "F134"
       ],
       "rust_equivalent": {
-        "relationship": "none",
-        "routes": [],
-        "scenario_files": [],
-        "authorities": []
+        "relationship": "same_path",
+        "routes": [
+          {
+            "method": "POST",
+            "path": "/classify",
+            "prefix_scheme": "native_quad"
+          }
+        ],
+        "scenario_files": [
+          "juiced/rewrite/rust-tests/tests/text_engines.rs"
+        ],
+        "authorities": [
+          {
+            "method": "POST",
+            "path": "/classify",
+            "authority": "inference"
+          }
+        ]
       },
-      "semantic_boundary": "No Rust handler implements this native path. Add request, response, authority, persistence and failure scenarios before claiming parity.",
+      "semantic_boundary": "Rust validates the native body (input or text, positive top_k, string model) with v0.9.2's 400 messages, forwards {model, text} through normal admission (Operation classify) to the model's ort-server worker at /classify, and answers {object:\"classification\", model, labels} sorted by score and cut to top_k. A request without model is refused instead of using the sole loaded classifier. Native auto-load options and telemetry spans are not reproduced. Real ort-server 0.3.7 verified on CPU with lemonade-sdk/phishing-email-detection-distilbert-ONNX.",
       "documentation": "docs/api/juiced.md",
       "native_authority": "regular_api"
     },
@@ -11972,12 +11991,31 @@
     },
     {
       "method": "POST",
-      "path": "/rerank",
+      "path": "/classify",
       "prefix_scheme": "native_quad",
       "authority": "inference",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
         "line": 306,
+        "text": "(post, \"/classify\", classify, \"inference\"),",
+        "role": "registration"
+      },
+      "native_route_ids": [
+        "http:POST:native_quad:/classify"
+      ],
+      "scenario_files": [
+        "juiced/rewrite/rust-tests/tests/text_engines.rs"
+      ],
+      "native_same_path": true
+    },
+    {
+      "method": "POST",
+      "path": "/rerank",
+      "prefix_scheme": "native_quad",
+      "authority": "inference",
+      "evidence": {
+        "path": "juiced/rewrite/service/src/http.rs",
+        "line": 307,
         "text": "(post, \"/rerank\", rerank, \"inference\"),",
         "role": "registration"
       },
@@ -11996,7 +12034,7 @@
       "authority": "inference",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 307,
+        "line": 308,
         "text": "(post, \"/reranking\", rerank, \"inference\"),",
         "role": "registration"
       },
@@ -12015,7 +12053,7 @@
       "authority": "inference",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 308,
+        "line": 309,
         "text": "(post, \"/reranker\", rerank, \"inference\"),",
         "role": "registration"
       },
@@ -12034,7 +12072,7 @@
       "authority": "inference",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 309,
+        "line": 310,
         "text": "(post, \"/tokenize\", tokenize, \"inference\"),",
         "role": "registration"
       },
@@ -12053,7 +12091,7 @@
       "authority": "inference",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 310,
+        "line": 311,
         "text": "(post, \"/detokenize\", detokenize, \"inference\"),",
         "role": "registration"
       },
@@ -12070,7 +12108,7 @@
       "authority": "inference",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 311,
+        "line": 312,
         "text": "(get, \"/slots\", slots, \"inference\"),",
         "role": "registration"
       },
@@ -12089,7 +12127,7 @@
       "authority": "inference",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 312,
+        "line": 313,
         "text": "(post, \"/slots/{slot}\", slot_action, \"inference\"),",
         "role": "registration"
       },
@@ -12108,7 +12146,7 @@
       "authority": "read",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 313,
+        "line": 314,
         "text": "(get, \"/stats\", stats, \"read\"),",
         "role": "registration"
       },
@@ -12127,7 +12165,7 @@
       "authority": "read",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 314,
+        "line": 315,
         "text": "(get, \"/audio/voices\", audio_voices, \"read\"),",
         "role": "registration"
       },
@@ -12412,7 +12450,7 @@
       "authority": "read",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 315,
+        "line": 316,
         "text": "(get, \"/logs/stream\", log_stream, \"read\"),",
         "role": "registration"
       },
@@ -12741,11 +12779,11 @@
     "native_websocket_routes": 4,
     "auxiliary_http_route_families": 41,
     "native_registration_sites": 143,
-    "rust_published_routes": 144,
-    "rust_native_same_path_rows": 82,
+    "rust_published_routes": 145,
+    "rust_native_same_path_rows": 83,
     "native_http_status_counts": {
-      "partial": 91,
-      "planned": 35,
+      "partial": 92,
+      "planned": 34,
       "conditional": 2,
       "excluded": 7,
       "implemented": 0

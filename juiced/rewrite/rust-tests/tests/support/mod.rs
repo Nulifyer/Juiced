@@ -148,7 +148,8 @@ pub const MULTIPART_INFERENCE_ROUTES: [&str; 3] = [
 pub const MEDIA_INFERENCE_ROUTES: [&str; 3] =
     ["/images/generations", "/audio/speech", "/images/upscale"];
 pub const WEBSOCKET_INFERENCE_ROUTES: [&str; 1] = ["/realtime"];
-pub const LLAMA_ROUTES: [(&str, &str, &str); 9] = [
+pub const LLAMA_ROUTES: [(&str, &str, &str); 10] = [
+    ("POST", "/classify", "inference"),
     ("POST", "/rerank", "inference"),
     ("POST", "/reranking", "inference"),
     ("POST", "/reranker", "inference"),

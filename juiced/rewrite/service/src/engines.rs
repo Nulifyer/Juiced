@@ -2,6 +2,8 @@ pub mod archive;
 pub mod catalog;
 pub mod download;
 pub mod environments;
+#[cfg(test)]
+mod llm_engine_tests;
 pub mod memory;
 pub mod models;
 #[cfg(test)]
@@ -106,14 +108,14 @@ pub struct Choice {
     pub reason: String,
 }
 
-/// Hybrid backends are experimental and never recommended, but an operator may name one
-/// once detection confirms every device it needs.
+/// Hybrid and HRX backends are experimental and never recommended, but an operator may name
+/// one once detection confirms every device it needs.
 fn selectable(inventory: &Inventory, engine: Engine, backend: &str) -> bool {
     inventory.backends.iter().any(|variant| {
         variant.recipe == catalog::recipe_of(engine, backend)
             && variant.backend == backend
             && variant.backend != "system"
-            && if variant.backend.starts_with("hybrid") {
+            && if variant.backend.starts_with("hybrid") || variant.backend == crate::hrx::BACKEND {
                 variant.state == Availability::Available
             } else {
                 (variant.tier == "core"

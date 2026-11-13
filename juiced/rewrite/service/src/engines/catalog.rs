@@ -277,10 +277,18 @@ pub fn recipe_of(engine: Engine, backend: &str) -> &'static str {
     }
 }
 
-/// Support rows for backends Juiced adds beyond the native descriptors. Each is
-/// `(recipe, backend, tier, format, os, device declaration)`.
-pub const SUPPLEMENTAL_SUPPORT_ROWS: &[(&str, &str, &str, &str, &[&str], &str)] =
-    llm::SUPPLEMENTAL_SUPPORT_ROWS;
+/// A support row for a backend Juiced adds beyond the native descriptors.
+#[derive(Debug)]
+pub struct SupportRow {
+    pub recipe: &'static str,
+    pub backend: &'static str,
+    pub tier: &'static str,
+    pub format: &'static str,
+    pub os: &'static [&'static str],
+    pub device_declaration: &'static str,
+}
+
+pub const SUPPLEMENTAL_SUPPORT_ROWS: &[SupportRow] = llm::SUPPLEMENTAL_SUPPORT_ROWS;
 
 pub(super) const fn with_runtime(build: Build, runtime: &'static Runtime) -> Build {
     Build {
