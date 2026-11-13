@@ -1,5 +1,6 @@
+import type { Client } from "../src/api";
 import { describe as group, expect, test } from "bun:test";
-import { accumulate, action, approvedArgs, candidates, changeLines, describe, functionTools, implication, jobLine, modelText, outcome, parseArguments, readOnly, systemPrompt, type PromptIndex, type Reply } from "../src/baristaTools";
+import { accumulate, action, approvedArgs, candidates, changeLines, describe, functionTools, implication, jobLine, modelText, outcome, parseArguments, readOnly, streamReply, systemPrompt, type PromptIndex, type Reply } from "../src/baristaTools";
 import type { Model } from "../src/domain";
 
 const empty: Reply = { content: "", reasoning: "", toolCalls: [] };
@@ -95,4 +96,27 @@ group("barista", () => {
     expect(prompt.length).toBeLessThan(2400);
     expect(systemPrompt("m", "full", status(1024 ** 3), index)).toBe(prompt);
   });
+});
+
+const sse = (chunks: unknown[]) => new Response(chunks.map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`).join("") + "data: [DONE]\n\n");
+test("streamReply asks once more with thinking off when the limit ends a reply that only reasoned", async () => {
+  const bodies: any[] = [];
+  const replies = [
+    sse([{ choices: [{ delta: { reasoning_content: "thinking..." } }] }, { choices: [{ delta: {}, finish_reason: "length" }] }]),
+    sse([{ choices: [{ delta: { content: "Paris." } }] }, { choices: [{ delta: {}, finish_reason: "stop" }] }]),
+  ];
+  const client = { stream: async (_path: string, body: unknown) => { bodies.push(body); return replies.shift()!; } } as unknown as Client;
+  const reply = await streamReply(client, "m", [{ role: "user", content: "Capital of France?" }], [], 16, () => undefined);
+  expect(reply.content).toBe("Paris.");
+  expect(reply.reasoning).toBe("thinking...");
+  expect(bodies).toHaveLength(2);
+  expect(bodies[0].chat_template_kwargs).toBeUndefined();
+  expect(bodies[1].chat_template_kwargs).toEqual({ enable_thinking: false });
+});
+test("streamReply keeps a reply that was cut off after it answered or called a tool", async () => {
+  let calls = 0;
+  const client = { stream: async () => { calls += 1; return sse([{ choices: [{ delta: { content: "Partial" } }] }, { choices: [{ delta: {}, finish_reason: "length" }] }]); } } as unknown as Client;
+  const reply = await streamReply(client, "m", [{ role: "user", content: "x" }], [], 16, () => undefined);
+  expect(reply).toMatchObject({ content: "Partial", finish: "length" });
+  expect(calls).toBe(1);
 });

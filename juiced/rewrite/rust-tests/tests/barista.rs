@@ -143,7 +143,7 @@ async fn barista_starts_off_and_its_settings_require_operator_authority() {
     assert_eq!(enabled["revision"], 1);
     assert_eq!(names(&enabled).len(), 38);
     assert_eq!(enabled["identity"]["sha256"].as_str().unwrap().len(), 64);
-    assert_eq!(enabled["prompt"]["version"], 2);
+    assert_eq!(enabled["prompt"]["version"], 3);
     assert_eq!(enabled["pending"].as_array().unwrap().len(), 1);
     let saved: Value =
         serde_json::from_slice(&std::fs::read(&server.config_path).unwrap()).unwrap();

@@ -16,7 +16,7 @@ export type Change = { target: string; field: string; before: unknown; after: un
 export type Job = { id: string; kind: string; label: string; state: string; done: boolean; progress: number | null; done_bytes?: number; total_bytes?: number | null; error?: string | null };
 export type Envelope = { ok: boolean; tool?: string; summary?: string; data?: any; source?: unknown[]; changed?: Change[]; job?: Job; next?: string[]; warnings?: string[]; preview?: boolean; error?: { code?: string; message?: string; status?: number } };
 export type ToolResult = { ok: boolean; text: string; value: Envelope };
-export type Reply = { content: string; reasoning: string; toolCalls: ToolCall[] };
+export type Reply = { content: string; reasoning: string; toolCalls: ToolCall[]; finish?: string };
 
 export const MAX_STEPS = 20;
 const MAX_TOOL_TEXT = 16000;
@@ -84,9 +84,11 @@ export function systemPrompt(model: string, permission: Permission, status: Reco
 
 /** Folds one streamed Chat Completions chunk into the reply, including tool-call fragments. */
 export function accumulate(reply: Reply, chunk: any): Reply {
-  const delta = chunk?.choices?.[0]?.delta ?? chunk?.choices?.[0]?.message;
-  if (!delta) return reply;
-  const next: Reply = { content: reply.content, reasoning: reply.reasoning, toolCalls: reply.toolCalls.map((call) => ({ ...call })) };
+  const choice = chunk?.choices?.[0];
+  const delta = choice?.delta ?? choice?.message;
+  const finish = typeof choice?.finish_reason === "string" ? choice.finish_reason : reply.finish;
+  if (!delta) return finish === reply.finish ? reply : { ...reply, finish };
+  const next: Reply = { content: reply.content, reasoning: reply.reasoning, toolCalls: reply.toolCalls.map((call) => ({ ...call })), ...(finish ? { finish } : {}) };
   if (typeof delta.content === "string") next.content += delta.content;
   if (typeof delta.reasoning_content === "string") next.reasoning += delta.reasoning_content;
   if (Array.isArray(delta.tool_calls)) {
@@ -102,8 +104,23 @@ export function accumulate(reply: Reply, chunk: any): Reply {
   return next;
 }
 
+/** Most output tokens one Barista reply may use. */
+export const REPLY_TOKENS = 4096;
+
+/**
+ * Streams one reply. A thinking model can spend the whole output limit reasoning and stop
+ * with no answer and no tool call; the turn is then asked once more with thinking off, so the
+ * operator gets an answer instead of an empty reply.
+ */
 export async function streamReply(client: Client, model: string, messages: ChatMessage[], tools: BaristaTool[], maxTokens: number, onUpdate: (reply: Reply) => void, signal?: AbortSignal): Promise<Reply> {
   const body = { model, messages, tools: functionTools(tools), stream: true, max_tokens: maxTokens };
+  const first = await streamOnce(client, body, onUpdate, signal);
+  if (first.finish !== "length" || first.content.trim() || first.toolCalls.length) return first;
+  const second = await streamOnce(client, { ...body, chat_template_kwargs: { enable_thinking: false } }, (state) => onUpdate({ ...state, reasoning: first.reasoning + state.reasoning }), signal);
+  return { ...second, reasoning: first.reasoning + second.reasoning };
+}
+
+async function streamOnce(client: Client, body: Record<string, unknown>, onUpdate: (reply: Reply) => void, signal?: AbortSignal): Promise<Reply> {
   if (requestBytes(body) > REQUEST_LIMIT_BYTES) throw new ApiError(tooLarge, 413, "request_too_large");
   const response = await client.stream("chat/completions", body, signal);
   if (!response.ok || !response.body) {

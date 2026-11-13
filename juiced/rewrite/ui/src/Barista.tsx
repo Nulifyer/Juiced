@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, type Client } from "./api";
-import { MAX_STEPS, action, approvedArgs, callTool, candidates, changeLines, describe, implication, jobLine, outcome, parseArguments, permissionHelp, permissionNames, readJob, readOnly, stopCodes, streamReply, systemPrompt, type BaristaSettings, type ChatMessage, type Envelope, type Job, type Permission, type ToolResult } from "./baristaTools";
+import { MAX_STEPS, REPLY_TOKENS, action, approvedArgs, callTool, candidates, changeLines, describe, implication, jobLine, outcome, parseArguments, permissionHelp, permissionNames, readJob, readOnly, stopCodes, streamReply, systemPrompt, type BaristaSettings, type ChatMessage, type Envelope, type Job, type Permission, type ToolResult } from "./baristaTools";
 import { withImages, withoutImages } from "./chatImages";
 import { AssistantBody, Composer, UserBody, thinkingClock, useAttachments } from "./ChatParts";
 import { Copy } from "./Connect";
@@ -18,7 +18,7 @@ type NewItem = Item extends infer Entry ? Entry extends Item ? Omit<Entry, "id">
 type Saved = { items: Item[]; messages: ChatMessage[] };
 
 const storageKey = "juiced.barista.v2";
-const replyTokens = (model: Model) => Math.max(1, Math.min(4096, model.request_limits?.output_tokens ?? 4096));
+const replyTokens = (model: Model) => Math.max(1, Math.min(REPLY_TOKENS, model.request_limits?.output_tokens ?? REPLY_TOKENS));
 function restore(): Saved {
   try {
     const saved = JSON.parse(sessionStorage.getItem(storageKey) ?? "null") as Saved | null;
