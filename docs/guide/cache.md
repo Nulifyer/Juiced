@@ -38,6 +38,36 @@ idle sessions keep no live slot. A qualified persistent session restores its
 snapshot when its turn arrives. Queue deadlines and resource pressure can still
 return overload errors. Juiced does not shrink the model's context while waiting.
 
+## Start new conversations warm
+
+Most clients send the same long system prompt at the start of every
+conversation. Home Assistant, the Barista assistant and character cards are
+examples. In Persistent mode, Juiced remembers the opening messages of each saved
+conversation. When a new conversation opens with the same messages, Juiced
+restores that saved state first. The engine then processes only the new
+messages. This also works after the other slots were used by other clients,
+and after an unload or restart.
+
+- Juiced restores a saved state only if the shared opening messages amount to
+  about 2 KiB of request text or more. Below that, prefilling costs less than
+  the restore.
+- If several saved states share the same opening messages, Juiced restores the
+  smallest one.
+- With several slots, Juiced sends a request to the slot that already holds
+  its opening messages. If the request's first message changed partway, Juiced
+  reuses that client's own slot instead of evicting another client.
+- The engine checks the actual tokens, so a restored state never changes the
+  reply. Juiced keeps the message fingerprints in `session-lineage.json` next
+  to the configuration. The file holds digests, not message text.
+
+Hybrid models such as Qwen3.5 and Qwen3.6 MoE keep recurrent state. They can
+reuse a prompt only up to a point where llama.cpp saved a checkpoint, which is
+the start of a message or the end of a prompt. If a system prompt changes
+partway, for example with the current time, free memory or live device states,
+these models process it again from the beginning. Keep changing values out of
+the system prompt, or put them in a later message. Barista keeps live figures
+out of its system prompt and reads them with `juiced_status`.
+
 ## Connect a client with persistent session reuse
 
 For qualified OpenAI Chat Completions, send the full current message history

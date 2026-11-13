@@ -161,6 +161,66 @@ async fn older_conversation_restores_on_a_shared_slot_and_after_service_restart(
     );
 }
 
+fn new_conversation(system: &str, question: &str) -> Vec<Value> {
+    vec![
+        json!({"role":"system","content":system}),
+        json!({"role":"user","content":question}),
+    ]
+}
+
+#[tokio::test]
+async fn new_conversations_restore_a_saved_state_that_shares_their_system_prompt() {
+    let mut server = session_server(1, fast()).await;
+    let assistant = "Household assistant with these exposed devices: ".to_owned()
+        + &"porch light, hallway sensor, garage door, ".repeat(60);
+    let first = chat(
+        &server,
+        &new_conversation(&assistant, "Turn on the porch."),
+        None,
+    )
+    .await;
+    assert_eq!(cached(&first), 0);
+    settled(&server, 1).await;
+    let pirate = "Pirate storyteller who answers in rhyme. ".repeat(60);
+    chat(&server, &new_conversation(&pirate, "A tale?"), None).await;
+    settled(&server, 2).await;
+
+    let system_words = assistant.split_whitespace().count() as u64;
+    let returning = chat(
+        &server,
+        &new_conversation(&assistant, "Is the garage open?"),
+        None,
+    )
+    .await;
+    let record = last_record(&server).await;
+    assert_eq!(record["session_cache"]["path"], "restored", "{record}");
+    assert!(cached(&returning) > system_words, "{returning}");
+    assert!(processed(&returning) <= 6, "{returning}");
+    settled(&server, 3).await;
+
+    server.restart().await;
+    let after_restart = chat(
+        &server,
+        &new_conversation(&assistant, "Lock the hallway?"),
+        None,
+    )
+    .await;
+    let record = last_record(&server).await;
+    assert_eq!(record["session_cache"]["path"], "restored", "{record}");
+    assert!(cached(&after_restart) > system_words, "{after_restart}");
+    settled(&server, 4).await;
+
+    let brief = "Be brief.";
+    chat(&server, &new_conversation(brief, "One?"), None).await;
+    settled(&server, 5).await;
+    chat(&server, &new_conversation(&pirate, "Another tale?"), None).await;
+    settled(&server, 6).await;
+    let short = chat(&server, &new_conversation(brief, "Two?"), None).await;
+    let record = last_record(&server).await;
+    assert_eq!(record["session_cache"]["path"], "cold", "{record}");
+    assert!(cached(&short) <= 1, "{short}");
+}
+
 #[tokio::test]
 async fn header_sessions_take_precedence_and_unload_flushes_unsaved_state() {
     let server = session_server(1, json!({"save_delay_ms": 60000})).await;
@@ -342,6 +402,45 @@ async fn multiple_slots_keep_conversations_resident_with_engine_slot_routing() {
     let view = sessions(&server).await;
     assert_eq!(model_row(&view)["effective"], "memory", "{view}");
     assert_eq!(view["totals"]["sessions"], 0);
+}
+
+#[tokio::test]
+async fn a_partly_changed_system_prompt_replaces_its_own_slot_not_another_clients() {
+    let server = session_server(2, json!({"mode":"memory"})).await;
+    let rules = |live: &str| format!("{}Live note: {live}", "Static household rule. ".repeat(80));
+    chat(
+        &server,
+        &new_conversation(&rules("3 GiB free."), "Lights?"),
+        None,
+    )
+    .await;
+    let alpha = last_record(&server).await["session_cache"]["slot"].clone();
+    let pirate = "Pirate storyteller who answers in rhyme. ".repeat(60);
+    chat(&server, &new_conversation(&pirate, "A tale?"), None).await;
+    let bravo = last_record(&server).await["session_cache"]["slot"].clone();
+    assert_ne!(alpha, bravo);
+    chat(
+        &server,
+        &new_conversation(&rules("3 GiB free."), "Fans?"),
+        None,
+    )
+    .await;
+    assert_eq!(last_record(&server).await["session_cache"]["slot"], alpha);
+
+    let changed = chat(
+        &server,
+        &new_conversation(&rules("4 GiB free."), "Heating?"),
+        None,
+    )
+    .await;
+    let record = last_record(&server).await;
+    assert_eq!(record["session_cache"]["slot"], alpha, "{record}");
+    assert!(cached(&changed) > 240, "{changed}");
+    let back = chat(&server, &new_conversation(&pirate, "Another?"), None).await;
+    let record = last_record(&server).await;
+    assert_eq!(record["session_cache"]["slot"], bravo, "{record}");
+    assert_eq!(record["session_cache"]["path"], "slot-hit", "{record}");
+    assert!(processed(&back) <= 4, "{back}");
 }
 
 #[tokio::test]

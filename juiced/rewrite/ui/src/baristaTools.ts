@@ -67,8 +67,9 @@ export function systemPrompt(model: string, permission: Permission, status: Reco
     const cpu = status.cpu ?? {};
     const gpus = Array.isArray(status.gpus) && status.gpus.length ? status.gpus.map((gpu: any) => [gpu.name ?? gpu.vendor ?? "GPU", gpu.vram_total_bytes].filter(Boolean).map((part: unknown) => typeof part === "number" ? gib(part) : part).join(" ")).join("; ") : "none detected";
     const backends = Object.entries(status.recommended_backends ?? {}).map(([engine, backend]) => `${engine}: ${backend}`).join(", ") || "none";
-    lines.push(`Machine: ${status.host?.os ?? "unknown OS"} ${status.host?.architecture ?? ""}. CPU ${cpu.name ?? "unknown"} with ${cpu.logical_threads ?? "?"} threads. RAM ${gib(status.ram?.total_bytes)} total, ${gib(status.ram?.available_bytes)} available. GPUs: ${gpus}.`);
-    lines.push(`Model memory budget ${gib(status.memory?.resident_budget_bytes)}, ${gib(status.memory?.reserved_bytes)} reserved now. Recommended backends: ${backends}. ${Array.isArray(status.loaded_models) ? status.loaded_models.length : 0} models loaded.`);
+    // Live figures stay out: a prompt that changes every turn forces the engine to prefill it again.
+    lines.push(`Machine: ${status.host?.os ?? "unknown OS"} ${status.host?.architecture ?? ""}. CPU ${cpu.name ?? "unknown"} with ${cpu.logical_threads ?? "?"} threads. RAM ${gib(status.ram?.total_bytes)} total. GPUs: ${gpus}.`);
+    lines.push(`Model memory budget ${gib(status.memory?.resident_budget_bytes)}. Recommended backends: ${backends}. Free memory, reservations and loaded models change; read them with juiced_status.`);
   }
   return lines.join("\n");
 }

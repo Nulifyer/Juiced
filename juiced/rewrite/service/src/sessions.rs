@@ -12,6 +12,11 @@ pub const SESSION_HEADERS: [&str; 3] = [
     "x-juiced-thread-id",
 ];
 pub const PROTOCOL_PREFIX: &str = "auto.";
+pub const LINEAGE_UNITS: usize = 64;
+const LEAD_BLOCK_BYTES: usize = 256;
+const LEAD_BLOCKS: usize = 256;
+// Below about 500 tokens, re-reading a whole saved slot costs more than prefilling the shared part.
+pub const MINIMUM_SHARED_BYTES: u64 = 2048;
 const RESERVATION_HEADROOM_BYTES: u64 = 64 * 1024 * 1024;
 const MINIMUM_BUDGET_BYTES: u64 = 64 * 1024 * 1024;
 const MAXIMUM_BUDGET_BYTES: u64 = 128 * 1024 * 1024 * 1024;
@@ -106,6 +111,8 @@ impl KeyKind {
 pub struct Key {
     pub kind: KeyKind,
     chain: Vec<UnitDigest>,
+    bytes: Vec<u64>,
+    lead: Vec<UnitDigest>,
 }
 
 impl Key {
@@ -116,11 +123,13 @@ impl Key {
         Self {
             kind: KeyKind::Header,
             chain: vec![hash.finalize().into()],
+            bytes: vec![0],
+            lead: Vec::new(),
         }
     }
 
     pub fn prefix(operation: Operation, body: &[u8]) -> Option<Self> {
-        let units = match operation {
+        let (units, lead) = match operation {
             Operation::Chat => chat_units(body)?,
             Operation::Completion => completion_units(body)?,
             Operation::Responses => responses_units(body)?,
@@ -134,21 +143,25 @@ impl Key {
             .chain_update(operation.path().as_bytes())
             .finalize()
             .into();
-        let chain = units
+        let mut total = 0u64;
+        let (chain, bytes) = units
             .into_iter()
             .take(MAXIMUM_UNITS)
-            .map(|unit| {
+            .map(|(unit, size)| {
                 previous = Sha256::new()
                     .chain_update(previous)
                     .chain_update(unit)
                     .finalize()
                     .into();
-                previous
+                total = total.saturating_add(size);
+                (previous, total)
             })
-            .collect();
+            .unzip();
         Some(Self {
             kind: KeyKind::Prefix,
             chain,
+            bytes,
+            lead: lead_blocks(&lead),
         })
     }
 
@@ -185,6 +198,83 @@ impl Key {
     pub fn extends(&self, earlier: &Self) -> bool {
         self.common_units(earlier) == earlier.units()
     }
+
+    /// Leading units and their request bytes that `self` shares with `other`.
+    pub fn shared(&self, other: &Self) -> (usize, u64) {
+        let units = self.common_units(other);
+        (
+            units,
+            units.checked_sub(1).map_or(0, |last| self.bytes[last]),
+        )
+    }
+
+    /// Leading blocks of the first unit shared with `other`, for requests whose first message
+    /// changed partway through, such as a system prompt that embeds live figures.
+    pub fn lead_blocks_shared(&self, other: &Self) -> usize {
+        if self.kind != other.kind {
+            return 0;
+        }
+        self.lead
+            .iter()
+            .zip(&other.lead)
+            .take_while(|(left, right)| left == right)
+            .count()
+    }
+
+    pub fn lineage(&self) -> Self {
+        let units = self.chain.len().min(LINEAGE_UNITS);
+        Self {
+            kind: self.kind,
+            chain: self.chain[..units].to_vec(),
+            bytes: self.bytes[..units].to_vec(),
+            lead: Vec::new(),
+        }
+    }
+
+    pub fn to_record(&self) -> LineageRecord {
+        LineageRecord {
+            chain: self.chain.iter().map(hex).collect(),
+            bytes: self.bytes.clone(),
+        }
+    }
+
+    pub fn from_record(record: &LineageRecord) -> Option<Self> {
+        if record.chain.is_empty()
+            || record.chain.len() > LINEAGE_UNITS
+            || record.chain.len() != record.bytes.len()
+        {
+            return None;
+        }
+        let chain = record
+            .chain
+            .iter()
+            .map(|digest| unhex(digest))
+            .collect::<Option<Vec<_>>>()?;
+        Some(Self {
+            kind: KeyKind::Prefix,
+            chain,
+            bytes: record.bytes.clone(),
+            lead: Vec::new(),
+        })
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct LineageRecord {
+    pub chain: Vec<String>,
+    pub bytes: Vec<u64>,
+}
+
+fn unhex(text: &str) -> Option<UnitDigest> {
+    if text.len() != 64 {
+        return None;
+    }
+    let mut digest = [0u8; 32];
+    for (index, byte) in digest.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(text.get(index * 2..index * 2 + 2)?, 16).ok()?;
+    }
+    Some(digest)
 }
 
 pub fn hex(digest: &UnitDigest) -> String {
@@ -264,16 +354,43 @@ pub fn with_slot(body: &[u8], slot: u32) -> Option<Vec<u8>> {
     serde_json::to_vec(&object).ok()
 }
 
-fn chat_units(body: &[u8]) -> Option<Vec<UnitDigest>> {
+type Unit = (UnitDigest, u64);
+
+fn message_unit(message: &Value) -> Unit {
+    (message_digest(message), canonical(message).len() as u64)
+}
+
+fn lead_blocks(text: &[u8]) -> Vec<UnitDigest> {
+    let mut previous: UnitDigest = Sha256::digest(b"juiced-lead-v1\0").into();
+    text.as_chunks::<LEAD_BLOCK_BYTES>()
+        .0
+        .iter()
+        .take(LEAD_BLOCKS)
+        .map(|block| {
+            previous = Sha256::new()
+                .chain_update(previous)
+                .chain_update(block)
+                .finalize()
+                .into();
+            previous
+        })
+        .collect()
+}
+
+fn chat_units(body: &[u8]) -> Option<(Vec<Unit>, Vec<u8>)> {
     #[derive(Deserialize)]
     struct Chat {
         messages: Vec<Value>,
     }
     let chat: Chat = serde_json::from_slice(body).ok()?;
-    Some(chat.messages.iter().map(message_digest).collect())
+    let lead = chat.messages.first().map(canonical).unwrap_or_default();
+    Some((
+        chat.messages.iter().map(message_unit).collect(),
+        lead.into_bytes(),
+    ))
 }
 
-fn responses_units(body: &[u8]) -> Option<Vec<UnitDigest>> {
+fn responses_units(body: &[u8]) -> Option<(Vec<Unit>, Vec<u8>)> {
     #[derive(Deserialize)]
     struct Responses {
         input: Value,
@@ -281,40 +398,52 @@ fn responses_units(body: &[u8]) -> Option<Vec<UnitDigest>> {
     }
     let request: Responses = serde_json::from_slice(body).ok()?;
     let mut units = Vec::new();
+    let lead = match (&request.instructions, &request.input) {
+        (Some(instructions), _) => instructions.clone(),
+        (None, Value::String(text)) => text.clone(),
+        (None, Value::Array(items)) => items.first().map(canonical).unwrap_or_default(),
+        (None, _) => String::new(),
+    };
     if let Some(instructions) = &request.instructions {
-        units.push(text_digest(b"instructions", instructions));
+        units.push((
+            text_digest(b"instructions", instructions),
+            instructions.len() as u64,
+        ));
     }
     match &request.input {
         Value::String(text) => units.extend(text_blocks(text)),
-        Value::Array(items) => units.extend(items.iter().map(message_digest)),
+        Value::Array(items) => units.extend(items.iter().map(message_unit)),
         _ => return None,
     }
-    Some(units)
+    Some((units, lead.into_bytes()))
 }
 
-fn completion_units(body: &[u8]) -> Option<Vec<UnitDigest>> {
+fn completion_units(body: &[u8]) -> Option<(Vec<Unit>, Vec<u8>)> {
     #[derive(Deserialize)]
     struct Completion {
         prompt: Value,
     }
     let request: Completion = serde_json::from_slice(body).ok()?;
     match &request.prompt {
-        Value::String(text) => Some(text_blocks(text).collect()),
+        Value::String(text) => Some((text_blocks(text).collect(), Vec::new())),
         _ => None,
     }
 }
 
-fn text_blocks(text: &str) -> impl Iterator<Item = UnitDigest> + '_ {
+fn text_blocks(text: &str) -> impl Iterator<Item = Unit> + '_ {
     text.as_bytes()
         .as_chunks::<PROMPT_BLOCK_BYTES>()
         .0
         .iter()
         .map(|block| {
-            Sha256::new()
-                .chain_update(b"juiced-prompt-block-v1\0")
-                .chain_update(block)
-                .finalize()
-                .into()
+            (
+                Sha256::new()
+                    .chain_update(b"juiced-prompt-block-v1\0")
+                    .chain_update(block)
+                    .finalize()
+                    .into(),
+                PROMPT_BLOCK_BYTES as u64,
+            )
         })
 }
 
@@ -518,26 +647,37 @@ pub struct SlotCandidate<'a> {
 }
 
 pub fn slot_preference(slots: &[SlotCandidate<'_>], request: Option<(&Scope, &Key)>) -> Vec<usize> {
-    let affinity = |slot: &SlotCandidate<'_>| match (slot.holder, request) {
+    let similarity = |slot: &SlotCandidate<'_>| match (slot.holder, request) {
         (Some((held_scope, held)), Some((scope, key))) if held_scope == scope => {
-            held.common_units(key)
+            (held.common_units(key), held.lead_blocks_shared(key))
         }
-        _ => 0,
+        _ => (0, 0),
     };
     let mut order = (0..slots.len()).collect::<Vec<_>>();
     order.sort_by_key(|index| {
         let slot = &slots[*index];
-        let affinity = affinity(slot);
+        let (affinity, lead) = similarity(slot);
+        // A holder whose first message matches only partway is usually the same client's
+        // superseded conversation: replacing it reuses what still matches and keeps other
+        // clients' states resident.
         let class = if affinity > 0 {
             0
-        } else if slot.holder.is_none() && !slot.dirty {
+        } else if !slot.dirty && lead > 0 {
             1
-        } else if !slot.dirty {
+        } else if slot.holder.is_none() && !slot.dirty {
             2
-        } else {
+        } else if !slot.dirty {
             3
+        } else {
+            4
         };
-        (class, std::cmp::Reverse(affinity), slot.last_used, *index)
+        (
+            class,
+            std::cmp::Reverse(affinity),
+            std::cmp::Reverse(lead),
+            slot.last_used,
+            *index,
+        )
     });
     order
 }
@@ -598,6 +738,46 @@ mod tests {
         .unwrap();
         assert_ne!(chat_key.saved_digest(), responses.saved_digest());
         assert!(!chat_key.saved_digest().contains("Hello") && chat_key.saved_digest().len() == 64);
+    }
+
+    #[test]
+    fn shared_leading_messages_report_their_bytes_and_survive_a_lineage_round_trip() {
+        let system = json!({"role":"system","content":"House rules. ".repeat(40)});
+        let saved = Key::prefix(
+            Operation::Chat,
+            &chat(json!([system, {"role":"user","content":"Lights?"},{"role":"assistant","content":"On."}])),
+        )
+        .unwrap();
+        let fresh = Key::prefix(
+            Operation::Chat,
+            &chat(json!([system, {"role":"user","content":"Heating?"}])),
+        )
+        .unwrap();
+        let system_bytes = canonical(&system).len() as u64;
+        assert_eq!(fresh.shared(&saved), (1, system_bytes));
+        assert_eq!(saved.shared(&saved).0, 3);
+        let restored = Key::from_record(&saved.lineage().to_record()).unwrap();
+        assert_eq!(restored.shared(&saved), saved.shared(&saved));
+        assert_eq!(fresh.shared(&restored), (1, system_bytes));
+        let header = Key::header("thread");
+        assert_eq!(fresh.shared(&header), (0, 0));
+        let mut broken = saved.to_record();
+        broken.chain[0].replace_range(0..2, "zz");
+        assert!(Key::from_record(&broken).is_none());
+        broken = saved.to_record();
+        broken.bytes.pop();
+        assert!(Key::from_record(&broken).is_none());
+        let long = Key::prefix(
+            Operation::Chat,
+            &chat(Value::Array(
+                (0..LINEAGE_UNITS + 5)
+                    .map(|index| json!({"role":"user","content":index.to_string()}))
+                    .collect(),
+            )),
+        )
+        .unwrap();
+        assert_eq!(long.lineage().units(), LINEAGE_UNITS);
+        assert!(long.extends(&long.lineage()));
     }
 
     #[test]
@@ -782,7 +962,7 @@ mod tests {
     }
 
     #[test]
-    fn slots_prefer_the_holder_then_empty_then_least_recent_clean_state() {
+    fn slots_prefer_the_holder_then_a_partial_match_then_empty_then_least_recent_clean_state() {
         let me = scope("client");
         let other = scope("admin");
         let mine = Key::prefix(
@@ -819,6 +999,52 @@ mod tests {
         ];
         assert_eq!(slot_preference(&slots, Some((&me, &request))), [3, 2, 1, 0]);
         assert_eq!(slot_preference(&slots, None), [1, 0, 3, 2]);
+        let rules = |live: &str| {
+            Key::prefix(
+                Operation::Chat,
+                &chat(json!([{"role":"system","content":format!("{}{live}", "Static rule. ".repeat(60))},{"role":"user","content":"q"}])),
+            )
+            .unwrap()
+        };
+        let (old, new, unrelated) = (rules("Free 3 GiB."), rules("Free 4 GiB."), Key::prefix(
+            Operation::Chat,
+            &chat(json!([{"role":"system","content":"Other client. ".repeat(60)},{"role":"user","content":"q"}])),
+        )
+        .unwrap());
+        assert_eq!(old.common_units(&new), 0);
+        assert!(old.lead_blocks_shared(&new) >= 2);
+        assert_eq!(old.lead_blocks_shared(&unrelated), 0);
+        let full = [
+            SlotCandidate {
+                holder: Some((&me, &unrelated)),
+                dirty: false,
+                last_used: 1,
+            },
+            SlotCandidate {
+                holder: Some((&me, &old)),
+                dirty: false,
+                last_used: 9,
+            },
+        ];
+        assert_eq!(slot_preference(&full, Some((&me, &new))), [1, 0]);
+        let with_empty = [
+            SlotCandidate {
+                holder: None,
+                dirty: false,
+                last_used: 0,
+            },
+            SlotCandidate {
+                holder: Some((&me, &old)),
+                dirty: false,
+                last_used: 9,
+            },
+        ];
+        assert_eq!(slot_preference(&with_empty, Some((&me, &new))), [1, 0]);
+        assert_eq!(
+            slot_preference(&with_empty, Some((&me, &unrelated))),
+            [0, 1]
+        );
+        assert_eq!(slot_preference(&full, Some((&other, &new))), [0, 1]);
     }
 
     #[test]

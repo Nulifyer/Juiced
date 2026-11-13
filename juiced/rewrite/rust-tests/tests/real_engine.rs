@@ -917,3 +917,212 @@ async fn tiny_gguf_sessions_restore_after_options_reload_and_idle_unload() {
         json!({"cold":first,"after_options_reload":after_reload,"after_idle_unload":after_idle})
     );
 }
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+#[ignore = "requires JUICED_TEST_LLAMA_SERVER and JUICED_TEST_PREFIX_GGUF with at least 4k context; prefix reuse across conversations, not output quality"]
+async fn real_new_conversations_reuse_saved_system_prompts_across_clients_and_restart() {
+    use serde_json::Value;
+    const MODEL: &str = "real-prefix-sessions";
+    let variable = |name: &str| std::env::var(name).ok();
+    let engine =
+        PathBuf::from(variable("JUICED_TEST_LLAMA_SERVER").expect("set JUICED_TEST_LLAMA_SERVER"));
+    let Some(model) = variable("JUICED_TEST_PREFIX_GGUF").map(PathBuf::from) else {
+        println!("skipped: set JUICED_TEST_PREFIX_GGUF to a chat GGUF with at least 4k context");
+        return;
+    };
+    let lines: usize =
+        variable("JUICED_TEST_PROMPT_LINES").map_or(40, |value| value.parse().unwrap());
+    let slots: u32 = variable("JUICED_TEST_SLOTS").map_or(1, |value| value.parse().unwrap());
+    let resident: u64 =
+        variable("JUICED_TEST_RESIDENT_GIB").map_or(1, |value| value.parse().unwrap());
+    let template = variable("JUICED_TEST_CHAT_TEMPLATE");
+    let mut args = vec![
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "{port}",
+        "--model",
+        "{model}",
+        "--ctx-size",
+        "8192",
+        "--slots",
+        "--n-gpu-layers",
+        "0",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect::<Vec<_>>();
+    match &template {
+        Some(name) => args.extend(["--chat-template".to_owned(), name.clone()]),
+        None => args.push("--jinja".to_owned()),
+    }
+    let parallel = slots.to_string();
+    args.extend(["--parallel".to_owned(), parallel]);
+    let gib = 1024u64 * 1024 * 1024;
+    let mut server = Server::configured(true, |config| {
+        config["session_cache"] = json!({"save_delay_ms": 50});
+        config["resident_budget_bytes"] = json!((resident + 2) * gib);
+        config["startup_timeout_ms"] = json!(300000);
+        config["request_timeout_ms"] = json!(1800000);
+        config["models"] = json!([{"id":MODEL,"model_file":model,"command":engine,"provider":"llama-cpp","args":args,"resident_bytes":resident * gib,"max_inflight":slots,"operations":["chat/completions"],"policy":"on-demand"}]);
+    })
+    .await;
+    let words = [
+        "kitchen",
+        "porch",
+        "garage",
+        "hallway",
+        "office",
+        "bedroom",
+        "thermostat",
+        "sensor",
+        "lamp",
+        "fan",
+        "door",
+        "switch",
+        "blind",
+    ];
+    let system = |client: &str, live: Option<u32>| {
+        let mut rows = (0..lines)
+            .map(|index| {
+                format!(
+                    "{client} device {index}: {} {} in area {} is exposed as light.device_{index}.",
+                    words[index % words.len()],
+                    words[(index * 7) % words.len()],
+                    index % 11
+                )
+            })
+            .collect::<Vec<_>>();
+        if let Some(value) = live {
+            rows[lines / 2] = format!(
+                "Live note: {value} GiB available, {} GiB reserved.",
+                value * 3
+            );
+        }
+        rows.join("\n")
+    };
+    async fn settle(server: &Server) {
+        for _ in 0..1200 {
+            let view = server.get("juiced/cache/sessions").await;
+            let idle = view["models"][0]["slots"].as_array().is_some_and(|slots| {
+                slots
+                    .iter()
+                    .all(|slot| slot["state"] != "unsaved" && slot["state"] != "busy")
+            });
+            if idle {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        panic!("session snapshots did not settle");
+    }
+    let mut receipts = Vec::new();
+    let mut ask = async |server: &Server, step: &str, system: String, question: &str| -> Value {
+        let mut request = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(1800))
+            .build()
+            .unwrap()
+            .post(format!("{}/v1/chat/completions", server.base))
+            .json(&json!({"model":MODEL,"messages":[{"role":"system","content":system},{"role":"user","content":question}],"max_tokens":2,"temperature":0,"stream":false}));
+        if let Some(key) = server.read_key() {
+            request = request.bearer_auth(key);
+        }
+        let response = request.send().await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let _: Value = response.json().await.unwrap();
+        let record = server.get("juiced/requests").await["data"][0].clone();
+        let receipt = json!({"step":step,"path":record["session_cache"]["path"],"slot":record["session_cache"]["slot"],"input":record["input_tokens"],"cached":record["cached_tokens"],"processed":record["prompt_processed_tokens"],"elapsed_ms":record["elapsed_ms"],"restore_ms":record["session_cache"]["restore_ms"]});
+        println!("prefix-receipt {receipt}");
+        settle(server).await;
+        receipts.push(receipt);
+        record
+    };
+    ask(
+        &server,
+        "a1-cold",
+        system("Alpha", None),
+        "Turn on the porch light.",
+    )
+    .await;
+    ask(
+        &server,
+        "b1-other-client",
+        system("Bravo", None),
+        "Close the garage.",
+    )
+    .await;
+    let returning = ask(
+        &server,
+        "a2-new-conversation",
+        system("Alpha", None),
+        "Is the office warm?",
+    )
+    .await;
+    ask(
+        &server,
+        "b2-new-conversation",
+        system("Bravo", None),
+        "Dim the lamp.",
+    )
+    .await;
+    ask(
+        &server,
+        "a3-new-conversation",
+        system("Alpha", None),
+        "Open the blind.",
+    )
+    .await;
+    let (status, _) = server.post("unload", json!({"model":MODEL})).await;
+    assert_eq!(status, StatusCode::OK);
+    server.restart().await;
+    ask(
+        &server,
+        "load-after-restart",
+        "Be brief.".to_owned(),
+        "Ready?",
+    )
+    .await;
+    let restarted = ask(
+        &server,
+        "a4-after-restart",
+        system("Alpha", None),
+        "Lock the door.",
+    )
+    .await;
+    ask(
+        &server,
+        "a5-middle-changed",
+        system("Alpha", Some(4)),
+        "Fan speed?",
+    )
+    .await;
+    ask(
+        &server,
+        "a6-middle-changed-again",
+        system("Alpha", Some(5)),
+        "Fan off?",
+    )
+    .await;
+    ask(
+        &server,
+        "a7-end-changed",
+        system("Alpha", None) + "\nLive note: 9 GiB available.",
+        "Hallway?",
+    )
+    .await;
+    println!("prefix-receipts {}", Value::Array(receipts));
+    let expected = if slots > 1 { "slot-hit" } else { "restored" };
+    assert_eq!(returning["session_cache"]["path"], expected, "{returning}");
+    assert_eq!(
+        restarted["session_cache"]["path"], "restored",
+        "{restarted}"
+    );
+    for record in [&returning, &restarted] {
+        assert!(
+            record["cached_tokens"].as_u64().unwrap() * 2
+                > record["input_tokens"].as_u64().unwrap(),
+            "{record}"
+        );
+    }
+}
