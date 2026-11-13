@@ -416,7 +416,7 @@ async fn plan(manager: &Manager, body: &PullBody) -> Result<Plan, ApiError> {
                     "Registering a model requires a recipe, for example llamacpp.",
                 )
             })?;
-        recipe_engine(&recipe)?;
+        let engine = recipe_engine(&recipe)?;
         let (repo, variant) = parse_checkpoint(&checkpoint).ok_or_else(|| {
             error(
                 StatusCode::BAD_REQUEST,
@@ -425,7 +425,7 @@ async fn plan(manager: &Manager, body: &PullBody) -> Result<Plan, ApiError> {
             )
         })?;
         let selection = library
-            .select_checkpoint(&repo, variant.as_deref(), None)
+            .select_checkpoint(&repo, variant.as_deref(), None, Some(engine))
             .await?;
         registry().remember(
             &public,
@@ -467,8 +467,27 @@ async fn plan(manager: &Manager, body: &PullBody) -> Result<Plan, ApiError> {
                 &entry.repo,
                 None,
                 entry.file.as_deref().or(entry.quant.as_deref()),
+                None,
             )
             .await?
+    } else if let Some(entry) = crate::library::native::registry_checkpoint(name) {
+        let selection = library
+            .select_checkpoint(&entry.repo, None, entry.file.as_deref(), Some(entry.engine))
+            .await?;
+        if let Some(extra) = entry.companions.iter().find(|companion| {
+            !companion.split_once(':').is_some_and(|(repo, file)| {
+                repo == entry.repo && selection.files.iter().any(|known| known == file)
+            })
+        }) {
+            return Err(error(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "companion_unsupported",
+                format!(
+                    "Juiced cannot pull '{extra}' beside this checkpoint yet. Download the model's files from one repository and add them as a set."
+                ),
+            ));
+        }
+        selection
     } else {
         return Err(unknown_model(name));
     };
@@ -721,7 +740,7 @@ async fn run(manager: &Arc<Manager>, job: &Arc<Download>, resumed: Option<String
         policy: Some(Policy::OnDemand),
         backend: None,
         path: None,
-        engine: None,
+        engine: job.selection.engine.clone(),
     };
     let added = register_download(&manager, request).await;
     let _ = manager.library().dismiss_pull(&pull);
@@ -822,6 +841,7 @@ fn save(manager: &Manager, job: &Download) {
             "selection": {
                 "repo": job.selection.repo, "files": job.selection.files,
                 "bytes": job.selection.bytes, "label": job.selection.label,
+                "engine": job.selection.engine,
             },
             "pull": pull, "status": progress.status,
             "error": progress.error, "code": progress.code,
@@ -872,6 +892,7 @@ pub(crate) async fn recover(manager: Arc<Manager>) {
                 .unwrap_or_default(),
             bytes: saved["selection"]["bytes"].as_u64(),
             label: text(&saved["selection"]["label"]),
+            engine: text(&saved["selection"]["engine"]),
         };
         let pull = text(&saved["pull"]);
         let status = saved_status(saved["status"].as_str().unwrap_or_default());
@@ -1194,6 +1215,7 @@ pub(crate) async fn native_registry_search(
                 task: None,
                 limit: Some(limit),
                 cursor: None,
+                engine: query.format.is_some().then(|| "llama.cpp".to_owned()),
             },
         )
         .await?;
@@ -1211,9 +1233,9 @@ pub(crate) async fn native_registry_search(
         .filter(|entry| entry["source"] == "huggingface")
         .take(limit)
         .map(|entry| {
-            let gguf = entry["quants"]
-                .as_array()
-                .is_some_and(|quants| !quants.is_empty());
+            let gguf = entry["quants"].as_array().is_some_and(|quants| {
+                quants.iter().any(|quant| quant["kind"] != "checkpoint")
+            });
             json!({
                 "repository_id": entry["repo"], "display_name": entry["name"],
                 "source": "huggingface", "repository_type": "model",

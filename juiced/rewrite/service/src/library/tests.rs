@@ -286,6 +286,7 @@ fn query(q: &str) -> SearchQuery {
         task: None,
         limit: None,
         cursor: None,
+        engine: None,
     }
 }
 
@@ -361,6 +362,7 @@ fn split_parts_group_into_ordered_complete_variants_and_skip_companions() {
         path: path.into(),
         bytes,
         sha256: Some("a".repeat(64)),
+        blob: None,
     };
     let variants = super::quant::group(&[
         file("Q4_K_M/Model-Q4_K_M-00002-of-00003.gguf", Some(2)),
@@ -1181,6 +1183,7 @@ fn speech_catalog_entries_pin_engines_and_complete_their_moonshine_sets() {
         path: path.into(),
         bytes: Some(10),
         sha256: sha.map(str::to_owned),
+        blob: None,
     };
     let mut files = Vec::new();
     for size in ["tiny", "small"] {

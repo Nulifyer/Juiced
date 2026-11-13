@@ -105,6 +105,22 @@ pub struct RepoSummary {
     pub pipeline_tag: Option<String>,
     pub gated: Option<bool>,
     pub license: Option<String>,
+    /// Weight formats the repository tags name, when the hub listed its tags.
+    pub formats: Option<Formats>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct Formats {
+    pub gguf: bool,
+    pub safetensors: bool,
+    pub onnx: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Stream {
+    Gguf,
+    /// Original checkpoints: Transformers or diffusion safetensors and ONNX exports.
+    Checkpoint(Option<&'static str>),
 }
 
 #[derive(Clone, Debug)]
@@ -340,6 +356,7 @@ impl Hub {
         task: Option<Task>,
         limit: usize,
         cursor: Option<&str>,
+        stream: Stream,
     ) -> Result<(Arc<SearchPage>, bool), HubError> {
         let mut url = self.url(&["api", "models"])?;
         {
@@ -347,8 +364,15 @@ impl Hub {
             if !query.is_empty() {
                 pairs.append_pair("search", query);
             }
-            if task != Some(Task::Transcription) {
-                pairs.append_pair("filter", "gguf");
+            match stream {
+                Stream::Gguf if task != Some(Task::Transcription) => {
+                    pairs.append_pair("filter", "gguf");
+                }
+                Stream::Gguf => {}
+                Stream::Checkpoint(Some(filter)) => {
+                    pairs.append_pair("filter", filter);
+                }
+                Stream::Checkpoint(None) => {}
             }
             if let Some(pipeline) = task.and_then(Task::pipeline_filter) {
                 pairs.append_pair("pipeline_tag", pipeline);
@@ -417,6 +441,74 @@ impl Hub {
         let info = Arc::new(info);
         self.infos.insert(key, info.clone(), weight);
         Ok((info, false))
+    }
+}
+
+impl Hub {
+    /// Fetches one small repository file, following the hub's redirects within the source
+    /// policy and sending the token only to the hub itself.
+    pub async fn fetch_file(
+        &self,
+        repo: &str,
+        revision: &str,
+        file: &str,
+        maximum: u64,
+    ) -> Result<Vec<u8>, HubError> {
+        let prefix = self.base_prefix().ok_or(HubError::Unconfigured)?;
+        let mut url = Url::parse(&self.resolve_url(repo, revision, file)?)
+            .map_err(|_| HubError::Malformed)?;
+        let work = async {
+            for _ in 0..=5 {
+                let client = crate::artifacts::policy_client(&url, self.policy)
+                    .await
+                    .map_err(HubError::from_artifact)?;
+                let mut request = client
+                    .get(url.clone())
+                    .header(header::ACCEPT_ENCODING, "identity")
+                    .header(header::USER_AGENT, "juiced-library/1");
+                if let Some(token) = &self.token
+                    && url.as_str().starts_with(&format!("{prefix}/"))
+                {
+                    request = request.bearer_auth(&token.0);
+                }
+                let mut response = request.send().await.map_err(|_| HubError::Unreachable)?;
+                if response.status().is_redirection() {
+                    let location = response
+                        .headers()
+                        .get(header::LOCATION)
+                        .and_then(|value| value.to_str().ok())
+                        .ok_or(HubError::Malformed)?;
+                    let next = url.join(location).map_err(|_| HubError::Malformed)?;
+                    url = crate::artifacts::policy_url(next.as_str(), self.policy)
+                        .map_err(HubError::from_artifact)?;
+                    continue;
+                }
+                match response.status() {
+                    status if status.is_success() => {}
+                    StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN | StatusCode::NOT_FOUND => {
+                        return Err(HubError::NotFound);
+                    }
+                    StatusCode::TOO_MANY_REQUESTS => return Err(HubError::RateLimited),
+                    _ => return Err(HubError::Status),
+                }
+                let mut body = Vec::new();
+                while let Some(chunk) = response.chunk().await.map_err(|_| HubError::Unreachable)? {
+                    if (body.len() + chunk.len()) as u64 > maximum {
+                        return Err(HubError::TooLarge);
+                    }
+                    body.extend_from_slice(&chunk);
+                }
+                return Ok(body);
+            }
+            Err(HubError::Malformed)
+        };
+        tokio::time::timeout(self.limits.request_timeout * 3, work)
+            .await
+            .map_err(|_| HubError::Timeout)?
+    }
+
+    pub fn token(&self) -> Option<&str> {
+        self.token.as_ref().map(|token| token.0.as_str())
     }
 }
 
@@ -495,6 +587,14 @@ fn summary(item: &Value) -> Option<RepoSummary> {
         pipeline_tag: short_text(&item["pipeline_tag"], 64),
         gated: gated(&item["gated"]),
         license: license(item),
+        formats: item["tags"].as_array().map(|tags| {
+            let has = |name: &str| tags.iter().any(|tag| tag.as_str() == Some(name));
+            Formats {
+                gguf: has("gguf"),
+                safetensors: has("safetensors"),
+                onnx: has("onnx"),
+            }
+        }),
     })
 }
 
@@ -521,6 +621,13 @@ pub fn parse_search(
     Ok(page)
 }
 
+fn git_blob(value: &Value) -> Option<String> {
+    value
+        .as_str()
+        .filter(|blob| blob.len() == 40 && blob.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .map(str::to_ascii_lowercase)
+}
+
 fn digest(value: &Value) -> Option<String> {
     value
         .as_str()
@@ -538,7 +645,8 @@ pub fn parse_info(body: &[u8], maximum_files: usize) -> Result<RepoInfo, HubErro
         let Some(path) = sibling["rfilename"].as_str() else {
             continue;
         };
-        if !valid_file(path) || !quant::is_listed_file(path) {
+        if !valid_file(path) || !(quant::is_listed_file(path) || super::checkpoint::is_listed(path))
+        {
             continue;
         }
         if files.len() == maximum_files {
@@ -556,6 +664,10 @@ pub fn parse_info(body: &[u8], maximum_files: usize) -> Result<RepoInfo, HubErro
                 .flatten()
                 .filter(|bytes| *bytes > 0),
             sha256: consistent.then(|| digest(&lfs["sha256"])).flatten(),
+            blob: lfs
+                .is_null()
+                .then(|| git_blob(&sibling["blobId"]))
+                .flatten(),
         });
     }
     Ok(RepoInfo {

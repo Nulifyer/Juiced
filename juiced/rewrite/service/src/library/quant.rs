@@ -7,6 +7,8 @@ pub struct FileMeta {
     pub path: String,
     pub bytes: Option<u64>,
     pub sha256: Option<String>,
+    /// The git blob id the hub reports for a file stored outside LFS, which has no SHA-256.
+    pub blob: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -18,6 +20,9 @@ pub struct Variant {
     pub complete: bool,
     /// Per-file artifact-set roles for companion bundles; empty for single files and splits.
     pub roles: Vec<crate::artifacts::ArtifactRole>,
+    /// Artifact-set member names when they differ from the repository basenames.
+    pub names: Vec<String>,
+    pub checkpoint: Option<super::checkpoint::Kind>,
 }
 
 impl Variant {
@@ -26,12 +31,18 @@ impl Variant {
             .iter()
             .try_fold(0u64, |total, file| total.checked_add(file.bytes?))
     }
+    /// Every file has a size and either a published SHA-256 or, for a small file kept outside
+    /// LFS, a git blob id the pull checks before it learns the SHA-256.
     pub fn verifiable(&self) -> bool {
         self.complete
-            && self
-                .files
-                .iter()
-                .all(|file| file.bytes.is_some_and(|bytes| bytes > 0) && file.sha256.is_some())
+            && self.files.iter().all(|file| {
+                file.bytes.is_some_and(|bytes| bytes > 0)
+                    && (file.sha256.is_some()
+                        || (file.blob.is_some()
+                            && file
+                                .bytes
+                                .is_some_and(|bytes| bytes <= super::checkpoint::SMALL_FILE_BYTES)))
+            })
     }
 }
 
@@ -75,6 +86,8 @@ pub fn bundle(
         parts: 1,
         complete,
         roles,
+        names: Vec::new(),
+        checkpoint: None,
     })
 }
 
@@ -266,6 +279,8 @@ pub fn group(files: &[FileMeta]) -> Vec<Variant> {
                 parts: 1,
                 complete: true,
                 roles: Vec::new(),
+                names: Vec::new(),
+                checkpoint: None,
             });
         }
     }
@@ -280,6 +295,8 @@ pub fn group(files: &[FileMeta]) -> Vec<Variant> {
             parts: total,
             complete,
             roles: Vec::new(),
+            names: Vec::new(),
+            checkpoint: None,
         });
     }
     variants.sort_by(|left, right| left.primary.cmp(&right.primary));

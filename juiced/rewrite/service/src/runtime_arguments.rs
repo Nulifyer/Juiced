@@ -656,6 +656,9 @@ impl ArgumentTemplate {
         ) {
             return verify_named_members(companions);
         }
+        if matches!(self.adapter, Provider::Vllm | Provider::OnnxRuntime) {
+            return verify_checkpoint_members(companions);
+        }
         if self.adapter == Provider::Moonshine {
             // Without a retained set, the worker reads the registered file's own directory.
             let mut companions = companions.into_iter().peekable();
@@ -712,6 +715,34 @@ pub fn verify_named_members<'a>(
             return Err(Error::new(
                 "artifact_set_binding_mismatch",
                 "A generation model set needs distinct file names with model-input roles.",
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// vLLM and ort-server read a checkpoint directory by file name, so the launch links every
+/// retained member into it; each needs a distinct file name and a checkpoint-input role.
+pub fn verify_checkpoint_members<'a>(
+    companions: impl IntoIterator<Item = (&'a str, ArtifactRole)>,
+) -> Result<(), Error> {
+    let mut names = std::collections::BTreeSet::new();
+    for (name, role) in companions {
+        if !valid_member_name(name)
+            || !matches!(
+                role,
+                ArtifactRole::ExternalTensor
+                    | ArtifactRole::WeightIndex
+                    | ArtifactRole::Tokenizer
+                    | ArtifactRole::Vocabulary
+                    | ArtifactRole::Configuration
+                    | ArtifactRole::Processor
+            )
+            || !names.insert(name)
+        {
+            return Err(Error::new(
+                "artifact_set_binding_mismatch",
+                "A checkpoint set needs distinct weight, tokenizer, configuration or processor files.",
             ));
         }
     }

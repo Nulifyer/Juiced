@@ -6,7 +6,7 @@ pub(super) const TOOLS: &[Tool] = &[
         name: "juiced_search_models",
         group: Group::Acquire,
         title: "Search models",
-        description: "Search the recommended catalog, local files and Hugging Face. Each repo lists quants with size, local presence and a fit verdict for this host.",
+        description: "Search the recommended catalog, local files and Hugging Face. Each repo lists quants (GGUF files, or a checkpoint folder with the engine that runs it) with size, local presence and a fit verdict for this host.",
         read_only: true,
         destructive: false,
         idempotent: true,
@@ -16,7 +16,8 @@ pub(super) const TOOLS: &[Tool] = &[
         input: || {
             json!({"type":"object","properties":{
                 "query":{"type":"string","maxLength":200,"description":"Words to match. Omit for recommendations."},
-                "task":{"type":"string","enum":["chat","embeddings","transcription","tts","image","audio_generation","3d"]},
+                "task":{"type":"string","enum":["chat","embeddings","transcription","tts","image","audio_generation","3d","classify"]},
+                "engine":{"type":"string","minLength":1,"maxLength":64,"description":"Only what one engine runs: vllm, onnxruntime or thenoise list original checkpoints; llama.cpp lists GGUF quants."},
                 "max_bytes":{"type":"integer","minimum":1,"description":"Hide quants larger than this."},
                 "limit":{"type":"integer","minimum":1,"maximum":10,"default":5},
                 "hub":{"type":"boolean","default":true,"description":"false searches only the catalog and local files."},
@@ -87,7 +88,7 @@ pub(super) const TOOLS: &[Tool] = &[
         name: "juiced_download",
         group: Group::Acquire,
         title: "Download",
-        description: "Start downloading a quant or files from a Hugging Face repo into the library. Returns a job; wait with juiced_wait_job.",
+        description: "Start downloading a quant, a checkpoint (quant label such as Checkpoint or ONNX) or files from a Hugging Face repo into the library. Returns a job; wait with juiced_wait_job, whose finished job carries the juiced_add_model input.",
         read_only: false,
         destructive: false,
         idempotent: false,
@@ -193,6 +194,7 @@ struct SearchArgs {
     limit: Option<u32>,
     hub: Option<bool>,
     cursor: Option<String>,
+    engine: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -344,6 +346,8 @@ fn quant_row(quant: &Value, host: &Host) -> Value {
             "complete",
             "pullable",
             "recommended",
+            "kind",
+            "engine",
         ],
     );
     if quant["local"]["present"] == true {
@@ -415,8 +419,13 @@ async fn search_raw(
     limit: u32,
     hub: bool,
     cursor: Option<&str>,
+    engine: Option<&str>,
 ) -> Result<Value> {
     let mut parameters = vec![format!("limit={limit}")];
+    if let Some(engine) = engine {
+        bounded(engine, 1, 64, "engine")?;
+        parameters.push(format!("engine={}", encode(engine)));
+    }
     if let Some(text) = query.map(str::trim).filter(|text| !text.is_empty()) {
         bounded(text, 1, 200, "query")?;
         parameters.push(format!("q={}", encode(text)));
@@ -447,7 +456,8 @@ async fn search(context: &Context<'_>, args: Value) -> Result<Outcome> {
             search.task,
             size,
             search.hub != Some(false),
-            search.cursor.as_deref()
+            search.cursor.as_deref(),
+            search.engine.as_deref(),
         ),
         Host::read(context),
     );
@@ -499,7 +509,7 @@ async fn find_repo(context: &Context<'_>, repo: &str) -> Result<(Value, Value)> 
             "repo must be publisher/name.".into(),
         ));
     }
-    let result = search_raw(context, Some(repo), None, 10, true, None).await?;
+    let result = search_raw(context, Some(repo), None, 10, true, None, None).await?;
     let entry = list(&result, "data")
         .into_iter()
         .find(|entry| entry["repo"].as_str().is_some_and(|known| known.eq_ignore_ascii_case(repo)))
@@ -920,13 +930,27 @@ pub(super) fn pull_job(pull: &Value) -> Value {
             .or(pull["file"].as_str())
             .unwrap_or("")
     );
-    json!({
+    let mut job = json!({
         "id": format!("pull:{}", pull["pull"].as_str().unwrap_or("")),
         "kind": "download", "label": label.trim(), "state": state,
         "done": matches!(state, "complete" | "failed"),
         "progress": if total > 0 { json!(((done as f64 / total as f64) * 1000.0).round() / 1000.0) } else { Value::Null },
         "done_bytes": done, "total_bytes": total, "error": pull["error"],
-    })
+    });
+    if state == "complete"
+        && let Some(set) = pull["set"].as_str()
+    {
+        let mut add = json!({"artifact_set": set});
+        if let Some(engine) = pull["engine"].as_str() {
+            job["engine"] = json!(engine);
+            add["engine"] = json!(engine);
+        }
+        if let Some(id) = pull["suggested_id"].as_str() {
+            add["id"] = json!(id);
+        }
+        job["add"] = add;
+    }
+    job
 }
 
 pub(super) fn engine_job(job: &Value) -> Value {

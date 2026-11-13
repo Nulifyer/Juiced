@@ -568,6 +568,7 @@ fn finish(draft: Draft, store_in_use: &BTreeSet<String>) -> LocalGroup {
             path: file.id.clone(),
             bytes: Some(file.bytes),
             sha256: None,
+            blob: None,
         })
         .collect();
     fn path_of<'a>(files: &'a [LocalFile], id: &'a str) -> &'a str {

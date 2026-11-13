@@ -1,4 +1,5 @@
 mod catalog;
+pub(crate) mod checkpoint;
 mod durable;
 mod hub;
 mod local;
@@ -77,9 +78,11 @@ pub enum Task {
     Transcription,
     Tts,
     Image,
+    #[serde(alias = "audio_generation")]
     AudioGeneration,
     #[serde(rename = "3d")]
     Model3d,
+    Classify,
 }
 
 impl Task {
@@ -91,6 +94,7 @@ impl Task {
             Self::Image => Some("text-to-image"),
             Self::AudioGeneration => Some("text-to-audio"),
             Self::Model3d => Some("image-to-3d"),
+            Self::Classify => Some("text-classification"),
         }
     }
     fn from_pipeline(tag: &str) -> Option<Self> {
@@ -102,6 +106,7 @@ impl Task {
             "text-to-audio" => Some(Self::AudioGeneration),
             "text-to-image" => Some(Self::Image),
             "image-to-3d" => Some(Self::Model3d),
+            "text-classification" => Some(Self::Classify),
             _ => None,
         }
     }
@@ -188,6 +193,10 @@ pub struct SearchQuery {
     pub task: Option<Task>,
     pub limit: Option<usize>,
     pub cursor: Option<String>,
+    /// Narrows results to what one engine runs; vllm, onnxruntime and thenoise search
+    /// original checkpoints, any other engine searches GGUF files.
+    #[serde(default)]
+    pub engine: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -268,6 +277,7 @@ struct PullRecord {
     label: Option<String>,
     parts: Vec<Part>,
     set: Option<PlannedSet>,
+    checkpoint: Option<checkpoint::Kind>,
 }
 
 impl PullRecord {
@@ -361,6 +371,9 @@ impl PullRecord {
                 "files": self.parts.iter().map(|part| part.file.as_str()).collect::<Vec<_>>(),
             },
             "files": files, "jobs": jobs,
+            "format": self.checkpoint,
+            "engine": self.checkpoint.map(|kind| kind.engine().name()),
+            "suggested_id": self.checkpoint.map(|_| suggested_id(&self.repo)),
             "set": self.set.as_ref().map(|set| set.id.as_str()),
             "set_state": set_state, "set_error": set_error,
         })
@@ -415,6 +428,14 @@ impl Library {
 
     pub(crate) fn hub(&self) -> &Hub {
         &self.hub
+    }
+
+    /// Lets the artifact store send the hub token with file downloads from the hub, which
+    /// gated repositories require.
+    pub fn share_credential(&self, store: &ArtifactStore) {
+        if let (Some(prefix), Some(token)) = (self.hub.base_prefix(), self.hub.token()) {
+            store.set_origin_credential(prefix, token.to_owned());
+        }
     }
 
     /// Whether the last explicit update check found newer upstream weights for this model;
@@ -550,6 +571,7 @@ impl Library {
                     path: file.path.clone(),
                     bytes: Some(file.bytes),
                     sha256: file.digest.clone(),
+                    blob: None,
                 },
             })
             .collect()
@@ -635,6 +657,7 @@ impl Library {
                         path,
                         bytes: Some(record.bytes),
                         sha256: Some(record.sha256),
+                        blob: None,
                     },
                 })
             })
@@ -667,6 +690,13 @@ impl Library {
         {
             return Err(invalid("Use the next_cursor value from a previous page."));
         }
+        let engine = match query.engine.as_deref() {
+            None => None,
+            Some(name) => Some(crate::engines::catalog::Engine::parse(name).ok_or_else(|| {
+                invalid("Use an engine name such as llama.cpp, vllm, onnxruntime or thenoise.")
+            })?),
+        };
+        let wanted_kind = engine.and_then(checkpoint::Kind::for_engine);
         let task = query.task;
         let first_page = query.cursor.is_none();
         let terms: Vec<String> = text
@@ -679,6 +709,12 @@ impl Library {
                 .models
                 .iter()
                 .filter(|model| model.matches(&terms, task))
+                .filter(|model| match engine {
+                    None => true,
+                    Some(engine) => model
+                        .engine
+                        .map_or(wanted_kind.is_none(), |known| known == engine),
+                })
                 .take(limit)
                 .collect()
         } else {
@@ -688,45 +724,75 @@ impl Library {
         let skip_hub = query.hub == Some(false);
         let mut hub_error = blocked;
         let mut cached = None;
-        let page = if blocked.is_none() && !skip_hub {
-            match self
-                .hub
-                .search(&text, task, limit, query.cursor.as_deref())
-                .await
-            {
-                Ok((page, hit)) => {
-                    cached = Some(hit);
-                    Some(page)
-                }
-                Err(error) => {
-                    hub_error = Some(error);
-                    None
+        // Without an engine, page one also searches original checkpoints; later pages and the
+        // next cursor follow the GGUF listing.
+        let streams: Vec<(hub::Stream, usize)> = match wanted_kind {
+            Some(kind) => vec![(hub::Stream::Checkpoint(Some(kind.hub_filter())), limit)],
+            None if engine.is_some() || !first_page => vec![(hub::Stream::Gguf, limit)],
+            None => vec![
+                (hub::Stream::Gguf, limit),
+                (
+                    hub::Stream::Checkpoint((task == Some(Task::Classify)).then_some("onnx")),
+                    limit.min(CHECKPOINT_SEARCH),
+                ),
+            ],
+        };
+        let mut pages = Vec::new();
+        if blocked.is_none() && !skip_hub {
+            let searched = futures_util::future::join_all(streams.iter().map(|(stream, size)| {
+                let task = match stream {
+                    hub::Stream::Checkpoint(_) if task != Some(Task::Classify) => None,
+                    _ => task,
+                };
+                self.hub
+                    .search(&text, task, *size, query.cursor.as_deref(), *stream)
+            }))
+            .await;
+            for ((stream, _), result) in streams.iter().zip(searched) {
+                match result {
+                    Ok((page, hit)) => {
+                        cached = Some(cached.unwrap_or(true) && hit);
+                        pages.push((*stream, page));
+                    }
+                    Err(error) => {
+                        hub_error = hub_error.or(Some(error));
+                    }
                 }
             }
-        } else {
-            None
-        };
+            if !pages.is_empty() {
+                hub_error = None;
+            }
+        }
         let catalog_repos: BTreeSet<&str> = catalog_matches
             .iter()
             .map(|model| model.repo.as_str())
             .collect();
-        let hub_repos: Vec<&RepoSummary> = page
-            .as_ref()
-            .map(|page| {
-                page.repos
-                    .iter()
-                    .filter(|repo| !catalog_repos.contains(repo.id.as_str()))
-                    .filter(|repo| {
-                        task.is_none_or(|task| task.accepts(repo.pipeline_tag.as_deref()))
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+        let mut hub_repos: Vec<(&RepoSummary, bool)> = Vec::new();
+        for (stream, page) in &pages {
+            let checkpoints = matches!(stream, hub::Stream::Checkpoint(_));
+            for repo in &page.repos {
+                if catalog_repos.contains(repo.id.as_str())
+                    || hub_repos.iter().any(|(known, _)| known.id == repo.id)
+                {
+                    continue;
+                }
+                if checkpoints {
+                    if repo.formats.is_some_and(|formats| {
+                        formats.gguf || !(formats.safetensors || formats.onnx)
+                    }) {
+                        continue;
+                    }
+                } else if task.is_some_and(|task| !task.accepts(repo.pipeline_tag.as_deref())) {
+                    continue;
+                }
+                hub_repos.push((repo, checkpoints));
+            }
+        }
         let mut wanted: Vec<String> = catalog_repos
             .iter()
             .map(|repo| (*repo).to_owned())
             .collect();
-        wanted.extend(hub_repos.iter().map(|repo| repo.id.clone()));
+        wanted.extend(hub_repos.iter().map(|(repo, _)| repo.id.clone()));
         let infos = if skip_hub {
             wanted
                 .into_iter()
@@ -740,15 +806,11 @@ impl Library {
         } else {
             BTreeMap::new()
         };
-        let summaries: BTreeMap<&str, &RepoSummary> = page
-            .as_ref()
-            .map(|page| {
-                page.repos
-                    .iter()
-                    .map(|repo| (repo.id.as_str(), repo))
-                    .collect()
-            })
-            .unwrap_or_default();
+        let summaries: BTreeMap<&str, &RepoSummary> = pages
+            .iter()
+            .flat_map(|(_, page)| page.repos.iter())
+            .map(|repo| (repo.id.as_str(), repo))
+            .collect();
         let mut entries = Vec::new();
         for model in &catalog_matches {
             let info = infos.get(&model.repo);
@@ -772,7 +834,8 @@ impl Library {
             apply_info(&mut entry, info, |path| model.includes(path), Some(model));
             entries.push(entry);
         }
-        for repo in hub_repos {
+        let mut found = Vec::new();
+        for (repo, checkpoints) in hub_repos {
             let mut entry = Entry {
                 id: repo.id.clone(),
                 repo: repo.id.clone(),
@@ -793,12 +856,44 @@ impl Library {
                 variants: None,
             };
             apply_info(&mut entry, infos.get(&repo.id), |_| true, None);
-            if entry.variants.as_ref().is_some_and(Vec::is_empty) {
+            if let Some(variants) = &mut entry.variants {
+                variants.retain(|variant| {
+                    let kind = variant.checkpoint;
+                    (!checkpoints || kind.is_some())
+                        && wanted_kind.is_none_or(|wanted| kind == Some(wanted))
+                        && kind.is_none_or(|kind| task.is_none_or(|task| kind_task(kind) == task))
+                });
+                if variants.is_empty() {
+                    continue;
+                }
+            } else if checkpoints {
                 continue;
             }
-            entries.push(entry);
+            found.push(entry);
         }
-        if first_page {
+        found.sort_by_key(|entry| {
+            std::cmp::Reverse(entry.summary.as_ref().and_then(|summary| summary.downloads))
+        });
+        entries.extend(found);
+        let learned = store
+            .as_ref()
+            .map(|store| self.learned_digests(store))
+            .unwrap_or_default();
+        for entry in &mut entries {
+            let (repo, revision) = (entry.repo.clone(), entry.revision.clone());
+            for variant in entry.variants.iter_mut().flatten() {
+                for file in &mut variant.files {
+                    if file.sha256.is_none()
+                        && let Some(revision) = &revision
+                    {
+                        file.sha256 = learned
+                            .get(&(repo.clone(), revision.clone(), file.path.clone()))
+                            .cloned();
+                    }
+                }
+            }
+        }
+        if first_page && wanted_kind.is_none() {
             let mut local = store
                 .as_ref()
                 .map(|store| self.local_files(store))
@@ -819,7 +914,15 @@ impl Library {
         let pullable = store.is_some() && blocked.is_none();
         let data: Vec<Value> = entries
             .iter()
-            .map(|entry| entry_json(entry, presence.as_ref(), cache.as_ref(), pullable))
+            .map(|entry| {
+                entry_json(
+                    entry,
+                    presence.as_ref(),
+                    cache.as_ref(),
+                    pullable,
+                    store.as_deref(),
+                )
+            })
             .collect();
         let hub_status = match hub_error {
             None if skip_hub => "skipped",
@@ -828,10 +931,12 @@ impl Library {
             Some(HubError::SourcePolicy | HubError::Unconfigured) => "blocked",
             Some(_) => "unavailable",
         };
+        let next_cursor = pages.first().and_then(|(_, page)| page.next_cursor.clone());
         Ok(json!({
             "schema_version": 1,
             "query": text,
             "task": task,
+            "engine": engine.map(crate::engines::catalog::Engine::name),
             "offline": self.policy == SourcePolicy::Offline,
             "source_policy": self.policy,
             "artifact_generation": store.as_ref().map(|store| store.generation()),
@@ -839,14 +944,16 @@ impl Library {
                 "catalog": {"status": "ok", "count": catalog_matches.len()},
                 "huggingface": {
                     "status": hub_status, "error": hub_error.map(HubError::code),
-                    "cached": cached, "skipped": page.as_ref().map(|page| page.skipped),
+                    "cached": cached,
+                    "skipped": pages.first().map(|(_, page)| page.skipped),
+                    "authenticated": self.hub.token().is_some(),
                 },
                 "local": {"status": if store.is_some() { "ok" } else { "unavailable" }},
             },
             "data": data,
             "page": {
                 "limit": limit,
-                "next_cursor": page.as_ref().and_then(|page| page.next_cursor.clone()),
+                "next_cursor": next_cursor,
             },
             "contains_credentials": false,
         }))
@@ -967,30 +1074,38 @@ impl Library {
             .filter_map(|model| model.bundle(&info.files))
             .collect();
         variants.splice(0..0, bundles);
-        let mut selected: Vec<&quant::Variant> = Vec::new();
-        for file in &requested {
-            let variant = variants
+        variants.extend(checkpoint::variants(
+            &info.files,
+            info.summary.pipeline_tag.as_deref(),
+        ));
+        let listed = |file: &String| {
+            variants
                 .iter()
-                .find(|variant| variant.files.iter().any(|known| &known.path == file))
-                .ok_or_else(|| {
-                    library_error(
-                        StatusCode::NOT_FOUND,
-                        "library_file_not_found",
-                        "The selected model file is not in this repository revision.",
-                    )
-                })?;
-            if !selected
-                .iter()
-                .any(|known| known.primary == variant.primary)
-            {
-                selected.push(variant);
-            }
-        }
-        let [variant] = selected.as_slice() else {
-            return Err(invalid(
-                "Select files from exactly one quantization variant.",
-            ));
+                .any(|variant| variant.files.iter().any(|known| &known.path == file))
         };
+        if !requested.iter().all(listed) {
+            return Err(library_error(
+                StatusCode::NOT_FOUND,
+                "library_file_not_found",
+                "The selected model file is not in this repository revision.",
+            ));
+        }
+        // A file may sit in several variants (a checkpoint's config.json, a bundle's GGUF);
+        // the variant named by its primary file wins, then the first that holds them all.
+        let holding: Vec<&quant::Variant> = variants
+            .iter()
+            .filter(|variant| {
+                requested
+                    .iter()
+                    .all(|file| variant.files.iter().any(|known| &known.path == file))
+            })
+            .collect();
+        let variant = holding
+            .iter()
+            .find(|variant| requested.contains(&variant.primary))
+            .or(holding.first())
+            .copied()
+            .ok_or_else(|| invalid("Select files from exactly one quantization variant."))?;
         if !variant.complete {
             return Err(library_error(
                 StatusCode::UNPROCESSABLE_ENTITY,
@@ -1005,6 +1120,10 @@ impl Library {
                 "The hub did not publish a SHA-256 digest and size for every file.",
             ));
         }
+        let mut variant = variant.clone();
+        self.resolve_small_files(&store, &request.repo, &revision, &mut variant)
+            .await?;
+        let variant = &variant;
         let key = format!("{}@{revision}:{}", request.repo, variant.primary);
         if let Some(existing) = self.find_pull(&key) {
             let mut view = existing
@@ -1014,7 +1133,9 @@ impl Library {
             view["reused_pull"] = json!(true);
             return Ok(view);
         }
-        let names = member_names(&variant.files);
+        let names = checkpoint::member_names(variant)
+            .map(<[String]>::to_vec)
+            .unwrap_or_else(|| member_names(&variant.files));
         let mut parts = Vec::with_capacity(variant.files.len());
         for (file, name) in variant.files.iter().zip(&names) {
             let bytes = file.bytes.expect("verifiable size");
@@ -1034,29 +1155,8 @@ impl Library {
             });
         }
         let set = if parts.len() > 1 {
-            let specification = ArtifactSetSpec {
-                schema_version: 1,
-                origin: ArtifactSetOrigin {
-                    importer_id: IMPORTER_ID.into(),
-                    importer_version: IMPORTER_VERSION.into(),
-                    source_revision: revision.clone(),
-                },
-                primary: names[0].clone(),
-                members: parts
-                    .iter()
-                    .enumerate()
-                    .map(|(index, part)| ArtifactSetMember {
-                        name: names[index].clone(),
-                        role: variant.roles.get(index).copied().unwrap_or(if index == 0 {
-                            ArtifactRole::Model
-                        } else {
-                            ArtifactRole::WeightShard
-                        }),
-                        artifact: part.request.expected_sha256.clone(),
-                        bytes: part.request.maximum_bytes,
-                    })
-                    .collect(),
-            };
+            let specification = set_specification(variant, &names, &revision)
+                .ok_or_else(|| invalid("Select files from exactly one quantization variant."))?;
             let (specification, id) = store.plan_set(specification).map_err(ApiError::from)?;
             Some(PlannedSet {
                 id,
@@ -1116,6 +1216,7 @@ impl Library {
             label: variant.label.clone(),
             parts,
             set,
+            checkpoint: variant.checkpoint,
         }));
         let view = {
             let record = record.lock().unwrap_or_else(|error| error.into_inner());
@@ -1199,6 +1300,138 @@ impl Library {
     }
 }
 
+const CHECKPOINT_SEARCH: usize = 6;
+
+/// The console task a checkpoint kind serves.
+fn kind_task(kind: checkpoint::Kind) -> Task {
+    match kind {
+        checkpoint::Kind::Transformers => Task::Chat,
+        checkpoint::Kind::OnnxClassifier => Task::Classify,
+        checkpoint::Kind::TheNoiseDiffusion => Task::Image,
+    }
+}
+
+/// The model id a checkpoint pull suggests: the repository name.
+fn suggested_id(repo: &str) -> String {
+    repo.split_once('/')
+        .map_or(repo, |(_, name)| name)
+        .to_owned()
+}
+
+/// The artifact set a multi-file variant publishes; `None` until every digest is known.
+fn set_specification(
+    variant: &quant::Variant,
+    names: &[String],
+    revision: &str,
+) -> Option<ArtifactSetSpec> {
+    if names.len() != variant.files.len() {
+        return None;
+    }
+    Some(ArtifactSetSpec {
+        schema_version: 1,
+        origin: ArtifactSetOrigin {
+            importer_id: IMPORTER_ID.into(),
+            importer_version: IMPORTER_VERSION.into(),
+            source_revision: revision.to_owned(),
+        },
+        primary: names.first()?.clone(),
+        members: variant
+            .files
+            .iter()
+            .enumerate()
+            .map(|(index, file)| {
+                Some(ArtifactSetMember {
+                    name: names[index].clone(),
+                    role: variant.roles.get(index).copied().unwrap_or(if index == 0 {
+                        ArtifactRole::Model
+                    } else {
+                        ArtifactRole::WeightShard
+                    }),
+                    artifact: file.sha256.clone()?,
+                    bytes: file.bytes?,
+                })
+            })
+            .collect::<Option<Vec<_>>>()?,
+    })
+}
+
+impl Library {
+    /// SHA-256 digests the store learned for hub files it downloaded, keyed by repository,
+    /// revision and path, so files the hub publishes no digest for are recognised later.
+    fn learned_digests(&self, store: &ArtifactStore) -> BTreeMap<(String, String, String), String> {
+        let Some(prefix) = self.hub.base_prefix() else {
+            return BTreeMap::new();
+        };
+        store
+            .completed_sources(&format!("{prefix}/"), LOCAL_SOURCES)
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|record| {
+                let (repo, revision, path) = self.hub.parse_resolve_url(&record.source_url)?;
+                Some(((repo, revision, path), record.sha256))
+            })
+            .collect()
+    }
+
+    /// The repository name a downloaded checkpoint's primary file came from, as a model id.
+    pub fn checkpoint_id(&self, store: &ArtifactStore, artifact: &str) -> Option<String> {
+        self.learned_digests(store)
+            .into_iter()
+            .find(|(_, digest)| digest == artifact)
+            .map(|((repo, _, _), _)| suggested_id(&repo))
+    }
+
+    /// Learns the SHA-256 of each small file the hub keeps outside LFS by fetching it once and
+    /// checking its size and git blob id against the repository listing.
+    async fn resolve_small_files(
+        &self,
+        store: &ArtifactStore,
+        repo: &str,
+        revision: &str,
+        variant: &mut quant::Variant,
+    ) -> Result<(), ApiError> {
+        if variant.files.iter().all(|file| file.sha256.is_some()) {
+            return Ok(());
+        }
+        let learned = self.learned_digests(store);
+        for file in &mut variant.files {
+            if file.sha256.is_some() {
+                continue;
+            }
+            if let Some(known) =
+                learned.get(&(repo.to_owned(), revision.to_owned(), file.path.clone()))
+            {
+                file.sha256 = Some(known.clone());
+                continue;
+            }
+            let (Some(blob), Some(bytes)) = (file.blob.as_deref(), file.bytes) else {
+                return Err(library_error(
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "library_file_unverifiable",
+                    "The hub did not publish a SHA-256 digest and size for every file.",
+                ));
+            };
+            let body = self
+                .hub
+                .fetch_file(repo, revision, &file.path, checkpoint::SMALL_FILE_BYTES)
+                .await
+                .map_err(hub_api_error)?;
+            if body.len() as u64 != bytes || checkpoint::git_blob(&body) != blob {
+                return Err(library_error(
+                    StatusCode::BAD_GATEWAY,
+                    "library_file_mismatch",
+                    "A repository file did not match the size and git blob id the hub listed.",
+                ));
+            }
+            file.sha256 = Some(format!(
+                "{:x}",
+                <sha2::Sha256 as sha2::Digest>::digest(&body)
+            ));
+        }
+        Ok(())
+    }
+}
+
 fn existing_status(presence: &Presence, digest: &str) -> PartStatus {
     if presence.artifacts.contains_key(digest) {
         return PartStatus::Present { job: None };
@@ -1233,6 +1466,9 @@ async fn start(
     let store = store.clone();
     tokio::task::spawn_blocking(move || {
         let mut attempts = if expected_generation.is_some() { 1 } else { 4 };
+        // A finishing transfer frees its slot just after the store refuses a new one, so a
+        // refusal with free slots is retried before it counts as a hard limit.
+        let mut slot_attempts = 8;
         loop {
             let generation = expected_generation.unwrap_or_else(|| store.generation());
             match store.start_download(download.clone(), generation) {
@@ -1245,6 +1481,10 @@ async fn start(
                     });
                 }
                 Err(ArtifactError::Conflict) if attempts > 1 => attempts -= 1,
+                Err(ArtifactError::Limit) if slot_attempts > 1 && !store.active_work_full() => {
+                    slot_attempts -= 1;
+                    std::thread::sleep(Duration::from_millis(25));
+                }
                 Err(error) => return Err(error),
             }
         }
@@ -1362,7 +1602,14 @@ fn apply_info(
             entry.metadata = "huggingface";
             entry.metadata_error = None;
             entry.files_truncated = Some(info.files_truncated);
-            entry.variants = Some(grouped(&files, model));
+            let mut variants = grouped(&files, model);
+            if model.is_none() {
+                variants.extend(checkpoint::variants(
+                    &files,
+                    info.summary.pipeline_tag.as_deref(),
+                ));
+            }
+            entry.variants = Some(variants);
             if entry.summary.is_none() {
                 entry.summary = Some(info.summary.clone());
             } else if let Some(summary) = &mut entry.summary {
@@ -1454,12 +1701,13 @@ fn entry_json(
     presence: Option<&Presence>,
     cache: Option<&CachePresence>,
     pullable: bool,
+    store: Option<&ArtifactStore>,
 ) -> Value {
     let summary = entry.summary.as_ref();
     let variants = entry.variants.as_ref().map(|variants| {
         variants
             .iter()
-            .map(|variant| variant_json(entry, variant, presence, cache, pullable))
+            .map(|variant| variant_json(entry, variant, presence, cache, pullable, store))
             .collect::<Vec<_>>()
     });
     json!({
@@ -1494,11 +1742,25 @@ fn variant_json(
     presence: Option<&Presence>,
     cache: Option<&CachePresence>,
     pullable: bool,
+    store: Option<&ArtifactStore>,
 ) -> Value {
+    // Several checkpoints can share a primary file such as config.json, so a checkpoint is
+    // present only as the exact set its pull publishes.
+    let checkpoint_set = variant.checkpoint.and_then(|_| {
+        let names = checkpoint::member_names(variant)?;
+        let specification = set_specification(variant, names, entry.revision.as_deref()?)?;
+        store?.plan_set(specification).ok().map(|(_, id)| id)
+    });
     let files: Vec<Value> = variant
         .files
         .iter()
-        .map(|file| json!({"file": file.path, "bytes": file.bytes, "sha256": file.sha256}))
+        .enumerate()
+        .map(|(index, file)| {
+            json!({
+                "file": file.path, "bytes": file.bytes, "sha256": file.sha256,
+                "member": variant.names.get(index),
+            })
+        })
         .collect();
     let digests: Vec<&str> = variant
         .files
@@ -1529,11 +1791,17 @@ fn variant_json(
                     .sets
                     .get(*primary)?
                     .iter()
-                    .find(|_| variant.files.len() > 1)
+                    .find(|id| {
+                        variant.files.len() > 1
+                            && (variant.checkpoint.is_none()
+                                || checkpoint_set.as_deref() == Some(id.as_str()))
+                    })
                     .cloned()
             })
         });
-        let stored = variant.verifiable() && present == variant.files.len();
+        let stored = variant.verifiable()
+            && present == variant.files.len()
+            && (variant.checkpoint.is_none() || set.is_some());
         json!({
             "present": stored || in_cache,
             "present_files": present.max(cached.len()),
@@ -1559,8 +1827,22 @@ fn variant_json(
             })
             .collect::<Vec<_>>()
     });
+    let kind = if variant.checkpoint.is_some() {
+        "checkpoint"
+    } else if variant.roles.is_empty() {
+        "quant"
+    } else {
+        "bundle"
+    };
     json!({
         "label": variant.label,
+        "kind": kind,
+        "format": variant.checkpoint,
+        "engine": variant
+            .checkpoint
+            .map(|kind| kind.engine())
+            .or(entry.catalog.and_then(|model| model.engine))
+            .map(crate::engines::catalog::Engine::name),
         "file": variant.primary,
         "parts": variant.parts,
         "complete": variant.complete,
