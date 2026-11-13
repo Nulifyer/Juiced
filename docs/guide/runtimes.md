@@ -65,6 +65,8 @@ published SHA-256.
 
 - **CUDA builds** of OpenMOSS, ACE-Step, ThinkSound and TRELLIS bundle CUDA 13, so
   they need NVIDIA driver 580 or newer. TRELLIS needs an RTX 30-series GPU or newer.
+  The OpenMOSS CUDA build also needs a CPU with AVX-512; on other CPUs Juiced
+  offers only its Vulkan build.
 - **AMD GPUs** run OpenMOSS, ACE-Step and ThinkSound with their Vulkan builds. Their
   ROCm releases are built for other GPU targets against a ROCm version Juiced
   doesn't pin.

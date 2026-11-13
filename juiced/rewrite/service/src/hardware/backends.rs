@@ -29,6 +29,7 @@ pub enum ReasonCode {
     VulkanUnavailable,
     VulkanUnverified,
     InstallationProvenanceUnresolved,
+    CpuInstructionsMissing,
     DeviceDeclarationUnknown,
 }
 

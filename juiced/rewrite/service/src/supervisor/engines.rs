@@ -317,6 +317,7 @@ impl Manager {
                     catalog::Unresolved::NoMatchingGpu => "No build of this engine backend matches a detected GPU target.",
                     catalog::Unresolved::BackendUnknown | catalog::Unresolved::NotPublished => "This engine has no installable build for that backend.",
                     catalog::Unresolved::NoMatchingNpu => "This engine backend needs an AMD XDNA 2 NPU, and none was detected.",
+                    catalog::Unresolved::CpuUnsupported => "This engine build needs CPU instructions (AVX-512) this processor lacks. Install its Vulkan build instead.",
                 },
             )
         })?;

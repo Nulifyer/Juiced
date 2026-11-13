@@ -306,6 +306,7 @@ pub enum Unresolved {
     NoMatchingGpu,
     NotPublished,
     NoMatchingNpu,
+    CpuUnsupported,
 }
 
 /// Multi-GPU hosts get the highest CUDA compute capability with a published build and a
@@ -327,6 +328,13 @@ pub fn resolve(engine: Engine, backend: &str, host: &HostReport) -> Result<Build
         .collect();
     if candidates.is_empty() {
         return Err(Unresolved::HostUnsupported);
+    }
+    let candidates: Vec<&Build> = candidates
+        .into_iter()
+        .filter(|build| media::cpu_supported(build, host))
+        .collect();
+    if candidates.is_empty() {
+        return Err(Unresolved::CpuUnsupported);
     }
     if let Some(build) = candidates.iter().find(|build| build.gpu_target.is_none()) {
         return Ok(**build);

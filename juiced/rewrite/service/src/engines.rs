@@ -307,15 +307,29 @@ pub fn installable(
                 .iter()
                 .find(|variant| variant.recipe == engine.recipe() && variant.backend == backend);
             let build = resolved.ok();
+            let cpu_unsupported = resolved.err() == Some(catalog::Unresolved::CpuUnsupported);
+            let mut reasons: Vec<crate::hardware::Reason> = variant
+                .map(|variant| variant.reasons.clone())
+                .unwrap_or_default();
+            if cpu_unsupported {
+                reasons.push(crate::hardware::Reason {
+                    code: crate::hardware::ReasonCode::CpuInstructionsMissing,
+                    message:
+                        "This build needs AVX-512, which this CPU lacks. Use the Vulkan build."
+                            .into(),
+                });
+            }
             Installable {
                 engine,
                 backend,
                 build,
                 unresolved: resolved.err(),
-                availability: variant.map(|variant| variant.state),
-                reasons: variant
-                    .map(|variant| variant.reasons.clone())
-                    .unwrap_or_default(),
+                availability: if cpu_unsupported {
+                    Some(Availability::Unavailable)
+                } else {
+                    variant.map(|variant| variant.state)
+                },
+                reasons,
                 recommended: recommended(engine, inventory, host)
                     .is_some_and(|recommendation| recommendation.backend == backend),
                 installed_package: installed

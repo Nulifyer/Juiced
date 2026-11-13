@@ -53,6 +53,21 @@ macro_rules! sd_cuda {
     };
 }
 
+/// The OpenMOSS CUDA release bundles a CPU backend compiled for AVX-512 (it dies with SIGILL
+/// on AVX2-only CPUs such as Zen 2); its Vulkan build has no such requirement.
+const CPU_REQUIREMENTS: &[(Engine, &str, &[&str])] = &[(Engine::OpenMoss, "cuda", &["avx512f"])];
+
+/// Hosts whose CPU report is missing are not refused; detection reports that separately.
+pub(super) fn cpu_supported(build: &Build, host: &crate::hardware::HostReport) -> bool {
+    let Some(cpu) = host.devices.cpu.as_ref().filter(|cpu| !cpu.isa.is_empty()) else {
+        return true;
+    };
+    CPU_REQUIREMENTS
+        .iter()
+        .filter(|(engine, backend, _)| *engine == build.engine && *backend == build.backend)
+        .all(|(_, _, features)| features.iter().all(|feature| cpu.isa.contains(feature)))
+}
+
 pub(super) const ENGINES: &[EngineInfo] = &[
     EngineInfo {
         engine: Engine::WhisperCpp,

@@ -39,7 +39,8 @@ fn gfx1151() -> HostReport {
 
 #[test]
 fn generation_engines_resolve_pinned_releases_per_backend() {
-    let rtx = report(&rtx_host());
+    let mut rtx = report(&rtx_host());
+    rtx.devices.cpu.as_mut().unwrap().isa.push("avx512f");
     for (engine, prefix, tag) in [
         (Engine::AceStep, "acestep", "v0.1.1"),
         (Engine::ThinkSound, "thinksound", "v0.1.2"),
@@ -580,4 +581,31 @@ fn thenoise_bundles_get_their_larger_file_bounds() {
         crate::runtime_bundle::file_limits("thenoise").0,
         crate::runtime_bundle::LARGE_MAX_FILES
     );
+}
+
+#[test]
+fn openmoss_cuda_needs_an_avx512_cpu() {
+    let zen2 = report(&rtx_host());
+    assert_eq!(
+        resolve(Engine::OpenMoss, "cuda", &zen2).unwrap_err(),
+        Unresolved::CpuUnsupported
+    );
+    assert!(resolve(Engine::OpenMoss, "vulkan", &zen2).is_ok());
+    assert!(resolve(Engine::AceStep, "cuda", &zen2).is_ok());
+    let rows = installable(&inventory(&zen2), &zen2, &[]);
+    let row = rows
+        .iter()
+        .find(|row| row.engine == Engine::OpenMoss && row.backend == "cuda")
+        .unwrap();
+    assert_eq!(
+        row.availability,
+        Some(crate::hardware::Availability::Unavailable)
+    );
+    assert_eq!(
+        row.reasons.last().unwrap().code,
+        crate::hardware::ReasonCode::CpuInstructionsMissing
+    );
+    let mut unknown = report(&rtx_host());
+    unknown.devices.cpu = None;
+    assert!(resolve(Engine::OpenMoss, "cuda", &unknown).is_ok());
 }
