@@ -230,4 +230,4 @@ Later (not batched): P1-27 real NPU/hybrid qualification on mage; P1-28 ROCm mat
 
 ## Next action
 
-The user picks the P0/P1 cut, then the primary agent starts B1-B4 in parallel on rc.12 + helper-discovery, with B5 and B6 after B3's options shape lands.
+User direction 2026-11-12: close all v0.9.2 gaps (no P0/P1 cut needed), then the planned additions. P0-12 to P0-15 merged from helper-discovery (19ed3cf4), shipping as rc.13. Running from f090e527: B1 helper-b1, B2 helper-b2, B3 helper-b3, B4 helper-b4, B5 helper-b5. B6 starts when B3 publishes its image-options shape (scratchpad note b3-image-options-shape.md). Then P2 rows and the engine-management round.
