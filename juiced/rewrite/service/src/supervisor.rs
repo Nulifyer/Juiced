@@ -1452,6 +1452,7 @@ pub struct ModelView {
     pub request_limits: Option<crate::resource_profile::Limits>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub residency: Option<ResidencyView>,
+    pub vision: bool,
 }
 
 #[derive(Clone, Serialize)]
@@ -3066,6 +3067,9 @@ impl Manager {
                 })
                 .flatten(),
             residency: None,
+            // Protected request profiles accept only text parts, so images would be refused.
+            vision: worker.spec.execution_profile.binds_projector()
+                && !(worker.protected_memory && worker.spec.resource_profile.is_some()),
             preparation_pending: worker.preparing.load(Ordering::Acquire),
             startup_waiting: worker.startup_waiting.load(Ordering::Acquire),
             id: worker.spec.id.clone(),

@@ -692,6 +692,7 @@ mod tests {
             uncertain_state_operations: 0,
             request_limits: None,
             residency: None,
+            vision: false,
         }
     }
 

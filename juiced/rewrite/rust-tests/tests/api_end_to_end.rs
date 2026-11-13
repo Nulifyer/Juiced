@@ -869,6 +869,31 @@ async fn inference_forwards_original_json_bytes_including_whitespace_and_escaped
 }
 
 #[tokio::test]
+async fn chat_image_parts_reach_the_worker_byte_for_byte() {
+    let server = Server::new(true).await;
+    let image = "A".repeat(1_500_000);
+    let body = format!(
+        r#"{{"model":"fixture.one","max_tokens":8,"messages":[{{"role":"user","content":[{{"type":"text","text":"What is this?"}},{{"type":"image_url","image_url":{{"url":"data:image/jpeg;base64,{image}"}}}}]}}]}}"#
+    );
+    let response = server
+        .client
+        .post(format!("{}/v1/chat/completions", server.base))
+        .bearer_auth(CLIENT_KEY)
+        .header("content-type", "application/json")
+        .body(body.clone())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let value: Value = response.json().await.unwrap();
+    assert_eq!(
+        value["received_body_sha256"],
+        format!("{:x}", Sha256::digest(body.as_bytes()))
+    );
+    assert_eq!(server.model("fixture.one").await["vision"], false);
+}
+
+#[tokio::test]
 async fn policy_and_worker_mutations_function_under_each_native_prefix() {
     let server = Server::new(true).await;
     for prefix in PREFIXES {

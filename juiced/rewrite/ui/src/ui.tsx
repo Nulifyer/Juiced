@@ -8,7 +8,7 @@ export function Button({ variant = "outline", className = "", ...props }: Button
   return <button type="button" className={`button ${variant} ${className}`} {...props} />;
 }
 
-export type IconName = "models" | "policy" | "library" | "backend" | "cache" | "api" | "diagnostics" | "test" | "refresh" | "close" | "menu" | "back" | "settings" | "info" | "chat" | "mic" | "layers" | "pause" | "play" | "download" | "upload" | "github" | "dashboard" | "chevron" | "cpu";
+export type IconName = "models" | "policy" | "library" | "backend" | "cache" | "api" | "diagnostics" | "test" | "refresh" | "close" | "menu" | "back" | "settings" | "info" | "chat" | "mic" | "layers" | "pause" | "play" | "download" | "upload" | "github" | "dashboard" | "chevron" | "cpu" | "check" | "copy" | "pin" | "image";
 const paths: Record<IconName, ReactNode> = {
   models: <><rect x="3" y="3" width="18" height="7" rx="2" /><rect x="3" y="14" width="18" height="7" rx="2" /><path d="M7 6h.01M7 17h.01" /></>,
   policy: <><path d="M4 6h16M4 12h16M4 18h16M8 3v6M16 9v6M10 15v6" /></>,
@@ -35,6 +35,10 @@ const paths: Record<IconName, ReactNode> = {
   dashboard: <><rect x="3" y="3" width="7" height="9" rx="1.5" /><rect x="14" y="3" width="7" height="5" rx="1.5" /><rect x="14" y="12" width="7" height="9" rx="1.5" /><rect x="3" y="16" width="7" height="5" rx="1.5" /></>,
   chevron: <path d="m6 9 6 6 6-6" />,
   cpu: <><rect x="6" y="6" width="12" height="12" rx="2" /><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4" /></>,
+  check: <path d="m5 12 5 5 9-10" />,
+  copy: <><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h8" /></>,
+  pin: <><path d="M9 4h6l-1 6 3 3v2H7v-2l3-3Z" /><path d="M12 15v6" /></>,
+  image: <><rect x="3" y="4" width="18" height="16" rx="2" /><circle cx="9" cy="10" r="2" /><path d="m21 16-5-5-9 9" /></>,
 };
 export function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[name]}</svg>;

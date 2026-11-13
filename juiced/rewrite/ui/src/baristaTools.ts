@@ -1,4 +1,5 @@
 import { ApiError, type Client } from "./api";
+import { REQUEST_LIMIT_BYTES, requestBytes, tooLarge, type MessageContent } from "./chatImages";
 import { bytes, policyNames, type Model, type Policy } from "./domain";
 
 export type Permission = "full" | "ask" | "read_only";
@@ -6,7 +7,8 @@ export type BaristaTool = { name: string; title?: string; description?: string; 
 export type BaristaSettings = { enabled: boolean; model: string | null; permission: Permission; revision: number; qualified: boolean; tools: BaristaTool[] };
 export type ToolCall = { id: string; name: string; arguments: string };
 export type ChatMessage =
-  | { role: "system" | "user"; content: string }
+  | { role: "system"; content: string }
+  | { role: "user"; content: MessageContent }
   | { role: "assistant"; content: string | null; tool_calls?: { id: string; type: "function"; function: { name: string; arguments: string } }[] }
   | { role: "tool"; tool_call_id: string; content: string };
 export type ToolResult = { ok: boolean; text: string; value: unknown };
@@ -92,7 +94,9 @@ export function accumulate(reply: Reply, chunk: any): Reply {
 }
 
 export async function streamReply(client: Client, model: string, messages: ChatMessage[], tools: BaristaTool[], maxTokens: number, onUpdate: (reply: Reply) => void, signal?: AbortSignal): Promise<Reply> {
-  const response = await client.stream("chat/completions", { model, messages, tools: functionTools(tools), stream: true, max_tokens: maxTokens }, signal);
+  const body = { model, messages, tools: functionTools(tools), stream: true, max_tokens: maxTokens };
+  if (requestBytes(body) > REQUEST_LIMIT_BYTES) throw new ApiError(tooLarge, 413, "request_too_large");
+  const response = await client.stream("chat/completions", body, signal);
   if (!response.ok || !response.body) {
     let message = `The model request failed (${response.status}).`;
     try { const value = await response.json(); message = value?.error?.message ?? message; } catch { /* Error bodies are optional. */ }

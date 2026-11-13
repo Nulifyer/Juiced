@@ -1,15 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, type Client } from "./api";
 import { MAX_STEPS, action, callTool, candidates, describe, implication, outcome, parseArguments, permissionHelp, permissionNames, readOnly, stopCodes, streamReply, systemPrompt, type BaristaSettings, type ChatMessage, type Permission } from "./baristaTools";
+import { withImages, withoutImages } from "./chatImages";
+import { AssistantBody, Composer, UserBody, thinkingClock, useAttachments } from "./ChatParts";
 import type { Model } from "./domain";
-import { Message } from "./ServiceTest";
 import { Badge, Button, Empty, HelpTip, Icon } from "./ui";
 import "./barista.css";
 
 type Step = "running" | "pending" | "done" | "failed" | "skipped";
 type Item =
-  | { id: number; kind: "user"; text: string }
-  | { id: number; kind: "assistant"; text: string; reasoning: string; streaming: boolean }
+  | { id: number; kind: "user"; text: string; images?: string[] }
+  | { id: number; kind: "assistant"; text: string; reasoning: string; streaming: boolean; since?: number; thoughtMs?: number }
   | { id: number; kind: "tool"; name: string; label: string; change: boolean; step: Step; detail?: string }
   | { id: number; kind: "note"; text: string };
 type NewItem = Item extends infer Entry ? Entry extends Item ? Omit<Entry, "id"> : never : never;
@@ -25,12 +26,39 @@ function restore(): Saved {
   } catch { return { items: [], messages: [] }; }
 }
 function persist(saved: Saved) {
-  try { sessionStorage.setItem(storageKey, JSON.stringify(saved)); } catch { /* Session storage can be unavailable or full. */ }
+  try { sessionStorage.setItem(storageKey, JSON.stringify(saved)); return; } catch { /* Images can exceed the session storage quota. */ }
+  try { sessionStorage.setItem(storageKey, JSON.stringify({ items: saved.items.map((item) => item.kind === "user" ? { ...item, images: undefined } : item), messages: withoutImages(saved.messages) })); } catch { /* Session storage can be unavailable. */ }
 }
 
 /** The invitation decision is a client preference. Juiced has no stable installation ID yet, so it is keyed by service origin. */
 export function invitationKey(base: string): string {
   return `juiced.barista.invitation:${base || location.origin}`;
+}
+
+const panelKey = "juiced.barista.panel";
+const dockQuery = "(min-width: 1100px)";
+
+/** Whether the panel is open and pinned is a per-client preference, so it lives in this browser. */
+export function useBaristaPanel() {
+  const [state, setState] = useState<{ open: boolean; pinned: boolean }>(() => {
+    try { const saved = JSON.parse(localStorage.getItem(panelKey) ?? "null"); return { open: saved?.open === true, pinned: saved?.pinned === true }; } catch { return { open: false, pinned: false }; }
+  });
+  const [dockable, setDockable] = useState(() => typeof matchMedia === "function" && matchMedia(dockQuery).matches);
+  useEffect(() => {
+    if (typeof matchMedia !== "function") return;
+    const query = matchMedia(dockQuery);
+    const change = () => setDockable(query.matches);
+    change(); query.addEventListener("change", change);
+    return () => query.removeEventListener("change", change);
+  }, []);
+  const update = useCallback((change: Partial<{ open: boolean; pinned: boolean }>) => setState((current) => {
+    const next = { ...current, ...change };
+    try { localStorage.setItem(panelKey, JSON.stringify(next)); } catch { /* Storage can be unavailable in private sessions. */ }
+    return next;
+  }), []);
+  const setOpen = useCallback((open: boolean) => update({ open }), [update]);
+  const onPin = useCallback((pinned: boolean) => update({ pinned }), [update]);
+  return { open: state.open, setOpen, docked: state.pinned && dockable, layout: { pinned: state.pinned, dockable, onPin } };
 }
 
 /** Barista settings for operators. Other callers get null and see no Barista controls. */
@@ -92,7 +120,16 @@ function Setup({ settings, models, client, online, onSaved, onDisable, onChanged
   </form>;
 }
 
-export function Barista({ open, onClose, models, client, online, settings, onSettings, onChanged }: { open: boolean; onClose: () => void; models: Model[]; client: Client; online: boolean; settings: BaristaSettings; onSettings: (settings: BaristaSettings) => void; onChanged: () => void }) {
+function StepIcon({ step }: { step: Step }) {
+  if (step === "running" || step === "pending") return <span className="step-spinner" aria-hidden="true" />;
+  if (step === "done") return <span className="step-icon done"><Icon name="check" size={13} /></span>;
+  if (step === "failed") return <span className="step-icon failed"><Icon name="close" size={13} /></span>;
+  return <span className="step-icon skipped" aria-hidden="true">–</span>;
+}
+
+export type BaristaLayout = { pinned: boolean; dockable: boolean; onPin: (pinned: boolean) => void };
+
+export function Barista({ open, onClose, models, ready, client, online, settings, onSettings, onChanged, layout }: { open: boolean; onClose: () => void; models: Model[]; ready: boolean; client: Client; online: boolean; settings: BaristaSettings; onSettings: (settings: BaristaSettings) => void; onChanged: () => void; layout: BaristaLayout }) {
   const [saved] = useState(restore);
   const [items, setItems] = useState<Item[]>(saved.items);
   const messages = useRef<ChatMessage[]>(saved.messages);
@@ -105,20 +142,30 @@ export function Barista({ open, onClose, models, client, online, settings, onSet
   const nextId = useRef(Math.max(0, ...saved.items.map((item) => item.id)) + 1);
   const thread = useRef<HTMLDivElement>(null);
   const field = useRef<HTMLTextAreaElement>(null);
+  const wasOpen = useRef(open);
   const model = models.find((entry) => entry.id === settings.model);
+  const vision = model?.vision === true;
+  const attachments = useAttachments(vision);
   const waiting = items.some((item) => item.kind === "tool" && item.step === "pending");
+  const docked = layout.pinned && layout.dockable;
+  const gone = ready && settings.enabled && !model;
+  const setup = !settings.enabled || showSettings || gone;
 
   const stop = useCallback(() => { request.current?.abort(); for (const resolve of approvals.current.values()) resolve(false); }, []);
   useEffect(() => { persist({ items, messages: messages.current }); thread.current?.scrollTo({ top: thread.current.scrollHeight }); }, [items]);
   useEffect(() => stop, [client, stop]);
   useEffect(() => { if (!settings.enabled) { stop(); setShowSettings(false); } }, [settings.enabled, stop]);
   useEffect(() => {
-    if (!open) return;
-    if (settings.enabled && !showSettings) field.current?.focus();
+    const opened = open && !wasOpen.current;
+    wasOpen.current = open;
+    if (opened && !setup) field.current?.focus();
+  }, [open, setup]);
+  useEffect(() => {
+    if (!open || docked) return;
     const onKey = (event: KeyboardEvent) => { if (event.key === "Escape" && !document.querySelector("dialog[open], [popover]:popover-open")) onClose(); };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose, settings.enabled, showSettings]);
+  }, [open, docked, onClose]);
 
   const add = (item: NewItem) => { const id = nextId.current++; setItems((current) => [...current, { ...item, id } as Item]); return id; };
   const patch = (id: number, change: Partial<Item>) => setItems((current) => current.map((item) => item.id === id ? { ...item, ...change } as Item : item));
@@ -127,12 +174,13 @@ export function Barista({ open, onClose, models, client, online, settings, onSet
 
   async function send() {
     const text = input.trim();
-    if (!text || busy || !model) return;
-    setInput(""); setBusy(true); setTask(text);
+    const images = attachments.list;
+    if ((!text && images.length === 0) || busy || !model) return;
+    setInput(""); attachments.clear(); setBusy(true); setTask(text || "Image");
     const controller = new AbortController(); request.current = controller;
     const signal = controller.signal;
-    add({ kind: "user", text });
-    messages.current = [...messages.current, { role: "user", content: text }];
+    add({ kind: "user", text, ...(images.length ? { images: images.map((image) => image.url) } : {}) });
+    messages.current = [...messages.current, { role: "user", content: withImages(text, images) }];
     try {
       const current = await client.request<BaristaSettings>("juiced/barista", undefined, signal);
       onSettings(current);
@@ -143,10 +191,12 @@ export function Barista({ open, onClose, models, client, online, settings, onSet
       let finished = false;
       for (let step = 0; step < MAX_STEPS && !finished; step += 1) {
         const reply = add({ kind: "assistant", text: "", reasoning: "", streaming: true });
-        const answer = await streamReply(client, model.id, [system, ...messages.current], current.tools, replyTokens(model), (state) => patch(reply, { text: state.content, reasoning: state.reasoning }), signal);
+        const clock = thinkingClock();
+        const answer = await streamReply(client, model.id, [system, ...messages.current], current.tools, replyTokens(model), (state) => patch(reply, { text: state.content, reasoning: state.reasoning, ...clock.observe(state.reasoning, !!state.content || state.toolCalls.length > 0) }), signal);
         const calls = answer.toolCalls;
+        const thoughtMs = clock.finish();
         if (!answer.content && !answer.reasoning && calls.length) setItems((list) => list.filter((item) => item.id !== reply));
-        else patch(reply, { text: answer.content || (calls.length ? "" : "The model returned no text."), reasoning: answer.reasoning, streaming: false });
+        else patch(reply, { text: answer.content || (calls.length ? "" : "The model returned no text."), reasoning: answer.reasoning, thoughtMs, streaming: false });
         messages.current = [...messages.current, { role: "assistant", content: answer.content || null, ...(calls.length ? { tool_calls: calls.map((call) => ({ id: call.id, type: "function" as const, function: { name: call.name, arguments: call.arguments || "{}" } })) } : {}) }];
         if (!calls.length) { finished = true; break; }
         let changed = false;
@@ -197,42 +247,38 @@ export function Barista({ open, onClose, models, client, online, settings, onSet
   function reset() { messages.current = []; setItems([]); }
 
   const blocked = !online ? "The service is offline."
-    : !model ? `${settings.model ?? "The Barista model"} is no longer registered. Pick another model in settings.`
-    : model.policy === "disabled" ? `${model.id} is Disabled. Set it to On demand, or pick another model in settings.` : "";
-  const setup = !settings.enabled || showSettings;
+    : model?.policy === "disabled" ? `${model.id} is Disabled. Set it to On demand, or pick another model in settings.` : "";
   const activity = waiting ? "Waiting for your approval" : busy ? `Working on "${task.length > 48 ? `${task.slice(0, 47)}…` : task}"` : "Ready";
-  return <aside className="barista-panel" aria-label="Barista" hidden={!open}>
+  return <aside className={`barista-panel ${docked ? "docked" : "overlay"}`} aria-label="Barista" hidden={!open}>
     <div className="barista-head">
       <h2>Barista</h2>
       <HelpTip label="Barista">Barista reads and changes Juiced through the same checks as the console. It cannot change its own permissions. Turning it off stops its current request. Changes that already finished stay in place.</HelpTip>
       <span className="barista-spacer" />
       {settings.enabled && !setup && items.length > 0 && !busy && <Button variant="ghost" onClick={reset}>Clear</Button>}
-      {settings.enabled && <Button variant="ghost" aria-label="Barista settings" aria-pressed={showSettings} onClick={() => setShowSettings(!showSettings)}><Icon name="settings" size={16} /></Button>}
-      <Button variant="ghost" aria-label="Close Barista" onClick={onClose}><Icon name="close" /></Button>
+      {layout.dockable && <Button variant="ghost" className="barista-icon" aria-label="Pin Barista" title={layout.pinned ? "Unpin, so Barista opens over the page" : "Pin beside the page"} aria-pressed={layout.pinned} onClick={() => layout.onPin(!layout.pinned)}><Icon name="pin" size={16} /></Button>}
+      {settings.enabled && !gone && <Button variant="ghost" className="barista-icon" aria-label="Barista settings" aria-pressed={showSettings} onClick={() => setShowSettings(!showSettings)}><Icon name="settings" size={16} /></Button>}
+      <Button variant="ghost" className="barista-icon" aria-label="Close Barista" onClick={onClose}><Icon name="close" /></Button>
     </div>
-    {settings.enabled && <p className="barista-meta" aria-label="Barista status"><span className="barista-model">{settings.model}</span><Badge>{permissionNames[settings.permission]}</Badge><span className={`barista-task ${busy ? "active" : ""}`}>{activity}</span></p>}
-    {setup ? <Setup key={`${settings.revision}:${settings.enabled}`} settings={settings} models={models} client={client} online={online} onSaved={(next) => { onSettings(next); setShowSettings(false); }} onDisable={stop} onChanged={onChanged} /> : <>
+    {settings.enabled && !setup && <p className="barista-meta" aria-label="Barista status"><span className="barista-model">{settings.model}</span><Badge>{permissionNames[settings.permission]}</Badge>{vision && <Badge>Images</Badge>}<span className={`barista-task ${busy ? "active" : ""}`}>{activity}</span></p>}
+    {setup ? <>
+      {gone && <p className="barista-blocked" role="status">{settings.model ?? "The Barista model"} is no longer registered. Pick another model.</p>}
+      <Setup key={`${settings.revision}:${settings.enabled}`} settings={settings} models={models} client={client} online={online} onSaved={(next) => { onSettings(next); setShowSettings(false); }} onDisable={stop} onChanged={onChanged} />
+    </> : <>
       <div ref={thread} className="barista-thread" aria-live="polite" aria-busy={busy}>
         {items.length === 0 ? <Empty title="Ask Barista">Try "Which models fit this machine?" or "Load a small chat model". This chat clears when you close the tab.</Empty> : items.map((item) => {
-          if (item.kind === "user") return <article key={item.id} className="chat-turn user" aria-label="You"><Message text={item.text} /></article>;
-          if (item.kind === "assistant") return <article key={item.id} className="chat-turn assistant" aria-label="Barista reply">
-            {item.reasoning && <div className="chat-reasoning"><Message text={item.reasoning} /></div>}
-            {item.text ? <Message text={item.text} /> : item.streaming && <p className="muted">Thinking…</p>}
-          </article>;
+          if (item.kind === "user") return <article key={item.id} className="chat-turn user" aria-label="You"><UserBody text={item.text} images={item.images} /></article>;
+          if (item.kind === "assistant") return <article key={item.id} className="chat-turn assistant" aria-label="Barista reply"><AssistantBody text={item.text} reasoning={item.reasoning} streaming={item.streaming} since={item.since} thoughtMs={item.thoughtMs} /></article>;
           if (item.kind === "note") return <p key={item.id} className="barista-note" role="status">{item.text}</p>;
-          if (!item.change) return <div key={item.id} className={`barista-step ${item.step}`} aria-label="Tool step"><span className={`status-dot ${item.step === "done" ? "good" : item.step === "failed" ? "bad" : "warning"}`} /><span>{item.label}{item.step === "running" ? "…" : ""}</span>{item.detail && <span className="barista-detail">{item.detail}</span>}</div>;
+          if (!item.change) return <div key={item.id} className={`barista-step ${item.step}`} aria-label="Tool step"><StepIcon step={item.step} /><span className="barista-step-label">{item.label}</span>{item.detail && <span className="barista-detail">{item.detail}</span>}</div>;
           return <div key={item.id} className={`barista-change ${item.step}`} role="group" aria-label="Change">
-            <p className="barista-question">{item.label}</p>
+            <p className="barista-question"><StepIcon step={item.step} />{item.label}</p>
             {item.step === "pending" ? <div className="action-row"><Button variant="primary" onClick={() => decide(item.id, true)}>Approve</Button><Button onClick={() => decide(item.id, false)}>Skip</Button></div>
               : <p className="barista-result"><Badge tone={item.step === "done" ? "good" : item.step === "failed" ? "bad" : "quiet"}>{item.step === "done" ? "Done" : item.step === "failed" ? "Failed" : item.step === "running" ? "Running" : "Skipped"}</Badge>{item.detail && <span>{item.detail}</span>}</p>}
           </div>;
         })}
       </div>
       {blocked && <p className="barista-blocked" role="status">{blocked}</p>}
-      <form className="composer" onSubmit={(event) => { event.preventDefault(); void send(); }}>
-        <textarea ref={field} aria-label="Message Barista" rows={2} value={input} placeholder="Ask about models, engines or settings" onChange={(event) => setInput(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); } }} />
-        {busy ? <Button variant="danger" onClick={stop}>Stop</Button> : <Button variant="primary" type="submit" disabled={!input.trim() || !!blocked}>Send</Button>}
-      </form>
+      <Composer label="Message Barista" placeholder={vision ? "Ask about Juiced, or add a screenshot" : "Ask about models, engines or settings"} value={input} onChange={setInput} onSubmit={() => void send()} busy={busy} onStop={stop} canSend={(!!input.trim() || attachments.list.length > 0) && !!model && !blocked} attachments={attachments} vision={vision} inputRef={field} />
     </>}
   </aside>;
 }
