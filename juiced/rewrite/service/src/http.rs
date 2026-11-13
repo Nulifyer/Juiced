@@ -17,7 +17,7 @@ use futures_util::{StreamExt, stream};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{path::PathBuf, sync::Arc};
-use tower_http::{cors::CorsLayer, services::ServeDir};
+use tower_http::services::ServeDir;
 
 pub use crate::auth::Auth;
 use crate::auth::{Authority, Authorization, RequestContext};
@@ -188,7 +188,7 @@ macro_rules! define_routes {
 define_routes! {
     (get, "/health", health, "read"),
     (get, "/models", models, "read"),
-    (get, "/system-info", system_info, "operator"),
+    (get, "/system-info", system_info, "read"),
     (get, "/juiced/catalog", catalog, "read"),
     (get, "/juiced/state", service_state, "read"),
     (get, "/juiced/requests", requests, "operator"),
@@ -243,7 +243,7 @@ define_routes! {
     (post, "/responses", responses, "inference"),
     (post, "/embeddings", embeddings, "inference"),
     (post, "/audio/transcriptions", transcription, "inference"),
-    (get, "/system-stats", system_stats, "operator"),
+    (get, "/system-stats", system_stats, "read"),
     (get, "/juiced/logs", logs, "operator"),
     (get, "/juiced/library/search", library_search, "operator"),
     (post, "/juiced/library/pull", library_pull, "operator"),
@@ -289,6 +289,7 @@ define_routes! {
     (post, "/slots/{slot}", slot_action, "inference"),
     (get, "/stats", stats, "read"),
     (get, "/audio/voices", audio_voices, "read"),
+    (get, "/logs/stream", log_stream, "read"),
 }
 async fn residency(State(state): State<AppState>) -> impl IntoResponse {
     (
@@ -1304,6 +1305,10 @@ pub fn router(manager: Arc<Manager>, auth: Auth, ui: Option<PathBuf>) -> Router 
         .layer(Extension(Arc::new(crate::realtime::Sessions::default())))
         .merge(crate::compat::router(state.manager.clone()))
         .merge(crate::a1111::router(state.manager.clone()))
+        .merge(crate::metrics::router(
+            state.manager.clone(),
+            state.auth.clone(),
+        ))
         .layer(DefaultBodyLimit::max(crate::admission::JSON_INGRESS_BYTES))
         .layer(middleware::from_fn_with_state(state.clone(), authorize))
         .merge(crate::llama_routes::public());
@@ -1311,12 +1316,10 @@ pub fn router(manager: Arc<Manager>, auth: Auth, ui: Option<PathBuf>) -> Router 
     if let Some(ui) = ui {
         app = app.fallback_service(ServeDir::new(ui).append_index_html_on_directories(true));
     }
-    app.layer(
-        CorsLayer::new()
-            .allow_origin(tower_http::cors::Any)
-            .allow_methods(tower_http::cors::Any)
-            .allow_headers(tower_http::cors::Any),
-    )
+    app.layer(middleware::from_fn_with_state(
+        state.manager.clone(),
+        crate::cors::layer,
+    ))
 }
 
 async fn catalog(State(state): State<AppState>, headers: HeaderMap) -> Response {
@@ -2027,6 +2030,15 @@ async fn wyoming_set(
                 "The Wyoming change was interrupted. Refresh before retrying.",
             )
         })?
+}
+async fn log_stream(
+    State(state): State<AppState>,
+    upgrade: Result<
+        axum::extract::ws::WebSocketUpgrade,
+        axum::extract::ws::rejection::WebSocketUpgradeRejection,
+    >,
+) -> Response {
+    crate::metrics::log_stream(state.manager, state.auth, upgrade).await
 }
 async fn realtime(
     State(state): State<AppState>,

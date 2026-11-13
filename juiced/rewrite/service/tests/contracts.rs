@@ -84,6 +84,8 @@ impl Harness {
             protocols: Default::default(),
             barista: Default::default(),
             native_adoption: None,
+            log_level: None,
+            allowed_origins: None,
         };
         change(&mut config);
         let path = dir.path().join("config.json");
@@ -317,12 +319,28 @@ async fn all_prefixes_enforce_regular_and_operator_authority() {
         },
         None,
     );
+    for key in [None, Some("wrong"), Some("operator")] {
+        assert_eq!(
+            call(app.clone(), "/v1/health", None, key).await.0,
+            StatusCode::OK
+        );
+        assert_eq!(
+            call(app.clone(), "/v1/chat/completions", Some(json!({})), key)
+                .await
+                .0,
+            StatusCode::BAD_REQUEST
+        );
+    }
+    for key in [None, Some("wrong")] {
+        assert_eq!(
+            call(app.clone(), "/v1/juiced/requests", None, key).await.0,
+            StatusCode::UNAUTHORIZED
+        );
+    }
     assert_eq!(
-        call(app.clone(), "/v1/health", None, None).await.0,
-        StatusCode::UNAUTHORIZED
-    );
-    assert_eq!(
-        call(app, "/v1/health", None, Some("operator")).await.0,
+        call(app, "/v1/juiced/requests", None, Some("operator"))
+            .await
+            .0,
         StatusCode::OK
     );
 }

@@ -1,10 +1,14 @@
 use serde::Serialize;
 use std::{
     collections::VecDeque,
-    io::Read,
-    sync::{Arc, Mutex},
+    io::{Read, Write},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU8, Ordering},
+    },
     time::{SystemTime, UNIX_EPOCH},
 };
+use tokio::sync::watch;
 
 pub const CAPACITY_LINES: usize = 4096;
 pub const CAPACITY_BYTES: usize = 8 * 1024 * 1024;
@@ -21,6 +25,69 @@ pub enum Level {
     Warning,
     Info,
     Debug,
+}
+
+impl Level {
+    fn rank(self) -> u8 {
+        match self {
+            Self::Error => 1,
+            Self::Warning => 2,
+            Self::Info => 3,
+            Self::Debug => 4,
+        }
+    }
+
+    fn severity(self) -> &'static str {
+        match self {
+            Self::Error => "Error",
+            Self::Warning => "Warn",
+            Self::Info => "Info",
+            Self::Debug => "Debug",
+        }
+    }
+}
+
+/// The most verbose level mirrored to stderr; `None` mirrors nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Threshold(Option<Level>);
+
+impl Threshold {
+    pub const DEFAULT: Self = Self(Some(Level::Info));
+    pub const OFF: Self = Self(None);
+
+    /// Accepts the native `log_level` names.
+    pub fn parse(text: &str) -> Option<Self> {
+        Some(Self(match text.trim().to_ascii_lowercase().as_str() {
+            "trace" | "debug" => Some(Level::Debug),
+            "info" => Some(Level::Info),
+            "warning" | "warn" => Some(Level::Warning),
+            "error" | "fatal" => Some(Level::Error),
+            "none" => None,
+            _ => return None,
+        }))
+    }
+
+    /// `LEMONADE_LOG_LEVEL` overrides the configured `log_level`. An unusable environment
+    /// value is reported and ignored rather than silencing the service.
+    pub fn resolve(configured: Option<&str>) -> (Self, Option<String>) {
+        let configured = configured.and_then(Self::parse).unwrap_or(Self::DEFAULT);
+        match std::env::var("LEMONADE_LOG_LEVEL") {
+            Ok(value) if !value.trim().is_empty() => match Self::parse(&value) {
+                Some(level) => (level, None),
+                None => (
+                    configured,
+                    Some(format!(
+                        "Ignoring LEMONADE_LOG_LEVEL={value:?}; use trace, debug, info, warning, error, fatal or none."
+                    )),
+                ),
+            },
+            _ => (configured, None),
+        }
+    }
+
+    fn encode(self) -> u8 {
+        self.0.map_or(0, Level::rank)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -50,6 +117,65 @@ pub struct Line {
     pub truncated: bool,
 }
 
+impl Line {
+    fn severity(&self) -> &'static str {
+        self.level.unwrap_or(Level::Info).severity()
+    }
+
+    pub fn timestamp(&self) -> String {
+        format_timestamp(self.timestamp_ms)
+    }
+
+    /// The native single-line rendering, as written to the container log.
+    pub fn render(&self) -> String {
+        format!(
+            "{} [{}] ({}) {}",
+            self.timestamp(),
+            self.severity(),
+            self.source,
+            self.text
+        )
+    }
+
+    /// The native `/logs/stream` entry shape.
+    pub fn entry(&self) -> serde_json::Value {
+        serde_json::json!({
+            "seq": self.seq,
+            "timestamp": self.timestamp(),
+            "severity": self.severity(),
+            "tag": self.source,
+            "line": self.render(),
+        })
+    }
+}
+
+fn format_timestamp(timestamp_ms: u64) -> String {
+    let seconds = timestamp_ms / 1000;
+    let days = (seconds / 86_400) as i64;
+    let of_day = seconds % 86_400;
+    let shifted = days + 719_468;
+    let era = shifted.div_euclid(146_097);
+    let day_of_era = shifted.rem_euclid(146_097);
+    let year_of_era =
+        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_index = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_index + 2) / 5 + 1;
+    let month = if month_index < 10 {
+        month_index + 3
+    } else {
+        month_index - 9
+    };
+    let year = year_of_era + era * 400 + i64::from(month <= 2);
+    format!(
+        "{year:04}-{month:02}-{day:02} {:02}:{:02}:{:02}.{:03}",
+        of_day / 3600,
+        of_day / 60 % 60,
+        of_day % 60,
+        timestamp_ms % 1000
+    )
+}
+
 #[derive(Debug, Serialize)]
 pub struct Page {
     pub data: Vec<Line>,
@@ -71,6 +197,8 @@ pub struct LogBuffer {
     capacity_bytes: usize,
     service: Arc<str>,
     inner: Mutex<Inner>,
+    mirror: AtomicU8,
+    published: watch::Sender<u64>,
 }
 
 fn now_ms() -> u64 {
@@ -100,7 +228,18 @@ impl LogBuffer {
                 bytes: 0,
                 next_seq: 1,
             }),
+            mirror: AtomicU8::new(Threshold::OFF.encode()),
+            published: watch::channel(0).0,
         })
+    }
+
+    pub fn mirror_to_stderr(&self, threshold: Threshold) {
+        self.mirror.store(threshold.encode(), Ordering::Relaxed);
+    }
+
+    /// Changes whenever a line is retained; the value is the latest sequence number.
+    pub fn subscribe(&self) -> watch::Receiver<u64> {
+        self.published.subscribe()
     }
 
     pub fn service(&self, level: Level, message: &str) {
@@ -147,6 +286,9 @@ impl LogBuffer {
             text,
             truncated: truncated || clipped,
         };
+        let mirrored = (line.level.unwrap_or(Level::Info).rank()
+            <= self.mirror.load(Ordering::Relaxed))
+        .then(|| line.render());
         inner.bytes += line_cost(&line);
         inner.lines.push_back(line);
         while inner.lines.len() > self.capacity_lines || inner.bytes > self.capacity_bytes {
@@ -154,6 +296,12 @@ impl LogBuffer {
                 break;
             };
             inner.bytes -= line_cost(&evicted);
+        }
+        drop(inner);
+        self.published.send_replace(seq);
+        if let Some(mut rendered) = mirrored {
+            rendered.push('\n');
+            let _ = std::io::stderr().lock().write_all(rendered.as_bytes());
         }
         Some(seq)
     }
@@ -205,6 +353,113 @@ impl LogBuffer {
             .stack_size(READER_STACK)
             .spawn(move || drain(&buffer, &origin, stream, reader))
             .map(drop)
+    }
+}
+
+/// Serves the native `/logs/stream` protocol: nothing is sent until `logs.subscribe`, which
+/// answers with one `logs.snapshot` of the retained lines and then a `logs.entry` per new line.
+/// `accepts` validates the token of an in-band `auth` message.
+pub async fn stream(
+    buffer: Arc<LogBuffer>,
+    mut socket: axum::extract::ws::WebSocket,
+    accepts: impl Fn(&str) -> bool + Send,
+) {
+    use axum::extract::ws::Message;
+    let mut updates = buffer.subscribe();
+    let mut cursor: Option<u64> = None;
+    loop {
+        let outgoing = tokio::select! {
+            message = socket.recv() => {
+                let text = match message {
+                    Some(Ok(Message::Text(text))) => text.to_string(),
+                    Some(Ok(Message::Binary(bytes))) => String::from_utf8_lossy(&bytes).into_owned(),
+                    Some(Ok(Message::Ping(_) | Message::Pong(_))) => continue,
+                    Some(Ok(Message::Close(_))) => {
+                        let _ = socket.send(Message::Close(None)).await;
+                        break;
+                    }
+                    _ => break,
+                };
+                match client_message(&text, &accepts) {
+                    Ok(Some(after)) => {
+                        let (entries, next) = collect(&buffer, after.unwrap_or(0), usize::MAX);
+                        cursor = Some(next);
+                        vec![serde_json::json!({"type": "logs.snapshot", "entries": entries})]
+                    }
+                    Ok(None) => vec![serde_json::json!({"type": "auth.ok"})],
+                    Err(message) => vec![serde_json::json!({"type": "error", "error": {"message": message, "type": "invalid_request_error"}})],
+                }
+            }
+            changed = updates.changed(), if cursor.is_some() => {
+                if changed.is_err() {
+                    break;
+                }
+                let (entries, next) = collect(&buffer, cursor.unwrap_or(0), MAXIMUM_PAGE);
+                cursor = Some(next);
+                if next < *updates.borrow() {
+                    updates.mark_changed();
+                }
+                entries
+                    .into_iter()
+                    .map(|entry| serde_json::json!({"type": "logs.entry", "entry": entry}))
+                    .collect()
+            }
+        };
+        for message in outgoing {
+            if socket
+                .send(Message::Text(message.to_string().into()))
+                .await
+                .is_err()
+            {
+                return;
+            }
+        }
+    }
+}
+
+/// `Ok(Some(after_seq))` subscribes, `Ok(None)` acknowledges a valid `auth` message.
+fn client_message(
+    text: &str,
+    accepts: &impl Fn(&str) -> bool,
+) -> Result<Option<Option<u64>>, String> {
+    let request: serde_json::Value =
+        serde_json::from_str(text).map_err(|error| format!("Invalid JSON: {error}"))?;
+    match request["type"].as_str().unwrap_or_default() {
+        "logs.subscribe" => match &request["after_seq"] {
+            serde_json::Value::Null => Ok(Some(None)),
+            value => value
+                .as_u64()
+                .map(|after| Some(Some(after)))
+                .ok_or_else(|| "after_seq must be null or a non-negative integer".to_owned()),
+        },
+        "auth" => {
+            let token = request["token"]
+                .as_str()
+                .filter(|token| !token.is_empty())
+                .or_else(|| request["api_key"].as_str())
+                .unwrap_or_default();
+            let token = token.strip_prefix("Bearer ").unwrap_or(token);
+            if accepts(token) {
+                Ok(None)
+            } else {
+                Err("Invalid API key".to_owned())
+            }
+        }
+        _ => Err("Expected logs.subscribe message".to_owned()),
+    }
+}
+
+fn collect(buffer: &LogBuffer, mut after: u64, limit: usize) -> (Vec<serde_json::Value>, u64) {
+    let mut entries = Vec::new();
+    loop {
+        let page = buffer.read(after, MAXIMUM_PAGE, None);
+        let full = page.data.len() == MAXIMUM_PAGE;
+        entries.extend(page.data.iter().map(Line::entry));
+        let advanced = page.next != after || page.cursor_reset;
+        after = page.next;
+        if !full || !advanced || entries.len() >= limit {
+            return (entries, after);
+        }
     }
 }
 
@@ -415,6 +670,40 @@ mod tests {
         assert!(line.text.len() <= LINE_BYTES);
         assert_eq!(line.source.as_ref(), "service");
         assert_eq!(line.level, Some(Level::Info));
+    }
+
+    #[test]
+    fn native_rendering_uses_utc_timestamps_and_native_level_names() {
+        assert_eq!(format_timestamp(0), "1970-01-01 00:00:00.000");
+        assert_eq!(format_timestamp(951_782_400_123), "2000-02-29 00:00:00.123");
+        assert_eq!(
+            format_timestamp(1_794_540_104_515),
+            "2026-11-13 03:21:44.515"
+        );
+        let buffer = LogBuffer::new();
+        buffer.push(&worker(), Stream::Stderr, None, b"W slot busy", false);
+        buffer.push(&worker(), Stream::Stdout, None, b"plain", false);
+        let page = buffer.read(0, 10, None);
+        let entry = page.data[0].entry();
+        assert_eq!(entry["severity"], "Warn");
+        assert_eq!(entry["tag"], "model.one");
+        assert!(
+            entry["line"]
+                .as_str()
+                .unwrap()
+                .ends_with(" [Warn] (model.one) W slot busy")
+        );
+        assert_eq!(page.data[1].entry()["severity"], "Info");
+        assert_eq!(
+            Threshold::parse("Warning"),
+            Some(Threshold(Some(Level::Warning)))
+        );
+        assert_eq!(
+            Threshold::parse("trace"),
+            Some(Threshold(Some(Level::Debug)))
+        );
+        assert_eq!(Threshold::parse("none"), Some(Threshold::OFF));
+        assert_eq!(Threshold::parse("verbose"), None);
     }
 
     #[test]

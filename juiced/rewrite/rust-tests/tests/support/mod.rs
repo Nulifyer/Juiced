@@ -28,7 +28,7 @@ pub const CLIENT_KEY: &str = "isolated-e2e-client-key";
 pub const ADMIN_KEY: &str = "isolated-e2e-admin-key";
 const ROTATED_CLIENT_KEY: &str = "isolated-e2e-rotated-client-key";
 const ROTATED_ADMIN_KEY: &str = "isolated-e2e-rotated-admin-key";
-pub const READ_ROUTES: [&str; 13] = [
+pub const READ_ROUTES: [&str; 15] = [
     "/health",
     "/juiced/context",
     "/juiced/capabilities",
@@ -42,11 +42,12 @@ pub const READ_ROUTES: [&str; 13] = [
     "/models/{model}",
     "/models/{model}/options",
     "/juiced/voices",
+    "/system-info",
+    "/system-stats",
 ];
 /// Read routes whose operator view adds process details; `Server::get` reads them as operator.
 pub const OPERATOR_DETAIL_ROUTES: [&str; 1] = ["/juiced/context"];
-pub const OPERATOR_READ_ROUTES: [&str; 30] = [
-    "/system-info",
+pub const OPERATOR_READ_ROUTES: [&str; 28] = [
     "/juiced/cache/inspect",
     "/juiced/cache/sessions",
     "/juiced/requests",
@@ -62,7 +63,6 @@ pub const OPERATOR_READ_ROUTES: [&str; 30] = [
     "/models/{model}/runtime",
     "/models/{model}/variants",
     "/models/{model}/fit",
-    "/system-stats",
     "/juiced/logs",
     "/juiced/library/search",
     "/juiced/library/pulls/{pull}",
@@ -144,6 +144,7 @@ pub const LLAMA_ROUTES: [(&str, &str, &str); 9] = [
     ("GET", "/stats", "read"),
     ("GET", "/audio/voices", "read"),
 ];
+pub const WEBSOCKET_READ_ROUTES: [&str; 1] = ["/logs/stream"];
 pub const COMPAT_ROUTES: [(&str, &str, &str); 24] = [
     ("GET", "/.well-known/juiced.json", "read"),
     ("POST", "/v1/messages", "inference"),
@@ -176,6 +177,7 @@ pub fn route_matrix() -> BTreeSet<(String, String)> {
         .iter()
         .chain(OPERATOR_READ_ROUTES.iter())
         .chain(WEBSOCKET_INFERENCE_ROUTES.iter())
+        .chain(WEBSOCKET_READ_ROUTES.iter())
         .map(|path| ("GET".into(), (*path).into()))
         .chain(
             WRITE_ROUTES

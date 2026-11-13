@@ -7,7 +7,7 @@ use std::collections::BTreeSet;
 use support::{
     ADMIN_KEY, CLIENT_KEY, COMPAT_ROUTES, INFERENCE_ROUTES, LLAMA_ROUTES, MEDIA_INFERENCE_ROUTES,
     MULTIPART_INFERENCE_ROUTES, OPERATOR_READ_ROUTES, PREFIXES, READ_ROUTES, Server,
-    WEBSOCKET_INFERENCE_ROUTES, WRITE_ROUTES, route_matrix,
+    WEBSOCKET_INFERENCE_ROUTES, WEBSOCKET_READ_ROUTES, WRITE_ROUTES, route_matrix,
 };
 use tokio::io::AsyncReadExt;
 
@@ -69,7 +69,9 @@ async fn endpoint_inventory_matches_exercised_http_contracts() {
             .find(|(m, p, _)| *m == method && *p == path)
         {
             authority
-        } else if method == "GET" && READ_ROUTES.contains(&path) {
+        } else if method == "GET"
+            && (READ_ROUTES.contains(&path) || WEBSOCKET_READ_ROUTES.contains(&path))
+        {
             "read"
         } else if INFERENCE_ROUTES.contains(&path)
             || MULTIPART_INFERENCE_ROUTES.contains(&path)

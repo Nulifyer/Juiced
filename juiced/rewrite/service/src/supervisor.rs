@@ -1683,6 +1683,7 @@ impl Drop for RequestLease {
                 usage: record.usage,
             });
         }
+        self.manager.metrics.observe(&record.model, &record.usage);
         let mut records = self
             .manager
             .records
@@ -1905,6 +1906,8 @@ pub struct Manager {
     last_inference: Mutex<Option<LastInference>>,
     usage_totals: llama::UsageTotals,
     logs: Arc<crate::logs::LogBuffer>,
+    metrics: crate::metrics::Counters,
+    cors: crate::cors::Policy,
     system_stats: crate::system_stats::Sampler,
     library: Arc<crate::library::Library>,
     next_request: AtomicU64,
@@ -2174,6 +2177,9 @@ impl Manager {
         };
         let power = crate::power::Controller::new(config.inhibit_suspend);
         let library_policy = config.artifact_source_policy;
+        let (log_threshold, log_warning) =
+            crate::logs::Threshold::resolve(config.log_level.as_deref());
+        let cors = crate::cors::Policy::resolve(config.allowed_origins.as_deref());
         Ok(Arc::new(Self {
             runtime_definitions,
             hardware: crate::hardware::Detector::from_environment(),
@@ -2230,11 +2236,20 @@ impl Manager {
             usage_totals: Default::default(),
             logs: {
                 let logs = crate::logs::LogBuffer::new();
+                // Unit tests share one process stderr; only the service binary mirrors.
+                if !cfg!(test) {
+                    logs.mirror_to_stderr(log_threshold);
+                }
+                if let Some(warning) = log_warning {
+                    logs.service(crate::logs::Level::Warning, &warning);
+                }
                 if let Some((level, notice)) = &cache_notice {
                     logs.service(*level, notice);
                 }
                 logs
             },
+            metrics: crate::metrics::Counters::default(),
+            cors,
             system_stats: crate::system_stats::Sampler::default(),
             library: Arc::new(crate::library::Library::from_environment(library_policy)),
             next_request: AtomicU64::new(1),
@@ -3294,6 +3309,14 @@ impl Manager {
 
     pub fn logs(&self) -> &Arc<crate::logs::LogBuffer> {
         &self.logs
+    }
+
+    pub fn metrics(&self) -> &crate::metrics::Counters {
+        &self.metrics
+    }
+
+    pub fn cors(&self) -> &crate::cors::Policy {
+        &self.cors
     }
 
     fn capture_worker_output(
