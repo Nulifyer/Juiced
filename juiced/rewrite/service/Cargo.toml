@@ -19,6 +19,7 @@ lzma-rust2 = { version = "0.25", default-features = false, features = ["std", "x
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "multipart", "rustls-tls"] }
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["raw_value"] }
+sha1 = "0.10"
 sha2 = "0.10"
 socket2 = "0.6"
 subtle = "2"

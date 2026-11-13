@@ -43,6 +43,8 @@ struct SavedPull {
     label: Option<String>,
     parts: Vec<SavedPart>,
     set: Option<SavedSet>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    checkpoint: Option<String>,
 }
 
 /// Failure codes are `&'static str` throughout the pull model; journal codes outside the known
@@ -123,6 +125,10 @@ fn saved(record: &PullRecord) -> SavedPull {
                 error,
             }
         }),
+        checkpoint: record
+            .checkpoint
+            .and_then(|kind| serde_json::to_value(kind).ok())
+            .and_then(|value| value.as_str().map(str::to_owned)),
     }
 }
 
@@ -173,6 +179,9 @@ fn restored(saved: SavedPull, store: &ArtifactStore) -> PullRecord {
                 _ => SetState::Pending,
             },
         }),
+        checkpoint: saved
+            .checkpoint
+            .and_then(|kind| serde_json::from_value(serde_json::Value::String(kind)).ok()),
     }
 }
 

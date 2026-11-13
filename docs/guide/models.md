@@ -26,9 +26,38 @@ Juiced downloads published variants; it does not convert or quantize weights.
 A vision model may require a matching projector. Selecting text only does not
 qualify vision service.
 
-The runtime filter also finds vLLM and FastFlowLM candidates. **Review files** opens
-the publisher's package; this GGUF download flow does not import every format in
-those results. Review runtime compatibility before acquiring a different format.
+## Download an original checkpoint
+
+Some engines run a model's original folder instead of a GGUF file:
+
+| Checkpoint | Engine | What Juiced downloads |
+| --- | --- | --- |
+| Transformers (`config.json` with `.safetensors` weights) | vLLM | Weights, shard index, config, generation config, tokenizer and chat template files |
+| Exported ONNX classifier (`model.onnx`, `tokenizer.json`, `config.json`) | ONNX Runtime | The graph and its external data, tokenizer, vocabulary and config |
+| Split diffusion files (`diffusion_models/`, `vae/`, `text_encoders/`) | TheNoise | One diffusion model with its VAE and text encoder |
+
+1. Open **Models → Discover** and search, for example `Qwen3-0.6B`. Pick an engine
+   in **Any engine** to see only what it runs; the **Classify** task lists text
+   classifiers.
+2. A checkpoint shows as one chip, such as **Checkpoint · vLLM**. Select it to see
+   every file, the total size, the license and the engine. READMEs, images and
+   other formats are skipped.
+3. Select **Download**. The files download at the repository's current commit and
+   appear as one row in **Downloads**, where you can pause, resume or cancel them.
+   A restart continues from the bytes already on disk.
+4. When the chip shows **✓ downloaded**, select **Add model**. Juiced names the model
+   after the repository and registers it on the engine shown. If that engine is not
+   installed, **Install engine and add** installs it first.
+
+vLLM and TheNoise need a supported GPU. A checkpoint can still be downloaded on a
+host without one; adding it reports `no_usable_backend`.
+
+Gated repositories need a Hugging Face token. Set `HF_TOKEN` on the server and
+accept the repository's license on Hugging Face; Juiced sends the token only to
+Hugging Face, never to the download mirrors it redirects to.
+
+Files from the same checkpoint that two models share are stored once. Removing a
+model deletes only the files no other model uses. See [manage storage](storage.md).
 
 ## Follow progress and recover
 

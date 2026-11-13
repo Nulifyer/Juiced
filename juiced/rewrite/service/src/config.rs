@@ -395,6 +395,8 @@ impl Provider {
                 | Self::Trellis
                 | Self::OpenMoss
                 | Self::TheNoise
+                | Self::Vllm
+                | Self::OnnxRuntime
         )
     }
     pub fn transcription_path(self) -> &'static str {

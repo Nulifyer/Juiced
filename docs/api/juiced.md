@@ -171,6 +171,62 @@ Downloads, engine installs and snapshot saves refuse with HTTP 507
 restart and resume from committed bytes; `GET /v1/downloads` and
 `GET /v1/juiced/library/pulls` list them again after the restart.
 
+## Search and download models
+
+`GET /v1/juiced/library/search` searches the catalog, files on this machine and
+Hugging Face. Query parameters: `q` (at most 128 bytes), `task` (`chat`,
+`embeddings`, `transcription`, `tts`, `image`, `audio-generation`, `3d`,
+`classify`), `engine`, `limit` (1-20, default 10), `cursor` and `hub=false`
+(skip Hugging Face). Without `engine`, the first page lists GGUF repositories and
+original checkpoints; later pages follow the GGUF listing. `engine=vllm`,
+`onnxruntime` or `thenoise` lists only checkpoints for that engine; any other engine
+lists GGUF files. An unknown engine returns 400 `invalid_library_query`.
+
+Each result has `repo`, `license`, `gated`, `downloads` and `quants`. A checkpoint
+quant looks like this:
+
+```json
+{"label": "Checkpoint", "kind": "checkpoint", "format": "transformers", "engine": "vllm",
+ "file": "config.json", "bytes": 1519182365, "pullable": true,
+ "files": [{"file": "config.json", "bytes": 726, "sha256": null, "member": "config.json"},
+           {"file": "model.safetensors", "bytes": 1503300328, "sha256": "f47f…", "member": "model.safetensors"}],
+ "local": {"present": false, "set": null, "storage": null}}
+```
+
+`kind` is `quant` (GGUF), `bundle` (a catalog model with companions) or
+`checkpoint`; `format` is `transformers`, `onnx-classifier` or
+`thenoise-diffusion`. `member` is the file name inside the downloaded folder.
+`sha256` is null for small files Hugging Face keeps outside LFS until Juiced has
+downloaded them. `sources.huggingface.authenticated` reports whether the server
+has an `HF_TOKEN` for gated repositories.
+
+`POST /v1/juiced/library/pull` downloads one variant:
+
+```json
+{"repo": "Qwen/Qwen3-0.6B", "file": "config.json", "expected_generation": 12}
+```
+
+`file` names any file of the variant, or `files` lists several from one variant;
+Juiced downloads the whole variant at the repository's current commit, or at
+`revision`. Small files without a published SHA-256 are fetched first and checked
+against their git blob id (`library_file_mismatch`, 502, when they differ). The
+reply and `GET /v1/juiced/library/pulls/ID` return the pull with `state`
+(`downloading`, `waiting`, `publishing`, `complete` or `failed`), `files`, `jobs`,
+`set` and, for checkpoints, `format`, `engine` and `suggested_id`. Pause, resume or
+cancel a pull through its `jobs` with `POST /v1/juiced/artifacts/jobs/ID`.
+
+Register a finished checkpoint with `POST /v1/juiced/models/add`:
+
+```json
+{"artifact_set": "set-…", "policy": "on-demand"}
+```
+
+The id defaults to the repository name. Pass `"engine": "thenoise"` for split
+diffusion checkpoints that sd.cpp could also read. The engine reads the set as a
+folder of its member names. Without the engine installed the reply is 409
+`engine_not_installed` with the build to install; on a host the engine cannot run
+on it is 409 `no_usable_backend`.
+
 ## Workflow jobs and stored conversations
 
 Juiced runs no caller-defined workflows and stores no conversations. These

@@ -735,7 +735,21 @@ impl Manager {
                             .hold_binding_with(&held_artifact, held_set.as_deref(), true)
                             .map_err(ApiError::from)?;
                         let path = lease.path().to_owned();
-                        let (format, bytes) = models::detect(&path).map_err(format_error)?;
+                        let (format, bytes) = match lease.primary_name() {
+                            Some(primary)
+                                if models::checkpoint_primary(primary)
+                                    && !lease.companions().is_empty() =>
+                            {
+                                let members: Vec<(&str, &std::path::Path)> = lease
+                                    .companions()
+                                    .into_iter()
+                                    .map(|(name, _, path)| (name, path))
+                                    .collect();
+                                models::detect_checkpoint_set(primary, &path, &members)
+                            }
+                            _ => models::detect(&path),
+                        }
+                        .map_err(format_error)?;
                         let mut total = bytes;
                         let mut companions = Vec::new();
                         for (name, role, path) in lease.companions() {
@@ -829,7 +843,19 @@ impl Manager {
                     ApiError::from(crate::artifacts::ArtifactError::SetUnsupported)
                 }
             })?;
-        let id = match request.id {
+        let checkpoint_id = match (&format, artifact.as_deref(), request.id.is_none()) {
+            (
+                models::ModelFormat::Transformers { .. }
+                | models::ModelFormat::OnnxClassifier { .. },
+                Some(artifact),
+                true,
+            ) => self
+                .artifacts()
+                .ok()
+                .and_then(|store| self.library().checkpoint_id(&store, artifact)),
+            _ => None,
+        };
+        let id = match request.id.or(checkpoint_id) {
             Some(id) => id,
             None => models::native_default_id(&format)
                 .or_else(|| name.as_deref().and_then(models::default_id))

@@ -368,6 +368,46 @@ pub fn detect(path: &Path) -> Result<(ModelFormat, u64), FormatError> {
 
 pub const COMPONENT_NOT_PRIMARY: &str = "generation_component_not_primary";
 
+/// Detects a checkpoint artifact set (a Transformers `config.json` or an ONNX classifier's
+/// `model.onnx`) by linking its members under their names, as the launch does; returns the
+/// primary member's size.
+pub fn detect_checkpoint_set(
+    primary: &str,
+    path: &Path,
+    companions: &[(&str, &Path)],
+) -> Result<(ModelFormat, u64), FormatError> {
+    let directory = tempfile::Builder::new()
+        .prefix("juiced-checkpoint-")
+        .tempdir()
+        .map_err(|_| FormatError::Unavailable)?;
+    for (name, target) in std::iter::once((primary, path)).chain(companions.iter().copied()) {
+        if !crate::runtime_arguments::valid_member_name(name) {
+            return Err(FormatError::Invalid("artifact_set_binding_mismatch"));
+        }
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(target, directory.path().join(name))
+            .map_err(|_| FormatError::Unavailable)?;
+        #[cfg(not(unix))]
+        std::fs::hard_link(target, directory.path().join(name))
+            .map_err(|_| FormatError::Unavailable)?;
+    }
+    let (format, _) = detect(&directory.path().join(primary))?;
+    match format {
+        ModelFormat::Transformers { .. } | ModelFormat::OnnxClassifier { .. } => {
+            let bytes = std::fs::metadata(path)
+                .map_err(|_| FormatError::Unavailable)?
+                .len();
+            Ok((format, bytes))
+        }
+        _ => Err(FormatError::Unsupported),
+    }
+}
+
+/// Primary member names that anchor a checkpoint directory set.
+pub fn checkpoint_primary(name: &str) -> bool {
+    matches!(name, "config.json" | "model.onnx")
+}
+
 /// The OpenMOSS family a sidecar declares, or `None` for any other GGUF.
 pub fn moss_family(path: &Path) -> Result<Option<String>, FormatError> {
     let mut file = File::open(path).map_err(|_| FormatError::Unavailable)?;
@@ -851,6 +891,15 @@ pub fn companion_arguments(
                 ]),
                 _ => Err(CompanionError::Required("thenoise_companions_required")),
             }
+        }
+        ModelFormat::Transformers { .. } | ModelFormat::OnnxClassifier { .. } => {
+            crate::runtime_arguments::verify_checkpoint_members(
+                companions
+                    .iter()
+                    .map(|companion| (companion.name.as_str(), companion.role)),
+            )
+            .map_err(|_| CompanionError::Unsupported)?;
+            Ok(Vec::new())
         }
         ModelFormat::MoonshineOrt { .. } => {
             crate::runtime_arguments::verify_directory_members(

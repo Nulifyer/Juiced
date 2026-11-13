@@ -38,10 +38,14 @@ the portable environment the native release used.
 
 ## Run an original checkpoint on vLLM
 
-1. Install **vLLM** on its CUDA or ROCm backend.
-2. In **Models**, add a local folder that holds `config.json` and the
-   `.safetensors` files, for example a Hugging Face cache snapshot under an
-   import root. Juiced registers the folder in place.
+1. Download the checkpoint from **Models → Discover**: search for the repository,
+   select its **Checkpoint · vLLM** chip and **Download**. See
+   [download an original checkpoint](models.md#download-an-original-checkpoint).
+   A folder already on disk that holds `config.json` and the `.safetensors` files,
+   such as a Hugging Face cache snapshot under an import root, can be added in
+   place instead.
+2. Select **Add model**. Juiced installs vLLM on its CUDA or ROCm backend first
+   when it is missing.
 3. Load the model. The first start compiles kernels and can take several
    minutes; later starts reuse the compile cache.
 
@@ -51,8 +55,10 @@ tokens than the context leaves are reduced to fit.
 
 ## Classify text
 
-Add a folder with `model.onnx`, `tokenizer.json` and `config.json` (an
-`optimum-cli export onnx` classifier) with ONNX Runtime installed. Send
+Download a text classifier from **Models → Discover** with the **Classify** task
+(for example `lemonade-sdk/phishing-email-detection-distilbert-ONNX`) and add it,
+or add a folder with `model.onnx`, `tokenizer.json` and `config.json` (an
+`optimum-cli export onnx` classifier). Juiced installs ONNX Runtime if needed. Send
 `POST /v1/classify` with `model` and `input`; the reply lists label scores.
 
 ## Select a profile

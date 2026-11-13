@@ -328,6 +328,9 @@ pub struct ArtifactStore {
     publication: Mutex<()>,
     stopping: AtomicBool,
     free_reserve: std::sync::atomic::AtomicU64,
+    /// A bearer token and the origin prefix it is sent to (the model hub), never to redirects
+    /// elsewhere.
+    credential: std::sync::OnceLock<(String, String)>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -672,6 +675,7 @@ impl ArtifactStore {
             publication: Mutex::new(()),
             stopping: AtomicBool::new(false),
             free_reserve: std::sync::atomic::AtomicU64::new(0),
+            credential: std::sync::OnceLock::new(),
         }))
     }
 
@@ -680,6 +684,11 @@ impl ArtifactStore {
     }
 
     /// Free space every new or resumed transfer must leave on the store's volume.
+    /// Sends `token` with downloads whose URL is under `prefix` (no trailing slash).
+    pub fn set_origin_credential(&self, prefix: String, token: String) {
+        let _ = self.credential.set((prefix, token));
+    }
+
     pub fn set_free_reserve(&self, bytes: u64) {
         self.free_reserve.store(bytes, Ordering::Release);
     }
@@ -1716,6 +1725,11 @@ impl ArtifactStore {
                 .get(url.clone())
                 .header(header::ACCEPT_ENCODING, "identity")
                 .timeout(self.limits.request_timeout);
+            if let Some((prefix, token)) = self.credential.get()
+                && url.as_str().starts_with(&format!("{prefix}/"))
+            {
+                request = request.bearer_auth(token);
+            }
             if *offset > 0 {
                 request = request.header(header::RANGE, format!("bytes={offset}-"));
                 if let Some(value) = validator.as_deref() {

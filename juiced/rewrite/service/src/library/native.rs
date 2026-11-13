@@ -10,6 +10,8 @@ pub struct Selection {
     pub files: Vec<String>,
     pub bytes: Option<u64>,
     pub label: Option<String>,
+    /// The engine a checkpoint registers on when the format alone does not pick it.
+    pub engine: Option<String>,
 }
 
 /// Built-in registry entry for a native model name.
@@ -28,6 +30,50 @@ pub fn parse_checkpoint(value: &str) -> Option<(String, Option<String>)> {
         None => (value, None),
     };
     valid_repo(repo).then(|| (repo.to_owned(), variant.map(str::to_owned)))
+}
+
+/// A native registry model served from an original checkpoint (vLLM, ONNX Runtime or
+/// TheNoise), which the GGUF catalog does not carry.
+#[derive(Clone, Debug)]
+pub struct RegistryCheckpoint {
+    pub repo: String,
+    pub file: Option<String>,
+    pub companions: Vec<String>,
+    pub engine: crate::engines::catalog::Engine,
+}
+
+pub fn registry_checkpoint(name: &str) -> Option<RegistryCheckpoint> {
+    let registry: serde_json::Map<String, Value> =
+        serde_json::from_str(crate::native_execution::NATIVE_REGISTRY).ok()?;
+    let (_, entry) = registry
+        .iter()
+        .find(|(known, _)| known.eq_ignore_ascii_case(name))?;
+    let engine = match entry["recipe"].as_str()? {
+        "vllm" => crate::engines::catalog::Engine::Vllm,
+        "onnxruntime" => crate::engines::catalog::Engine::OnnxRuntime,
+        "thenoise" => crate::engines::catalog::Engine::TheNoise,
+        _ => return None,
+    };
+    let main = entry["checkpoint"]
+        .as_str()
+        .or_else(|| entry["checkpoints"]["main"].as_str())?;
+    let (repo, file) = match main.split_once(':') {
+        Some((repo, file)) => (repo, Some(file.to_owned())),
+        None => (main, None),
+    };
+    let companions = entry["checkpoints"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .filter(|(role, _)| role.as_str() != "main")
+        .filter_map(|(_, value)| value.as_str().map(str::to_owned))
+        .collect();
+    valid_repo(repo).then(|| RegistryCheckpoint {
+        repo: repo.to_owned(),
+        file,
+        companions,
+        engine,
+    })
 }
 
 pub fn builtin(name: &str) -> Option<Builtin> {
@@ -88,6 +134,10 @@ impl Library {
             .map_err(hub_api_error)?;
         let mut variants = quant::group(&info.files);
         variants.retain(|variant| !mmproj(&variant.primary));
+        variants.extend(checkpoint::variants(
+            &info.files,
+            info.summary.pipeline_tag.as_deref(),
+        ));
         let bundles: Vec<_> = catalog::catalog()
             .models
             .iter()
@@ -104,9 +154,16 @@ impl Library {
         repo: &str,
         variant: Option<&str>,
         recommended: Option<&str>,
+        engine: Option<crate::engines::catalog::Engine>,
     ) -> Result<Selection, ApiError> {
-        let (_, variants) = self.repo_variants(repo).await?;
+        let (_, mut variants) = self.repo_variants(repo).await?;
+        let kind = engine.and_then(checkpoint::Kind::for_engine);
+        variants.retain(|variant| variant.checkpoint == kind);
         let chosen = match variant.or(recommended) {
+            Some(wanted) if kind.is_some() => variants.iter().find(|variant| {
+                matches(variant, wanted) || variant.primary.eq_ignore_ascii_case(wanted)
+            }),
+            None if kind.is_some() => variants.iter().find(|variant| variant.complete),
             Some(wanted) => variants.iter().find(|variant| matches(variant, wanted)),
             None => variants
                 .iter()
@@ -125,6 +182,9 @@ impl Library {
             files: chosen.files.iter().map(|file| file.path.clone()).collect(),
             bytes: chosen.bytes(),
             label: chosen.label.clone(),
+            engine: chosen
+                .checkpoint
+                .map(|kind| kind.engine().name().to_owned()),
         })
     }
 
@@ -135,6 +195,22 @@ impl Library {
             .iter()
             .filter(|variant| variant.complete && variant.roles.is_empty())
             .collect();
+        let checkpoints: Vec<&quant::Variant> = variants
+            .iter()
+            .filter(|variant| variant.complete && variant.checkpoint.is_some())
+            .collect();
+        let recipe = match (ranked.is_empty(), checkpoints.first()) {
+            (true, Some(first)) => {
+                let kind = first.checkpoint.expect("checkpoint variant");
+                ranked = checkpoints
+                    .iter()
+                    .filter(|variant| variant.checkpoint == Some(kind))
+                    .copied()
+                    .collect();
+                kind.engine().recipe()
+            }
+            _ => "llamacpp",
+        };
         ranked.sort_by(|left, right| {
             rank(left.label.as_deref())
                 .cmp(&rank(right.label.as_deref()))
@@ -173,7 +249,7 @@ impl Library {
             .collect();
         Ok(json!({
             "checkpoint": repo,
-            "recipe": "llamacpp",
+            "recipe": recipe,
             "suggested_name": repo.split_once('/').map_or(repo, |(_, name)| name),
             "suggested_labels": labels,
             "mmproj_files": mmproj_files,

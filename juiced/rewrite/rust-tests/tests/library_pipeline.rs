@@ -196,16 +196,16 @@ async fn search_pull_and_verified_artifacts_work_under_every_prefix() {
         .collect();
     assert_eq!(roles, ["model", "weight-shard"]);
 
+    // Gated repositories need the token on the hub's own file URLs too; the artifact store
+    // never forwards it to redirect targets on other origins.
     let observed = hub.observed();
     for request in &observed {
-        if request.path.starts_with("/api/") {
-            assert_eq!(
-                request.authorization.as_deref(),
-                Some(format!("Bearer {TOKEN}").as_str())
-            );
-        } else {
-            assert_eq!(request.authorization, None, "{}", request.path);
-        }
+        assert_eq!(
+            request.authorization.as_deref(),
+            Some(format!("Bearer {TOKEN}").as_str()),
+            "{}",
+            request.path
+        );
     }
     assert!(
         observed

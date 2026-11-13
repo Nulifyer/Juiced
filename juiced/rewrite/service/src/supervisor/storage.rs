@@ -59,6 +59,7 @@ pub(super) fn library(
     }
     if let Some(store) = artifacts {
         store.set_free_reserve(config.storage.reserve_bytes);
+        library.share_credential(store);
     }
     library
 }
