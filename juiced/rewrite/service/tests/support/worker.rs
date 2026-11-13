@@ -1407,6 +1407,7 @@ async fn main() {
         .route("/tokenize", post(fixture_tokenize))
         .route("/detokenize", post(fixture_detokenize))
         .route("/v1/rerank", post(fixture_rerank))
+        .route("/classify", post(fixture_classify))
         .with_state(fixture);
     let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port))
         .await
@@ -1437,6 +1438,12 @@ async fn fixture_tokenize(Json(body): Json<Value>) -> Json<Value> {
 async fn fixture_detokenize(Json(body): Json<Value>) -> Json<Value> {
     let count = body["tokens"].as_array().map_or(0, Vec::len);
     Json(json!({"content": vec!["word"; count].join(" ")}))
+}
+
+async fn fixture_classify(Json(body): Json<Value>) -> Json<Value> {
+    let suspicious = body["text"].as_str().unwrap_or("").contains("verify");
+    let (phishing, safe) = if suspicious { (0.9, 0.1) } else { (0.2, 0.8) };
+    Json(json!({"labels": {"phishing": phishing, "safe": safe, "spam": 0.0}}))
 }
 
 async fn fixture_rerank(Json(body): Json<Value>) -> Json<Value> {

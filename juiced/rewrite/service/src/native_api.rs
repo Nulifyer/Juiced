@@ -607,6 +607,7 @@ async fn register_download(
         policy: request.policy,
         backend,
         path: None,
+        engine: request.engine.clone(),
     };
     let failure = match manager.add_model(retry(None)).await {
         Err(AddModelError::NotInstalled(body)) => body,
@@ -720,6 +721,7 @@ async fn run(manager: &Arc<Manager>, job: &Arc<Download>, resumed: Option<String
         policy: Some(Policy::OnDemand),
         backend: None,
         path: None,
+        engine: None,
     };
     let added = register_download(&manager, request).await;
     let _ = manager.library().dismiss_pull(&pull);
@@ -2000,7 +2002,7 @@ pub(crate) async fn native_uninstall(
 /// The native `recipes` block, derived from the engine inventory.
 fn recipes(engines: &Value, system: &Value) -> Value {
     let mut recipes = Map::new();
-    for engine in Engine::ALL {
+    for engine in Engine::all() {
         let recipe = engine.recipe();
         let mut backends = Map::new();
         for row in engines["installable"].as_array().into_iter().flatten() {

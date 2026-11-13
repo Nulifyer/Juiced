@@ -17,6 +17,9 @@ export function parseJob(item: Record<string, any>): EngineJob {
 function downloadBytes(build: unknown): number | null {
   if (!build || typeof build !== "object") return null;
   const archive = number((build as Record<string, any>).archive_bytes);
+  // A Python engine environment takes its installed size, far beyond the installer archive.
+  const environment = number((build as Record<string, any>).environment?.installed_bytes);
+  if (environment !== null) return environment;
   return archive === null ? null : archive + (number((build as Record<string, any>).runtime?.archive_bytes) ?? 0);
 }
 
@@ -66,7 +69,12 @@ const managed: Record<string, { recipe: string; name: string; purpose: string }>
   "futo-transcribe.cpp": { recipe: "asr4all", name: "FUTO transcribe", purpose: "Speech to text" },
   moonshine: { recipe: "moonshine", name: "Moonshine", purpose: "Speech to text" },
   fastflowlm: { recipe: "flm", name: "FastFlowLM", purpose: "Chat on the NPU" },
+  vllm: { recipe: "vllm", name: "vLLM", purpose: "Chat with original checkpoints" },
+  ds4: { recipe: "ds4", name: "DwarfStar4", purpose: "DeepSeek V4 chat" },
+  onnxruntime: { recipe: "onnxruntime", name: "ONNX Runtime", purpose: "Text classification" },
 };
+// Native recipes whose backends install under another engine.
+const recipeEngines: Record<string, string> = { "llamacpp-hrx": "llama.cpp" };
 
 export type ChipState = "installed" | "installing" | "installable" | "unavailable" | "no-installer";
 export type BackendChip = { key: string; engine: string; backend: string; label: string; state: ChipState; recommended: boolean; download_bytes: number | null; models: number; reason: string; job: EngineJob | null; version?: string | null; replaces?: string | null };
@@ -101,7 +109,7 @@ export function engineGroups(engines: Engines, backends: BackendRow[], jobs: Rec
     const { engine, backend } = { engine: same[0]!.engine!, backend: same[0]!.backend ?? "" };
     groups.get(engine)!.chips.push({ key, engine, backend, label: backend ? label(backend) : same.length > 1 ? `Imported ×${same.length}` : "Imported", state: "installed", recommended: false, download_bytes: null, models: same.reduce((total, entry) => total + entry.models.length, 0), reason: "", job: null, version: same.length === 1 ? same[0]!.tag : null });
   }
-  const byRecipe = new Map(Object.entries(managed).map(([engine, meta]) => [meta.recipe, engine]));
+  const byRecipe = new Map([...Object.entries(managed).map(([engine, meta]) => [meta.recipe, engine] as const), ...Object.entries(recipeEngines)]);
   for (const row of backends) {
     if (row.backend === "system") continue;
     const engine = byRecipe.get(row.recipe);

@@ -1,6 +1,9 @@
 pub mod archive;
 pub mod catalog;
 pub mod download;
+pub mod environments;
+#[cfg(test)]
+mod llm_engine_tests;
 pub mod memory;
 pub mod models;
 #[cfg(test)]
@@ -105,18 +108,19 @@ pub struct Choice {
     pub reason: String,
 }
 
-/// Hybrid backends are experimental and never recommended, but an operator may name one
-/// once detection confirms every device it needs.
+/// Hybrid and HRX backends are experimental and never recommended, but an operator may name
+/// one once detection confirms every device it needs.
 fn selectable(inventory: &Inventory, engine: Engine, backend: &str) -> bool {
     inventory.backends.iter().any(|variant| {
-        variant.recipe == engine.recipe()
+        variant.recipe == catalog::recipe_of(engine, backend)
             && variant.backend == backend
             && variant.backend != "system"
-            && if variant.backend.starts_with("hybrid") {
+            && if variant.backend.starts_with("hybrid") || variant.backend == crate::hrx::BACKEND {
                 variant.state == Availability::Available
             } else {
                 (variant.tier == "core"
-                    || (variant.tier == "experimental" && engine.accepts_experimental()))
+                    || (matches!(variant.tier.as_str(), "experimental" | "guest")
+                        && engine.accepts_experimental()))
                     && variant.state != Availability::Unavailable
             }
     })
@@ -130,7 +134,7 @@ fn fallback_backend(inventory: &Inventory, engine: Engine) -> Option<String> {
         .backends
         .iter()
         .find(|variant| {
-            variant.recipe == engine.recipe()
+            variant.recipe == catalog::recipe_of(engine, &variant.backend)
                 && variant.state == Availability::Available
                 && selectable(inventory, engine, &variant.backend)
         })
@@ -278,7 +282,7 @@ pub fn installable(
     installed: &[Installed],
 ) -> Vec<Installable> {
     let mut seen = Vec::new();
-    for build in catalog::BUILDS {
+    for build in catalog::builds() {
         if !seen.contains(&(build.engine, build.backend)) {
             seen.push((build.engine, build.backend));
         }
@@ -287,10 +291,9 @@ pub fn installable(
     seen.into_iter()
         .map(|(engine, backend)| {
             let resolved = catalog::resolve(engine, backend, host);
-            let variant = inventory
-                .backends
-                .iter()
-                .find(|variant| variant.recipe == engine.recipe() && variant.backend == backend);
+            let variant = inventory.backends.iter().find(|variant| {
+                variant.recipe == catalog::recipe_of(engine, backend) && variant.backend == backend
+            });
             let build = resolved.ok();
             Installable {
                 engine,

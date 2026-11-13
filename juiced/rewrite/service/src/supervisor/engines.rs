@@ -14,27 +14,27 @@ const MAX_ARCHIVE_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 const STAGING: &str = "engine-staging";
 
 #[derive(Clone, Serialize)]
-struct JobStatus {
-    state: &'static str,
+pub(super) struct JobStatus {
+    pub(super) state: &'static str,
     error: Option<&'static str>,
     package: Option<String>,
-    archive_sha256: Option<String>,
-    digest_source: Option<&'static str>,
-    total_bytes: Option<u64>,
+    pub(super) archive_sha256: Option<String>,
+    pub(super) digest_source: Option<&'static str>,
+    pub(super) total_bytes: Option<u64>,
     finished_at_unix_ms: Option<u64>,
 }
 
 pub(super) struct EngineJob {
     id: String,
-    build: Build,
+    pub(super) build: Build,
     started_at_unix_ms: u64,
-    downloaded: AtomicU64,
-    runtime_downloaded: AtomicU64,
+    pub(super) downloaded: AtomicU64,
+    pub(super) runtime_downloaded: AtomicU64,
     status: Mutex<JobStatus>,
 }
 
 impl EngineJob {
-    fn update(&self, change: impl FnOnce(&mut JobStatus)) {
+    pub(super) fn update(&self, change: impl FnOnce(&mut JobStatus)) {
         let mut status = self
             .status
             .lock()
@@ -54,6 +54,9 @@ impl EngineJob {
             "runtime": self.build.runtime.map(|runtime| json!({
                 "name": runtime.name, "version": runtime.version, "asset": runtime.asset,
                 "archive_bytes": runtime.archive_bytes, "archive_sha256": runtime.sha256,
+            })),
+            "environment": self.build.environment.map(|environment| json!({
+                "version": environment.version, "installed_bytes": environment.installed_bytes,
             })),
             "downloaded_bytes": self.downloaded.load(Ordering::Acquire)
                 + self.runtime_downloaded.load(Ordering::Acquire),
@@ -180,6 +183,9 @@ pub struct ModelAdd {
     pub backend: Option<String>,
     #[serde(default)]
     pub path: Option<String>,
+    /// Picks an engine other than the format's default, among those that serve the format.
+    #[serde(default)]
+    pub engine: Option<String>,
 }
 
 fn invalid(code: &'static str, message: &'static str) -> ApiError {
@@ -213,7 +219,9 @@ impl Manager {
     pub async fn engines(&self) -> Result<Value, ApiError> {
         let (snapshot, inventory) = self.host().await?;
         let packages = self.package_inventory().await?;
-        let installed = crate::engines::installed_packages(&packages);
+        let records = self.environment_records().await;
+        let mut installed = crate::engines::installed_packages(&packages);
+        installed.extend(Self::environment_packages(&records));
         let mut usage: BTreeMap<String, Vec<Value>> = BTreeMap::new();
         for model in &self.config.lock().await.models {
             let profile = &model.execution_profile;
@@ -230,7 +238,7 @@ impl Manager {
                     .push(json!({"model": model.id, "selection": "previous"}));
             }
         }
-        let installed_view: Vec<Value> = packages["packages"]
+        let mut installed_view: Vec<Value> = packages["packages"]
             .as_array()
             .map(|packages| {
                 packages
@@ -252,9 +260,9 @@ impl Manager {
                     .collect()
             })
             .unwrap_or_default();
+        installed_view.extend(self.environment_views(&records, &self.config.lock().await.models));
         let report = &snapshot.report;
-        let recommendations: BTreeMap<_, _> = Engine::ALL
-            .into_iter()
+        let recommendations: BTreeMap<_, _> = Engine::all()
             .map(|engine| {
                 (
                     engine.recipe(),
@@ -281,16 +289,22 @@ impl Manager {
         request: EngineInstall,
     ) -> Result<(StatusCode, Value), ApiError> {
         let engine = Engine::parse(&request.engine).ok_or_else(|| {
-            invalid(
+            ApiError::new(
+                StatusCode::BAD_REQUEST,
                 "unknown_engine",
-                "Choose engine llama.cpp, whisper.cpp, sd.cpp, kokoros, parakeet.cpp, moonshine, futo-transcribe.cpp or fastflowlm.",
+                format!(
+                    "Choose engine {}.",
+                    Engine::all()
+                        .map(Engine::name)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
             )
         })?;
         if catalog::UNPUBLISHED.contains(&(engine, request.backend.as_str())) {
             return Err(not_published());
         }
-        if !catalog::BUILDS
-            .iter()
+        if !catalog::builds()
             .any(|build| build.engine == engine && build.backend == request.backend)
         {
             return Err(invalid(
@@ -319,7 +333,7 @@ impl Manager {
             )
         })?;
         if inventory.backends.iter().any(|variant| {
-            variant.recipe == engine.recipe()
+            variant.recipe == catalog::recipe_of(engine, &request.backend)
                 && variant.backend == request.backend
                 && variant.state == crate::hardware::Availability::Unavailable
         }) {
@@ -337,6 +351,7 @@ impl Manager {
                 "The artifact source policy is offline; engine downloads are disabled.",
             ));
         }
+        self.environment_space(&build)?;
         let packages = self.package_inventory().await?;
         if packages["generation"].as_u64() != Some(request.expected_generation) {
             return Err(ApiError::new(
@@ -345,7 +360,10 @@ impl Manager {
                 "Installed runtimes changed. Refresh GET /juiced/engines before retrying.",
             ));
         }
-        let installed = crate::engines::installed_packages(&packages);
+        let mut installed = crate::engines::installed_packages(&packages);
+        installed.extend(Self::environment_packages(
+            &self.environment_records().await,
+        ));
         if let Some(existing) =
             crate::engines::installable(&inventory, &snapshot.report, &installed)
                 .into_iter()
@@ -409,6 +427,9 @@ impl Manager {
         expected_generation: u64,
     ) -> Result<String, &'static str> {
         let build = job.build;
+        if build.environment.is_some() {
+            return self.run_environment_install(job, policy).await;
+        }
         let releases = &self.engine_releases;
         job.update(|status| status.state = "resolving");
         let (sha256, bytes, source) = match build.sha256.filter(|_| releases.pinned_digests) {
@@ -470,6 +491,38 @@ impl Manager {
         let _ = tokio::task::spawn_blocking(move || {
             let _ = std::fs::remove_dir_all(&cleanup);
             if let Some(parent) = cleanup.parent() {
+                let _ = std::fs::remove_dir(parent);
+            }
+        })
+        .await;
+        result
+    }
+
+    async fn run_environment_install(
+        self: &Arc<Self>,
+        job: &Arc<EngineJob>,
+        policy: crate::artifacts::SourcePolicy,
+    ) -> Result<String, &'static str> {
+        let staging = self
+            .config_path
+            .parent()
+            .ok_or("engine_storage")?
+            .join(STAGING)
+            .join(&job.id);
+        let work = staging.clone();
+        tokio::task::spawn_blocking(move || {
+            if let Some(abandoned) = work.parent() {
+                let _ = crate::engines::environments::remove(abandoned);
+            }
+            std::fs::create_dir_all(&work)
+        })
+        .await
+        .map_err(|_| "engine_storage")?
+        .map_err(|_| "engine_storage")?;
+        let result = self.install_environment(job, policy, &staging).await;
+        let _ = tokio::task::spawn_blocking(move || {
+            let _ = crate::engines::environments::remove(&staging);
+            if let Some(parent) = staging.parent() {
                 let _ = std::fs::remove_dir(parent);
             }
         })
@@ -566,28 +619,7 @@ impl Manager {
             let _ = std::fs::remove_file(&archive_path);
             let _ = std::fs::remove_file(&runtime_path);
             job_state.update(|status| status.state = "verifying");
-            let licenses = match (build.engine, build.backend) {
-                (Engine::Kokoros, _) => {
-                    vec!["Apache-2.0".into(), "GPL-3.0-or-later".into()]
-                }
-                (Engine::Moonshine, _) => {
-                    vec!["BSD-3-Clause".into(), "MIT".into(), "PSF-2.0".into()]
-                }
-                (Engine::FastFlowLm, _) => {
-                    vec!["LicenseRef-FastFlowLM-Binary".into(), "MIT".into()]
-                }
-                (_, "hybrid-rocm") => vec![
-                    "LicenseRef-AMD-ROCm".into(),
-                    "LicenseRef-AMD-XRT".into(),
-                    "MIT".into(),
-                ],
-                (_, "cuda") => vec![
-                    "LicenseRef-NVIDIA-CUDA-Redistributable".into(),
-                    "MIT".into(),
-                ],
-                (_, "rocm") => vec!["LicenseRef-AMD-ROCm".into(), "MIT".into()],
-                _ => vec!["MIT".to_owned()],
-            };
+            let licenses = catalog::licenses(&build);
             let request = crate::runtime_packages::ImportRequest {
                 schema_version: 1,
                 files: described
@@ -782,10 +814,32 @@ impl Manager {
             )
             .into());
         }
-        let engine = format.engine();
+        let engine = match request.engine.as_deref() {
+            None => format.engine(),
+            Some(name) => Engine::parse(name)
+                .filter(|engine| format.engines().contains(engine))
+                .ok_or_else(|| {
+                    ApiError::new(
+                        StatusCode::CONFLICT,
+                        "engine_format_mismatch",
+                        format!(
+                            "This model can run on {} only.",
+                            format
+                                .engines()
+                                .into_iter()
+                                .map(Engine::name)
+                                .collect::<Vec<_>>()
+                                .join(" or ")
+                        ),
+                    )
+                })?,
+        };
         let (snapshot, inventory) = self.host().await?;
         let packages = self.package_inventory().await?;
-        let installed = crate::engines::installed_packages(&packages);
+        let mut installed = crate::engines::installed_packages(&packages);
+        installed.extend(Self::environment_packages(
+            &self.environment_records().await,
+        ));
         let choice = crate::engines::choose(
             engine,
             &inventory,
@@ -867,7 +921,7 @@ impl Manager {
             .cpu
             .as_ref()
             .and_then(|cpu| cpu.physical_cores.or(cpu.usable_threads));
-        let registration = models::registration(&models::ProfileInputs {
+        let mut registration = models::registration(&models::ProfileInputs {
             id: &id,
             model_file: &model_file,
             artifact: artifact.as_deref(),
@@ -881,6 +935,18 @@ impl Manager {
             companion_arguments: &companion_arguments,
             llama: llama.as_ref(),
         });
+        if engine == Engine::Vllm {
+            self.environment_registration(&mut registration, &choice, &snapshot.report)
+                .await?;
+        }
+        if engine == Engine::Ds4 {
+            models::ds4_registration(&mut registration, estimate.context_tokens, file_bytes);
+        }
+        if choice.backend == crate::hrx::BACKEND
+            && let Some(args) = registration["execution_profile"]["args"].as_array_mut()
+        {
+            args.extend(crate::hrx::DEVICE.map(|value| json!(value)));
+        }
         let crate::config::Registration(spec) =
             serde_json::from_value(registration.clone()).map_err(|_| {
                 ApiError::new(
@@ -1001,8 +1067,7 @@ impl Manager {
         };
         let (build, supported) = match arch {
             Some(arch) => {
-                let candidates: Vec<&Build> = catalog::BUILDS
-                    .iter()
+                let candidates: Vec<&Build> = catalog::builds()
                     .filter(|build| {
                         build.engine == engine
                             && build.backend == backend
@@ -1053,6 +1118,9 @@ impl Manager {
                 "engine_install_busy",
                 "An engine installation is running. Wait for it to finish before removing one.",
             ));
+        }
+        if let Some(result) = self.uninstall_environments(engine, backend).await {
+            return result;
         }
         let packages = self.package_inventory().await?;
         let targets: Vec<String> = crate::engines::installed_packages(&packages)

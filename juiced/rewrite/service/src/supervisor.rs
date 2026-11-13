@@ -37,6 +37,7 @@ mod discovery;
 pub use artifact_revision::ArtifactRevisionChange;
 pub(crate) use discovery::{Discovered, loaded_entry, model_type, revision as catalog_revision};
 mod engines;
+mod environments;
 pub use engines::{AddModelError, EngineInstall, ModelAdd};
 mod intake;
 pub use intake::{ImportListQuery, ImportPathRequest, UploadQuery};
@@ -1608,6 +1609,10 @@ impl RequestLease {
 
     pub fn adapter(&self) -> crate::config::Provider {
         self.worker.spec.execution_profile.adapter
+    }
+
+    pub fn worker_arguments(&self) -> &[String] {
+        &self.worker.spec.execution_profile.args
     }
 
     pub fn upstream_model(&self) -> Option<&str> {
@@ -3637,6 +3642,16 @@ impl Manager {
         Ok(outcome.model.expect("published model policy"))
     }
 
+    /// Python engines compile kernels on their first start, far past a native worker's
+    /// configured startup bound.
+    fn startup_timeout_for(configured: Duration, worker: &Worker) -> Duration {
+        if worker.spec.execution_profile.adapter == crate::config::Provider::Vllm {
+            configured.max(crate::vllm::STARTUP)
+        } else {
+            configured
+        }
+    }
+
     async fn ensure_loaded<'a>(
         &self,
         worker: &'a Arc<Worker>,
@@ -3708,7 +3723,9 @@ impl Manager {
             let wait = self.startup_wait;
             let deadline = now
                 .checked_add(wait)
-                .and_then(|deadline| deadline.checked_add(self.startup_timeout))
+                .and_then(|deadline| {
+                    deadline.checked_add(Self::startup_timeout_for(self.startup_timeout, worker))
+                })
                 .and_then(|deadline| deadline.checked_add(crate::process::DEFAULT_STOP_TIMEOUT))
                 .ok_or_else(|| {
                     ApiError::new(
@@ -3785,7 +3802,7 @@ impl Manager {
                 let preparation = Preparation::begin(attempt.clone(), reservation, permit);
                 *preparation.resources.host.lock().unwrap_or_else(|error| error.into_inner()) = host;
                 let dispatch_deadline = Instant::now()
-                    .checked_add(self.startup_timeout)
+                    .checked_add(Self::startup_timeout_for(self.startup_timeout, worker))
                     .unwrap_or_else(|| deadline.into_std())
                     .min(deadline.into_std());
                 self.start_prepared(worker, &mut state, preparation, dispatch_deadline).await
@@ -3932,6 +3949,12 @@ impl Manager {
                     crate::config::Provider::Moonshine => Some(
                         tempfile::Builder::new()
                             .prefix("juiced-moonshine-")
+                            .tempdir()
+                            .map_err(preparation_identity_error)?,
+                    ),
+                    crate::config::Provider::Vllm | crate::config::Provider::OnnxRuntime => Some(
+                        tempfile::Builder::new()
+                            .prefix("juiced-vllm-")
                             .tempdir()
                             .map_err(preparation_identity_error)?,
                     ),

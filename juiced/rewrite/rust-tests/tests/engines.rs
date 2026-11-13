@@ -432,6 +432,10 @@ async fn engine_install_auto_registration_load_and_chat_use_the_installed_packag
         ),
         (
             json!({"engine":"vllm","backend":"cpu","expected_generation":0}),
+            "unknown_backend",
+        ),
+        (
+            json!({"engine":"tensorrt-llm","backend":"cuda","expected_generation":0}),
             "unknown_engine",
         ),
     ] {

@@ -253,8 +253,11 @@ fn nvidia_host_reports_cuda_device_and_recommends_cuda() {
     );
 
     let inventory = inventory(&report);
-    assert_eq!(inventory.backends.len(), 40);
+    assert_eq!(inventory.backends.len(), 41);
     assert_eq!(inventory.recommendations.len(), 18);
+    let vllm = variant(&inventory, "vllm", "cuda");
+    assert_eq!(vllm.state, Availability::Available);
+    assert_eq!(vllm.tier, "experimental");
     let cuda = variant(&inventory, "llamacpp", "cuda");
     assert_eq!(cuda.state, Availability::Available);
     assert_eq!(cuda.devices, ["nvidia_gpu"]);
@@ -867,7 +870,8 @@ fn every_native_support_row_is_projected_once_per_backend() {
         .native_recipe_migrations()
         .iter()
         .map(|migration| migration.native_backend_labels.len())
-        .sum();
+        .sum::<usize>()
+        + crate::engines::catalog::SUPPLEMENTAL_SUPPORT_ROWS.len();
     assert_eq!(inventory.backends.len(), expected);
     for migration in catalog.native_recipe_migrations() {
         for label in &migration.native_backend_labels {
@@ -994,7 +998,7 @@ async fn detector_caches_within_ttl_and_refreshes_after_it() {
     assert_eq!(document["cache_ttl_ms"], 60000);
     assert_eq!(document["devices"]["gpus"][0]["family"], "sm_120");
     assert_eq!(document["recommendations"]["llamacpp"], "cuda");
-    assert_eq!(document["backends"].as_array().unwrap().len(), 40);
+    assert_eq!(document["backends"].as_array().unwrap().len(), 41);
     assert!(document["backends"][0]["installed"].is_null());
 }
 

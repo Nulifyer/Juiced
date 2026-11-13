@@ -158,6 +158,9 @@ pub(crate) fn recipe(provider: Provider) -> Option<&'static str> {
         Provider::Moonshine => Some("moonshine"),
         Provider::Asr4all => Some("asr4all"),
         Provider::FastFlowLm => Some("flm"),
+        Provider::Vllm => Some("vllm"),
+        Provider::Ds4 => Some("ds4"),
+        Provider::OnnxRuntime => Some("onnxruntime"),
     }
 }
 

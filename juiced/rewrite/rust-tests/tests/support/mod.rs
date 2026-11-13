@@ -153,7 +153,8 @@ pub const MEDIA_INFERENCE_ROUTES: [&str; 3] =
 pub const WEBSOCKET_INFERENCE_ROUTES: [&str; 1] = ["/realtime"];
 /// Quad-prefixed POST actions that take no body, with their authority.
 pub const ACTION_ROUTES: [(&str, &str, &str); 1] = [("POST", "/models/check-updates", "operator")];
-pub const LLAMA_ROUTES: [(&str, &str, &str); 9] = [
+pub const LLAMA_ROUTES: [(&str, &str, &str); 10] = [
+    ("POST", "/classify", "inference"),
     ("POST", "/rerank", "inference"),
     ("POST", "/reranking", "inference"),
     ("POST", "/reranker", "inference"),
