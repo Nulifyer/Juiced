@@ -5,9 +5,10 @@ ARG RUNTIME_IMAGE=docker.io/library/debian:trixie-slim
 
 FROM ${RUST_IMAGE} AS service
 WORKDIR /src/juiced/rewrite
-# The service embeds the native model registry and the runtime catalog at compile time.
+# The service embeds the native model registry, the runtime catalog and the API reference at compile time.
 COPY src/cpp/resources/server_models.json src/cpp/resources/architecture_defaults.json \
     /src/src/cpp/resources/
+COPY docs/api/ /src/docs/api/
 COPY juiced/rewrite/catalog-design/inventory.json catalog-design/
 COPY juiced/rewrite/Cargo.toml juiced/rewrite/Cargo.lock ./
 COPY juiced/rewrite/service/ service/

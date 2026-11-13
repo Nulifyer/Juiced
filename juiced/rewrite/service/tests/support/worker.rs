@@ -73,6 +73,7 @@ struct Fixture {
     #[cfg(target_os = "linux")]
     _identity_map: Option<IdentityMapping>,
     events: Option<PathBuf>,
+    captured_bodies: Option<PathBuf>,
     finite_stream: bool,
     report_timings: bool,
     chatty_bytes: usize,
@@ -405,6 +406,9 @@ async fn inference(
         Err(_) => return StatusCode::BAD_REQUEST.into_response(),
     };
     let body_sha256 = format!("{:x}", Sha256::digest(&bytes));
+    if let Some(path) = &fixture.captured_bodies {
+        write_record(path, body.clone());
+    }
     fixture.inference_started.fetch_add(1, Ordering::AcqRel);
     let mut observation = Observation {
         fixture,
@@ -1333,6 +1337,7 @@ async fn main() {
             IdentityMapping::open(std::path::Path::new(&path)).expect("open owned identity mapping")
         }),
         events: arg("--events").map(PathBuf::from),
+        captured_bodies: arg("--capture-bodies").map(PathBuf::from),
         finite_stream: args.iter().any(|value| value == "--finite-stream"),
         report_timings: args.iter().any(|value| value == "--report-timings"),
         chatty_bytes: arg("--chatty-bytes")

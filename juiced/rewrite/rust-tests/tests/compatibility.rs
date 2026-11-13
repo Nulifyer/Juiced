@@ -238,7 +238,7 @@ async fn mcp_initialize_list_tools_and_all_inference_tools_use_actual_worker_pip
         if method == "initialize" {
             assert_eq!(value["result"]["protocolVersion"], "2025-06-18");
         } else if method == "tools/list" {
-            assert_eq!(value["result"]["tools"].as_array().unwrap().len(), 4);
+            assert_eq!(value["result"]["tools"].as_array().unwrap().len(), 7);
         } else if params["name"] == "lemonade_list_models" {
             assert_eq!(
                 value["result"]["structuredContent"]["models"]

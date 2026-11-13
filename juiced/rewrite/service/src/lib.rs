@@ -14,6 +14,7 @@ pub mod connect;
 pub mod cors;
 pub mod discovery;
 mod discovery_http;
+pub mod docs_api;
 pub mod engine_usage;
 pub mod engines;
 pub mod execution_profile;

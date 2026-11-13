@@ -36,9 +36,30 @@ inference credential when needed.
 | `POST /api/embed` | Embeddings |
 | `POST /api/embeddings` | Legacy single-prompt embeddings |
 
-`POST /api/show` is a metadata read. Model creation, copy, push, and blob upload
-are not implemented. Use Juiced's Library and model management controls for
-acquisition and removal.
+`POST /api/show` is a metadata read. Use Juiced's Library and model management
+controls for acquisition and removal. These requests return HTTP 501:
+
+| Request | Error |
+| --- | --- |
+| `POST /api/pull` | `Use Juiced model management to download weights` |
+| `DELETE /api/delete` | `Use Juiced model management to remove weights` |
+| `POST /api/create`, `/api/copy`, `/api/push`, `/api/blobs/DIGEST` | `not supported by Lemonade` |
+
+## Options and ignored fields
+
+Juiced forwards `temperature`, `top_p`, `top_k`, `min_p`, `typical_p`, `seed`,
+`stop`, `presence_penalty`, `frequency_penalty`, `repeat_penalty`,
+`repeat_last_n` and the `mirostat` settings to the engine. `num_predict` sets the
+output limit; `-1` and `-2` mean no limit. The options can also appear at the top
+level, where they override `options`. `num_ctx` is accepted, but the context size
+comes from the model's loading settings.
+
+`think: false` turns reasoning off on models whose chat template supports it.
+
+Other options and fields are ignored, not rejected. Examples are `num_thread`,
+`num_gpu`, and `system`, `context` or `raw: false` on `/api/generate`. Generation
+sends the prompt to the model without a chat template. Each ignored part is
+named in the `X-Lemonade-Warning` response header.
 
 Select **Memory** cache mode for models used through this interface when
 persistent mode rejects the request. Tool-call execution belongs to the client.

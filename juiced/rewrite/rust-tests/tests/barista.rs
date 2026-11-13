@@ -388,7 +388,10 @@ async fn mcp_gateway_offers_only_inference_tools_and_refuses_browser_origins() {
             "lemonade_list_models",
             "lemonade_chat",
             "lemonade_complete",
-            "lemonade_embed"
+            "lemonade_embed",
+            "lemonade_transcribe_audio",
+            "lemonade_generate_image",
+            "lemonade_docs"
         ]
     );
     let (_, refused) = server

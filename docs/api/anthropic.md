@@ -22,6 +22,14 @@ The interface translates the supported Messages, tool-use, and streaming subset
 through the selected worker. Tools execute in the client. Provider-hosted tools
 are not implemented.
 
+Fields that the translation cannot use are ignored, not rejected. Examples are
+`metadata`, `service_tier`, `cache_control`, `thinking.budget_tokens`,
+provider-hosted tools, and earlier `thinking` blocks. Each ignored part is named
+in the `X-Lemonade-Warning` response header, separated by ` | `. A non-streaming
+reply also lists them in `warnings`; a stream lists them in `message_delta`.
+`thinking: {"type":"disabled"}` turns reasoning off on models whose chat template
+supports it.
+
 `POST /v1/messages/count_tokens` requires backend-native message token counting.
 The bundled llama.cpp b12032 contract supplies that capability. Do not assume
 another engine implements it.

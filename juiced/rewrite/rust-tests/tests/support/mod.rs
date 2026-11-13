@@ -28,8 +28,10 @@ pub const CLIENT_KEY: &str = "isolated-e2e-client-key";
 pub const ADMIN_KEY: &str = "isolated-e2e-admin-key";
 const ROTATED_CLIENT_KEY: &str = "isolated-e2e-rotated-client-key";
 const ROTATED_ADMIN_KEY: &str = "isolated-e2e-rotated-admin-key";
-pub const READ_ROUTES: [&str; 15] = [
+pub const READ_ROUTES: [&str; 17] = [
     "/health",
+    "/docs",
+    "/docs/{*page}",
     "/juiced/context",
     "/juiced/capabilities",
     "/models",
@@ -145,7 +147,7 @@ pub const LLAMA_ROUTES: [(&str, &str, &str); 9] = [
     ("GET", "/audio/voices", "read"),
 ];
 pub const WEBSOCKET_READ_ROUTES: [&str; 1] = ["/logs/stream"];
-pub const COMPAT_ROUTES: [(&str, &str, &str); 24] = [
+pub const COMPAT_ROUTES: [(&str, &str, &str); 29] = [
     ("GET", "/.well-known/juiced.json", "read"),
     ("POST", "/v1/messages", "inference"),
     ("POST", "/v1/messages/count_tokens", "inference"),
@@ -157,6 +159,11 @@ pub const COMPAT_ROUTES: [(&str, &str, &str); 24] = [
     ("GET", "/api/ps", "read"),
     ("POST", "/api/show", "read"),
     ("GET", "/api/version", "read"),
+    ("POST", "/api/pull", "inference"),
+    ("DELETE", "/api/delete", "inference"),
+    ("POST", "/api/create", "inference"),
+    ("POST", "/api/copy", "inference"),
+    ("POST", "/api/push", "inference"),
     ("POST", "/mcp", "inference"),
     ("POST", "/sdapi/v1/txt2img", "inference"),
     ("GET", "/sdapi/v1/sd-models", "read"),

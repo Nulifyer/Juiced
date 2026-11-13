@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - 'juiced/rewrite/**'
+      - 'docs/api/**'
       - '.github/workflows/juiced-rewrite.yml'
 permissions:
   contents: read

@@ -6,6 +6,7 @@
 !juiced/ui/T3-SOURCES.json
 !src/cpp/resources/server_models.json
 !src/cpp/resources/architecture_defaults.json
+!docs/api/
 !juiced/rewrite/catalog-design/inventory.json
 !juiced/rewrite/Cargo.toml
 !juiced/rewrite/Cargo.lock
