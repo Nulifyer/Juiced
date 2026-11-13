@@ -396,10 +396,11 @@ async fn status(context: &Context<'_>, args: Value) -> Result<Outcome> {
         json!({"volumes": list(&storage, "volumes").iter().map(volume_row).collect::<Vec<_>>()})
     });
     let summary = format!(
-        "Juiced {}: {} of {} models loaded, {} free of {} model budget, {} active requests, {}{}.",
+        "Juiced {}: {} of {} models loaded holding {}, {} free of {} model budget, {} active requests, {}{}.",
         state["version"].as_str().unwrap_or("unknown"),
         loaded.len(),
         models.len(),
+        size(resources["reserved_bytes"].as_u64().unwrap_or(0)),
         headroom.map_or("unknown".into(), size),
         budget.map_or("unknown".into(), size),
         resources["active_requests"].as_u64().unwrap_or(0),
@@ -424,6 +425,7 @@ async fn status(context: &Context<'_>, args: Value) -> Result<Outcome> {
                 "budget_bytes": budget, "reserved_bytes": resources["reserved_bytes"],
                 "free_bytes": headroom, "measured_bytes": resources["measured_memory_bytes"],
                 "source": resources["reservation_source"],
+                "change_budget": "The operator sets the budget with Model memory on the Loading policy screen.",
             },
             "host": system["host"],
             "cpu": pick(&devices["cpu"], &["name", "logical_threads"]),
@@ -737,10 +739,14 @@ struct EngineFilter {
 /// What each engine runs, so the model can match a task to an engine without guessing.
 pub(super) fn engine_use(engine: &str) -> &'static str {
     match engine {
-        "llama.cpp" => "chat and embeddings from GGUF",
+        "llama.cpp" => {
+            "chat and embeddings from GGUF; image input when the model has an mmproj file"
+        }
         "fastflowlm" => "chat on the XDNA2 NPU from FLM checkpoints",
-        "vllm" => "chat from Transformers checkpoint folders (safetensors)",
-        "ds4" => "DeepSeek V4 chat from its own GGUFs",
+        "vllm" => {
+            "chat from Transformers checkpoint folders (safetensors), including vision-language models"
+        }
+        "ds4" => "DeepSeek V4 text chat from its own GGUFs, no image input",
         "onnxruntime" => "text classification from exported ONNX encoders",
         "whisper.cpp" | "parakeet.cpp" | "moonshine" => "speech to text",
         "futo-transcribe.cpp" => "speech to text, English only",
