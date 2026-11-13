@@ -304,9 +304,10 @@ pub(super) const fn with_runtime(build: Build, runtime: &'static Runtime) -> Bui
 
 pub const THEROCK_HOST: &str = "https://stable.repo.amd.com";
 
-/// The shared libraries `libggml-hip.so` of the TheRock-linked llama.cpp and sd.cpp builds
-/// needs (transitive `DT_NEEDED`), the rocBLAS/hipBLASLt kernel data, and the device-code
+/// The shared libraries `libggml-hip.so` of the TheRock-linked llama.cpp, sd.cpp and TRELLIS
+/// builds needs (transitive `DT_NEEDED`), the rocBLAS/hipBLASLt kernel data, and the device-code
 /// archives rocBLAS and rocSOLVER resolve at `../.kpack/` beside their library directory.
+/// TRELLIS's `libggml-base` and `libggml-cpu` also link LLVM's OpenMP runtime, `libomp.so`.
 const THEROCK_MEMBERS: &[&str] = &[
     ".info/version",
     ".kpack/blas_lib_",
@@ -327,6 +328,7 @@ const THEROCK_MEMBERS: &[&str] = &[
     "lib/rocblas/library/",
     "lib/llvm/lib/libLLVM.so",
     "lib/llvm/lib/libclang-cpp.so",
+    "lib/llvm/lib/libomp.so",
     "lib/rocm_sysdeps/lib/librocm_sysdeps_",
     "share/doc/",
 ];

@@ -251,6 +251,7 @@ fn therock_members_keep_the_hip_blas_closure_and_drop_the_toolchain() {
         "lib/hipblaslt/library/gfx1150/extop.co",
         "lib/llvm/lib/libLLVM.so.24.0git",
         "lib/llvm/lib/libclang-cpp.so.24.0git",
+        "lib/llvm/lib/libomp.so",
         "lib/rocm_sysdeps/lib/librocm_sysdeps_numa.so.1",
         "share/doc/hip/LICENSE.md",
     ] {
@@ -263,7 +264,8 @@ fn therock_members_keep_the_hip_blas_closure_and_drop_the_toolchain() {
         "lib/libMIOpen.so.1.0",
         "lib/libdevice_conv_operations.a",
         "lib/llvm/bin/clang",
-        "lib/llvm/lib/libomp.so",
+        "lib/llvm/lib/libomptarget.so.24.0git",
+        "lib/llvm/lib/libgomp.so",
         "lib/rocm_sysdeps/lib/cmake/numa.cmake",
         "lib/rdc/grpc/lib/rocm_sysdeps/lib/librocm_sysdeps_z.so.1.3.2",
         ".kpack/miopen_lib_gfx1150.kpack",
