@@ -3645,7 +3645,9 @@ impl Manager {
     /// Python engines compile kernels on their first start, far past a native worker's
     /// configured startup bound.
     fn startup_timeout_for(configured: Duration, worker: &Worker) -> Duration {
-        if worker.spec.execution_profile.adapter == crate::config::Provider::Vllm {
+        let adapter = worker.spec.execution_profile.adapter;
+        let configured = configured.max(adapter.minimum_startup());
+        if adapter == crate::config::Provider::Vllm {
             configured.max(crate::vllm::STARTUP)
         } else {
             configured
@@ -3955,6 +3957,16 @@ impl Manager {
                     crate::config::Provider::Vllm | crate::config::Provider::OnnxRuntime => Some(
                         tempfile::Builder::new()
                             .prefix("juiced-vllm-")
+                            .tempdir()
+                            .map_err(preparation_identity_error)?,
+                    ),
+                    crate::config::Provider::AceStep
+                    | crate::config::Provider::ThinkSound
+                    | crate::config::Provider::Trellis
+                    | crate::config::Provider::OpenMoss
+                    | crate::config::Provider::TheNoise => Some(
+                        tempfile::Builder::new()
+                            .prefix("juiced-generation-")
                             .tempdir()
                             .map_err(preparation_identity_error)?,
                     ),

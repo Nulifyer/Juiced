@@ -226,6 +226,10 @@ pub enum Operation {
     Rerank,
     #[serde(rename = "classify")]
     Classify,
+    #[serde(rename = "audio/generations")]
+    AudioGeneration,
+    #[serde(rename = "3d/generations")]
+    Model3dGeneration,
 }
 
 impl Operation {
@@ -241,12 +245,18 @@ impl Operation {
             Self::ImageGeneration => "images/generations",
             Self::Rerank => "rerank",
             Self::Classify => "classify",
+            Self::AudioGeneration => "audio/generations",
+            Self::Model3dGeneration => "3d/generations",
         }
     }
     pub fn single_slot_media(self) -> bool {
         matches!(
             self,
-            Self::Transcription | Self::Speech | Self::ImageGeneration
+            Self::Transcription
+                | Self::Speech
+                | Self::ImageGeneration
+                | Self::AudioGeneration
+                | Self::Model3dGeneration
         )
     }
 }
@@ -269,6 +279,16 @@ pub enum Provider {
     Ds4,
     #[serde(rename = "onnxruntime")]
     OnnxRuntime,
+    #[serde(rename = "acestep")]
+    AceStep,
+    #[serde(rename = "thinksound")]
+    ThinkSound,
+    #[serde(rename = "trellis")]
+    Trellis,
+    #[serde(rename = "openmoss")]
+    OpenMoss,
+    #[serde(rename = "thenoise")]
+    TheNoise,
 }
 
 impl Provider {
@@ -286,6 +306,11 @@ impl Provider {
             Self::Vllm => Some("vllm"),
             Self::Ds4 => Some("ds4"),
             Self::OnnxRuntime => Some("onnxruntime"),
+            Self::AceStep => Some("acestep-cpp"),
+            Self::ThinkSound => Some("thinksound-cpp"),
+            Self::Trellis => Some("trellis-cpp"),
+            Self::OpenMoss => Some("openmoss-cpp"),
+            Self::TheNoise => Some("thenoise"),
         }
     }
     pub fn from_implementation(id: &str) -> Option<Self> {
@@ -301,22 +326,43 @@ impl Provider {
             "vllm" => Some(Self::Vllm),
             "ds4" => Some(Self::Ds4),
             "onnxruntime" => Some(Self::OnnxRuntime),
+            "acestep-cpp" => Some(Self::AceStep),
+            "thinksound-cpp" => Some(Self::ThinkSound),
+            "trellis-cpp" => Some(Self::Trellis),
+            "openmoss-cpp" => Some(Self::OpenMoss),
+            "thenoise" => Some(Self::TheNoise),
             _ => None,
         }
     }
     pub fn media_operation(self) -> Option<Operation> {
+        self.media_operations().first().copied()
+    }
+    /// OpenMOSS serves speech checkpoints and its sound-effect checkpoint through one engine,
+    /// so a registration picks exactly one of the operations its adapter allows.
+    pub fn media_operations(self) -> &'static [Operation] {
         match self {
             Self::WhisperCpp | Self::Parakeet | Self::Moonshine | Self::Asr4all => {
-                Some(Operation::Transcription)
+                &[Operation::Transcription]
             }
-            Self::StableDiffusionCpp => Some(Operation::ImageGeneration),
-            Self::Kokoros => Some(Operation::Speech),
+            Self::StableDiffusionCpp | Self::TheNoise => &[Operation::ImageGeneration],
+            Self::Kokoros => &[Operation::Speech],
+            Self::AceStep | Self::ThinkSound => &[Operation::AudioGeneration],
+            Self::Trellis => &[Operation::Model3dGeneration],
+            Self::OpenMoss => &[Operation::Speech, Operation::AudioGeneration],
             Self::ExternalHttp
             | Self::LlamaCpp
             | Self::FastFlowLm
             | Self::Vllm
             | Self::Ds4
-            | Self::OnnxRuntime => None,
+            | Self::OnnxRuntime => &[],
+        }
+    }
+    /// TheNoise loads its checkpoints and compiles kernels before it listens, which native
+    /// allowed 30 minutes for.
+    pub fn minimum_startup(self) -> std::time::Duration {
+        match self {
+            Self::TheNoise => std::time::Duration::from_secs(30 * 60),
+            _ => std::time::Duration::ZERO,
         }
     }
     pub fn readiness_path(self) -> &'static str {
@@ -330,13 +376,25 @@ impl Provider {
             | Self::Moonshine
             | Self::Asr4all
             | Self::Vllm
-            | Self::OnnxRuntime => "/health",
+            | Self::OnnxRuntime
+            | Self::AceStep
+            | Self::ThinkSound
+            | Self::Trellis
+            | Self::OpenMoss
+            | Self::TheNoise => "/health",
         }
     }
     pub fn accepts_companions(self) -> bool {
         matches!(
             self,
-            Self::StableDiffusionCpp | Self::Kokoros | Self::Moonshine
+            Self::StableDiffusionCpp
+                | Self::Kokoros
+                | Self::Moonshine
+                | Self::AceStep
+                | Self::ThinkSound
+                | Self::Trellis
+                | Self::OpenMoss
+                | Self::TheNoise
         )
     }
     pub fn transcription_path(self) -> &'static str {
@@ -794,8 +852,10 @@ impl Config {
             {
                 return Err("Native public model IDs must be single literal aliases without surrounding whitespace or comma separators".into());
             }
-            if let Some(operation) = profile.adapter.media_operation()
-                && (model.max_inflight != 1 || model.operations != [operation])
+            let media = profile.adapter.media_operations();
+            if let Some(operation) = media.first()
+                && (model.max_inflight != 1
+                    || !matches!(model.operations.as_slice(), [declared] if media.contains(declared)))
             {
                 return Err(format!(
                     "The selected {} worker needs one physical slot and only {}",
@@ -807,7 +867,7 @@ impl Config {
                 .operations
                 .iter()
                 .find(|operation| operation.single_slot_media())
-                && profile.adapter.media_operation() != Some(*operation)
+                && !profile.adapter.media_operations().contains(operation)
             {
                 return Err(format!(
                     "{} requires its explicit single-slot media adapter",

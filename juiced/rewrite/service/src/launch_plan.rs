@@ -550,7 +550,16 @@ impl LaunchPlan {
                         )
                     })?,
             )
-        } else if checkpoint || profile.adapter == Provider::Moonshine {
+        } else if checkpoint
+            || matches!(
+                profile.adapter,
+                Provider::Moonshine
+                    | Provider::AceStep
+                    | Provider::ThinkSound
+                    | Provider::Trellis
+                    | Provider::OpenMoss
+            )
+        {
             Some(moonshine_directory(
                 &bindings,
                 companions
@@ -560,6 +569,20 @@ impl LaunchPlan {
             )?)
         } else {
             None
+        };
+        // moss-tts-server takes the backbone file and finds `<stem>.extras.gguf` beside it.
+        let directory = match (&directory, profile.adapter) {
+            (Some(directory), Provider::OpenMoss) => Some(
+                bindings
+                    .artifact
+                    .as_ref()
+                    .and_then(|artifact| artifact.primary_name())
+                    .map_or_else(
+                        || bindings.model.path().to_owned(),
+                        |name| directory.join(name),
+                    ),
+            ),
+            _ => directory,
         };
         let model = match &directory {
             Some(directory) => directory.as_os_str().to_str().ok_or_else(|| {
@@ -770,6 +793,31 @@ impl LaunchPlan {
                 command
                     .env("PIPER_ESPEAKNG_DATA_DIRECTORY", workspace.path())
                     .env("ESPEAK_DATA_PATH", workspace.path());
+            }
+            // trellis-server numbers its request files from 0 in every process, so workers
+            // sharing a temporary directory overwrite each other's inputs and meshes.
+            if matches!(
+                self.adapter,
+                Provider::AceStep
+                    | Provider::ThinkSound
+                    | Provider::Trellis
+                    | Provider::OpenMoss
+                    | Provider::TheNoise
+            ) {
+                let scratch = workspace.path().join("tmp");
+                std::fs::create_dir_all(&scratch).map_err(|_| {
+                    Error::new(
+                        "worker_workspace",
+                        "The generation worker's private temporary directory could not be created.",
+                    )
+                })?;
+                command.env("TMPDIR", &scratch);
+                if self.adapter == Provider::TheNoise {
+                    command
+                        .env("HOME", workspace.path())
+                        .env("TORCHINDUCTOR_CACHE_DIR", scratch.join("inductor"))
+                        .env("TRITON_CACHE_DIR", scratch.join("triton"));
+                }
             }
         }
         Ok(command)

@@ -48,4 +48,4 @@ export function progress(quant: Quant): number | null {
   return quant.bytes ? Math.min(100, done / quant.bytes * 100) : 0;
 }
 
-export const tasks = [["chat", "Chat"], ["embeddings", "Embeddings"], ["transcription", "Speech to text"], ["tts", "Text to speech"], ["image", "Images"]] as const;
+export const tasks = [["chat", "Chat"], ["embeddings", "Embeddings"], ["transcription", "Speech to text"], ["tts", "Text to speech"], ["image", "Images"], ["audio-generation", "Audio"], ["3d", "3D"]] as const;

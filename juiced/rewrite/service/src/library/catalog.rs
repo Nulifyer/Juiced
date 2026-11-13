@@ -33,7 +33,7 @@ pub struct CatalogCompanion {
     pub sha256: Option<String>,
 }
 
-const MAX_COMPANIONS: usize = 8;
+const MAX_COMPANIONS: usize = 12;
 
 fn bundle_primary(file: &str) -> bool {
     let name = file.to_ascii_lowercase();
@@ -182,6 +182,9 @@ impl Catalog {
                         || !matches!(
                             companion.role,
                             crate::artifacts::ArtifactRole::Voice
+                                | crate::artifacts::ArtifactRole::DraftModel
+                                | crate::artifacts::ArtifactRole::Denoiser
+                                | crate::artifacts::ArtifactRole::ExternalTensor
                                 | crate::artifacts::ArtifactRole::Vae
                                 | crate::artifacts::ArtifactRole::Encoder
                                 | crate::artifacts::ArtifactRole::Decoder

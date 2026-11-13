@@ -46,7 +46,7 @@ fn engine_metadata_round_trips_through_names_aliases_and_serde() {
     assert!(serde_json::from_value::<Engine>(serde_json::json!("flm")).is_err());
     assert_eq!(catalog::recipe_of(Engine::LlamaCpp, "hrx"), "llamacpp-hrx");
     assert_eq!(catalog::recipe_of(Engine::LlamaCpp, "cuda"), "llamacpp");
-    assert_eq!(Engine::all().count(), 11);
+    assert_eq!(Engine::all().count(), 16);
 }
 
 #[test]

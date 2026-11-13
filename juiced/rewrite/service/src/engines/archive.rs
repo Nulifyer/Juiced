@@ -137,6 +137,17 @@ fn resolve_symlink(link: &Path, target: &str) -> Result<PathBuf, ArchiveError> {
 }
 
 /// Vendor runtime tarballs carry far more entries than the members a bundle keeps.
+pub fn limits_for(engine: super::catalog::Engine) -> Limits {
+    let (files, entries) = crate::runtime_bundle::file_limits(
+        engine.provider().implementation_id().unwrap_or_default(),
+    );
+    Limits {
+        entries: entries.max(LIMITS.entries),
+        files,
+        ..LIMITS
+    }
+}
+
 pub const RUNTIME_LIMITS: Limits = Limits {
     entries: 65536,
     ..LIMITS
@@ -584,7 +595,8 @@ pub fn assemble(
     tree: &Path,
     cancelled: &AtomicBool,
 ) -> Result<Described, ArchiveError> {
-    extract(archive, build.format, tree, &LIMITS, cancelled)?;
+    let limits = limits_for(build.engine);
+    extract(archive, build.format, tree, &limits, cancelled)?;
     let root = bundle_root(tree)?;
     match (build.runtime, runtime_archive) {
         (None, None) => {}
@@ -605,7 +617,7 @@ pub fn assemble(
         }
         _ => return Err(ArchiveError::Layout),
     }
-    describe(&root, build.engine, &LIMITS, cancelled)
+    describe(&root, build.engine, &limits, cancelled)
 }
 
 pub fn describe(

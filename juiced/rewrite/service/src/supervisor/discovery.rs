@@ -161,6 +161,11 @@ pub(crate) fn recipe(provider: Provider) -> Option<&'static str> {
         Provider::Vllm => Some("vllm"),
         Provider::Ds4 => Some("ds4"),
         Provider::OnnxRuntime => Some("onnxruntime"),
+        Provider::AceStep => Some("acestep"),
+        Provider::ThinkSound => Some("thinksound"),
+        Provider::Trellis => Some("trellis"),
+        Provider::OpenMoss => Some("openmoss"),
+        Provider::TheNoise => Some("thenoise"),
     }
 }
 
@@ -181,6 +186,10 @@ pub(crate) fn model_type(operations: &[Operation]) -> &'static str {
         "tts"
     } else if operations.contains(&Operation::ImageGeneration) {
         "image"
+    } else if operations.contains(&Operation::AudioGeneration) {
+        "audio-generation"
+    } else if operations.contains(&Operation::Model3dGeneration) {
+        "mesh"
     } else {
         "unknown"
     }
@@ -399,6 +408,8 @@ impl Manager {
             (Operation::Transcription, "transcription"),
             (Operation::Speech, "tts"),
             (Operation::ImageGeneration, "image"),
+            (Operation::AudioGeneration, "audio-generation"),
+            (Operation::Model3dGeneration, "3d"),
         ] {
             if view.operations.contains(&operation) {
                 labels.push(label);

@@ -84,6 +84,59 @@ profile explains its restriction.
 Use **Find a prepared version** to search for another publisher artifact.
 Use [published variants](variants.md) when another format or quant is needed.
 
+## Speech, audio, image and 3D engines
+
+Install these from **Engines & hardware**. Juiced picks the build for your
+hardware and lists builds your machine can't run, with the reason, under
+**Show all**. Each engine downloads a pinned release that is checked against its
+published SHA-256.
+
+| Engine | Used for | Linux builds | Notes |
+| --- | --- | --- | --- |
+| whisper.cpp | Speech to text | CPU, Vulkan, ROCm | NPU and Metal builds need Windows or macOS. |
+| Parakeet | Speech to text | CPU | |
+| Moonshine | Speech to text | CPU | |
+| FUTO transcribe | Speech to text | CPU | English only. |
+| Kokoro | Text to speech | CPU | Metal needs macOS. |
+| OpenMOSS | Text to speech, sound effects | CUDA, Vulkan | Needs a GPU with 16 GB for MOSS-TTS. |
+| ACE-Step | Music | CUDA, Vulkan | |
+| ThinkSound | Sound effects | CUDA, Vulkan | |
+| sd.cpp | Images | CPU, Vulkan, CUDA, ROCm | |
+| TheNoise | Images | ROCm (gfx1150, gfx1151, gfx1152) | |
+| TRELLIS | Image to 3D mesh | CUDA, Vulkan, ROCm (gfx1150) | |
+
+- **CUDA builds** of OpenMOSS, ACE-Step, ThinkSound and TRELLIS bundle CUDA 13, so
+  they need NVIDIA driver 580 or newer. TRELLIS needs an RTX 30-series GPU or newer.
+  The OpenMOSS CUDA build also needs a CPU with AVX-512; on other CPUs Juiced
+  offers only its Vulkan build.
+- **AMD GPUs** run OpenMOSS, ACE-Step and ThinkSound with their Vulkan builds. Their
+  ROCm releases are built for other GPU targets against a ROCm version Juiced
+  doesn't pin.
+- **TheNoise** bundles Python, PyTorch and ROCm, so its install is about 1.8 GB to
+  download and 6 GB on disk. Its first image after loading is slow while PyTorch
+  compiles kernels. The gfx103X, gfx110X and gfx120X bundles are not offered,
+  because they ship as split archives.
+
+### Add a generation model
+
+1. Open **Models**, then **Discover**, and pick the **Audio** or **3D** task.
+2. Download the model. ACE-Step, ThinkSound, TRELLIS and OpenMOSS models come as a
+   set of files, and Juiced downloads all of them.
+3. Select **Add model**. If its engine is missing, select **Install engine and add**.
+4. Try it in **Test services**: **Audio** makes a clip from a prompt and optional
+   lyrics, and **3D** turns an object photo into a `.glb` file.
+
+ACE-Step 1.5 Turbo is the smallest music set (about 3.3 GB). TRELLIS.2 Q4 is the
+smallest 3D set (about 6.5 GB with BiRefNet). Generation models load only when a
+request arrives if their policy is On demand, and loading can take a minute.
+
+### Parakeet models from an earlier Juiced
+
+If your earlier installation had a Parakeet model, it appears under **Models** as
+Disabled and waiting for its engine. Install **Parakeet · CPU** in **Engines &
+hardware**. Juiced then registers the model, still Disabled; enable it in
+**Loading policy**.
+
 ## Try experimental XDNA2 + ROCm
 
 This profile requires Linux, a gfx1150 Radeon GPU, an XDNA2 NPU, and a matched

@@ -148,8 +148,13 @@ pub const MULTIPART_INFERENCE_ROUTES: [&str; 3] = [
     "/images/edits",
     "/images/variations",
 ];
-pub const MEDIA_INFERENCE_ROUTES: [&str; 3] =
-    ["/images/generations", "/audio/speech", "/images/upscale"];
+pub const MEDIA_INFERENCE_ROUTES: [&str; 5] = [
+    "/images/generations",
+    "/audio/speech",
+    "/images/upscale",
+    "/audio/generations",
+    "/3d/generations",
+];
 pub const WEBSOCKET_INFERENCE_ROUTES: [&str; 1] = ["/realtime"];
 /// Quad-prefixed POST actions that take no body, with their authority.
 pub const ACTION_ROUTES: [(&str, &str, &str); 1] = [("POST", "/models/check-updates", "operator")];
