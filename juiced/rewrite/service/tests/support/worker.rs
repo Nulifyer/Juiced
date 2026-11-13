@@ -881,6 +881,15 @@ async fn slot_action(
     if slot != 0 && (fixture.prompt_cache.is_none() || slot >= fixture.parallel) {
         return StatusCode::NOT_FOUND.into_response();
     }
+    if action.action == "erase" {
+        let erased = fixture.prompt_cache.as_ref().map_or(0, |cache| {
+            std::mem::take(&mut cache.lock().unwrap()[slot as usize]).len()
+        });
+        if let Some(events) = &fixture.events {
+            record_event(events, "slot-erase", "completed");
+        }
+        return Json(json!({"id_slot":slot,"n_erased":erased})).into_response();
+    }
     let Some(root) = &fixture.cache else {
         return StatusCode::NOT_IMPLEMENTED.into_response();
     };
@@ -1346,9 +1355,62 @@ async fn main() {
         .route("/metrics", get(|| async { "# HELP llamacpp:spec_decode_num_draft_tokens_total Speculative: Total draft tokens generated\nllamacpp:spec_decode_num_draft_tokens_total 105\nllamacpp:spec_decode_num_accepted_tokens_total 48\nllamacpp:spec_decode_num_drafts_total 35\n" }))
         .route("/slots/{slot}", post(slot_action))
         .route("/slots",get(inspect_slots))
+        .route("/tokenize", post(fixture_tokenize))
+        .route("/detokenize", post(fixture_detokenize))
+        .route("/v1/rerank", post(fixture_rerank))
         .with_state(fixture);
     let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port))
         .await
         .unwrap();
     axum::serve(listener, app).await.unwrap();
+}
+
+async fn fixture_tokenize(Json(body): Json<Value>) -> Json<Value> {
+    let words: Vec<&str> = body["content"]
+        .as_str()
+        .unwrap_or("")
+        .split_whitespace()
+        .collect();
+    let tokens: Vec<Value> = words
+        .iter()
+        .enumerate()
+        .map(|(index, word)| {
+            if body["with_pieces"] == true {
+                json!({"id": index + 1, "piece": word})
+            } else {
+                json!(index + 1)
+            }
+        })
+        .collect();
+    Json(json!({"tokens": tokens, "received": body}))
+}
+
+async fn fixture_detokenize(Json(body): Json<Value>) -> Json<Value> {
+    let count = body["tokens"].as_array().map_or(0, Vec::len);
+    Json(json!({"content": vec!["word"; count].join(" ")}))
+}
+
+async fn fixture_rerank(Json(body): Json<Value>) -> Json<Value> {
+    let query = body["query"].as_str().unwrap_or("");
+    let results: Vec<Value> = body["documents"]
+        .as_array()
+        .map(|documents| {
+            documents
+                .iter()
+                .enumerate()
+                .map(|(index, document)| {
+                    let shared = document
+                        .as_str()
+                        .unwrap_or("")
+                        .split_whitespace()
+                        .filter(|word| query.split_whitespace().any(|term| term == *word))
+                        .count();
+                    json!({"index": index, "relevance_score": shared as f64})
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Json(
+        json!({"model": body["model"], "object": "list", "results": results, "usage": {"prompt_tokens": 3, "total_tokens": 3}}),
+    )
 }

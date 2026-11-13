@@ -23,6 +23,7 @@ pub mod http;
 pub mod hybrid;
 pub mod identity;
 pub mod library;
+mod llama_routes;
 pub mod logs;
 pub mod media;
 pub mod model_discovery;

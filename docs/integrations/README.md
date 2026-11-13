@@ -44,5 +44,21 @@ Use Memory cache mode for request paths that cannot use persistent snapshots.
 Clients using qualified Chat Completions reuse can supply a stable
 [session header](../guide/cache.md).
 
+## Use llama.cpp-style endpoints
+
+Clients written for llama-server can use these paths under `/v1` (also
+`/api/v0`, `/api/v1` and `/v0`) with the inference key:
+
+| Path | Notes |
+| --- | --- |
+| `POST /v1/rerank` | Also `/reranking` and `/reranker`. The model must declare the `rerank` operation and start llama-server with `--reranking`. |
+| `POST /v1/tokenize`, `POST /v1/detokenize` | Uses the named `model`, or the loaded llama.cpp model that served the latest request. Nothing is loaded for you. |
+| `GET /v1/slots` | Lists slot progress only. Prompts and sampling settings are withheld. |
+| `POST /v1/slots/{id}?action=save\|restore\|erase` | See [save a slot by filename](../guide/cache.md#save-a-slot-by-filename). |
+| `GET /v1/stats` | Speed and token counts of the last request, and totals since start. |
+| `GET /v1/audio/voices?model=` | Voices of a Kokoro model, read from its voice pack without loading it. |
+
+The Realtime WebSocket also answers on bare `/realtime`.
+
 See [API examples](../api/README.md), [coding clients and Pi](pi.md), or
 [Home Assistant speech](home-assistant.md).

@@ -88,6 +88,9 @@ impl Protocol {
         if path == "/mcp" {
             return Some(Self::Mcp);
         }
+        if path == "/realtime" {
+            return Some(Self::Realtime);
+        }
         if path.starts_with("/sdapi/") {
             return Some(Self::Automatic1111);
         }

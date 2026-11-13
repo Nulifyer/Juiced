@@ -46,6 +46,8 @@ pub use fit::FitQuery;
 mod flm;
 pub use flm::{FlmModelAdd, FlmPull};
 mod host;
+mod llama;
+pub use llama::Target as LlamaTarget;
 mod native;
 mod native_adoption;
 pub use native_adoption::{
@@ -1666,6 +1668,7 @@ impl Drop for RequestLease {
         record.elapsed_ms = self.started.elapsed().as_millis().min(u64::MAX as u128) as u64;
         record.completed_at_ms = unix_time_ms();
         if record.outcome == "completed" && !record.usage.is_empty() {
+            self.manager.usage_totals.observe(&record.usage);
             *self
                 .manager
                 .last_inference
@@ -1899,6 +1902,7 @@ pub struct Manager {
     pub request_timeout: Duration,
     records: Mutex<VecDeque<RequestRecord>>,
     last_inference: Mutex<Option<LastInference>>,
+    usage_totals: llama::UsageTotals,
     logs: Arc<crate::logs::LogBuffer>,
     system_stats: crate::system_stats::Sampler,
     library: Arc<crate::library::Library>,
@@ -2222,6 +2226,7 @@ impl Manager {
             cache_directory,
             records: Mutex::new(VecDeque::new()),
             last_inference: Mutex::new(None),
+            usage_totals: Default::default(),
             logs: {
                 let logs = crate::logs::LogBuffer::new();
                 if let Some((level, notice)) = &cache_notice {

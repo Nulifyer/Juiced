@@ -222,6 +222,8 @@ pub enum Operation {
     Speech,
     #[serde(rename = "images/generations")]
     ImageGeneration,
+    #[serde(rename = "rerank")]
+    Rerank,
 }
 
 impl Operation {
@@ -235,6 +237,7 @@ impl Operation {
             Self::Transcription => "audio/transcriptions",
             Self::Speech => "audio/speech",
             Self::ImageGeneration => "images/generations",
+            Self::Rerank => "rerank",
         }
     }
     pub fn single_slot_media(self) -> bool {
