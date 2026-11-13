@@ -68,8 +68,10 @@ lemonade delete MyModel     # unload, remove, free its downloaded files
 ```
 
 Load options are saved for the model and apply on every later load.
-`--llamacpp-args` accepts `--ctx-size`, `--threads`, `--gpu-layers` and
-`--parallel`. `--pin` sets the model to **Hot**.
+`--llamacpp-args` accepts the typed llama.cpp flags (`--ctx-size`, `--threads`,
+`--gpu-layers`, `--parallel`, batch sizes, `--flash-attn`, `--cache-type-k/-v`
+and the sampling defaults) and saves them as the model's settings. Other flags
+belong in the model's extra arguments. `--pin` sets the model to **Hot**.
 
 `delete` frees only files Juiced downloaded and no other model uses. Files you
 linked from your own folders stay on disk. `delete MODEL --revision N` removes

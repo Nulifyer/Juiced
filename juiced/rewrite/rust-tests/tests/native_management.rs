@@ -405,7 +405,7 @@ async fn v092_install_pull_load_pin_alias_unload_delete_and_uninstall_flow() {
         server,
         Method::POST,
         "/v1/load",
-        Some(json!({"model_name":"Tiny","llamacpp_args":"--flash-attn on"})),
+        Some(json!({"model_name":"Tiny","llamacpp_args":"--no-mmap"})),
     )
     .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{unsupported}");

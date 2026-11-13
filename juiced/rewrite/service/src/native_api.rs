@@ -1352,7 +1352,7 @@ fn launch_options(
             StatusCode::UNPROCESSABLE_ENTITY,
             "unsupported_load_option",
             format!(
-                "Juiced does not apply '{key}' on load. Supported: ctx_size and llamacpp_args with --ctx-size, --threads, --gpu-layers or --parallel. Change the backend with POST /v1/models/{{id}}/runtime."
+                "Juiced does not apply '{key}' on load. Supported: ctx_size and llamacpp_args with the typed llama.cpp flags. Change the backend with POST /v1/models/{{id}}/runtime."
             ),
         ));
     }
@@ -1385,7 +1385,7 @@ fn launch_options(
                     StatusCode::UNPROCESSABLE_ENTITY,
                     "unsupported_load_option",
                     format!(
-                        "Juiced does not pass '{flag}' to llama-server. Supported: --ctx-size, --threads, --gpu-layers and --parallel."
+                        "Juiced does not pass '{flag}' on load. Save it as an extra argument with POST /v1/models/{{id}}/options."
                     ),
                 )
             })?;
@@ -1396,6 +1396,16 @@ fn launch_options(
                     format!("{flag} needs a value."),
                 )
             })?;
+            if !crate::profiles::legacy_field(field) {
+                if !options.set_flag(field, value) {
+                    return Err(error(
+                        StatusCode::BAD_REQUEST,
+                        "invalid_option",
+                        format!("'{value}' is not a supported value for {flag}."),
+                    ));
+                }
+                continue;
+            }
             let parsed = positive(&Value::String(value.to_owned()), flag)?;
             match field {
                 0 => options.context_tokens = parsed,
@@ -2133,9 +2143,30 @@ mod tests {
     }
 
     #[test]
+    fn typed_load_flags_join_the_saved_settings() {
+        let request: Map<String, Value> = serde_json::from_value(
+            json!({"model_name": "m", "llamacpp_args": "--flash-attn on --temp 0.7 -ctk q8_0"}),
+        )
+        .unwrap();
+        let options = launch_options(&LaunchOptions::default(), &request, None).unwrap();
+        assert!(options.flash_attention.is_some());
+        assert!(options.temperature.is_some());
+        assert_eq!(options.cache_type_k.as_deref(), Some("q8_0"));
+        let bad: Map<String, Value> =
+            serde_json::from_value(json!({"model_name": "m", "llamacpp_args": "--top-k many"}))
+                .unwrap();
+        assert_eq!(
+            launch_options(&LaunchOptions::default(), &bad, None)
+                .unwrap_err()
+                .code,
+            "invalid_option"
+        );
+    }
+
+    #[test]
     fn unsupported_load_options_are_refused_not_ignored() {
         for body in [
-            json!({"model_name": "m", "llamacpp_args": "--flash-attn on"}),
+            json!({"model_name": "m", "llamacpp_args": "--no-mmap"}),
             json!({"model_name": "m", "steps": 4}),
             json!({"model_name": "m", "llamacpp_backend": "rocm"}),
         ] {

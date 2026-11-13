@@ -33,7 +33,7 @@
     },
     {
       "path": "docs/api/lemonade.md",
-      "sha256": "57c8f1d3a98f1879d7fe3a8e2cdb8fe44251a68308d9575f1ea3c91f9df93536",
+      "sha256": "4d067209152fab4e1ebe2f3497b6f85587aefc333ccaa7080d7052fc41671e2e",
       "hash_check": "snapshot_only"
     },
     {
@@ -253,7 +253,7 @@
     },
     {
       "path": "juiced/rewrite/rust-tests/tests/native_management.rs",
-      "sha256": "11a4c6939e2e5f891497bd5f731722526d21c68f3fa9c0a25cf1f55f77565661",
+      "sha256": "672158c8c93392e6d73754310acb1e260ef882e0c65808d4be36184d33642ac7",
       "hash_check": "snapshot_only"
     },
     {

@@ -301,6 +301,26 @@ impl LaunchOptions {
         self.overlay(&next);
     }
 
+    /// Sets a typed field from an engine argument value; false when the value is outside its domain.
+    pub(crate) fn set_flag(&mut self, index: usize, value: &str) -> bool {
+        self.set_literal(index, value);
+        match index {
+            4 => self.batch_size.is_some(),
+            5 => self.ubatch_size.is_some(),
+            6 => self.batch_threads.is_some(),
+            7 => self.flash_attention.is_some(),
+            8 => self.cache_type_k.is_some(),
+            9 => self.cache_type_v.is_some(),
+            10 => self.temperature.is_some(),
+            11 => self.top_k.is_some(),
+            12 => self.top_p.is_some(),
+            13 => self.min_p.is_some(),
+            14 => self.repeat_penalty.is_some(),
+            15 => self.reasoning_budget.is_some(),
+            _ => false,
+        }
+    }
+
     fn clear(&mut self, index: usize) {
         match index {
             4 => self.batch_size = None,
