@@ -707,7 +707,7 @@ mod tests {
                 .await
                 .unwrap_err()
                 .code,
-            "worker_loaded"
+            "worker_starting"
         );
         {
             let mut state = worker.state.lock().await;
@@ -3504,6 +3504,9 @@ impl Manager {
         expected_revision: u64,
     ) -> Result<ModelView, ApiError> {
         let worker = self.worker(id)?;
+        if policy == Policy::Disabled {
+            self.flush_sessions(&worker).await;
+        }
         let mut state = worker.state.clone().lock_owned().await;
         Self::reap(&mut state);
         if state.revision != expected_revision {
@@ -3513,17 +3516,23 @@ impl Manager {
                 "The policy changed in another client. Refresh and review the current policy before saving again.",
             ));
         }
+        let stop_after = policy == Policy::Disabled
+            && (state.running.is_some() || self.processes.snapshot(id).is_some());
+        if policy == Policy::Disabled && worker.active.load(Ordering::Acquire) > 0 {
+            return Err(ApiError::new(
+                StatusCode::CONFLICT,
+                "worker_busy",
+                "Requests are still running on this model. Let them finish, then disable it.",
+            ));
+        }
         if policy == Policy::Disabled
-            && (worker.active.load(Ordering::Acquire) > 0
-                || (worker.preparing.load(Ordering::Acquire)
-                    && !worker.startup_waiting.load(Ordering::Acquire))
-                || state.running.is_some()
-                || self.processes.snapshot(id).is_some())
+            && worker.preparing.load(Ordering::Acquire)
+            && !worker.startup_waiting.load(Ordering::Acquire)
         {
             return Err(ApiError::new(
                 StatusCode::CONFLICT,
-                "worker_loaded",
-                "Switch to On demand and unload the idle worker before disabling it.",
+                "worker_starting",
+                "This model is still starting. Disable it once it has loaded.",
             ));
         }
         let config = self.config.clone().lock_owned().await;
@@ -3571,6 +3580,9 @@ impl Manager {
         }
         if policy == Policy::OnDemand {
             self.residency.touch(id);
+        }
+        if stop_after {
+            return self.unload(id).await;
         }
         Ok(outcome.model.expect("published model policy"))
     }

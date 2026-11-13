@@ -273,16 +273,9 @@ async fn removing_a_registration_requires_disabled_unloaded_state_and_retains_we
             .1["error"]["code"],
         "model_in_use"
     );
-    assert_eq!(server.post("juiced/policy", json!({"model":"guarded.model","policy":"disabled","expected_revision":enabled_revision})).await.1["error"]["code"], "worker_loaded");
-    assert_eq!(
-        server
-            .post("unload", json!({"model":"guarded.model"}))
-            .await
-            .0,
-        StatusCode::OK
-    );
     let (status, disabled) = server.post("juiced/policy", json!({"model":"guarded.model","policy":"disabled","expected_revision":enabled_revision})).await;
     assert_eq!(status, StatusCode::OK);
+    assert_eq!(disabled["loaded"], false);
     assert_eq!(
         server
             .post(

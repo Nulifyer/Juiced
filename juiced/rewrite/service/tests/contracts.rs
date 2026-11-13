@@ -414,19 +414,35 @@ async fn repeated_load_uses_one_process_and_hot_blocks_unload() {
         h.manager.unload("one").await.unwrap_err().code,
         "worker_hot"
     );
+    let disabled = h
+        .manager
+        .set_policy("one", Policy::Disabled, 1)
+        .await
+        .unwrap();
+    assert_eq!(disabled.policy, Policy::Disabled);
+    assert!(!disabled.loaded);
+    assert_eq!(h.manager.resources()["reserved_bytes"], 0);
+}
+
+#[tokio::test]
+async fn disabling_waits_for_active_requests() {
+    let h = Harness::new();
+    let (_, lease) = h.manager.begin("one", Operation::Chat).await.unwrap();
     assert_eq!(
         h.manager
-            .set_policy("one", Policy::Disabled, 1)
+            .set_policy("one", Policy::Disabled, 0)
             .await
             .unwrap_err()
             .code,
-        "worker_loaded"
+        "worker_busy"
     );
-    h.manager
-        .set_policy("one", Policy::OnDemand, 1)
+    drop(lease);
+    let disabled = h
+        .manager
+        .set_policy("one", Policy::Disabled, 0)
         .await
         .unwrap();
-    h.manager.unload("one").await.unwrap();
+    assert!(!disabled.loaded);
     assert_eq!(h.manager.resources()["reserved_bytes"], 0);
 }
 

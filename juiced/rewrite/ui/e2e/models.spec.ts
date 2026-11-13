@@ -82,9 +82,9 @@ test("the inspector groups Overview, Settings and Manage tabs and loads from Ove
   await expect(inspector.getByRole("radiogroup", { name: "Loading policy" }).getByRole("radio", { name: "On demand" })).toHaveAttribute("aria-checked", "true");
   await inspector.getByRole("button", { name: "Load worker" }).click();
   await expect(toasts(page).getByRole("status")).toContainText(`Loaded ${modelId}.`);
-  await expect(inspector.getByRole("radio", { name: "Disabled" })).toBeDisabled();
-  await inspector.getByRole("button", { name: "Unload", exact: true }).click();
-  await expect(toasts(page).getByRole("status")).toContainText(`Unloaded ${modelId}.`);
+  await inspector.getByRole("radio", { name: "Disabled" }).click();
+  await expect(toasts(page).getByRole("status")).toContainText(`Disabled and unloaded ${modelId}.`);
+  expect(await service.model(modelId)).toMatchObject({ policy: "disabled", loaded: false });
   await inspector.getByRole("radio", { name: "Hot" }).click();
   await expect(toasts(page).getByRole("status")).toContainText(`${modelId} is now Hot.`);
   expect((await service.model(modelId))!.policy).toBe("hot");

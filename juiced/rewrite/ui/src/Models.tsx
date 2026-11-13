@@ -35,12 +35,12 @@ type ListProps = { models: Model[]; selected?: string; onSelect: (id: string) =>
 
 function setPolicy(mutate: Mutate, model: Model, policy: Policy) {
   if (policy === model.policy) return;
-  void mutate("juiced/policy", { model: model.id, policy, expected_revision: model.revision }, `${model.id} is now ${policyNames[policy]}.`);
+  void mutate("juiced/policy", { model: model.id, policy, expected_revision: model.revision }, policy === "disabled" && model.loaded ? `Disabled and unloaded ${model.id}.` : `${model.id} is now ${policyNames[policy]}.`);
 }
 
 function PolicySelect({ model, mutate, disabled }: { model: Model; mutate: Mutate; disabled: boolean }) {
   return <select className="policy-select" aria-label={`Loading policy for ${model.id}`} data-policy={model.policy} value={model.policy} disabled={disabled} onClick={(event) => event.stopPropagation()} onChange={(event) => setPolicy(mutate, model, event.target.value as Policy)}>
-    <option value="hot">Hot</option><option value="on-demand">On demand</option><option value="disabled" disabled={model.loaded}>Disabled</option>
+    <option value="hot">Hot</option><option value="on-demand">On demand</option><option value="disabled" disabled={model.active_requests > 0}>Disabled</option>
   </select>;
 }
 
@@ -89,7 +89,7 @@ export function ModelList({ models, selected, onSelect, mode, mutate, busy, onli
     {models.length === 0 && files.length === 0 ? <Empty title="No models yet">{onDiscover ? <><button className="link-button" onClick={onDiscover}>Find a model</button> to get started.</> : "Find a model in Discover to get started."}</Empty> : visible.length === 0 && visibleFiles.length === 0 ? <Empty title="No matches">Try another search or filter.</Empty> : mode === "policy" ? <div className="policy-board">
       {(["hot", "on-demand", "disabled"] as Policy[]).map((policy) => <section className={`policy-lane ${dragging ? "droppable" : ""}`} key={policy} aria-label={`${policyNames[policy]} models`}
         onDragOver={(event) => { if (dragged.current) event.preventDefault(); }}
-        onDrop={(event) => { event.preventDefault(); const model = models.find((item) => item.id === dragged.current); dragged.current = ""; setDragging(""); if (model && !(policy === "disabled" && model.loaded)) setPolicy(mutate, model, policy); }}>
+        onDrop={(event) => { event.preventDefault(); const model = models.find((item) => item.id === dragged.current); dragged.current = ""; setDragging(""); if (model && !(policy === "disabled" && model.active_requests > 0)) setPolicy(mutate, model, policy); }}>
         <header><h2>{policyNames[policy]}</h2><span className="muted">{visible.filter((model) => model.policy === policy).length}</span></header>
         <p className="muted">{policy === "hot" ? "Loaded at startup and kept ready" : policy === "on-demand" ? "Loads on the first request" : "Hidden from apps"}</p>
         {policy === "on-demand" && idleControl}
@@ -133,7 +133,7 @@ export function Inspector({ model, busy, online, onClose, onDirty, mutate, clien
       {model.error && <p className={["request_termination_unconfirmed", "state_termination_unconfirmed"].includes(model.error) ? "inline-warning" : "inline-error"} role="alert">{workerFailure(model.error)}</p>}
       <div role="tabpanel" id="panel-overview" aria-labelledby="tab-overview" hidden={tab !== "overview"}>
       <section className="inspector-section"><span className="field-label" id="policy-label">Loading policy</span>
-        <div className="segmented wide" role="radiogroup" aria-labelledby="policy-label">{(["hot", "on-demand", "disabled"] as Policy[]).map((policy) => <button key={policy} role="radio" aria-checked={model.policy === policy} disabled={busy || !online || dirty || (policy === "disabled" && model.loaded)} title={policy === "disabled" && model.loaded ? "Unload the model before disabling it" : undefined} onClick={() => setPolicy(mutate, model, policy)}>{policyNames[policy]}</button>)}</div>
+        <div className="segmented wide" role="radiogroup" aria-labelledby="policy-label">{(["hot", "on-demand", "disabled"] as Policy[]).map((policy) => <button key={policy} role="radio" aria-checked={model.policy === policy} disabled={busy || !online || dirty || (policy === "disabled" && model.active_requests > 0)} title={policy === "disabled" && model.active_requests > 0 ? "Requests are still running on this model" : policy === "disabled" && model.loaded ? "Disabling also unloads the model" : undefined} onClick={() => setPolicy(mutate, model, policy)}>{policyNames[policy]}</button>)}</div>
         <p className="field-help">{model.policy === "hot" ? (cleanupRetry ? "Retrying cleanup keeps the Hot policy." : "Loads at startup and stays loaded.") : model.policy === "on-demand" ? "Loads on the first request." : "Hidden from apps."}</p>
         <ModelIdle model={model} client={client} online={online} disabled={busy || dirty} />
       </section>

@@ -7,7 +7,7 @@ clients can discover it.
 | --- | --- | --- |
 | Hot | Keeps the model loaded and attempts startup recovery | Services you want ready without a first-request load |
 | On-demand | Allows client requests to load the model when needed | Models you use occasionally |
-| Disabled | Excludes the model from client discovery and inference | Stored weights you are not serving |
+| Disabled | Unloads the model and excludes it from client discovery and inference | Stored weights you are not serving |
 
 ## Change a policy
 
@@ -25,8 +25,8 @@ rather than treating its policy as proof of readiness.
 Use the model's load/unload controls in **Models**. Loading starts its runtime
 process. Unloading releases the worker's resources and preserves its weights.
 
-Busy workers and protected Hot models can refuse operations that would interrupt
-service. Wait for the request to finish, then review the policy and retry.
+To stop a Hot model, set it to Disabled. That unloads it in one step. Busy
+workers refuse operations that would interrupt service, including Disabled. Wait for the request to finish, then review the policy and retry.
 Do not repeatedly restart the server to force a runtime change.
 
 ## Fit several services on one host
