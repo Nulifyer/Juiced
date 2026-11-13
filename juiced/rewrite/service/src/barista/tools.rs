@@ -1,297 +1,274 @@
 //! Barista's typed management tools.
 //!
-//! Each tool replays the equivalent native route through the service router with the caller's
-//! own credentials, so route authority, validation and revision conflicts stay authoritative.
+//! Each tool is an adapter onto native routes, replayed through the service router with the
+//! caller's own credentials, so route authority, validation and revision checks stay
+//! authoritative. Every tool answers with one bounded, redacted result envelope.
 
-use crate::auth::{Authority, RequestContext};
+mod acquire;
+mod configure;
+mod explain;
+mod inspect;
+mod maintain;
+mod verify;
+
+use super::Permission;
+use crate::{auth::RequestContext, http::AppState};
 use axum::{
-    Router,
-    body::{Body, to_bytes},
+    body::{Body, Bytes, to_bytes},
     http::{HeaderMap, Method, Request, header},
 };
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::{Map, Value, json};
+use std::sync::Mutex;
 use tower::ServiceExt;
 
-const MAX_ROUTE_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
-const MODEL_ID_BYTES: u64 = 256;
+const MAX_ROUTE_RESPONSE_BYTES: usize = 32 * 1024 * 1024;
+/// Matches the console's per-result budget so nothing is cut again before the model sees it.
+pub(super) const MAX_RESULT_BYTES: usize = 12 * 1024;
+const MAX_STRING_BYTES: usize = 1500;
+pub(super) const MODEL_ID_BYTES: u64 = 256;
 
-pub(super) struct Tool {
-    name: &'static str,
-    title: &'static str,
-    description: &'static str,
-    authority: Authority,
-    pub(super) read_only: bool,
-    destructive: bool,
-    idempotent: bool,
-    open_world: bool,
-    input: fn() -> Value,
-}
-
-fn model_property() -> Value {
-    json!({"type":"string","minLength":1,"maxLength":MODEL_ID_BYTES,"description":"Model id from juiced_list_models."})
-}
-fn no_input() -> Value {
-    json!({"type":"object","properties":{},"additionalProperties":false})
-}
-fn model_input() -> Value {
-    json!({"type":"object","required":["model"],"properties":{"model":model_property()},"additionalProperties":false})
-}
-fn launch_property(maximum: u32, description: &str) -> Value {
-    json!({"type":["integer","null"],"minimum":0,"maximum":maximum,"description":description})
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum Group {
+    Inspect,
+    Acquire,
+    Configure,
+    Verify,
+    Maintain,
+    Explain,
 }
 
-const TOOLS: &[Tool] = &[
-    Tool {
-        name: "juiced_status",
-        title: "Service status",
-        description: "Hardware summary, memory budget and reservations, recommended backends, and loaded models.",
-        authority: Authority::Operator,
-        read_only: true,
-        destructive: false,
-        idempotent: true,
-        open_world: false,
-        input: no_input,
-    },
-    Tool {
-        name: "juiced_list_models",
-        title: "List models",
-        description: "Every registered model with its loading policy, revision, worker state and operations. Use the revision with juiced_set_policy and juiced_set_model_settings.",
-        authority: Authority::Operator,
-        read_only: true,
-        destructive: false,
-        idempotent: true,
-        open_world: false,
-        input: no_input,
-    },
-    Tool {
-        name: "juiced_model_settings",
-        title: "Model settings",
-        description: "Saved launch settings and the memory fit estimate for one model.",
-        authority: Authority::Operator,
-        read_only: true,
-        destructive: false,
-        idempotent: true,
-        open_world: false,
-        input: model_input,
-    },
-    Tool {
-        name: "juiced_list_engines",
-        title: "List engines",
-        description: "Engines installed on this machine and the ones that can be installed here, with the generation juiced_install_engine checks.",
-        authority: Authority::Operator,
-        read_only: true,
-        destructive: false,
-        idempotent: true,
-        open_world: false,
-        input: no_input,
-    },
-    Tool {
-        name: "juiced_search_models",
-        title: "Search models",
-        description: "Search the recommended catalog, local files and Hugging Face, as the console's Find models page does.",
-        authority: Authority::Operator,
-        read_only: true,
-        destructive: false,
-        idempotent: true,
-        open_world: true,
-        input: || {
-            json!({"type":"object","properties":{
-                "query":{"type":"string","maxLength":200,"description":"Words to match. Omit for recommendations."},
-                "task":{"type":"string","enum":["chat","embeddings","transcription","tts","image"]},
-                "limit":{"type":"integer","minimum":1,"maximum":20,"default":8},
-                "hub":{"type":"boolean","default":true,"description":"false searches only the catalog and local files."}
-            },"additionalProperties":false})
-        },
-    },
-    Tool {
-        name: "juiced_list_local_files",
-        title: "List local files",
-        description: "Model files already on disk. Each quant's add value is the exact input for juiced_add_model.",
-        authority: Authority::Operator,
-        read_only: true,
-        destructive: false,
-        idempotent: true,
-        open_world: false,
-        input: no_input,
-    },
-    Tool {
-        name: "juiced_list_downloads",
-        title: "List downloads",
-        description: "Model downloads started from the library, with progress and outcome.",
-        authority: Authority::Operator,
-        read_only: true,
-        destructive: false,
-        idempotent: true,
-        open_world: false,
-        input: no_input,
-    },
-    Tool {
-        name: "juiced_set_policy",
-        title: "Set loading policy",
-        description: "Set a model to disabled, on-demand (loads on first request) or hot (loads now and stays loaded). Fails with a conflict when expected_revision is stale.",
-        authority: Authority::Operator,
-        read_only: false,
-        destructive: false,
-        idempotent: true,
-        open_world: false,
-        input: || {
-            json!({"type":"object","required":["model","policy","expected_revision"],"properties":{
-                "model":model_property(),
-                "policy":{"type":"string","enum":["disabled","on-demand","hot"]},
-                "expected_revision":{"type":"integer","minimum":0,"description":"The model's current revision."}
-            },"additionalProperties":false})
-        },
-    },
-    Tool {
-        name: "juiced_load_model",
-        title: "Load model",
-        description: "Start a model's worker now. The model must not be disabled.",
-        authority: Authority::Operator,
-        read_only: false,
-        destructive: false,
-        idempotent: true,
-        open_world: false,
-        input: model_input,
-    },
-    Tool {
-        name: "juiced_unload_model",
-        title: "Unload model",
-        description: "Stop a model's worker and free its memory. Hot models must be set to on-demand first.",
-        authority: Authority::Operator,
-        read_only: false,
-        destructive: true,
-        idempotent: true,
-        open_world: false,
-        input: model_input,
-    },
-    Tool {
-        name: "juiced_set_model_settings",
-        title: "Set model settings",
-        description: "Change launch settings for one model. Omitted settings keep their saved value; null returns a setting to automatic. Fails with a conflict when expected_revision is stale.",
-        authority: Authority::Operator,
-        read_only: false,
-        destructive: false,
-        idempotent: true,
-        open_world: false,
-        input: || {
-            json!({"type":"object","required":["model","expected_revision"],"properties":{
-                "model":model_property(),
-                "expected_revision":{"type":"integer","minimum":0},
-                "context_tokens":launch_property(1_048_576, "Total context budget in tokens."),
-                "gpu_layers":launch_property(1024, "Layers offloaded to the GPU."),
-                "threads":launch_property(1024, "CPU threads."),
-                "parallel_slots":launch_property(crate::profiles::MAX_PARALLEL_SLOTS, "Concurrent request slots."),
-                "apply":{"type":"string","enum":["next_load","reload"],"default":"next_load","description":"reload restarts a loaded worker now."}
-            },"additionalProperties":false})
-        },
-    },
-    Tool {
-        name: "juiced_download_model",
-        title: "Download model",
-        description: "Start downloading a model file from Hugging Face into the library. Take repo and file from juiced_search_models.",
-        authority: Authority::Operator,
-        read_only: false,
-        destructive: false,
-        idempotent: false,
-        open_world: true,
-        input: || {
-            json!({"type":"object","required":["repo"],"properties":{
-                "repo":{"type":"string","minLength":3,"maxLength":200,"pattern":"^[^/\\s]+/[^/\\s]+$"},
-                "file":{"type":"string","minLength":1,"maxLength":512},
-                "files":{"type":"array","maxItems":64,"items":{"type":"string","minLength":1,"maxLength":512}},
-                "revision":{"type":"string","minLength":1,"maxLength":128},
-                "expected_generation":{"type":"integer","minimum":0,"description":"Library generation from juiced_search_models. Omit to use the current one."}
-            },"additionalProperties":false})
-        },
-    },
-    Tool {
-        name: "juiced_add_model",
-        title: "Add model",
-        description: "Register a downloaded file as a model. Pass exactly one of path, artifact or artifact_set, as listed by juiced_list_local_files. Reports engine_not_installed with the engine to install first.",
-        authority: Authority::Operator,
-        read_only: false,
-        destructive: false,
-        idempotent: false,
-        open_world: false,
-        input: || {
-            json!({"type":"object","properties":{
-                "path":{"type":"string","minLength":1,"maxLength":4096},
-                "artifact":{"type":"string","minLength":1,"maxLength":128},
-                "artifact_set":{"type":"string","minLength":1,"maxLength":128},
-                "id":{"type":"string","minLength":1,"maxLength":MODEL_ID_BYTES,"description":"Model id to create. Omit to derive one."},
-                "policy":{"type":"string","enum":["disabled","on-demand","hot"],"default":"on-demand"},
-                "backend":{"type":"string","minLength":1,"maxLength":64}
-            },"additionalProperties":false})
-        },
-    },
-    Tool {
-        name: "juiced_install_engine",
-        title: "Install engine",
-        description: "Download and install one engine build listed as installable by juiced_list_engines.",
-        authority: Authority::Operator,
-        read_only: false,
-        destructive: false,
-        idempotent: true,
-        open_world: true,
-        input: || {
-            json!({"type":"object","required":["engine","backend"],"properties":{
-                "engine":{"type":"string","minLength":1,"maxLength":64},
-                "backend":{"type":"string","minLength":1,"maxLength":64},
-                "expected_generation":{"type":"integer","minimum":0,"description":"Engine generation from juiced_list_engines. Omit to use the current one."}
-            },"additionalProperties":false})
-        },
-    },
-];
-
-pub(super) fn tool(name: &str) -> Option<&'static Tool> {
-    TOOLS.iter().find(|tool| tool.name == name)
-}
-
-fn allows(context: &RequestContext, authority: Authority) -> bool {
-    match authority {
-        Authority::Operator => context.operator(),
-        Authority::Inference | Authority::Read => true,
+impl Group {
+    pub(super) const ALL: [Self; 6] = [
+        Self::Inspect,
+        Self::Acquire,
+        Self::Configure,
+        Self::Verify,
+        Self::Maintain,
+        Self::Explain,
+    ];
+    pub(super) fn title(self) -> &'static str {
+        match self {
+            Self::Inspect => "Inspect",
+            Self::Acquire => "Acquire",
+            Self::Configure => "Configure",
+            Self::Verify => "Verify",
+            Self::Maintain => "Maintain",
+            Self::Explain => "Explain",
+        }
+    }
+    pub(super) fn purpose(self) -> &'static str {
+        match self {
+            Self::Inspect => {
+                "read status, hardware, models, engines, requests, logs, storage, cache and connections"
+            }
+            Self::Acquire => {
+                "search Hugging Face, inspect repos, estimate fit, download, add models, install engines, wait for jobs"
+            }
+            Self::Configure => {
+                "change policy, load state, model settings, cache, protocols, aliases, Wyoming and API keys"
+            }
+            Self::Verify => "run one real test request or the quick speed benchmark",
+            Self::Maintain => {
+                "remove models, files, sessions and engine builds; pause the service; restart a model"
+            }
+            Self::Explain => "procedures for whole jobs and the bundled docs",
+        }
     }
 }
 
-pub(super) fn listed(context: &RequestContext, permission: super::Permission) -> Vec<Value> {
-    TOOLS
+/// Whether the native operation behind a tool exists in this build.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Support {
+    Working,
+    /// Some arguments wait on a native owner that is still being built.
+    Partial(&'static str),
+    /// The whole operation waits on a native owner; the tool answers `not_supported`.
+    Pending(&'static str),
+}
+
+pub(super) struct Tool {
+    pub(super) name: &'static str,
+    pub(super) group: Group,
+    pub(super) title: &'static str,
+    pub(super) description: &'static str,
+    pub(super) read_only: bool,
+    pub(super) destructive: bool,
+    pub(super) idempotent: bool,
+    pub(super) open_world: bool,
+    /// Mutations that accept `preview: true` and then change nothing.
+    pub(super) preview: bool,
+    pub(super) support: Support,
+    pub(super) input: fn() -> Value,
+}
+
+pub(super) fn catalog() -> impl Iterator<Item = &'static Tool> {
+    inspect::TOOLS
         .iter()
-        .filter(|tool| allows(context, tool.authority))
-        .filter(|tool| tool.read_only || permission != super::Permission::ReadOnly)
-        .map(|tool| {
-            let mut annotations = json!({"title":tool.title,"readOnlyHint":tool.read_only,"openWorldHint":tool.open_world});
-            if !tool.read_only {
-                annotations["destructiveHint"] = json!(tool.destructive);
-                annotations["idempotentHint"] = json!(tool.idempotent);
-            }
-            let confirm = !tool.read_only && permission == super::Permission::Ask;
-            json!({"name":tool.name,"title":tool.title,"description":tool.description,"inputSchema":(tool.input)(),"annotations":annotations,"requires_confirmation":confirm})
-        })
+        .chain(acquire::TOOLS)
+        .chain(configure::TOOLS)
+        .chain(verify::TOOLS)
+        .chain(maintain::TOOLS)
+        .chain(explain::TOOLS)
+}
+
+pub(super) fn tool(name: &str) -> Option<&'static Tool> {
+    catalog().find(|tool| tool.name == name)
+}
+
+pub(super) fn schema(tool: &Tool) -> Value {
+    let mut input = (tool.input)();
+    if tool.preview {
+        input["properties"]["preview"] = json!({"type":"boolean","default":false,"description":"true returns the effect and changes nothing."});
+    }
+    input
+}
+
+pub(super) fn describe(tool: &Tool, permission: Permission) -> Value {
+    let mut annotations =
+        json!({"title":tool.title,"readOnlyHint":tool.read_only,"openWorldHint":tool.open_world});
+    if !tool.read_only {
+        annotations["destructiveHint"] = json!(tool.destructive);
+        annotations["idempotentHint"] = json!(tool.idempotent);
+    }
+    let confirm = !tool.read_only && permission == Permission::Ask;
+    let (status, pending) = match tool.support {
+        Support::Working => ("working", None),
+        Support::Partial(reason) => ("partial", Some(reason)),
+        Support::Pending(reason) => ("pending", Some(reason)),
+    };
+    let mut entry = json!({
+        "name":tool.name,"title":tool.title,"group":tool.group,"description":tool.description,
+        "inputSchema":schema(tool),"annotations":annotations,"requires_confirmation":confirm,
+        "previewable":tool.preview,"status":status,
+    });
+    if let Some(reason) = pending {
+        entry["pending"] = json!(reason);
+    }
+    entry
+}
+
+pub(super) fn listed(context: &RequestContext, permission: Permission) -> Vec<Value> {
+    if !context.operator() {
+        return Vec::new();
+    }
+    catalog()
+        .filter(|tool| tool.read_only || permission != Permission::ReadOnly)
+        .map(|tool| describe(tool, permission))
         .collect()
 }
 
 #[derive(Debug)]
 pub(super) enum Failure {
-    Forbidden,
     InvalidParams(String),
     Route(Value),
 }
 
-struct Routes<'a> {
-    app: Router,
-    headers: &'a HeaderMap,
+impl Failure {
+    pub(super) fn new(code: &str, message: impl Into<String>, status: u16) -> Self {
+        Self::Route(json!({"error":{"code":code,"message":message.into(),"status":status}}))
+    }
+    pub(super) fn unsupported(reason: &str) -> Self {
+        Self::new(
+            "not_supported",
+            format!("Not yet supported in this build: {reason}."),
+            501,
+        )
+    }
+    fn error(&self) -> Value {
+        match self {
+            Self::InvalidParams(message) => {
+                json!({"code":"invalid_arguments","message":message,"status":400})
+            }
+            Self::Route(value) => value["error"].clone(),
+        }
+    }
+    pub(super) fn code(&self) -> &str {
+        match self {
+            Self::InvalidParams(_) => "invalid_arguments",
+            Self::Route(value) => value["error"]["code"].as_str().unwrap_or(""),
+        }
+    }
 }
 
-impl Routes<'_> {
-    async fn send(
+pub(super) type Result<T> = std::result::Result<T, Failure>;
+
+/// What a tool did, before the dispatcher wraps it in the envelope.
+#[derive(Default)]
+pub(super) struct Outcome {
+    pub(super) summary: String,
+    pub(super) data: Value,
+    pub(super) changed: Vec<Value>,
+    pub(super) job: Option<Value>,
+    pub(super) next: Vec<&'static str>,
+    pub(super) warnings: Vec<String>,
+}
+
+impl Outcome {
+    pub(super) fn new(summary: impl Into<String>, data: Value) -> Self {
+        Self {
+            summary: summary.into(),
+            data,
+            ..Self::default()
+        }
+    }
+    pub(super) fn next(mut self, tools: &[&'static str]) -> Self {
+        self.next.extend_from_slice(tools);
+        self
+    }
+    pub(super) fn warn(mut self, warning: impl Into<String>) -> Self {
+        self.warnings.push(warning.into());
+        self
+    }
+    pub(super) fn change(mut self, target: &str, field: &str, before: Value, after: Value) -> Self {
+        self.changed
+            .push(json!({"target":target,"field":field,"before":before,"after":after}));
+        self
+    }
+    pub(super) fn job(mut self, job: Value) -> Self {
+        self.job = Some(job);
+        self
+    }
+}
+
+pub(super) fn change(target: &str, field: &str, before: Value, after: Value) -> Value {
+    json!({"target":target,"field":field,"before":before,"after":after})
+}
+
+/// Everything one dispatch needs: replayed routes, the barista settings it was authorized
+/// against and whether this is a preview.
+pub(super) struct Context<'a> {
+    pub(super) state: &'a AppState,
+    app: axum::Router,
+    headers: &'a HeaderMap,
+    pub(super) permission: Permission,
+    pub(super) revision: u64,
+    pub(super) assistant_model: Option<String>,
+    pub(super) preview: bool,
+    sources: Mutex<Vec<Value>>,
+}
+
+pub(super) struct Raw {
+    pub(super) status: u16,
+    pub(super) content_type: String,
+    pub(super) bytes: Bytes,
+}
+
+impl Context<'_> {
+    async fn send_raw(
         &self,
         method: Method,
         path: &str,
-        body: Option<Value>,
-    ) -> Result<Value, Failure> {
-        let mut request = Request::builder().method(method).uri(format!("/v1/{path}"));
+        content_type: Option<&str>,
+        body: Option<Bytes>,
+    ) -> Result<Raw> {
+        let uri = if path.starts_with('/') {
+            path.to_owned()
+        } else {
+            format!("/v1/{path}")
+        };
+        let mut request = Request::builder().method(method.clone()).uri(&uri);
         for name in [
             header::AUTHORIZATION,
             header::HeaderName::from_static("x-api-key"),
@@ -300,54 +277,168 @@ impl Routes<'_> {
                 request = request.header(name, value);
             }
         }
-        if body.is_some() {
-            request = request.header(header::CONTENT_TYPE, "application/json");
+        if let Some(content_type) = content_type {
+            request = request.header(header::CONTENT_TYPE, content_type);
         }
         let request = request
-            .body(body.map_or_else(Body::empty, |body| Body::from(body.to_string())))
+            .extension(crate::connect::Probe)
+            .body(body.map_or_else(Body::empty, Body::from))
             .map_err(|_| {
                 Failure::InvalidParams("The tool arguments cannot form a request.".into())
             })?;
-        let unavailable = |message: &str| {
-            Failure::Route(
-                json!({"error":{"code":"route_unavailable","message":message,"status":503}}),
-            )
-        };
+        let unavailable = |message: &str| Failure::new("route_unavailable", message, 503);
         let response = self
             .app
             .clone()
             .oneshot(request)
             .await
             .map_err(|_| unavailable("The service route did not answer."))?;
-        let status = response.status();
+        let status = response.status().as_u16();
+        let content_type = response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("")
+            .to_owned();
         let bytes = to_bytes(response.into_body(), MAX_ROUTE_RESPONSE_BYTES)
             .await
             .map_err(|_| unavailable("The service response exceeded the tool limit."))?;
-        let value: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
-        if status.is_success() {
-            return Ok(value);
-        }
-        let mut error = value.get("error").cloned().filter(Value::is_object).unwrap_or_else(
-            || json!({"code":"request_failed","message":format!("The service answered {status}.")}),
-        );
-        error["status"] = json!(status.as_u16());
-        let mut failure = json!({"error":error});
-        if let Some(extra) = value.as_object() {
-            for (key, value) in extra.iter().filter(|(key, _)| *key != "error") {
-                failure[key] = value.clone();
+        let route = uri.split('?').next().unwrap_or(&uri).to_owned();
+        let mut source = json!({"route":format!("{method} {route}"),"status":status});
+        if let Ok(value) = serde_json::from_slice::<Value>(&bytes) {
+            for key in [
+                "revision",
+                "generation",
+                "configuration_generation",
+                "artifact_generation",
+            ] {
+                if let Some(number) = value.get(key).filter(|value| value.is_u64()) {
+                    source[key] = number.clone();
+                }
             }
         }
-        Err(Failure::Route(failure))
+        self.sources
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .push(source);
+        Ok(Raw {
+            status,
+            content_type,
+            bytes,
+        })
     }
-    async fn get(&self, path: &str) -> Result<Value, Failure> {
+
+    pub(super) async fn send(
+        &self,
+        method: Method,
+        path: &str,
+        body: Option<Value>,
+    ) -> Result<Value> {
+        let has_body = body.is_some();
+        let raw = self
+            .send_raw(
+                method,
+                path,
+                has_body.then_some("application/json"),
+                body.map(|body| Bytes::from(body.to_string())),
+            )
+            .await?;
+        decode(raw)
+    }
+    pub(super) async fn get(&self, path: &str) -> Result<Value> {
         self.send(Method::GET, path, None).await
     }
-    async fn post(&self, path: &str, body: Value) -> Result<Value, Failure> {
+    pub(super) async fn post(&self, path: &str, body: Value) -> Result<Value> {
         self.send(Method::POST, path, Some(body)).await
+    }
+    pub(super) async fn post_bytes(
+        &self,
+        path: &str,
+        content_type: &str,
+        body: Vec<u8>,
+    ) -> Result<Raw> {
+        self.send_raw(
+            Method::POST,
+            path,
+            Some(content_type),
+            Some(Bytes::from(body)),
+        )
+        .await
+    }
+    pub(super) async fn post_raw(&self, path: &str, body: Value) -> Result<Raw> {
+        self.send_raw(
+            Method::POST,
+            path,
+            Some("application/json"),
+            Some(Bytes::from(body.to_string())),
+        )
+        .await
+    }
+
+    pub(super) async fn catalog(&self) -> Result<Vec<Value>> {
+        Ok(list(&self.get("juiced/catalog").await?, "data"))
+    }
+    pub(super) async fn model(&self, id: &str) -> Result<Value> {
+        self.catalog()
+            .await?
+            .into_iter()
+            .find(|model| model["id"] == id)
+            .ok_or_else(|| {
+                Failure::new(
+                    "unknown_model",
+                    format!("No registered model is named {id}. Use juiced_list_models."),
+                    404,
+                )
+            })
+    }
+    /// The model's revision: the caller's value when given, so the native owner rejects stale
+    /// plans, otherwise the current one.
+    pub(super) fn revision(model: &Value, expected: Option<u64>) -> u64 {
+        expected.unwrap_or_else(|| model["revision"].as_u64().unwrap_or(0))
+    }
+    pub(super) fn host(&self) -> Option<String> {
+        let host = self.headers.get(header::HOST)?.to_str().ok()?;
+        let scheme = self
+            .headers
+            .get("x-forwarded-proto")
+            .and_then(|value| value.to_str().ok())
+            .filter(|value| matches!(*value, "http" | "https"))
+            .unwrap_or("http");
+        Some(format!("{scheme}://{host}"))
+    }
+    pub(super) fn own_model(&self, id: &str) -> bool {
+        self.assistant_model.as_deref() == Some(id)
+    }
+    /// Barista's settings may change while a server-side wait runs; stop as soon as they do.
+    pub(super) async fn still_authorized(&self) -> bool {
+        let settings = self.state.manager.barista_settings().await;
+        settings.enabled && settings.revision == self.revision
     }
 }
 
-fn encode(text: &str) -> String {
+fn decode(raw: Raw) -> Result<Value> {
+    let value: Value = serde_json::from_slice(&raw.bytes).unwrap_or(Value::Null);
+    if (200..300).contains(&raw.status) {
+        return Ok(value);
+    }
+    let mut error = match value.get("error") {
+        Some(Value::Object(error)) => Value::Object(error.clone()),
+        Some(Value::String(message)) => json!({"code":"request_failed","message":message}),
+        _ => {
+            json!({"code":"request_failed","message":format!("The service answered {}.", raw.status)})
+        }
+    };
+    error["status"] = json!(raw.status);
+    let mut failure = json!({"error":error});
+    if let Some(extra) = value.as_object() {
+        for (key, value) in extra.iter().filter(|(key, _)| *key != "error") {
+            failure[key] = value.clone();
+        }
+    }
+    Err(Failure::Route(failure))
+}
+
+pub(super) fn encode(text: &str) -> String {
     text.bytes()
         .map(|byte| {
             if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
@@ -359,7 +450,7 @@ fn encode(text: &str) -> String {
         .collect()
 }
 
-fn parse<T: DeserializeOwned>(args: Value) -> Result<T, Failure> {
+pub(super) fn parse<T: DeserializeOwned>(args: Value) -> Result<T> {
     serde_json::from_value(args).map_err(|error| {
         let message = error.to_string();
         Failure::InvalidParams(format!(
@@ -369,17 +460,27 @@ fn parse<T: DeserializeOwned>(args: Value) -> Result<T, Failure> {
     })
 }
 
-fn bounded(value: &str, minimum: usize, maximum: usize, field: &str) -> Result<(), Failure> {
-    if (minimum..=maximum).contains(&value.len()) {
+pub(super) fn bounded(value: &str, minimum: usize, maximum: usize, field: &str) -> Result<()> {
+    if (minimum..=maximum).contains(&value.len()) && !value.chars().any(char::is_control) {
         Ok(())
     } else {
         Err(Failure::InvalidParams(format!(
-            "{field} must be {minimum} to {maximum} bytes."
+            "{field} must be {minimum} to {maximum} bytes without control characters."
         )))
     }
 }
 
-fn pick(value: &Value, keys: &[&str]) -> Value {
+pub(super) fn limit(value: Option<u32>, default: u32, maximum: u32, field: &str) -> Result<u32> {
+    match value {
+        None => Ok(default),
+        Some(value) if (1..=maximum).contains(&value) => Ok(value),
+        Some(_) => Err(Failure::InvalidParams(format!(
+            "{field} must be 1 to {maximum}."
+        ))),
+    }
+}
+
+pub(super) fn pick(value: &Value, keys: &[&str]) -> Value {
     let mut output = Map::new();
     for key in keys {
         if let Some(field) = value.get(*key).filter(|field| !field.is_null()) {
@@ -389,7 +490,7 @@ fn pick(value: &Value, keys: &[&str]) -> Value {
     Value::Object(output)
 }
 
-fn list(value: &Value, key: &str) -> Vec<Value> {
+pub(super) fn list(value: &Value, key: &str) -> Vec<Value> {
     value
         .get(key)
         .and_then(Value::as_array)
@@ -397,7 +498,7 @@ fn list(value: &Value, key: &str) -> Vec<Value> {
         .unwrap_or_default()
 }
 
-fn present(value: &Value) -> Value {
+pub(super) fn present(value: &Value) -> Value {
     Value::Object(
         value
             .as_object()
@@ -411,491 +512,44 @@ fn present(value: &Value) -> Value {
     )
 }
 
-const MODEL_FIELDS: &[&str] = &[
-    "id",
-    "policy",
-    "revision",
-    "state",
-    "loaded",
-    "downloaded",
-    "operations",
-    "resident_bytes",
-    "active_requests",
-    "max_inflight",
-    "error",
-    "implementation_id",
-    "aliased_to",
-];
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ModelArgs {
-    model: String,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct SearchArgs {
-    query: Option<String>,
-    task: Option<crate::library::Task>,
-    limit: Option<u8>,
-    hub: Option<bool>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct PolicyArgs {
-    model: String,
-    policy: crate::config::Policy,
-    expected_revision: u64,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct SettingsArgs {
-    model: String,
-    expected_revision: u64,
-    #[serde(default, deserialize_with = "explicit")]
-    context_tokens: Option<Option<u32>>,
-    #[serde(default, deserialize_with = "explicit")]
-    gpu_layers: Option<Option<u32>>,
-    #[serde(default, deserialize_with = "explicit")]
-    threads: Option<Option<u32>>,
-    #[serde(default, deserialize_with = "explicit")]
-    parallel_slots: Option<Option<u32>>,
-    apply: Option<String>,
-}
-
-fn explicit<'de, D: serde::Deserializer<'de>>(
-    deserializer: D,
-) -> Result<Option<Option<u32>>, D::Error> {
-    Option::<u32>::deserialize(deserializer).map(Some)
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct DownloadArgs {
-    repo: String,
-    file: Option<String>,
-    files: Option<Vec<String>>,
-    revision: Option<String>,
-    expected_generation: Option<u64>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct AddArgs {
-    path: Option<String>,
-    artifact: Option<String>,
-    artifact_set: Option<String>,
-    id: Option<String>,
-    policy: Option<crate::config::Policy>,
-    backend: Option<String>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct EngineArgs {
-    engine: String,
-    backend: String,
-    expected_generation: Option<u64>,
-}
-
-fn model(args: Value) -> Result<String, Failure> {
-    let ModelArgs { model } = parse(args)?;
-    bounded(&model, 1, MODEL_ID_BYTES as usize, "model")?;
-    Ok(model)
-}
-
-fn launch(value: Option<Option<u32>>, maximum: u32, field: &str) -> Result<(), Failure> {
-    match value {
-        Some(Some(value)) if value > maximum => Err(Failure::InvalidParams(format!(
-            "{field} must be at most {maximum}."
-        ))),
-        _ => Ok(()),
+/// A page of a longer list with the count and a cursor for the next page.
+pub(super) fn page(items: Vec<Value>, cursor: usize, size: usize) -> Value {
+    let total = items.len();
+    let start = cursor.min(total);
+    let end = (start + size).min(total);
+    let mut page = json!({"items":items[start..end],"total":total});
+    if end < total {
+        page["next_cursor"] = json!(end);
     }
+    page
 }
 
-pub(super) async fn call(
-    app: Router,
-    headers: &HeaderMap,
-    context: &RequestContext,
-    tool: &Tool,
-    args: Value,
-) -> Result<Value, Failure> {
-    if !allows(context, tool.authority) {
-        return Err(Failure::Forbidden);
-    }
-    let routes = Routes { app, headers };
-    match tool.name {
-        "juiced_status" => {
-            no_arguments(args)?;
-            let (state, system, catalog) = tokio::join!(
-                routes.get("juiced/state"),
-                routes.get("system-info"),
-                routes.get("juiced/catalog")
-            );
-            let (state, system, catalog) = (state?, system?, catalog?);
-            let resources = &state["resources"];
-            let devices = &system["devices"];
-            let recommended: Map<String, Value> = system["recommendations"]
-                .as_object()
-                .map(|map| {
-                    map.iter()
-                        .filter(|(_, backend)| !backend.is_null())
-                        .map(|(engine, backend)| (engine.clone(), backend.clone()))
-                        .collect()
-                })
-                .unwrap_or_default();
-            let loaded: Vec<Value> = list(&catalog, "data")
-                .iter()
-                .filter(|model| model["loaded"] == true || model["state"] == "loading")
-                .map(|model| {
-                    pick(
-                        model,
-                        &["id", "state", "policy", "resident_bytes", "active_requests"],
-                    )
-                })
-                .collect();
-            Ok(json!({
-                "version": state["version"],
-                "paused": resources["paused"],
-                "active_requests": resources["active_requests"],
-                "memory": pick(resources, &["resident_budget_bytes", "reserved_bytes", "measured_memory_bytes", "reservation_source"]),
-                "host": system["host"],
-                "cpu": pick(&devices["cpu"], &["name", "vendor", "physical_cores", "logical_threads", "isa"]),
-                "ram": devices["memory"],
-                "gpus": list(devices, "gpus").iter().map(|gpu| pick(gpu, &["name", "vendor", "integrated", "vram_total_bytes", "vram_free_bytes", "gtt_total_bytes", "compute_capability", "gfx_target"])).collect::<Vec<_>>(),
-                "npus": devices["npus"],
-                "recommended_backends": recommended,
-                "loaded_models": loaded,
-                "models_registered": list(&catalog, "data").len(),
-            }))
-        }
-        "juiced_list_models" => {
-            no_arguments(args)?;
-            let catalog = routes.get("juiced/catalog").await?;
-            let models: Vec<Value> = list(&catalog, "data")
-                .iter()
-                .map(|model| pick(model, MODEL_FIELDS))
-                .collect();
-            Ok(json!({ "models": models }))
-        }
-        "juiced_model_settings" => {
-            let model = encode(&model(args)?);
-            let (options, fit) = (
-                format!("models/{model}/options"),
-                format!("models/{model}/fit"),
-            );
-            let (options, fit) = tokio::join!(routes.get(&options), routes.get(&fit));
-            let fit = fit?;
-            Ok(json!({
-                "settings": options?,
-                "fit": pick(&fit, &["fits", "budget_bytes", "available_bytes", "total_bytes", "reservation_bytes", "largest_context_that_fits", "trained_context", "source", "loaded", "warnings", "breakdown"]),
-            }))
-        }
-        "juiced_list_engines" => {
-            no_arguments(args)?;
-            let engines = routes.get("juiced/engines").await?;
-            let installable: Vec<Value> = list(&engines, "installable")
-                .iter()
-                .map(|row| {
-                    let mut entry =
-                        pick(row, &["engine", "backend", "availability", "recommended"]);
-                    if let Some(bytes) = row["build"].get("archive_bytes") {
-                        entry["archive_bytes"] = bytes.clone();
-                    }
-                    let reasons: Vec<Value> = list(row, "reasons")
-                        .iter()
-                        .map(|reason| reason.get("message").cloned().unwrap_or(reason.clone()))
-                        .collect();
-                    if !reasons.is_empty() {
-                        entry["reasons"] = json!(reasons);
-                    }
-                    if row["installed_package"].is_string() {
-                        entry["installed"] = json!(true);
-                    }
-                    entry
-                })
-                .collect();
-            let installed: Vec<Value> = list(&engines, "installed")
-                .iter()
-                .map(|row| pick(row, &["engine", "package", "phase", "models", "release"]))
-                .collect();
-            Ok(json!({
-                "generation": engines["generation"],
-                "installation_active": engines["installation_active"],
-                "recommended": present(&engines["recommendations"]),
-                "installed": installed,
-                "installable": installable,
-                "jobs": engines["jobs"],
-            }))
-        }
-        "juiced_search_models" => {
-            let search: SearchArgs = parse(args)?;
-            if search.limit.is_some_and(|limit| !(1..=20).contains(&limit)) {
-                return Err(Failure::InvalidParams("limit must be 1 to 20.".into()));
-            }
-            let mut query = vec![format!("limit={}", search.limit.unwrap_or(8))];
-            if let Some(text) = search
-                .query
-                .as_deref()
-                .map(str::trim)
-                .filter(|text| !text.is_empty())
-            {
-                bounded(text, 1, 200, "query")?;
-                query.push(format!("q={}", encode(text)));
-            }
-            if let Some(task) = search.task {
-                query.push(format!(
-                    "task={}",
-                    serde_json::to_value(task)
-                        .unwrap()
-                        .as_str()
-                        .unwrap_or("chat")
-                ));
-            }
-            if search.hub == Some(false) {
-                query.push("hub=false".into());
-            }
-            let result = routes
-                .get(&format!("juiced/library/search?{}", query.join("&")))
-                .await?;
-            let models: Vec<Value> = list(&result, "data")
-                .iter()
-                .map(|entry| {
-                    let mut model = pick(
-                        entry,
-                        &[
-                            "repo",
-                            "name",
-                            "publisher",
-                            "task",
-                            "source",
-                            "license",
-                            "downloads",
-                            "gated",
-                            "recommended_quant",
-                            "recommended_file",
-                            "revision",
-                        ],
-                    );
-                    model["quants"] = json!(
-                        list(entry, "quants")
-                            .iter()
-                            .take(12)
-                            .map(|quant| {
-                                let mut row = pick(
-                                    quant,
-                                    &[
-                                        "label",
-                                        "file",
-                                        "files",
-                                        "bytes",
-                                        "complete",
-                                        "pullable",
-                                        "recommended",
-                                    ],
-                                );
-                                if quant["local"]["present"] == true {
-                                    row["downloaded"] = json!(true);
-                                }
-                                row
-                            })
-                            .collect::<Vec<_>>()
-                    );
-                    model
-                })
-                .collect();
-            Ok(json!({
-                "generation": result["artifact_generation"],
-                "offline": result["offline"],
-                "next_cursor": result["page"]["next_cursor"],
-                "models": models,
-            }))
-        }
-        "juiced_list_local_files" => {
-            no_arguments(args)?;
-            let local = routes.get("juiced/library/local").await?;
-            let groups: Vec<Value> = list(&local, "groups")
-                .iter()
-                .map(|group| {
-                    let mut entry = pick(
-                        group,
-                        &["name", "repo", "publisher", "bytes", "used_by", "read_only"],
-                    );
-                    entry["quants"] = json!(
-                        list(group, "quants")
-                            .iter()
-                            .map(|quant| pick(
-                                quant,
-                                &["label", "bytes", "complete", "parts", "used_by", "add"]
-                            ))
-                            .collect::<Vec<_>>()
-                    );
-                    entry
-                })
-                .collect();
-            Ok(
-                json!({"total_bytes": local["total_bytes"], "truncated": local["truncated"], "groups": groups}),
-            )
-        }
-        "juiced_list_downloads" => {
-            no_arguments(args)?;
-            let pulls = routes.get("juiced/library/pulls").await?;
-            Ok(json!({"downloads": pulls["data"]}))
-        }
-        "juiced_set_policy" => {
-            let change: PolicyArgs = parse(args)?;
-            bounded(&change.model, 1, MODEL_ID_BYTES as usize, "model")?;
-            let model = routes
-                .post(
-                    "juiced/policy",
-                    json!({"model":change.model,"policy":change.policy,"expected_revision":change.expected_revision}),
-                )
-                .await?;
-            Ok(json!({"model": pick(&model, MODEL_FIELDS)}))
-        }
-        "juiced_load_model" => {
-            let model = model(args)?;
-            routes.post("load", json!({"model":model})).await
-        }
-        "juiced_unload_model" => {
-            let model = model(args)?;
-            routes.post("unload", json!({"model":model})).await
-        }
-        "juiced_set_model_settings" => {
-            let change: SettingsArgs = parse(args)?;
-            bounded(&change.model, 1, MODEL_ID_BYTES as usize, "model")?;
-            launch(change.context_tokens, 1_048_576, "context_tokens")?;
-            launch(change.gpu_layers, 1024, "gpu_layers")?;
-            launch(change.threads, 1024, "threads")?;
-            launch(
-                change.parallel_slots,
-                crate::profiles::MAX_PARALLEL_SLOTS,
-                "parallel_slots",
-            )?;
-            let apply = change.apply.as_deref().unwrap_or("next_load");
-            if !matches!(apply, "next_load" | "reload") {
-                return Err(Failure::InvalidParams(
-                    "apply must be next_load or reload.".into(),
-                ));
-            }
-            let id = encode(&change.model);
-            let current = routes.get(&format!("models/{id}/options")).await?;
-            let saved = &current["saved"];
-            let merge = |field: Option<Option<u32>>, key: &str| match field {
-                Some(value) => json!(value),
-                None => saved.get(key).cloned().unwrap_or(Value::Null),
-            };
-            let options = json!({
-                "context_tokens": merge(change.context_tokens, "context_tokens"),
-                "gpu_layers": merge(change.gpu_layers, "gpu_layers"),
-                "threads": merge(change.threads, "threads"),
-                "parallel_slots": merge(change.parallel_slots, "parallel_slots"),
-            });
-            routes
-                .post(
-                    &format!("models/{id}/options"),
-                    json!({"expected_revision":change.expected_revision,"options":options,"apply":apply}),
-                )
-                .await
-        }
-        "juiced_download_model" => {
-            let pull: DownloadArgs = parse(args)?;
-            bounded(&pull.repo, 3, 200, "repo")?;
-            for file in pull.file.iter().chain(pull.files.iter().flatten()) {
-                bounded(file, 1, 512, "file")?;
-            }
-            if pull.files.as_ref().is_some_and(|files| files.len() > 64) {
-                return Err(Failure::InvalidParams(
-                    "files accepts at most 64 entries.".into(),
-                ));
-            }
-            if let Some(revision) = &pull.revision {
-                bounded(revision, 1, 128, "revision")?;
-            }
-            let generation = match pull.expected_generation {
-                Some(generation) => generation,
-                None => routes
-                    .get("juiced/library/search?limit=1&hub=false")
-                    .await?["artifact_generation"]
-                    .as_u64()
-                    .unwrap_or(0),
-            };
-            let mut body = json!({"repo":pull.repo,"expected_generation":generation});
-            if let Some(file) = pull.file {
-                body["file"] = json!(file);
-            }
-            if let Some(files) = pull.files {
-                body["files"] = json!(files);
-            }
-            if let Some(revision) = pull.revision {
-                body["revision"] = json!(revision);
-            }
-            routes.post("juiced/library/pull", body).await
-        }
-        "juiced_add_model" => {
-            let add: AddArgs = parse(args)?;
-            let sources = [&add.path, &add.artifact, &add.artifact_set]
-                .iter()
-                .filter(|source| source.is_some())
-                .count();
-            if sources != 1 {
-                return Err(Failure::InvalidParams(
-                    "Pass exactly one of path, artifact or artifact_set.".into(),
-                ));
-            }
-            for (value, maximum, field) in [
-                (&add.path, 4096, "path"),
-                (&add.artifact, 128, "artifact"),
-                (&add.artifact_set, 128, "artifact_set"),
-                (&add.id, MODEL_ID_BYTES as usize, "id"),
-                (&add.backend, 64, "backend"),
-            ] {
-                if let Some(value) = value {
-                    bounded(value, 1, maximum, field)?;
-                }
-            }
-            let mut body = Map::new();
-            for (key, value) in [
-                ("path", add.path),
-                ("artifact", add.artifact),
-                ("artifact_set", add.artifact_set),
-                ("id", add.id),
-                ("backend", add.backend),
-            ] {
-                if let Some(value) = value {
-                    body.insert(key.into(), json!(value));
-                }
-            }
-            if let Some(policy) = add.policy {
-                body.insert("policy".into(), json!(policy));
-            }
-            routes.post("juiced/models/add", Value::Object(body)).await
-        }
-        "juiced_install_engine" => {
-            let install: EngineArgs = parse(args)?;
-            bounded(&install.engine, 1, 64, "engine")?;
-            bounded(&install.backend, 1, 64, "backend")?;
-            let generation = match install.expected_generation {
-                Some(generation) => generation,
-                None => routes.get("juiced/engines").await?["generation"]
-                    .as_u64()
-                    .unwrap_or(0),
-            };
-            routes
-                .post(
-                    "juiced/engines/install",
-                    json!({"engine":install.engine,"backend":install.backend,"expected_generation":generation}),
-                )
-                .await
-        }
-        _ => Err(Failure::InvalidParams("Unknown tool.".into())),
-    }
+pub(super) fn model_id(value: &str) -> Result<()> {
+    bounded(value, 1, MODEL_ID_BYTES as usize, "model")
 }
 
-fn no_arguments(args: Value) -> Result<(), Failure> {
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ModelArgs {
+    pub(super) model: String,
+}
+
+pub(super) fn model_arg(args: Value) -> Result<ModelArgs> {
+    let args: ModelArgs = parse(args)?;
+    model_id(&args.model)?;
+    Ok(args)
+}
+
+pub(super) fn model_property() -> Value {
+    json!({"type":"string","minLength":1,"maxLength":MODEL_ID_BYTES,"description":"Model id from juiced_list_models."})
+}
+pub(super) fn no_input() -> Value {
+    json!({"type":"object","properties":{},"additionalProperties":false})
+}
+pub(super) fn model_input() -> Value {
+    json!({"type":"object","required":["model"],"properties":{"model":model_property()},"additionalProperties":false})
+}
+pub(super) fn no_arguments(args: &Value) -> Result<()> {
     match args.as_object() {
         Some(map) if map.is_empty() => Ok(()),
         _ => Err(Failure::InvalidParams(
@@ -904,10 +558,266 @@ fn no_arguments(args: Value) -> Result<(), Failure> {
     }
 }
 
+pub(super) fn size(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{bytes} B")
+    } else {
+        format!("{value:.1} {}", UNITS[unit])
+    }
+}
+
+pub(super) struct Dispatch<'a> {
+    pub(super) state: &'a AppState,
+    pub(super) headers: &'a HeaderMap,
+    pub(super) permission: Permission,
+    pub(super) revision: u64,
+    pub(super) assistant_model: Option<String>,
+    pub(super) preview: bool,
+}
+
+/// Runs one tool and returns its envelope. Authority is already checked by the caller.
+pub(super) async fn call(
+    dispatch: Dispatch<'_>,
+    app: axum::Router,
+    tool: &Tool,
+    mut args: Value,
+) -> Value {
+    if tool.preview
+        && let Some(map) = args.as_object_mut()
+    {
+        map.remove("preview");
+    }
+    let context = Context {
+        state: dispatch.state,
+        app,
+        headers: dispatch.headers,
+        permission: dispatch.permission,
+        revision: dispatch.revision,
+        assistant_model: dispatch.assistant_model,
+        preview: dispatch.preview,
+        sources: Mutex::default(),
+    };
+    let result = match tool.support {
+        Support::Pending(reason) => Err(Failure::unsupported(reason)),
+        _ => run(&context, tool, args).await,
+    };
+    let sources = std::mem::take(
+        &mut *context
+            .sources
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()),
+    );
+    envelope(tool, context.preview, sources, result)
+}
+
+async fn run(context: &Context<'_>, tool: &Tool, args: Value) -> Result<Outcome> {
+    let name = tool.name;
+    let routed = match tool.group {
+        Group::Inspect => inspect::run(context, name, args).await,
+        Group::Acquire => acquire::run(context, name, args).await,
+        Group::Configure => configure::run(context, name, args).await,
+        Group::Verify => verify::run(context, name, args).await,
+        Group::Maintain => maintain::run(context, name, args).await,
+        Group::Explain => explain::run(context, name, args).await,
+    };
+    routed.unwrap_or_else(|| Err(Failure::InvalidParams("Unknown tool.".into())))
+}
+
+fn envelope(tool: &Tool, preview: bool, sources: Vec<Value>, result: Result<Outcome>) -> Value {
+    let mut envelope = match result {
+        Ok(outcome) => {
+            let mut envelope = json!({
+                "ok": true, "tool": tool.name, "summary": outcome.summary,
+                "data": outcome.data, "source": sources,
+            });
+            if preview {
+                envelope["preview"] = json!(true);
+            }
+            if !outcome.changed.is_empty() {
+                envelope["changed"] = json!(outcome.changed);
+            }
+            if let Some(job) = outcome.job {
+                envelope["job"] = job;
+            }
+            if !outcome.next.is_empty() {
+                envelope["next"] = json!(outcome.next);
+            }
+            if !outcome.warnings.is_empty() {
+                envelope["warnings"] = json!(outcome.warnings);
+            }
+            envelope
+        }
+        Err(failure) => {
+            let error = failure.error();
+            let message = error["message"]
+                .as_str()
+                .unwrap_or("The tool failed.")
+                .to_owned();
+            let mut envelope = json!({
+                "ok": false, "tool": tool.name, "summary": message, "error": error, "source": sources,
+            });
+            if let Failure::Route(extra) = &failure
+                && let Some(map) = extra.as_object()
+            {
+                let details: Map<String, Value> = map
+                    .iter()
+                    .filter(|(key, _)| *key != "error")
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect();
+                if !details.is_empty() {
+                    envelope["data"] = Value::Object(details);
+                }
+            }
+            let next: &[&str] = match failure.code() {
+                "revision_conflict" => &["juiced_list_models"],
+                "unknown_model" => &["juiced_list_models"],
+                "engine_not_installed" => &["juiced_list_engines", "juiced_install_engine"],
+                _ => &[],
+            };
+            if !next.is_empty() {
+                envelope["next"] = json!(next);
+            }
+            envelope
+        }
+    };
+    redact(&mut envelope);
+    bound(&mut envelope);
+    envelope
+}
+
+const SECRET_KEYS: &[&str] = &[
+    "secret",
+    "api_key",
+    "apikey",
+    "authorization",
+    "password",
+    "token",
+    "hf_token",
+    "access_token",
+];
+
+fn secret_like(text: &str) -> bool {
+    let generated = text.len() == 50
+        && text.starts_with("juiced_")
+        && text[7..]
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'));
+    generated || text.starts_with("Bearer ") || text.starts_with("hf_") && text.len() > 30
+}
+
+/// Secrets never reach the model, whatever a route returns.
+pub(super) fn redact(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            for (key, field) in map.iter_mut() {
+                if field.is_string() && SECRET_KEYS.contains(&key.to_ascii_lowercase().as_str()) {
+                    *field = json!("[redacted]");
+                } else {
+                    redact(field);
+                }
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(redact),
+        Value::String(text) if secret_like(text) => *text = "[redacted]".into(),
+        _ => {}
+    }
+}
+
+fn clip_strings(value: &mut Value) {
+    match value {
+        Value::Object(map) => map.values_mut().for_each(clip_strings),
+        Value::Array(items) => items.iter_mut().for_each(clip_strings),
+        Value::String(text) if text.len() > MAX_STRING_BYTES => {
+            let mut end = MAX_STRING_BYTES;
+            while !text.is_char_boundary(end) {
+                end -= 1;
+            }
+            text.truncate(end);
+            text.push_str(" [truncated]");
+        }
+        _ => {}
+    }
+}
+
+/// JSON pointer to the largest list with more than one entry.
+fn largest_array(value: &Value) -> Option<String> {
+    fn walk(value: &Value, path: String, best: &mut Option<(String, usize)>) {
+        match value {
+            Value::Array(items) => {
+                let bytes = serde_json::to_vec(value).map_or(0, |bytes| bytes.len());
+                if items.len() > 1 && best.as_ref().is_none_or(|(_, known)| bytes > *known) {
+                    *best = Some((path.clone(), bytes));
+                }
+                for (index, item) in items.iter().enumerate() {
+                    walk(item, format!("{path}/{index}"), best);
+                }
+            }
+            Value::Object(map) => {
+                for (key, field) in map {
+                    let key = key.replace('~', "~0").replace('/', "~1");
+                    walk(field, format!("{path}/{key}"), best);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut best = None;
+    walk(value, String::new(), &mut best);
+    best.map(|(path, _)| path)
+}
+
+/// Keeps the envelope within the result budget by clipping long strings, then halving the
+/// largest lists, and says so in a warning so the model narrows its request instead.
+pub(super) fn bound(envelope: &mut Value) {
+    let size = |value: &Value| serde_json::to_vec(value).map_or(0, |bytes| bytes.len());
+    if size(envelope) <= MAX_RESULT_BYTES {
+        return;
+    }
+    clip_strings(&mut envelope["data"]);
+    let mut halved = false;
+    for _ in 0..24 {
+        if size(envelope) <= MAX_RESULT_BYTES {
+            break;
+        }
+        let Some(path) = largest_array(&envelope["data"]) else {
+            break;
+        };
+        let Some(Value::Array(items)) = envelope["data"].pointer_mut(&path) else {
+            break;
+        };
+        let keep = items.len() / 2;
+        items.truncate(keep.max(1));
+        halved = true;
+    }
+    if size(envelope) > MAX_RESULT_BYTES {
+        envelope["data"] = json!({"omitted":true});
+    }
+    let warning = if halved {
+        "Output shortened to fit the tool limit: lists show only their first entries. Use a filter, limit or cursor for the rest."
+    } else {
+        "Output shortened to fit the tool limit."
+    };
+    match envelope["warnings"].as_array_mut() {
+        Some(warnings) => warnings.push(json!(warning)),
+        None => envelope["warnings"] = json!([warning]),
+    }
+    if size(envelope) > MAX_RESULT_BYTES {
+        envelope["source"] = json!([]);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::auth::Role;
+    use std::collections::BTreeSet;
 
     fn context(role: Role) -> RequestContext {
         RequestContext {
@@ -918,86 +828,152 @@ mod tests {
     }
 
     #[test]
-    fn tools_are_listed_only_to_operators_and_filtered_by_permission() {
-        use super::super::Permission;
+    fn catalog_schemas_are_closed_objects_with_unique_names() {
+        let mut names = BTreeSet::new();
+        for tool in catalog() {
+            assert!(names.insert(tool.name), "duplicate {}", tool.name);
+            assert!(tool.name.starts_with("juiced_"), "{}", tool.name);
+            assert!(
+                tool.description.len() <= 320,
+                "{} description is long",
+                tool.name
+            );
+            let input = schema(tool);
+            assert_eq!(input["type"], "object", "{}", tool.name);
+            assert_eq!(input["additionalProperties"], false, "{}", tool.name);
+            assert_eq!(
+                input["properties"].get("preview").is_some(),
+                tool.preview,
+                "{}",
+                tool.name
+            );
+            if tool.preview {
+                assert!(!tool.read_only, "{} previews but is read only", tool.name);
+            }
+            if tool.read_only {
+                assert!(!tool.destructive, "{}", tool.name);
+            }
+            for required in input["required"].as_array().into_iter().flatten() {
+                assert!(
+                    input["properties"]
+                        .get(required.as_str().unwrap())
+                        .is_some(),
+                    "{} requires an undeclared field",
+                    tool.name
+                );
+            }
+        }
+        for group in Group::ALL {
+            assert!(
+                catalog().any(|tool| tool.group == group),
+                "{group:?} is empty"
+            );
+        }
+        for excluded in [
+            "shell",
+            "exec",
+            "file_write",
+            "convert",
+            "quantize",
+            "barista",
+            "permission",
+        ] {
+            assert!(
+                !names.iter().any(|name| name.contains(excluded)),
+                "{excluded} must not be a tool"
+            );
+        }
+    }
+
+    #[test]
+    fn listing_follows_operator_authority_and_permission() {
         assert!(listed(&context(Role::Inference), Permission::Full).is_empty());
+        assert!(listed(&context(Role::Read), Permission::Full).is_empty());
+        let total = catalog().count();
         for role in [Role::Operator, Role::TrustedLan] {
             let full = listed(&context(role), Permission::Full);
-            assert_eq!(full.len(), TOOLS.len());
-            for tool in &full {
-                let name = tool["name"].as_str().unwrap();
-                assert!(name.starts_with("juiced_"), "{name}");
-                assert_eq!(tool["inputSchema"]["type"], "object");
-                assert_eq!(tool["inputSchema"]["additionalProperties"], false);
-                assert_eq!(tool["requires_confirmation"], false);
-                let read_only = tool["annotations"]["readOnlyHint"].as_bool().unwrap();
-                assert_eq!(
-                    read_only,
-                    name.starts_with("juiced_list")
-                        || matches!(
-                            name,
-                            "juiced_status" | "juiced_model_settings" | "juiced_search_models"
-                        )
-                );
-                assert_eq!(
-                    tool["annotations"].get("destructiveHint").is_none(),
-                    read_only
-                );
-            }
-            let ask = listed(&context(role), Permission::Ask);
-            assert_eq!(ask.len(), TOOLS.len());
-            for tool in &ask {
-                assert_eq!(
-                    tool["requires_confirmation"],
-                    tool["annotations"]["readOnlyHint"] == false
-                );
-            }
-            let read = listed(&context(role), Permission::ReadOnly);
-            assert_eq!(
-                read.len(),
-                TOOLS.iter().filter(|tool| tool.read_only).count()
+            assert_eq!(full.len(), total);
+            assert!(
+                full.iter()
+                    .all(|tool| tool["requires_confirmation"] == false)
             );
+            let ask = listed(&context(role), Permission::Ask);
+            assert!(ask.iter().all(|tool| tool["requires_confirmation"]
+                == !tool["annotations"]["readOnlyHint"].as_bool().unwrap()));
+            let read = listed(&context(role), Permission::ReadOnly);
+            assert_eq!(read.len(), catalog().filter(|tool| tool.read_only).count());
             assert!(
                 read.iter()
                     .all(|tool| tool["annotations"]["readOnlyHint"] == true)
             );
         }
+        let pending: Vec<_> = listed(&context(Role::Operator), Permission::Full)
+            .into_iter()
+            .filter(|tool| tool["status"] != "working")
+            .collect();
+        assert!(pending.iter().all(|tool| tool["pending"].is_string()));
+    }
+
+    #[test]
+    fn redaction_removes_secrets_but_keeps_counts_and_tool_names() {
+        let secret = format!("juiced_{}", "A".repeat(43));
+        let mut value = json!({
+            "secret": "abc", "token": "x", "context_tokens": 4096, "input_tokens": 7,
+            "nested": [{"api_key": "k"}, secret.clone(), "juiced_list_models"],
+            "authorization": "Bearer abc", "note": format!("Bearer {secret}"),
+        });
+        redact(&mut value);
+        assert_eq!(value["secret"], "[redacted]");
+        assert_eq!(value["token"], "[redacted]");
+        assert_eq!(value["context_tokens"], 4096);
+        assert_eq!(value["nested"][0]["api_key"], "[redacted]");
+        assert_eq!(value["nested"][1], "[redacted]");
+        assert_eq!(value["nested"][2], "juiced_list_models");
+        assert_eq!(value["authorization"], "[redacted]");
+        assert_eq!(value["note"], "[redacted]");
+        assert!(!value.to_string().contains(&secret));
+    }
+
+    #[test]
+    fn oversized_output_is_bounded_with_a_warning() {
+        let rows: Vec<Value> = (0..2000)
+            .map(|index| json!({"id":index,"text":"x".repeat(40)}))
+            .collect();
+        let mut envelope = json!({"ok":true,"summary":"s","data":{"rows":rows,"long":"y".repeat(5000)},"source":[]});
+        bound(&mut envelope);
+        assert!(serde_json::to_vec(&envelope).unwrap().len() <= MAX_RESULT_BYTES);
+        assert!(
+            envelope["warnings"][0]
+                .as_str()
+                .unwrap()
+                .starts_with("Output shortened")
+        );
+        assert!(envelope["data"]["rows"].as_array().unwrap().len() < 2000);
+        assert!(
+            envelope["data"]["long"]
+                .as_str()
+                .unwrap()
+                .ends_with("[truncated]")
+        );
+        let mut small = json!({"ok":true,"summary":"s","data":{"rows":[1,2,3]},"source":[]});
+        bound(&mut small);
+        assert!(small.get("warnings").is_none());
+    }
+
+    #[test]
+    fn pages_count_and_continue() {
+        let items: Vec<Value> = (0..25).map(|index| json!(index)).collect();
+        let first = page(items.clone(), 0, 10);
+        assert_eq!(first["total"], 25);
+        assert_eq!(first["next_cursor"], 10);
+        let last = page(items, 20, 10);
+        assert_eq!(last["items"].as_array().unwrap().len(), 5);
+        assert!(last.get("next_cursor").is_none());
     }
 
     #[test]
     fn path_segments_and_queries_are_percent_encoded() {
         assert_eq!(encode("fixture.chat-q4"), "fixture.chat-q4");
         assert_eq!(encode("a/b c?&"), "a%2Fb%20c%3F%26");
-    }
-
-    #[tokio::test]
-    async fn inference_callers_are_refused_before_any_route_runs() {
-        let refused = call(
-            Router::new(),
-            &HeaderMap::new(),
-            &context(Role::Inference),
-            tool("juiced_set_policy").unwrap(),
-            json!({"model":"m","policy":"hot","expected_revision":0}),
-        )
-        .await;
-        assert!(matches!(refused, Err(Failure::Forbidden)));
-        let invalid = call(
-            Router::new(),
-            &HeaderMap::new(),
-            &context(Role::Operator),
-            tool("juiced_set_policy").unwrap(),
-            json!({"model":"m","policy":"always","expected_revision":0}),
-        )
-        .await;
-        assert!(matches!(invalid, Err(Failure::InvalidParams(_))));
-        let mixed = call(
-            Router::new(),
-            &HeaderMap::new(),
-            &context(Role::Operator),
-            tool("juiced_add_model").unwrap(),
-            json!({"path":"/a.gguf","artifact":"b"}),
-        )
-        .await;
-        assert!(matches!(mixed, Err(Failure::InvalidParams(_))));
     }
 }

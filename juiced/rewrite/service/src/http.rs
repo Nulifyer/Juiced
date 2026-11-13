@@ -22,7 +22,8 @@ use tower_http::services::ServeDir;
 pub use crate::auth::Auth;
 use crate::auth::{Authority, Authorization, RequestContext};
 use crate::barista::{
-    call as barista_call, settings_set as barista_set, settings_view as barista_view,
+    call as barista_call, handle as barista_handle, settings_set as barista_set,
+    settings_view as barista_view,
 };
 use crate::connect::{access, health as protocol_health, key_create, key_revoke, protocol_set};
 use crate::docs_api::{document as docs_page, index as docs_index};
@@ -303,6 +304,7 @@ define_routes! {
     (get, "/juiced/barista", barista_view, "operator"),
     (post, "/juiced/barista", barista_set, "operator"),
     (post, "/juiced/barista/tools/call", barista_call, "operator"),
+    (post, "/juiced/barista/handles/{handle}", barista_handle, "operator"),
     (post, "/rerank", rerank, "inference"),
     (post, "/reranking", rerank, "inference"),
     (post, "/reranker", rerank, "inference"),
