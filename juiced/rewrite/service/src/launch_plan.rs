@@ -55,6 +55,7 @@ impl CapturedEnvironment {
                         | "CONFIGURATION_DIRECTORY"
                 )
                 || name.starts_with("JUICED_")
+                || crate::engines::environments::reserved_variable(&name)
                 || name == "LEMONADE_API_KEY"
                 || name == "LEMONADE_ADMIN_API_KEY"
                 || (name.starts_with("LEMONADE_") && name.ends_with("_API_KEY"))
@@ -437,6 +438,9 @@ impl LaunchPlan {
         let hybrid = crate::hybrid::apply(hybrid_root, &mut adapter_arguments)
             .map_err(|error| Error::new(error.code, error.message))?;
         let mut adapter_environment = hybrid.environment;
+        if crate::hrx::bundle(profile.adapter, bindings.bundle.as_deref()) {
+            adapter_environment.push(crate::hrx::environment());
+        }
         if profile.adapter == Provider::FastFlowLm {
             let root = bindings.bundle.as_ref().ok_or_else(|| {
                 Error::new(
@@ -446,6 +450,26 @@ impl LaunchPlan {
             })?;
             adapter_environment.extend(crate::flm::runtime_environment(&root.root));
             adapter_environment.push(flm_store(bindings.model.path())?);
+        }
+        if profile.adapter == Provider::Vllm {
+            let workspace = bindings.workspace.as_ref().ok_or_else(|| {
+                Error::new(
+                    "vllm_workspace",
+                    "The vLLM worker needs its private workspace.",
+                )
+            })?;
+            adapter_environment.extend(
+                crate::engines::environments::launch_for(
+                    bindings.executable.path(),
+                    workspace.path(),
+                )
+                .map_err(|error| {
+                    Error::new(
+                        error.code(),
+                        "vLLM runs only from an installed, unchanged vLLM engine environment.",
+                    )
+                })?,
+            );
         }
         for (key, value) in &adapter_environment {
             digest.update(b"\0juiced-launch-adapter-environment-v1\0");
@@ -512,7 +536,21 @@ impl LaunchPlan {
                     })
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let directory = if profile.adapter == Provider::Moonshine {
+        let checkpoint = matches!(profile.adapter, Provider::Vllm | Provider::OnnxRuntime);
+        let directory = if checkpoint && bindings.artifact.is_none() {
+            // The registered anchor, not its canonical target, sits beside the checkpoint.
+            Some(
+                spec.model_file
+                    .parent()
+                    .map(Path::to_owned)
+                    .ok_or_else(|| {
+                        Error::new(
+                            "checkpoint_directory",
+                            "The checkpoint registration needs its model directory.",
+                        )
+                    })?,
+            )
+        } else if checkpoint || profile.adapter == Provider::Moonshine {
             Some(moonshine_directory(
                 &bindings,
                 companions

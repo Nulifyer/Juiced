@@ -303,6 +303,7 @@ define_routes! {
     (get, "/juiced/barista", barista_view, "operator"),
     (post, "/juiced/barista", barista_set, "operator"),
     (post, "/juiced/barista/tools/call", barista_call, "operator"),
+    (post, "/classify", classify, "inference"),
     (post, "/rerank", rerank, "inference"),
     (post, "/reranking", rerank, "inference"),
     (post, "/reranker", rerank, "inference"),
@@ -1837,10 +1838,27 @@ pub(crate) async fn forward_prioritized(
             )
         })?;
     }
+    if lease.adapter() == crate::config::Provider::Vllm
+        && let Some(prepared) = crate::vllm::prepare_request(
+            &manager.client,
+            &base,
+            &body,
+            matches!(operation, Operation::Chat | Operation::Completion),
+            crate::vllm::max_model_len(lease.worker_arguments()),
+        )
+        .await
+    {
+        body = Bytes::from(prepared);
+    }
     lease.text_dispatched();
+    let path = if operation == Operation::Classify {
+        "/classify".to_owned()
+    } else {
+        format!("/v1/{}", operation.path())
+    };
     let upstream = manager
         .client
-        .post(format!("{base}/v1/{}", operation.path()))
+        .post(format!("{base}{path}"))
         .header(header::CONTENT_TYPE, "application/json")
         .body(body)
         .timeout(lease.upstream_timeout())
@@ -2012,4 +2030,5 @@ async fn realtime(
         .max_frame_size(crate::realtime::MAX_MESSAGE_BYTES)
         .on_upgrade(move |socket| crate::realtime::serve(manager, socket, query, slot)))
 }
+use crate::classify::classify;
 use crate::llama_routes::{audio_voices, detokenize, rerank, slot_action, slots, stats, tokenize};

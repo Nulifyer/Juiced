@@ -556,10 +556,30 @@ pub fn project(catalog: &Catalog, host: &HostReport) -> Inventory {
     let mut recommendations = BTreeMap::new();
     for migration in catalog.native_recipe_migrations() {
         let start = backends.len();
-        for label in &migration.native_backend_labels {
+        let supplemental: Vec<NativeSupportRow> =
+            crate::engines::catalog::SUPPLEMENTAL_SUPPORT_ROWS
+                .iter()
+                .filter(|row| row.0 == migration.legacy_recipe)
+                .map(|(_, backend, tier, format, os, device)| NativeSupportRow {
+                    backend: (*backend).into(),
+                    tier: (*tier).into(),
+                    format: (*format).into(),
+                    os: os.iter().map(|os| (*os).into()).collect(),
+                    device_declaration: (*device).into(),
+                })
+                .collect();
+        let mut labels = migration.native_backend_labels.clone();
+        labels.extend(
+            supplemental
+                .iter()
+                .map(|row| row.backend.clone())
+                .filter(|backend| !migration.native_backend_labels.contains(backend)),
+        );
+        for label in &labels {
             let rows: Vec<_> = migration
                 .native_support_rows
                 .iter()
+                .chain(&supplemental)
                 .filter(|row| &row.backend == label)
                 .collect();
             let implementation_id = migration

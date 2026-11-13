@@ -8,7 +8,7 @@ pub struct Error {
 }
 
 impl Error {
-    fn new(code: &'static str, message: &'static str) -> Self {
+    pub(crate) fn new(code: &'static str, message: &'static str) -> Self {
         Self {
             code,
             message: message.into(),
@@ -250,6 +250,19 @@ pub fn validate(adapter: Provider, arguments: &[String]) -> Result<ArgumentTempl
     if adapter == Provider::FastFlowLm {
         return validate_flm(arguments);
     }
+    if adapter == Provider::Vllm {
+        bounded(arguments)?;
+        let (arguments, bindings) = crate::vllm::validate(arguments)?;
+        return Ok(ArgumentTemplate {
+            arguments,
+            cache_binding: false,
+            adapter,
+            fixture: false,
+            typed_spans: Vec::new(),
+            bindings,
+            members: Vec::new(),
+        });
+    }
     validate_selected(adapter, arguments, false)
 }
 
@@ -418,6 +431,11 @@ fn owned(
             "--port" => Some((1, "--port")),
             _ => None,
         },
+        Provider::OnnxRuntime => match flag {
+            "--model-path" => Some((0, "--model-path")),
+            "--port" => Some((1, "--port")),
+            _ => None,
+        },
         _ => match flag {
             "-m" | "--model" => Some((0, "--model")),
             "--port" => Some((1, "--port")),
@@ -435,7 +453,7 @@ fn host_flag(adapter: Provider) -> Option<&'static str> {
     match adapter {
         Provider::StableDiffusionCpp => Some("--listen-ip"),
         Provider::Kokoros => Some("--ip"),
-        Provider::Moonshine | Provider::Asr4all => None,
+        Provider::Moonshine | Provider::Asr4all | Provider::OnnxRuntime => None,
         _ => Some("--host"),
     }
 }
@@ -697,7 +715,12 @@ fn validate_selected(
                     "-t" | "--threads" | "--futo-commit" | "--futo-right"
                 )
                 .then_some(1),
-                Provider::Kokoros | Provider::ExternalHttp | Provider::FastFlowLm => None,
+                Provider::Ds4 => crate::vllm::ds4_arity(&flag),
+                Provider::OnnxRuntime => (flag == "--verbose").then_some(0),
+                Provider::Kokoros
+                | Provider::ExternalHttp
+                | Provider::FastFlowLm
+                | Provider::Vllm => None,
             })
             .ok_or_else(|| {
                 Error::new(
@@ -770,7 +793,11 @@ fn forbidden(flag: &str, adapter: Provider) -> bool {
         return true;
     }
     match adapter {
-        Provider::ExternalHttp | Provider::FastFlowLm => false,
+        Provider::ExternalHttp
+        | Provider::FastFlowLm
+        | Provider::Vllm
+        | Provider::Ds4
+        | Provider::OnnxRuntime => false,
         Provider::StableDiffusionCpp => matches!(
             flag,
             "--serve-html-path"

@@ -105,9 +105,26 @@ pub enum ModelFormat {
     MoonshineOrt {
         model_arch: Option<u32>,
     },
+    /// An exported encoder classifier directory (`model.onnx`, `tokenizer.json`,
+    /// `config.json`) for `ort-server`, registered by its `model.onnx`.
+    OnnxClassifier {
+        architecture: Option<String>,
+        labels: u32,
+    },
+    /// An original Transformers checkpoint directory, registered by its `config.json`.
+    Transformers {
+        checkpoint: Box<crate::vllm::Checkpoint>,
+    },
 }
 
 impl ModelFormat {
+    /// Engines that can serve this format; the first is the automatic choice.
+    pub fn engines(&self) -> Vec<Engine> {
+        match self {
+            Self::Gguf { .. } => vec![Engine::LlamaCpp, Engine::Ds4],
+            other => vec![other.engine()],
+        }
+    }
     pub fn engine(&self) -> Engine {
         match self {
             Self::Gguf { .. } => Engine::LlamaCpp,
@@ -117,6 +134,8 @@ impl ModelFormat {
             Self::ParakeetGguf { .. } => Engine::Parakeet,
             Self::Asr4allGguf { .. } => Engine::Asr4all,
             Self::MoonshineOrt { .. } => Engine::Moonshine,
+            Self::Transformers { .. } => Engine::Vllm,
+            Self::OnnxClassifier { .. } => Engine::OnnxRuntime,
         }
     }
     pub fn standalone(&self) -> bool {
@@ -130,7 +149,9 @@ impl ModelFormat {
             Self::Gguf { .. }
             | Self::WhisperGgml { .. }
             | Self::ParakeetGguf { .. }
-            | Self::Asr4allGguf { .. } => true,
+            | Self::Asr4allGguf { .. }
+            | Self::Transformers { .. }
+            | Self::OnnxClassifier { .. } => true,
         }
     }
 }
@@ -158,7 +179,42 @@ impl TensorClasses {
     }
 }
 
+/// `ort-server` serves a directory with the graph, the tokenizer and the config.
+fn onnx_classifier(path: &Path) -> Option<ModelFormat> {
+    let directory = path.parent()?;
+    if path.file_name()? != "model.onnx" || !directory.join("tokenizer.json").is_file() {
+        return None;
+    }
+    let file = File::open(directory.join("config.json")).ok()?;
+    if file.metadata().ok()?.len() > MAX_SPEECH_CONFIG_BYTES * 16 {
+        return None;
+    }
+    let config: Value = serde_json::from_reader(BufReader::new(file)).ok()?;
+    Some(ModelFormat::OnnxClassifier {
+        architecture: config["architectures"][0].as_str().map(str::to_owned),
+        labels: config["id2label"]
+            .as_object()
+            .map_or(0, |labels| labels.len() as u32),
+    })
+}
+
 pub fn detect(path: &Path) -> Result<(ModelFormat, u64), FormatError> {
+    if let Some(format) = onnx_classifier(path) {
+        let bytes = std::fs::metadata(path)
+            .map_err(|_| FormatError::Unavailable)?
+            .len();
+        return Ok((format, bytes));
+    }
+    if path.file_name().is_some_and(|name| name == "config.json") {
+        let checkpoint = crate::vllm::checkpoint(path).ok_or(FormatError::Unsupported)?;
+        let bytes = checkpoint.weights_bytes;
+        return Ok((
+            ModelFormat::Transformers {
+                checkpoint: Box::new(checkpoint),
+            },
+            bytes,
+        ));
+    }
     let mut file = File::open(path).map_err(|_| FormatError::Unavailable)?;
     let bytes = file.metadata().map_err(|_| FormatError::Unavailable)?.len();
     let mut magic = [0; 8];
@@ -394,9 +450,27 @@ pub fn estimate_with(
     plan: Option<&super::memory::Plan>,
 ) -> Estimate {
     let file_bytes = model_bytes.saturating_add(projector_bytes);
+    if let ModelFormat::Transformers { checkpoint } = format {
+        let context = plan.map_or_else(
+            || crate::vllm::default_context(checkpoint),
+            |plan| plan.context_tokens,
+        );
+        let memory = crate::vllm::memory(checkpoint, context);
+        return Estimate {
+            file_bytes,
+            context_tokens: Some(context),
+            kv_bytes: memory.kv_bytes,
+            workspace_bytes: crate::vllm::RUNTIME_OVERHEAD_BYTES,
+            resident_bytes: memory.resident_bytes,
+            basis: "vllm-kv-budget",
+            formula: "safetensors weights + --kv-cache-memory-bytes (16-bit KV for the context) + 2 GiB runtime",
+            breakdown: None,
+        };
+    }
     match format {
         ModelFormat::Diffusion { .. }
         | ModelFormat::Onnx { .. }
+        | ModelFormat::OnnxClassifier { .. }
         | ModelFormat::ParakeetGguf {}
         | ModelFormat::Asr4allGguf {}
         | ModelFormat::MoonshineOrt { .. } => {
@@ -498,9 +572,11 @@ pub fn context_tokens(format: &ModelFormat) -> Option<u64> {
                     tokens.min(DEFAULT_CONTEXT_TOKENS)
                 }),
         ),
+        ModelFormat::Transformers { checkpoint } => Some(crate::vllm::default_context(checkpoint)),
         ModelFormat::WhisperGgml { .. }
         | ModelFormat::Diffusion { .. }
         | ModelFormat::Onnx { .. }
+        | ModelFormat::OnnxClassifier { .. }
         | ModelFormat::ParakeetGguf {}
         | ModelFormat::Asr4allGguf {}
         | ModelFormat::MoonshineOrt { .. } => None,
@@ -754,6 +830,44 @@ pub fn registration(inputs: &ProfileInputs<'_>) -> Value {
                 json!(["audio/transcriptions"]),
             )
         }
+        ModelFormat::Transformers { checkpoint } => {
+            let context = inputs
+                .estimate
+                .context_tokens
+                .unwrap_or_else(|| crate::vllm::default_context(checkpoint));
+            let mut args: Vec<String> = ["-I", "-B", "-m", crate::vllm::MODULE, "serve", "{model}"]
+                .map(str::to_owned)
+                .into();
+            args.extend([
+                "--port".into(),
+                "{port}".into(),
+                "--served-model-name".into(),
+                inputs.id.to_owned(),
+                "--max-model-len".into(),
+                context.to_string(),
+                "--kv-cache-memory-bytes".into(),
+                inputs.estimate.kv_bytes.to_string(),
+                "--max-num-seqs".into(),
+                crate::vllm::DEFAULT_MAX_SEQUENCES.to_string(),
+            ]);
+            if inputs.backend == "rocm" {
+                args.push("--enforce-eager".into());
+            }
+            args.extend(crate::vllm::family_arguments(
+                &checkpoint.architecture,
+                None,
+            ));
+            (
+                json!(args),
+                json!({}),
+                json!(["chat/completions", "completions", "responses"]),
+            )
+        }
+        ModelFormat::OnnxClassifier { .. } => (
+            json!(["--model-path", "{model}", "--port", "{port}"]),
+            json!({}),
+            json!(["classify"]),
+        ),
         ModelFormat::MoonshineOrt { model_arch } => (
             json!([
                 "--model-path",
@@ -780,7 +894,11 @@ pub fn registration(inputs: &ProfileInputs<'_>) -> Value {
             "placement": "unresolved",
         },
         "resident_bytes": inputs.estimate.resident_bytes,
-        "max_inflight": 1,
+        "max_inflight": if matches!(inputs.format, ModelFormat::Transformers { .. }) {
+            crate::vllm::DEFAULT_MAX_SEQUENCES
+        } else {
+            1
+        },
         "operations": operations,
         "policy": "disabled",
     });
@@ -791,6 +909,32 @@ pub fn registration(inputs: &ProfileInputs<'_>) -> Value {
         registration["artifact_set"] = json!(set);
     }
     registration
+}
+
+/// Rewrites a GGUF registration for `ds4-server`, which serves only its curated
+/// DeepSeek V4 GGUFs. Native streamed experts from disk (`--ssd-streaming`) because full
+/// residency of the published 81 GB model never fits gfx1151's arena.
+pub fn ds4_registration(registration: &mut Value, context: Option<u64>, file_bytes: u64) {
+    let mut args: Vec<String> = ["-m", "{model}", "--host", "127.0.0.1", "--port", "{port}"]
+        .map(str::to_owned)
+        .into();
+    if let Some(context) = context {
+        args.extend(["-c".into(), context.to_string()]);
+    }
+    args.push("--ssd-streaming".into());
+    let profile = &mut registration["execution_profile"];
+    profile["adapter"] = json!(crate::config::Provider::Ds4);
+    profile["implementation_id"] = json!(crate::config::Provider::Ds4.implementation_id());
+    profile["args"] = json!(args);
+    profile["options"] = json!({});
+    // Streaming keeps routed experts on disk; native charged the published model 16 GB.
+    let streamed = (file_bytes / 5).max(16 * 1024 * 1024 * 1024);
+    if registration["resident_bytes"]
+        .as_u64()
+        .is_some_and(|bytes| bytes > streamed)
+    {
+        registration["resident_bytes"] = json!(streamed);
+    }
 }
 
 /// Native recipe defaults from `juiced/BACKENDS.md` (`parakeet_threads`, `asr4all_threads`,

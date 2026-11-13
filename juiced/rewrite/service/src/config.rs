@@ -224,6 +224,8 @@ pub enum Operation {
     ImageGeneration,
     #[serde(rename = "rerank")]
     Rerank,
+    #[serde(rename = "classify")]
+    Classify,
 }
 
 impl Operation {
@@ -238,6 +240,7 @@ impl Operation {
             Self::Speech => "audio/speech",
             Self::ImageGeneration => "images/generations",
             Self::Rerank => "rerank",
+            Self::Classify => "classify",
         }
     }
     pub fn single_slot_media(self) -> bool {
@@ -262,6 +265,10 @@ pub enum Provider {
     Asr4all,
     #[serde(rename = "fastflowlm")]
     FastFlowLm,
+    Vllm,
+    Ds4,
+    #[serde(rename = "onnxruntime")]
+    OnnxRuntime,
 }
 
 impl Provider {
@@ -276,6 +283,9 @@ impl Provider {
             Self::Moonshine => Some("moonshine-voice"),
             Self::Asr4all => Some("futo-transcribe-cpp"),
             Self::FastFlowLm => Some("fastflowlm"),
+            Self::Vllm => Some("vllm"),
+            Self::Ds4 => Some("ds4"),
+            Self::OnnxRuntime => Some("onnxruntime"),
         }
     }
     pub fn from_implementation(id: &str) -> Option<Self> {
@@ -288,6 +298,9 @@ impl Provider {
             "moonshine-voice" => Some(Self::Moonshine),
             "futo-transcribe-cpp" => Some(Self::Asr4all),
             "fastflowlm" => Some(Self::FastFlowLm),
+            "vllm" => Some(Self::Vllm),
+            "ds4" => Some(Self::Ds4),
+            "onnxruntime" => Some(Self::OnnxRuntime),
             _ => None,
         }
     }
@@ -298,19 +311,26 @@ impl Provider {
             }
             Self::StableDiffusionCpp => Some(Operation::ImageGeneration),
             Self::Kokoros => Some(Operation::Speech),
-            Self::ExternalHttp | Self::LlamaCpp | Self::FastFlowLm => None,
+            Self::ExternalHttp
+            | Self::LlamaCpp
+            | Self::FastFlowLm
+            | Self::Vllm
+            | Self::Ds4
+            | Self::OnnxRuntime => None,
         }
     }
     pub fn readiness_path(self) -> &'static str {
         match self {
-            Self::StableDiffusionCpp | Self::Kokoros => "/v1/models",
+            Self::StableDiffusionCpp | Self::Kokoros | Self::Ds4 => "/v1/models",
             Self::FastFlowLm => "/api/tags",
             Self::ExternalHttp
             | Self::LlamaCpp
             | Self::WhisperCpp
             | Self::Parakeet
             | Self::Moonshine
-            | Self::Asr4all => "/health",
+            | Self::Asr4all
+            | Self::Vllm
+            | Self::OnnxRuntime => "/health",
         }
     }
     pub fn accepts_companions(self) -> bool {

@@ -18,6 +18,9 @@ pub enum ArchiveFormat {
 pub enum Engine {
     LlamaCpp,
     FastFlowLm,
+    Vllm,
+    Ds4,
+    OnnxRuntime,
     // Media engines (catalog/media.rs).
     WhisperCpp,
     StableDiffusionCpp,
@@ -111,6 +114,66 @@ pub struct Build {
     pub sha256: Option<&'static str>,
     pub format: ArchiveFormat,
     pub runtime: Option<&'static Runtime>,
+    /// A Python engine installs as an environment rather than a runtime package.
+    pub environment: Option<&'static Environment>,
+}
+
+/// A Python engine environment. It is installed into the engine-environments store and
+/// started through its own interpreter.
+#[derive(Debug, Serialize)]
+pub struct Environment {
+    /// The engine version the environment provides, for display.
+    pub version: &'static str,
+    pub source: EnvironmentSource,
+    /// Disk space the installed environment needs, checked before anything downloads.
+    pub installed_bytes: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum EnvironmentSource {
+    /// The build archive is `uv`. It installs the pinned CPython build and then the
+    /// hash-locked requirements, with PyTorch wheels from `torch_backend`.
+    Uv {
+        python: &'static str,
+        torch_backend: &'static str,
+        #[serde(skip)]
+        lock: &'static str,
+        lock_sha256: &'static str,
+    },
+    /// The release publishes a relocatable environment as a `.tar.gz` split into these
+    /// parts. The build asset is the first part.
+    Parts { parts: &'static [Part] },
+}
+
+#[derive(Debug, Serialize)]
+pub struct Part {
+    pub asset: &'static str,
+    pub bytes: u64,
+    pub sha256: &'static str,
+}
+
+impl Environment {
+    /// Identifies the exact pinned inputs, so a changed pin is never mistaken for the
+    /// installed environment.
+    pub fn pin(&self) -> String {
+        match &self.source {
+            EnvironmentSource::Uv {
+                python,
+                torch_backend,
+                lock_sha256,
+                ..
+            } => format!("uv:{python}:{torch_backend}:{lock_sha256}"),
+            EnvironmentSource::Parts { parts } => format!(
+                "parts:{}",
+                parts
+                    .iter()
+                    .map(|part| part.sha256)
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ),
+        }
+    }
 }
 
 /// A vendor runtime the engine archive links against but does not ship. It is extracted
@@ -187,8 +250,37 @@ pub(super) const fn linux(
         sha256: Some(sha256),
         format,
         runtime: None,
+        environment: None,
     }
 }
+
+pub(super) const fn with_environment(build: Build, environment: &'static Environment) -> Build {
+    Build {
+        environment: Some(environment),
+        ..build
+    }
+}
+
+pub(super) const fn arm64(build: Build) -> Build {
+    Build {
+        architecture: "aarch64",
+        ..build
+    }
+}
+
+/// The native recipe whose support rows describe a backend. HRX is a llama.cpp build with
+/// its own native recipe.
+pub fn recipe_of(engine: Engine, backend: &str) -> &'static str {
+    match (engine, backend) {
+        (Engine::LlamaCpp, "hrx") => "llamacpp-hrx",
+        _ => engine.recipe(),
+    }
+}
+
+/// Support rows for backends Juiced adds beyond the native descriptors. Each is
+/// `(recipe, backend, tier, format, os, device declaration)`.
+pub const SUPPLEMENTAL_SUPPORT_ROWS: &[(&str, &str, &str, &str, &[&str], &str)] =
+    llm::SUPPLEMENTAL_SUPPORT_ROWS;
 
 pub(super) const fn with_runtime(build: Build, runtime: &'static Runtime) -> Build {
     Build {

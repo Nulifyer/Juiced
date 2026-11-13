@@ -108,6 +108,22 @@ fn reject_split(name: &str) -> Result<(), ApiError> {
     Ok(())
 }
 
+/// A Hugging Face cache snapshot is named by its revision, so the repository name two
+/// levels up (`models--org--name/snapshots/<revision>`) names the model instead.
+fn directory_name(directory: &Path) -> Option<String> {
+    let name = directory.file_name()?.to_string_lossy().into_owned();
+    let repository = directory
+        .parent()
+        .filter(|parent| parent.file_name().is_some_and(|name| name == "snapshots"))
+        .and_then(Path::parent)
+        .and_then(Path::file_name)
+        .and_then(|name| name.to_str())
+        .and_then(|name| name.strip_prefix("models--"))
+        .and_then(|name| name.rsplit("--").next())
+        .map(str::to_owned);
+    Some(repository.unwrap_or(name))
+}
+
 fn single_model(format: &models::ModelFormat) -> Result<(), ApiError> {
     if let models::ModelFormat::Gguf { declared, .. } = format
         && declared.architecture.as_deref() == Some("clip")
@@ -214,8 +230,23 @@ fn open_regular(path: &Path) -> Result<(File, u64), ApiError> {
 }
 
 fn inspect_file(roots: &[PathBuf], raw: &str) -> Result<(Linked, File), ApiError> {
-    let path = canonical_within(roots, raw)?;
-    let (file, bytes) = open_regular(&path)?;
+    let mut path = canonical_within(roots, raw)?;
+    // Checkpoint directories register by an anchor file. In a Hugging Face snapshot the
+    // anchor links into `blobs/`, so the opened file is the link target while the
+    // registered path stays in the snapshot beside its siblings.
+    let mut anchor = None;
+    if path.is_dir() {
+        if let Some(found) = ["model.onnx", "config.json"]
+            .into_iter()
+            .map(|name| path.join(name))
+            .find(|anchor| anchor.is_file())
+        {
+            path = canonical_within(roots, &found.to_string_lossy())?;
+            anchor = Some(found);
+        }
+    }
+    let (file, mut bytes) = open_regular(&path)?;
+    let path = anchor.unwrap_or(path);
     let name = path
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
@@ -227,8 +258,15 @@ fn inspect_file(roots: &[PathBuf], raw: &str) -> Result<(Linked, File), ApiError
             )
         })?;
     reject_split(&name)?;
-    let (format, _) = models::detect(&path).map_err(super::engines::format_error)?;
+    let (format, detected) = models::detect(&path).map_err(super::engines::format_error)?;
     single_model(&format)?;
+    let name = match &format {
+        models::ModelFormat::Transformers { .. } | models::ModelFormat::OnnxClassifier { .. } => {
+            bytes = detected.max(bytes);
+            path.parent().and_then(directory_name).unwrap_or(name)
+        }
+        _ => name,
+    };
     Ok((
         Linked {
             name,
@@ -297,7 +335,10 @@ impl Manager {
             Ok(packages) => packages,
             Err(error) => return json!([row(false, Some(error.code))]),
         };
-        let installed = crate::engines::installed_packages(&packages);
+        let mut installed = crate::engines::installed_packages(&packages);
+        installed.extend(Self::environment_packages(
+            &self.environment_records().await,
+        ));
         let mut value = row(false, None);
         let mut backends: Vec<&str> = installed
             .iter()
@@ -603,6 +644,13 @@ impl Manager {
             let Some(store) = store else {
                 return Ok((linked, None));
             };
+            if matches!(linked.format, models::ModelFormat::Transformers { .. }) {
+                return Err(failure(
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "checkpoint_copy_unsupported",
+                    "Transformers checkpoint directories are registered in place. Import with mode link.",
+                ));
+            }
             if linked.bytes > maximum {
                 return Err(failure(
                     StatusCode::PAYLOAD_TOO_LARGE,
