@@ -1,6 +1,6 @@
 import { useMemo, useState, type ReactNode } from "react";
 import type { Client } from "./api";
-import { parseSystemInfo, type SystemInfo } from "./hardware";
+import { gpuMemory, parseSystemInfo, type SystemInfo } from "./hardware";
 import { gib } from "./live";
 import { downloadSize, engineGroups, installEngine, parseEngines, shownByDefault, type BackendChip, type EngineJob } from "./engines";
 import { Button, Empty, HelpTip, Icon, Switch } from "./ui";
@@ -75,8 +75,8 @@ function MachineStrip({ data }: { data: SystemInfo }) {
     <Device kind="Memory" name={gib(memory?.total_bytes)} fact={memory?.available_bytes != null ? `${gib(memory.available_bytes)} free` : ""} />
     {data.gpus.map((gpu, index) => {
       const blocked = !!gpu.render_node_access && gpu.render_node_access !== "read_write";
-      return <Device key={index} kind="GPU" name={gpu.name ?? `${gpu.vendor.toUpperCase()} GPU`} fact={gpu.vram_total_bytes ? `${gib(gpu.vram_total_bytes)}${gpu.integrated ? " shared" : ""}` : ""} warning={blocked ? "No access" : undefined}
-        tip={<>{gpu.integrated ? "Integrated" : "Dedicated"}{gpu.family ? ` · ${gpu.family}` : ""}{gpu.compute_capability ? ` · compute ${gpu.compute_capability}` : ""}{gpu.driver_version ? ` · driver ${gpu.driver_version}` : ""}.{blocked ? " The service can't open this GPU's device, so GPU builds won't run. Pass the device into the container." : ""}</>} />;
+      return <Device key={index} kind="GPU" name={gpu.name ?? `${gpu.vendor.toUpperCase()} GPU`} fact={gpuMemory(gpu) ? `${gib(gpuMemory(gpu))}${gpu.integrated ? " shared" : ""}` : ""} warning={blocked ? "No access" : undefined}
+        tip={<>{gpu.integrated ? `Integrated${gpu.gtt_total_bytes ? `: ${gib(gpu.vram_total_bytes)} dedicated plus ${gib(gpu.gtt_total_bytes)} mapped from system memory` : ""}` : "Dedicated"}{gpu.family ? ` · ${gpu.family}` : ""}{gpu.compute_capability ? ` · compute ${gpu.compute_capability}` : ""}{gpu.driver_version ? ` · driver ${gpu.driver_version}` : ""}.{blocked ? " The service can't open this GPU's device, so GPU builds won't run. Pass the device into the container." : ""}</>} />;
     })}
     {data.gpus.length === 0 && <Device kind="GPU" name="None" fact="models run on the CPU" />}
     {data.npus.map((npu, index) => <Device key={`npu-${index}`} kind="NPU" name={npu.name ?? `${npu.vendor.toUpperCase()} NPU`} fact={npu.name ? "" : npu.family ?? ""} warning={npu.access && npu.access !== "read_write" ? "No access" : undefined} />)}

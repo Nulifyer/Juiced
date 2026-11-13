@@ -295,7 +295,7 @@ impl Host {
         let system = system.unwrap_or(Value::Null);
         let gpu_bytes = list(&system["devices"], "gpus")
             .iter()
-            .filter_map(|gpu| gpu["vram_total_bytes"].as_u64())
+            .filter_map(gpu_addressable_bytes)
             .max()
             .filter(|bytes| *bytes > 0);
         let ram_bytes = system["devices"]["memory"]["total_bytes"].as_u64();

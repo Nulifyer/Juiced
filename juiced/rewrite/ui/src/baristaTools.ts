@@ -75,7 +75,7 @@ export function systemPrompt(model: string, permission: Permission, status: Reco
   if (index?.groups?.length) lines.push(`Tools: ${index.groups.map((group) => `${group.title} (${group.purpose})`).join("; ")}.`);
   if (index?.skills?.length) lines.push(`Procedures for juiced_help: ${index.skills.map((skill) => `${skill.topic} (${skill.title})`).join(", ")}.`);
   if (status) {
-    const gpus = Array.isArray(status.gpus) && status.gpus.length ? status.gpus.map((gpu: any) => [gpu.name ?? gpu.vendor ?? "GPU", gpu.vram_total_bytes].filter(Boolean).map((part: unknown) => typeof part === "number" ? gib(part) : part).join(" ")).join("; ") : "none detected";
+    const gpus = Array.isArray(status.gpus) && status.gpus.length ? status.gpus.map((gpu: any) => [gpu.name ?? gpu.vendor ?? "GPU", gpu.addressable_bytes ?? gpu.vram_total_bytes, gpu.integrated ? "(integrated, shares system RAM)" : null].filter(Boolean).map((part: unknown) => typeof part === "number" ? gib(part) : part).join(" ")).join("; ") : "none detected";
     // Live figures stay out: a prompt that changes every turn forces the engine to prefill it again.
     lines.push(`Machine: ${status.host?.os ?? "unknown OS"} ${status.host?.architecture ?? ""}. CPU ${status.cpu?.name ?? "unknown"} with ${status.cpu?.logical_threads ?? "?"} threads. RAM ${gib(status.ram_bytes)}. GPUs: ${gpus}. Model memory budget ${gib(status.memory?.budget_bytes)}. Free memory, loaded models and jobs change; read them with juiced_status.`);
   }

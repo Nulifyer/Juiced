@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Client } from "./api";
 import { bytes } from "./domain";
-import { parseSystemInfo } from "./hardware";
+import { gpuMemory, parseSystemInfo } from "./hardware";
 import { AddModel, type AddTarget } from "./AddModel";
 import { UrlDownload } from "./UrlDownload";
 import { engineNames, parseSearch, progress, searchEngines, tasks, type LibraryModel, type Quant, type SearchResult } from "./libraryData";
@@ -98,7 +98,7 @@ export function FindModels({ client, online, onRegistered, onOpenModel, onDownlo
   const choose = (next: { repo: string; label: string } | null) => { if (next) local.clear(); setSelected(next); };
   const model = local.file ? undefined : result?.models.find((item) => item.repo === selected?.repo);
   const quant = model?.quants.find((item) => item.label === selected?.label);
-  const gpu = info.data?.gpus.reduce((best, item) => Math.max(best, item.vram_total_bytes ?? 0), 0) || null;
+  const gpu = info.data?.gpus.reduce((best, item) => Math.max(best, gpuMemory(item) ?? 0), 0) || null;
   const ram = info.data?.memory?.total_bytes ?? null;
   async function download(target: LibraryModel, item: Quant) {
     if (!result) return;

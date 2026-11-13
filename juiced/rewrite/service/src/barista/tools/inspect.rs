@@ -430,7 +430,7 @@ async fn status(context: &Context<'_>, args: Value) -> Result<Outcome> {
             "host": system["host"],
             "cpu": pick(&devices["cpu"], &["name", "logical_threads"]),
             "ram_bytes": devices["memory"]["total_bytes"],
-            "gpus": list(devices, "gpus").iter().map(|gpu| pick(gpu, &["name", "vendor", "vram_total_bytes", "vram_free_bytes"])).collect::<Vec<_>>(),
+            "gpus": list(devices, "gpus").iter().map(|gpu| gpu_row(gpu, &["name", "vendor", "vram_total_bytes", "vram_free_bytes"])).collect::<Vec<_>>(),
             "npus": list(devices, "npus").len(),
             "loaded_models": loaded,
             "models_registered": models.len(),
@@ -481,7 +481,7 @@ async fn hardware(context: &Context<'_>, args: Value) -> Result<Outcome> {
     let gpus: Vec<Value> = list(devices, "gpus")
         .iter()
         .map(|gpu| {
-            pick(
+            gpu_row(
                 gpu,
                 &[
                     "name",
@@ -489,7 +489,6 @@ async fn hardware(context: &Context<'_>, args: Value) -> Result<Outcome> {
                     "integrated",
                     "vram_total_bytes",
                     "vram_free_bytes",
-                    "gtt_total_bytes",
                     "compute_capability",
                     "gfx_target",
                     "driver",

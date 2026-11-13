@@ -470,6 +470,34 @@ pub(super) fn limit(value: Option<u32>, default: u32, maximum: u32, field: &str)
     }
 }
 
+/// Memory the GPU can hold model weights in. An integrated GPU also maps shared system
+/// memory (GTT), so its dedicated carve-out alone understates what fits.
+pub(super) fn gpu_addressable_bytes(gpu: &Value) -> Option<u64> {
+    let vram = gpu["vram_total_bytes"].as_u64();
+    let shared = (gpu["integrated"] == true)
+        .then(|| gpu["gtt_total_bytes"].as_u64())
+        .flatten();
+    match (vram, shared) {
+        (None, None) => None,
+        (vram, shared) => Some(vram.unwrap_or(0) + shared.unwrap_or(0)),
+    }
+}
+
+/// A GPU row for the model: identity, dedicated memory and, for an integrated GPU, the shared
+/// memory it maps from system RAM.
+pub(super) fn gpu_row(gpu: &Value, keys: &[&str]) -> Value {
+    let mut row = pick(gpu, keys);
+    if gpu["integrated"] == true {
+        row["integrated"] = json!(true);
+        row["shared_total_bytes"] = gpu["gtt_total_bytes"].clone();
+        row["note"] = json!(
+            "Integrated GPU: model weights live in shared system memory, so the GPU can hold up to addressable_bytes; that memory is the same RAM the model budget covers."
+        );
+    }
+    row["addressable_bytes"] = json!(gpu_addressable_bytes(gpu));
+    row
+}
+
 pub(super) fn pick(value: &Value, keys: &[&str]) -> Value {
     let mut output = Map::new();
     for key in keys {
@@ -807,6 +835,24 @@ mod tests {
     use super::*;
     use crate::auth::Role;
     use std::collections::BTreeSet;
+
+    #[test]
+    fn an_integrated_gpu_holds_weights_in_shared_memory_too() {
+        const GIB: u64 = 1024 * 1024 * 1024;
+        let integrated = json!({"name": "Radeon 890M", "integrated": true, "vram_total_bytes": 16 * GIB, "gtt_total_bytes": 72 * GIB});
+        assert_eq!(gpu_addressable_bytes(&integrated), Some(88 * GIB));
+        let row = gpu_row(&integrated, &["name", "vram_total_bytes"]);
+        assert_eq!(row["addressable_bytes"], 88 * GIB);
+        assert_eq!(row["shared_total_bytes"], 72 * GIB);
+        let dedicated =
+            json!({"integrated": false, "vram_total_bytes": 16 * GIB, "gtt_total_bytes": 64 * GIB});
+        assert_eq!(gpu_addressable_bytes(&dedicated), Some(16 * GIB));
+        assert_eq!(
+            gpu_row(&dedicated, &["name"]).get("shared_total_bytes"),
+            None
+        );
+        assert_eq!(gpu_addressable_bytes(&json!({"name": "unknown"})), None);
+    }
 
     fn context(role: Role) -> RequestContext {
         RequestContext {

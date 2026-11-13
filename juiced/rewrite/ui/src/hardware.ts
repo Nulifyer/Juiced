@@ -1,4 +1,4 @@
-export type Gpu = { vendor: string; name: string | null; vram_total_bytes: number | null; vram_free_bytes: number | null; integrated: boolean | null; compute_capability: string | null; gfx_target: string | null; family: string | null; driver_version: string | null; render_node_access: string | null };
+export type Gpu = { vendor: string; name: string | null; vram_total_bytes: number | null; vram_free_bytes: number | null; gtt_total_bytes: number | null; integrated: boolean | null; compute_capability: string | null; gfx_target: string | null; family: string | null; driver_version: string | null; render_node_access: string | null };
 export type Npu = { vendor: string; name: string | null; family: string | null; access: string | null };
 export type BackendRow = { recipe: string; display_name: string; backend: string; tier: string; format: string; state: "available" | "unavailable" | "unknown"; reasons: { code: string; message: string }[]; installed: boolean | null; recommended: boolean };
 export type SystemInfo = {
@@ -25,7 +25,7 @@ export function parseSystemInfo(value: unknown): SystemInfo {
     host: { os: text(host.os), architecture: text(host.architecture), detection: text(host.detection) },
     cpu: cpu && { name: text(cpu.name), physical_cores: number(cpu.physical_cores), logical_threads: number(cpu.logical_threads), isa: Array.isArray(cpu.isa) ? cpu.isa.filter((entry): entry is string => typeof entry === "string").slice(0, 32) : [] },
     memory: memory && { total_bytes: number(memory.total_bytes), available_bytes: number(memory.available_bytes) },
-    gpus: list(devices.gpus).map((gpu) => ({ vendor: text(gpu.vendor) ?? "unknown", name: text(gpu.name), vram_total_bytes: number(gpu.vram_total_bytes), vram_free_bytes: number(gpu.vram_free_bytes), integrated: typeof gpu.integrated === "boolean" ? gpu.integrated : null, compute_capability: text(gpu.compute_capability), gfx_target: text(gpu.gfx_target), family: text(gpu.family), driver_version: text(gpu.driver_version), render_node_access: text(gpu.render_node_access) })),
+    gpus: list(devices.gpus).map((gpu) => ({ vendor: text(gpu.vendor) ?? "unknown", name: text(gpu.name), vram_total_bytes: number(gpu.vram_total_bytes), vram_free_bytes: number(gpu.vram_free_bytes), gtt_total_bytes: number(gpu.gtt_total_bytes), integrated: typeof gpu.integrated === "boolean" ? gpu.integrated : null, compute_capability: text(gpu.compute_capability), gfx_target: text(gpu.gfx_target), family: text(gpu.family), driver_version: text(gpu.driver_version), render_node_access: text(gpu.render_node_access) })),
     npus: list(devices.npus).map((npu) => ({ vendor: text(npu.vendor) ?? "unknown", name: text(npu.name), family: text(npu.family), access: text(npu.access) })),
     vulkan: { state: text(vulkan.state), devices: list(vulkan.devices).map((device) => text(device.name) ?? "Unknown device") },
     backends: list(item.backends).map((row) => ({
@@ -38,3 +38,10 @@ export function parseSystemInfo(value: unknown): SystemInfo {
 }
 
 export const backendNames: Record<string, string> = { cpu: "CPU", vulkan: "Vulkan", cuda: "CUDA", rocm: "ROCm", "rocm-stable": "ROCm", metal: "Metal", npu: "NPU", "hybrid-rocm": "NPU + ROCm", system: "System install", hrx: "HRX" };
+
+/** Memory the GPU can hold weights in: an integrated GPU also maps shared system memory (GTT). */
+export function gpuMemory(gpu: Pick<Gpu, "vram_total_bytes" | "gtt_total_bytes" | "integrated">): number | null {
+  const shared = gpu.integrated ? gpu.gtt_total_bytes ?? 0 : 0;
+  const total = (gpu.vram_total_bytes ?? 0) + shared;
+  return total > 0 ? total : null;
+}
