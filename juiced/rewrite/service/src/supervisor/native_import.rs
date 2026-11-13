@@ -396,9 +396,11 @@ impl Manager {
                 .as_ref()
                 .map(|definition| definition.labels.clone())
                 .unwrap_or_default();
+            let recipe_name =
+                routed.map_or(recipe.as_deref().unwrap_or_default(), |(_, name, _)| name);
             let mut mapped = crate::native_import::map_options(
                 recipe_engine,
-                routed.map_or(recipe.as_deref().unwrap_or_default(), |(_, name, _)| name),
+                recipe_name,
                 &inspection.config,
                 &layers,
                 &labels,
@@ -508,6 +510,40 @@ impl Manager {
                 }
                 match choice {
                     Ok(choice) => {
+                        if mapped.args_backend.as_deref() != Some(choice.backend.as_str())
+                            && (mapped.args_backend.is_some()
+                                || crate::native_import::has_backend_arguments(
+                                    &inspection.config,
+                                    recipe_name,
+                                    &choice.backend,
+                                ))
+                        {
+                            let preferred = mapped.backend.take();
+                            let later = settings.split_off(mapped.rows.len().min(settings.len()));
+                            mapped = crate::native_import::map_options_for(
+                                recipe_engine,
+                                recipe_name,
+                                &inspection.config,
+                                &layers,
+                                &labels,
+                                Some(&choice.backend),
+                            );
+                            mapped.backend = preferred;
+                            settings = mapped.rows.clone();
+                            settings.extend(later);
+                            settings.push(crate::native_import::SettingRow {
+                                scope: "global",
+                                key: format!("{}.{}_args", recipe_name.replace('-', ""), crate::native_import::display_key(&choice.backend)),
+                                state: if mapped.args_backend.is_some() { "mapped" } else { "default" },
+                                value: None,
+                                target: Some("arguments"),
+                                reason: if mapped.args_backend.is_some() {
+                                    "The arguments saved for the backend this host runs replace the engine's args."
+                                } else {
+                                    "This host runs another backend than the native preference, so the engine's args apply."
+                                },
+                            });
+                        }
                         if mapped
                             .backend
                             .as_deref()

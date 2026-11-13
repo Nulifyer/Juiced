@@ -307,7 +307,7 @@ impl Volume {
                 "Chat-Q6_K": {"checkpoints": {"main": "acme/Chat-GGUF:Q6_K", "mmproj": "acme/Chat-GGUF:mmproj-BF16.gguf"},
                     "labels": ["chat", "custom", "vision"], "recipe": "llamacpp", "source": "huggingface"},
                 "Writer-IQ4_NL": {"checkpoints": {"main": "acme/Writer-GGUF:IQ4_NL"}, "recipe": "llamacpp",
-                    "recipe_options": {"ctx_size": 4096, "llamacpp_args": "--temp 1.0 --top-k 20",
+                    "recipe_options": {"ctx_size": 32768, "llamacpp_args": "--temp 1.0 --top-k 20",
                         "llamacpp_backend": "rocm", "merge_args": true}},
                 "Picture-Q8_0": {"checkpoints": {"main": "acme/Picture-GGUF:picture-Q8_0.gguf",
                         "text_encoder": "acme/Encoder-GGUF:encoder-Q4_K_M.gguf",
@@ -342,7 +342,7 @@ impl Volume {
         );
         write(
             &config.join("config.json"),
-            r#"{"config_version":2,"host":"0.0.0.0","port":8080,"max_loaded_models":4,"llamacpp":{"vulkan_bin":"/opt/juiced/llama"}}"#,
+            r#"{"config_version":2,"host":"0.0.0.0","port":8080,"max_loaded_models":4,"llamacpp":{"vulkan_bin":"/opt/juiced/llama","args":"--jinja","cpu_args":"--swa-full -ub 256"}}"#,
         );
         write(
             &config.join("juiced/state.json"),
@@ -579,13 +579,44 @@ async fn first_boot_adopts_a_native_volume_in_place_and_restarts_idempotently() 
     )));
     assert_eq!(
         writer["execution_profile"]["options"]["context_tokens"],
-        4096
+        32768
+    );
+    let chat_options = server.get("models/Chat-Q6_K/options").await;
+    assert_eq!(
+        chat_options["effective_launch"]["temperature"], 1.0,
+        "{chat_options}"
+    );
+    let extras: Vec<String> = serde_json::from_value(chat_options["extra_args"].clone()).unwrap();
+    assert!(
+        has_pair(&extras, "--spec-type", "draft-mtp"),
+        "{chat_options}"
+    );
+    assert!(has_pair(
+        &extras,
+        "--chat-template-kwargs",
+        r#"{"preserve_thinking":true}"#
+    ));
+    assert!(!extras.iter().any(|argument| argument == "--swa-full"));
+    let writer_options = server.get("models/Writer-IQ4_NL/options").await;
+    assert_eq!(
+        writer_options["saved"]["context_tokens"], 32768,
+        "{writer_options}"
+    );
+    assert_eq!(
+        writer_options["effective_launch"]["top_k"], 20,
+        "{writer_options}"
     );
     let hybrid = saved_model(&server, "Retired-Hybrid");
     assert_eq!(
         hybrid["execution_profile"]["options"]["context_tokens"],
         2048
     );
+    let args = arguments(&hybrid);
+    assert!(
+        args.iter().any(|argument| argument == "--swa-full"),
+        "{args:?}"
+    );
+    assert!(has_pair(&args, "-ub", "256"), "{args:?}");
     let kokoro = saved_model(&server, "kokoro-v1");
     assert_eq!(kokoro["companions"][0]["role"], "voice");
     let voices = server.get("juiced/voices").await;

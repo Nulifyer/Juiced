@@ -217,6 +217,7 @@ define_routes! {
     (get, "/models/{model}/artifacts", model_artifacts, "operator"),
     (post, "/models/{model}/artifacts", model_artifacts_set, "operator"),
     (post, "/models/register", register, "operator"),
+    (post, "/models/check-updates", model_check_updates, "operator"),
     (post, "/delete", unregister, "operator"),
     (get, "/juiced/artifacts", artifact_inventory, "operator"),
     (post, "/juiced/artifacts/pull", artifact_pull, "operator"),
@@ -1114,52 +1115,20 @@ async fn model_artifacts_set(
         .await
         .map(Json)
 }
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct OptionsChange {
-    expected_revision: u64,
-    #[serde(default)]
-    options: Option<crate::profiles::LaunchOptions>,
-    #[serde(default)]
-    image_defaults: Option<serde_json::Map<String, Value>>,
-    #[serde(default)]
-    apply: crate::supervisor::OptionsApply,
-}
 async fn model_options_set(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    ApiJson(change): ApiJson<OptionsChange>,
+    ApiJson(change): ApiJson<crate::supervisor::SettingsChange>,
 ) -> Result<Json<Value>, crate::supervisor::OptionsError> {
-    tokio::spawn(async move {
-        let manager = &state.manager;
-        match (change.options, change.image_defaults) {
-            (Some(options), None) => {
-                manager
-                    .apply_options(&id, change.expected_revision, options, change.apply)
-                    .await
-            }
-            (None, Some(patch)) => {
-                manager
-                    .apply_image_defaults(&id, change.expected_revision, patch, change.apply)
-                    .await
-            }
-            _ => Err(ApiError::new(
-                StatusCode::BAD_REQUEST,
-                "options_body",
-                "Send either options or image_defaults.",
-            )
-            .into()),
-        }
-        .map(Json)
-    })
-    .await
-    .map_err(|_| {
-        crate::supervisor::OptionsError::from(ApiError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "options_interrupted",
-            "Profile update was interrupted. Refresh before retrying.",
-        ))
-    })?
+    tokio::spawn(async move { state.manager.apply_settings(&id, change).await.map(Json) })
+        .await
+        .map_err(|_| {
+            crate::supervisor::OptionsError::from(ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "options_interrupted",
+                "Profile update was interrupted. Refresh before retrying.",
+            ))
+        })?
 }
 
 async fn model_variants(
@@ -1219,6 +1188,9 @@ async fn model_detail(
     Ok(Json(entry))
 }
 
+async fn model_check_updates(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
+    state.manager.check_model_updates().await.map(Json)
+}
 async fn register(
     State(state): State<AppState>,
     ApiJson(Registration(spec)): ApiJson<Registration>,

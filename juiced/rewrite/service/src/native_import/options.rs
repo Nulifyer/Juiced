@@ -27,6 +27,8 @@ pub struct Mapped {
     pub arguments: Vec<Vec<String>>,
     /// Native `ctx_size` was absent or `-1`, so the context is sized automatically.
     pub automatic_context: bool,
+    /// The backend whose global `<backend>_args` replaced the engine's global `args`.
+    pub args_backend: Option<String>,
     pub rows: Vec<SettingRow>,
 }
 
@@ -145,8 +147,32 @@ fn passthrough_arguments(
             (None, Some(_)) => 2,
             (None, None) => 1,
         };
+        if engine == Engine::FastFlowLm {
+            let value = next();
+            match crate::flm::argument(flag, value.as_deref()) {
+                Ok(crate::flm::Arity::Flag) if inline.is_none() => {
+                    mapped.arguments.push(vec![flag.to_owned()]);
+                    passed += 1;
+                    index += 1;
+                }
+                Ok(crate::flm::Arity::Value) => {
+                    let value = value.unwrap_or_default();
+                    index += width(&Some(value.clone()));
+                    mapped.arguments.push(vec![flag.to_owned(), value]);
+                    passed += 1;
+                }
+                _ => {
+                    if flag.len() <= 64 {
+                        dropped.push(Value::String(flag.to_owned()));
+                    }
+                    index += width(&value);
+                }
+            }
+            continue;
+        }
         if engine == Engine::LlamaCpp
             && let Some(field) = crate::profiles::option_field(flag)
+                .filter(|field| crate::profiles::legacy_field(*field))
         {
             let value = next();
             let consumed = width(&value);
@@ -240,6 +266,17 @@ fn passthrough_arguments(
     }
 }
 
+fn custom_arguments(engine: Engine) -> bool {
+    matches!(
+        engine,
+        Engine::LlamaCpp
+            | Engine::StableDiffusionCpp
+            | Engine::WhisperCpp
+            | Engine::Moonshine
+            | Engine::FastFlowLm
+    )
+}
+
 /// Native stores image defaults loosely typed; the shared validator sees canonical JSON so
 /// imported and edited defaults obey the same ranges.
 fn image_default(key: &str, value: &RawValue) -> Option<String> {
@@ -260,6 +297,38 @@ pub fn map_options(
     global: &Document,
     layers: &[Layer<'_>],
     labels: &[String],
+) -> Mapped {
+    map_options_for(engine, recipe, global, layers, labels, None)
+}
+
+fn nonempty(value: &RawValue) -> bool {
+    text(value).is_some_and(|text| !text.trim().is_empty())
+}
+
+/// Whether the engine's global section saves arguments for this backend, as native's
+/// `<section>.<backend>_args`.
+pub fn has_backend_arguments(global: &Document, recipe: &str, backend: &str) -> bool {
+    global
+        .row(&recipe.replace('-', ""))
+        .and_then(|row| serde_json::from_str::<BTreeMap<String, Box<RawValue>>>(row.get()).ok())
+        .and_then(|section| {
+            section
+                .get(&format!("{backend}_args"))
+                .map(|value| nonempty(value))
+        })
+        .unwrap_or(false)
+}
+
+/// [`map_options`] for a known launch backend: native replaces the engine's global `args` with
+/// the non-empty `<backend>_args` of the backend it runs. Without one, the native backend
+/// preference selects it.
+pub fn map_options_for(
+    engine: Option<Engine>,
+    recipe: &str,
+    global: &Document,
+    layers: &[Layer<'_>],
+    labels: &[String],
+    backend: Option<&str>,
 ) -> Mapped {
     let mut mapped = Mapped {
         automatic_context: true,
@@ -283,6 +352,15 @@ pub fn map_options(
             effective.insert("__args", ("global", value.as_ref()));
         }
     }
+    if engine == Some(Engine::StableDiffusionCpp)
+        && let Some(section) = &global_section
+    {
+        for (name, _) in crate::media::IMAGE_DEFAULTS {
+            if let Some(value) = section.get(*name) {
+                effective.insert(name, ("global", value.as_ref()));
+            }
+        }
+    }
     for layer in layers {
         for (key, value) in &layer.values {
             effective.insert(key, (layer.scope, value));
@@ -290,6 +368,21 @@ pub fn map_options(
     }
     if let Some((scope, value)) = effective.remove(backend_key.as_str()) {
         effective.insert("__backend", (scope, value));
+    }
+    let mut global_args_key = "args".to_owned();
+    let args_backend = backend.map(str::to_owned).or_else(|| {
+        effective
+            .get("__backend")
+            .and_then(|(_, value)| backend_text(value))
+            .filter(|backend| !matches!(backend.as_str(), "" | "auto" | "system"))
+    });
+    if let (Some(section), Some(name)) = (&global_section, args_backend) {
+        let key = format!("{name}_args");
+        if let Some(value) = section.get(&key).filter(|value| nonempty(value)) {
+            effective.insert("__args", ("global", value.as_ref()));
+            global_args_key = key;
+            mapped.args_backend = Some(name);
+        }
     }
     let hybrid = effective
         .get("__backend")
@@ -301,14 +394,12 @@ pub fn map_options(
     for (key, (scope, value)) in &effective {
         let (scope, value) = (*scope, *value);
         match *key {
+            // Native flattens the engine's global args into the model's `<section>_args`
+            // option, so a model that saves its own replaces them.
+            "__args" if effective.contains_key(args_key.as_str()) => {}
             "__args" => {
-                if let Some(engine) = engine.filter(|engine| {
-                    matches!(
-                        engine,
-                        Engine::LlamaCpp | Engine::StableDiffusionCpp | Engine::WhisperCpp
-                    )
-                }) {
-                    passthrough_arguments(engine, scope, "args", value, &mut mapped);
+                if let Some(engine) = engine.filter(|engine| custom_arguments(*engine)) {
+                    passthrough_arguments(engine, scope, &global_args_key, value, &mut mapped);
                 }
             }
             "__backend" => {}
@@ -504,7 +595,7 @@ pub fn map_options(
     }
     if let Some((scope, value)) = seen_args {
         match engine {
-            Some(engine @ (Engine::LlamaCpp | Engine::StableDiffusionCpp | Engine::WhisperCpp)) => {
+            Some(engine) if custom_arguments(engine) => {
                 passthrough_arguments(engine, scope, &args_key, value, &mut mapped)
             }
             _ => mapped.rows.push(row(

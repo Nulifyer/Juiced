@@ -83,6 +83,49 @@ impl IntoResponse for OptionsError {
     }
 }
 
+const MAX_EXTRA_ARGUMENTS: usize = 256;
+
+/// One settings edit: typed llama.cpp options with optional extra arguments, image defaults,
+/// or asr4all options.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SettingsChange {
+    pub expected_revision: u64,
+    #[serde(default)]
+    pub options: Option<LaunchOptions>,
+    #[serde(default)]
+    pub extra_args: Option<Vec<String>>,
+    #[serde(default)]
+    pub image_defaults: Option<serde_json::Map<String, serde_json::Value>>,
+    #[serde(default)]
+    pub asr_options: Option<serde_json::Map<String, serde_json::Value>>,
+    #[serde(default)]
+    pub apply: OptionsApply,
+}
+
+/// The editable settings of a local profile beside its saved and effective typed options.
+pub(super) fn settings_view(
+    profile: &ExecutionProfile,
+    effective: Option<&LaunchOptions>,
+    view: &mut serde_json::Value,
+) {
+    view["saved"] = serde_json::json!(profile.options());
+    view["effective_launch"] = serde_json::json!(effective);
+    match profile.adapter {
+        Provider::LlamaCpp => {
+            view["defaults"] = LaunchOptions::engine_defaults();
+            view["extra_args"] = serde_json::json!(profile.extra_arguments().unwrap_or_default());
+        }
+        Provider::StableDiffusionCpp => {
+            view["image_defaults"] = crate::media::image_defaults_view(&profile.args);
+        }
+        Provider::Asr4all => {
+            view["asr_options"] = crate::profiles::asr_options_view(&profile.args);
+        }
+        _ => {}
+    }
+}
+
 fn worker_busy() -> ApiError {
     ApiError::new(
         StatusCode::CONFLICT,
@@ -117,9 +160,73 @@ impl Manager {
         options: LaunchOptions,
         apply: OptionsApply,
     ) -> Result<serde_json::Value, OptionsError> {
-        options
-            .validate()
-            .map_err(|error| ApiError::new(StatusCode::BAD_REQUEST, error.code, error.message))?;
+        self.apply_llama(id, expected_revision, Some(options), None, apply)
+            .await
+    }
+
+    pub async fn apply_settings(
+        self: &Arc<Self>,
+        id: &str,
+        change: SettingsChange,
+    ) -> Result<serde_json::Value, OptionsError> {
+        let SettingsChange {
+            expected_revision,
+            options,
+            extra_args,
+            image_defaults,
+            asr_options,
+            apply,
+        } = change;
+        match (
+            options.is_some() || extra_args.is_some(),
+            image_defaults,
+            asr_options,
+        ) {
+            (true, None, None) => {
+                self.apply_llama(id, expected_revision, options, extra_args, apply)
+                    .await
+            }
+            (false, Some(patch), None) => {
+                self.apply_image_defaults(id, expected_revision, patch, apply)
+                    .await
+            }
+            (false, None, Some(patch)) => {
+                self.apply_asr_options(id, expected_revision, patch, apply)
+                    .await
+            }
+            _ => Err(ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "options_body",
+                "Send options and extra_args, image_defaults, or asr_options.",
+            )
+            .into()),
+        }
+    }
+
+    async fn apply_llama(
+        self: &Arc<Self>,
+        id: &str,
+        expected_revision: u64,
+        options: Option<LaunchOptions>,
+        extra_args: Option<Vec<String>>,
+        apply: OptionsApply,
+    ) -> Result<serde_json::Value, OptionsError> {
+        if let Some(options) = &options {
+            options.validate().map_err(|error| {
+                ApiError::new(StatusCode::BAD_REQUEST, error.code, error.message)
+            })?;
+        }
+        if extra_args
+            .as_ref()
+            .is_some_and(|extras| extras.len() > MAX_EXTRA_ARGUMENTS)
+        {
+            return Err(ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "invalid_extra_arguments",
+                "Send at most 256 extra arguments.",
+            )
+            .into());
+        }
         let worker = self.worker(id)?;
         if apply == OptionsApply::Reload {
             self.flush_sessions(&worker).await;
@@ -143,6 +250,14 @@ impl Manager {
             .into());
         }
         if worker.spec.execution_profile.native_model_id().is_some() {
+            let Some(options) = options.filter(|_| extra_args.is_none()) else {
+                return Err(ApiError::new(
+                    StatusCode::BAD_REQUEST,
+                    "native_options_authority",
+                    "Imported native settings edit only the context; their engine arguments stay with the native settings.",
+                )
+                .into());
+            };
             if apply == OptionsApply::Reload {
                 return Err(ApiError::new(
                     StatusCode::NOT_IMPLEMENTED,
@@ -156,6 +271,16 @@ impl Manager {
                 .set_native_options(worker, expected_revision, options)
                 .await?);
         }
+        if let Some(extras) = &extra_args {
+            worker
+                .spec
+                .execution_profile
+                .clone()
+                .set_local_extra_arguments(extras)
+                .map_err(|error| {
+                    ApiError::new(StatusCode::BAD_REQUEST, error.code, error.message)
+                })?;
+        }
         let restart = self.restart_needed(&worker, &mut state, apply)?;
         let projector_worker = worker.clone();
         let budget = (!self.memory_protected()).then_some(self.budget.limit);
@@ -166,15 +291,24 @@ impl Manager {
             .to_owned();
         let (replacement, previous) = self
             .replace_local_profile(worker, state, move |spec| {
-                spec.execution_profile
-                    .set_local_options(options)
-                    .map_err(|_| {
-                        ApiError::new(
-                            StatusCode::CONFLICT,
-                            "native_settings_authority",
-                            "Native options must be changed through their committed settings generation.",
-                        )
-                    })?;
+                if let Some(options) = options {
+                    spec.execution_profile
+                        .set_local_options(options)
+                        .map_err(|_| {
+                            ApiError::new(
+                                StatusCode::CONFLICT,
+                                "native_settings_authority",
+                                "Native options must be changed through their committed settings generation.",
+                            )
+                        })?;
+                }
+                if let Some(extras) = &extra_args {
+                    spec.execution_profile
+                        .set_local_extra_arguments(extras)
+                        .map_err(|error| {
+                            ApiError::new(StatusCode::BAD_REQUEST, error.code, error.message)
+                        })?;
+                }
                 if let Some((_, corrected)) = super::fit::formula_reservation(
                     &spec.resolved(&parent),
                     Some(&projector_worker),
@@ -232,6 +366,50 @@ impl Manager {
             .replace_local_profile(worker, state, move |spec| {
                 spec.execution_profile.args =
                     crate::media::apply_image_defaults(&spec.execution_profile.args, &patch)?;
+                Ok(())
+            })
+            .await?;
+        self.finish_options(id, replacement, previous, restart, apply)
+            .await
+    }
+
+    pub async fn apply_asr_options(
+        self: &Arc<Self>,
+        id: &str,
+        expected_revision: u64,
+        patch: serde_json::Map<String, serde_json::Value>,
+        apply: OptionsApply,
+    ) -> Result<serde_json::Value, OptionsError> {
+        let invalid = |error: crate::profiles::Error| {
+            ApiError::new(StatusCode::BAD_REQUEST, error.code, error.message)
+        };
+        let worker = self.worker(id)?;
+        if worker.spec.execution_profile.adapter != Provider::Asr4all {
+            return Err(ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "asr_options_unsupported",
+                "These options apply only to asr4all speech models.",
+            )
+            .into());
+        }
+        crate::profiles::apply_asr_options(&worker.spec.execution_profile.args, &patch)
+            .map_err(invalid)?;
+        let mut state = worker.state.clone().lock_owned().await;
+        self.ensure_registered(&worker)?;
+        if state.revision != expected_revision {
+            return Err(ApiError::new(
+                StatusCode::CONFLICT,
+                "revision_conflict",
+                "The profile changed. Refresh before saving options.",
+            )
+            .into());
+        }
+        let restart = self.restart_needed(&worker, &mut state, apply)?;
+        let (replacement, previous) = self
+            .replace_local_profile(worker, state, move |spec| {
+                spec.execution_profile.args =
+                    crate::profiles::apply_asr_options(&spec.execution_profile.args, &patch)
+                        .map_err(invalid)?;
                 Ok(())
             })
             .await?;
@@ -470,6 +648,82 @@ mod tests {
             OptionsApply::NextLoad
         );
         assert!(serde_json::from_str::<OptionsApply>("\"later\"").is_err());
+    }
+
+    #[tokio::test]
+    async fn settings_save_typed_options_and_extra_arguments_together() {
+        let (_directory, manager) = manager();
+        let change: SettingsChange = serde_json::from_value(serde_json::json!({
+            "expected_revision": 1,
+            "options": {"temperature": 0.6, "top_k": 20, "flash_attention": "on", "cache_type_k": "q8_0"},
+            "extra_args": ["--spec-type", "draft-mtp", "--jinja"],
+        }))
+        .unwrap();
+        let view = manager.apply_settings("one", change).await.unwrap();
+        assert_eq!(view["saved"]["temperature"], 0.6);
+        assert!(view["saved"].get("batch_size").is_none());
+        assert_eq!(view["effective_launch"]["top_k"], 20);
+        assert_eq!(view["defaults"]["top_k"], 40);
+        assert_eq!(
+            view["extra_args"],
+            serde_json::json!(["--spec-type", "draft-mtp", "--jinja"])
+        );
+        let revision = view["revision"].as_u64().unwrap();
+        let persisted = crate::config::Config::read(&manager.config_path).unwrap();
+        let profile = &persisted.models[0].execution_profile;
+        assert!(
+            profile
+                .args
+                .windows(2)
+                .any(|pair| pair == ["--spec-type", "draft-mtp"])
+        );
+        let (template, _) = profile.resolved_arguments().unwrap();
+        assert!(
+            template
+                .arguments()
+                .windows(2)
+                .any(|pair| pair == ["--temp", "0.6"])
+        );
+
+        let only_extras: SettingsChange = serde_json::from_value(serde_json::json!({
+            "expected_revision": revision, "extra_args": []
+        }))
+        .unwrap();
+        let view = manager.apply_settings("one", only_extras).await.unwrap();
+        assert_eq!(view["extra_args"], serde_json::json!([]));
+        assert_eq!(view["saved"]["temperature"], 0.6);
+        let revision = view["revision"].as_u64().unwrap();
+        for (body, code) in [
+            (
+                serde_json::json!({"expected_revision": revision, "extra_args": ["--top-k", "4"]}),
+                "extra_argument_typed",
+            ),
+            (
+                serde_json::json!({"expected_revision": revision, "extra_args": ["--host", "0.0.0.0"]}),
+                "extra_argument_managed",
+            ),
+            (
+                serde_json::json!({"expected_revision": revision, "options": {"top_p": 2}}),
+                "invalid_launch_options",
+            ),
+            (
+                serde_json::json!({"expected_revision": revision, "asr_options": {"threads": 2}}),
+                "asr_options_unsupported",
+            ),
+            (
+                serde_json::json!({"expected_revision": revision}),
+                "options_body",
+            ),
+            (
+                serde_json::json!({"expected_revision": revision, "options": {}, "image_defaults": {}}),
+                "options_body",
+            ),
+        ] {
+            let change: SettingsChange = serde_json::from_value(body.clone()).unwrap();
+            let error = manager.apply_settings("one", change).await.unwrap_err();
+            assert_eq!(error.code(), code, "{body}");
+        }
+        assert_eq!(manager.options("one").await.unwrap()["revision"], revision);
     }
 
     #[tokio::test]

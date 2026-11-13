@@ -404,7 +404,7 @@ impl Manager {
             context_tokens: query.context_tokens.or(saved.context_tokens),
             gpu_layers: query.gpu_layers.or(saved.gpu_layers),
             parallel_slots: query.parallel_slots.or(saved.parallel_slots),
-            threads: saved.threads,
+            ..saved
         };
         let resolved = draft
             .resolve(template.arguments())

@@ -536,6 +536,71 @@ async fn session_routes_configure_forget_and_own_explicit_slot_operations() {
 }
 
 #[tokio::test]
+async fn sessions_can_be_retained_and_expire_only_after_their_retention() {
+    let server = session_server(1, fast()).await;
+    chat(&server, &conversation("rivers"), None).await;
+    settled(&server, 1).await;
+    let view = sessions(&server).await;
+    let session = view["sessions"][0]["session"].as_str().unwrap().to_owned();
+    assert_eq!(view["sessions"][0]["retained"], false);
+    assert_eq!(view["sessions"][0]["expires_unix_ms"], Value::Null);
+    for (body, status, code) in [
+        (json!({"action":"retain","session":"short","retained":true}), StatusCode::BAD_REQUEST, "invalid_session"),
+        (json!({"action":"retain","session":"0".repeat(64),"retained":true}), StatusCode::NOT_FOUND, "unknown_session"),
+    ] {
+        let (actual, error) = server.post("juiced/cache/sessions", body).await;
+        assert_eq!(actual, status, "{error}");
+        assert_eq!(error["error"]["code"], code);
+    }
+    let (status, retained) = server
+        .post(
+            "juiced/cache/sessions",
+            json!({"action":"retain","session":session,"retained":true}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{retained}");
+    assert_eq!(retained["retained"], true);
+    let generation = sessions(&server).await["configuration_generation"].clone();
+    let (status, configured) = server
+        .post(
+            "juiced/cache/sessions",
+            json!({"action":"configure","expected_generation":generation,"settings":{"retention_days":1}}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{configured}");
+    let view = sessions(&server).await;
+    assert_eq!(view["settings"]["retention_days"], 1);
+    assert_eq!(view["settings"]["retained"], json!([session]));
+    assert_eq!(view["totals"]["sessions"], 1);
+    assert_eq!(view["sessions"][0]["retained"], true);
+    assert_eq!(view["sessions"][0]["expires_unix_ms"], Value::Null);
+    let (status, _) = server
+        .post(
+            "juiced/cache/sessions",
+            json!({"action":"retain","session":session,"retained":false}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let view = sessions(&server).await;
+    assert!(view["settings"].get("retained").is_none(), "{view}");
+    let expires = view["sessions"][0]["expires_unix_ms"].as_u64().unwrap();
+    let used = view["sessions"][0]["last_used_unix_ms"].as_u64().unwrap();
+    assert_eq!(expires - used, 86_400_000);
+    let generation = view["configuration_generation"].clone();
+    let (status, error) = server
+        .post(
+            "juiced/cache/sessions",
+            json!({"action":"configure","expected_generation":generation,"settings":{"retention_days":400}}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(error["error"]["code"], "invalid_session_settings");
+    let saved: Value =
+        serde_json::from_slice(&std::fs::read(&server.config_path).unwrap()).unwrap();
+    assert_eq!(saved["session_cache"]["retention_days"], 1);
+}
+
+#[tokio::test]
 async fn removing_a_model_forgets_its_saved_sessions() {
     let server = session_server(1, fast()).await;
     chat(&server, &conversation("rivers"), None).await;

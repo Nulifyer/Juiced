@@ -14,6 +14,45 @@ use std::{
 
 pub const MAX_PARALLEL_SLOTS: u32 = 4096;
 
+/// A finite decimal launch value. JSON cannot carry NaN or infinity, and every constructor
+/// validates, so equality is total.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct Decimal(pub f64);
+impl Eq for Decimal {}
+impl fmt::Display for Decimal {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}", self.0)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FlashAttention {
+    Auto,
+    On,
+    Off,
+}
+impl FlashAttention {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::On => "on",
+            Self::Off => "off",
+        }
+    }
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "auto" => Some(Self::Auto),
+            "on" | "1" | "true" | "enabled" => Some(Self::On),
+            "off" | "0" | "false" | "disabled" => Some(Self::Off),
+            _ => None,
+        }
+    }
+}
+
+// The first four fields predate the rest and keep their always-present wire form; later fields
+// are omitted when unset so stored profiles and native execution identities stay byte-stable.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct LaunchOptions {
@@ -21,6 +60,30 @@ pub struct LaunchOptions {
     pub threads: Option<u32>,
     pub gpu_layers: Option<u32>,
     pub parallel_slots: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub batch_size: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ubatch_size: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub batch_threads: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub flash_attention: Option<FlashAttention>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_type_k: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_type_v: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<Decimal>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top_k: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top_p: Option<Decimal>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_p: Option<Decimal>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repeat_penalty: Option<Decimal>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_budget: Option<i32>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -49,16 +112,80 @@ impl fmt::Display for Error {
 }
 impl std::error::Error for Error {}
 
-const FLAGS: [&str; 4] = ["--ctx-size", "--threads", "--gpu-layers", "--parallel"];
+pub(crate) const FIELD_COUNT: usize = 16;
+const LEGACY_FIELDS: usize = 4;
+const FLAGS: [&str; FIELD_COUNT] = [
+    "--ctx-size",
+    "--threads",
+    "--gpu-layers",
+    "--parallel",
+    "--batch-size",
+    "--ubatch-size",
+    "--threads-batch",
+    "--flash-attn",
+    "--cache-type-k",
+    "--cache-type-v",
+    "--temp",
+    "--top-k",
+    "--top-p",
+    "--min-p",
+    "--repeat-penalty",
+    "--reasoning-budget",
+];
+pub const FIELD_KEYS: [&str; FIELD_COUNT] = [
+    "context_tokens",
+    "threads",
+    "gpu_layers",
+    "parallel_slots",
+    "batch_size",
+    "ubatch_size",
+    "batch_threads",
+    "flash_attention",
+    "cache_type_k",
+    "cache_type_v",
+    "temperature",
+    "top_k",
+    "top_p",
+    "min_p",
+    "repeat_penalty",
+    "reasoning_budget",
+];
 pub(crate) fn option_field(flag: &str) -> Option<usize> {
     match flag {
         "--ctx-size" | "-c" => Some(0),
         "--threads" | "-t" => Some(1),
         "--gpu-layers" | "--n-gpu-layers" | "-ngl" => Some(2),
         "--parallel" | "-np" => Some(3),
+        "--batch-size" | "-b" => Some(4),
+        "--ubatch-size" | "-ub" => Some(5),
+        "--threads-batch" | "-tb" => Some(6),
+        "--flash-attn" | "-fa" => Some(7),
+        "--cache-type-k" | "-ctk" => Some(8),
+        "--cache-type-v" | "-ctv" => Some(9),
+        "--temp" | "--temperature" => Some(10),
+        "--top-k" => Some(11),
+        "--top-p" => Some(12),
+        "--min-p" => Some(13),
+        "--repeat-penalty" => Some(14),
+        "--reasoning-budget" => Some(15),
         _ => None,
     }
 }
+/// The fields whose saved value predates typed sampling and batching; native imports map only
+/// these, and pass the others through as literal worker arguments that remain readable here.
+pub(crate) fn legacy_field(index: usize) -> bool {
+    index < LEGACY_FIELDS
+}
+
+fn decimal_in(value: Option<Decimal>, range: std::ops::RangeInclusive<f64>) -> bool {
+    value.is_none_or(|value| value.0.is_finite() && range.contains(&value.0))
+}
+fn cache_type(value: &Option<String>) -> bool {
+    value.as_deref().is_none_or(|value| {
+        crate::engines::memory::CacheType::parse(value).is_some_and(|kind| kind.name() == value)
+    })
+}
+
 impl LaunchOptions {
     pub fn validate(&self) -> Result<(), Error> {
         if self
@@ -77,32 +204,175 @@ impl LaunchOptions {
                 "Context must be 1 to 2147483647 tokens, threads 1 to 65536, GPU layers 0 to 2147483647, and parallel slots 1 to 4096.",
             ));
         }
+        if [self.batch_size, self.ubatch_size]
+            .iter()
+            .flatten()
+            .any(|value| *value == 0 || *value > 1 << 20)
+            || self
+                .batch_threads
+                .is_some_and(|value| value == 0 || value > 65536)
+            || !cache_type(&self.cache_type_k)
+            || !cache_type(&self.cache_type_v)
+        {
+            return Err(Error::new(
+                "invalid_launch_options",
+                "Batch sizes must be 1 to 1048576, prompt threads 1 to 65536, and cache types one of f32, f16, bf16, q8_0, q4_0, q4_1, q5_0, q5_1 or iq4_nl.",
+            ));
+        }
+        if !decimal_in(self.temperature, 0.0..=100.0)
+            || self.top_k.is_some_and(|value| value > i32::MAX as u32)
+            || !decimal_in(self.top_p, 0.0..=1.0)
+            || !decimal_in(self.min_p, 0.0..=1.0)
+            || !decimal_in(self.repeat_penalty, 0.0..=100.0)
+            || self.reasoning_budget.is_some_and(|value| value < -1)
+        {
+            return Err(Error::new(
+                "invalid_launch_options",
+                "Temperature must be 0 to 100, top K 0 or more, top P and min P 0 to 1, repetition penalty 0 to 100, and the reasoning budget -1 or more.",
+            ));
+        }
         Ok(())
     }
 
-    fn values(&self) -> [Option<u32>; 4] {
-        [
-            self.context_tokens,
-            self.threads,
-            self.gpu_layers,
-            self.parallel_slots,
-        ]
-    }
-    fn from_values(values: [Option<u32>; 4]) -> Self {
-        Self {
-            context_tokens: values[0],
-            threads: values[1],
-            gpu_layers: values[2],
-            parallel_slots: values[3],
+    fn text(&self, index: usize) -> Option<String> {
+        let number = |value: Option<u32>| value.map(|value| value.to_string());
+        let decimal = |value: Option<Decimal>| value.map(|value| value.to_string());
+        match index {
+            0 => number(self.context_tokens),
+            1 => number(self.threads),
+            2 => number(self.gpu_layers),
+            3 => number(self.parallel_slots),
+            4 => number(self.batch_size),
+            5 => number(self.ubatch_size),
+            6 => number(self.batch_threads),
+            7 => self.flash_attention.map(|value| value.name().to_owned()),
+            8 => self.cache_type_k.clone(),
+            9 => self.cache_type_v.clone(),
+            10 => decimal(self.temperature),
+            11 => number(self.top_k),
+            12 => decimal(self.top_p),
+            13 => decimal(self.min_p),
+            14 => decimal(self.repeat_penalty),
+            15 => self.reasoning_budget.map(|value| value.to_string()),
+            _ => None,
         }
+    }
+
+    fn set_legacy(&mut self, index: usize, value: Option<u32>) {
+        match index {
+            0 => self.context_tokens = value,
+            1 => self.threads = value,
+            2 => self.gpu_layers = value,
+            _ => self.parallel_slots = value,
+        }
+    }
+
+    /// Reads a literal engine argument into its typed field. Values outside the typed domain stay
+    /// literal arguments and leave the field unknown rather than invalidating the profile.
+    fn set_literal(&mut self, index: usize, value: &str) {
+        let mut next = Self::default();
+        let count = || value.parse::<u32>().ok();
+        let decimal = || value.parse::<f64>().ok().map(Decimal);
+        match index {
+            4 => next.batch_size = count(),
+            5 => next.ubatch_size = count(),
+            6 => {
+                next.batch_threads = value
+                    .parse::<i64>()
+                    .ok()
+                    .and_then(|value| u32::try_from(value).ok())
+                    .filter(|value| *value > 0)
+            }
+            7 => next.flash_attention = FlashAttention::parse(value),
+            8 => next.cache_type_k = Some(value.to_owned()),
+            9 => next.cache_type_v = Some(value.to_owned()),
+            10 => next.temperature = decimal(),
+            11 => next.top_k = count(),
+            12 => next.top_p = decimal(),
+            13 => next.min_p = decimal(),
+            14 => next.repeat_penalty = decimal(),
+            15 => next.reasoning_budget = value.parse().ok(),
+            _ => return,
+        }
+        if next.validate().is_err() {
+            next = Self::default();
+        }
+        self.clear(index);
+        self.overlay(&next);
+    }
+
+    fn clear(&mut self, index: usize) {
+        match index {
+            4 => self.batch_size = None,
+            5 => self.ubatch_size = None,
+            6 => self.batch_threads = None,
+            7 => self.flash_attention = None,
+            8 => self.cache_type_k = None,
+            9 => self.cache_type_v = None,
+            10 => self.temperature = None,
+            11 => self.top_k = None,
+            12 => self.top_p = None,
+            13 => self.min_p = None,
+            14 => self.repeat_penalty = None,
+            15 => self.reasoning_budget = None,
+            _ => {}
+        }
+    }
+
+    /// Replaces each field that `other` sets.
+    pub fn overlay(&mut self, other: &Self) {
+        macro_rules! take {
+            ($($field:ident),*) => {$(if other.$field.is_some() { self.$field = other.$field.clone(); })*};
+        }
+        take!(
+            context_tokens,
+            threads,
+            gpu_layers,
+            parallel_slots,
+            batch_size,
+            ubatch_size,
+            batch_threads,
+            flash_attention,
+            cache_type_k,
+            cache_type_v,
+            temperature,
+            top_k,
+            top_p,
+            min_p,
+            repeat_penalty,
+            reasoning_budget
+        );
+    }
+
+    /// Every typed field by its wire key, with `null` for unset fields.
+    pub fn view(&self) -> serde_json::Map<String, Value> {
+        let mut view = serde_json::to_value(self)
+            .ok()
+            .and_then(|value| value.as_object().cloned())
+            .unwrap_or_default();
+        for key in FIELD_KEYS {
+            view.entry(key).or_insert(Value::Null);
+        }
+        view
+    }
+
+    /// llama-server's own defaults for the typed fields; `null` means the engine sizes it.
+    pub fn engine_defaults() -> Value {
+        serde_json::json!({
+            "context_tokens": null, "threads": null, "gpu_layers": null, "parallel_slots": null,
+            "batch_size": 2048, "ubatch_size": 512, "batch_threads": null, "flash_attention": "auto",
+            "cache_type_k": "f16", "cache_type_v": "f16", "temperature": 0.8, "top_k": 40,
+            "top_p": 0.95, "min_p": 0.05, "repeat_penalty": 1.0, "reasoning_budget": -1,
+        })
     }
 
     pub fn resolve(&self, args: &[String]) -> Result<ResolvedLaunch, Error> {
         self.validate()?;
-        let overrides = self.values();
-        let mut applied = [None; 4];
-        let mut seen: [Option<String>; 4] = std::array::from_fn(|_| None);
-        let mut emitted = [false; 4];
+        let overrides: [Option<String>; FIELD_COUNT] =
+            std::array::from_fn(|index| self.text(index));
+        let mut applied = Self::default();
+        let mut seen: [Option<String>; LEGACY_FIELDS] = std::array::from_fn(|_| None);
+        let mut emitted = [false; FIELD_COUNT];
         let mut resolved = Vec::with_capacity(args.len() + 8);
         let mut position = 0;
         while position < args.len() {
@@ -127,42 +397,44 @@ impl LaunchOptions {
                         format!("{flag} requires a value."),
                     )
                 })?;
-            let (number, normalized) = legacy_value(index, value)?;
-            if seen[index]
-                .as_ref()
-                .is_some_and(|previous| previous != &normalized)
-            {
-                return Err(Error::new(
-                    "conflicting_launch_arguments",
-                    format!("Conflicting values were supplied for {}.", FLAGS[index]),
-                ));
+            if legacy_field(index) {
+                let (number, normalized) = legacy_value(index, value)?;
+                if seen[index]
+                    .as_ref()
+                    .is_some_and(|previous| previous != &normalized)
+                {
+                    return Err(Error::new(
+                        "conflicting_launch_arguments",
+                        format!("Conflicting values were supplied for {}.", FLAGS[index]),
+                    ));
+                }
+                seen[index] = Some(normalized);
+                applied.set_legacy(index, number);
+            } else {
+                applied.set_literal(index, value);
             }
-            seen[index] = Some(normalized);
-            applied[index] = number;
             let consumed = if inline.is_some() { 1 } else { 2 };
-            if let Some(value) = overrides[index] {
+            if let Some(value) = &overrides[index] {
                 if !emitted[index] {
                     resolved.push(FLAGS[index].to_owned());
-                    resolved.push(value.to_string());
+                    resolved.push(value.clone());
                     emitted[index] = true;
                 }
-                applied[index] = Some(value);
             } else {
                 resolved.extend_from_slice(&args[position..position + consumed]);
             }
             position += consumed;
         }
         for (index, value) in overrides.into_iter().enumerate() {
-            if let Some(value) = value {
-                if !emitted[index] {
-                    resolved.push(FLAGS[index].to_owned());
-                    resolved.push(value.to_string());
-                }
-                applied[index] = Some(value);
+            if let Some(value) = value
+                && !emitted[index]
+            {
+                resolved.push(FLAGS[index].to_owned());
+                resolved.push(value);
             }
         }
         resolved.extend_from_slice(&args[position..]);
-        let applied = Self::from_values(applied);
+        applied.overlay(self);
         applied.validate()?;
         Ok(ResolvedLaunch {
             args: resolved,
@@ -198,6 +470,104 @@ fn legacy_value(index: usize, value: &str) -> Result<(Option<u32>, String), Erro
         ));
     }
     Ok((Some(number), number.to_string()))
+}
+
+/// asr4all (FUTO) launch options by wire key, with their worker flags; the first flag is the
+/// one written.
+pub const ASR_OPTIONS: [(&str, &[&str]); 3] = [
+    ("threads", &["--threads", "-t"]),
+    ("commit", &["--futo-commit"]),
+    ("right", &["--futo-right"]),
+];
+const MAX_ASR_OPTION: u64 = 65536;
+
+fn asr_flag(argument: &str) -> Option<(usize, bool)> {
+    let (flag, inline) = argument
+        .split_once('=')
+        .map_or((argument, false), |(flag, _)| (flag, true));
+    ASR_OPTIONS
+        .iter()
+        .position(|(_, flags)| flags.contains(&flag))
+        .map(|index| (index, inline))
+}
+
+/// asr4all options read from launch arguments, `null` where the engine default applies.
+pub fn asr_options_view(args: &[String]) -> Value {
+    let mut view: serde_json::Map<String, Value> = ASR_OPTIONS
+        .iter()
+        .map(|(key, _)| ((*key).to_owned(), Value::Null))
+        .collect();
+    let mut position = 0;
+    while position < args.len() {
+        let Some((index, inline)) = asr_flag(&args[position]) else {
+            position += 1;
+            continue;
+        };
+        let text = if inline {
+            args[position].split_once('=').map(|(_, value)| value)
+        } else {
+            args.get(position + 1).map(String::as_str)
+        };
+        if let Some(number) = text.and_then(|text| text.parse::<u64>().ok()) {
+            view.insert(ASR_OPTIONS[index].0.to_owned(), Value::from(number));
+        }
+        position += if inline { 1 } else { 2 };
+    }
+    Value::Object(view)
+}
+
+/// Applies a merge patch of asr4all options to launch arguments: a value replaces the option,
+/// `null` restores the engine default and absent keys keep their arguments.
+pub fn apply_asr_options(
+    args: &[String],
+    patch: &serde_json::Map<String, Value>,
+) -> Result<Vec<String>, Error> {
+    let mut replacements = Vec::with_capacity(patch.len());
+    for (key, value) in patch {
+        let index = ASR_OPTIONS
+            .iter()
+            .position(|(name, _)| name == key)
+            .ok_or_else(|| {
+                Error::new("invalid_asr_options", "Use only threads, commit and right.")
+            })?;
+        let argument = match value {
+            Value::Null => None,
+            value => Some(
+                value
+                    .as_u64()
+                    .filter(|number| (1..=MAX_ASR_OPTION).contains(number))
+                    .ok_or_else(|| {
+                        Error::new(
+                            "invalid_asr_options",
+                            "Threads, commit and right must be whole numbers from 1 to 65536.",
+                        )
+                    })?
+                    .to_string(),
+            ),
+        };
+        replacements.push((index, argument));
+    }
+    let mut output = Vec::with_capacity(args.len() + 2 * replacements.len());
+    let mut position = 0;
+    while position < args.len() {
+        match asr_flag(&args[position]) {
+            Some((index, inline)) if replacements.iter().any(|(named, _)| *named == index) => {
+                position += if inline { 1 } else { 2 };
+            }
+            _ => {
+                output.push(args[position].clone());
+                position += 1;
+            }
+        }
+    }
+    replacements.sort_by_key(|(index, _)| *index);
+    for (index, argument) in replacements {
+        if let Some(argument) = argument {
+            output.push(ASR_OPTIONS[index].1[0].to_owned());
+            output.push(argument);
+        }
+    }
+    Ok(output)
 }
 
 const MAX_JSON_BYTES: usize = 1024 * 1024;
@@ -1120,9 +1490,16 @@ mod tests {
             threads: Some(8),
             gpu_layers: Some(0),
             parallel_slots: Some(2),
+            ..LaunchOptions::default()
         };
         let resolved = options.resolve(&original).unwrap();
-        assert_eq!(resolved.applied, options);
+        assert_eq!(
+            resolved.applied,
+            LaunchOptions {
+                batch_threads: Some(6),
+                ..options.clone()
+            }
+        );
         assert!(
             resolved
                 .args
@@ -1146,6 +1523,170 @@ mod tests {
         assert!(resolved.args.iter().any(|value| value == "{cache}"));
         assert_eq!(options.resolve(&resolved.args).unwrap(), resolved);
     }
+    #[test]
+    fn typed_sampling_batching_and_cache_options_replace_literal_flags() {
+        let original = args(&[
+            "--model",
+            "{model}",
+            "--port",
+            "{port}",
+            "-b",
+            "1024",
+            "--temp=0.7",
+            "--temp",
+            "0.9",
+            "-fa",
+            "maybe",
+            "--cache-type-v",
+            "Q8_0",
+            "--spec-type",
+            "draft-mtp",
+        ]);
+        let literal = LaunchOptions::default().resolve(&original).unwrap();
+        assert_eq!(literal.args, original);
+        assert_eq!(literal.applied.batch_size, Some(1024));
+        assert_eq!(literal.applied.temperature, Some(Decimal(0.9)));
+        assert_eq!(literal.applied.flash_attention, None);
+        assert_eq!(literal.applied.cache_type_v, None);
+        let options = LaunchOptions {
+            temperature: Some(Decimal(0.6)),
+            top_k: Some(20),
+            top_p: Some(Decimal(0.95)),
+            min_p: Some(Decimal(0.0)),
+            repeat_penalty: Some(Decimal(1.05)),
+            reasoning_budget: Some(-1),
+            ubatch_size: Some(256),
+            flash_attention: Some(FlashAttention::On),
+            cache_type_k: Some("q8_0".into()),
+            cache_type_v: Some("q8_0".into()),
+            ..LaunchOptions::default()
+        };
+        let resolved = options.resolve(&original).unwrap();
+        let pairs: Vec<[&str; 2]> = resolved
+            .args
+            .windows(2)
+            .map(|pair| [pair[0].as_str(), pair[1].as_str()])
+            .collect();
+        for pair in [
+            ["--temp", "0.6"],
+            ["--top-k", "20"],
+            ["--top-p", "0.95"],
+            ["--min-p", "0"],
+            ["--repeat-penalty", "1.05"],
+            ["--reasoning-budget", "-1"],
+            ["--ubatch-size", "256"],
+            ["--flash-attn", "on"],
+            ["--cache-type-k", "q8_0"],
+            ["--cache-type-v", "q8_0"],
+            ["-b", "1024"],
+            ["--spec-type", "draft-mtp"],
+        ] {
+            assert!(pairs.contains(&pair), "{pair:?} in {:?}", resolved.args);
+        }
+        assert_eq!(
+            resolved
+                .args
+                .iter()
+                .filter(|arg| arg.starts_with("--temp"))
+                .count(),
+            1
+        );
+        assert!(
+            !resolved
+                .args
+                .iter()
+                .any(|arg| arg == "maybe" || arg == "Q8_0")
+        );
+        assert_eq!(resolved.applied.batch_size, Some(1024));
+        assert_eq!(resolved.applied.temperature, Some(Decimal(0.6)));
+        assert_eq!(options.resolve(&resolved.args).unwrap(), resolved);
+        for invalid in [
+            LaunchOptions {
+                top_p: Some(Decimal(1.5)),
+                ..LaunchOptions::default()
+            },
+            LaunchOptions {
+                cache_type_k: Some("q3".into()),
+                ..LaunchOptions::default()
+            },
+            LaunchOptions {
+                cache_type_k: Some("Q8_0".into()),
+                ..LaunchOptions::default()
+            },
+            LaunchOptions {
+                reasoning_budget: Some(-2),
+                ..LaunchOptions::default()
+            },
+            LaunchOptions {
+                batch_size: Some(0),
+                ..LaunchOptions::default()
+            },
+        ] {
+            assert_eq!(
+                invalid.validate().unwrap_err().code,
+                "invalid_launch_options"
+            );
+        }
+        let legacy = serde_json::to_value(LaunchOptions {
+            threads: Some(2),
+            ..LaunchOptions::default()
+        })
+        .unwrap();
+        assert_eq!(
+            legacy,
+            serde_json::json!({"context_tokens":null,"threads":2,"gpu_layers":null,"parallel_slots":null})
+        );
+        let view = options.view();
+        assert_eq!(view.len(), FIELD_KEYS.len());
+        assert_eq!(view["temperature"], serde_json::json!(0.6));
+        assert_eq!(view["batch_size"], serde_json::Value::Null);
+        let parsed: LaunchOptions =
+            serde_json::from_value(serde_json::json!({"flash_attention":"off","temperature":1}))
+                .unwrap();
+        assert_eq!(parsed.flash_attention, Some(FlashAttention::Off));
+        assert!(
+            serde_json::from_value::<LaunchOptions>(serde_json::json!({"flash_attention":"maybe"}))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn asr_options_round_trip_through_launch_arguments() {
+        let original = args(&[
+            "--model",
+            "{model}",
+            "--port",
+            "{port}",
+            "-t",
+            "4",
+            "--futo-right=2",
+        ]);
+        let view = asr_options_view(&original);
+        assert_eq!(
+            view,
+            serde_json::json!({"threads":4,"commit":null,"right":2})
+        );
+        let patch = serde_json::json!({"commit": 16, "right": null});
+        let next = apply_asr_options(&original, patch.as_object().unwrap()).unwrap();
+        assert_eq!(
+            asr_options_view(&next),
+            serde_json::json!({"threads":4,"commit":16,"right":null})
+        );
+        assert!(next.windows(2).any(|pair| pair == ["--futo-commit", "16"]));
+        for bad in [
+            serde_json::json!({"threads": 0}),
+            serde_json::json!({"beam": 2}),
+            serde_json::json!({"right": "2"}),
+        ] {
+            assert_eq!(
+                apply_asr_options(&original, bad.as_object().unwrap())
+                    .unwrap_err()
+                    .code,
+                "invalid_asr_options"
+            );
+        }
+    }
+
     #[test]
     fn launch_sentinels_and_conflicts_do_not_become_serving_capacity() {
         let resolved = LaunchOptions::default()

@@ -1126,3 +1126,108 @@ async fn real_new_conversations_reuse_saved_system_prompts_across_clients_and_re
         );
     }
 }
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+#[ignore = "requires JUICED_TEST_LLAMA_SERVER and JUICED_TEST_GGUF"]
+async fn tiny_gguf_saved_settings_reach_the_real_engine_argv() {
+    const MODEL: &str = "tiny-real-settings";
+    let engine = PathBuf::from(
+        std::env::var_os("JUICED_TEST_LLAMA_SERVER").expect("set JUICED_TEST_LLAMA_SERVER"),
+    );
+    let model = PathBuf::from(std::env::var_os("JUICED_TEST_GGUF").expect("set JUICED_TEST_GGUF"));
+    let server = Server::configured(false, |config| {
+        config["resident_budget_bytes"] = json!(1024u64 * 1024 * 1024);
+        config["startup_timeout_ms"] = json!(30000);
+        config["request_timeout_ms"] = json!(30000);
+        config["models"] = json!([{"id":MODEL,"model_file":model,"command":engine,"provider":"llama-cpp","args":["--host","127.0.0.1","--port","{port}","--model","{model}","--ctx-size","256","--parallel","1","--slots","--n-gpu-layers","0","--temp","0.9"],"resident_bytes":512u64 * 1024 * 1024,"max_inflight":1,"operations":["completions"],"policy":"on-demand"}]);
+    })
+    .await;
+    let before = server.get(&format!("models/{MODEL}/options")).await;
+    assert_eq!(before["effective_launch"]["temperature"], 0.9, "{before}");
+    assert_eq!(before["defaults"]["top_k"], 40);
+    let mut options = before["saved"].clone();
+    for (key, value) in [
+        ("temperature", json!(0.6)),
+        ("top_k", json!(20)),
+        ("top_p", json!(0.9)),
+        ("min_p", json!(0.02)),
+        ("repeat_penalty", json!(1.1)),
+        ("reasoning_budget", json!(0)),
+        ("batch_size", json!(128)),
+        ("ubatch_size", json!(64)),
+        ("flash_attention", json!("off")),
+        ("cache_type_k", json!("q8_0")),
+    ] {
+        options[key] = value;
+    }
+    let (status, saved) = server
+        .post(
+            &format!("models/{MODEL}/options"),
+            json!({"expected_revision":before["revision"],"options":options,"extra_args":["--no-warmup","--chat-template","chatml"]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    assert_eq!(
+        saved["extra_args"],
+        json!(["--no-warmup", "--chat-template", "chatml"])
+    );
+    let (status, loaded) = server.post("load", json!({"model":MODEL})).await;
+    assert_eq!(status, StatusCode::OK, "{loaded}");
+    let pid = server.model(MODEL).await["pid"]
+        .as_u64()
+        .expect("worker pid");
+    let argv: Vec<String> = std::fs::read(format!("/proc/{pid}/cmdline"))
+        .unwrap()
+        .split(|byte| *byte == 0)
+        .filter(|part| !part.is_empty())
+        .map(|part| String::from_utf8_lossy(part).into_owned())
+        .collect();
+    for pair in [
+        ["--temp", "0.6"],
+        ["--top-k", "20"],
+        ["--top-p", "0.9"],
+        ["--min-p", "0.02"],
+        ["--repeat-penalty", "1.1"],
+        ["--reasoning-budget", "0"],
+        ["--batch-size", "128"],
+        ["--ubatch-size", "64"],
+        ["--flash-attn", "off"],
+        ["--cache-type-k", "q8_0"],
+        ["--chat-template", "chatml"],
+    ] {
+        assert!(
+            argv.windows(2).any(|window| window == pair),
+            "{pair:?} not in {argv:?}"
+        );
+    }
+    assert!(
+        argv.iter().any(|argument| argument == "--no-warmup"),
+        "{argv:?}"
+    );
+    assert!(
+        argv.iter().any(|argument| argument == "--slots"),
+        "{argv:?}"
+    );
+    assert_eq!(
+        argv.iter().filter(|argument| *argument == "--temp").count(),
+        1
+    );
+    let (status, completion) = server
+        .post(
+            "completions",
+            json!({"model":MODEL,"prompt":"Once upon a time","max_tokens":4,"stream":false}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{completion}");
+    let view = server.get(&format!("models/{MODEL}/options")).await;
+    assert_eq!(
+        view["fields"]["kv_cache_type"]["launched"], "q8_0/f16",
+        "{view}"
+    );
+    assert_eq!(
+        view["fields"]["flash_attention"]["launched"], "off",
+        "{view}"
+    );
+    println!("real-settings-argv {}", json!(argv));
+}

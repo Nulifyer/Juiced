@@ -224,6 +224,8 @@ struct SessionRow {
     bytes: u64,
     last_used_unix_ms: Option<u64>,
     execution_current: Option<bool>,
+    retained: bool,
+    expires_unix_ms: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -238,6 +240,10 @@ pub enum SessionAction {
         model: Option<String>,
         #[serde(default)]
         session: Option<String>,
+    },
+    Retain {
+        session: String,
+        retained: bool,
     },
 }
 
@@ -673,6 +679,7 @@ impl Manager {
             sessions: settings.max_sessions as usize,
         };
         self.reclaim_sessions().await;
+        self.expire_sessions().await;
         let rows = self.all_session_rows(&cache).await?;
         let stored = self.stored_rows(&rows, &identity, &model_tag, &superseded, None);
         let estimate = if known {
@@ -829,6 +836,7 @@ impl Manager {
         superseded: &std::collections::HashSet<String>,
         saved: Option<&str>,
     ) -> Vec<crate::sessions::StoredRow> {
+        let retained = &self.session_settings().retained;
         rows.iter()
             .map(|row| {
                 let tag = crate::sessions::parse_protocol(&row.identity.protocol)
@@ -851,7 +859,8 @@ impl Manager {
                     },
                     busy: row.busy
                         || row.state != crate::cache::SnapshotState::Saved
-                        || saved == Some(row.id.as_str()),
+                        || saved == Some(row.id.as_str())
+                        || retained.contains(&row.identity.session_digest),
                 }
             })
             .collect()
@@ -988,6 +997,14 @@ impl Manager {
                     execution_current: current
                         .get(tag.model_tag)
                         .map(|fingerprint| **fingerprint == *row.identity.execution_fingerprint),
+                    retained: settings.retained.contains(&row.identity.session_digest),
+                    expires_unix_ms: settings
+                        .retention_days
+                        .filter(|_| !settings.retained.contains(&row.identity.session_digest))
+                        .map(|days| {
+                            self.session_used(&row.id, row.modified_ms)
+                                .saturating_add(u64::from(days) * 86_400_000)
+                        }),
                 })
             })
             .collect::<Vec<_>>();
@@ -1075,6 +1092,77 @@ impl Manager {
         Ok((forgotten, busy))
     }
 
+    async fn commit_session_settings(
+        self: &Arc<Self>,
+        config: OwnedMutexGuard<crate::config::Config>,
+        settings: Settings,
+    ) -> Result<u64, ApiError> {
+        settings.validate().map_err(|message| {
+            ApiError::new(StatusCode::BAD_REQUEST, "invalid_session_settings", message)
+        })?;
+        let mut next = config.clone();
+        next.session_cache = settings.clone();
+        next.generation = next.generation.checked_add(1).ok_or_else(|| {
+            ApiError::new(
+                StatusCode::CONFLICT,
+                "revision_exhausted",
+                "Configuration generation cannot advance.",
+            )
+        })?;
+        let generation = next.generation;
+        let outcome = self
+            .publish_configuration(config, next, publication::Effect::ConfigOnly)
+            .await?;
+        *self
+            .session_settings
+            .write()
+            .unwrap_or_else(|error| error.into_inner()) = Arc::new(settings);
+        if outcome.warning {
+            self.verify_storage().await?;
+            return Err(ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "configuration_durability",
+                "Session cache settings committed but directory durability is unconfirmed.",
+            ));
+        }
+        Ok(generation)
+    }
+
+    /// Deletes saved sessions unused for longer than the retention period, except retained,
+    /// busy and unsettled ones.
+    pub(super) async fn expire_sessions(&self) -> usize {
+        let settings = self.session_settings();
+        let (Some(days), Some(cache)) = (settings.retention_days, self.cache.clone()) else {
+            return 0;
+        };
+        let cutoff = unix_time_ms().saturating_sub(u64::from(days) * 86_400_000);
+        let Ok(Ok(rows)) = tokio::task::spawn_blocking({
+            let cache = cache.clone();
+            move || cache.session_rows(crate::sessions::PROTOCOL_PREFIX, |_| true, false)
+        })
+        .await
+        else {
+            return 0;
+        };
+        let expired = rows
+            .into_iter()
+            .filter(|row| {
+                !row.busy
+                    && row.state == crate::cache::SnapshotState::Saved
+                    && !settings.retained.contains(&row.identity.session_digest)
+                    && (1..cutoff).contains(&self.session_used(&row.id, row.modified_ms))
+            })
+            .collect::<Vec<_>>();
+        tokio::task::spawn_blocking(move || {
+            expired
+                .iter()
+                .filter(|row| cache.forget(&row.id, &row.identity, row.revision).is_ok())
+                .count()
+        })
+        .await
+        .unwrap_or(0)
+    }
+
     pub async fn session_action(
         self: &Arc<Self>,
         action: SessionAction,
@@ -1082,11 +1170,8 @@ impl Manager {
         match action {
             SessionAction::Configure {
                 expected_generation,
-                settings,
+                mut settings,
             } => {
-                settings.validate().map_err(|message| {
-                    ApiError::new(StatusCode::BAD_REQUEST, "invalid_session_settings", message)
-                })?;
                 let config = self.config.clone().lock_owned().await;
                 if config.generation != expected_generation {
                     return Err(ApiError::new(
@@ -1095,32 +1180,55 @@ impl Manager {
                         "Configuration changed. Refresh before changing session cache settings.",
                     ));
                 }
-                let mut next = config.clone();
-                next.session_cache = settings.clone();
-                next.generation = next.generation.checked_add(1).ok_or_else(|| {
-                    ApiError::new(
-                        StatusCode::CONFLICT,
-                        "revision_exhausted",
-                        "Configuration generation cannot advance.",
-                    )
-                })?;
-                let generation = next.generation;
-                let outcome = self
-                    .publish_configuration(config, next, publication::Effect::ConfigOnly)
-                    .await?;
-                *self
-                    .session_settings
-                    .write()
-                    .unwrap_or_else(|error| error.into_inner()) = Arc::new(settings);
-                if outcome.warning {
-                    self.verify_storage().await?;
+                settings.retained = config.session_cache.retained.clone();
+                let generation = self.commit_session_settings(config, settings).await?;
+                self.expire_sessions().await;
+                Ok(serde_json::json!({"configured":true,"configuration_generation":generation}))
+            }
+            SessionAction::Retain { session, retained } => {
+                if !crate::sessions::valid_session_digest(&session) {
                     return Err(ApiError::new(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "configuration_durability",
-                        "Session cache settings committed but directory durability is unconfirmed.",
+                        StatusCode::BAD_REQUEST,
+                        "invalid_session",
+                        "Provide a listed 64-character session digest.",
                     ));
                 }
-                Ok(serde_json::json!({"configured":true,"configuration_generation":generation}))
+                if retained {
+                    let cache = self.cache_store()?;
+                    let wanted = session.clone();
+                    let listed = tokio::task::spawn_blocking(move || {
+                        cache.session_rows(
+                            crate::sessions::PROTOCOL_PREFIX,
+                            |identity| identity.session_digest == wanted,
+                            false,
+                        )
+                    })
+                    .await
+                    .map_err(|_| claims_unavailable())?
+                    .map_err(cache_error)?;
+                    if listed.is_empty() {
+                        return Err(ApiError::new(
+                            StatusCode::NOT_FOUND,
+                            "unknown_session",
+                            "No saved session has this digest.",
+                        ));
+                    }
+                }
+                let config = self.config.clone().lock_owned().await;
+                let mut settings = config.session_cache.clone();
+                let changed = if retained {
+                    settings.retained.insert(session.clone())
+                } else {
+                    settings.retained.remove(&session)
+                };
+                let generation = if changed {
+                    self.commit_session_settings(config, settings).await?
+                } else {
+                    config.generation
+                };
+                Ok(
+                    serde_json::json!({"session":session,"retained":retained,"configuration_generation":generation}),
+                )
             }
             SessionAction::Forget { model, session } => {
                 if session.as_ref().is_some_and(|session| {

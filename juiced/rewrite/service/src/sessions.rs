@@ -2,7 +2,7 @@ use crate::config::Operation;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub const MAXIMUM_UNITS: usize = 4096;
 pub const PROMPT_BLOCK_BYTES: usize = 512;
@@ -40,6 +40,19 @@ pub struct Settings {
     pub save_delay_ms: u64,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub models: BTreeMap<String, Mode>,
+    /// Saved sessions not used for this many days are deleted; unset keeps them until the
+    /// budget needs their space.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retention_days: Option<u32>,
+    /// Session digests that are never evicted or expired.
+    #[serde(skip_serializing_if = "BTreeSet::is_empty")]
+    pub retained: BTreeSet<String>,
+}
+
+pub const MAXIMUM_RETAINED: usize = 1024;
+
+pub fn valid_session_digest(session: &str) -> bool {
+    session.len() == 64 && session.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 impl Default for Settings {
@@ -51,6 +64,8 @@ impl Default for Settings {
             max_sessions: 1024,
             save_delay_ms: 1000,
             models: BTreeMap::new(),
+            retention_days: None,
+            retained: BTreeSet::new(),
         }
     }
 }
@@ -80,6 +95,20 @@ impl Settings {
                 .any(|id| id.is_empty() || id.len() > 256 || id.chars().any(char::is_control))
         {
             return Err("Per-model session overrides need at most 4096 bounded model IDs.");
+        }
+        if self
+            .retention_days
+            .is_some_and(|days| !(1..=365).contains(&days))
+        {
+            return Err("Session retention needs 1 to 365 days.");
+        }
+        if self.retained.len() > MAXIMUM_RETAINED
+            || !self
+                .retained
+                .iter()
+                .all(|session| valid_session_digest(session))
+        {
+            return Err("Retain at most 1024 listed sessions.");
         }
         Ok(())
     }
@@ -685,6 +714,27 @@ pub fn slot_preference(slots: &[SlotCandidate<'_>], request: Option<(&Scope, &Ke
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retention_and_retained_sessions_are_bounded() {
+        let mut settings = Settings::default();
+        assert!(settings.validate().is_ok());
+        assert_eq!(
+            serde_json::to_value(&settings).unwrap().get("retained"),
+            None
+        );
+        settings.retention_days = Some(0);
+        assert!(settings.validate().is_err());
+        settings.retention_days = Some(7);
+        settings.retained.insert("a".repeat(64));
+        assert!(settings.validate().is_ok());
+        settings.retained.insert("not-a-digest".into());
+        assert!(settings.validate().is_err());
+        let parsed: Settings =
+            serde_json::from_value(serde_json::json!({"retention_days": 30})).unwrap();
+        assert_eq!(parsed.retention_days, Some(30));
+        assert!(parsed.retained.is_empty());
+    }
     use serde_json::json;
 
     fn chat(messages: Value) -> Vec<u8> {

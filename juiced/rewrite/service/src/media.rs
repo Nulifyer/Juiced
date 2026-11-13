@@ -758,8 +758,10 @@ impl EditRequest {
                 images.push(upload);
                 continue;
             }
+            // v0.9.2 skipped unrecognized form fields, so clients sending extras keep working.
             if !EDIT_TEXT_FIELDS.contains(&name.as_str()) {
-                return Err(unsupported("Use only the documented image form fields."));
+                field.bytes().await.map_err(edit_multipart_error)?;
+                continue;
             }
             if field.file_name().is_some() {
                 return Err(invalid(CODE, "Text form fields cannot be file uploads."));

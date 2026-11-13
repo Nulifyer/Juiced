@@ -316,6 +316,27 @@ impl ExecutionProfile {
         Ok(())
     }
 
+    pub fn extra_arguments(&self) -> Result<Vec<String>, crate::runtime_arguments::Error> {
+        Ok(self.argument_template()?.extra_arguments())
+    }
+
+    pub fn set_local_extra_arguments(
+        &mut self,
+        extras: &[String],
+    ) -> Result<(), crate::runtime_arguments::Error> {
+        if self.native_model_id.is_some() || self.schema_version != 1 {
+            return Err(runtime_error(
+                "native_settings_authority",
+                "Native profile arguments belong to the native settings owner",
+            ));
+        }
+        self.args = self
+            .argument_template()?
+            .with_extra_arguments(extras)?
+            .into_arguments();
+        Ok(())
+    }
+
     pub(crate) fn bind_native_options(
         &mut self,
         options: LaunchOptions,
@@ -653,6 +674,7 @@ mod tests {
             threads: Some(2),
             gpu_layers: Some(0),
             parallel_slots: Some(1),
+            ..LaunchOptions::default()
         }
     }
 

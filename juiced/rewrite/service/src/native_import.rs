@@ -402,6 +402,30 @@ fn engine_section_rows(section: &str, value: &RawValue) -> Vec<SettingRow> {
                     "GPU layers, threads and context flags apply to imported models; other flags are reported per model.",
                     None,
                 ),
+                key if key.ends_with("_args")
+                    && key != "args"
+                    && matches!(section, "llamacpp" | "llama.cpp" | "sdcpp" | "whispercpp" | "moonshine" | "flm")
+                    && text.as_deref().is_some_and(|text| !text.trim().is_empty()) =>
+                (
+                    "mapped",
+                    Some("arguments"),
+                    "Used instead of this engine's args for imported models running on this backend that save no arguments of their own.",
+                    None,
+                ),
+                "args" if text.as_deref().is_some_and(|text| !text.trim().is_empty()) && matches!(section, "sdcpp" | "whispercpp" | "moonshine" | "flm") => (
+                    "mapped",
+                    Some("arguments"),
+                    "Passed to imported models of this engine; other flags are reported per model.",
+                    None,
+                ),
+                "steps" | "cfg_scale" | "width" | "height" | "sampling_method" | "flow_shift" | "scheduler" | "seed"
+                    if section == "sdcpp" =>
+                (
+                    "mapped",
+                    Some("image_defaults"),
+                    "Default for imported image models that save none of their own.",
+                    None,
+                ),
                 key if key.ends_with("_bin") && text.as_deref() == Some("builtin") => (
                     "ignored",
                     None,
@@ -1413,7 +1437,9 @@ fn select(
 }
 
 mod options;
-pub use options::{Layer, Mapped, map_options, shell_words};
+pub use options::{
+    Layer, Mapped, has_backend_arguments, map_options, map_options_for, shell_words,
+};
 
 #[cfg(test)]
 mod tests;
