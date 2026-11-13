@@ -39,6 +39,15 @@ limits. Unknown or unrecorded qualification is not a successful test.
 | `GET /v1/juiced/admission` | Pending work, reservations, allocations, and uncertain termination |
 | `GET /v1/juiced/requests` | Bounded request metadata for diagnostics |
 
+Each `GET /v1/juiced/requests` record carries `id`, `model`, `operation`,
+`outcome`, `status`, `elapsed_ms`, `queue_wait_ms`, `completed_at_ms` (Unix
+milliseconds), and the engine-reported `input_tokens`, `output_tokens`,
+`prompt_tokens_per_second` and `decode_tokens_per_second`; unknown values are
+`null`. Engines that report prompt reuse add `cached_tokens` and
+`prompt_processed_tokens`, and prompt-cache requests add `session_cache` with its
+`path` (`slot-hit`, `restored`, `cold` or `bypass`), `slot`, and `restore_ms` when
+restored. Records are newest first; the service keeps the latest 128.
+
 Admission observations include `physical_slots` for requests with an observed
 native slot inventory. Each record binds a worker generation to its inventory,
 unique claimed slot IDs and pending count. Nested cache-state and inference

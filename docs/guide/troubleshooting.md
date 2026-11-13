@@ -39,7 +39,7 @@ Use [runtime selection](runtimes.md) before attempting conversion.
 
 ## A request waits or returns a capacity error
 
-Check active requests, resident models, and accelerator ownership in Diagnostics.
+Check active requests, loaded models, and model memory on the Dashboard.
 Let busy work finish before changing profiles or unloading workers.
 A Hot model can retain resources needed by another request.
 

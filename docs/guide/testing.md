@@ -67,4 +67,4 @@ Check [image API limits](../api/automatic1111.md) before configuring another cli
 
 Keep prompt, generation settings, and available resources consistent when
 comparing. A single test does not establish general model quality or performance.
-Use [Diagnostics](troubleshooting.md) to investigate failed requests.
+Use [Diagnostics](diagnostics.md#inspect-requests) to investigate failed requests.

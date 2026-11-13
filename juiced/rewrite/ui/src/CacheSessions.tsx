@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { Client } from "./api";
 import { Meter } from "./charts";
+import { pathNames } from "./performance";
 import { Badge, Button, Empty, HelpTip } from "./ui";
 import { useOperation, useResource } from "./useResource";
 
@@ -13,7 +14,6 @@ export type Turn = { id: number; model: string; path: string; restoreMs: number 
 
 const modes: SessionMode[] = ["off", "memory", "persistent"];
 export const modeNames: Record<SessionMode, string> = { off: "Off", memory: "Memory only", persistent: "Memory and disk" };
-const pathNames: Record<string, string> = { "slot-hit": "Still loaded", restored: "Restored from disk", cold: "Processed in full", bypass: "Not cached" };
 const apiNames: Record<string, string> = { chat: "Chat", completions: "Completions", responses: "Responses" };
 const record = (value: unknown): Record<string, unknown> => value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 const num = (value: unknown) => typeof value === "number" && Number.isFinite(value) ? value : null;

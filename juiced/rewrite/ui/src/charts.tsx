@@ -12,7 +12,7 @@ export function Sparkline({ values, max = 100, label, height = 40 }: { values: (
   </svg>;
 }
 
-export function Meter({ value, label }: { value: number | null; label: string }) {
+export function Meter({ value, label, plain = false }: { value: number | null; label: string; plain?: boolean }) {
   const clamped = value === null ? 0 : Math.max(0, Math.min(100, value));
-  return <div className="meter" role="meter" aria-label={label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={value ?? undefined}><span style={{ width: `${clamped}%` }} data-level={clamped > 90 ? "high" : clamped > 70 ? "mid" : "low"} /></div>;
+  return <div className="meter" role="meter" aria-label={label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={value ?? undefined}><span style={{ width: `${clamped}%` }} data-level={plain ? "plain" : clamped > 90 ? "high" : clamped > 70 ? "mid" : "low"} /></div>;
 }

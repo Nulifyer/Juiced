@@ -1466,6 +1466,7 @@ pub struct RequestRecord {
     pub status: Option<u16>,
     pub elapsed_ms: u64,
     pub queue_wait_ms: u64,
+    pub completed_at_ms: u64,
     #[serde(flatten)]
     pub usage: crate::engine_usage::Observation,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1661,6 +1662,7 @@ impl Drop for RequestLease {
                 .unwrap_or_else(|e| e.into_inner()) = self.cache_identity.take();
         }
         record.elapsed_ms = self.started.elapsed().as_millis().min(u64::MAX as u128) as u64;
+        record.completed_at_ms = unix_time_ms();
         if record.outcome == "completed" && !record.usage.is_empty() {
             *self
                 .manager
@@ -1670,7 +1672,7 @@ impl Drop for RequestLease {
                 request_id: record.id,
                 model: record.model.clone(),
                 operation: record.operation,
-                completed_at_ms: unix_time_ms(),
+                completed_at_ms: record.completed_at_ms,
                 elapsed_ms: record.elapsed_ms,
                 usage: record.usage,
             });
@@ -4560,6 +4562,7 @@ impl Manager {
                     status: None,
                     elapsed_ms: 0,
                     queue_wait_ms,
+                    completed_at_ms: 0,
                     usage: Default::default(),
                     session_cache: None,
                 }),

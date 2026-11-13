@@ -31,9 +31,9 @@ Do not repeatedly restart the server to force a runtime change.
 
 ## Fit several services on one host
 
-Start with one small model. Add Hot services while watching actual memory in
-**Diagnostics**. Allow room for context, runtime buffers, speech, image jobs,
-and the host operating system.
+Start with one small model. Add Hot services while watching **Model memory**
+and **GPU memory** on the Dashboard. Allow room for context, runtime buffers,
+speech, image jobs, and the host operating system.
 
 The default container configuration limits loaded models to four. Changing a
 count limit does not create memory or qualify a concurrent workload. Engines

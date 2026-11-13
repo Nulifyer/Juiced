@@ -1,16 +1,18 @@
-import { api, expect, hotModel, navigate, open, test } from "./support";
+import { api, expect, hotModel, navigate, open, tab, test } from "./support";
 
-test("live resource cards and the running model render from service data", async ({ page }) => {
+test("glance tiles and the running model render from service data", async ({ page }) => {
   await open(page);
-  const resources = page.getByRole("region", { name: "Live resources" });
-  await expect(resources.getByRole("article", { name: "CPU" })).toContainText(/\d+(\.\d)?%/);
-  await expect(resources.getByRole("article", { name: "Memory" })).toContainText(/\d+(\.\d)? GiB/);
-  await expect(resources.getByRole("article", { name: "Memory" })).toContainText(/of \d+(\.\d)? GiB/);
-  await expect(resources.getByRole("article", { name: "GPU" })).toBeVisible();
-  await expect(resources.getByRole("article", { name: "VRAM" })).toBeVisible();
-  await expect(resources.getByRole("img", { name: "CPU over the last two minutes" })).toBeVisible();
+  const glance = page.getByRole("region", { name: "At a glance" });
+  await expect(glance.getByRole("article", { name: "Protocols" })).toContainText(/\d+ ready/);
+  await expect(glance.getByRole("article", { name: "Requests" })).toContainText(/\d+ active/);
+  await expect(glance.getByRole("article", { name: "Requests" })).toContainText(/of \d+ slots?/);
+  await expect(glance.getByRole("article", { name: "Model memory" })).toContainText("/ 6.0 GiB");
+  await expect(glance.getByRole("article", { name: "Model memory" })).toContainText("free for another model");
+  await expect(glance.getByRole("meter", { name: "Model memory reserved" })).toBeVisible();
+  await expect(page.getByRole("img", { name: /over the last two minutes/ }), "resource history lives in Diagnostics").toHaveCount(0);
   const running = page.getByRole("region", { name: "Running models" });
   await expect(running.getByRole("button", { name: new RegExp(hotModel) })).toContainText("ready · Hot");
+  await expect(running.getByRole("button", { name: new RegExp(hotModel) })).toContainText(/Used .+ago|Used just now|Not used yet/);
   await expect(running).toContainText(/Hot \d+\/\d+ ready/);
   await expect(page.getByRole("button", { name: /refresh/i })).toHaveCount(0);
   await running.getByRole("button", { name: new RegExp(hotModel) }).click();
@@ -45,32 +47,35 @@ test("a failed Hot model needs attention and opens in the Models inspector", asy
   await expect(page.getByRole("region", { name: "Needs attention" })).not.toContainText(id);
 });
 
-test("recent requests list completed work and link to the test page", async ({ page, request }) => {
-  const response = await request.post("/v1/chat/completions", { data: { model: hotModel, messages: [{ role: "user", content: "Dashboard fixture prompt" }], stream: false, max_tokens: 4 } });
-  expect(response.ok()).toBe(true);
+test("a failed request needs attention and opens Diagnostics requests", async ({ page, request }) => {
+  const failure = await request.post("/v1/chat/completions", { data: { model: hotModel, messages: [{ role: "user", content: "Dashboard failure prompt" }], stream: false, max_tokens: 4, fixture_status: 500 } });
+  expect(failure.ok()).toBe(false);
   await open(page);
-  const recent = page.getByRole("region", { name: "Recent requests" });
-  await expect(recent).toContainText(hotModel);
-  await expect(recent).toContainText("chat/completions");
-  await expect(recent).not.toContainText("Dashboard fixture prompt");
-  await recent.getByRole("button", { name: "Try a model" }).click();
-  await expect(page.getByRole("heading", { name: "Test services", level: 1 })).toBeVisible();
+  const attention = page.getByRole("region", { name: "Needs attention" });
+  const entry = attention.getByRole("button", { name: /failed requests?/ });
+  await expect(entry).toContainText(`Latest: ${hotModel}`);
+  await expect(page.locator("body")).not.toContainText("Dashboard failure prompt");
+  await entry.click();
+  await expect(page.getByRole("heading", { name: "Diagnostics", level: 1 })).toBeVisible();
+  await expect(tab(page, "Diagnostics views", "Requests")).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("table", { name: "Recent requests" }).getByRole("row").filter({ hasText: hotModel }).filter({ hasText: "500" }).first()).toBeVisible();
 });
 
-test("the GPU card names the GPU and says when utilization has no reading", async ({ page }) => {
+test("the GPU memory tile names the GPU and says when utilization has no reading", async ({ page }) => {
   let gpu: Record<string, unknown> | null = { id: "amdgpu:0000:c7:00.0", vendor: "amd", name: null, gpu_percent: 0, memory_used_bytes: 5 * 1024 ** 3, memory_total_bytes: 16 * 1024 ** 3 };
   await page.route("**/v1/system-stats", async (route) => {
     const stats = await (await route.fetch()).json();
     await route.fulfill({ json: { ...stats, gpus: gpu ? [gpu] : [] } });
   });
   await open(page);
-  const card = page.getByRole("region", { name: "Live resources" }).getByRole("article", { name: "GPU" });
-  await expect(card).toContainText("0.0%");
-  await expect(card).toContainText("AMD GPU");
-  await expect(page.getByRole("article", { name: "VRAM" })).toContainText("of 16 GiB");
+  const card = page.getByRole("region", { name: "At a glance" }).getByRole("article", { name: "GPU memory" });
+  await expect(card).toContainText("5.0 / 16 GiB");
+  await expect(card).toContainText("0.0% busy · AMD GPU");
+  await expect(card.getByRole("meter", { name: "GPU memory used" })).toBeVisible();
   gpu = { ...gpu, name: "AMD Radeon 890M", gpu_percent: null };
-  await expect(card).toContainText("Utilization unavailable");
+  await expect(card).toContainText("Utilization unavailable · AMD Radeon 890M");
   await expect(card).not.toContainText("No GPU detected");
   gpu = null;
   await expect(card).toContainText("No GPU detected");
+  await expect(card.getByRole("meter")).toHaveCount(0);
 });
