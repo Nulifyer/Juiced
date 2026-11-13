@@ -36,7 +36,8 @@ Download activity stays inside **Find & run models**. The top-bar download butto
 opens the same activity. It shows file progress, retry delays and actionable errors.
 Use **Pause** or **Cancel** to stop a transfer; wait for the worker to acknowledge
 that stop before **Resume / retry** becomes available. Retry uses the retained
-registration and source. Interrupted transfers remain recoverable after restart.
+registration and source. Downloads continue after a restart from the bytes already
+on disk; paused ones stay paused. See [manage storage](storage.md).
 
 After completion, select **Review model** or find the downloaded row in the same
 search. Downloading never enables the model automatically.

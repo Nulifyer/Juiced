@@ -17,6 +17,8 @@ use std::{
 const WALK_ENTRIES: u64 = 400_000;
 const WALK_DEADLINE: Duration = Duration::from_secs(8);
 const VIEW_TTL: Duration = Duration::from_secs(15);
+/// Measurements faster than this are repeated on every request instead of cached.
+const SLOW_VIEW: Duration = Duration::from_millis(500);
 const MAXIMUM_RECLAIM: usize = 64;
 const PACKAGE_STORE: &str = "runtime-packages";
 
@@ -257,8 +259,8 @@ impl Scan {
                 let title = match row {
                     Some(row) => format!(
                         "{} {}",
-                        row.engine.map_or("engine", |engine| engine.recipe()),
-                        row.backend.as_deref().unwrap_or("build")
+                        row.engine.map_or("Engine", |engine| engine.name()),
+                        row.backend.as_deref().unwrap_or("imported build")
                     ),
                     None => package["implementation_id"]
                         .as_str()
@@ -643,6 +645,7 @@ impl Manager {
         {
             return Ok(view.clone());
         }
+        let started = Instant::now();
         let scan = self.storage_scan(false).await;
         let paths = self.volume_paths(&scan);
         let low_space = scan.settings.low_space_bytes;
@@ -690,10 +693,12 @@ impl Manager {
         let candidates = scan.candidates(&walked);
         let revision = revision(&candidates);
         let view = self.compose_view(&scan, &walked, &candidates, revision, volume_rows, warnings);
-        cached_view()
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .insert(self.config_path.clone(), (Instant::now(), view.clone()));
+        if started.elapsed() > SLOW_VIEW {
+            cached_view()
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .insert(self.config_path.clone(), (Instant::now(), view.clone()));
+        }
         Ok(view)
     }
 
@@ -1184,7 +1189,7 @@ mod tests {
         };
         let mut grown = partial.clone();
         grown.bytes = 99;
-        assert_eq!(revision(&[partial.clone()]), revision(&[grown]));
+        assert_eq!(revision(std::slice::from_ref(&partial)), revision(&[grown]));
         let refused = refuse(partial.clone(), "active");
         assert_ne!(revision(&[partial]), revision(&[refused]));
     }

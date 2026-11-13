@@ -187,7 +187,7 @@ pub fn tree_size(path: &Path, maximum_entries: u64, deadline: Instant) -> TreeSi
         };
         for entry in entries.flatten() {
             seen += 1;
-            if seen > maximum_entries || (seen % 256 == 0 && Instant::now() > deadline) {
+            if seen > maximum_entries || (seen.is_multiple_of(256) && Instant::now() > deadline) {
                 size.truncated = true;
                 return size;
             }

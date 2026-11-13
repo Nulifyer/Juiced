@@ -28,7 +28,7 @@ pub const CLIENT_KEY: &str = "isolated-e2e-client-key";
 pub const ADMIN_KEY: &str = "isolated-e2e-admin-key";
 const ROTATED_CLIENT_KEY: &str = "isolated-e2e-rotated-client-key";
 const ROTATED_ADMIN_KEY: &str = "isolated-e2e-rotated-admin-key";
-pub const READ_ROUTES: [&str; 18] = [
+pub const READ_ROUTES: [&str; 19] = [
     "/health",
     "/docs",
     "/docs/{*page}",
@@ -47,6 +47,7 @@ pub const READ_ROUTES: [&str; 18] = [
     "/system-info",
     "/system-stats",
     "/models/{model}/files",
+    "/juiced/storage",
 ];
 /// Read routes whose operator view adds process details; `Server::get` reads them as operator.
 pub const OPERATOR_DETAIL_ROUTES: [&str; 1] = ["/juiced/context"];
@@ -80,7 +81,7 @@ pub const OPERATOR_READ_ROUTES: [&str; 28] = [
     "/juiced/protocols/health",
     "/juiced/barista",
 ];
-pub const WRITE_ROUTES: [&str; 40] = [
+pub const WRITE_ROUTES: [&str; 41] = [
     "/juiced/runtime-packages/import",
     "/juiced/engines/install",
     "/juiced/models/add",
@@ -108,6 +109,7 @@ pub const WRITE_ROUTES: [&str; 40] = [
     "/juiced/library/pull",
     "/juiced/library/pulls/{pull}",
     "/juiced/library/local/delete",
+    "/juiced/storage/reclaim",
     "/juiced/aliases",
     "/juiced/residency",
     "/juiced/library/upload",

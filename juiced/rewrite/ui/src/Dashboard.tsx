@@ -6,10 +6,11 @@ import { policyNames, workerState, workerTone, type Model, type Snapshot } from 
 import { gib, gpuName, percent, type SystemStats } from "./live";
 import { failed } from "./performance";
 import { remaining } from "./Residency";
+import { lowSpace, parseStorageSummary } from "./storageData";
 import { Badge, Empty } from "./ui";
 import { useResource } from "./useResource";
 
-type Props = { client: Client; snapshot: Snapshot; stats: SystemStats | null; onOpenModel: (id: string) => void; onOpenRequests: () => void; onOpenConnect: () => void };
+type Props = { client: Client; snapshot: Snapshot; stats: SystemStats | null; onOpenModel: (id: string) => void; onOpenRequests: () => void; onOpenConnect: () => void; onOpenStorage: () => void };
 type Issue = { key: string; title: string; detail: string; tone: "warning" | "bad"; open?: () => void };
 
 const RECENT_FAILURE_MS = 60 * 60_000;
@@ -45,8 +46,9 @@ function Tile({ label, value, children, foot }: { label: string; value: ReactNod
   </article>;
 }
 
-export function Dashboard({ client, snapshot, stats, onOpenModel, onOpenRequests, onOpenConnect }: Props) {
+export function Dashboard({ client, snapshot, stats, onOpenModel, onOpenRequests, onOpenConnect, onOpenStorage }: Props) {
   const health = useResource(client, "juiced/protocols/health", parseHealth, 5000, true);
+  const storage = useResource(client, "juiced/storage?summary=1", parseStorageSummary, 30000, true);
   const now = Date.now();
   const gpu = stats?.gpus[0];
   const resources = snapshot.resources;
@@ -64,6 +66,7 @@ export function Dashboard({ client, snapshot, stats, onOpenModel, onOpenRequests
     ...snapshot.models.flatMap((model) => { const issue = attention(model); return issue ? [{ key: `model:${model.id}`, title: model.id, detail: issue, tone: "warning" as const, open: () => onOpenModel(model.id) }] : []; }),
     ...broken.map((protocol) => ({ key: `protocol:${protocol.id}`, title: protocol.title, detail: summary(protocol, now), tone: "bad" as const, open: onOpenConnect })),
     ...failures.length ? [{ key: "requests", title: `${failures.length} failed ${failures.length === 1 ? "request" : "requests"}`, detail: `Latest: ${failures[0]!.model} · ${failures[0]!.status ?? failures[0]!.outcome.replaceAll("_", " ")}`, tone: "bad" as const, open: onOpenRequests }] : [],
+    ...lowSpace(storage.data).map((warning) => ({ key: `storage:${warning.code}:${warning.path ?? ""}`, title: warning.code === "low_space" ? "Low disk space" : warning.code === "session_cache_over_budget" ? "Session cache over budget" : "Downloads can't be recorded", detail: warning.message, tone: "warning" as const, open: onOpenStorage })),
     ...cache?.state === "unavailable" ? [{ key: "cache", title: "Snapshot cache unavailable", detail: "Not enough host memory. Free memory, then restart the service.", tone: "warning" as const }] : [],
   ];
   const active = stats?.active_requests ?? resources.active_requests;

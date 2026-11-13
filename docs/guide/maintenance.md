@@ -5,6 +5,9 @@ the container. Use one writable manager per state directory.
 
 ## Know what persists
 
+The rewrite's `/data` layout and how to reclaim space are in
+[manage storage](storage.md).
+
 | Container path | Contents |
 | --- | --- |
 | `/data/config` | Native configuration, model registrations, profiles, and Juiced state |

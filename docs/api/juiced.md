@@ -103,6 +103,74 @@ URL-encode model IDs in query parameters. Request metadata is not a stored
 conversation API. The default native port for a source build is `13305`.
 The Juiced container explicitly uses `8080`.
 
+## Storage
+
+`GET /v1/juiced/storage` (read key) reports every store Juiced writes or reads.
+`?summary=1` returns only `volumes`, `warnings` and `settings` without measuring
+directories, for frequent polling. The full view:
+
+```json
+{
+  "schema_version": 1, "summary": false, "revision": "9f3c0d2a41b7e655",
+  "settings": {"reserve_bytes": 2147483648, "low_space_bytes": 21474836480},
+  "volumes": [{"path": "/data", "paths": ["/data", "/data/artifacts"], "roles": ["data", "models", "session_cache"],
+               "total_bytes": 0, "available_bytes": 0, "used_bytes": 0, "read_only": false, "low": false}],
+  "warnings": [{"code": "low_space", "path": "/data", "available_bytes": 0, "message": "..."}],
+  "categories": [{"id": "models", "title": "Model weights", "bytes": 0, "reclaimable_bytes": 0}],
+  "models": [{"model": "ID", "id": "model:ID", "bytes": 0, "files": 1, "shared_bytes": 0,
+              "read_only_bytes": 0, "removal_frees_bytes": 0, "shared_with": [], "engines": ["package-..."]}],
+  "shared": [{"id": "file:PATH", "name": "x.gguf", "bytes": 0, "used_by": ["a", "b"], "quants": [], "read_only": false}],
+  "unreferenced": [ITEM], "partials": [ITEM], "engines": [ITEM], "legacy": [ITEM],
+  "leftover_files": [{"filename": "job-....part", "reserved_bytes": 0, "reclaimable": false, "message": "..."}],
+  "session_cache": {"path": "/data/kv-cache", "bytes": 0, "session_bytes": 0, "snapshot_bytes": 0,
+                    "sessions": 0, "budget_bytes": 0, "over_budget": false},
+  "other": [{"name": "home", "path": "/data/home", "bytes": 0, "files": 0, "truncated": false}],
+  "truncated": false
+}
+```
+
+Category IDs are `models`, `library`, `downloads`, `engines`, `session_cache`,
+`config`, `logs`, `legacy` and `other`. Each `ITEM` is
+`{"id", "kind", "title", "path", "bytes", "reclaimable", "refusal", "message", "references"}`.
+Item IDs are `file:<local inventory id>`, `partial:<job>`, `engine:<package>`,
+`legacy:cache`, `legacy:prompt-state`, `legacy:config` and `model:<id>`.
+`refusal` is one of `read_only`, `not_owned`, `in_use`, `busy`, `active`,
+`publication_uncertain`, `install_running`, `kept` or `not_found`; `references`
+names the models or downloads involved. Unreferenced files only come from stores
+Juiced owns. Warning codes are `low_space`, `session_cache_over_budget` and
+`acquisition_journal_unwritable`.
+
+`POST /v1/juiced/storage/reclaim` (operator key) deletes items with the owning
+store's rules. Preview first:
+
+```json
+{"items": ["legacy:cache", "file:/data/huggingface/hub/.../x.gguf"], "preview": true}
+```
+
+The preview returns `{"schema_version": 1, "preview": true, "applied": false,
+"revision", "freed_bytes", "refused", "items": [ITEM]}` and changes nothing. Apply
+with the preview's revision:
+
+```json
+{"items": ["legacy:cache", "file:/data/huggingface/hub/.../x.gguf"], "expected_revision": "9f3c0d2a41b7e655"}
+```
+
+The result is `{"schema_version": 1, "preview": false, "applied", "freed_bytes",
+"items": [{"id", "kind", "title", "applied", "freed_bytes", "error"}]}`. Errors:
+`storage_revision_required` (400, no revision), `storage_revision_conflict` (409,
+storage changed since the preview), `storage_item_refused` (409, an item is still
+in use; nothing is deleted) and `invalid_storage_reclaim` (400, 1-64 items).
+`model:<id>` disables, unloads and unregisters the model like `POST /v1/delete`,
+then deletes the weights only that model used. Read-only library mounts are never
+written.
+
+Downloads, engine installs and snapshot saves refuse with HTTP 507
+`insufficient_storage` when the target volume would drop below
+`storage.reserve_bytes`; the message gives the shortfall. Library pulls and
+`POST /v1/pull` jobs are journaled in `/data/acquisitions.json`, survive a
+restart and resume from committed bytes; `GET /v1/downloads` and
+`GET /v1/juiced/library/pulls` list them again after the restart.
+
 ## Workflow jobs and stored conversations
 
 Juiced runs no caller-defined workflows and stores no conversations. These

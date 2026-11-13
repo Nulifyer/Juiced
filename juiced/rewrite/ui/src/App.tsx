@@ -11,6 +11,7 @@ import { ServiceApis, type ConnectTab } from "./ServiceApis";
 import { InstalledRuntimes } from "./InstalledRuntimes";
 import { Dashboard } from "./Dashboard";
 import { Engines } from "./Backends";
+import { Storage } from "./Storage";
 import { Diagnostics } from "./Diagnostics";
 import { Aliases } from "./Aliases";
 import { Barista, BaristaInvite, invitationKey, useBarista, useBaristaPanel } from "./Barista";
@@ -58,6 +59,7 @@ export function App() {
   const [diagnosticsTab, setDiagnosticsTab] = useState<"performance" | "requests" | "logs">("performance");
   const [connectTab, setConnectTab] = useState<ConnectTab>("protocols");
   const [modelsTab, setModelsTab] = useState<"installed" | "discover" | "downloads" | "aliases">("installed");
+  const [backendTab, setBackendTab] = useState<"engines" | "storage">("engines");
   const client = useMemo(() => new Client(base, key), [base, key]);
   const toasts = useToasts();
   const live = useSystemStats(client, online);
@@ -147,6 +149,7 @@ export function App() {
   const tabs = screen === "models" ? <Tabs label="Models views" value={modelsTab} onChange={modelsView} items={[["installed", "Installed"], ["discover", "Discover"], ["downloads", downloads ? `Downloads ${downloads}` : "Downloads"], ["aliases", "Aliases"]]} />
     : screen === "test" ? <Tabs label="Test mode" value={testMode} onChange={setTestMode} items={[["try", "Try a model"], ["compare", "Compare"]]} />
     : screen === "connect" ? <Tabs label="Connect views" value={connectTab} onChange={setConnectTab} items={[["protocols", "Protocols"], ["keys", "API keys"], ["endpoints", "Endpoints"]]} />
+    : screen === "backend" ? <Tabs label="Engines & hardware views" value={backendTab} onChange={setBackendTab} items={[["engines", "Engines"], ["storage", "Storage"]]} />
     : screen === "diagnostics" ? <Tabs label="Diagnostics views" value={diagnosticsTab} onChange={setDiagnosticsTab} items={[["performance", "Performance"], ["requests", "Requests"], ["logs", "Logs"]]} />
     : null;
 
@@ -176,7 +179,7 @@ export function App() {
       {connectionError && <div className="notice error" role="alert"><span>{snapshot ? "Showing the last observation. " : ""}{connectionError}</span><Button onClick={() => leave(() => setConnectionOpen(true))}>Connection settings</Button></div>}
       <div className="page-header"><h1>{title}</h1>{tabs}</div>
       {!snapshot ? <Empty title={refreshing ? "Connecting to Juiced" : "Service unavailable"}>{refreshing ? "Reading models and service state…" : "Check the address and API key in Connection settings."}</Empty> : <>
-        {screen === "dashboard" && <Dashboard client={client} snapshot={snapshot} stats={live.stats} onOpenModel={openModel} onOpenRequests={() => { setDiagnosticsTab("requests"); setScreen("diagnostics"); }} onOpenConnect={() => { setConnectTab("protocols"); setScreen("connect"); }} />}
+        {screen === "dashboard" && <Dashboard client={client} snapshot={snapshot} stats={live.stats} onOpenModel={openModel} onOpenRequests={() => { setDiagnosticsTab("requests"); setScreen("diagnostics"); }} onOpenConnect={() => { setConnectTab("protocols"); setScreen("connect"); }} onOpenStorage={() => { setBackendTab("storage"); setScreen("backend"); }} />}
         {modelScreen && <div className="model-workspace"><ModelList models={snapshot.models} selected={selected} onSelect={(id) => leave(() => { setSelected(id); setSelectedFile(""); })} mode={screen as "models" | "policy"} mutate={mutate} busy={busy} online={online} idleControl={screen === "policy" ? <IdleDefault client={client} online={online} /> : undefined} files={installed ? files : undefined} inventory={installed ? local.data : undefined} selectedFile={fileGroup?.id} onSelectFile={(id) => leave(() => { setSelected(""); setSelectedFile(id); })} onDiscover={() => modelsView("discover")} />
           {hasInspector && model && <Inspector key={`${model.id}:${epoch}`} model={model} busy={busy} online={online} onClose={() => leave(() => setSelected(""))} onDirty={setDirty} mutate={mutate} client={client} stopLoad={loadingModel === model.id ? stopLoad : undefined} inventory={local.data} onRemoved={() => { const { groups } = modelFiles(model, local.data); setSelected(""); if (installed && groups.length === 1 && groups[0]!.usedBy.every((id) => id === model.id)) setSelectedFile(groups[0]!.id); void local.reload(); }} />}
           {hasInspector && fileGroup && <FileInspector key={`${fileGroup.id}:${epoch}`} group={fileGroup} client={client} online={online} onClose={() => setSelectedFile("")} onRegistered={refresh} onOpenModel={openModel} onChanged={local.reload} />}</div>}
@@ -186,7 +189,8 @@ export function App() {
         {screen === "diagnostics" && <Diagnostics client={client} snapshot={snapshot} stats={live.stats} history={live.history} tab={diagnosticsTab} />}
         {screen === "test" && <ServiceTest key={`${epoch}:${testMode}`} mode={testMode} models={snapshot.models} client={client} online={online} />}
         {screen === "connect" && <ServiceApis key={epoch} base={base} client={client} tab={connectTab} models={snapshot.models} online={online} consoleKey={key} onAdoptKey={(next) => { adoptingKey.current = true; setKey(next); }} />}
-        {screen === "backend" && <Engines key={epoch} client={client} online={online} importer={<InstalledRuntimes client={client} online={online} paused={resources?.paused === true} />} />}
+        {screen === "backend" && backendTab === "storage" && <Storage key={epoch} client={client} online={online} />}
+        {screen === "backend" && backendTab === "engines" && <Engines key={epoch} client={client} online={online} importer={<InstalledRuntimes client={client} online={online} paused={resources?.paused === true} />} />}
         {screen === "cache" && <Cache key={epoch} client={client} online={online} models={snapshot.models} />}
       </>}
     </main>

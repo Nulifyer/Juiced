@@ -147,6 +147,10 @@ source = Bun.serve({
   await mkdir(resolve(importRoot, "nested"), { recursive: true });
   await writeFile(resolve(importRoot, "nested", "Local-Import-Q8_0.gguf"), metadataGguf(2048, 48 * 1024));
   await writeFile(resolve(directory, "Upload-Sample-Q8_0.gguf"), metadataGguf(2048, 40 * 1024));
+  await mkdir(resolve(directory, "cache", "llama", "bin"), { recursive: true });
+  await writeFile(resolve(directory, "cache", "llama", "bin", "llama-server"), new Uint8Array(96 * 1024));
+  await mkdir(resolve(directory, "prompt-state"), { recursive: true });
+  await writeFile(resolve(directory, "prompt-state", "slot-0.bin"), new Uint8Array(12 * 1024));
   const oldVolume = resolve(importRoot, "old-juiced");
   await mkdir(resolve(oldVolume, "config", "juiced"), { recursive: true });
   await writeFile(resolve(oldVolume, "config", "user_models.json"), JSON.stringify({ OldChat: { checkpoint: "acme/Old-Chat-GGUF:Q8_0", recipe: "llamacpp" } }));
