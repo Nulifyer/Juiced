@@ -83,20 +83,23 @@ rc.20 never published (phone-width URL-download test raced on CI; fixed with exp
 
 Deployed 2026-11-13; healthy in 50 s with Ornith, kokoro-v1 and whisper ready. Removed the v0.9.2 leftovers through storage reclaim (`legacy:cache`, `legacy:prompt-state`; 30,966,667,750 bytes freed; `/data/config` kept for rollback and import). Model memory budget changed from 66 to 80 GiB through `POST /v1/juiced/residency` with no restart; `/juiced/state` reports 80 GiB. `/v1/models?service=chat`: Ornith and Qwen3.5-4B report `enable_thinking` with `request_values` [false, true]; TheDrummer Skyfall 31B now reports `supported: null`, reason `template_renders_reasoning_only`; text-only models show `features.vision: false`. `/.well-known/juiced.json` reports all three authorities `open`; a wrong key shows `presented: true, accepted: false`. Barista with Ornith (Full permission; browser allowed read-only tools only), on rc.21 and again on rc.22: correct cold-load diagnosis, Open WebUI steps, budget refusal; rc.21 summed loaded memory wrong and called ds4 a vision engine, both fixed in rc.22 (40.7 GiB used, 39.3 GiB free; vision engines llama.cpp and vLLM; budget answer names Model memory on Loading policy). Replies took 21-64 s.
 
-## Pending (2026-11-13, after rc.22)
+## Live verification (v1.0.0-rc.23, 2026-11-13)
+
+Deployed; healthy in 40 s with the three Hot models. vLLM ROCm 0.20.1 with a test Qwen3-0.6B added on rc.23 (parsers from the new defaults): thinking on returned `reasoning_content` and content "Paris" (40.3 s cold); `enable_thinking: false` returned no reasoning (0.3 s); a `get_weather` tool request returned `finish_reason: tool_calls` with `{"city": "Paris"}` (0.7 s). Test model deleted (1,519,182,365 bytes freed). Barista tools report the 890M as integrated with `addressable_bytes` 88 GiB (16 GiB carve-out plus 72 GiB GTT); asked how big a model the GPU holds, Ornith answered ~88 GiB with the 80 GiB budget as the limit (it also said "no dedicated VRAM", which is wrong; minor).
+
+## Pending (2026-11-13, after rc.23)
 
 - TRELLIS on gfx1150: Vulkan measured ~11% faster than ROCm; consider recommending Vulkan for TRELLIS on RDNA 3.5.
-- Barista sees VRAM carve-out (16 GiB) but not GTT on the 890M, so it calls GPU room tight; give juiced_status/juiced_hardware the shared-memory totals.
 
 Engine gaps found:
-- vLLM starts without `--reasoning-parser` / `--enable-auto-tool-choice --tool-call-parser`: Qwen3 replies keep `<think></think>` in content and tool calls are not parsed. Proposed: pick parsers from the checkpoint's config.json (`model_type`/architectures) with an override in model settings.
+- vLLM parser defaults shipped in rc.23 (by architecture). Still missing: typed vLLM settings, so an operator cannot change a model's parsers without re-adding it; models added before rc.23 keep their old arguments.
 - Installed packages match a build by engine/backend/gpu_target/tag, so a fixed runtime member list does not mark an rc.19 TRELLIS ROCm package as outdated; covered by the engine-management round (update checks).
 
 Decided by the user (2026-11-13):
 - Budget may change (now 80 GiB); v0.9.2 leftovers removed.
 - `juiced_*` tools stay inside Barista, never on the network `/mcp` (current behaviour).
 - CORS: keep same-origin plus loopback by default; `LEMONADE_ALLOWED_ORIGINS` opts in other origins (current behaviour).
-- Barista: test it (done above). B1 qualification (60 tasks) still not run.
+- Barista: test it (done above). B1 qualification (90 frozen tasks, 62 held out, 3 reps per candidate) not run: the suite needs the homelab model set and a disposable service. Asked the user to choose: disposable stack on mage beside production (budget-limited), on mage with production stopped, or small models only on the local RTX 5080.
 - "Engine changed": explained; recommended keeping it strict. No answer yet.
 
 Client (pi-t3-agent) follow-ups: told to use `/v1/models?service=chat`, `thinking.request_values` and the well-known `credential` block. Final field names shipped in rc.22.
@@ -115,4 +118,4 @@ Known gaps:
 
 ## Next action
 
-vLLM parser defaults, plus GTT in Barista's hardware view. Then the engine-management round.
+Waiting on the user's choice of qualification setup. Otherwise: typed vLLM settings (parsers), then the engine-management round.
