@@ -13,7 +13,13 @@ curl --fail-with-body http://localhost:8080/v1/juiced/capabilities
 curl --fail-with-body http://localhost:8080/v1/juiced/protocols
 ```
 
-The operator catalog includes disabled registrations. Consumer discovery at
+The operator catalog includes disabled registrations. Each entry has a
+`vision` boolean. It is `true` when the model's llama.cpp launch binds a vision
+projector (`--mmproj`), so `/v1/chat/completions` accepts `image_url` content
+parts for it. It is `false` for other engines, for models without a projector,
+and for models under a protected request profile, which accepts text parts
+only. Juiced forwards chat request bodies to the worker unchanged; the 2 MiB
+JSON request limit includes any images. Consumer discovery at
 `/v1/models` includes only enabled available models. Native capabilities report
 declared operations, component status, selected execution, and unknowns.
 

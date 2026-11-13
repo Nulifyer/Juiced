@@ -571,6 +571,8 @@ async fn first_boot_adopts_a_native_volume_in_place_and_restarts_idempotently() 
         chat["execution_profile"]["options"]["context_tokens"],
         65536
     );
+    assert_eq!(server.model("Chat-Q6_K").await["vision"], true);
+    assert_eq!(server.model("Writer-IQ4_NL").await["vision"], false);
     let writer = saved_model(&server, "Writer-IQ4_NL");
     assert!(writer["model_file"].as_str().unwrap().contains(&format!(
         "library/huggingface/hub/models--acme--Writer-GGUF/snapshots/{OLDER}"

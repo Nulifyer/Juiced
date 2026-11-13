@@ -492,6 +492,16 @@ impl ExecutionProfile {
         )
     }
 
+    /// Whether launches bind a llama.cpp vision projector, so chat requests can carry images.
+    pub fn binds_projector(&self) -> bool {
+        self.adapter == Provider::LlamaCpp
+            && self.resolved_arguments().is_ok_and(|(template, _)| {
+                template
+                    .member_requirements()
+                    .any(|(_, role)| role == crate::artifacts::ArtifactRole::Projector)
+            })
+    }
+
     pub fn resolved_arguments(
         &self,
     ) -> Result<
@@ -1010,6 +1020,24 @@ mod tests {
         ] {
             input["args"] = arguments;
             assert!(serde_json::from_value::<ExecutionProfile>(input.clone()).is_err());
+        }
+    }
+
+    #[test]
+    fn only_llama_profiles_with_a_projector_member_accept_images() {
+        let text: ExecutionProfile = serde_json::from_value(profile()).unwrap();
+        assert!(!text.binds_projector());
+        let mut vision = profile();
+        vision["args"]
+            .as_array_mut()
+            .unwrap()
+            .extend([json!("--mmproj"), json!("{member:mmproj}")]);
+        let parsed: ExecutionProfile = serde_json::from_value(vision.clone()).unwrap();
+        assert!(parsed.binds_projector());
+        vision["adapter"] = json!("external-http");
+        vision["implementation_id"] = json!(null);
+        if let Ok(other) = serde_json::from_value::<ExecutionProfile>(vision) {
+            assert!(!other.binds_projector());
         }
     }
 }
