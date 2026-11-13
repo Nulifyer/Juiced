@@ -156,34 +156,7 @@ impl Manager {
                 .set_native_options(worker, expected_revision, options)
                 .await?);
         }
-        let restart = match apply {
-            OptionsApply::NextLoad => {
-                if state.running.is_some()
-                    || worker.preparing.load(Ordering::Acquire)
-                    || worker.active.load(Ordering::Acquire) != 0
-                    || self.processes.snapshot(id).is_some()
-                {
-                    return Err(ApiError::new(
-                        StatusCode::CONFLICT,
-                        "worker_in_use",
-                        "Unload this worker before changing its launch profile, or apply the options with a reload. Saved policy is preserved.",
-                    )
-                    .into());
-                }
-                false
-            }
-            OptionsApply::Reload => {
-                Self::reap(&mut state);
-                if worker.active.load(Ordering::Acquire) != 0
-                    || worker.preparing.load(Ordering::Acquire)
-                {
-                    return Err(worker_busy().into());
-                }
-                Self::process_available(&worker, state.running.is_some())?;
-                state.policy != Policy::Disabled
-                    && (state.running.is_some() || state.policy == Policy::Hot)
-            }
-        };
+        let restart = self.restart_needed(&worker, &mut state, apply)?;
         let projector_worker = worker.clone();
         let budget = (!self.memory_protected()).then_some(self.budget.limit);
         let parent = self
@@ -223,6 +196,92 @@ impl Manager {
                 Ok(())
             })
             .await?;
+        self.finish_options(id, replacement, previous, restart, apply)
+            .await
+    }
+
+    pub async fn apply_image_defaults(
+        self: &Arc<Self>,
+        id: &str,
+        expected_revision: u64,
+        patch: serde_json::Map<String, serde_json::Value>,
+        apply: OptionsApply,
+    ) -> Result<serde_json::Value, OptionsError> {
+        let worker = self.worker(id)?;
+        if worker.spec.execution_profile.adapter != Provider::StableDiffusionCpp {
+            return Err(ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "image_defaults_unsupported",
+                "Image defaults apply only to stable-diffusion-cpp image models.",
+            )
+            .into());
+        }
+        crate::media::apply_image_defaults(&worker.spec.execution_profile.args, &patch)?;
+        let mut state = worker.state.clone().lock_owned().await;
+        self.ensure_registered(&worker)?;
+        if state.revision != expected_revision {
+            return Err(ApiError::new(
+                StatusCode::CONFLICT,
+                "revision_conflict",
+                "The profile changed. Refresh before saving options.",
+            )
+            .into());
+        }
+        let restart = self.restart_needed(&worker, &mut state, apply)?;
+        let (replacement, previous) = self
+            .replace_local_profile(worker, state, move |spec| {
+                spec.execution_profile.args =
+                    crate::media::apply_image_defaults(&spec.execution_profile.args, &patch)?;
+                Ok(())
+            })
+            .await?;
+        self.finish_options(id, replacement, previous, restart, apply)
+            .await
+    }
+
+    fn restart_needed(
+        &self,
+        worker: &Arc<Worker>,
+        state: &mut WorkerState,
+        apply: OptionsApply,
+    ) -> Result<bool, ApiError> {
+        Ok(match apply {
+            OptionsApply::NextLoad => {
+                if state.running.is_some()
+                    || worker.preparing.load(Ordering::Acquire)
+                    || worker.active.load(Ordering::Acquire) != 0
+                    || self.processes.snapshot(&worker.spec.id).is_some()
+                {
+                    return Err(ApiError::new(
+                        StatusCode::CONFLICT,
+                        "worker_in_use",
+                        "Unload this worker before changing its launch profile, or apply the options with a reload. Saved policy is preserved.",
+                    ));
+                }
+                false
+            }
+            OptionsApply::Reload => {
+                Self::reap(state);
+                if worker.active.load(Ordering::Acquire) != 0
+                    || worker.preparing.load(Ordering::Acquire)
+                {
+                    return Err(worker_busy());
+                }
+                Self::process_available(worker, state.running.is_some())?;
+                state.policy != Policy::Disabled
+                    && (state.running.is_some() || state.policy == Policy::Hot)
+            }
+        })
+    }
+
+    async fn finish_options(
+        self: &Arc<Self>,
+        id: &str,
+        replacement: Arc<Worker>,
+        previous: (ExecutionProfile, u64),
+        restart: bool,
+        apply: OptionsApply,
+    ) -> Result<serde_json::Value, OptionsError> {
         let mut view = if restart {
             match self.restart_worker(&replacement).await {
                 Ok(()) => self.options(id).await?,
@@ -311,10 +370,9 @@ impl Manager {
             .execution_profile
             .resolved_arguments()
             .map_err(|error| ApiError::new(StatusCode::BAD_REQUEST, error.code, error.message))?
-            .1
-            .expect("llama options");
+            .1;
         if applied
-            .parallel_slots
+            .and_then(|applied| applied.parallel_slots)
             .is_some_and(|slots| slots != spec.max_inflight)
         {
             return Err(ApiError::new(

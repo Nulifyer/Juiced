@@ -30,7 +30,7 @@ pub const HTTP_PROTOCOLS: [Protocol; 6] = [
     Protocol::Realtime,
 ];
 
-pub const OPENAI_ROUTES: [&str; 8] = [
+pub const OPENAI_ROUTES: [&str; 11] = [
     "/models",
     "/chat/completions",
     "/completions",
@@ -39,6 +39,9 @@ pub const OPENAI_ROUTES: [&str; 8] = [
     "/audio/transcriptions",
     "/audio/speech",
     "/images/generations",
+    "/images/edits",
+    "/images/variations",
+    "/images/upscale",
 ];
 
 const NATIVE_PREFIXES: [&str; 4] = ["/api/v0", "/api/v1", "/v0", "/v1"];
@@ -202,6 +205,8 @@ mod tests {
             ("/v1/chat/completions", Some(Protocol::Openai)),
             ("/api/v1/models", Some(Protocol::Openai)),
             ("/v0/audio/speech", Some(Protocol::Openai)),
+            ("/v1/images/edits", Some(Protocol::Openai)),
+            ("/sdapi/v1/sd-models", Some(Protocol::Automatic1111)),
             ("/v1/models/fixture.one", None),
             ("/v1/juiced/protocols", None),
             ("/api/v1/health", None),

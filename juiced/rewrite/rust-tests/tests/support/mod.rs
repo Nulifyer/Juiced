@@ -125,10 +125,15 @@ pub const INFERENCE_ROUTES: [&str; 4] = [
     "/responses",
     "/embeddings",
 ];
-pub const MULTIPART_INFERENCE_ROUTES: [&str; 1] = ["/audio/transcriptions"];
-pub const MEDIA_INFERENCE_ROUTES: [&str; 2] = ["/images/generations", "/audio/speech"];
+pub const MULTIPART_INFERENCE_ROUTES: [&str; 3] = [
+    "/audio/transcriptions",
+    "/images/edits",
+    "/images/variations",
+];
+pub const MEDIA_INFERENCE_ROUTES: [&str; 3] =
+    ["/images/generations", "/audio/speech", "/images/upscale"];
 pub const WEBSOCKET_INFERENCE_ROUTES: [&str; 1] = ["/realtime"];
-pub const COMPAT_ROUTES: [(&str, &str, &str); 13] = [
+pub const COMPAT_ROUTES: [(&str, &str, &str); 24] = [
     ("GET", "/.well-known/juiced.json", "read"),
     ("POST", "/v1/messages", "inference"),
     ("POST", "/v1/messages/count_tokens", "inference"),
@@ -142,6 +147,17 @@ pub const COMPAT_ROUTES: [(&str, &str, &str); 13] = [
     ("GET", "/api/version", "read"),
     ("POST", "/mcp", "inference"),
     ("POST", "/sdapi/v1/txt2img", "inference"),
+    ("GET", "/sdapi/v1/sd-models", "read"),
+    ("GET", "/sdapi/v1/options", "read"),
+    ("POST", "/sdapi/v1/options", "inference"),
+    ("GET", "/sdapi/v1/samplers", "read"),
+    ("GET", "/sdapi/v1/schedulers", "read"),
+    ("GET", "/sdapi/v1/progress", "read"),
+    ("GET", "/sdapi/v1/upscalers", "read"),
+    ("GET", "/sdapi/v1/sd-vae", "read"),
+    ("GET", "/sdapi/v1/latent-upscale-modes", "read"),
+    ("POST", "/sdapi/v1/img2img", "inference"),
+    ("POST", "/sdapi/v1/interrupt", "inference"),
 ];
 
 pub fn route_matrix() -> BTreeSet<(String, String)> {

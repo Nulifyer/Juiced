@@ -33,6 +33,26 @@ For images, width, height, steps, sampler, and scheduler support depends on the
 selected model and engine. A larger image can require substantially more memory.
 Use a temporary test override when comparing sizes.
 
+## Set image defaults
+
+An image model's defaults apply to every image request that leaves the field
+unset, from any client. They are the image worker's launch settings, so they
+take effect on the next load. To apply them now, use a reload.
+
+```bash
+curl --fail-with-body http://localhost:8080/v1/models/your-image-model-id/options
+curl --fail-with-body http://localhost:8080/v1/models/your-image-model-id/options \
+  -H 'Content-Type: application/json' \
+  -d '{"expected_revision":7,"image_defaults":{"steps":8,"width":1024,"height":1024,"cfg_scale":null},"apply":"reload"}'
+```
+
+`GET` returns `image_defaults` with `steps`, `cfg_scale`, `width`, `height`,
+`sampling_method`, `scheduler`, `flow_shift` and `seed`; `null` means the engine
+default. `POST` changes only the keys you send, and `null` clears one. Use the
+`revision` from `GET` as `expected_revision`. Without `"apply":"reload"`, unload
+the model first. With access keys on, `POST` needs the admin key. Models adopted from Juiced 0.9 keep their `image_defaults` and
+recipe options here.
+
 ## Return to defaults
 
 Clear a saved override through the pane's default/reset control when available.

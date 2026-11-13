@@ -49,6 +49,9 @@ server-sent events. Tool use and vision require model and backend support.
 | `POST /v1/audio/speech` | Compatible speech model and voice |
 | `GET /v1/audio/voices?model=MODEL_ID` | Voice discovery supported by that speech backend |
 | `POST /v1/images/generations` | Compatible image model |
+| `POST /v1/images/edits` | Compatible image model, multipart image upload |
+| `POST /v1/images/variations` | Compatible image model, multipart image upload |
+| `POST /v1/images/upscale` | Validated only; Juiced has no upscaling models |
 
 Each `GET /v1/models` entry has the OpenAI fields plus `recipe`, `downloaded`,
 `labels`, `context`, `context_length` (tokens one request can use), `vision`,
@@ -106,8 +109,36 @@ curl --fail-with-body http://localhost:8080/v1/images/generations \
 ```
 
 Image output format depends on the backend and supported request settings.
-Decode or fetch the returned image data in your client. Use a compatible
-embedding model for vectors:
+Decode or fetch the returned image data in your client.
+
+### Edit images
+
+Send `multipart/form-data`, as the OpenAI SDK's `images.edit` does:
+
+```bash
+curl --fail-with-body http://localhost:8080/v1/images/edits \
+  -F model=your-enabled-image-model-id \
+  -F "prompt=Add a red barn in the background" \
+  -F image=@source.png
+```
+
+- `image` (one file) or repeated `image[]` (up to 8 references, in order): PNG, JPEG or WebP.
+- Optional `mask`, `n` (1 to 10), `size` (`WIDTHxHEIGHT`, multiples of 8 up to 2048),
+  `output_format` (`png` or `jpeg`), `steps`, `cfg_scale`, `seed`, `negative_prompt`.
+- Without `size`, the output keeps the first image's size, scaled down to at most
+  2048 pixels per side.
+- `user`, `quality`, `background`, `input_fidelity` and `output_compression` are
+  accepted and ignored. The whole form can be up to 8 MiB.
+
+`/v1/images/variations` takes the same form with exactly one `image`, no mask and
+no prompt. Editing quality depends on the model; editing-capable models such as
+Flux Klein work best.
+
+`/v1/images/upscale` checks its JSON body (`image` as base64, `model`) like Juiced
+0.9 did, but Juiced registers no ESRGAN upscaling models. An unknown model returns
+`404`, and any registered model returns `400`.
+
+Use a compatible embedding model for vectors:
 
 ```bash
 curl --fail-with-body http://localhost:8080/v1/embeddings \

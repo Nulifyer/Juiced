@@ -23,7 +23,7 @@
     },
     {
       "path": "docs/api/automatic1111.md",
-      "sha256": "4e2b8c6d092b5243970b85f68ab2c6a18963903555435c38d3e1ef04c36f8155",
+      "sha256": "d08bfff5d71c589916dadbe631545bdc22e2aaa4c5e330c16e0863dd9d85539e",
       "hash_check": "snapshot_only"
     },
     {
@@ -53,7 +53,7 @@
     },
     {
       "path": "docs/api/openai.md",
-      "sha256": "fde3611587b7e4e7ac3581b3142c304338b2084cb56e6558fb8fd7d773602b95",
+      "sha256": "22e6d0fbb81ce8f7f5c9b3fe575cd290bc2e64c8ecc46626bbd6b6657e48f70b",
       "hash_check": "snapshot_only"
     },
     {
@@ -118,12 +118,12 @@
     },
     {
       "path": "juiced/rewrite/rust-tests/tests/support/mod.rs",
-      "sha256": "189e356b6e4e4380472be832afa9e553c65fda5237014a663dcddafe3c5b8a6f",
+      "sha256": "cd78ed0820763a11bc8795f0a8d0b2888953722a3624345398c729a5bc8624ca",
       "hash_check": "snapshot_only"
     },
     {
       "path": "juiced/rewrite/service/src/compat.rs",
-      "sha256": "6f506ac13d5416c92c987835c5db9123a145cc6c89929d2f14103245f0db511b",
+      "sha256": "28549bbacfdd055f58d15a1ae86e385cdbb9adf92e7cf2c2980af9945467cd09",
       "hash_check": "snapshot_only"
     },
     {
@@ -133,7 +133,7 @@
     },
     {
       "path": "juiced/rewrite/service/src/http.rs",
-      "sha256": "cf10b74a91d7de5c1b8d865e4ef700f0a5cc60faddf3c4669bf0cc1bd9f124a4",
+      "sha256": "2975edec80da229ebd4cd3e62653b32a0388930c1b51c48c11bc3a9179358479",
       "hash_check": "snapshot_only"
     },
     {
@@ -208,7 +208,7 @@
     },
     {
       "path": "juiced/rewrite/rust-tests/tests/media_pipeline.rs",
-      "sha256": "8d6c929e6c020799a20534ae9c1c2e4cb31ec40572449b2034db8d2e3f06e441",
+      "sha256": "4f5bcee470c0e4761411994e2cde9714d5c7864ff7402c21dfaef2d13ac8673a",
       "hash_check": "snapshot_only"
     },
     {
@@ -229,6 +229,11 @@
     {
       "path": "juiced/rewrite/rust-tests/tests/model_discovery.rs",
       "sha256": "25b5f91fce499103832734e0371f215da2704c5303e09a891477e01e514f5f31",
+      "hash_check": "snapshot_only"
+    },
+    {
+      "path": "juiced/rewrite/rust-tests/tests/image_surface.rs",
+      "sha256": "47de073e9f12d5ab28094e1552d7d2518f34263af3695ca97ad6a61ec626b746",
       "hash_check": "snapshot_only"
     }
   ],
@@ -2236,7 +2241,7 @@
       "evidence": [
         {
           "path": "juiced/rewrite/service/src/http.rs",
-          "line": 36,
+          "line": 37,
           "text": "async fn authorize(State(state): State<AppState>, mut request: Request, next: Next) -> Response {",
           "role": "authority_owner"
         }
@@ -2793,7 +2798,7 @@
       "category": "native",
       "native_behavior": "handler",
       "disposition": "retained",
-      "status": "planned",
+      "status": "partial",
       "native_evidence": [
         {
           "path": "src/cpp/server/server.cpp",
@@ -2808,12 +2813,26 @@
         "F134"
       ],
       "rust_equivalent": {
-        "relationship": "none",
-        "routes": [],
-        "scenario_files": [],
-        "authorities": []
+        "relationship": "same_path",
+        "routes": [
+          {
+            "method": "POST",
+            "path": "/images/edits",
+            "prefix_scheme": "native_quad"
+          }
+        ],
+        "scenario_files": [
+          "juiced/rewrite/rust-tests/tests/image_surface.rs"
+        ],
+        "authorities": [
+          {
+            "method": "POST",
+            "path": "/images/edits",
+            "authority": "inference"
+          }
+        ]
       },
-      "semantic_boundary": "No Rust handler implements this native path. Add request, response, authority, persistence and failure scenarios before claiming parity.",
+      "semantic_boundary": "Rust forwards multipart edits (image or image[] up to 8, optional mask, n 1-10, size or the first image's size fitted to 2048 px, png/jpeg, steps/cfg_scale/seed) to the selected sd.cpp worker's /v1/images/edits with an 8 MiB upload bound. Wire equality with native remains unqualified.",
       "documentation": "docs/api/juiced.md",
       "native_authority": "regular_api"
     },
@@ -2825,7 +2844,7 @@
       "category": "native",
       "native_behavior": "handler",
       "disposition": "retained",
-      "status": "planned",
+      "status": "partial",
       "native_evidence": [
         {
           "path": "src/cpp/server/server.cpp",
@@ -2839,12 +2858,26 @@
         "F134"
       ],
       "rust_equivalent": {
-        "relationship": "none",
-        "routes": [],
-        "scenario_files": [],
-        "authorities": []
+        "relationship": "same_path",
+        "routes": [
+          {
+            "method": "POST",
+            "path": "/images/variations",
+            "prefix_scheme": "native_quad"
+          }
+        ],
+        "scenario_files": [
+          "juiced/rewrite/rust-tests/tests/image_surface.rs"
+        ],
+        "authorities": [
+          {
+            "method": "POST",
+            "path": "/images/variations",
+            "authority": "inference"
+          }
+        ]
       },
-      "semantic_boundary": "No Rust handler implements this native path. Add request, response, authority, persistence and failure scenarios before claiming parity.",
+      "semantic_boundary": "Rust forwards one multipart image as an sd.cpp edit with the native synthetic \"variation\" prompt, n 1-10 and optional size.",
       "documentation": "docs/api/juiced.md",
       "native_authority": "regular_api"
     },
@@ -2856,7 +2889,7 @@
       "category": "native",
       "native_behavior": "handler",
       "disposition": "retained",
-      "status": "planned",
+      "status": "partial",
       "native_evidence": [
         {
           "path": "src/cpp/server/server.cpp",
@@ -2870,12 +2903,26 @@
         "F134"
       ],
       "rust_equivalent": {
-        "relationship": "none",
-        "routes": [],
-        "scenario_files": [],
-        "authorities": []
+        "relationship": "same_path",
+        "routes": [
+          {
+            "method": "POST",
+            "path": "/images/upscale",
+            "prefix_scheme": "native_quad"
+          }
+        ],
+        "scenario_files": [
+          "juiced/rewrite/rust-tests/tests/image_surface.rs"
+        ],
+        "authorities": [
+          {
+            "method": "POST",
+            "path": "/images/upscale",
+            "authority": "inference"
+          }
+        ]
       },
-      "semantic_boundary": "No Rust handler implements this native path. Add request, response, authority, persistence and failure scenarios before claiming parity.",
+      "semantic_boundary": "Rust reproduces native validation (400 missing image/model, 404 unknown model, 400 for models not labeled upscaling). It registers no ESRGAN upscaling models and runs no sd-cli upscale, so no request succeeds.",
       "documentation": "docs/api/juiced.md",
       "native_authority": "regular_api"
     },
@@ -6677,7 +6724,7 @@
       "category": "automatic1111",
       "native_behavior": "handler",
       "disposition": "retained",
-      "status": "planned",
+      "status": "partial",
       "native_evidence": [
         {
           "path": "src/cpp/server/juiced/compatibility.cpp",
@@ -6696,12 +6743,26 @@
         "F119"
       ],
       "rust_equivalent": {
-        "relationship": "none",
-        "routes": [],
-        "scenario_files": [],
-        "authorities": []
+        "relationship": "same_path",
+        "routes": [
+          {
+            "method": "GET",
+            "path": "/sdapi/v1/sd-models",
+            "prefix_scheme": "fixed"
+          }
+        ],
+        "scenario_files": [
+          "juiced/rewrite/rust-tests/tests/image_surface.rs"
+        ],
+        "authorities": [
+          {
+            "method": "GET",
+            "path": "/sdapi/v1/sd-models",
+            "authority": "read"
+          }
+        ]
       },
-      "semantic_boundary": "No Rust handler implements this native path. Add request, response, authority, persistence and failure scenarios before claiming parity.",
+      "semantic_boundary": "Rust lists enabled, downloaded image-generation models in the native {title,model_name,hash,sha256,filename,config} shape; hashes stay null.",
       "documentation": "docs/api/automatic1111.md",
       "native_authority": "regular_api"
     },
@@ -6713,7 +6774,7 @@
       "category": "automatic1111",
       "native_behavior": "handler",
       "disposition": "retained",
-      "status": "planned",
+      "status": "partial",
       "native_evidence": [
         {
           "path": "src/cpp/server/juiced/compatibility.cpp",
@@ -6732,12 +6793,26 @@
         "F119"
       ],
       "rust_equivalent": {
-        "relationship": "none",
-        "routes": [],
-        "scenario_files": [],
-        "authorities": []
+        "relationship": "same_path",
+        "routes": [
+          {
+            "method": "GET",
+            "path": "/sdapi/v1/options",
+            "prefix_scheme": "fixed"
+          }
+        ],
+        "scenario_files": [
+          "juiced/rewrite/rust-tests/tests/image_surface.rs"
+        ],
+        "authorities": [
+          {
+            "method": "GET",
+            "path": "/sdapi/v1/options",
+            "authority": "read"
+          }
+        ]
       },
-      "semantic_boundary": "No Rust handler implements this native path. Add request, response, authority, persistence and failure scenarios before claiming parity.",
+      "semantic_boundary": "Rust reports {sd_model_checkpoint} for the selected, explicit (?model=) or single enabled image model; 409 when none or several are usable. Other A1111 options are not published.",
       "documentation": "docs/api/automatic1111.md",
       "native_authority": "regular_api"
     },
@@ -6749,7 +6824,7 @@
       "category": "automatic1111",
       "native_behavior": "handler",
       "disposition": "retained",
-      "status": "planned",
+      "status": "partial",
       "native_evidence": [
         {
           "path": "src/cpp/server/juiced/compatibility.cpp",
@@ -6768,12 +6843,26 @@
         "F119"
       ],
       "rust_equivalent": {
-        "relationship": "none",
-        "routes": [],
-        "scenario_files": [],
-        "authorities": []
+        "relationship": "same_path",
+        "routes": [
+          {
+            "method": "GET",
+            "path": "/sdapi/v1/samplers",
+            "prefix_scheme": "fixed"
+          }
+        ],
+        "scenario_files": [
+          "juiced/rewrite/rust-tests/tests/image_surface.rs"
+        ],
+        "authorities": [
+          {
+            "method": "GET",
+            "path": "/sdapi/v1/samplers",
+            "authority": "read"
+          }
+        ]
       },
-      "semantic_boundary": "No Rust handler implements this native path. Add request, response, authority, persistence and failure scenarios before claiming parity.",
+      "semantic_boundary": "Rust relays the running sd.cpp worker's sampler list without claiming a request slot; before the worker runs it returns only a \"default\" entry instead of native's 409.",
       "documentation": "docs/api/automatic1111.md",
       "native_authority": "regular_api"
     },
@@ -6785,7 +6874,7 @@
       "category": "automatic1111",
       "native_behavior": "handler",
       "disposition": "retained",
-      "status": "planned",
+      "status": "partial",
       "native_evidence": [
         {
           "path": "src/cpp/server/juiced/compatibility.cpp",
@@ -6804,12 +6893,26 @@
         "F119"
       ],
       "rust_equivalent": {
-        "relationship": "none",
-        "routes": [],
-        "scenario_files": [],
-        "authorities": []
+        "relationship": "same_path",
+        "routes": [
+          {
+            "method": "GET",
+            "path": "/sdapi/v1/schedulers",
+            "prefix_scheme": "fixed"
+          }
+        ],
+        "scenario_files": [
+          "juiced/rewrite/rust-tests/tests/image_surface.rs"
+        ],
+        "authorities": [
+          {
+            "method": "GET",
+            "path": "/sdapi/v1/schedulers",
+            "authority": "read"
+          }
+        ]
       },
-      "semantic_boundary": "No Rust handler implements this native path. Add request, response, authority, persistence and failure scenarios before claiming parity.",
+      "semantic_boundary": "Rust relays the running sd.cpp worker's scheduler list without claiming a request slot; before the worker runs it returns only a \"default\" entry instead of native's 409.",
       "documentation": "docs/api/automatic1111.md",
       "native_authority": "regular_api"
     },
@@ -6821,7 +6924,7 @@
       "category": "automatic1111",
       "native_behavior": "handler",
       "disposition": "retained",
-      "status": "planned",
+      "status": "partial",
       "native_evidence": [
         {
           "path": "src/cpp/server/juiced/compatibility.cpp",
@@ -6840,12 +6943,26 @@
         "F119"
       ],
       "rust_equivalent": {
-        "relationship": "none",
-        "routes": [],
-        "scenario_files": [],
-        "authorities": []
+        "relationship": "same_path",
+        "routes": [
+          {
+            "method": "GET",
+            "path": "/sdapi/v1/progress",
+            "prefix_scheme": "fixed"
+          }
+        ],
+        "scenario_files": [
+          "juiced/rewrite/rust-tests/tests/image_surface.rs"
+        ],
+        "authorities": [
+          {
+            "method": "GET",
+            "path": "/sdapi/v1/progress",
+            "authority": "read"
+          }
+        ]
       },
-      "semantic_boundary": "No Rust handler implements this native path. Add request, response, authority, persistence and failure scenarios before claiming parity.",
+      "semantic_boundary": "Rust relays the running worker's progress with skip_current_image=true, or the native idle body while the model is unloaded.",
       "documentation": "docs/api/automatic1111.md",
       "native_authority": "regular_api"
     },
@@ -6857,7 +6974,7 @@
       "category": "automatic1111",
       "native_behavior": "empty_array",
       "disposition": "retained",
-      "status": "planned",
+      "status": "partial",
       "native_evidence": [
         {
           "path": "src/cpp/server/juiced/compatibility.cpp",
@@ -6876,12 +6993,26 @@
         "F119"
       ],
       "rust_equivalent": {
-        "relationship": "none",
-        "routes": [],
-        "scenario_files": [],
-        "authorities": []
+        "relationship": "same_path",
+        "routes": [
+          {
+            "method": "GET",
+            "path": "/sdapi/v1/upscalers",
+            "prefix_scheme": "fixed"
+          }
+        ],
+        "scenario_files": [
+          "juiced/rewrite/rust-tests/tests/image_surface.rs"
+        ],
+        "authorities": [
+          {
+            "method": "GET",
+            "path": "/sdapi/v1/upscalers",
+            "authority": "read"
+          }
+        ]
       },
-      "semantic_boundary": "Native publishes an empty array for this unsupported A1111 enumeration. Rust has no route. Preserve the discovery response without inventing an engine capability.",
+      "semantic_boundary": "Rust publishes the native empty array; no upscaler capability is implied.",
       "documentation": "docs/api/automatic1111.md",
       "native_authority": "regular_api"
     },
@@ -6893,7 +7024,7 @@
       "category": "automatic1111",
       "native_behavior": "empty_array",
       "disposition": "retained",
-      "status": "planned",
+      "status": "partial",
       "native_evidence": [
         {
           "path": "src/cpp/server/juiced/compatibility.cpp",
@@ -6912,12 +7043,26 @@
         "F119"
       ],
       "rust_equivalent": {
-        "relationship": "none",
-        "routes": [],
-        "scenario_files": [],
-        "authorities": []
+        "relationship": "same_path",
+        "routes": [
+          {
+            "method": "GET",
+            "path": "/sdapi/v1/sd-vae",
+            "prefix_scheme": "fixed"
+          }
+        ],
+        "scenario_files": [
+          "juiced/rewrite/rust-tests/tests/image_surface.rs"
+        ],
+        "authorities": [
+          {
+            "method": "GET",
+            "path": "/sdapi/v1/sd-vae",
+            "authority": "read"
+          }
+        ]
       },
-      "semantic_boundary": "Native publishes an empty array for this unsupported A1111 enumeration. Rust has no route. Preserve the discovery response without inventing an engine capability.",
+      "semantic_boundary": "Rust publishes the native empty array; no VAE selection is implied.",
       "documentation": "docs/api/automatic1111.md",
       "native_authority": "regular_api"
     },
@@ -6929,7 +7074,7 @@
       "category": "automatic1111",
       "native_behavior": "empty_array",
       "disposition": "retained",
-      "status": "planned",
+      "status": "partial",
       "native_evidence": [
         {
           "path": "src/cpp/server/juiced/compatibility.cpp",
@@ -6948,12 +7093,26 @@
         "F119"
       ],
       "rust_equivalent": {
-        "relationship": "none",
-        "routes": [],
-        "scenario_files": [],
-        "authorities": []
+        "relationship": "same_path",
+        "routes": [
+          {
+            "method": "GET",
+            "path": "/sdapi/v1/latent-upscale-modes",
+            "prefix_scheme": "fixed"
+          }
+        ],
+        "scenario_files": [
+          "juiced/rewrite/rust-tests/tests/image_surface.rs"
+        ],
+        "authorities": [
+          {
+            "method": "GET",
+            "path": "/sdapi/v1/latent-upscale-modes",
+            "authority": "read"
+          }
+        ]
       },
-      "semantic_boundary": "Native publishes an empty array for this unsupported A1111 enumeration. Rust has no route. Preserve the discovery response without inventing an engine capability.",
+      "semantic_boundary": "Rust publishes the native empty array; no high-resolution pass is implied.",
       "documentation": "docs/api/automatic1111.md",
       "native_authority": "regular_api"
     },
@@ -6993,7 +7152,8 @@
           }
         ],
         "scenario_files": [
-          "juiced/rewrite/rust-tests/tests/media_pipeline.rs"
+          "juiced/rewrite/rust-tests/tests/media_pipeline.rs",
+          "juiced/rewrite/rust-tests/tests/image_surface.rs"
         ],
         "authorities": [
           {
@@ -7003,7 +7163,7 @@
           }
         ]
       },
-      "semantic_boundary": "Rust forwards a bounded one-image txt2img subset to the same sd.cpp workers; model may be omitted only when exactly one image model is enabled. Options, model listing, samplers, progress, interrupt, img2img and wire equality remain unqualified.",
+      "semantic_boundary": "Rust forwards a bounded txt2img subset (batch_size 1-4, override_settings sd_model_checkpoint/CLIP_stop_at_last_layers) to sd.cpp workers, drops the inert hires/saving fields and SillyTavern url/auth fields, and rejects scripts, hires and face restoration. Selection errors are 409 as in native. Wire equality remains unqualified.",
       "documentation": "docs/api/automatic1111.md",
       "native_authority": "regular_api"
     },
@@ -7015,7 +7175,7 @@
       "category": "automatic1111",
       "native_behavior": "handler",
       "disposition": "retained",
-      "status": "planned",
+      "status": "partial",
       "native_evidence": [
         {
           "path": "src/cpp/server/juiced/compatibility.cpp",
@@ -7034,12 +7194,26 @@
         "F119"
       ],
       "rust_equivalent": {
-        "relationship": "none",
-        "routes": [],
-        "scenario_files": [],
-        "authorities": []
+        "relationship": "same_path",
+        "routes": [
+          {
+            "method": "POST",
+            "path": "/sdapi/v1/options",
+            "prefix_scheme": "fixed"
+          }
+        ],
+        "scenario_files": [
+          "juiced/rewrite/rust-tests/tests/image_surface.rs"
+        ],
+        "authorities": [
+          {
+            "method": "POST",
+            "path": "/sdapi/v1/options",
+            "authority": "inference"
+          }
+        ]
       },
-      "semantic_boundary": "No Rust handler implements this native path. Add request, response, authority, persistence and failure scenarios before claiming parity.",
+      "semantic_boundary": "Rust accepts only {sd_model_checkpoint} (409 otherwise) and keeps the selection in memory; it is not persisted across restarts as native did.",
       "documentation": "docs/api/automatic1111.md",
       "native_authority": "regular_api"
     },
@@ -7051,7 +7225,7 @@
       "category": "automatic1111",
       "native_behavior": "explicit_501",
       "disposition": "retained",
-      "status": "planned",
+      "status": "partial",
       "native_evidence": [
         {
           "path": "src/cpp/server/juiced/compatibility.cpp",
@@ -7076,12 +7250,26 @@
         "F119"
       ],
       "rust_equivalent": {
-        "relationship": "none",
-        "routes": [],
-        "scenario_files": [],
-        "authorities": []
+        "relationship": "same_path",
+        "routes": [
+          {
+            "method": "POST",
+            "path": "/sdapi/v1/interrupt",
+            "prefix_scheme": "fixed"
+          }
+        ],
+        "scenario_files": [
+          "juiced/rewrite/rust-tests/tests/image_surface.rs"
+        ],
+        "authorities": [
+          {
+            "method": "POST",
+            "path": "/sdapi/v1/interrupt",
+            "authority": "inference"
+          }
+        ]
       },
-      "semantic_boundary": "Native explicitly returns501 outside its retained A1111 subset. Preserve the unsupported contract. A1111 img2img/global interrupt are not implied by separate OpenAI image endpoints.",
+      "semantic_boundary": "Rust returns the native 501 body {\"error\":\"This operation is not supported by Juiced's SD API subset\"}.",
       "documentation": "docs/api/automatic1111.md",
       "native_authority": "regular_api"
     },
@@ -7093,7 +7281,7 @@
       "category": "automatic1111",
       "native_behavior": "explicit_501",
       "disposition": "retained",
-      "status": "planned",
+      "status": "partial",
       "native_evidence": [
         {
           "path": "src/cpp/server/juiced/compatibility.cpp",
@@ -7118,12 +7306,26 @@
         "F119"
       ],
       "rust_equivalent": {
-        "relationship": "none",
-        "routes": [],
-        "scenario_files": [],
-        "authorities": []
+        "relationship": "same_path",
+        "routes": [
+          {
+            "method": "POST",
+            "path": "/sdapi/v1/img2img",
+            "prefix_scheme": "fixed"
+          }
+        ],
+        "scenario_files": [
+          "juiced/rewrite/rust-tests/tests/image_surface.rs"
+        ],
+        "authorities": [
+          {
+            "method": "POST",
+            "path": "/sdapi/v1/img2img",
+            "authority": "inference"
+          }
+        ]
       },
-      "semantic_boundary": "Native explicitly returns501 outside its retained A1111 subset. Preserve the unsupported contract. A1111 img2img/global interrupt are not implied by separate OpenAI image endpoints.",
+      "semantic_boundary": "Rust returns the native 501 body {\"error\":\"This operation is not supported by Juiced's SD API subset\"}.",
       "documentation": "docs/api/automatic1111.md",
       "native_authority": "regular_api"
     },
@@ -9558,7 +9760,7 @@
       "authority": "read",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 188,
+        "line": 189,
         "text": "(get, \"/health\", health, \"read\"),",
         "role": "registration"
       },
@@ -9578,7 +9780,7 @@
       "authority": "read",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 189,
+        "line": 190,
         "text": "(get, \"/models\", models, \"read\"),",
         "role": "registration"
       },
@@ -9598,7 +9800,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 190,
+        "line": 191,
         "text": "(get, \"/system-info\", system_info, \"operator\"),",
         "role": "registration"
       },
@@ -9618,7 +9820,7 @@
       "authority": "read",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 191,
+        "line": 192,
         "text": "(get, \"/juiced/catalog\", catalog, \"read\"),",
         "role": "registration"
       },
@@ -9638,7 +9840,7 @@
       "authority": "read",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 192,
+        "line": 193,
         "text": "(get, \"/juiced/state\", service_state, \"read\"),",
         "role": "registration"
       },
@@ -9657,7 +9859,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 193,
+        "line": 194,
         "text": "(get, \"/juiced/requests\", requests, \"operator\"),",
         "role": "registration"
       },
@@ -9676,7 +9878,7 @@
       "authority": "read",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 194,
+        "line": 195,
         "text": "(get, \"/juiced/protocols\", protocols, \"read\"),",
         "role": "registration"
       },
@@ -9695,7 +9897,7 @@
       "authority": "read",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 195,
+        "line": 196,
         "text": "(get, \"/juiced/runtimes\", runtime_catalog, \"read\"),",
         "role": "registration"
       },
@@ -9712,7 +9914,7 @@
       "authority": "read",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 196,
+        "line": 197,
         "text": "(get, \"/juiced/runtimes/resolve\", runtime_resolve, \"read\"),",
         "role": "registration"
       },
@@ -9729,7 +9931,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 197,
+        "line": 198,
         "text": "(get, \"/juiced/suitability\", suitability, \"operator\"),",
         "role": "registration"
       },
@@ -9748,7 +9950,7 @@
       "authority": "read",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 198,
+        "line": 199,
         "text": "(get, \"/juiced/context\", context, \"read\"),",
         "role": "registration"
       },
@@ -9766,7 +9968,7 @@
       "authority": "read",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 200,
+        "line": 201,
         "text": "(get, \"/juiced/endpoints\", endpoints, \"read\"),",
         "role": "registration"
       },
@@ -9783,7 +9985,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 201,
+        "line": 202,
         "text": "(get, \"/juiced/admission\", admission, \"operator\"),",
         "role": "registration"
       },
@@ -9802,7 +10004,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 202,
+        "line": 203,
         "text": "(post, \"/juiced/admission\", pause, \"operator\"),",
         "role": "registration"
       },
@@ -9821,7 +10023,7 @@
       "authority": "read",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 203,
+        "line": 204,
         "text": "(get, \"/models/{model}\", model_detail, \"read\"),",
         "role": "registration"
       },
@@ -9841,7 +10043,7 @@
       "authority": "read",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 204,
+        "line": 205,
         "text": "(get, \"/models/{model}/options\", model_options, \"read\"),",
         "role": "registration"
       },
@@ -9860,7 +10062,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 205,
+        "line": 206,
         "text": "(post, \"/models/{model}/options\", model_options_set, \"operator\"),",
         "role": "registration"
       },
@@ -9879,7 +10081,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 206,
+        "line": 207,
         "text": "(get, \"/models/{model}/variants\", model_variants, \"operator\"),"
       },
       "native_route_ids": [],
@@ -9895,7 +10097,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 207,
+        "line": 208,
         "text": "(post, \"/models/{model}/variants\", model_variants_sync, \"operator\"),"
       },
       "native_route_ids": [],
@@ -9911,7 +10113,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 218,
+        "line": 219,
         "text": "(post, \"/models/register\", register, \"operator\"),",
         "role": "registration"
       },
@@ -9930,7 +10132,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 219,
+        "line": 220,
         "text": "(post, \"/delete\", unregister, \"operator\"),",
         "role": "registration"
       },
@@ -9949,7 +10151,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 220,
+        "line": 221,
         "text": "(get, \"/juiced/artifacts\", artifact_inventory, \"operator\"),",
         "role": "registration"
       },
@@ -9969,7 +10171,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 221,
+        "line": 222,
         "text": "(post, \"/juiced/artifacts/pull\", artifact_pull, \"operator\"),",
         "role": "registration"
       },
@@ -9988,7 +10190,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 222,
+        "line": 223,
         "text": "(get, \"/juiced/artifacts/jobs/{job}\", artifact_job, \"operator\"),",
         "role": "registration"
       },
@@ -10005,7 +10207,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 223,
+        "line": 224,
         "text": "(post, \"/juiced/artifacts/jobs/{job}\", artifact_control, \"operator\"),",
         "role": "registration"
       },
@@ -10024,7 +10226,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 224,
+        "line": 225,
         "text": "(post, \"/juiced/artifacts/remove\", artifact_remove, \"operator\"),",
         "role": "registration"
       },
@@ -10043,7 +10245,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 228,
+        "line": 229,
         "text": "(get, \"/juiced/cache\", cache_view, \"operator\"),",
         "role": "registration"
       },
@@ -10062,7 +10264,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 229,
+        "line": 230,
         "text": "(post, \"/juiced/cache\", cache_configure, \"operator\"),",
         "role": "registration"
       },
@@ -10081,7 +10283,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 230,
+        "line": 231,
         "text": "(post, \"/juiced/cache/save\", cache_save, \"operator\"),",
         "role": "registration"
       },
@@ -10100,7 +10302,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 231,
+        "line": 232,
         "text": "(post, \"/juiced/cache/restore\", cache_restore, \"operator\"),",
         "role": "registration"
       },
@@ -10119,7 +10321,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 232,
+        "line": 233,
         "text": "(post, \"/juiced/cache/forget\", cache_forget, \"operator\"),",
         "role": "registration"
       },
@@ -10138,7 +10340,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 234,
+        "line": 235,
         "text": "(get, \"/juiced/cache/inspect\", cache_inspect, \"operator\"),",
         "role": "registration"
       },
@@ -10155,7 +10357,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 237,
+        "line": 238,
         "text": "(post, \"/juiced/policy\", policy, \"operator\"),",
         "role": "registration"
       },
@@ -10174,7 +10376,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 238,
+        "line": 239,
         "text": "(post, \"/load\", load, \"operator\"),",
         "role": "registration"
       },
@@ -10193,7 +10395,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 239,
+        "line": 240,
         "text": "(post, \"/unload\", unload, \"operator\"),",
         "role": "registration"
       },
@@ -10212,7 +10414,7 @@
       "authority": "inference",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 240,
+        "line": 241,
         "text": "(post, \"/chat/completions\", chat, \"inference\"),",
         "role": "registration"
       },
@@ -10231,7 +10433,7 @@
       "authority": "inference",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 241,
+        "line": 242,
         "text": "(post, \"/completions\", completion, \"inference\"),",
         "role": "registration"
       },
@@ -10250,7 +10452,7 @@
       "authority": "inference",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 242,
+        "line": 243,
         "text": "(post, \"/responses\", responses, \"inference\"),",
         "role": "registration"
       },
@@ -10269,7 +10471,7 @@
       "authority": "inference",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 243,
+        "line": 244,
         "text": "(post, \"/embeddings\", embeddings, \"inference\"),",
         "role": "registration"
       },
@@ -10288,7 +10490,7 @@
       "authority": "inference",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 244,
+        "line": 245,
         "text": "(post, \"/audio/transcriptions\", transcription, \"inference\"),",
         "role": "registration"
       },
@@ -10517,7 +10719,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 233,
+        "line": 234,
         "text": "(post, \"/juiced/cache/recover\", cache_recover, \"operator\"),",
         "role": "registration"
       },
@@ -10537,7 +10739,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 225,
+        "line": 226,
         "text": "(post, \"/juiced/artifacts/sets\", artifact_set_publish, \"operator\"),",
         "role": "registration"
       },
@@ -10555,7 +10757,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 226,
+        "line": 227,
         "text": "(get, \"/juiced/artifacts/sets/{set}\", artifact_set_get, \"operator\"),",
         "role": "registration"
       },
@@ -10573,7 +10775,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 227,
+        "line": 228,
         "text": "(post, \"/juiced/artifacts/sets/remove\", artifact_set_remove, \"operator\"),",
         "role": "registration"
       },
@@ -10591,7 +10793,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 216,
+        "line": 217,
         "text": "(get, \"/models/{model}/artifacts\", model_artifacts, \"operator\"),"
       },
       "native_route_ids": [],
@@ -10607,7 +10809,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 217,
+        "line": 218,
         "text": "(post, \"/models/{model}/artifacts\", model_artifacts_set, \"operator\"),"
       },
       "native_route_ids": [],
@@ -10623,7 +10825,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 209,
+        "line": 210,
         "text": "(get, \"/models/{model}/runtime\", model_runtime, \"operator\"),"
       },
       "native_route_ids": [],
@@ -10640,7 +10842,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 210,
+        "line": 211,
         "text": "(post, \"/models/{model}/runtime\", model_runtime_set, \"operator\"),"
       },
       "native_route_ids": [],
@@ -10657,7 +10859,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 211,
+        "line": 212,
         "text": "(get, \"/juiced/runtime-packages\", runtime_packages, \"operator\"),"
       },
       "native_route_ids": [],
@@ -10674,7 +10876,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 212,
+        "line": 213,
         "text": "(post, \"/juiced/runtime-packages/import\", runtime_import, \"operator\"),"
       },
       "native_route_ids": [],
@@ -10691,7 +10893,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 213,
+        "line": 214,
         "text": "(get, \"/juiced/engines\", engines, \"operator\"),"
       },
       "native_route_ids": [],
@@ -10708,7 +10910,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 214,
+        "line": 215,
         "text": "(post, \"/juiced/engines/install\", engine_install, \"operator\"),"
       },
       "native_route_ids": [],
@@ -10725,7 +10927,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 215,
+        "line": 216,
         "text": "(post, \"/juiced/models/add\", model_add, \"operator\"),"
       },
       "native_route_ids": [],
@@ -10742,7 +10944,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 245,
+        "line": 246,
         "text": "(get, \"/system-stats\", system_stats, \"operator\"),",
         "role": "registration"
       },
@@ -10762,7 +10964,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 246,
+        "line": 247,
         "text": "(get, \"/juiced/logs\", logs, \"operator\"),",
         "role": "registration"
       },
@@ -10782,7 +10984,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 247,
+        "line": 248,
         "text": "(get, \"/juiced/library/search\", library_search, \"operator\"),",
         "role": "registration"
       },
@@ -10803,7 +11005,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 248,
+        "line": 249,
         "text": "(post, \"/juiced/library/pull\", library_pull, \"operator\"),",
         "role": "registration"
       },
@@ -10823,7 +11025,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 249,
+        "line": 250,
         "text": "(get, \"/juiced/library/pulls/{pull}\", library_pull_status, \"operator\"),",
         "role": "registration"
       },
@@ -10841,7 +11043,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 254,
+        "line": 255,
         "text": "(get, \"/juiced/aliases\", aliases, \"operator\"),",
         "role": "registration"
       },
@@ -10861,7 +11063,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 255,
+        "line": 256,
         "text": "(post, \"/juiced/aliases\", alias_set, \"operator\"),",
         "role": "registration"
       },
@@ -10881,7 +11083,7 @@
       "authority": "inference",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 256,
+        "line": 257,
         "text": "(post, \"/images/generations\", image_generation, \"inference\"),",
         "role": "registration"
       },
@@ -10901,7 +11103,7 @@
       "authority": "inference",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 257,
+        "line": 261,
         "text": "(post, \"/audio/speech\", speech, \"inference\"),",
         "role": "registration"
       },
@@ -10921,7 +11123,7 @@
       "authority": "read",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 258,
+        "line": 262,
         "text": "(get, \"/juiced/voices\", voices, \"read\"),",
         "role": "registration"
       },
@@ -10939,7 +11141,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 259,
+        "line": 263,
         "text": "(get, \"/juiced/residency\", residency, \"operator\"),",
         "role": "registration"
       },
@@ -10957,7 +11159,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 260,
+        "line": 264,
         "text": "(post, \"/juiced/residency\", residency_set, \"operator\"),",
         "role": "registration"
       },
@@ -10984,7 +11186,8 @@
       ],
       "scenario_files": [
         "juiced/rewrite/rust-tests/tests/media_pipeline.rs",
-        "juiced/rewrite/rust-tests/tests/compatibility.rs"
+        "juiced/rewrite/rust-tests/tests/compatibility.rs",
+        "juiced/rewrite/rust-tests/tests/image_surface.rs"
       ],
       "native_same_path": true
     },
@@ -10995,7 +11198,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 235,
+        "line": 236,
         "text": "(get, \"/juiced/cache/sessions\", cache_sessions, \"operator\"),",
         "role": "registration"
       },
@@ -11013,7 +11216,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 236,
+        "line": 237,
         "text": "(post, \"/juiced/cache/sessions\", cache_sessions_change, \"operator\"),",
         "role": "registration"
       },
@@ -11031,7 +11234,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 261,
+        "line": 265,
         "text": "(post, \"/juiced/library/upload\", library_upload, \"operator\"),",
         "role": "registration"
       },
@@ -11055,7 +11258,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 262,
+        "line": 266,
         "text": "(get, \"/juiced/library/import-path\", library_import_candidates, \"operator\"),",
         "role": "registration"
       },
@@ -11074,7 +11277,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 263,
+        "line": 267,
         "text": "(post, \"/juiced/library/import-path\", library_import_path, \"operator\"),",
         "role": "registration"
       },
@@ -11095,7 +11298,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 264,
+        "line": 268,
         "text": "(post, \"/juiced/import/native\", native_import, \"operator\"),",
         "role": "registration"
       },
@@ -11112,7 +11315,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 265,
+        "line": 269,
         "text": "(get, \"/juiced/wyoming\", wyoming_view, \"operator\"),",
         "role": "registration"
       },
@@ -11131,7 +11334,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 266,
+        "line": 270,
         "text": "(post, \"/juiced/wyoming\", wyoming_set, \"operator\"),",
         "role": "registration"
       },
@@ -11150,7 +11353,7 @@
       "authority": "inference",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 267,
+        "line": 271,
         "text": "(get, \"/realtime\", realtime, \"inference\"),",
         "role": "registration"
       },
@@ -11170,7 +11373,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 268,
+        "line": 272,
         "text": "(get, \"/juiced/flm\", flm_status, \"operator\"),",
         "role": "registration"
       },
@@ -11187,7 +11390,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 269,
+        "line": 273,
         "text": "(post, \"/juiced/flm/pull\", flm_pull, \"operator\"),",
         "role": "registration"
       },
@@ -11204,7 +11407,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 270,
+        "line": 274,
         "text": "(post, \"/juiced/flm/models/add\", flm_model_add, \"operator\"),",
         "role": "registration"
       },
@@ -11221,7 +11424,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 271,
+        "line": 275,
         "text": "(get, \"/juiced/access\", access, \"operator\"),",
         "role": "registration"
       },
@@ -11239,7 +11442,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 272,
+        "line": 276,
         "text": "(post, \"/juiced/access/keys\", key_create, \"operator\"),",
         "role": "registration"
       },
@@ -11257,7 +11460,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 273,
+        "line": 277,
         "text": "(post, \"/juiced/access/keys/revoke\", key_revoke, \"operator\"),",
         "role": "registration"
       },
@@ -11275,7 +11478,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 274,
+        "line": 278,
         "text": "(post, \"/juiced/protocols\", protocol_set, \"operator\"),",
         "role": "registration"
       },
@@ -11293,7 +11496,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 275,
+        "line": 279,
         "text": "(get, \"/juiced/protocols/health\", protocol_health, \"operator\"),",
         "role": "registration"
       },
@@ -11311,7 +11514,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 250,
+        "line": 251,
         "text": "(post, \"/juiced/library/pulls/{pull}\", library_pull_dismiss, \"operator\"),",
         "role": "registration"
       },
@@ -11329,7 +11532,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 251,
+        "line": 252,
         "text": "(get, \"/juiced/library/pulls\", library_pulls, \"operator\"),",
         "role": "registration"
       },
@@ -11347,7 +11550,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 252,
+        "line": 253,
         "text": "(get, \"/juiced/library/local\", library_local, \"operator\"),",
         "role": "registration"
       },
@@ -11365,7 +11568,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 253,
+        "line": 254,
         "text": "(post, \"/juiced/library/local/delete\", library_local_delete, \"operator\"),",
         "role": "registration"
       },
@@ -11383,7 +11586,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 208,
+        "line": 209,
         "text": "(get, \"/models/{model}/fit\", model_fit, \"operator\"),",
         "role": "registration"
       },
@@ -11400,7 +11603,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 276,
+        "line": 280,
         "text": "(get, \"/juiced/barista\", barista_view, \"operator\"),",
         "role": "registration"
       },
@@ -11418,7 +11621,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 277,
+        "line": 281,
         "text": "(post, \"/juiced/barista\", barista_set, \"operator\"),",
         "role": "registration"
       },
@@ -11436,7 +11639,7 @@
       "authority": "operator",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 278,
+        "line": 282,
         "text": "(post, \"/juiced/barista/tools/call\", barista_call, \"operator\"),",
         "role": "registration"
       },
@@ -11454,7 +11657,7 @@
       "authority": "read",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 199,
+        "line": 200,
         "text": "(get, \"/juiced/capabilities\", capabilities, \"read\"),",
         "role": "registration"
       },
@@ -11484,6 +11687,272 @@
         "juiced/rewrite/rust-tests/tests/model_discovery.rs"
       ],
       "native_same_path": true
+    },
+    {
+      "method": "POST",
+      "path": "/images/edits",
+      "prefix_scheme": "native_quad",
+      "authority": "inference",
+      "evidence": {
+        "path": "juiced/rewrite/service/src/http.rs",
+        "line": 258,
+        "text": "(post, \"/images/edits\", image_edit, \"inference\"),",
+        "role": "registration"
+      },
+      "native_route_ids": [
+        "http:POST:native_quad:/images/edits"
+      ],
+      "scenario_files": [
+        "juiced/rewrite/rust-tests/tests/image_surface.rs"
+      ],
+      "native_same_path": true
+    },
+    {
+      "method": "POST",
+      "path": "/images/variations",
+      "prefix_scheme": "native_quad",
+      "authority": "inference",
+      "evidence": {
+        "path": "juiced/rewrite/service/src/http.rs",
+        "line": 259,
+        "text": "(post, \"/images/variations\", image_variation, \"inference\"),",
+        "role": "registration"
+      },
+      "native_route_ids": [
+        "http:POST:native_quad:/images/variations"
+      ],
+      "scenario_files": [
+        "juiced/rewrite/rust-tests/tests/image_surface.rs"
+      ],
+      "native_same_path": true
+    },
+    {
+      "method": "POST",
+      "path": "/images/upscale",
+      "prefix_scheme": "native_quad",
+      "authority": "inference",
+      "evidence": {
+        "path": "juiced/rewrite/service/src/http.rs",
+        "line": 260,
+        "text": "(post, \"/images/upscale\", image_upscale, \"inference\"),",
+        "role": "registration"
+      },
+      "native_route_ids": [
+        "http:POST:native_quad:/images/upscale"
+      ],
+      "scenario_files": [
+        "juiced/rewrite/rust-tests/tests/image_surface.rs"
+      ],
+      "native_same_path": true
+    },
+    {
+      "method": "GET",
+      "path": "/sdapi/v1/sd-models",
+      "prefix_scheme": "fixed",
+      "authority": "read",
+      "evidence": {
+        "path": "juiced/rewrite/service/src/compat.rs",
+        "line": 110,
+        "text": "Endpoint {",
+        "role": "registration"
+      },
+      "native_route_ids": [
+        "http:GET:fixed:/sdapi/v1/sd-models"
+      ],
+      "scenario_files": [
+        "juiced/rewrite/rust-tests/tests/image_surface.rs"
+      ],
+      "native_same_path": true
+    },
+    {
+      "method": "GET",
+      "path": "/sdapi/v1/options",
+      "prefix_scheme": "fixed",
+      "authority": "read",
+      "evidence": {
+        "path": "juiced/rewrite/service/src/compat.rs",
+        "line": 116,
+        "text": "Endpoint {",
+        "role": "registration"
+      },
+      "native_route_ids": [
+        "http:GET:fixed:/sdapi/v1/options"
+      ],
+      "scenario_files": [
+        "juiced/rewrite/rust-tests/tests/image_surface.rs"
+      ],
+      "native_same_path": true
+    },
+    {
+      "method": "GET",
+      "path": "/sdapi/v1/samplers",
+      "prefix_scheme": "fixed",
+      "authority": "read",
+      "evidence": {
+        "path": "juiced/rewrite/service/src/compat.rs",
+        "line": 128,
+        "text": "Endpoint {",
+        "role": "registration"
+      },
+      "native_route_ids": [
+        "http:GET:fixed:/sdapi/v1/samplers"
+      ],
+      "scenario_files": [
+        "juiced/rewrite/rust-tests/tests/image_surface.rs"
+      ],
+      "native_same_path": true
+    },
+    {
+      "method": "GET",
+      "path": "/sdapi/v1/schedulers",
+      "prefix_scheme": "fixed",
+      "authority": "read",
+      "evidence": {
+        "path": "juiced/rewrite/service/src/compat.rs",
+        "line": 134,
+        "text": "Endpoint {",
+        "role": "registration"
+      },
+      "native_route_ids": [
+        "http:GET:fixed:/sdapi/v1/schedulers"
+      ],
+      "scenario_files": [
+        "juiced/rewrite/rust-tests/tests/image_surface.rs"
+      ],
+      "native_same_path": true
+    },
+    {
+      "method": "GET",
+      "path": "/sdapi/v1/progress",
+      "prefix_scheme": "fixed",
+      "authority": "read",
+      "evidence": {
+        "path": "juiced/rewrite/service/src/compat.rs",
+        "line": 140,
+        "text": "Endpoint {",
+        "role": "registration"
+      },
+      "native_route_ids": [
+        "http:GET:fixed:/sdapi/v1/progress"
+      ],
+      "scenario_files": [
+        "juiced/rewrite/rust-tests/tests/image_surface.rs"
+      ],
+      "native_same_path": true
+    },
+    {
+      "method": "GET",
+      "path": "/sdapi/v1/upscalers",
+      "prefix_scheme": "fixed",
+      "authority": "read",
+      "evidence": {
+        "path": "juiced/rewrite/service/src/compat.rs",
+        "line": 146,
+        "text": "Endpoint {",
+        "role": "registration"
+      },
+      "native_route_ids": [
+        "http:GET:fixed:/sdapi/v1/upscalers"
+      ],
+      "scenario_files": [
+        "juiced/rewrite/rust-tests/tests/image_surface.rs"
+      ],
+      "native_same_path": true
+    },
+    {
+      "method": "GET",
+      "path": "/sdapi/v1/sd-vae",
+      "prefix_scheme": "fixed",
+      "authority": "read",
+      "evidence": {
+        "path": "juiced/rewrite/service/src/compat.rs",
+        "line": 152,
+        "text": "Endpoint {",
+        "role": "registration"
+      },
+      "native_route_ids": [
+        "http:GET:fixed:/sdapi/v1/sd-vae"
+      ],
+      "scenario_files": [
+        "juiced/rewrite/rust-tests/tests/image_surface.rs"
+      ],
+      "native_same_path": true
+    },
+    {
+      "method": "GET",
+      "path": "/sdapi/v1/latent-upscale-modes",
+      "prefix_scheme": "fixed",
+      "authority": "read",
+      "evidence": {
+        "path": "juiced/rewrite/service/src/compat.rs",
+        "line": 158,
+        "text": "Endpoint {",
+        "role": "registration"
+      },
+      "native_route_ids": [
+        "http:GET:fixed:/sdapi/v1/latent-upscale-modes"
+      ],
+      "scenario_files": [
+        "juiced/rewrite/rust-tests/tests/image_surface.rs"
+      ],
+      "native_same_path": true
+    },
+    {
+      "method": "POST",
+      "path": "/sdapi/v1/options",
+      "prefix_scheme": "fixed",
+      "authority": "inference",
+      "evidence": {
+        "path": "juiced/rewrite/service/src/compat.rs",
+        "line": 122,
+        "text": "Endpoint {",
+        "role": "registration"
+      },
+      "native_route_ids": [
+        "http:POST:fixed:/sdapi/v1/options"
+      ],
+      "scenario_files": [
+        "juiced/rewrite/rust-tests/tests/image_surface.rs"
+      ],
+      "native_same_path": true
+    },
+    {
+      "method": "POST",
+      "path": "/sdapi/v1/interrupt",
+      "prefix_scheme": "fixed",
+      "authority": "inference",
+      "evidence": {
+        "path": "juiced/rewrite/service/src/compat.rs",
+        "line": 170,
+        "text": "Endpoint {",
+        "role": "registration"
+      },
+      "native_route_ids": [
+        "http:POST:fixed:/sdapi/v1/interrupt"
+      ],
+      "scenario_files": [
+        "juiced/rewrite/rust-tests/tests/image_surface.rs"
+      ],
+      "native_same_path": true
+    },
+    {
+      "method": "POST",
+      "path": "/sdapi/v1/img2img",
+      "prefix_scheme": "fixed",
+      "authority": "inference",
+      "evidence": {
+        "path": "juiced/rewrite/service/src/compat.rs",
+        "line": 164,
+        "text": "Endpoint {",
+        "role": "registration"
+      },
+      "native_route_ids": [
+        "http:POST:fixed:/sdapi/v1/img2img"
+      ],
+      "scenario_files": [
+        "juiced/rewrite/rust-tests/tests/image_surface.rs"
+      ],
+      "native_same_path": true
     }
   ],
   "other_transport_boundaries": [
@@ -11498,11 +11967,11 @@
     "native_websocket_routes": 4,
     "auxiliary_http_route_families": 41,
     "native_registration_sites": 143,
-    "rust_published_routes": 104,
-    "rust_native_same_path_rows": 44,
+    "rust_published_routes": 118,
+    "rust_native_same_path_rows": 58,
     "native_http_status_counts": {
-      "partial": 45,
-      "planned": 81,
+      "partial": 59,
+      "planned": 67,
       "conditional": 2,
       "excluded": 7,
       "implemented": 0

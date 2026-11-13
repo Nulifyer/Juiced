@@ -172,7 +172,7 @@ async fn image_generation_requires_a_selected_single_slot_worker_and_translates_
         ),
         (
             "/sdapi/v1/txt2img",
-            json!({"prompt":"x","batch_size":3}),
+            json!({"prompt":"x","batch_size":5}),
             StatusCode::BAD_REQUEST,
             "unsupported_parameter",
         ),
