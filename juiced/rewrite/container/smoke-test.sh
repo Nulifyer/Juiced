@@ -65,9 +65,12 @@ if [ -n "${EXPECT_VERSION:-}" ] && [ "$version" != "$EXPECT_VERSION" ]; then
 fi
 
 step "authentication"
+# With only the admin key set, read routes stay open (v0.9.2 behaviour) and operator routes need the key.
 code=$(curl -s -o /dev/null -w '%{http_code}' "$base/v1/system-info")
-[ "$code" = 401 ] || fail "unauthenticated /v1/system-info returned $code, expected 401"
-echo "unauthenticated system-info: $code"
+[ "$code" = 200 ] || fail "unauthenticated /v1/system-info returned $code, expected 200 in admin-key-only mode"
+code=$(curl -s -o /dev/null -w '%{http_code}' "$base/v1/juiced/requests")
+[ "$code" = 401 ] || fail "unauthenticated /v1/juiced/requests returned $code, expected 401"
+echo "unauthenticated system-info: 200, operator route: $code"
 
 step "container healthcheck"
 if [ "$engine" = podman ]; then
