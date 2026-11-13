@@ -51,5 +51,45 @@ calls. Changes that already finished stay in place. A download or engine
 install it started keeps running under its own job, and shared model workers
 keep running.
 
+## What Barista can do
+
+Barista uses the same checks as the console and never runs shell commands or
+touches files outside Juiced. It can:
+
+| Group | Examples |
+| --- | --- |
+| Inspect | Status and alerts, hardware and usable backends, models, engines, recent requests, logs, cache, connections |
+| Acquire | Search Hugging Face, check a repository's quants and license, estimate fit, download, add a model, install an engine |
+| Configure | Loading policy, load and unload, context and slots, cache mode, protocols, aliases, Wyoming, API keys |
+| Verify | Send one real test request (chat, embeddings, speech, transcription, image, rerank) or run the quick speed benchmark |
+| Maintain | Remove a model's registration, forget saved sessions, uninstall an unused engine, pause requests, restart a model |
+| Explain | Step-by-step procedures for whole jobs, and the docs bundled with this version |
+
+Some operations are not available yet. Barista says so when you ask for them:
+the storage breakdown and deleting unused model files, deleting files when a
+model is removed, and sampling, KV cache, batch, flash attention and extra
+argument settings.
+
+Barista follows shipped procedures for common jobs, such as setting up Home
+Assistant voice, finding and running a model that fits, changing a model's
+context, finding why a request was slow, freeing disk space, connecting a client
+and checking the cache. It checks its work with a test request or the model's
+reported settings before it says a job is done.
+
+### What the chat shows
+
+- Each check Barista makes is one short line. A test request shows its result,
+  including an audio player or image when there is one.
+- Each change shows what it changed, before and after.
+- A download or engine install shows its progress, and keeps updating after
+  Barista finishes its reply.
+- When Barista creates an API key, select **Reveal key** to see it once and copy
+  it. Barista itself never sees the key. The first key, which turns on keys for
+  every route, must be created from **Connect**.
+
+Barista cannot disable, remove or switch off the protocol for the model it runs
+on, and it cannot change its own permissions. Hot models load when Juiced starts,
+so Barista loads a model it just made Hot if you want it running now.
+
 Barista works only from the console. Applications that call the OpenAI or MCP
 APIs get ordinary inference, never Barista's tools.

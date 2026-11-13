@@ -1,5 +1,5 @@
 import type { Page, Route } from "@playwright/test";
-import { api, capture, expect, hotModel, modelId, noHorizontalOverflow, open, picture, speechModel, test, withVision } from "./support";
+import { api, capture, expect, hotModel, modelId, noHorizontalOverflow, open, picture, sourceOrigin, speechModel, test, withVision } from "./support";
 
 const shots = (page: Page, name: string, ready: () => Promise<void>) => capture(page, `barista-${name}`, ready);
 
@@ -27,9 +27,9 @@ async function script(page: Page, replies: ((body: any) => unknown[])[]) {
 }
 
 function dispatches(page: Page) {
-  const calls: { name: string; confirmed: boolean }[] = [];
+  const calls: { name: string; confirmed: boolean; preview?: true }[] = [];
   page.on("request", (outgoing) => {
-    if (new URL(outgoing.url()).pathname === "/v1/juiced/barista/tools/call") { const body = outgoing.postDataJSON(); calls.push({ name: body.name, confirmed: body.confirmed }); }
+    if (new URL(outgoing.url()).pathname === "/v1/juiced/barista/tools/call") { const body = outgoing.postDataJSON(); calls.push({ name: body.name, confirmed: body.confirmed, ...(body.arguments?.preview === true ? { preview: true as const } : {}) }); }
   });
   return calls;
 }
@@ -117,7 +117,8 @@ test.describe("Barista", () => {
     await open(page);
     const panel = await ask(page, "Disable the speech model");
     const change = panel.getByRole("group", { name: "Change" }).filter({ hasText: `Set ${speechModel} to Disabled` });
-    await expect(change).toContainText(`${speechModel} is now Disabled.`);
+    await expect(change).toContainText(`${speechModel} is now disabled`);
+    await expect(change.getByRole("list", { name: "Changed" })).toHaveText("policy: On demand → Disabled");
     await expect(change).toContainText("Done");
     await expect(change.getByRole("button", { name: "Approve" })).toHaveCount(0);
     await expect(panel.getByRole("article", { name: "Barista reply" }).last()).toContainText(`${speechModel} is Disabled now.`);
@@ -130,11 +131,16 @@ test.describe("Barista", () => {
     expect(system.content).toContain("You are Barista");
     expect(system.content).toContain(`You run on the model ${hotModel}.`);
     expect(system.content).toContain("Permission: Full control.");
+    expect(system.content).toContain("Procedures for juiced_help: setup-voice");
+    expect(system.content).not.toContain("inputSchema");
     const offered = bodies[0].tools.map((tool: any) => tool.function.name);
     expect(offered).toContain("juiced_set_policy");
     expect(offered.some((name: string) => name.startsWith("lemonade_"))).toBe(false);
     const listed = bodies[1].messages.find((message: any) => message.role === "tool" && message.tool_call_id === "read");
-    expect(JSON.parse(listed.content).models.some((model: any) => model.id === speechModel)).toBe(true);
+    const envelope = JSON.parse(listed.content);
+    expect(envelope).toMatchObject({ ok: true, tool: "juiced_list_models" });
+    expect(envelope.source).toBeUndefined();
+    expect(envelope.data.models.items.some((model: any) => model.id === speechModel)).toBe(true);
 
     await shots(page, "panel", async () => { await expect(change).toBeVisible(); });
     await noHorizontalOverflow(page, "panel open");
@@ -153,32 +159,39 @@ test.describe("Barista", () => {
     const speech = await service.model(speechModel);
     const calls = dispatches(page);
     const bodies = await script(page, [
-      () => toolCall([{ id: "load", name: "juiced_load_model", arguments: { model: modelId } }, { id: "policy", name: "juiced_set_policy", arguments: { model: speechModel, policy: "disabled", expected_revision: speech!.revision } }]),
+      () => toolCall([{ id: "load", name: "juiced_load", arguments: { model: modelId } }, { id: "policy", name: "juiced_set_policy", arguments: { model: speechModel, policy: "disabled", expected_revision: speech!.revision } }]),
       () => text("Done."),
     ]);
     await open(page);
     const panel = await ask(page, "Free memory by disabling the speech model");
-    const load = panel.getByRole("group", { name: "Change" }).filter({ hasText: `Load ${modelId}?` });
+    const load = panel.getByRole("group", { name: /change$/i }).filter({ hasText: `Load ${modelId}?` });
+    await expect(load).toHaveAccessibleName("Confirm change");
     await expect(load.getByRole("button", { name: "Approve" })).toBeVisible();
+    await expect(load).toContainText(`Would load ${modelId}`);
+    await expect(load.getByRole("list", { name: "Changed" })).toHaveText("state: unloaded → ready");
     await expect(panel.getByLabel("Barista status")).toContainText("Waiting for your approval");
     expect(bodies[0].messages[0].content).toContain("Permission: Ask before changes.");
+    await shots(page, "confirmation", async () => { await expect(load.getByRole("button", { name: "Approve" })).toBeVisible(); });
+    await noHorizontalOverflow(page, "confirmation card");
     await load.getByRole("button", { name: "Skip" }).click();
     await expect(load).toContainText("Skipped");
-    const policy = panel.getByRole("group", { name: "Change" }).filter({ hasText: `Set ${speechModel} to Disabled?` });
+    const policy = panel.getByRole("group", { name: "Confirm change" }).filter({ hasText: `Set ${speechModel} to Disabled?` });
     await expect(policy.getByRole("button", { name: "Approve" })).toBeVisible();
+    await expect(policy).toContainText(`Would set ${speechModel} from on-demand to disabled.`);
     expect((await service.model(speechModel))?.policy).toBe("on-demand");
     expect((await service.model(modelId))?.loaded).toBe(false);
 
     await policy.getByRole("button", { name: "Approve" }).click();
-    await expect(policy).toContainText(`${speechModel} is now Disabled.`);
+    const done = panel.getByRole("group", { name: "Change" }).filter({ hasText: `Set ${speechModel} to Disabled?` });
+    await expect(done).toContainText(`${speechModel} is now disabled`);
     expect((await service.model(speechModel))?.policy).toBe("disabled");
-    expect(calls.filter((call) => call.name !== "juiced_status")).toEqual([{ name: "juiced_set_policy", confirmed: true }]);
+    expect(calls.filter((call) => call.name !== "juiced_status")).toEqual([{ name: "juiced_load", confirmed: false, preview: true }, { name: "juiced_set_policy", confirmed: false, preview: true }, { name: "juiced_set_policy", confirmed: true }]);
     await expect(panel.getByRole("article", { name: "Barista reply" }).last()).toContainText("Done.");
     const results = bodies[1].messages.filter((message: any) => message.role === "tool");
     expect(JSON.parse(results.find((message: any) => message.tool_call_id === "load").content)).toMatchObject({ skipped: true });
 
     const current = await service.barista();
-    const unconfirmed = await request.post("/v1/juiced/barista/tools/call", { data: { name: "juiced_load_model", arguments: { model: modelId }, revision: current.revision } });
+    const unconfirmed = await request.post("/v1/juiced/barista/tools/call", { data: { name: "juiced_load", arguments: { model: modelId }, revision: current.revision } });
     expect(unconfirmed.status()).toBe(403);
     expect((await unconfirmed.json()).error.code).toBe("assistant_confirmation_required");
   });
@@ -200,7 +213,7 @@ test.describe("Barista", () => {
     const offered = bodies[0].tools.map((tool: any) => tool.function.name);
     expect(offered).toContain("juiced_list_models");
     expect(offered).not.toContain("juiced_set_policy");
-    expect(offered).not.toContain("juiced_load_model");
+    expect(offered).not.toContain("juiced_load");
     expect(bodies[0].messages[0].content).toContain("Permission: Read only.");
     expect((await service.model(speechModel))?.policy).toBe("on-demand");
   });
@@ -209,10 +222,10 @@ test.describe("Barista", () => {
     const service = api(request);
     await service.setBarista(true, hotModel, "ask");
     const calls = dispatches(page);
-    const bodies = await script(page, [() => toolCall([{ id: "load", name: "juiced_load_model", arguments: { model: modelId } }]), () => text("Should not run.")]);
+    const bodies = await script(page, [() => toolCall([{ id: "load", name: "juiced_load", arguments: { model: modelId } }]), () => text("Should not run.")]);
     await open(page);
     const panel = await ask(page, "Load the long context model");
-    const load = panel.getByRole("group", { name: "Change" }).filter({ hasText: `Load ${modelId}?` });
+    const load = panel.getByRole("group", { name: "Confirm change" }).filter({ hasText: `Load ${modelId}?` });
     await expect(load.getByRole("button", { name: "Approve" })).toBeVisible();
     const revision = (await service.barista()).revision;
 
@@ -222,7 +235,7 @@ test.describe("Barista", () => {
     await expect(setup.getByRole("button", { name: "Turn on Barista" })).toBeVisible();
     expect((await service.barista()).enabled).toBe(false);
     expect(bodies).toHaveLength(1);
-    expect(calls.map((call) => call.name)).toEqual(["juiced_status"]);
+    expect(calls).toEqual([{ name: "juiced_status", confirmed: false }, { name: "juiced_load", confirmed: false, preview: true }]);
     expect((await service.model(modelId))?.loaded).toBe(false);
     expect((await service.model(hotModel))?.loaded).toBe(true);
     const refused = await request.post("/v1/juiced/barista/tools/call", { data: { name: "juiced_list_models", arguments: {}, revision } });
@@ -231,7 +244,7 @@ test.describe("Barista", () => {
 
     await setup.getByRole("button", { name: "Turn on Barista" }).click();
     await expect(panel.getByRole("status").filter({ hasText: "Stopped. Changes that already finished stay in place." })).toBeVisible();
-    await expect(load).toContainText("Not run.");
+    await expect(panel.getByRole("group", { name: "Change" }).filter({ hasText: `Load ${modelId}?` })).toContainText("Not run.");
   });
   test("renders tables and code, folds reasoning into one row and keeps tool steps compact", async ({ page, request }) => {
     const service = api(request);
@@ -372,5 +385,85 @@ test.describe("Barista", () => {
     expect(sent.content[1].type).toBe("image_url");
     expect(sent.content[1].image_url.url).toMatch(/^data:image\/jpeg;base64,/);
     await shots(page, "image-sent", async () => { await expect(panel.getByRole("article", { name: "You" }).getByRole("img")).toBeVisible(); });
+  });
+  test("a download shows as a job row that keeps its live progress after the turn ends", async ({ page, request }) => {
+    const service = api(request);
+    await service.setBarista(true, hotModel, "full");
+    const tiny = "45957cc9a23e06484db4e445c3ad4250730296d331118687038f4c1d4d403f7f";
+    await service.removeArtifact(tiny);
+    await script(page, [
+      () => toolCall([{ id: "pull", name: "juiced_download", arguments: { repo: "fixture-labs/Tiny-Chat-GGUF", quant: "Q4_K_M" } }]),
+      () => text("The download is running. Models, Downloads shows it too."),
+    ]);
+    await open(page);
+    const panel = await ask(page, "Download the tiny chat model");
+    const change = panel.getByRole("group", { name: "Change" }).filter({ hasText: "Download Q4_K_M from fixture-labs/Tiny-Chat-GGUF" });
+    await expect(change).toContainText("Started");
+    await expect(change.getByRole("list", { name: "Changed" })).toHaveCount(0);
+    await expect(panel.getByRole("article", { name: "Barista reply" }).last()).toContainText("The download is running.");
+    const job = change.getByRole("status", { name: "Job progress" });
+    await expect(job).toContainText(/fixture-labs\/Tiny-Chat-GGUF Q4_K_M: (queued|downloading)/);
+    await expect(job.getByRole("progressbar")).toBeVisible();
+    await shots(page, "job-progress", async () => { await expect(job).toBeVisible(); });
+    await noHorizontalOverflow(page, "job progress");
+    await expect(job).toContainText("finished", { timeout: 20000 });
+    await expect(job.getByRole("progressbar")).toHaveCount(0);
+    const pulls = await service.json<{ data: any[] }>("/v1/juiced/library/pulls");
+    for (const pull of pulls.data) await request.post(`/v1/juiced/library/pulls/${pull.pull}`, { data: { action: "dismiss" } });
+    await service.removeArtifact(tiny);
+  });
+
+  test("a created key is revealed once to the operator and never reaches the model", async ({ page, request }) => {
+    const service = api(request);
+    await service.setBarista(true, hotModel, "full");
+    const secret = `juiced_${"Q".repeat(43)}`;
+    let revealed = 0;
+    await page.route("**/v1/juiced/barista/tools/call", async (route) => {
+      const body = route.request().postDataJSON();
+      if (body.name !== "juiced_create_api_key") return route.fallback();
+      await route.fulfill({ json: { ok: true, tool: body.name, summary: "Created inference key SillyTavern. The operator can reveal the secret once in the chat; you cannot see it.", data: { key: { id: "key_1", name: "SillyTavern", scope: "inference", prefix: secret.slice(0, 13) }, secret_handle: "h_fixture" }, changed: [{ target: "SillyTavern", field: "api_key", before: null, after: "created" }], source: [] } });
+    });
+    await page.route("**/v1/juiced/barista/handles/h_fixture", async (route) => { revealed += 1; await route.fulfill(revealed === 1 ? { json: { secret } } : { status: 404, json: { error: { code: "handle_expired", message: "This value was already shown or has expired." } } }); });
+    const bodies = await script(page, [
+      () => toolCall([{ id: "key", name: "juiced_create_api_key", arguments: { name: "SillyTavern", scope: "inference" } }]),
+      () => text("Select Reveal key and paste it into SillyTavern."),
+    ]);
+    await open(page);
+    const panel = await ask(page, "Connect SillyTavern");
+    const change = panel.getByRole("group", { name: "Change" }).filter({ hasText: "Create an inference key named SillyTavern" });
+    await expect(change.getByRole("list", { name: "Changed" })).toHaveText("api key: none → created");
+    await change.getByRole("button", { name: "Reveal key" }).click();
+    await expect(change.getByLabel("New API key")).toHaveValue(secret);
+    await expect(change).toContainText("Shown once and never sent to the model.");
+    await expect(panel.getByRole("article", { name: "Barista reply" }).last()).toContainText("Select Reveal key");
+    expect(JSON.stringify(bodies)).not.toContain(secret);
+    expect(revealed).toBe(1);
+    await page.reload();
+    await expect(panel.getByLabel("New API key")).toHaveCount(0);
+  });
+
+  test("test results show inline: transcript text and playable audio", async ({ page, request }) => {
+    const service = api(request);
+    await service.setBarista(true, hotModel, "full");
+    const wav = await (await request.get(`${sourceOrigin}/speech-fixture.wav`)).body();
+    await page.route("**/v1/juiced/barista/tools/call", async (route) => {
+      const body = route.request().postDataJSON();
+      if (body.name !== "juiced_test_model" || body.arguments.kind !== "speech") return route.fallback();
+      await route.fulfill({ json: { ok: true, tool: body.name, summary: "fixture.voice produced 118.6 KiB of audio.", data: { kind: "speech", bytes: wav.length, content_type: "audio/wav", media: { handle: "h_audio", type: "audio/wav" } }, source: [] } });
+    });
+    await page.route("**/v1/juiced/barista/handles/h_audio", (route) => route.fulfill({ body: wav, contentType: "audio/wav" }));
+    await script(page, [
+      () => toolCall([{ id: "stt", name: "juiced_test_model", arguments: { model: speechModel, kind: "transcribe" } }, { id: "tts", name: "juiced_test_model", arguments: { model: "fixture.voice", kind: "speech" } }]),
+      () => text("Both voice models answered."),
+    ]);
+    await open(page);
+    const panel = await ask(page, "Check the voice models");
+    const transcript = panel.getByLabel("Tool step").filter({ hasText: `Tested ${speechModel} (transcribe)` });
+    await expect(transcript).toContainText(`${speechModel} transcribed the shipped check clip`, { timeout: 15000 });
+    const speech = panel.getByLabel("Tool step").filter({ hasText: "Tested fixture.voice (speech)" });
+    await expect(speech.getByLabel("Test audio result")).toBeVisible();
+    await expect(panel.getByRole("article", { name: "Barista reply" }).last()).toContainText("Both voice models answered.");
+    await shots(page, "verification", async () => { await expect(speech.getByLabel("Test audio result")).toBeVisible(); });
+    await noHorizontalOverflow(page, "verification");
   });
 });

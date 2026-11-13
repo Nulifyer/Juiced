@@ -118,7 +118,7 @@
     },
     {
       "path": "juiced/rewrite/rust-tests/tests/support/mod.rs",
-      "sha256": "0311d492e6743750c8786f67661c340c183fc00b959a6131cd2567c133054380",
+      "sha256": "0f7ed857a9e5beefdfdf7af44ec88a04e6a750cd7d3ff363bb1bbca2325dee3e",
       "hash_check": "snapshot_only"
     },
     {
@@ -133,7 +133,7 @@
     },
     {
       "path": "juiced/rewrite/service/src/http.rs",
-      "sha256": "3c977dba43f0565ac737f97ea57505654a580aa64235defdd0b49f5bbf1c5086",
+      "sha256": "5117cc8f55fe4a6f58de10c3564d5d70cde3ce9e5b2f55d9cf4b47f37b754d9f",
       "hash_check": "snapshot_only"
     },
     {
@@ -11996,7 +11996,7 @@
       "authority": "inference",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 307,
+        "line": 308,
         "text": "(post, \"/rerank\", rerank, \"inference\"),",
         "role": "registration"
       },
@@ -12015,7 +12015,7 @@
       "authority": "inference",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 308,
+        "line": 309,
         "text": "(post, \"/reranking\", rerank, \"inference\"),",
         "role": "registration"
       },
@@ -12034,7 +12034,7 @@
       "authority": "inference",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 309,
+        "line": 310,
         "text": "(post, \"/reranker\", rerank, \"inference\"),",
         "role": "registration"
       },
@@ -12053,7 +12053,7 @@
       "authority": "inference",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 310,
+        "line": 311,
         "text": "(post, \"/tokenize\", tokenize, \"inference\"),",
         "role": "registration"
       },
@@ -12072,7 +12072,7 @@
       "authority": "inference",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 311,
+        "line": 312,
         "text": "(post, \"/detokenize\", detokenize, \"inference\"),",
         "role": "registration"
       },
@@ -12089,7 +12089,7 @@
       "authority": "inference",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 312,
+        "line": 313,
         "text": "(get, \"/slots\", slots, \"inference\"),",
         "role": "registration"
       },
@@ -12108,7 +12108,7 @@
       "authority": "inference",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 313,
+        "line": 314,
         "text": "(post, \"/slots/{slot}\", slot_action, \"inference\"),",
         "role": "registration"
       },
@@ -12127,7 +12127,7 @@
       "authority": "read",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 314,
+        "line": 315,
         "text": "(get, \"/stats\", stats, \"read\"),",
         "role": "registration"
       },
@@ -12146,7 +12146,7 @@
       "authority": "read",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 315,
+        "line": 316,
         "text": "(get, \"/audio/voices\", audio_voices, \"read\"),",
         "role": "registration"
       },
@@ -12431,7 +12431,7 @@
       "authority": "read",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
-        "line": 316,
+        "line": 317,
         "text": "(get, \"/logs/stream\", log_stream, \"read\"),",
         "role": "registration"
       },
@@ -12765,6 +12765,23 @@
         "juiced/rewrite/rust-tests/tests/model_updates.rs"
       ],
       "native_same_path": true
+    },
+    {
+      "method": "POST",
+      "path": "/juiced/barista/handles/{handle}",
+      "prefix_scheme": "native_quad",
+      "authority": "operator",
+      "evidence": {
+        "path": "juiced/rewrite/service/src/http.rs",
+        "line": 307,
+        "text": "(post, \"/juiced/barista/handles/{handle}\", barista_handle, \"operator\"),",
+        "role": "registration"
+      },
+      "native_route_ids": [],
+      "scenario_files": [
+        "juiced/rewrite/rust-tests/tests/barista.rs"
+      ],
+      "native_same_path": false
     }
   ],
   "other_transport_boundaries": [
@@ -12779,7 +12796,7 @@
     "native_websocket_routes": 4,
     "auxiliary_http_route_families": 41,
     "native_registration_sites": 143,
-    "rust_published_routes": 145,
+    "rust_published_routes": 146,
     "rust_native_same_path_rows": 83,
     "native_http_status_counts": {
       "partial": 92,

@@ -304,6 +304,7 @@ define_routes! {
     (get, "/juiced/barista", barista_view, "operator"),
     (post, "/juiced/barista", barista_set, "operator"),
     (post, "/juiced/barista/tools/call", barista_call, "operator"),
+    (post, "/juiced/barista/handles/{handle}", barista_handle, "operator"),
     (post, "/rerank", rerank, "inference"),
     (post, "/reranking", rerank, "inference"),
     (post, "/reranker", rerank, "inference"),
@@ -1985,3 +1986,5 @@ async fn realtime(
         .on_upgrade(move |socket| crate::realtime::serve(manager, socket, query, slot)))
 }
 use crate::llama_routes::{audio_voices, detokenize, rerank, slot_action, slots, stats, tokenize};
+
+use crate::barista::handle as barista_handle;

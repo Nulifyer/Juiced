@@ -1,5 +1,5 @@
 import { describe as group, expect, test } from "bun:test";
-import { accumulate, action, candidates, describe, functionTools, implication, outcome, parseArguments, readOnly, systemPrompt, type Reply } from "../src/baristaTools";
+import { accumulate, action, candidates, changeLines, describe, functionTools, implication, jobLine, modelText, outcome, parseArguments, readOnly, systemPrompt, type PromptIndex, type Reply } from "../src/baristaTools";
 import type { Model } from "../src/domain";
 
 const empty: Reply = { content: "", reasoning: "", toolCalls: [] };
@@ -8,7 +8,7 @@ const model = (id: string, change: Partial<Model> = {}): Model => ({ id, policy:
 
 group("barista", () => {
   test("maps tools to function tools and reads the read-only hint", () => {
-    const tools = [{ name: "juiced_list_models", description: "List", inputSchema: { type: "object", properties: {} }, annotations: { readOnlyHint: true } }, { name: "juiced_load_model", annotations: { readOnlyHint: false } }];
+    const tools = [{ name: "juiced_list_models", description: "List", inputSchema: { type: "object", properties: {} }, annotations: { readOnlyHint: true } }, { name: "juiced_load", annotations: { readOnlyHint: false } }];
     expect(readOnly(tools[0])).toBe(true);
     expect(readOnly(tools[1])).toBe(false);
     expect(readOnly(undefined)).toBe(false);
@@ -44,29 +44,44 @@ group("barista", () => {
   test("describes reads, approvals and outcomes in plain words", () => {
     expect(describe("juiced_list_models", {})).toBe("Checked models");
     expect(describe("juiced_search_models", { query: "qwen" })).toBe("Searched for \"qwen\"");
-    expect(describe("juiced_load_model", { model: "Ornith-1.5-35B-A3B-GGUF-Q6_K" })).toBe("Load Ornith-1.5-35B-A3B-GGUF-Q6_K?");
-    expect(describe("juiced_set_policy", { model: "m", policy: "hot", expected_revision: 2 })).toBe("Set m to Hot?");
-    expect(describe("juiced_set_model_settings", { model: "m", context_tokens: 8192, gpu_layers: null, apply: "reload" })).toBe("Change m: context tokens 8192, gpu layers automatic, and reload it now?");
-    expect(describe("juiced_download_model", { repo: "o/r", file: "f.gguf" })).toBe("Download f.gguf from o/r?");
-    expect(action("juiced_load_model", { model: "m" })).toBe("Load m");
-    expect(outcome("juiced_set_policy", { model: "m", policy: "on-demand" }, { ok: true, text: "", value: null })).toBe("m is now On demand.");
-    expect(outcome("juiced_set_policy", {}, { ok: false, text: "", value: { error: { code: "revision_conflict", message: "Refresh first." } } })).toBe("Refresh first.");
+    expect(describe("juiced_load", { model: "Ornith-1.5-35B-A3B-GGUF-Q6_K" })).toBe("Load Ornith-1.5-35B-A3B-GGUF-Q6_K?");
+    expect(describe("juiced_set_policy", { model: "m", policy: "hot" })).toBe("Set m to Hot?");
+    expect(describe("juiced_set_model_settings", { model: "m", changes: { context_tokens: 8192, gpu_layers: null }, apply: "reload" })).toBe("Change m: context tokens 8192, gpu layers automatic, and reload it now?");
+    expect(describe("juiced_download", { repo: "o/r", quant: "Q4_K_M" })).toBe("Download Q4_K_M from o/r?");
+    expect(describe("juiced_create_api_key", { name: "SillyTavern", scope: "inference" })).toBe("Create an inference key named SillyTavern?");
+    expect(describe("juiced_test_model", { model: "m", kind: "speech" })).toBe("Tested m (speech)");
+    expect(describe("juiced_help", { topic: "setup-voice" })).toBe("Read the setup-voice procedure");
+    expect(action("juiced_load", { model: "m" })).toBe("Load m");
+    expect(outcome("juiced_set_policy", {}, { ok: true, text: "", value: { ok: true, summary: "m is now on-demand (unloaded)." } })).toBe("m is now on-demand (unloaded).");
+    expect(outcome("juiced_set_policy", {}, { ok: false, text: "", value: { ok: false, error: { code: "revision_conflict", message: "Refresh first." } } })).toBe("Refresh first.");
   });
 
-  test("system prompt names the role, model, authority and machine", () => {
-    const bare = systemPrompt("m", "read_only", null);
+  test("shows before and after, and job progress, in plain words", () => {
+    expect(changeLines([{ target: "m", field: "policy", before: "on-demand", after: "hot" }, { target: "m", field: "context_tokens", before: null, after: 131072 }])).toEqual(["policy: On demand → Hot", "context tokens: none → 131,072"]);
+    expect(changeLines(undefined)).toEqual([]);
+    expect(jobLine({ id: "pull:a", kind: "download", label: "o/r Q4_K_M", state: "downloading", done: false, progress: 0.42, done_bytes: 1024, total_bytes: 4096 })).toBe("o/r Q4_K_M: downloading 42% · 1.0 KiB of 4.0 KiB");
+    expect(jobLine({ id: "engine:a", kind: "engine_install", label: "llama.cpp cpu", state: "failed", done: true, progress: null, error: "digest_mismatch" })).toBe("llama.cpp cpu: failed (digest_mismatch)");
+    const text = modelText({ ok: true, summary: "s", data: { a: 1 }, source: [{ route: "GET /v1/x" }] });
+    expect(JSON.parse(text)).toEqual({ ok: true, summary: "s", data: { a: 1 } });
+  });
+
+  test("system prompt is the service's small index plus a stable machine line", () => {
+    const index: PromptIndex = { version: 2, role: "You are Barista, the operator assistant.", rules: ["Read before you change.", "For a job with several steps, call juiced_help."], authority: { full: "Full control. Go.", ask: "Ask before changes. The operator approves or skips.", read_only: "Read only. Look only." }, groups: [{ group: "inspect", title: "Inspect", purpose: "read state", tools: ["juiced_status"] }], skills: [{ topic: "setup-voice", title: "Set up Home Assistant voice" }] };
+    const bare = systemPrompt("m", "read_only", null, index);
     expect(bare).toContain("You are Barista");
-    expect(bare).toContain("model m");
-    expect(bare).toContain("Permission: Read only");
-    expect(bare).toContain("only when a tool result shows it");
+    expect(bare).toContain("You run on the model m.");
+    expect(bare).toContain("Permission: Read only. Look only.");
+    expect(bare).toContain("Tools: Inspect (read state).");
+    expect(bare).toContain("Procedures for juiced_help: setup-voice (Set up Home Assistant voice).");
+    expect(bare).not.toContain("juiced_status");
     expect(systemPrompt("m", "full", null)).toContain("Full control");
     expect(systemPrompt("m", "ask", null)).toContain("approves or skips");
-    const prompt = systemPrompt("m", "full", { host: { os: "linux", architecture: "x86_64" }, cpu: { name: "Ryzen", logical_threads: 16 }, ram: { total_bytes: 32 * 1024 ** 3, available_bytes: 16 * 1024 ** 3 }, gpus: [{ name: "Radeon", vram_total_bytes: 16 * 1024 ** 3 }], memory: { resident_budget_bytes: 24 * 1024 ** 3, reserved_bytes: 0 }, recommended_backends: { llamacpp: "vulkan" }, loaded_models: [] });
+    const status = (free: number) => ({ host: { os: "linux", architecture: "x86_64" }, cpu: { name: "Ryzen", logical_threads: 16 }, ram_bytes: 32 * 1024 ** 3, gpus: [{ name: "Radeon", vram_total_bytes: 16 * 1024 ** 3 }], memory: { budget_bytes: 24 * 1024 ** 3, free_bytes: free }, loaded_models: [] });
+    const prompt = systemPrompt("m", "full", status(20 * 1024 ** 3), index);
     expect(prompt).toContain("CPU Ryzen with 16 threads");
     expect(prompt).toContain("GPUs: Radeon 16.0 GiB");
-    expect(prompt).toContain("llamacpp: vulkan");
-    expect(prompt.length).toBeLessThan(1600);
-    const later = systemPrompt("m", "full", { host: { os: "linux", architecture: "x86_64" }, cpu: { name: "Ryzen", logical_threads: 16 }, ram: { total_bytes: 32 * 1024 ** 3, available_bytes: 3 * 1024 ** 3 }, gpus: [{ name: "Radeon", vram_total_bytes: 16 * 1024 ** 3 }], memory: { resident_budget_bytes: 24 * 1024 ** 3, reserved_bytes: 20 * 1024 ** 3 }, recommended_backends: { llamacpp: "vulkan" }, loaded_models: [{ id: "x" }] });
-    expect(later).toBe(prompt);
+    expect(prompt).toContain("Model memory budget 24.0 GiB");
+    expect(prompt.length).toBeLessThan(2400);
+    expect(systemPrompt("m", "full", status(1024 ** 3), index)).toBe(prompt);
   });
 });
