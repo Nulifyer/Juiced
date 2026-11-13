@@ -61,14 +61,23 @@ fn number_or_null(value: &Value, maximum: f64) -> bool {
 }
 
 #[tokio::test]
-async fn system_stats_requires_operator_authority_under_every_prefix_and_keeps_unknowns_null() {
+async fn system_stats_requires_read_authority_under_every_prefix_and_keeps_unknowns_null() {
     let server = Server::new(true).await;
     for prefix in PREFIXES {
         let path = format!("{prefix}/system-stats");
-        for key in [None, Some(CLIENT_KEY), Some("invalid-key")] {
+        for key in [None, Some("invalid-key")] {
             let response = server.request(Method::GET, &path, None, key).await.unwrap();
             assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{path}");
         }
+        let response = server
+            .request(Method::GET, &path, None, Some(CLIENT_KEY))
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "{path} with the inference key"
+        );
         let (status, stats) = server.json(Method::GET, &path, None, Some(ADMIN_KEY)).await;
         assert_eq!(status, StatusCode::OK, "{path}");
         assert_eq!(stats["schema_version"], 1);

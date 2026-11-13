@@ -66,7 +66,48 @@ not inferred from another request.
 
 Buffered warnings can remain after the original condition clears. Check the
 current worker state before treating an old warning as an active failure.
-For startup failures, use `docker logs --tail 100 juiced` from the host.
+
+## Read container logs
+
+Service and worker lines also go to the container's standard error, so
+`docker logs --tail 100 juiced` shows them. Each line looks like
+`2026-11-12 14:22:05.456 [Info] (stories) message`, with a UTC timestamp and the
+model ID, or `service`, in parentheses.
+
+Choose how much reaches the container log with `log_level` in the configuration
+or the `LEMONADE_LOG_LEVEL` environment variable, which wins. Use `trace`,
+`debug`, `info` (the default), `warning`, `error`, `fatal` or `none`. Worker lines
+without a level of their own count as `info`. The level does not filter
+**Diagnostics → Logs**, which keeps every line. Restart the service after a change.
+
+## Scrape metrics
+
+`GET /metrics` returns Prometheus text with the native metric names:
+`lemonade_server_up`, `lemonade_loaded_models`, per-model `lemonade_model_*`
+gauges and counters labelled by `model_name`, totals such as
+`lemonade_requests_total`, and `lemonade_cpu_usage_percent`,
+`lemonade_memory_used_gb`, `lemonade_gpu_usage_percent`, `lemonade_vram_used_gb`
+and `lemonade_npu_usage_percent`. Counters start at zero when the service starts.
+It needs the same key as other read routes:
+
+```yaml
+scrape_configs:
+  - job_name: juiced
+    authorization:
+      credentials: "<LEMONADE_API_KEY>"
+    static_configs:
+      - targets: ["juiced.example:8080"]
+```
+
+`lemonade_max_loaded_models`, `lemonade_model_time_to_first_token_seconds`,
+`lemonade_routing_*` and the `lemonade_llamacpp_*` engine metrics are not exposed.
+
+## Stream logs
+
+Log tail clients can open the WebSocket `/logs/stream`, or `/v1/logs/stream`, with
+the read key. Send `{"type":"logs.subscribe","after_seq":null}` to receive one
+`logs.snapshot` of the retained lines, then a `logs.entry` for each new line. Send
+the last `seq` you saw as `after_seq` to resume after a reconnect.
 
 Remove credentials, private paths, prompts, and client identifiers before sharing
 log excerpts. See [troubleshooting](troubleshooting.md) for specific failures.

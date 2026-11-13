@@ -436,6 +436,10 @@ pub struct Config {
     pub barista: crate::barista::Settings,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native_adoption: Option<NativeAdoption>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log_level: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allowed_origins: Option<String>,
 }
 
 pub const MAXIMUM_IMPORT_ROOTS: usize = 16;
@@ -541,6 +545,10 @@ struct ConfigWire {
     barista: crate::barista::Settings,
     #[serde(default)]
     native_adoption: Option<NativeAdoption>,
+    #[serde(default)]
+    log_level: Option<String>,
+    #[serde(default)]
+    allowed_origins: Option<String>,
 }
 
 fn deserialize_native_binding<'de, D: Deserializer<'de>>(
@@ -612,6 +620,8 @@ impl<'de> Deserialize<'de> for Config {
             protocols: wire.protocols,
             barista: wire.barista,
             native_adoption: wire.native_adoption,
+            log_level: wire.log_level,
+            allowed_origins: wire.allowed_origins,
         })
     }
 }
@@ -725,6 +735,15 @@ impl Config {
         self.wyoming.validate()?;
         self.barista.validate()?;
         self.protocols.validate()?;
+        if self
+            .log_level
+            .as_deref()
+            .is_some_and(|level| crate::logs::Threshold::parse(level).is_none())
+        {
+            return Err(
+                "log_level must be trace, debug, info, warning, error, fatal or none".into(),
+            );
+        }
         let mut ids = HashSet::new();
         let mut native_ids = HashSet::new();
         for model in &self.models {

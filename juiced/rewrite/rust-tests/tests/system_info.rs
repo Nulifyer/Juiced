@@ -73,17 +73,18 @@ async fn fixture_server(kfd: bool) -> (Server, tempfile::TempDir) {
 }
 
 #[tokio::test]
-async fn system_info_reports_fixture_hardware_under_every_prefix_with_operator_authority() {
+async fn system_info_reports_fixture_hardware_under_every_prefix_with_read_authority() {
     let (server, _hardware) = fixture_server(true).await;
     for prefix in PREFIXES {
         let path = format!("{prefix}/system-info");
-        for key in [None, Some("invalid-key"), Some(CLIENT_KEY)] {
-            let (status, body) = server.json(Method::GET, &path, None, key).await;
+        for key in [None, Some("invalid-key")] {
+            let (status, _) = server.json(Method::GET, &path, None, key).await;
             assert_eq!(status, StatusCode::UNAUTHORIZED, "GET {path} {key:?}");
-            if key == Some(CLIENT_KEY) {
-                assert_eq!(body["error"]["code"], "operator_required");
-            }
         }
+        let (status, _) = server
+            .json(Method::GET, &path, None, Some(CLIENT_KEY))
+            .await;
+        assert_eq!(status, StatusCode::OK, "GET {path} with the inference key");
         let response = server
             .request(Method::POST, &path, None, Some(ADMIN_KEY))
             .await

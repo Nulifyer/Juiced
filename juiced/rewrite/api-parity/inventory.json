@@ -73,12 +73,12 @@
     },
     {
       "path": "juiced/rewrite/rust-tests/tests/api_end_to_end.rs",
-      "sha256": "79721cb95a6fed4dc209ba18036f2c7f71b157932ef0ffd2b0aaf886d1b8afe6",
+      "sha256": "32562586075fa4c069a3464b803ad185ad8487172f80c93aca4a1a77ac3c08ee",
       "hash_check": "snapshot_only"
     },
     {
       "path": "juiced/rewrite/rust-tests/tests/system_info.rs",
-      "sha256": "186aa1d2a04dfab8c522310a5f8f79e318b9a6dabfdb9e1e9ed1303e5338788a",
+      "sha256": "6983f285233a3aeaaf551e21016fa590f81afa5f07aceaaba1e529e839b2c063",
       "hash_check": "snapshot_only"
     },
     {
@@ -118,7 +118,7 @@
     },
     {
       "path": "juiced/rewrite/rust-tests/tests/support/mod.rs",
-      "sha256": "189e356b6e4e4380472be832afa9e553c65fda5237014a663dcddafe3c5b8a6f",
+      "sha256": "35cf77dc3d983fec2cf6037b959b6a14b284fc3eada00d80d1dc6bd80827a894",
       "hash_check": "snapshot_only"
     },
     {
@@ -128,12 +128,12 @@
     },
     {
       "path": "juiced/rewrite/service/src/config.rs",
-      "sha256": "236905e5b38033d3552a2c51dbf8fbd2cd7707b0133bf2abae4c777c3da4bcf8",
+      "sha256": "511b67fb4567e6494501f664ce880d35b4b66e8636ec68b5fe4ee9c36c868f71",
       "hash_check": "snapshot_only"
     },
     {
       "path": "juiced/rewrite/service/src/http.rs",
-      "sha256": "cf10b74a91d7de5c1b8d865e4ef700f0a5cc60faddf3c4669bf0cc1bd9f124a4",
+      "sha256": "cc44ea1dfd3b6bfdec2cfd12389420c393ee683d14fc2059c54fe1da0b16e4b8",
       "hash_check": "snapshot_only"
     },
     {
@@ -193,7 +193,7 @@
     },
     {
       "path": "juiced/rewrite/rust-tests/tests/telemetry.rs",
-      "sha256": "cf8575162b39b7e1546b43f6769201e084b5119a85412e8713b05bdca2aadfe6",
+      "sha256": "a717c928aebadded96b369f4367cde4d2bbee93285fae68a26660b3e5e8bd230",
       "hash_check": "snapshot_only"
     },
     {
@@ -229,6 +229,11 @@
     {
       "path": "juiced/rewrite/rust-tests/tests/model_discovery.rs",
       "sha256": "25b5f91fce499103832734e0371f215da2704c5303e09a891477e01e514f5f31",
+      "hash_check": "snapshot_only"
+    },
+    {
+      "path": "juiced/rewrite/rust-tests/tests/operations_auth.rs",
+      "sha256": "be46b61e26d1725a5a541acfd12916c97063c05eed7cea80ddecf6d368ff5e64",
       "hash_check": "snapshot_only"
     }
   ],
@@ -3680,17 +3685,18 @@
         ],
         "scenario_files": [
           "juiced/rewrite/rust-tests/tests/api_end_to_end.rs",
-          "juiced/rewrite/rust-tests/tests/system_info.rs"
+          "juiced/rewrite/rust-tests/tests/system_info.rs",
+          "juiced/rewrite/rust-tests/tests/operations_auth.rs"
         ],
         "authorities": [
           {
             "method": "GET",
             "path": "/system-info",
-            "authority": "operator"
+            "authority": "read"
           }
         ]
       },
-      "semantic_boundary": "Rust reports bounded Linux CPU, memory, NVIDIA, AMD, Intel, NPU and Vulkan observations plus per-recipe/backend hardware suitability with reasons. Native top-level OS/processor strings, cloud providers, model storage, recipe options, installation state/actions and release URLs are absent; Rust requires operator authority while native uses regular API authority. Same path does not establish native JSON parity or installation support.",
+      "semantic_boundary": "Rust reports bounded Linux CPU, memory, NVIDIA, AMD, Intel, NPU and Vulkan observations plus per-recipe/backend hardware suitability with reasons. Native top-level OS/processor strings, cloud providers, model storage, recipe options, installation state/actions and release URLs are absent; Rust requires operator authority while native uses regular API authority. Same path does not establish native JSON parity or installation support. Read authority as natively: any configured key, or open when only LEMONADE_ADMIN_API_KEY is set.",
       "documentation": "docs/api/juiced.md",
       "native_authority": "regular_api"
     },
@@ -3725,17 +3731,18 @@
           }
         ],
         "scenario_files": [
-          "juiced/rewrite/rust-tests/tests/telemetry.rs"
+          "juiced/rewrite/rust-tests/tests/telemetry.rs",
+          "juiced/rewrite/rust-tests/tests/operations_auth.rs"
         ],
         "authorities": [
           {
             "method": "GET",
             "path": "/system-stats",
-            "authority": "operator"
+            "authority": "read"
           }
         ]
       },
-      "semantic_boundary": "Rust keeps the native cpu_percent, memory_gb, gpu_percent, vram_gb, primary_gpu_id, gpus and npu_percent field names from one background sampler (2 s interval, idle stop) and adds byte counts, source states, active/queued requests and the last completed text inference's engine-reported usage and decode rate. Unknown values are null. Rust requires operator authority where native accepts regular API keys, omits memory_budget and cgroup accounting, reads NVIDIA through bounded nvidia-smi and AMD through amdgpu sysfs only on Linux, and does not observe NPU utilization.",
+      "semantic_boundary": "Rust keeps the native cpu_percent, memory_gb, gpu_percent, vram_gb, primary_gpu_id, gpus and npu_percent field names from one background sampler (2 s interval, idle stop) and adds byte counts, source states, active/queued requests and the last completed text inference's engine-reported usage and decode rate. Unknown values are null. Rust requires operator authority where native accepts regular API keys, omits memory_budget and cgroup accounting, reads NVIDIA through bounded nvidia-smi and AMD through amdgpu sysfs only on Linux, and does not observe NPU utilization. Read authority as natively: any configured key, or open when only LEMONADE_ADMIN_API_KEY is set.",
       "documentation": "docs/api/juiced.md",
       "native_authority": "regular_api"
     },
@@ -4482,7 +4489,7 @@
       "category": "operations",
       "native_behavior": "handler",
       "disposition": "retained",
-      "status": "planned",
+      "status": "partial",
       "native_evidence": [
         {
           "path": "src/cpp/server/server.cpp",
@@ -4496,12 +4503,26 @@
         "F134"
       ],
       "rust_equivalent": {
-        "relationship": "none",
-        "routes": [],
-        "scenario_files": [],
-        "authorities": []
+        "relationship": "same_path",
+        "routes": [
+          {
+            "method": "GET",
+            "path": "/metrics",
+            "prefix_scheme": "framework"
+          }
+        ],
+        "scenario_files": [
+          "juiced/rewrite/rust-tests/tests/operations_auth.rs"
+        ],
+        "authorities": [
+          {
+            "method": "GET",
+            "path": "/metrics",
+            "authority": "read"
+          }
+        ]
       },
-      "semantic_boundary": "No Rust handler implements this native path. Add request, response, authority, persistence and failure scenarios before claiming parity.",
+      "semantic_boundary": "Rust serves Prometheus text 0.0.4 from metrics.rs with the native lemonade_server_*, lemonade_loaded_models, lemonade_model_* (labels model_name, checkpoint, type, device, recipe), process totals and lemonade_{cpu,gpu,npu}_usage_percent / lemonade_{memory,vram}_used_gb names, gated like other read routes. Not exposed: lemonade_max_loaded_models (no per-type limits), lemonade_model_time_to_first_token_seconds, lemonade_routing_* and the lemonade_llamacpp_* backend passthrough.",
       "documentation": "docs/api/README.md",
       "native_authority": "regular_api"
     },
@@ -7892,7 +7913,7 @@
       "category": "websocket",
       "native_behavior": "handler",
       "disposition": "retained",
-      "status": "planned",
+      "status": "partial",
       "native_evidence": [
         {
           "path": "src/cpp/server/websocket_server.cpp",
@@ -7905,26 +7926,26 @@
         "F131"
       ],
       "rust_equivalent": {
-        "relationship": "related_operation",
+        "relationship": "same_path",
         "routes": [
           {
             "method": "GET",
-            "path": "/juiced/logs",
+            "path": "/logs/stream",
             "prefix_scheme": "native_quad"
           }
         ],
         "scenario_files": [
-          "juiced/rewrite/rust-tests/tests/telemetry.rs"
+          "juiced/rewrite/rust-tests/tests/operations_auth.rs"
         ],
         "authorities": [
           {
             "method": "GET",
-            "path": "/juiced/logs",
-            "authority": "operator"
+            "path": "/logs/stream",
+            "authority": "read"
           }
         ]
       },
-      "semantic_boundary": "Rust does not serve the native WebSocket log stream. Operators poll GET /juiced/logs with an after cursor over a bounded in-memory ring (4096 lines, 8 MiB, 4 KiB per line) of service lines and drained worker stdout/stderr, with a dropped count when the cursor fell out of the ring. Request bodies are not logged.",
+      "semantic_boundary": "Rust serves the native protocol bare and under the four prefixes: logs.subscribe with after_seq null or a sequence, one logs.snapshot of the retained ring (4096 lines, 8 MiB), then logs.entry per line, entries {seq,timestamp,severity,tag,line}; in-band auth replies auth.ok. The bare path is registered in metrics.rs, outside the parsed route tables. Read authority, so it stays open when only LEMONADE_ADMIN_API_KEY is set. Timestamps are UTC; worker lines carry the model id as tag.",
       "documentation": "docs/api/README.md",
       "native_authority": "websocket_handshake_policy"
     },
@@ -8368,10 +8389,12 @@
             "prefix_scheme": "framework"
           }
         ],
-        "scenario_files": [],
+        "scenario_files": [
+          "juiced/rewrite/rust-tests/tests/operations_auth.rs"
+        ],
         "authorities": []
       },
-      "semantic_boundary": "Native preflight uses 204 and a configured origin policy. Rust CorsLayer currently permits any origin/method/header; exact preflight and rejection behavior differs.",
+      "semantic_boundary": "Rust cors.rs follows the native origin layers (no Origin passes; loopback and app schemes pass; a non-empty allowed_origins or LEMONADE_ALLOWED_ORIGINS is authoritative; otherwise same-origin), answers 403 for disallowed origins, sets Vary: Origin, the native Allow-Methods and an explicit Allow-Headers list including Authorization, and Access-Control-Allow-Private-Network. Additions: same-origin also accepts an https origin or an IP-literal origin equal to Host/X-Forwarded-Host, and trusted preflights also list the requested headers. Configuration changes need a restart.",
       "native_authority": "preflight"
     },
     {
@@ -9595,11 +9618,11 @@
       "method": "GET",
       "path": "/system-info",
       "prefix_scheme": "native_quad",
-      "authority": "operator",
+      "authority": "read",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
         "line": 190,
-        "text": "(get, \"/system-info\", system_info, \"operator\"),",
+        "text": "(get, \"/system-info\", system_info, \"read\"),",
         "role": "registration"
       },
       "native_route_ids": [
@@ -9607,7 +9630,8 @@
       ],
       "scenario_files": [
         "juiced/rewrite/rust-tests/tests/api_end_to_end.rs",
-        "juiced/rewrite/rust-tests/tests/system_info.rs"
+        "juiced/rewrite/rust-tests/tests/system_info.rs",
+        "juiced/rewrite/rust-tests/tests/operations_auth.rs"
       ],
       "native_same_path": true
     },
@@ -10739,11 +10763,11 @@
       "method": "GET",
       "path": "/system-stats",
       "prefix_scheme": "native_quad",
-      "authority": "operator",
+      "authority": "read",
       "evidence": {
         "path": "juiced/rewrite/service/src/http.rs",
         "line": 245,
-        "text": "(get, \"/system-stats\", system_stats, \"operator\"),",
+        "text": "(get, \"/system-stats\", system_stats, \"read\"),",
         "role": "registration"
       },
       "native_route_ids": [
@@ -10751,7 +10775,8 @@
       ],
       "scenario_files": [
         "juiced/rewrite/rust-tests/tests/telemetry.rs",
-        "juiced/rewrite/rust-tests/tests/api_end_to_end.rs"
+        "juiced/rewrite/rust-tests/tests/api_end_to_end.rs",
+        "juiced/rewrite/rust-tests/tests/operations_auth.rs"
       ],
       "native_same_path": true
     },
@@ -11484,6 +11509,25 @@
         "juiced/rewrite/rust-tests/tests/model_discovery.rs"
       ],
       "native_same_path": true
+    },
+    {
+      "method": "GET",
+      "path": "/logs/stream",
+      "prefix_scheme": "native_quad",
+      "authority": "read",
+      "evidence": {
+        "path": "juiced/rewrite/service/src/http.rs",
+        "line": 279,
+        "text": "(get, \"/logs/stream\", log_stream, \"read\"),",
+        "role": "registration"
+      },
+      "native_route_ids": [
+        "websocket:GET:bare_and_native_quad:/logs/stream"
+      ],
+      "scenario_files": [
+        "juiced/rewrite/rust-tests/tests/operations_auth.rs"
+      ],
+      "native_same_path": false
     }
   ],
   "other_transport_boundaries": [
@@ -11498,11 +11542,11 @@
     "native_websocket_routes": 4,
     "auxiliary_http_route_families": 41,
     "native_registration_sites": 143,
-    "rust_published_routes": 104,
+    "rust_published_routes": 105,
     "rust_native_same_path_rows": 44,
     "native_http_status_counts": {
-      "partial": 45,
-      "planned": 81,
+      "partial": 46,
+      "planned": 80,
       "conditional": 2,
       "excluded": 7,
       "implemented": 0

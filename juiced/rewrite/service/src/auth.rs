@@ -79,6 +79,7 @@ pub struct Authorization {
     regular: Option<Credential>,
     operator: Option<Credential>,
     anonymous: RequestContext,
+    open: RequestContext,
     keys: Arc<crate::api_keys::KeyStore>,
 }
 
@@ -120,6 +121,11 @@ impl Authorization {
                 role: Role::TrustedLan,
                 credential_epoch: "anonymous-trusted-lan-v1".into(),
             },
+            open: RequestContext {
+                principal: "anonymous-open",
+                role: Role::Inference,
+                credential_epoch: "anonymous-open-v1".into(),
+            },
             keys,
         }
     }
@@ -152,6 +158,12 @@ impl Authorization {
         .collect()
     }
 
+    /// As in the native server, an admin key on its own guards only operator routes; read and
+    /// inference stay open, and a presented key is used only when it is valid.
+    fn admin_only(&self) -> bool {
+        self.regular.is_none() && self.operator.is_some() && !self.keys.enforcing()
+    }
+
     pub fn authenticate(
         &self,
         headers: &HeaderMap,
@@ -160,6 +172,33 @@ impl Authorization {
         if !self.enforcing() {
             return Ok(self.anonymous.clone());
         }
+        if authority != Authority::Operator && self.admin_only() {
+            return Ok(self
+                .credential(headers)
+                .ok()
+                .filter(|context| context.allows(authority))
+                .unwrap_or_else(|| self.open.clone()));
+        }
+        let context = self.credential(headers)?;
+        if !context.allows(authority) {
+            return Err(if authority == Authority::Operator {
+                ApiError::new(
+                    StatusCode::UNAUTHORIZED,
+                    "operator_required",
+                    "An operator API key is required.",
+                )
+            } else {
+                ApiError::new(
+                    StatusCode::UNAUTHORIZED,
+                    "inference_required",
+                    "This read-only key cannot run inference. Use an inference or operator key.",
+                )
+            });
+        }
+        Ok(context)
+    }
+
+    fn credential(&self, headers: &HeaderMap) -> Result<RequestContext, ApiError> {
         let unauthorized = || {
             ApiError::new(
                 StatusCode::UNAUTHORIZED,
@@ -201,31 +240,15 @@ impl Authorization {
             .or(api_key)
             .or_else(|| websocket_key(headers))
             .ok_or_else(unauthorized)?;
-        let context = match self
+        match self
             .operator
             .iter()
             .chain(self.regular.iter())
             .find(|key| bool::from(token.as_bytes().ct_eq(key.token.as_bytes())))
         {
-            Some(credential) => credential.context.clone(),
-            None => self.issued(token)?,
-        };
-        if !context.allows(authority) {
-            return Err(if authority == Authority::Operator {
-                ApiError::new(
-                    StatusCode::UNAUTHORIZED,
-                    "operator_required",
-                    "An operator API key is required.",
-                )
-            } else {
-                ApiError::new(
-                    StatusCode::UNAUTHORIZED,
-                    "inference_required",
-                    "This read-only key cannot run inference. Use an inference or operator key.",
-                )
-            });
+            Some(credential) => Ok(credential.context.clone()),
+            None => self.issued(token),
         }
-        Ok(context)
     }
 
     fn issued(&self, token: &str) -> Result<RequestContext, ApiError> {
@@ -430,6 +453,34 @@ mod tests {
                 .principal,
             "configured-api"
         );
+    }
+
+    #[test]
+    fn an_admin_key_alone_guards_only_operator_routes() {
+        let auth = Authorization::new(Auth {
+            api_key: None,
+            admin_key: Some("operator".into()),
+        });
+        let mut headers = HeaderMap::new();
+        for authority in [Authority::Read, Authority::Inference] {
+            assert_eq!(
+                auth.authenticate(&headers, authority).unwrap().principal,
+                "anonymous-open"
+            );
+        }
+        assert!(auth.authenticate(&headers, Authority::Operator).is_err());
+        headers.insert(header::AUTHORIZATION, "Bearer wrong".parse().unwrap());
+        let open = auth.authenticate(&headers, Authority::Inference).unwrap();
+        assert_eq!(open.role, Role::Inference);
+        assert!(!open.operator());
+        assert!(auth.authenticate(&headers, Authority::Operator).is_err());
+        headers.insert(header::AUTHORIZATION, "Bearer operator".parse().unwrap());
+        assert!(
+            auth.authenticate(&headers, Authority::Inference)
+                .unwrap()
+                .operator()
+        );
+        assert!(auth.authenticate(&headers, Authority::Operator).is_ok());
     }
 
     #[test]
