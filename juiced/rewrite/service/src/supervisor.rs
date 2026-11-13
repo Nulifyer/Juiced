@@ -3703,7 +3703,12 @@ impl Manager {
             let wait = self.startup_wait;
             let deadline = now
                 .checked_add(wait)
-                .and_then(|deadline| deadline.checked_add(self.startup_timeout))
+                .and_then(|deadline| {
+                    deadline.checked_add(
+                        self.startup_timeout
+                            .max(worker.spec.execution_profile.adapter.minimum_startup()),
+                    )
+                })
                 .and_then(|deadline| deadline.checked_add(crate::process::DEFAULT_STOP_TIMEOUT))
                 .ok_or_else(|| {
                     ApiError::new(
@@ -3780,7 +3785,10 @@ impl Manager {
                 let preparation = Preparation::begin(attempt.clone(), reservation, permit);
                 *preparation.resources.host.lock().unwrap_or_else(|error| error.into_inner()) = host;
                 let dispatch_deadline = Instant::now()
-                    .checked_add(self.startup_timeout)
+                    .checked_add(
+                        self.startup_timeout
+                            .max(worker.spec.execution_profile.adapter.minimum_startup()),
+                    )
                     .unwrap_or_else(|| deadline.into_std())
                     .min(deadline.into_std());
                 self.start_prepared(worker, &mut state, preparation, dispatch_deadline).await

@@ -339,6 +339,14 @@ impl Provider {
             Self::ExternalHttp | Self::LlamaCpp | Self::FastFlowLm => &[],
         }
     }
+    /// TheNoise loads its checkpoints and compiles kernels before it listens, which native
+    /// allowed 30 minutes for.
+    pub fn minimum_startup(self) -> std::time::Duration {
+        match self {
+            Self::TheNoise => std::time::Duration::from_secs(30 * 60),
+            _ => std::time::Duration::ZERO,
+        }
+    }
     pub fn readiness_path(self) -> &'static str {
         match self {
             Self::StableDiffusionCpp | Self::Kokoros => "/v1/models",
