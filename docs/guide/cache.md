@@ -11,11 +11,24 @@ Juiced does not store your client's conversation history.
 | Memory | Reuses supported state while the worker remains alive |
 | Persistent | Saves and restores qualified Chat Completions computation snapshots |
 
-1. Open **Cache → Storage policy**.
-2. Choose the default mode, retention period, and disk budget.
-3. Select **Save changes**.
+1. Open **Cache**.
+2. Choose the default mode under **Conversation cache**.
+3. Set **Disk budget** and **Keep for … days**, then select **Save**.
 
-Changes remain drafts until you save. **Cancel** discards them.
+When the disk budget is full, the least recently used conversations are deleted
+first. With a number of days, conversations unused for that long are also
+deleted; leave it empty to keep them until space is needed.
+
+## Keep a conversation
+
+Select the pin next to a saved conversation to keep it. Kept conversations are
+never deleted by the budget or the retention period, and still count toward the
+budget. Select the pin again to release it. **Forget** still deletes a kept
+conversation.
+
+From a script, `POST /v1/juiced/cache/sessions` takes
+`{"action":"retain","session":"<64-hex digest>","retained":true}`, and the
+`configure` action takes `retention_days` (1 to 365) in `settings`.
 
 ## Override one model
 

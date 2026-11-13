@@ -27,7 +27,7 @@ mod barista;
 pub use aliases::AliasChange;
 mod images;
 mod options;
-pub use options::{OptionsApply, OptionsError};
+pub use options::{OptionsApply, OptionsError, SettingsChange};
 mod artifact_inventory;
 mod artifact_revision;
 mod runtime_selection;
@@ -41,6 +41,7 @@ pub use engines::{AddModelError, EngineInstall, ModelAdd};
 mod intake;
 pub use intake::{ImportListQuery, ImportPathRequest, UploadQuery};
 mod local_library;
+mod model_updates;
 pub use local_library::LocalDelete;
 mod fit;
 pub use fit::FitQuery;
@@ -2408,11 +2409,8 @@ impl Manager {
             .resolved_arguments()
             .map_err(|error| ApiError::new(StatusCode::CONFLICT, error.code, error.message))?
             .1;
-        let mut view = serde_json::json!({"model":id,"revision":spec.revision,"provider":spec.execution_profile.adapter,"saved":spec.execution_profile.options(),"effective_launch":effective,"physical_slots":spec.max_inflight,"reservation_bytes":self.worker(id)?.spec.resident_bytes,"context_semantics":"context_tokens is a total launch budget; serving context requires engine observation"});
-        if spec.execution_profile.adapter == crate::config::Provider::StableDiffusionCpp {
-            view["image_defaults"] =
-                crate::media::image_defaults_view(&spec.execution_profile.args);
-        }
+        let mut view = serde_json::json!({"model":id,"revision":spec.revision,"provider":spec.execution_profile.adapter,"physical_slots":spec.max_inflight,"reservation_bytes":self.worker(id)?.spec.resident_bytes,"context_semantics":"context_tokens is a total launch budget; serving context requires engine observation"});
+        options::settings_view(&spec.execution_profile, effective.as_ref(), &mut view);
         drop(config);
         if let Some((fields, metrics)) = self.launch_provenance(id).await {
             view["fields"] = fields;

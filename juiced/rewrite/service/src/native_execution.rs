@@ -441,6 +441,7 @@ impl ResolutionContext {
             threads: None,
             gpu_layers: Some(0),
             parallel_slots: Some(physical_slots),
+            ..LaunchOptions::default()
         };
         options.validate().map_err(|_| Blocker::InvalidContext)?;
         let identity = serde_json::to_vec(&(
@@ -1028,7 +1029,8 @@ mod tests {
                 context_tokens: Some(2048),
                 threads: None,
                 gpu_layers: Some(0),
-                parallel_slots: Some(1)
+                parallel_slots: Some(1),
+                ..LaunchOptions::default()
             }
         );
         assert_eq!(result.extra_arguments(), ["--jinja", "--metrics"]);

@@ -5,9 +5,10 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use support::{
-    ADMIN_KEY, CLIENT_KEY, COMPAT_ROUTES, INFERENCE_ROUTES, LLAMA_ROUTES, MEDIA_INFERENCE_ROUTES,
-    MULTIPART_INFERENCE_ROUTES, OPERATOR_READ_ROUTES, PREFIXES, READ_ROUTES, Server,
-    WEBSOCKET_INFERENCE_ROUTES, WEBSOCKET_READ_ROUTES, WRITE_ROUTES, route_matrix,
+    ACTION_ROUTES, ADMIN_KEY, CLIENT_KEY, COMPAT_ROUTES, INFERENCE_ROUTES, LLAMA_ROUTES,
+    MEDIA_INFERENCE_ROUTES, MULTIPART_INFERENCE_ROUTES, OPERATOR_READ_ROUTES, PREFIXES,
+    READ_ROUTES, Server, WEBSOCKET_INFERENCE_ROUTES, WEBSOCKET_READ_ROUTES, WRITE_ROUTES,
+    route_matrix,
 };
 use tokio::io::AsyncReadExt;
 
@@ -68,6 +69,7 @@ async fn endpoint_inventory_matches_exercised_http_contracts() {
         assert_eq!(prefixes, PREFIXES);
         let authority = if let Some((_, _, authority)) = LLAMA_ROUTES
             .iter()
+            .chain(ACTION_ROUTES.iter())
             .find(|(m, p, _)| *m == method && *p == path)
         {
             authority

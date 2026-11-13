@@ -73,6 +73,19 @@ reserves no capacity and does not enable the model or qualify its output quality
 Keep the exact public model ID when configuring clients. Quant variants are
 separate registrations and can have different runtime settings and loading policies.
 
+## Work with several models
+
+Tick models in **Models → Installed** to load, unload or set the loading policy
+of all of them at once. Select a column title to sort by name, state or memory.
+
+**Check for updates** compares each downloaded Hugging Face model with the
+current upstream file and marks changed ones **update available**. It downloads
+nothing. Scripts use `POST /v1/models/check-updates`; `/v1/models` then reports
+`update_available` per model until the service restarts.
+
+When Juiced knows a model's repository, its details link to the model card and
+README on Hugging Face.
+
 ## Remove a model
 
 1. Open its details and select **Manage**.

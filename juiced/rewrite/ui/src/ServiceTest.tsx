@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { chatTestTokenLimit, type Client } from "./api";
+import { chatTestTokenLimit, chatTokenCeiling, type Client } from "./api";
 import { eligible, operationEligible, type Model } from "./domain";
 import { speechModels } from "./speech";
-import { Badge, Button, Empty } from "./ui";
+import { Badge, Button, Empty, HelpTip, Switch } from "./ui";
 import { AssistantBody, Composer, UserBody, thinkingClock, useAttachments } from "./ChatParts";
 import { withImages } from "./chatImages";
 import { TranscriptionTest } from "./TranscriptionTest";
@@ -32,6 +32,8 @@ function TryModel({ models, client, online }: { models: Model[]; client: Client;
   const groups = kinds.map(([kind, label, accepts]) => ({ kind, label, list: models.filter((model) => accepts(model) && !seen.has(model.id) && (seen.add(model.id), true)) })).filter((group) => group.list.length > 0);
   const choices = groups.flatMap((group) => group.list.map((model) => ({ model, kind: group.kind, label: group.label })));
   const current = choices.find((choice) => choice.model.id === id) ?? choices.find((choice) => choice.kind === "chat" && choice.model.loaded) ?? choices[0];
+  const [maxTokens, setMaxTokens] = useState("");
+  const [thinking, setThinking] = useState(true);
   if (!current) return <section className="service-tests"><Empty title="Nothing to try yet">Set a model to Hot or On demand in Loading policy, then pick it here.</Empty></section>;
   const props = { model: current.model, client, online };
   return <section className="service-tests" aria-label="Try a model">
@@ -40,9 +42,14 @@ function TryModel({ models, client, online }: { models: Model[]; client: Client;
         {groups.map((group) => <optgroup key={group.kind} label={group.label}>{group.list.map((model) => <option key={model.id} value={model.id}>{model.id}</option>)}</optgroup>)}
       </select>
       <Badge>{current.label}</Badge>
-      <span className="muted">{current.model.loaded ? "Loaded" : "Loads on first use"}{current.kind === "chat" ? ` · up to ${chatTestTokenLimit(current.model)} tokens per reply${current.model.vision ? " · accepts images" : ""}` : ""}</span>
+      <span className="muted">{current.model.loaded ? "Loaded" : "Loads on first use"}{current.kind === "chat" && current.model.vision ? " · accepts images" : ""}</span>
+      {current.kind === "chat" && <span className="chat-options">
+        <label className="inline-field">Max tokens <input className="short-input" inputMode="numeric" aria-label="Max tokens per reply" value={maxTokens} placeholder={String(chatTestTokenLimit(current.model))} onChange={(event) => setMaxTokens(event.target.value.replace(/\D/g, ""))} /></label>
+        <Switch checked={thinking} label="Thinking" onChange={setThinking}>Thinking</Switch>
+        <HelpTip label="Chat test options">Max tokens caps each reply, up to {chatTokenCeiling(current.model).toLocaleString()}. Turning thinking off asks a reasoning model to answer directly; other models ignore it.</HelpTip>
+      </span>}
     </div>
-    {current.kind === "chat" ? <ChatTest {...props} />
+    {current.kind === "chat" ? <ChatTest {...props} maxTokens={Math.min(chatTokenCeiling(current.model), Math.max(1, Number(maxTokens) || chatTestTokenLimit(current.model)))} thinking={thinking ? undefined : false} />
       : current.kind === "embeddings" ? <EmbeddingsTest {...props} />
       : current.kind === "transcription" ? <TranscriptionTest {...props} />
       : current.kind === "speech" ? <SpeakTest {...props} />
@@ -52,7 +59,7 @@ function TryModel({ models, client, online }: { models: Model[]; client: Client;
 
 type Turn = { role: "user" | "assistant"; content: string; images?: string[]; reasoning?: string; since?: number; thoughtMs?: number; tokens?: number | null; rate?: number | null; error?: string; streaming?: boolean };
 
-function ChatTest({ model: selected, client, online }: { model: Model; client: Client; online: boolean }) {
+function ChatTest({ model: selected, client, online, maxTokens, thinking }: { model: Model; client: Client; online: boolean; maxTokens: number; thinking?: boolean }) {
   const [prompt, setPrompt] = useState("");
   const [turns, setTurns] = useState<Turn[]>([]);
   const [busy, setBusy] = useState(false);
@@ -73,7 +80,7 @@ function ChatTest({ model: selected, client, online }: { model: Model; client: C
     const clock = thinkingClock();
     const update = (patch: Partial<Turn>) => setTurns((current) => current.map((turn, index) => index === current.length - 1 ? { ...turn, ...patch } : turn));
     try {
-      const final = await client.streamChat(selected.id, history, chatTestTokenLimit(selected), (state) => update({ content: state.content, reasoning: state.reasoning, ...clock.observe(state.reasoning, !!state.content) }), controller.signal);
+      const final = await client.streamChat(selected.id, history, maxTokens, (state) => update({ content: state.content, reasoning: state.reasoning, ...clock.observe(state.reasoning, !!state.content) }), controller.signal, thinking);
       update({ content: final.content || "The model returned no text.", reasoning: final.reasoning, thoughtMs: clock.finish(), tokens: final.outputTokens, rate: final.decodeRate, streaming: false });
     } catch (error) {
       update({ streaming: false, thoughtMs: clock.finish(), error: controller.signal.aborted ? "Stopped." : error instanceof Error ? error.message : "The request failed." });

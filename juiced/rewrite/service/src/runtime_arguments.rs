@@ -52,6 +52,7 @@ pub struct ArgumentTemplate {
     adapter: Provider,
     fixture: bool,
     typed_spans: Vec<(usize, usize)>,
+    extra_spans: Vec<(usize, usize)>,
     bindings: [Option<usize>; 4],
     members: Vec<MemberBinding>,
 }
@@ -84,6 +85,82 @@ impl ArgumentTemplate {
         !self.typed_spans.is_empty()
     }
 
+    /// Operator arguments that are neither manager bindings, companions nor typed options, in
+    /// launch order. Switches the service itself reads from the engine are kept out of view and
+    /// survive every rewrite.
+    pub fn extra_arguments(&self) -> Vec<String> {
+        self.extra_spans
+            .iter()
+            .filter(|(start, _)| !service_kept(self.adapter, &self.arguments[*start]))
+            .flat_map(|(start, length)| self.arguments[*start..*start + *length].iter().cloned())
+            .collect()
+    }
+
+    /// Replaces the operator arguments, keeping bindings, companions, typed options and the
+    /// service-kept switches where they are.
+    pub fn with_extra_arguments(&self, extras: &[String]) -> Result<Self, Error> {
+        let mut position = 0;
+        while let Some(token) = extras.get(position) {
+            let flag = normalized_flag(
+                self.adapter,
+                token
+                    .split_once('=')
+                    .map_or(token.as_str(), |(flag, _)| flag),
+            );
+            if self.adapter == Provider::LlamaCpp && flag == "--no-slots" {
+                return Err(Error::new(
+                    "extra_argument_managed",
+                    "The service reads engine slots; --no-slots cannot be set.",
+                ));
+            }
+            if self.adapter == Provider::LlamaCpp && crate::profiles::option_field(&flag).is_some()
+            {
+                return Err(Error::new(
+                    "extra_argument_typed",
+                    "This flag has its own setting. Set it there instead of in the extra arguments.",
+                ));
+            }
+            match passthrough(self.adapter, &flag) {
+                Passthrough::ManagerOwned | Passthrough::Companion => {
+                    return Err(Error::new(
+                        "extra_argument_managed",
+                        "The service owns the worker host, port, model, companion and cache arguments.",
+                    ));
+                }
+                Passthrough::Accepted(arity) if !token.contains('=') => {
+                    position += 1 + usize::from(arity.min(1));
+                }
+                Passthrough::Accepted(_) => position += 1,
+                Passthrough::Forbidden | Passthrough::Unknown => {
+                    return Err(Error::new(
+                        "unsupported_runtime_argument",
+                        "The selected engine does not accept this argument, or it changes unmanaged files, networking or lifecycle.",
+                    ));
+                }
+            }
+        }
+        let mut arguments = Vec::with_capacity(self.arguments.len() + extras.len());
+        let mut position = 0;
+        let mut spans = self.extra_spans.iter().peekable();
+        while position < self.arguments.len() {
+            match spans.peek() {
+                Some((start, length)) if *start == position => {
+                    if service_kept(self.adapter, &self.arguments[position]) {
+                        arguments.extend_from_slice(&self.arguments[position..position + length]);
+                    }
+                    position += length;
+                    spans.next();
+                }
+                _ => {
+                    arguments.push(self.arguments[position].clone());
+                    position += 1;
+                }
+            }
+        }
+        arguments.extend_from_slice(extras);
+        validate_selected(self.adapter, &arguments, self.fixture)
+    }
+
     pub(crate) fn bindings_only(&self) -> bool {
         let pairs =
             self.bindings.iter().flatten().count() + usize::from(self.bindings[2].is_none());
@@ -111,7 +188,8 @@ impl ArgumentTemplate {
             message: error.message,
         })?;
         let mut groups = Vec::new();
-        let mut fields: [VecDeque<usize>; 4] = std::array::from_fn(|_| VecDeque::new());
+        let mut fields: [VecDeque<usize>; crate::profiles::FIELD_COUNT] =
+            std::array::from_fn(|_| VecDeque::new());
         for group in resolved.args.as_chunks::<2>().0 {
             let field = crate::profiles::option_field(&group[0]).ok_or_else(truncated)?;
             let queue = fields.get_mut(field).ok_or_else(truncated)?;
@@ -243,6 +321,7 @@ pub fn validate(adapter: Provider, arguments: &[String]) -> Result<ArgumentTempl
             adapter,
             fixture: false,
             typed_spans: Vec::new(),
+            extra_spans: Vec::new(),
             bindings: [None; 4],
             members: Vec::new(),
         });
@@ -329,6 +408,7 @@ fn validate_flm(arguments: &[String]) -> Result<ArgumentTemplate, Error> {
         adapter: Provider::FastFlowLm,
         fixture: false,
         typed_spans: Vec::new(),
+        extra_spans: Vec::new(),
         bindings,
         members: Vec::new(),
     })
@@ -496,6 +576,7 @@ pub fn passthrough(adapter: Provider, flag: &str) -> Passthrough {
         Provider::LlamaCpp => llama_arity(&flag),
         Provider::WhisperCpp => whisper_arity(&flag),
         Provider::StableDiffusionCpp => stable_diffusion_arity(&flag),
+        Provider::Moonshine => (flag == "--model-arch").then_some(1),
         _ => None,
     } {
         Some(arity) => Passthrough::Accepted(arity),
@@ -600,6 +681,7 @@ fn validate_selected(
     let mut bindings = [None; 4];
     let mut result = Vec::with_capacity(arguments.len() + 2);
     let mut typed_spans = Vec::new();
+    let mut extra_spans = Vec::new();
     let mut members: Vec<MemberBinding> = Vec::new();
     let mut server_phase = false;
     let mut position = 0;
@@ -682,6 +764,7 @@ fn validate_selected(
                 "This selected worker argument changes unmanaged authority, artifacts, files, networking or lifecycle.",
             ));
         }
+        let fixture_flag = fixture && fixture_arity(&flag).is_some();
         let arity = if fixture { fixture_arity(&flag) } else { None }
             .or_else(|| match adapter {
                 Provider::LlamaCpp => llama_arity(&flag),
@@ -705,10 +788,13 @@ fn validate_selected(
                     "The selected adapter does not define this worker argument or positional form.",
                 )
             })?;
+        let start = result.len();
         if adapter == Provider::LlamaCpp
             && let Some(field) = crate::profiles::option_field(&flag)
         {
-            typed_spans.push((result.len(), field));
+            typed_spans.push((start, field));
+        } else if !fixture_flag {
+            extra_spans.push((start, usize::from(arity.min(1)) + 1));
         }
         result.push(flag);
         if arity == 0 {
@@ -753,9 +839,14 @@ fn validate_selected(
         adapter,
         fixture,
         typed_spans,
+        extra_spans,
         bindings,
         members,
     })
+}
+
+fn service_kept(adapter: Provider, flag: &str) -> bool {
+    adapter == Provider::LlamaCpp && matches!(flag, "--slots" | "--metrics")
 }
 
 fn truncated() -> Error {
@@ -1563,6 +1654,81 @@ mod tests {
                 "--parallel",
                 "1"
             ])
+        );
+    }
+
+    #[test]
+    fn extra_arguments_are_replaced_without_touching_bindings_typed_flags_or_kept_switches() {
+        let template = validate(
+            Provider::LlamaCpp,
+            &args(&[
+                "--host",
+                "127.0.0.1",
+                "--port",
+                "{port}",
+                "--model",
+                "{model}",
+                "--slots",
+                "--jinja",
+                "-c",
+                "4096",
+                "--metrics",
+                "--spec-type",
+                "draft-mtp",
+                "--chat-template-kwargs",
+                "{\"enable_thinking\":false}",
+            ]),
+        )
+        .unwrap();
+        assert_eq!(
+            template.extra_arguments(),
+            args(&[
+                "--jinja",
+                "--spec-type",
+                "draft-mtp",
+                "--chat-template-kwargs",
+                "{\"enable_thinking\":false}"
+            ])
+        );
+        let next = template
+            .with_extra_arguments(&args(&["--swa-full", "--spec-type=draft-mtp"]))
+            .unwrap();
+        assert_eq!(
+            next.extra_arguments(),
+            args(&["--swa-full", "--spec-type", "draft-mtp"])
+        );
+        for kept in ["--slots", "--metrics", "{model}", "{port}", "4096"] {
+            assert!(
+                next.arguments().iter().any(|argument| argument == kept),
+                "{kept}"
+            );
+        }
+        assert!(
+            !next
+                .arguments()
+                .iter()
+                .any(|argument| argument == "--jinja")
+        );
+        for (extras, code) in [
+            (args(&["--temp", "0.5"]), "extra_argument_typed"),
+            (args(&["--port", "1"]), "extra_argument_managed"),
+            (args(&["--mmproj", "x.gguf"]), "extra_argument_managed"),
+            (args(&["--no-slots"]), "extra_argument_managed"),
+            (args(&["--lora", "x"]), "unsupported_runtime_argument"),
+            (args(&["--made-up"]), "unsupported_runtime_argument"),
+        ] {
+            assert_eq!(
+                template.with_extra_arguments(&extras).unwrap_err().code,
+                code,
+                "{extras:?}"
+            );
+        }
+        assert_eq!(
+            template
+                .with_extra_arguments(&[])
+                .unwrap()
+                .extra_arguments(),
+            Vec::<String>::new()
         );
     }
 

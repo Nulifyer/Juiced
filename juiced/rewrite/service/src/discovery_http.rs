@@ -156,11 +156,19 @@ pub async fn models(
             && service.is_none_or(|kind| model_type(&model.view.operations) == kind)
             && (!anthropic || model.chat())
     };
+    let library = manager.library();
     let mut data: Vec<Value> = models
         .iter()
         .filter(|model| included(model))
         .map(|model| model.openai(&model.view.id, None))
         .collect();
+    for entry in &mut data {
+        let update = entry["id"]
+            .as_str()
+            .and_then(|id| library.update_available(id))
+            .unwrap_or(false);
+        entry["update_available"] = json!(update);
+    }
     if service.is_none() && !anthropic {
         for (alias, target) in &alias_targets {
             if let Some(model) = models
@@ -172,7 +180,8 @@ pub async fn models(
         }
     }
     let variant = format!(
-        "models{}{}{}",
+        "models-u{}{}{}{}",
+        library.updates_generation(),
         if show_all { "-all" } else { "" },
         query
             .service

@@ -26,32 +26,104 @@ pub enum SyncField {
     Threads,
     GpuLayers,
     ParallelSlots,
+    Batching,
+    Attention,
+    Sampling,
+    ExtraArgs,
 }
 
-const FIELDS: [SyncField; 4] = [
+const FIELDS: [SyncField; 8] = [
     SyncField::ContextTokens,
     SyncField::Threads,
     SyncField::GpuLayers,
     SyncField::ParallelSlots,
+    SyncField::Batching,
+    SyncField::Attention,
+    SyncField::Sampling,
+    SyncField::ExtraArgs,
 ];
 
 impl SyncField {
-    fn get(self, options: &LaunchOptions) -> Option<u32> {
+    fn legacy(self, options: &LaunchOptions) -> Option<u32> {
         match self {
             Self::ContextTokens => options.context_tokens,
             Self::Threads => options.threads,
             Self::GpuLayers => options.gpu_layers,
             Self::ParallelSlots => options.parallel_slots,
+            _ => None,
         }
     }
 
-    fn set(self, options: &mut LaunchOptions, value: Option<u32>) {
+    /// The part of the options this field copies, as a standalone options value.
+    fn part(self, options: &LaunchOptions) -> LaunchOptions {
+        let mut part = LaunchOptions::default();
         match self {
-            Self::ContextTokens => options.context_tokens = value,
-            Self::Threads => options.threads = value,
-            Self::GpuLayers => options.gpu_layers = value,
-            Self::ParallelSlots => options.parallel_slots = value,
+            Self::ContextTokens => part.context_tokens = options.context_tokens,
+            Self::Threads => part.threads = options.threads,
+            Self::GpuLayers => part.gpu_layers = options.gpu_layers,
+            Self::ParallelSlots => part.parallel_slots = options.parallel_slots,
+            Self::Batching => {
+                part.batch_size = options.batch_size;
+                part.ubatch_size = options.ubatch_size;
+                part.batch_threads = options.batch_threads;
+            }
+            Self::Attention => {
+                part.flash_attention = options.flash_attention;
+                part.cache_type_k = options.cache_type_k.clone();
+                part.cache_type_v = options.cache_type_v.clone();
+            }
+            Self::Sampling => {
+                part.temperature = options.temperature;
+                part.top_k = options.top_k;
+                part.top_p = options.top_p;
+                part.min_p = options.min_p;
+                part.repeat_penalty = options.repeat_penalty;
+                part.reasoning_budget = options.reasoning_budget;
+            }
+            Self::ExtraArgs => {}
         }
+        part
+    }
+
+    fn same(self, source: &Entry, target: &Entry) -> bool {
+        match self {
+            Self::ExtraArgs => source.extras == target.extras,
+            _ => self.part(&source.saved) == self.part(&target.saved),
+        }
+    }
+
+    fn copy(self, source: &Entry, next: &mut LaunchOptions, extras: &mut Option<Vec<String>>) {
+        if self == Self::ExtraArgs {
+            *extras = Some(source.extras.clone());
+            return;
+        }
+        let reset = |options: &mut LaunchOptions| match self {
+            Self::ContextTokens => options.context_tokens = None,
+            Self::Threads => options.threads = None,
+            Self::GpuLayers => options.gpu_layers = None,
+            Self::ParallelSlots => options.parallel_slots = None,
+            Self::Batching => {
+                options.batch_size = None;
+                options.ubatch_size = None;
+                options.batch_threads = None;
+            }
+            Self::Attention => {
+                options.flash_attention = None;
+                options.cache_type_k = None;
+                options.cache_type_v = None;
+            }
+            Self::Sampling => {
+                options.temperature = None;
+                options.top_k = None;
+                options.top_p = None;
+                options.min_p = None;
+                options.repeat_penalty = None;
+                options.reasoning_budget = None;
+            }
+            Self::ExtraArgs => {}
+        };
+        reset(next);
+        next.overlay(&self.part(&source.saved));
     }
 }
 
@@ -79,6 +151,7 @@ struct Entry {
     adapter: Provider,
     native: bool,
     saved: LaunchOptions,
+    extras: Vec<String>,
     revision: u64,
     max_inflight: u32,
 }
@@ -150,15 +223,11 @@ fn ineligible(
     None
 }
 
-fn field_names(
-    fields: &[SyncField],
-    options: &LaunchOptions,
-    other: &LaunchOptions,
-) -> Vec<SyncField> {
+fn field_names(fields: &[SyncField], source: &Entry, target: &Entry) -> Vec<SyncField> {
     fields
         .iter()
         .copied()
-        .filter(|field| field.get(options) != field.get(other))
+        .filter(|field| !field.same(source, target))
         .collect()
 }
 
@@ -203,6 +272,7 @@ impl Manager {
                     .options()
                     .cloned()
                     .unwrap_or_default(),
+                extras: spec.execution_profile.extra_arguments().unwrap_or_default(),
                 revision: spec.revision,
                 max_inflight: spec.max_inflight,
             })
@@ -247,6 +317,7 @@ impl Manager {
             "provider": source.adapter,
             "syncable": syncable,
             "saved": source.saved,
+            "extra_args": source.extras,
             "fields": FIELDS,
             "group": null,
             "members": [],
@@ -288,7 +359,8 @@ impl Manager {
                     "saved": target.saved,
                     "eligible": reason.is_none(),
                     "reason": reason,
-                    "differs": field_names(&FIELDS, &source.saved, &target.saved),
+                    "extra_args": target.extras,
+                    "differs": field_names(&FIELDS, source, target),
                 })
             })
             .collect();
@@ -420,13 +492,14 @@ impl Manager {
                 continue;
             }
             let mut next = target.saved.clone();
+            let mut extras = None;
             let mut copied = Vec::new();
             let mut skipped = Vec::new();
             for field in &fields {
-                let value = field.get(&source.saved);
-                if value == field.get(&target.saved) {
+                if field.same(source, target) {
                     continue;
                 }
+                let value = field.legacy(&source.saved);
                 let refusal = match (field, value) {
                     (SyncField::ParallelSlots, Some(slots)) if slots != target.max_inflight => {
                         Some(json!({
@@ -460,7 +533,7 @@ impl Manager {
                 match refusal {
                     Some(refusal) => skipped.push(refusal),
                     None => {
-                        field.set(&mut next, value);
+                        field.copy(source, &mut next, &mut extras);
                         copied.push(*field);
                     }
                 }
@@ -480,6 +553,12 @@ impl Manager {
             let resolution = profile
                 .set_local_options(next)
                 .map_err(|_| "native_settings_authority")
+                .and_then(|()| match &extras {
+                    Some(extras) => profile
+                        .set_local_extra_arguments(extras)
+                        .map_err(|error| error.code),
+                    None => Ok(()),
+                })
                 .and_then(|()| profile.resolved_arguments().map_err(|error| error.code))
                 .and_then(|(_, applied)| {
                     applied
@@ -719,6 +798,51 @@ mod tests {
             fields: None,
             apply,
         }
+    }
+
+    #[tokio::test]
+    async fn sampling_and_extra_arguments_copy_as_named_groups() {
+        let (_directory, manager) = manager();
+        let change: super::super::SettingsChange = serde_json::from_value(json!({
+            "expected_revision": 1,
+            "options": {"temperature": 0.6, "top_k": 20, "threads": 3},
+            "extra_args": ["--spec-type", "draft-mtp"],
+        }))
+        .unwrap();
+        let saved = manager
+            .apply_settings("Demo-GGUF-Q4_K_M", change)
+            .await
+            .unwrap();
+        let view = manager.variants("Demo-GGUF-Q4_K_M").await.unwrap();
+        assert_eq!(view["extra_args"], json!(["--spec-type", "draft-mtp"]));
+        let member = view["members"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|member| member["model"] == "Demo-GGUF-Q6_K")
+            .unwrap()
+            .clone();
+        assert_eq!(
+            member["differs"],
+            json!(["threads", "sampling", "extra_args"])
+        );
+        let mut sync = request(&["Demo-GGUF-Q6_K"], OptionsApply::NextLoad);
+        sync.expected_revision = saved["revision"].as_u64().unwrap();
+        sync.fields = Some(vec![SyncField::Sampling, SyncField::ExtraArgs]);
+        let reply = manager
+            .sync_variants("Demo-GGUF-Q4_K_M", sync)
+            .await
+            .unwrap();
+        assert_eq!(reply["results"][0]["outcome"], "updated", "{reply}");
+        assert_eq!(
+            reply["results"][0]["copied"],
+            json!(["sampling", "extra_args"])
+        );
+        let target = manager.options("Demo-GGUF-Q6_K").await.unwrap();
+        assert_eq!(target["saved"]["temperature"], 0.6);
+        assert_eq!(target["saved"]["top_k"], 20);
+        assert_eq!(target["saved"]["threads"], Value::Null);
+        assert_eq!(target["extra_args"], json!(["--spec-type", "draft-mtp"]));
     }
 
     #[tokio::test]

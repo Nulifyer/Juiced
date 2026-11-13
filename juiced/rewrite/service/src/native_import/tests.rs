@@ -213,9 +213,10 @@ fn good_source_maps_models_options_policies_aliases_and_weights_without_writes()
         mapped.options,
         LaunchOptions {
             context_tokens: Some(4096),
-            threads: Some(6),
+            threads: None,
             gpu_layers: Some(20),
-            parallel_slots: None
+            parallel_slots: None,
+            ..LaunchOptions::default()
         }
     );
     assert_eq!(mapped.backend.as_deref(), Some("cpu"));
@@ -808,4 +809,105 @@ fn native_names_resolve_across_hubs_snapshots_and_companion_roles() {
     let (model, voices) = inspection.find_kokoro(kokoro).unwrap();
     assert!(model.path.ends_with("kokoro-v1.0.onnx"));
     assert!(voices.ends_with("voices-v1.0.bin"));
+}
+
+#[test]
+fn backend_arguments_global_image_defaults_and_typed_flags_survive_import() {
+    let global = Document::parse_bytes(
+        Role::Config,
+        Some(
+            br#"{"llamacpp":{"args":"--jinja","rocm_args":"--swa-full -ub 256","vulkan_args":""},
+                "sdcpp":{"steps":20,"cfg_scale":7.0,"width":512,"height":512,"rocm_args":"--vae-tiling"}}"#,
+        ),
+    )
+    .unwrap();
+    let ornith = [
+        (
+            "llamacpp_args",
+            raw(r#""--spec-type draft-mtp --temp 0.6 --top-k 20 -fa on --cache-type-k q8_0""#),
+        ),
+        ("ctx_size", raw("262144")),
+    ];
+    let mapped = map_options(
+        Some(Engine::LlamaCpp),
+        "llamacpp",
+        &global,
+        &[one_layer("saved", &ornith)],
+        &[],
+    );
+    assert_eq!(mapped.options.context_tokens, Some(262144));
+    assert_eq!(mapped.options.temperature, None);
+    let flat = mapped.arguments.concat();
+    for pair in [
+        ["--spec-type", "draft-mtp"],
+        ["--temp", "0.6"],
+        ["--top-k", "20"],
+        ["-fa", "on"],
+        ["--cache-type-k", "q8_0"],
+    ] {
+        assert!(flat.windows(2).any(|window| window == pair), "{flat:?}");
+    }
+    assert!(!flat.iter().any(|argument| argument == "--jinja"));
+    let applied = LaunchOptions::default().resolve(&flat).unwrap().applied;
+    assert_eq!(applied.temperature, Some(crate::profiles::Decimal(0.6)));
+    assert_eq!(applied.top_k, Some(20));
+    assert_eq!(applied.cache_type_k.as_deref(), Some("q8_0"));
+
+    let skyfall = [("ctx_size", raw("32768"))];
+    let rocm = map_options_for(
+        Some(Engine::LlamaCpp),
+        "llamacpp",
+        &global,
+        &[one_layer("saved", &skyfall)],
+        &[],
+        Some("rocm"),
+    );
+    assert_eq!(rocm.options.context_tokens, Some(32768));
+    assert_eq!(rocm.args_backend.as_deref(), Some("rocm"));
+    let flat = rocm.arguments.concat();
+    assert!(flat.iter().any(|argument| argument == "--swa-full"));
+    assert!(flat.windows(2).any(|window| window == ["-ub", "256"]));
+    assert!(!flat.iter().any(|argument| argument == "--jinja"));
+    assert!(
+        rocm.rows
+            .iter()
+            .any(|row| row.key == "rocm_args" && row.state == "mapped")
+    );
+    let vulkan = map_options_for(
+        Some(Engine::LlamaCpp),
+        "llamacpp",
+        &global,
+        &[one_layer("saved", &skyfall)],
+        &[],
+        Some("vulkan"),
+    );
+    assert_eq!(vulkan.args_backend, None);
+    assert_eq!(vulkan.arguments, vec![vec!["--jinja".to_owned()]]);
+    assert!(has_backend_arguments(&global, "llamacpp", "rocm"));
+    assert!(!has_backend_arguments(&global, "llamacpp", "vulkan"));
+
+    let image = [("steps", raw("8"))];
+    let mapped = map_options_for(
+        Some(Engine::StableDiffusionCpp),
+        "sd-cpp",
+        &global,
+        &[one_layer("image_defaults", &image)],
+        &[],
+        Some("rocm"),
+    );
+    let flat = mapped.arguments.concat();
+    for pair in [
+        ["--steps", "8"],
+        ["--cfg-scale", "7"],
+        ["-W", "512"],
+        ["-H", "512"],
+    ] {
+        assert!(flat.windows(2).any(|window| window == pair), "{flat:?}");
+    }
+    assert!(flat.iter().any(|argument| argument == "--vae-tiling"));
+    let rows = global_rows(&global);
+    let state = |key: &str| rows.iter().find(|row| row.key == key).map(|row| row.state);
+    assert_eq!(state("llamacpp.rocm_args"), Some("mapped"));
+    assert_eq!(state("llamacpp.vulkan_args"), Some("ignored"));
+    assert_eq!(state("sdcpp.steps"), Some("mapped"));
 }

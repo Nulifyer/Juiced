@@ -366,6 +366,7 @@ pub struct Library {
     pulls: Mutex<Vec<Arc<Mutex<PullRecord>>>>,
     local_scan: tokio::sync::Mutex<()>,
     local: Mutex<Option<CachedLocal>>,
+    updates: Mutex<(u64, BTreeMap<String, bool>)>,
 }
 
 impl Library {
@@ -398,6 +399,44 @@ impl Library {
             pulls: Mutex::new(Vec::new()),
             local_scan: tokio::sync::Mutex::new(()),
             local: Mutex::new(None),
+            updates: Mutex::new((0, BTreeMap::new())),
+        }
+    }
+
+    pub(crate) fn hub(&self) -> &Hub {
+        &self.hub
+    }
+
+    /// Whether the last explicit update check found newer upstream weights for this model;
+    /// `None` until a check determined it.
+    pub fn update_available(&self, model: &str) -> Option<bool> {
+        self.updates
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .1
+            .get(model)
+            .copied()
+    }
+
+    /// Changes whenever a check changes any determination, for list validators.
+    pub fn updates_generation(&self) -> u64 {
+        self.updates
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .0
+    }
+
+    pub(crate) fn record_updates(&self, determined: BTreeMap<String, bool>) {
+        let mut updates = self
+            .updates
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let mut changed = false;
+        for (model, available) in determined {
+            changed |= updates.1.insert(model, available) != Some(available);
+        }
+        if changed {
+            updates.0 += 1;
         }
     }
 

@@ -369,14 +369,15 @@ impl Manager {
         expected_revision: u64,
         options: crate::profiles::LaunchOptions,
     ) -> Result<serde_json::Value, ApiError> {
-        if options.threads.is_some()
-            || options.gpu_layers.is_some()
-            || options.parallel_slots.is_some()
-        {
+        let others = crate::profiles::LaunchOptions {
+            context_tokens: None,
+            ..options.clone()
+        };
+        if others != crate::profiles::LaunchOptions::default() {
             return Err(ApiError::new(
                 StatusCode::BAD_REQUEST,
                 "native_options_authority",
-                "This native settings view edits only the context override; CPU placement and the physical slot remain bound by the imported profile.",
+                "This native settings view edits only the context override; placement, slots, batching and sampling remain bound by the imported profile.",
             ));
         }
         let state = worker.state.lock().await;

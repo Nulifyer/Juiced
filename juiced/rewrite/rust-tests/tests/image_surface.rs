@@ -291,6 +291,8 @@ async fn openai_image_edits_and_variations_forward_multipart_to_the_edit_worker(
             Part::File("mask", "mask.png", "image/png", &mask),
             Part::Text("steps", "6"),
             Part::Text("quality", "auto"),
+            Part::Text("style", "vivid"),
+            Part::File("thumbnail", "t.png", "image/png", &mask),
         ],
     )
     .await;
@@ -299,6 +301,7 @@ async fn openai_image_edits_and_variations_forward_multipart_to_the_edit_worker(
     assert_eq!(edited["received"]["size"], "640x480");
     assert_eq!(edited["received"]["n"], "1");
     assert_eq!(edited["received"]["output_format"], "png");
+    assert!(edited["received"].get("style").is_none(), "{edited}");
     let prompt = edited["received"]["prompt"].as_str().unwrap();
     assert!(
         prompt.starts_with("Add a red barn <sd_cpp_extra_args>")
@@ -340,6 +343,7 @@ async fn openai_image_edits_and_variations_forward_multipart_to_the_edit_worker(
             Part::Text("size", "512x512"),
             Part::Text("n", "2"),
             Part::Text("response_format", "b64_json"),
+            Part::Text("client_request_id", "abc"),
         ],
     )
     .await;

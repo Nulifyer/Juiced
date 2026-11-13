@@ -6,6 +6,12 @@ export class ApiError extends Error {
   constructor(message: string, readonly status: number, readonly code: string, readonly body?: unknown) { super(message); }
 }
 
+/** The largest reply a chat test may ask for: the model's own output limit. */
+export function chatTokenCeiling(model: Pick<Model, "request_limits">): number {
+  const limit = model.request_limits?.output_tokens ?? 1024;
+  return Number.isSafeInteger(limit) && limit > 0 ? limit : 1024;
+}
+
 export function chatTestTokenLimit(model: Pick<Model, "request_limits">): number {
   const limit = model.request_limits?.output_tokens ?? 1024;
   if (!Number.isSafeInteger(limit) || limit <= 0) throw new ApiError("The model's test limit is invalid. Refresh service state.", 0, "invalid_model_limits");
@@ -27,10 +33,10 @@ export class Client {
     throw new ApiError("The worker returned an unsupported chat response. Check the selected service's compatibility.", 200, "invalid_chat_response");
   }
 
-  async streamChat(model: string, messages: { role: string; content: MessageContent }[], maxTokens: number, onUpdate: (update: ChatStreamUpdate) => void, signal?: AbortSignal): Promise<ChatStreamUpdate> {
+  async streamChat(model: string, messages: { role: string; content: MessageContent }[], maxTokens: number, onUpdate: (update: ChatStreamUpdate) => void, signal?: AbortSignal, thinking?: boolean): Promise<ChatStreamUpdate> {
     const headers: Record<string, string> = { "Content-Type": "application/json", Accept: "text/event-stream" };
     if (this.key) headers.Authorization = `Bearer ${this.key}`;
-    const body = { model, messages, stream: true, max_tokens: maxTokens, stream_options: { include_usage: true } };
+    const body = { model, messages, stream: true, max_tokens: maxTokens, stream_options: { include_usage: true }, ...(thinking === undefined ? {} : { chat_template_kwargs: { enable_thinking: thinking } }) };
     if (requestBytes(body) > REQUEST_LIMIT_BYTES) throw new ApiError(tooLarge, 413, "request_too_large");
     const response = await fetch(`${this.base}/v1/chat/completions`, { method: "POST", headers, signal, cache: "no-store", redirect: "error", body: JSON.stringify(body) });
     if (!response.ok || !response.body) {

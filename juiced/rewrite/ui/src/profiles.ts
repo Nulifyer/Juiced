@@ -1,7 +1,8 @@
-export type Provider = "external-http" | "llama-cpp" | "whisper-cpp";
+export type Provider = "external-http" | "llama-cpp" | "whisper-cpp" | "stable-diffusion-cpp" | "kokoros" | "parakeet" | "moonshine" | "asr4all" | "fastflowlm";
+const providers: Provider[] = ["external-http", "llama-cpp", "whisper-cpp", "stable-diffusion-cpp", "kokoros", "parakeet", "moonshine", "asr4all", "fastflowlm"];
 export type LaunchOptions = { context_tokens: number | null; threads: number | null; gpu_layers: number | null; parallel_slots: number | null };
 export type LaunchDraft = { context: string; threads: string; gpu: string };
-export type ModelOptions = { model: string; revision: number; provider: Provider; saved: LaunchOptions; effective_launch: LaunchOptions | null; physical_slots: number; context_semantics: string; options_authority?: "local-profile" | "native-settings"; editable_fields?: string[] };
+export type ModelOptions = { model: string; revision: number; provider: Provider; saved: LaunchOptions; effective_launch: LaunchOptions | null; physical_slots: number; context_semantics: string; options_authority?: "local-profile" | "native-settings"; editable_fields?: string[]; defaults?: Record<string, unknown>; extra_args?: string[]; image_defaults?: Record<string, unknown>; asr_options?: Record<string, unknown> };
 export type ModelContext = {
   schema_version: number; model: string; revision: number; provider: Provider;
   declared: { source: string; format_version: number; architecture: string | null; training_context_tokens: number | null } | null;
@@ -13,11 +14,13 @@ export type ModelContext = {
 const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
 const integer = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0;
 const optionalInteger = (value: unknown): boolean => value === null || integer(value);
-const provider = (value: unknown): value is Provider => value === "llama-cpp" || value === "external-http" || value === "whisper-cpp";
+const provider = (value: unknown): value is Provider => providers.includes(value as Provider);
 const options = (value: unknown): value is LaunchOptions => object(value) && ["context_tokens", "threads", "gpu_layers", "parallel_slots"].every((key) => optionalInteger(value[key]));
 export function parseModelOptions(value: unknown): ModelOptions {
   if (!object(value) || typeof value.model !== "string" || !integer(value.revision) || !provider(value.provider) || !options(value.saved) || !(value.effective_launch === null || options(value.effective_launch)) || !integer(value.physical_slots) || value.physical_slots === 0 || typeof value.context_semantics !== "string") throw new Error("The model launch settings are invalid. Refresh before saving a profile.");
   if (value.options_authority !== undefined && value.options_authority !== "local-profile" && value.options_authority !== "native-settings") throw new Error("The model settings owner is unsupported. Refresh before saving.");
+  if (value.extra_args !== undefined && (!Array.isArray(value.extra_args) || !value.extra_args.every((item) => typeof item === "string"))) throw new Error("The model's extra arguments are invalid. Refresh before saving.");
+  for (const key of ["defaults", "image_defaults", "asr_options"] as const) if (value[key] !== undefined && !object(value[key])) throw new Error("The model settings are invalid. Refresh before saving.");
   if (value.options_authority === "native-settings" && (value.provider !== "llama-cpp" || !Array.isArray(value.editable_fields) || value.editable_fields.length !== 1 || value.editable_fields[0] !== "context_tokens" || value.saved.threads !== null || value.saved.gpu_layers !== null || value.saved.parallel_slots !== null)) throw new Error("The imported model settings expose unsupported editable fields.");
   return value as ModelOptions;
 }

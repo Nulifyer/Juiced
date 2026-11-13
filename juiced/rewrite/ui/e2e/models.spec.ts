@@ -95,7 +95,7 @@ test("the inspector groups Overview, Settings and Manage tabs and loads from Ove
   await expect(inspector.getByRole("region", { name: "Model runtime selection" })).toHaveCount(0);
   await inspector.getByRole("switch", { name: "Show advanced settings" }).click();
   await expect(inspector.getByRole("region", { name: "Model runtime selection" })).toBeVisible();
-  await expect(inspector.getByRole("region", { name: "Context and launch profile" })).toContainText("Only llama.cpp models have launch settings here.");
+  await expect(inspector.getByRole("region", { name: "Context and launch profile" })).toContainText("This engine has no adjustable launch settings.");
   await sections.getByRole("tab", { name: "Manage" }).click();
   await expect(inspector.getByRole("button", { name: "Remove registration" })).toBeDisabled();
   await expect(inspector).toContainText("Set the model to Disabled before removing its registration.");
@@ -119,9 +119,9 @@ test("launch settings drafts survive conflicts and guard navigation", async ({ p
     const context = panel.getByLabel("Context", { exact: true });
     const save = panel.getByRole("button", { name: "Save", exact: true });
     await expect(context).toHaveValue("1024");
-    await expect(panel.getByLabel("Threads")).toHaveCount(0);
+    await expect(panel.getByLabel("Threads", { exact: true })).toHaveCount(0);
     await inspector.getByRole("switch", { name: "Show advanced settings" }).click();
-    await expect(panel.getByLabel("Threads")).toHaveValue("2");
+    await expect(panel.getByLabel("Threads", { exact: true })).toHaveValue("2");
     await expect(panel.getByRole("table", { name: "Setting sources" })).toBeVisible();
     await expect(save).toHaveCount(0);
     await context.fill("2048");
@@ -145,10 +145,10 @@ test("launch settings drafts survive conflicts and guard navigation", async ({ p
     expect((await service.json<{ saved: { context_tokens: number } }>(path)).saved.context_tokens).toBe(3072);
     await panel.getByRole("button", { name: "Cancel", exact: true }).click();
     await expect(context).toHaveValue("3072");
-    await expect(panel.getByLabel("Threads")).toHaveValue("3");
+    await expect(panel.getByLabel("Threads", { exact: true })).toHaveValue("3");
 
     await context.fill("4096");
-    await panel.getByLabel("Threads").fill("");
+    await panel.getByLabel("Threads", { exact: true }).fill("");
     await save.click();
     await expect(toasts(page).getByRole("status")).toContainText(`Saved launch settings for ${id}.`);
     await expect(save).toHaveCount(0);
@@ -286,7 +286,7 @@ test("saving launch settings on a loaded model restarts it with the new settings
     await tab(page, "Model sections", "Settings").click();
     const panel = inspector.getByRole("region", { name: "Context and launch profile" });
     await inspector.getByRole("switch", { name: "Show advanced settings" }).click();
-    await panel.getByLabel("Threads").fill("3");
+    await panel.getByLabel("Threads", { exact: true }).fill("3");
     await expect(panel.getByRole("button", { name: "Save and reload" })).toBeEnabled();
     await panel.getByRole("button", { name: "Save and reload" }).click();
     await expect(toasts(page).getByRole("status")).toContainText(`Saved launch settings and restarted ${id}.`, { timeout: 15000 });
