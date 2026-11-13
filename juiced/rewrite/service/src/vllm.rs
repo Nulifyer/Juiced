@@ -348,24 +348,50 @@ pub fn default_context(checkpoint: &Checkpoint) -> u64 {
         .min(crate::engines::models::DEFAULT_CONTEXT_TOKENS)
 }
 
-/// Native per-family serve flags (v0.9.2 `vllm_model_config.json`).
-pub fn family_arguments(architecture: &str, repository: Option<&str>) -> Vec<String> {
-    let repository = repository.unwrap_or_default();
-    if repository.contains("Qwen3.") || architecture.starts_with("Qwen3_5") {
-        return [
-            "--enable-auto-tool-choice",
-            "--tool-call-parser",
-            "qwen3_coder",
-        ]
-        .map(str::to_owned)
-        .to_vec();
+/// Reasoning and tool-call parsers for a checkpoint family. Without them vLLM returns
+/// reasoning inside `content` and tool calls as text. Every name exists in both vLLM
+/// releases Juiced ships (0.20.1 for ROCm, 0.33.0 for CUDA). `hint` is the model id and
+/// checkpoint path, which carry the repository name where one architecture covers several
+/// families. Unknown families get no parser rather than a guess.
+pub fn family_arguments(architecture: &str, hint: Option<&str>) -> Vec<String> {
+    let hint = hint.unwrap_or_default().to_ascii_lowercase();
+    let (reasoning, tools) = match architecture {
+        name if name.starts_with("Qwen3_5") => (Some("qwen3"), Some("qwen3_coder")),
+        name if name.starts_with("Qwen3") && hint.contains("qwen3.") => {
+            (Some("qwen3"), Some("qwen3_coder"))
+        }
+        _ if hint.contains("glm-4.7") => (Some("glm45"), Some("glm47")),
+        "Qwen3MoeForCausalLM" | "Qwen3ForCausalLM" if hint.contains("coder") => {
+            (None, Some("qwen3_coder"))
+        }
+        "Qwen3ForCausalLM" | "Qwen3MoeForCausalLM" | "Qwen3NextForCausalLM" => {
+            (Some("qwen3"), Some("hermes"))
+        }
+        "Qwen2ForCausalLM" if hint.contains("qwq") => (Some("deepseek_r1"), Some("hermes")),
+        "Qwen2ForCausalLM" | "Qwen2MoeForCausalLM" => (None, Some("hermes")),
+        "GptOssForCausalLM" => (Some("openai_gptoss"), Some("openai")),
+        "Glm4MoeForCausalLM" => (Some("glm45"), Some("glm45")),
+        "MiniMaxM2ForCausalLM" => (Some("minimax_m2_append_think"), Some("minimax_m2")),
+        "SeedOssForCausalLM" => (Some("seed_oss"), Some("seed_oss")),
+        name if name.starts_with("Gemma4") => (Some("gemma4"), Some("gemma4")),
+        "Llama4ForConditionalGeneration" => (None, Some("llama4_pythonic")),
+        "LlamaForCausalLM" if hint.contains("llama-3") || hint.contains("llama3") => {
+            (None, Some("llama3_json"))
+        }
+        _ => (None, None),
+    };
+    let mut arguments = Vec::new();
+    if let Some(parser) = reasoning {
+        arguments.extend(["--reasoning-parser".to_owned(), parser.to_owned()]);
     }
-    if repository.contains("GLM-4.7") {
-        return ["--enable-auto-tool-choice", "--tool-call-parser", "glm47"]
-            .map(str::to_owned)
-            .to_vec();
+    if let Some(parser) = tools {
+        arguments.extend([
+            "--enable-auto-tool-choice".to_owned(),
+            "--tool-call-parser".to_owned(),
+            parser.to_owned(),
+        ]);
     }
-    Vec::new()
+    arguments
 }
 
 /// `--max-model-len` of a validated template.
@@ -460,6 +486,142 @@ pub async fn prepare_request(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `vllm/reasoning/__init__.py` and `vllm/tool_parsers/__init__.py` of the shipped releases.
+    const REASONING_0_20: &str = "deepseek_r1 deepseek_v3 deepseek_v4 ernie45 gemma4 glm45 openai_gptoss granite holo2 hunyuan_a13b hy_v3 kimi_k2 mimo minimax_m2 minimax_m2_append_think mistral nemotron_v3 olmo3 qwen3 seed_oss step3 step3p5";
+    const TOOLS_0_20: &str = "deepseek_v3 deepseek_v31 deepseek_v32 deepseek_v4 ernie45 glm45 glm47 granite granite4 hermes hunyuan_a13b hy_v3 internlm jamba kimi_k2 llama3_json llama4_json llama4_pythonic longcat mimo minimax_m2 minimax mistral olmo3 openai phi4_mini_json pythonic qwen3_coder qwen3_xml seed_oss step3 step3p5 xlam gigachat3 functiongemma gemma4";
+    const REASONING_0_33: &str = "deepseek_r1 deepseek_v3 deepseek_v4 deepseek_v41 poolside_v1 cohere_command3 cohere_command4 ernie45 gemma4 glm45 glm47 ling3 openai_gptoss granite granite_thinking_parser hf beam holo2 hunyuan_a13b hy_v3 hy_v4 kimi_k2 kimi_k3 k2_horizon mimo minicpmv minimax_m2 minimax_m2_append_think minimax_m3 mistral nemotron_v3 olmo3 plamo3 muse muse_glimmer musespark1x qwen3 seed_oss step3 step3p5 step5 inkling";
+    const TOOLS_0_33: &str = "dots deepseek_v3 deepseek_v31 deepseek_v32 deepseek_v4 deepseek_v41 cohere_command3 cohere_command4 ernie45 glm45 glm47 ling3 granite granite4 hermes hf beam poolside_v1 hunyuan_a13b hy_v3 hy_v4 internlm jamba lfm2 kimi_k2 kimi_k3 k2_horizon llama3_json llama4_json llama4_pythonic longcat mimo minimax_m2 minimax_m3 minicpm5 mistral olmo3 plamo3 muse muse_glimmer musespark1x openai phi4_mini_json pythonic qwen3_coder qwen3_json qwen3_xml seed_oss step3 step3p5 step5 inkling xlam gigachat3 functiongemma gemma4 apertus";
+
+    fn parsers(architecture: &str, hint: &str) -> (Option<String>, Option<String>) {
+        let arguments = family_arguments(architecture, Some(hint));
+        let after = |flag: &str| {
+            arguments
+                .iter()
+                .position(|argument| argument == flag)
+                .map(|position| arguments[position + 1].clone())
+        };
+        if after("--tool-call-parser").is_some() {
+            assert!(arguments.contains(&"--enable-auto-tool-choice".to_owned()));
+        }
+        (after("--reasoning-parser"), after("--tool-call-parser"))
+    }
+
+    #[test]
+    fn families_get_parsers_both_shipped_vllm_releases_know() {
+        let cases = [
+            (
+                "Qwen3ForCausalLM",
+                "Qwen3-0.6B",
+                Some("qwen3"),
+                Some("hermes"),
+            ),
+            (
+                "Qwen3MoeForCausalLM",
+                "Qwen3-30B-A3B",
+                Some("qwen3"),
+                Some("hermes"),
+            ),
+            (
+                "Qwen3MoeForCausalLM",
+                "Qwen3-Coder-30B-A3B-Instruct",
+                None,
+                Some("qwen3_coder"),
+            ),
+            (
+                "Qwen3_5MoeForConditionalGeneration",
+                "Qwen3.5-35B-A3B",
+                Some("qwen3"),
+                Some("qwen3_coder"),
+            ),
+            (
+                "Qwen3ForCausalLM",
+                "Qwen3.6-4B",
+                Some("qwen3"),
+                Some("qwen3_coder"),
+            ),
+            (
+                "Qwen2ForCausalLM",
+                "Qwen2.5-7B-Instruct",
+                None,
+                Some("hermes"),
+            ),
+            (
+                "Qwen2ForCausalLM",
+                "QwQ-32B",
+                Some("deepseek_r1"),
+                Some("hermes"),
+            ),
+            (
+                "GptOssForCausalLM",
+                "gpt-oss-20b",
+                Some("openai_gptoss"),
+                Some("openai"),
+            ),
+            (
+                "Glm4MoeForCausalLM",
+                "GLM-4.5-Air",
+                Some("glm45"),
+                Some("glm45"),
+            ),
+            (
+                "Glm4MoeForCausalLM",
+                "GLM-4.7",
+                Some("glm45"),
+                Some("glm47"),
+            ),
+            (
+                "MiniMaxM2ForCausalLM",
+                "MiniMax-M2",
+                Some("minimax_m2_append_think"),
+                Some("minimax_m2"),
+            ),
+            (
+                "SeedOssForCausalLM",
+                "Seed-OSS-36B-Instruct",
+                Some("seed_oss"),
+                Some("seed_oss"),
+            ),
+            (
+                "Gemma4ForConditionalGeneration",
+                "gemma-4-12b-it",
+                Some("gemma4"),
+                Some("gemma4"),
+            ),
+            (
+                "Llama4ForConditionalGeneration",
+                "Llama-4-Scout",
+                None,
+                Some("llama4_pythonic"),
+            ),
+            (
+                "LlamaForCausalLM",
+                "Llama-3.1-8B-Instruct",
+                None,
+                Some("llama3_json"),
+            ),
+            ("LlamaForCausalLM", "TinyLlama-1.1B", None, None),
+            ("MistralForCausalLM", "Mistral-7B-Instruct", None, None),
+        ];
+        for (architecture, hint, reasoning, tools) in cases {
+            let (found_reasoning, found_tools) = parsers(architecture, hint);
+            assert_eq!(found_reasoning.as_deref(), reasoning, "{hint}");
+            assert_eq!(found_tools.as_deref(), tools, "{hint}");
+            for (name, registries) in [
+                (found_reasoning, [REASONING_0_20, REASONING_0_33]),
+                (found_tools, [TOOLS_0_20, TOOLS_0_33]),
+            ] {
+                if let Some(name) = name {
+                    for registry in registries {
+                        assert!(
+                            registry.split(' ').any(|known| known == name),
+                            "{name} is not in a shipped vLLM release"
+                        );
+                    }
+                }
+            }
+        }
+    }
 
     fn args(extra: &[&str]) -> Vec<String> {
         PREFIX

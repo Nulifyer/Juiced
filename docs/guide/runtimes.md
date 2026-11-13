@@ -53,6 +53,25 @@ Juiced sizes the KV cache for the registered context and caps
 `--gpu-memory-utilization` to its estimate. Requests that ask for more output
 tokens than the context leaves are reduced to fit.
 
+Adding a model also picks vLLM's reasoning and tool-call parsers from the
+checkpoint's architecture, so replies carry `reasoning_content` and parsed
+`tool_calls` instead of raw tags:
+
+| Family | Reasoning parser | Tool-call parser |
+| --- | --- | --- |
+| Qwen3, Qwen3 MoE, Qwen3-Next | `qwen3` | `hermes` |
+| Qwen3.5 and later, Qwen3-Coder | `qwen3` (not Coder) | `qwen3_coder` |
+| Qwen2.5 | none (`deepseek_r1` for QwQ) | `hermes` |
+| gpt-oss | `openai_gptoss` | `openai` |
+| GLM-4.5, GLM-4.6, GLM-4.7 | `glm45` | `glm45`, or `glm47` for 4.7 |
+| MiniMax-M2 | `minimax_m2_append_think` | `minimax_m2` |
+| Seed-OSS | `seed_oss` | `seed_oss` |
+| Gemma 4 | `gemma4` | `gemma4` |
+| Llama 4, Llama 3.x | none | `llama4_pythonic`, `llama3_json` |
+
+Other families start without parsers. Models added before this release keep the
+arguments they were added with; remove and add them again to pick up the parsers.
+
 ## Classify text
 
 Download a text classifier from **Models → Discover** with the **Classify** task

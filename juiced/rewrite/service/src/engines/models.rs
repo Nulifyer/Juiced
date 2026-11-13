@@ -1110,9 +1110,10 @@ pub fn registration(inputs: &ProfileInputs<'_>) -> Value {
             if inputs.backend == "rocm" {
                 args.push("--enforce-eager".into());
             }
+            let hint = format!("{} {}", inputs.id, inputs.model_file.display());
             args.extend(crate::vllm::family_arguments(
                 &checkpoint.architecture,
-                None,
+                Some(&hint),
             ));
             (
                 json!(args),
