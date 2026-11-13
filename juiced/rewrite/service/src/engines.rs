@@ -1,6 +1,8 @@
 pub mod archive;
 pub mod catalog;
 pub mod download;
+#[cfg(test)]
+mod media_engine_tests;
 pub mod memory;
 pub mod models;
 #[cfg(test)]
@@ -236,6 +238,19 @@ pub fn choose(
         format!("was requested as native {native}")
     } else if requested.is_some() {
         "was requested".to_owned()
+    } else if fallback
+        && inventory
+            .backends
+            .iter()
+            .filter(|variant| {
+                variant.recipe == engine.recipe()
+                    && variant.state == Availability::Available
+                    && selectable(inventory, engine, &variant.backend)
+            })
+            .count()
+            > 1
+    {
+        "is the first available".to_owned()
     } else if fallback {
         "is the only available".to_owned()
     } else if let Some(skipped) = &unpublished {

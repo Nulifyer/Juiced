@@ -258,7 +258,6 @@ impl Manager {
             .unwrap_or_default();
         let report = &snapshot.report;
         let recommendations: BTreeMap<_, _> = Engine::all()
-            .into_iter()
             .map(|engine| {
                 (
                     engine.recipe(),

@@ -98,6 +98,11 @@ Check the response status before treating the output file as audio.
 The voice list is available through `GET /v1/audio/voices?model=MODEL_ID` when
 supported by the backend. URL-encode the model ID in that query.
 
+OpenMOSS models return `wav` (the default for them) or `pcm` only, and accept
+`instructions`. With MOSS-VoiceGen, `voice` may be a plain description of the
+voice, such as `"A calm older narrator with a low voice"`. Native voice design on
+other OpenMOSS models (`voice_design_description`) is not available.
+
 ## Generate images or embeddings
 
 Use an enabled image model for an image request:
@@ -109,7 +114,12 @@ curl --fail-with-body http://localhost:8080/v1/images/generations \
 ```
 
 Image output format depends on the backend and supported request settings.
-Decode or fetch the returned image data in your client.
+Decode or fetch the returned image data in your client. TheNoise models (ROCm only) return PNG
+images; their request fields are mapped to TheNoise's own generator, and image
+edits and variations are not available for them.
+
+For music, sound effects and 3D meshes, see
+[audio and 3D generation](lemonade.md#generate-audio-and-3d-meshes).
 
 ### Edit images
 

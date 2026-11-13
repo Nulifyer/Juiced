@@ -21,8 +21,9 @@ pub const WORKSPACE_ALLOWANCE_BYTES: u64 = 256 * 1024 * 1024;
 pub const DIFFUSION_WORKSPACE_BYTES: u64 = 1024 * 1024 * 1024;
 pub const SPEECH_WORKSPACE_BYTES: u64 = 512 * 1024 * 1024;
 /// Per-request activations the generation engines allocate beyond their weights: ACE-Step's
-/// VAE tiles, ThinkSound's VAE im2col buffers and TRELLIS' sparse-structure decode.
-pub const AUDIO_GENERATION_WORKSPACE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+/// LM KV cache, DiT and VAE buffers (the 3.05 GiB turbo set held 9.0 GiB on CUDA with
+/// `--keep-loaded`), ThinkSound's VAE im2col buffers and TRELLIS' sparse-structure decode.
+pub const AUDIO_GENERATION_WORKSPACE_BYTES: u64 = 6 * 1024 * 1024 * 1024;
 pub const SOUND_EFFECT_WORKSPACE_BYTES: u64 = 3 * 1024 * 1024 * 1024;
 pub const MESH_WORKSPACE_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 pub const MOSS_WORKSPACE_BYTES: u64 = 1024 * 1024 * 1024;

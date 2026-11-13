@@ -190,6 +190,10 @@ source = Bun.serve({
     { ...model("TheDrummer_Skyfall-31B-v4.2-GGUF-IQ4_NL", "disabled", 1), model_file: resolve(skyfall, "Skyfall-31B-v4.2-IQ4_NL.gguf") },
     { ...model("asr4all-l-gptq-Q8_0", "disabled", 1), model_file: resolve(asr, "asr4all-l-gptq-Q8_0.gguf"), operations: ["chat/completions"] },
   );
+  if (process.env.JUICED_FIXTURE_GENERATION_MODELS === "1") initialConfig.models.push(
+    { id: "fixture.music", provider: "acestep", model_file: file, command: executable("juiced-test-worker"), args: ["--models", "{model}", "--port", "{port}", "--events", resolve(directory, "music.events")], resident_bytes: 64 * 1024 ** 2, max_inflight: 1, operations: ["audio/generations"], policy: "on-demand" } as never,
+    { id: "fixture.mesh", provider: "trellis", model_file: file, command: executable("juiced-test-worker"), args: ["--models", "{model}", "--port", "{port}", "--events", resolve(directory, "mesh.events")], resident_bytes: 64 * 1024 ** 2, max_inflight: 1, operations: ["3d/generations"], policy: "on-demand" } as never,
+  );
   if (protectedRuntime) initialConfig.models = initialConfig.models.map((model) => ({ ...model, policy: "disabled" }));
   await writeFile(config, JSON.stringify(initialConfig, null, 2));
   if (process.platform !== "win32") {
@@ -221,7 +225,8 @@ source = Bun.serve({
     await rm(runtimeSource, { recursive: true });
     const models = initialConfig.models.map((model) => {
       const { command, args, provider = "external-http", ...fields } = model as typeof model & { provider?: string };
-      return { ...fields, execution_profile: { schema_version: 1, adapter: provider, implementation_id: provider === "external-http" ? null : provider, command, args, options: {}, placement: "unresolved" } };
+      const implementation = ({ acestep: "acestep-cpp", trellis: "trellis-cpp" } as Record<string, string>)[provider] ?? provider;
+      return { ...fields, execution_profile: { schema_version: 1, adapter: provider, implementation_id: provider === "external-http" ? null : implementation, command, args, options: {}, placement: "unresolved" } };
     });
     const managed = { ...models[1]!, id: "fixture.managed-runtime", policy: "disabled", resident_bytes: 64 * 1024 ** 2, execution_profile: { schema_version: 1, adapter: "llama-cpp", implementation_id: "llama-cpp", runtime_package: installed[0], args: ["--host", "127.0.0.1", "--port", "{port}", "--model", "{model}", "--parallel", "1", "--ctx-size", "256", "--n-gpu-layers", "0", "--slot-save-path", "{cache}"], options: {}, placement: "unresolved" } };
     await writeFile(config, JSON.stringify({ ...initialConfig, schema_version: 2, models: [...models, managed] }, null, 2));

@@ -123,6 +123,6 @@ export function Model3dTest({ model, client, online }: Props) {
     {!seedValid && <p className="inline-warning">Seed must be a whole number from 0 to 4294967295.</p>}
     <div className="action-row">{request.busy ? <Button variant="danger" onClick={request.stop}>Stop</Button> : <Button variant="primary" disabled={!image || !online || !seedValid} onClick={() => void generate()}>Generate mesh</Button>}{request.busy && <span className="muted">Reconstructing… this takes minutes.</span>}</div>
     {error && <p className="inline-error" role="alert">{error}</p>}
-    {mesh && <div className="audio-result"><span className="muted">Ready in {mesh.seconds.toFixed(0)} s · {(mesh.size / 1024 ** 2).toFixed(1)} MiB{mesh.summary ? ` · ${mesh.summary.vertices.toLocaleString()} vertices` : ""}</span><a className="button primary" href={mesh.url} download="model.glb">Download .glb</a></div>}
+    {mesh && <div className="audio-result"><span className="muted">Ready in {mesh.seconds.toFixed(0)} s · {(mesh.size / 1024 ** 2).toFixed(1)} MiB{mesh.summary?.vertices ? ` · ${mesh.summary.vertices.toLocaleString()} vertices` : ""}</span><a className="button primary" href={mesh.url} download="model.glb">Download .glb</a></div>}
   </section>;
 }

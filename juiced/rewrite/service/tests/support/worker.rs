@@ -931,9 +931,10 @@ fn echo_wav(received: &Value) -> Vec<u8> {
     bytes
 }
 
-fn generation_jobs() -> &'static Mutex<std::collections::HashMap<String, (String, Vec<u8>)>> {
-    static JOBS: std::sync::OnceLock<Mutex<std::collections::HashMap<String, (String, Vec<u8>)>>> =
-        std::sync::OnceLock::new();
+type GenerationJobs = Mutex<std::collections::HashMap<String, (String, Vec<u8>)>>;
+
+fn generation_jobs() -> &'static GenerationJobs {
+    static JOBS: std::sync::OnceLock<GenerationJobs> = std::sync::OnceLock::new();
     JOBS.get_or_init(Mutex::default)
 }
 
@@ -1028,7 +1029,7 @@ async fn generation_direct(
     fields.insert("tmpdir".into(), json!(std::env::var("TMPDIR").ok()));
     let mut chunk =
         serde_json::to_vec(&json!({"asset": {"version": "2.0"}, "fixture": fields})).unwrap();
-    while chunk.len() % 4 != 0 {
+    while !chunk.len().is_multiple_of(4) {
         chunk.push(b' ');
     }
     let mut glb = b"glTF".to_vec();

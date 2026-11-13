@@ -12,7 +12,8 @@ Juiced's current guides and native contracts define its supported behavior.
 `GET /v1/health` keeps the native fields: `status`, `version`, `model_loaded` (the
 most recently used loaded model or `null`), `all_models_loaded`, `max_models`,
 `pinned_models`, `telemetry` and `update_check_done`. Each `all_models_loaded` entry
-has `model_name`, `type` (`llm`, `embedding`, `transcription`, `tts` or `image`),
+has `model_name`, `type` (`llm`, `embedding`, `transcription`, `tts`, `image`,
+`audio-generation` or `mesh`),
 `recipe`, `recipe_options.ctx_size`, `device`, `status`, `loaded`, `backend_alive`,
 `is_busy`, `pinned` (Hot policy), `pid`, `last_use`, `max_context_window`,
 `context_length` and `context_observation`. Juiced limits loaded models by memory,
@@ -47,6 +48,67 @@ operator key. Request and response bodies follow the v0.9.2 shapes. Errors use
 | `GET/POST /internal/aliases`, `DELETE /internal/aliases/{alias}` | Reads and changes model aliases. | The target must be a registered model. |
 | `POST /internal/pin` | `pinned: true` sets Hot; `false` sets On demand. | |
 | `POST /internal/shutdown` | Stops the service gracefully. | |
+
+## Generate audio and 3D meshes
+
+These native extensions work under `/api/v0`, `/api/v1`, `/v0` and `/v1` with an
+inference key. Juiced checks the request before it loads a model, so a malformed
+request never starts a multi-gigabyte load. Unknown fields return `400
+unsupported_parameter`; other invalid fields return `400 invalid_generation_request`
+with the native message. A model of another kind returns `400 model_not_applicable`,
+and an unknown model `404 unknown_model`. A worker error returns `500
+backend_error`; an empty or malformed result returns `502`.
+
+### `POST /v1/audio/generations`
+
+Generates music with ACE-Step models or sound effects with ThinkSound and
+MOSS-SoundEffect models. The reply is WAV audio (`audio/wav`).
+
+| Field | Required | Meaning |
+| --- | --- | --- |
+| `model` | Yes | An audio-generation model ID. |
+| `prompt` | Yes | Style or sound description, at most 16 KiB. |
+| `lyrics` | No | ACE-Step only. Lyrics to sing, with `[verse]` and `[chorus]` tags. Empty or `[Instrumental]` makes an instrumental track. |
+| `vocal_language` | No | ACE-Step only. Language code of the lyrics; default `en`. |
+| `duration` or `seconds` | No | Clip length in seconds, more than 0 and at most 600. ThinkSound clamps to 1-30 s; MOSS-SoundEffect allows at most 30 s. |
+| `steps` | No | Inference steps, 1 to 200. |
+| `cfg` or `cfg_scale` | No | Guidance strength, 0 to 50 (ThinkSound and MOSS-SoundEffect). |
+| `seed` | No | Integer from -1 to 4294967295. ThinkSound and MOSS default to a fixed seed, so send one for varied output. |
+| `description` or `cot` | No | ThinkSound only. Text for the T5 encoder; defaults to `prompt`. |
+| `negative_prompt` | No | MOSS-SoundEffect only. |
+| `response_format` | No | Only `wav`. |
+
+```bash
+curl --fail-with-body http://localhost:8080/v1/audio/generations \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"ACE-Step-Turbo","prompt":"warm acoustic folk, gentle female vocals","lyrics":"[verse]\nMoonlight on the floor\n\n[chorus]\nWe sing until the light","duration":30}' \
+  --output song.wav
+```
+
+ACE-Step runs a language-model pass before synthesis when lyrics are present, so
+vocal tracks take longer than instrumental ones.
+
+### `POST /v1/3d/generations`
+
+Turns one object image into a textured glTF-binary mesh with TRELLIS models. The
+reply is `model/gltf-binary`. Expect minutes per request.
+
+| Field | Required | Meaning |
+| --- | --- | --- |
+| `model` | Yes | A 3D model ID. |
+| `image` | Yes | Base64 PNG, JPEG, BMP or GIF, or a `data:` URL. The JSON body may be up to 8 MiB. |
+| `resolution` | No | `512` (default for Juiced registrations), `1024` or `1536`. |
+| `bg_removal` | No | `threshold` or `birefnet`. Without it, an image with alpha keeps its matte and others use BiRefNet when the model includes it. |
+| `uv` | No | `xatlas` (default) or `box`. |
+| `seed` | No | Integer from 0 to 4294967295; 0 or none is random. |
+| `response_format` | No | Only `glb`. |
+
+```bash
+curl --fail-with-body http://localhost:8080/v1/3d/generations \
+  -H 'Content-Type: application/json' \
+  -d "{\"model\":\"TRELLIS-3D-Q4\",\"image\":\"$(base64 -w0 input.png)\",\"resolution\":512}" \
+  --output model.glb
+```
 
 ## Backend tiers and formats
 
