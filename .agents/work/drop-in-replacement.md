@@ -67,39 +67,43 @@ rc.14 (FLM fixture race on CI) and rc.15 (image smoke test expected 401 on /v1/s
 
 B6 settings, Barista tools (38) and storage management. Deployed through Portainer: Hot models ready; storage view 1.44 TiB free on /data, models 945 GiB, legacy v0.9.2 leftovers 28.8 GiB (reported, not removed), 29 unreferenced files, every engine build in use with its models listed. Release page created; Homelab compose matches live (uncommitted). Next: rc.18 with LLM and media engines (merged 5be757cb, 585bfbec) and the Barista wiring helper; homelab engine checks per the helpers' check plans.
 
-## Pending (2026-11-12, after rc.12)
+## Live verification (v1.0.0-rc.18, 2026-11-13)
 
-In progress, round 11 (user feedback after enabling Barista on production):
+LLM and media engines, Barista storage/settings tools. Hybrid ROCm and Parakeet installed; 4 Hybrid models and Parakeet adopted (Disabled). Parakeet "Turn on the kitchen lights." in 0.41 s; Mellum Q6_K Hybrid 13.6 s cold, 22 tok/s decode; ACE-Step Vulkan 10 s clip 7.0 s cold, 3.2 s warm (test model deleted, 3,277,122,816 bytes freed; engine kept). Add picked ACE-Step rocm (no build) -> fixed in rc.19 (18cb7c56).
 
-- Released in rc.12: disabling a loaded model (Hot included) unloads it; refused only while requests run (`worker_busy`) or the worker is starting (`worker_starting`). e312333b, 9e82e999.
-- Helper `helper-chat`: chat rendering adapted from T3 Code (MIT) for Barista and Test services (GFM tables, code blocks, reasoning row, tool rows), image input for vision models, pinnable Barista panel, settings only via the gear once configured.
-- Helper `helper-dashboard`: Dashboard = health at a glance, Diagnostics = performance and causes (per-request cached vs processed tokens).
-- Helper `helper-prefill`: Hot models still pay a full prefill on a new conversation. Live evidence: a cold 6,477-token prompt took 16.9 s vs 1.5-3 s on slot hits; Ornith has 2 slots shared by Home Assistant (~6.5k-token prompt) and Barista (~2.5k); saved prefix sessions never restored (`saved_previous` false). Ornith is a hybrid architecture, so llama.cpp checkpoint/prompt-cache behaviour matters.
-- Then: merge, full gate, `v1.0.0-rc.11`, Portainer deploy, live check (repeat the cold/warm request comparison).
+## Live verification (v1.0.0-rc.19, 2026-11-13)
 
-- Model discovery parity (client report from pi-t3-agent, 2026-11-12): the rewrite dropped native discovery. `/health` is only `{"status":"ok"}` (no `version`, `all_models_loaded`), `/v1/models` entries are bare and include speech/image models, `/v1/juiced/capabilities` and `/.well-known/juiced.json` are 404, the catalog has no per-request context or thinking/tools capability fields, no catalog ETag. Helper `helper-discovery` restores the native contract (base v1.0.0-rc.11); ships in rc.12.
+Checkpoint acquisition. Qwen/Qwen3-0.6B pulled through library/pull in ~20 s (1.5 GB, set published, suggested_id Qwen3-0.6B); vLLM ROCm (0.20.1, ROCm 7.12) installed in 70 s; model added on rocm; engine ready in 33 s; first request 500: Triton launcher compile `fatal error: 'stdlib.h' file not found` (image has no libc headers; CUDA build also needs cc). Worker cleaned up, no orphan processes. TRELLIS ROCm installed in 52 s, TRELLIS.2 Q4 bundle pulled in 71 s (6.5 GB), worker exits: `libomp.so: cannot open shared object file` (TheRock member list dropped it). Bundle added as `ss_flow` (first file name). TRELLIS Vulkan (promoted via /models/ss_flow/runtime): 512 mesh 200 model/gltf-binary 4,800,264 bytes in 590 s. All three fixed in rc.20 (313bf6fd, 5223c0be, 1c21b9b3); vLLM CUDA verified in the rc.20 image on the RTX 5080 (Qwen3-0.6B "Paris", 210.6 s cold incl. start, <0.1 s warm).
+
+## Pending (2026-11-13, after rc.20)
+
+Homelab checks on rc.20 (test models only; existing policies untouched):
+- vLLM ROCm: retry chat on Qwen3-0.6B (engine and model already installed), unload, confirm no EngineCore left; then delete the test model and its files.
+- TRELLIS: uninstall/reinstall `trellis.cpp rocm` (rc.19 package lacks libomp), promote it on `ss_flow`, compare with Vulkan's 590 s; then delete `ss_flow` with files, re-add from Discover to confirm the name TRELLIS-3D-Q4, delete again.
+- Real Barista session with Ornith.
+
+Engine gaps found:
+- vLLM starts without `--reasoning-parser` / `--enable-auto-tool-choice --tool-call-parser`: Qwen3 replies keep `<think></think>` in content and tool calls are not parsed. Proposed: pick parsers from the checkpoint's config.json (`model_type`/architectures) with an override in model settings.
+- Installed packages match a build by engine/backend/gpu_target/tag, so a fixed runtime member list does not mark an rc.19 TRELLIS ROCm package as outdated; covered by the engine-management round (update checks).
 
 Decisions waiting on the user:
-
-- Saved conversations after an image upgrade show "Engine changed" (fingerprint covers every mapped file, image libraries included). Loosen to llama.cpp build + launch plan, or keep strict.
-- Barista: B1 qualification (60 tasks on real models) not run; external MCP clients no longer get `juiced_*` tools; the console must be same-origin; no native installation ID (invitation keyed by origin in localStorage); `barista` key breaks rollback to older rcs.
-- vLLM: the rewrite lists "vLLM ROCm" (experimental, no installer). Proper vLLM (ROCm and CUDA, safetensors) is a separate engine project; proposed for the engine-management round.
+- Resident budget: 66 GiB set at first boot; suggested ~80 GiB.
+- Delete the 28.8 GiB of v0.9.2 leftovers (/data/cache, /data/prompt-state).
+- Saved conversations after an image upgrade show "Engine changed" (fingerprint covers every mapped file). Loosen to llama.cpp build + launch plan, or keep strict.
+- Barista: B1 qualification (60 tasks) not run; external MCP clients no longer get `juiced_*` tools; console must be same-origin; `barista` key breaks rollback to older rcs; two edited held-out eval tasks.
+- CORS: set `LEMONADE_ALLOWED_ORIGINS` for exact v0.9.2 behaviour or keep same-origin default.
 
 Agreed later work:
-
-- Engine-management round: version catalog as data with tested pins per release, update checks against release sources, nightly opt-in, remove/update engines (no API yet), admin-added release sources, custom OpenAI-compatible engine in the UI.
-- Real NPU check (FastFlowLM, llama.cpp hybrid) on mage.
+- Engine-management round: version catalog as data with tested pins per release, update checks, nightly opt-in, remove/update engines, admin-added release sources, custom OpenAI-compatible engine in the UI.
+- Real NPU check (FastFlowLM, llama.cpp hybrid) on mage; NPU exclusivity.
+- Remaining P2 and console gaps (v092-parity.md): Discover filters, log download, request filters, GPU picker, inline README; upscale model type.
 
 Known gaps:
-
 - `api-keys.json` is not in settings backups.
-- KV cache type is not a saved per-model option.
-- Quant sync does not copy extra launch args.
-- Old `/data/cache` leftovers from v0.9.2 on the live volume; ask the user before deleting.
 - Split GGUF and mmproj files are refused by upload/import-path (adopted native mmproj companions work).
-- Test runs leak temp dirs: published runtime packages are read-only (dirs 0500), so `tempfile::TempDir` cleanup fails silently and every gate leaves ~128 MB fixture dirs in /tmp (155 dirs, 12 GB, filled the 16 GB tmpfs on 2026-11-12; removed by hand). Fix: make test roots writable before drop.
+- Test runs leak read-only temp dirs in /tmp (published runtime packages are 0500); remove by hand with chmod -R u+w.
 - Homelab `stacks/juiced/compose.yaml` matches live but is uncommitted (another session's untracked file).
 
 ## Next action
 
-User direction 2026-11-12: (1) v0.9.2 parity first ([v092-parity.md](v092-parity.md)); B1-B5 merged (rc.14 = B1-B4; B5 merged after), B6 (model settings, console gaps) running. (2) Round 12, started from beedf920: downloads must survive restarts and storage must be properly managed (helper-storage); Barista tools per [barista-tools-design.md](barista-tools-design.md) (helper-barista-tools); proper engine support for every discovered backend, refusing only where hardware cannot run it (helper-engines-llm incl. vLLM CUDA+ROCm; helper-engines-media incl. audio/3D generation routes). Per-load settings are not wanted: a model has one saved settings set. Then the engine-management round (versions as data, updates, nightly), NPU check on mage.
+rc.20 CI, Portainer deploy, then the homelab checks above. After that: vLLM parser defaults, then the engine-management round. v0.9.2 parity batches B1-B6 and round 12 (downloads survive restarts, storage management, Barista tools, engine support for discovered backends) are merged and live.
