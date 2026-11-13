@@ -80,6 +80,8 @@ pub struct Gpu {
     pub utilization_percent: Option<f64>,
     pub memory_used_bytes: Option<u64>,
     pub memory_total_bytes: Option<u64>,
+    pub shared_memory_used_bytes: Option<u64>,
+    pub shared_memory_total_bytes: Option<u64>,
     pub utilization_source: Option<&'static str>,
 }
 
@@ -193,6 +195,8 @@ pub fn parse_nvidia(text: &str) -> Option<Vec<Gpu>> {
             utilization_percent: percent(fields[tail]),
             memory_used_bytes: mib(fields[tail + 1]),
             memory_total_bytes: mib(fields[tail + 2]),
+            shared_memory_used_bytes: None,
+            shared_memory_total_bytes: None,
             utilization_source: Some("nvidia-smi"),
         });
     }
@@ -264,6 +268,8 @@ pub fn read_amdgpu(root: &Path) -> (Vec<Gpu>, SourceState) {
             utilization_percent: utilization,
             memory_used_bytes: number_file("mem_info_vram_used"),
             memory_total_bytes: number_file("mem_info_vram_total"),
+            shared_memory_used_bytes: number_file("mem_info_gtt_used"),
+            shared_memory_total_bytes: number_file("mem_info_gtt_total"),
             utilization_source: Some(if suspended {
                 "runtime-suspended"
             } else {
@@ -586,6 +592,9 @@ pub fn projection(sample: Option<&Sample>, interval: Duration) -> Value {
                 "memory_total_gb": gib(gpu.memory_total_bytes),
                 "memory_used_bytes": gpu.memory_used_bytes,
                 "memory_total_bytes": gpu.memory_total_bytes,
+                "shared_memory_used_bytes": gpu.shared_memory_used_bytes,
+                "shared_memory_total_bytes": gpu.shared_memory_total_bytes,
+                "integrated": null,
                 "utilization_source": gpu.utilization_source,
             })
         })
@@ -631,21 +640,22 @@ pub fn name_gpus(stats: &mut Value, detected: &[crate::hardware::Gpu]) {
         return;
     };
     for gpu in gpus {
-        if !gpu["name"].is_null() {
-            continue;
-        }
         let Some(slot) = gpu["id"].as_str().and_then(|id| id.strip_prefix("amdgpu:")) else {
             continue;
         };
-        let name = detected
-            .iter()
-            .find(|device| {
-                device.vendor == crate::hardware::GpuVendor::Amd
-                    && device.pci_slot.as_deref() == Some(slot)
-            })
-            .and_then(|device| device.name.clone());
-        if let Some(name) = name {
+        let Some(device) = detected.iter().find(|device| {
+            device.vendor == crate::hardware::GpuVendor::Amd
+                && device.pci_slot.as_deref() == Some(slot)
+        }) else {
+            continue;
+        };
+        if gpu["name"].is_null()
+            && let Some(name) = device.name.clone()
+        {
             gpu["name"] = name.into();
+        }
+        if let Some(integrated) = device.integrated {
+            gpu["integrated"] = integrated.into();
         }
     }
 }
@@ -759,6 +769,8 @@ mod tests {
         write(root, "card0/device/gpu_busy_percent", "42\n");
         write(root, "card0/device/mem_info_vram_used", "1073741824\n");
         write(root, "card0/device/mem_info_vram_total", "17163091968\n");
+        write(root, "card0/device/mem_info_gtt_used", "37123694592\n");
+        write(root, "card0/device/mem_info_gtt_total", "77309411328\n");
         write(root, "card0-DP-1/status", "connected\n");
         write(root, "card1/device/vendor", "0x10de\n");
         write(root, "card2/device/vendor", "0x1002\n");
@@ -774,6 +786,8 @@ mod tests {
         assert_eq!(gpus[0].utilization_percent, Some(42.0));
         assert_eq!(gpus[0].memory_used_bytes, Some(1073741824));
         assert_eq!(gpus[0].memory_total_bytes, Some(17163091968));
+        assert_eq!(gpus[0].shared_memory_used_bytes, Some(37123694592));
+        assert_eq!(gpus[0].shared_memory_total_bytes, Some(77309411328));
         assert_eq!(gpus[1].id, "amdgpu:card2");
         assert_eq!(gpus[1].utilization_percent, None);
         assert_eq!(gpus[1].utilization_source, Some("runtime-suspended"));
@@ -927,6 +941,7 @@ mod tests {
         let mut radeon = Detected::new(GpuVendor::Amd);
         radeon.pci_slot = Some("0000:c4:00.0".into());
         radeon.name = Some("AMD Radeon 890M Graphics".into());
+        radeon.integrated = Some(true);
         let mut other = Detected::new(GpuVendor::Amd);
         other.pci_slot = Some("0000:03:00.0".into());
         let mut stats = json!({"gpus": [
@@ -937,6 +952,7 @@ mod tests {
         ]});
         name_gpus(&mut stats, &[other, radeon]);
         assert_eq!(stats["gpus"][0]["name"], "AMD Radeon 890M Graphics");
+        assert_eq!(stats["gpus"][0]["integrated"], true);
         assert_eq!(stats["gpus"][1]["name"], Value::Null);
         assert_eq!(stats["gpus"][2]["name"], "Kept");
         assert_eq!(stats["gpus"][3]["name"], Value::Null);

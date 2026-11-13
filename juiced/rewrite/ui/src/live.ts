@@ -1,7 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 import type { Client } from "./api";
 
-export type GpuStats = { id: string; name: string | null; vendor: string | null; gpu_percent: number | null; memory_used_bytes: number | null; memory_total_bytes: number | null };
+export type GpuStats = { id: string; name: string | null; vendor: string | null; gpu_percent: number | null; memory_used_bytes: number | null; memory_total_bytes: number | null; shared: { dedicated_used: number | null; dedicated_total: number | null; shared_used: number; shared_total: number } | null };
+
+// An integrated GPU keeps model weights in shared system memory (GTT), so its small dedicated carve-out alone understates use.
+function gpuEntry(entry: Record<string, unknown>): GpuStats {
+  const used = number(entry.memory_used_bytes), total = number(entry.memory_total_bytes);
+  const sharedUsed = number(entry.shared_memory_used_bytes), sharedTotal = number(entry.shared_memory_total_bytes);
+  const shared = entry.integrated === true && sharedUsed != null && sharedTotal != null ? { dedicated_used: used, dedicated_total: total, shared_used: sharedUsed, shared_total: sharedTotal } : null;
+  return { id: text(entry.id) ?? "gpu", name: text(entry.name), vendor: text(entry.vendor), gpu_percent: number(entry.gpu_percent),
+    memory_used_bytes: shared ? (used ?? 0) + shared.shared_used : used, memory_total_bytes: shared ? (total ?? 0) + shared.shared_total : total, shared };
+}
 export type LastInference = { model: string; operation: string; decode_tokens_per_second: number | null; prompt_tokens_per_second: number | null; input_tokens: number | null; output_tokens: number | null; elapsed_ms: number | null; completed_at_ms: number };
 export type SystemStats = {
   supported: boolean; sampled_at_ms: number | null; cpu_percent: number | null;
@@ -26,7 +35,7 @@ export function parseSystemStats(value: unknown): SystemStats {
   return {
     supported: item.supported === true, sampled_at_ms: number(item.sampled_at_ms), cpu_percent: number(item.cpu_percent),
     memory: memory && { total_bytes: number(memory.total_bytes), used_bytes: number(memory.used_bytes) },
-    gpus: Array.isArray(item.gpus) ? item.gpus.slice(0, 16).map((gpu) => { const entry = record(gpu); return { id: text(entry.id) ?? "gpu", name: text(entry.name), vendor: text(entry.vendor), gpu_percent: number(entry.gpu_percent), memory_used_bytes: number(entry.memory_used_bytes), memory_total_bytes: number(entry.memory_total_bytes) }; }) : [],
+    gpus: Array.isArray(item.gpus) ? item.gpus.slice(0, 16).map((gpu) => gpuEntry(record(gpu))) : [],
     npu_percent: number(item.npu_percent), active_requests: number(item.active_requests), queued_requests: number(item.queued_requests),
     last_inference: last && typeof last.model === "string" ? { model: last.model, operation: text(last.operation) ?? "", decode_tokens_per_second: number(last.decode_tokens_per_second), prompt_tokens_per_second: number(last.prompt_tokens_per_second), input_tokens: number(last.input_tokens), output_tokens: number(last.output_tokens), elapsed_ms: number(last.elapsed_ms), completed_at_ms: number(last.completed_at_ms) ?? 0 } : null,
   };

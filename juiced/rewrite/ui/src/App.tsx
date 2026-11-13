@@ -193,7 +193,7 @@ export function App() {
     <footer className="global-footer" aria-label="Live usage">
       <span><Icon name="cpu" size={13} />CPU <strong>{percent(live.stats?.cpu_percent)}</strong></span>
       <span>RAM <strong>{gib(live.stats?.memory?.used_bytes)}</strong></span>
-      {gpu && <><span>GPU <strong>{percent(gpu.gpu_percent)}</strong></span><span>VRAM <strong>{gib(gpu.memory_used_bytes)}</strong></span></>}
+      {gpu && <><span>GPU <strong>{percent(gpu.gpu_percent)}</strong></span><span>{gpu.shared ? "GPU mem" : "VRAM"} <strong>{gib(gpu.memory_used_bytes)}</strong></span></>}
       {live.stats?.npu_percent != null && <span>NPU <strong>{percent(live.stats.npu_percent)}</strong></span>}
       <span className="footer-right">Last decode <strong>{rate(live.stats?.last_inference?.decode_tokens_per_second)}</strong></span>
       <span>Active <strong>{resources?.active_requests ?? "—"}</strong></span>

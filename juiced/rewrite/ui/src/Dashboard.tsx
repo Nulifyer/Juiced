@@ -82,7 +82,7 @@ export function Dashboard({ client, snapshot, stats, onOpenModel, onOpenRequests
         {budget ? `${gib(Math.max(0, budget - resources.reserved_bytes))} free for another model` : "No memory budget set"}
       </Tile>
       <Tile label="GPU memory" value={gpu ? pair(gpu.memory_used_bytes, gpu.memory_total_bytes) : "—"} foot={gpu ? <Meter plain value={share(gpu.memory_used_bytes, gpu.memory_total_bytes)} label="GPU memory used" /> : null}>
-        {gpu ? `${gpu.gpu_percent == null ? "Utilization unavailable" : `${percent(gpu.gpu_percent)} busy`} · ${gpuName(gpu)}` : "No GPU detected"}
+        {gpu ? `${gpu.gpu_percent == null ? "Utilization unavailable" : `${percent(gpu.gpu_percent)} busy`} · ${gpu.shared ? `shared · ${gib(gpu.shared.dedicated_total)} reserved + ${gib(gpu.shared.shared_total)} system` : gpuName(gpu)}` : "No GPU detected"}
       </Tile>
     </section>
     <div className="dashboard-columns">

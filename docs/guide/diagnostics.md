@@ -12,7 +12,7 @@ The Dashboard answers one question: is everything working right now?
 - **Requests** shows active and queued requests against the loaded request slots.
 - **Model memory** shows memory reserved by loaded models against the admission
   budget, and how much is free for another model.
-- **GPU memory** shows the first GPU's memory and utilization.
+- **GPU memory** shows the first GPU's memory and utilization. An integrated GPU, such as a Radeon 890M, keeps models in shared system memory, so the tile adds the shared allowance (GTT) to the reserved carve-out. `/v1/system-stats` reports both: `memory_*_bytes` for the carve-out and `shared_memory_*_bytes` for shared memory, with `integrated: true`. Shared memory is the same RAM that system memory counts, so never add the two.
 - **Running** lists loaded and starting models with their busy slots and when
   each was last used, or when an idle On demand model unloads.
 - **Needs attention** lists failed models, failing protocol self-checks, requests
