@@ -86,4 +86,4 @@ Known gaps:
 
 ## Next action
 
-Integrate the three round-11 helpers, then release rc.11. After that, the engine-management round.
+User direction 2026-11-12: "I would like to at least have the things from v0.9.2 and then want you to work on the rest." Priority order: (1) v0.9.2 parity, verified by the audit ledger [v092-parity.md](v092-parity.md) (helper `helper-parity-audit`, base v1.0.0-rc.12) and `helper-discovery` (model discovery contract); (2) then the planned additions (engine-management round, NPU check, PLAN.md R2-R8 scope).
