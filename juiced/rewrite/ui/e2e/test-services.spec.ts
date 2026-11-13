@@ -10,7 +10,8 @@ test.describe("Chat", () => {
     const chat = page.getByRole("region", { name: "Chat test" });
     await expect(chat).toContainText("Messages stay in this tab and aren't saved.");
     await expect(chat.getByRole("button", { name: "Send" })).toBeDisabled();
-    await expect(page.getByRole("region", { name: "Try a model" })).toContainText("Loaded · up to 1024 tokens per reply");
+    await expect(page.getByRole("region", { name: "Try a model" })).toContainText("Loaded");
+    await expect(page.getByLabel("Max tokens per reply")).toHaveAttribute("placeholder", "1024");
     await chat.getByLabel("Prompt").fill(prompt);
     const sent = page.waitForRequest((outgoing) => outgoing.method() === "POST" && new URL(outgoing.url()).pathname === "/v1/chat/completions");
     await chat.getByRole("button", { name: "Send" }).click();

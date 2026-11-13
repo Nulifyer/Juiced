@@ -11,6 +11,7 @@ describe("quant sync", () => {
     expect(parseVariants(view).members[0]!.quant).toBe("UD-Q6_K_XL");
     expect(parseVariants({ ...view, group: null, members: [] }).group).toBeNull();
     expect(() => parseVariants({ ...view, members: [{ ...member, differs: ["command"] }] })).toThrow();
+    expect(parseVariants({ ...view, members: [{ ...member, differs: ["sampling", "attention", "batching", "extra_args"] }] }).members[0]!.differs).toHaveLength(4);
     expect(() => parseVariants({ ...view, group: { id: 1 } })).toThrow();
     expect(() => parseSyncReply({ generation: 3, results: [{ ...result({}), outcome: "maybe" }] })).toThrow();
     expect(parseSyncReply({ generation: null, results: [result({ outcome: "unchanged" })] }).generation).toBeNull();

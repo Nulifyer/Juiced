@@ -2,7 +2,7 @@ import { ApiError, type Client } from "./api";
 import { backendNames, type BackendRow } from "./hardware";
 
 export type EngineJob = { id: string; engine: string; backend: string; state: string; downloaded_bytes: number; total_bytes: number | null; error: string | null; package: string | null };
-export type Installable = { engine: string; backend: string; archive_bytes: number | null; availability: string; reasons: string[]; recommended: boolean; installed_package: string | null };
+export type Installable = { engine: string; backend: string; archive_bytes: number | null; availability: string; reasons: string[]; recommended: boolean; installed_package: string | null; tag?: string | null };
 export type InstalledEngine = { package: string; engine: string | null; backend: string | null; tag: string | null; models: string[] };
 export type Engines = { generation: number; installable: Installable[]; installed: InstalledEngine[]; jobs: EngineJob[] };
 
@@ -25,7 +25,7 @@ export function parseEngines(value: unknown): Engines {
   const item = value as Record<string, any>;
   return {
     generation: number(item.generation) ?? 0,
-    installable: records(item.installable).map((row) => ({ engine: text(row.engine) ?? "", backend: text(row.backend) ?? "", archive_bytes: downloadBytes(row.build), availability: text(row.availability) ?? "unknown", reasons: records(row.reasons).map((reason) => text(reason.message) ?? ""), recommended: row.recommended === true, installed_package: text(row.installed_package) })),
+    installable: records(item.installable).map((row) => ({ engine: text(row.engine) ?? "", backend: text(row.backend) ?? "", archive_bytes: downloadBytes(row.build), availability: text(row.availability) ?? "unknown", reasons: records(row.reasons).map((reason) => text(reason.message) ?? ""), recommended: row.recommended === true, installed_package: text(row.installed_package), tag: text(row.build?.tag) })),
     installed: records(item.installed).map((row) => ({ package: text(row.package) ?? "", engine: text(row.engine), backend: text(row.backend) ?? text(row.release?.backend), tag: text(row.release?.tag) ?? text(row.tag), models: records(row.models).map((model) => text(model.model) ?? "") })),
     jobs: records(item.jobs, 32).map(parseJob),
   };
@@ -69,7 +69,7 @@ const managed: Record<string, { recipe: string; name: string; purpose: string }>
 };
 
 export type ChipState = "installed" | "installing" | "installable" | "unavailable" | "no-installer";
-export type BackendChip = { key: string; engine: string; backend: string; label: string; state: ChipState; recommended: boolean; download_bytes: number | null; models: number; reason: string; job: EngineJob | null };
+export type BackendChip = { key: string; engine: string; backend: string; label: string; state: ChipState; recommended: boolean; download_bytes: number | null; models: number; reason: string; job: EngineJob | null; version?: string | null; replaces?: string | null };
 export type EngineGroup = { key: string; name: string; purpose: string; installable: boolean; chips: BackendChip[] };
 
 const order: Record<ChipState, number> = { installed: 0, installing: 1, installable: 1, unavailable: 2, "no-installer": 2 };
@@ -88,7 +88,8 @@ export function engineGroups(engines: Engines, backends: BackendRow[], jobs: Rec
     const installed = row.installed_package ? engines.installed.find((entry) => entry.package === row.installed_package) : undefined;
     if (row.installed_package) claimed.add(row.installed_package);
     const state: ChipState = row.installed_package ? "installed" : job ? "installing" : row.availability === "available" ? "installable" : "unavailable";
-    group.chips.push({ key, engine: row.engine, backend: row.backend, label: label(row.backend), state, recommended: row.recommended, download_bytes: row.archive_bytes, models: installed?.models.length ?? 0, reason: row.reasons.filter(Boolean).join(" "), job });
+    const older = state !== "installed" ? engines.installed.find((entry) => entry.engine === row.engine && entry.backend === row.backend && entry.package !== row.installed_package) : undefined;
+    group.chips.push({ key, engine: row.engine, backend: row.backend, label: label(row.backend), state, recommended: row.recommended, download_bytes: row.archive_bytes, models: installed?.models.length ?? 0, reason: row.reasons.filter(Boolean).join(" "), job, version: installed?.tag ?? row.tag ?? null, replaces: older ? older.tag ?? "an older build" : null });
   }
   const unclaimed = new Map<string, InstalledEngine[]>();
   for (const entry of engines.installed) {
@@ -98,7 +99,7 @@ export function engineGroups(engines: Engines, backends: BackendRow[], jobs: Rec
   }
   for (const [key, same] of unclaimed) {
     const { engine, backend } = { engine: same[0]!.engine!, backend: same[0]!.backend ?? "" };
-    groups.get(engine)!.chips.push({ key, engine, backend, label: backend ? label(backend) : same.length > 1 ? `Imported ×${same.length}` : "Imported", state: "installed", recommended: false, download_bytes: null, models: same.reduce((total, entry) => total + entry.models.length, 0), reason: "", job: null });
+    groups.get(engine)!.chips.push({ key, engine, backend, label: backend ? label(backend) : same.length > 1 ? `Imported ×${same.length}` : "Imported", state: "installed", recommended: false, download_bytes: null, models: same.reduce((total, entry) => total + entry.models.length, 0), reason: "", job: null, version: same.length === 1 ? same[0]!.tag : null });
   }
   const byRecipe = new Map(Object.entries(managed).map(([engine, meta]) => [meta.recipe, engine]));
   for (const row of backends) {

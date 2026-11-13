@@ -1,14 +1,16 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { bytes, loadReason, matchingModels, offers, policyNames, services, unloadReason, workerState, workerTone, type Model, type Policy, type Service } from "./domain";
 import { Badge, Button, Empty, HelpTip, Icon, Switch } from "./ui";
-import type { Client } from "./api";
+import { Client } from "./api";
 import { removalReason } from "./management";
 import { ContextInspector } from "./ContextInspector";
 import { QuantSync } from "./QuantSync";
 import { ArtifactRevisionInspector } from "./ArtifactRevisionInspector";
 import { RuntimeInspector } from "./RuntimeInspector";
 import { ModelIdle, residencyNote } from "./Residency";
-import { ModelFiles, removalNote, unusedQuants } from "./LocalModels";
+import { ModelFiles, modelFiles, removalNote, unusedQuants } from "./LocalModels";
+import { notify } from "./toast";
+import { useResource } from "./useResource";
 import type { LocalGroup, LocalInventory } from "./localLibraryData";
 
 export type Mutate = (path: string, body: unknown, success: string) => Promise<boolean>;
@@ -31,7 +33,43 @@ function workerFailure(code: string): string {
   return "The worker needs attention. Review its current state before retrying.";
 }
 
-type ListProps = { models: Model[]; selected?: string; onSelect: (id: string) => void; mode: "models" | "policy"; mutate: Mutate; busy: boolean; online: boolean; idleControl?: ReactNode; files?: LocalGroup[]; inventory?: LocalInventory | null; selectedFile?: string; onSelectFile?: (id: string) => void; onDiscover?: () => void };
+type ListProps = { models: Model[]; selected?: string; onSelect: (id: string) => void; mode: "models" | "policy"; mutate: Mutate; busy: boolean; online: boolean; idleControl?: ReactNode; files?: LocalGroup[]; inventory?: LocalInventory | null; selectedFile?: string; onSelectFile?: (id: string) => void; onDiscover?: () => void; client?: Client };
+type SortKey = "name" | "state" | "memory";
+const placeholderClient = new Client("", "");
+
+export function parseUpdates(value: unknown): string[] {
+  const data = value && typeof value === "object" ? (value as { data?: unknown }).data : undefined;
+  return (Array.isArray(data) ? data : []).filter((item) => item && typeof item === "object" && item.update_available === true && typeof item.id === "string").map((item) => item.id as string);
+}
+
+export function sortModels(models: Model[], sort: { key: SortKey; descending: boolean } | null): Model[] {
+  if (!sort) return models;
+  const rank = (model: Model) => sort.key === "memory" ? model.resident_bytes ?? -1 : sort.key === "state" ? (model.loaded ? 0 : model.state === "loading" ? 1 : model.policy === "disabled" ? 3 : 2) : 0;
+  const sorted = [...models].sort((left, right) => (sort.key === "name" ? left.id.localeCompare(right.id) : rank(left) - rank(right)) || left.id.localeCompare(right.id));
+  return sort.descending ? sorted.reverse() : sorted;
+}
+
+function BulkBar({ models, chosen, mutate, disabled, onClear }: { models: Model[]; chosen: Set<string>; mutate: Mutate; disabled: boolean; onClear: () => void }) {
+  const picked = models.filter((model) => chosen.has(model.id));
+  const loadable = picked.filter((model) => !model.loaded && !loadReason(model));
+  const unloadable = picked.filter((model) => model.loaded && !unloadReason(model));
+  const run = async (targets: Model[], action: (model: Model) => Promise<boolean>) => { for (const model of targets) await action(model); onClear(); };
+  return <div className="bulk-bar" role="toolbar" aria-label="Selected models">
+    <strong>{picked.length} selected</strong>
+    <Button disabled={disabled || loadable.length === 0} onClick={() => void run(loadable, (model) => mutate("load", { model: model.id }, `Loaded ${model.id}.`))}>Load{loadable.length && loadable.length !== picked.length ? ` ${loadable.length}` : ""}</Button>
+    <Button disabled={disabled || unloadable.length === 0} onClick={() => void run(unloadable, (model) => mutate("unload", { model: model.id }, `Unloaded ${model.id}.`))}>Unload{unloadable.length && unloadable.length !== picked.length ? ` ${unloadable.length}` : ""}</Button>
+    <select aria-label="Set loading policy for selected models" value="" disabled={disabled} onChange={(event) => { const policy = event.target.value as Policy; if (policy) void run(picked.filter((model) => model.policy !== policy && !(policy === "disabled" && model.active_requests > 0)), (model) => mutate("juiced/policy", { model: model.id, policy, expected_revision: model.revision }, `${model.id} is now ${policyNames[policy]}.`)); }}>
+      <option value="">Set policy…</option><option value="hot">Hot</option><option value="on-demand">On demand</option><option value="disabled">Disabled</option>
+    </select>
+    <span className="spacer" />
+    <Button variant="ghost" onClick={onClear}>Clear</Button>
+  </div>;
+}
+
+function SortHeader({ label, id, sort, onSort, numeric, pick }: { label: string; id: SortKey; sort: { key: SortKey; descending: boolean } | null; onSort: (key: SortKey) => void; numeric?: boolean; pick?: ReactNode }) {
+  const active = sort?.key === id;
+  return <span role="columnheader" className={numeric ? "numeric" : pick ? "picked" : undefined} aria-sort={active ? (sort!.descending ? "descending" : "ascending") : "none"}>{pick}<button type="button" className="sort-header" onClick={() => onSort(id)}>{label}{active && <span aria-hidden="true">{sort!.descending ? " ↓" : " ↑"}</span>}</button></span>;
+}
 
 function setPolicy(mutate: Mutate, model: Model, policy: Policy) {
   if (policy === model.policy) return;
@@ -60,7 +98,7 @@ function FileRow({ group, selected, onSelect }: { group: LocalGroup; selected: b
   const unused = unusedQuants(group);
   const size = unused.length ? unused.reduce((sum, quant) => sum + quant.bytes, 0) : group.bytes;
   return <div className={`data-row model-row file-row ${selected ? "selected" : ""}`} role="row" onClick={onSelect}>
-    <div role="cell" className="model-identity"><button className="model-name" aria-pressed={selected} onClick={(event) => { event.stopPropagation(); onSelect(); }}>{group.name}</button><span className="model-meta">{[group.publisher, unused.map((quant) => quant.label).join(", ") || null, bytes(size), group.readOnly ? "read-only" : null].filter(Boolean).join(" · ")}</span></div>
+    <div role="cell" className="model-identity picked"><span className="pick pick-space" aria-hidden="true" /><div className="identity-text"><button className="model-name" aria-pressed={selected} onClick={(event) => { event.stopPropagation(); onSelect(); }}>{group.name}</button><span className="model-meta">{[group.publisher, unused.map((quant) => quant.label).join(", ") || null, bytes(size), group.readOnly ? "read-only" : null].filter(Boolean).join(" · ")}</span></div></div>
     <div role="cell" className="model-state"><Badge>Not added</Badge></div>
     <div role="cell" />
     <div role="cell" />
@@ -68,24 +106,49 @@ function FileRow({ group, selected, onSelect }: { group: LocalGroup; selected: b
   </div>;
 }
 
-export function ModelList({ models, selected, onSelect, mode, mutate, busy, online, idleControl, files = [], inventory, selectedFile, onSelectFile, onDiscover }: ListProps) {
+export function ModelList({ models, selected, onSelect, mode, mutate, busy, online, idleControl, files = [], inventory, selectedFile, onSelectFile, onDiscover, client }: ListProps) {
   const [query, setQuery] = useState("");
+  const [chosen, setChosen] = useState<Set<string>>(() => new Set());
+  const [sort, setSort] = useState<{ key: SortKey; descending: boolean } | null>(null);
+  const [checking, setChecking] = useState(false);
+  const listed = useResource(client ?? placeholderClient, "models", parseUpdates, 0, true, !!client && mode === "models");
+  const [checked, setChecked] = useState<string[] | null>(null);
+  const updates = useMemo(() => new Set(checked ?? listed.data ?? []), [checked, listed.data]);
+  useEffect(() => { setChosen((current) => { const ids = new Set(models.map((model) => model.id)); const next = new Set([...current].filter((id) => ids.has(id))); return next.size === current.size ? current : next; }); }, [models]);
+  async function checkUpdates() {
+    if (!client || checking) return;
+    setChecking(true);
+    try {
+      const reply = await client.request<{ models?: unknown; failed_models?: Record<string, string>; checked?: number }>("models/check-updates", {});
+      const found = Array.isArray(reply.models) ? reply.models.filter((id): id is string => typeof id === "string") : [];
+      setChecked(found);
+      const failed = Object.keys(reply.failed_models ?? {}).length;
+      notify(found.length ? `Updates for ${found.join(", ")}.` : `No updates${typeof reply.checked === "number" ? ` for ${reply.checked} Hugging Face model${reply.checked === 1 ? "" : "s"}` : ""}${failed ? `; ${failed} couldn't be checked` : ""}.`);
+    } catch (error) { notify(error instanceof Error ? error.message : "The update check failed.", "error"); }
+    finally { setChecking(false); }
+  }
   const [service, setService] = useState<Service | "files" | null>(null);
   const [dragging, setDragging] = useState("");
   const dragged = useRef("");
-  const visible = service === "files" ? [] : matchingModels(service ? models.filter((model) => offers(model, service)) : models, query);
+  const visible = sortModels(service === "files" ? [] : matchingModels(service ? models.filter((model) => offers(model, service)) : models, query), sort);
+  const onSort = (key: SortKey) => setSort((current) => current?.key === key ? (current.descending ? null : { key, descending: true }) : { key, descending: false });
+  const allChosen = visible.length > 0 && visible.every((model) => chosen.has(model.id));
+  const toggle = (id: string) => setChosen((current) => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; });
   const visibleFiles = service === null || service === "files" ? files.filter((group) => fileMatches(group, query)) : [];
   const chips = services.map(([id, label]) => [id, label, models.filter((model) => offers(model, id)).length] as const).filter(([, , count]) => count > 0);
   const filtered = service !== null && service !== "files" && !chips.some(([id]) => id === service);
   useEffect(() => { if (filtered || (service === "files" && files.length === 0)) setService(null); }, [filtered, service, files.length]);
   const locked = busy || !online;
+  const updateAction = client && mode === "models" && models.length > 0 ? <span className="update-action"><Button variant="ghost" disabled={!online || checking} onClick={() => void checkUpdates()}>{checking ? "Checking…" : "Check for updates"}</Button><HelpTip label="Check for updates">Compares each downloaded Hugging Face model with the file upstream. Nothing is downloaded.</HelpTip></span> : null;
   const disk = inventory && <span className="muted library-total">{bytes(inventory.totalBytes)} on disk<HelpTip label="disk use">Model files on this machine, including read-only libraries.{inventory.removableBytes > 0 ? ` ${bytes(inventory.removableBytes)} isn't used by a model and can be deleted.` : ""}{inventory.truncated ? " Large folders are counted up to a limit." : ""}</HelpTip></span>;
   return <section className="inventory" aria-label="Model inventory">
     <div className="toolbar">
       <input type="search" aria-label="Search models" placeholder="Search models" value={query} onChange={(event) => setQuery(event.target.value)} />
-      {(chips.length > 1 || files.length > 0) && <div className="chip-filter" role="group" aria-label="Service filter"><button aria-pressed={service === null} onClick={() => setService(null)}>All <span>{models.length + files.length}</span></button>{chips.map(([id, label, count]) => <button key={id} aria-pressed={service === id} onClick={() => setService(service === id ? null : id)}>{label} <span>{count}</span></button>)}{files.length > 0 && <button aria-pressed={service === "files"} onClick={() => setService(service === "files" ? null : "files")}>Not added <span>{files.length}</span></button>}{disk}</div>}
+      {(chips.length > 1 || files.length > 0) && <div className="chip-filter" role="group" aria-label="Service filter"><button aria-pressed={service === null} onClick={() => setService(null)}>All <span>{models.length + files.length}</span></button>{chips.map(([id, label, count]) => <button key={id} aria-pressed={service === id} onClick={() => setService(service === id ? null : id)}>{label} <span>{count}</span></button>)}{files.length > 0 && <button aria-pressed={service === "files"} onClick={() => setService(service === "files" ? null : "files")}>Not added <span>{files.length}</span></button>}{disk}{updateAction}</div>}
       {!(chips.length > 1 || files.length > 0) && disk}
+      {!(chips.length > 1 || files.length > 0) && updateAction}
     </div>
+    {mode === "models" && chosen.size > 0 && <BulkBar models={models} chosen={chosen} mutate={mutate} disabled={locked} onClear={() => setChosen(new Set())} />}
     {models.length === 0 && files.length === 0 ? <Empty title="No models yet">{onDiscover ? <><button className="link-button" onClick={onDiscover}>Find a model</button> to get started.</> : "Find a model in Discover to get started."}</Empty> : visible.length === 0 && visibleFiles.length === 0 ? <Empty title="No matches">Try another search or filter.</Empty> : mode === "policy" ? <div className="policy-board">
       {(["hot", "on-demand", "disabled"] as Policy[]).map((policy) => <section className={`policy-lane ${dragging ? "droppable" : ""}`} key={policy} aria-label={`${policyNames[policy]} models`}
         onDragOver={(event) => { if (dragged.current) event.preventDefault(); }}
@@ -99,9 +162,9 @@ export function ModelList({ models, selected, onSelect, mode, mutate, busy, onli
         </div>)}
       </section>)}
     </div> : <div className="data-table model-table" role="table" aria-label="Registered models">
-      <div className="data-head" role="row"><span role="columnheader">Model</span><span role="columnheader">State</span><span role="columnheader">Policy</span><span role="columnheader" className="numeric">Memory</span><span role="columnheader"><span className="sr-only">Action</span></span></div>
-      {visible.map((model) => <div className={`data-row model-row ${selected === model.id ? "selected" : ""}`} role="row" key={model.id} onClick={() => onSelect(model.id)}>
-        <div role="cell" className="model-identity"><button className="model-name" aria-pressed={selected === model.id} onClick={(event) => { event.stopPropagation(); onSelect(model.id); }}>{model.id}</button><span className="model-meta">{model.operations.slice(0, 3).join(" · ")}</span></div>
+      <div className="data-head" role="row"><SortHeader label="Model" id="name" sort={sort} onSort={onSort} pick={<input type="checkbox" className="pick" aria-label="Select all shown models" checked={allChosen} onChange={() => setChosen(allChosen ? new Set() : new Set(visible.map((model) => model.id)))} />} /><SortHeader label="State" id="state" sort={sort} onSort={onSort} /><span role="columnheader">Policy</span><SortHeader label="Memory" id="memory" sort={sort} onSort={onSort} numeric /><span role="columnheader"><span className="sr-only">Action</span></span></div>
+      {visible.map((model) => <div className={`data-row model-row ${selected === model.id ? "selected" : ""} ${chosen.has(model.id) ? "chosen" : ""}`} role="row" key={model.id} onClick={() => onSelect(model.id)}>
+        <div role="cell" className="model-identity picked"><input type="checkbox" className="pick" aria-label={`Select ${model.id}`} checked={chosen.has(model.id)} onClick={(event) => event.stopPropagation()} onChange={() => toggle(model.id)} /><div className="identity-text"><button className="model-name" aria-pressed={selected === model.id} onClick={(event) => { event.stopPropagation(); onSelect(model.id); }}>{model.id}</button><span className="model-meta">{model.operations.slice(0, 3).join(" · ")}{updates.has(model.id) && <> · <span className="update-note">update available</span></>}</span></div></div>
         <div role="cell" className="model-state" title={residencyNote(model) ?? undefined}><span className={`status-dot ${workerTone(model)}`} />{workerState(model)}{model.loaded ? <span className="muted"> · {model.active_requests}/{model.max_inflight}</span> : null}</div>
         <div role="cell"><PolicySelect model={model} mutate={mutate} disabled={locked} /></div>
         <div role="cell" className="numeric muted">{bytes(model.resident_bytes)}</div>
@@ -122,12 +185,14 @@ export function Inspector({ model, busy, online, onClose, onDirty, mutate, clien
   const unloadBlocked = unloadReason(model);
   const cleanupRetry = model.state === "cleanup-pending" && model.cleanup_retry_available === true;
   const [tab, setTab] = useState<"overview" | "settings" | "manage">("overview");
+  const repo = modelFiles(model, inventory).groups.find((group) => group.repo)?.repo ?? null;
   const [advanced, setAdvanced] = useState(() => readLocal("juiced.rewrite.inspectorAdvanced") === "1");
   const tabs = [["overview", "Overview", false], ["settings", "Settings", dirty], ["manage", "Manage", false]] as const;
   return <aside className="inspector" aria-label="Model inspector">
     <div className="inspector-top"><Button variant="ghost" className="back-button" onClick={onClose}><Icon name="back" /> Back to models</Button><Button variant="ghost" className="close-inspector" aria-label="Close model inspector" onClick={onClose}><Icon name="close" /></Button></div>
     <div className="inspector-body">
       <div className="inspector-title"><h2>{model.id}</h2><Badge tone={workerTone(model)}>{workerState(model)}</Badge></div>
+      {repo && <a className="model-card-link" href={`https://huggingface.co/${repo}`} target="_blank" rel="noreferrer noopener">{repo} <span aria-hidden="true">↗</span><span className="sr-only">: model card and README on Hugging Face</span></a>}
       <div className="tab-row"><div className="tabs" role="tablist" aria-label="Model sections">{tabs.map(([id, label, changed]) => <button key={id} role="tab" id={`tab-${id}`} aria-controls={`panel-${id}`} aria-selected={tab === id} onClick={() => setTab(id)}>{label}{changed && <span className="tab-dot" aria-label="unsaved" />}</button>)}</div>
         {tab === "settings" && <Switch checked={advanced} label="Show advanced settings" onChange={(next) => { setAdvanced(next); writeLocal("juiced.rewrite.inspectorAdvanced", next ? "1" : ""); }}>Advanced</Switch>}</div>
       {model.error && <p className={["request_termination_unconfirmed", "state_termination_unconfirmed"].includes(model.error) ? "inline-warning" : "inline-error"} role="alert">{workerFailure(model.error)}</p>}
@@ -149,7 +214,7 @@ export function Inspector({ model, busy, online, onClose, onDirty, mutate, clien
       </section>
       </div>
       <div role="tabpanel" id="panel-settings" aria-labelledby="tab-settings" hidden={tab !== "settings"}>
-      {model.operations.includes("audio/transcriptions") ? <section className="inspector-section"><p className="muted">Speech models use one slot. Text context settings don't apply.</p></section> : <ContextInspector model={model} client={client} online={online} busy={busy} policyDirty={artifactDirty || runtimeDirty} onDirty={setProfileDirty} mutate={mutate} advanced={advanced} />}
+      <ContextInspector model={model} client={client} online={online} busy={busy} policyDirty={artifactDirty || runtimeDirty} onDirty={setProfileDirty} mutate={mutate} advanced={advanced} />
       <QuantSync model={model} client={client} online={online} busy={busy} blocked={dirty} />
       {(advanced || artifactDirty) && model.artifact_set && <ArtifactRevisionInspector model={model} client={client} busy={busy} online={online} otherDirty={profileDirty || runtimeDirty} onDirty={setArtifactDirty} mutate={mutate} />}
       {(advanced || runtimeDirty) && <RuntimeInspector model={model} client={client} busy={busy} online={online} otherDirty={profileDirty || artifactDirty} onDirty={setRuntimeDirty} mutate={mutate} />}

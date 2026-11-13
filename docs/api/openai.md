@@ -127,8 +127,9 @@ curl --fail-with-body http://localhost:8080/v1/images/edits \
   `output_format` (`png` or `jpeg`), `steps`, `cfg_scale`, `seed`, `negative_prompt`.
 - Without `size`, the output keeps the first image's size, scaled down to at most
   2048 pixels per side.
-- `user`, `quality`, `background`, `input_fidelity` and `output_compression` are
-  accepted and ignored. The whole form can be up to 8 MiB.
+- `user`, `quality`, `background`, `input_fidelity`, `output_compression` and any
+  other unrecognized fields are accepted and ignored, as in Juiced 0.9. The whole
+  form can be up to 8 MiB.
 
 `/v1/images/variations` takes the same form with exactly one `image`, no mask and
 no prompt. Editing quality depends on the model; editing-capable models such as

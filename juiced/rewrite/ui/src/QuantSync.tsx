@@ -7,14 +7,14 @@ import { notify } from "./toast";
 import { Button, HelpTip } from "./ui";
 import { useResource } from "./useResource";
 
-export type SyncField = "context_tokens" | "threads" | "gpu_layers" | "parallel_slots";
+export type SyncField = "context_tokens" | "threads" | "gpu_layers" | "parallel_slots" | "batching" | "attention" | "sampling" | "extra_args";
 export type VariantMember = { model: string; revision: number; quant: string | null; loaded: boolean; state: string | null; saved: LaunchOptions; eligible: boolean; reason: string | null; differs: SyncField[] };
 export type Variants = { model: string; revision: number; syncable: boolean; saved: LaunchOptions; group: { id: string; label: string } | null; members: VariantMember[] };
 export type SkippedField = { field: SyncField; reason: string; value?: number; limit?: number };
 export type SyncResult = { model: string; outcome: "updated" | "unchanged" | "skipped" | "reload_failed"; reason: string | null; copied: SyncField[]; skipped_fields: SkippedField[]; restarted: boolean; restored_revision?: number | null };
 export type SyncReply = { generation: number | null; results: SyncResult[] };
 
-const fieldNames: Record<SyncField, string> = { context_tokens: "context", threads: "threads", gpu_layers: "GPU layers", parallel_slots: "slots" };
+const fieldNames: Record<SyncField, string> = { context_tokens: "context", threads: "threads", gpu_layers: "GPU layers", parallel_slots: "slots", batching: "batching", attention: "attention and KV cache", sampling: "generation defaults", extra_args: "extra arguments" };
 const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
 const integer = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0;
 const field = (value: unknown): value is SyncField => typeof value === "string" && value in fieldNames;
@@ -107,7 +107,7 @@ export function QuantSync({ model, client, online, busy, blocked }: { model: Mod
   const label = (member: VariantMember) => member.quant && view.members.filter((other) => other.quant === member.quant).length === 1 ? member.quant : member.model;
   const quantName = (id: string) => { const member = view.members.find((entry) => entry.model === id); return member ? label(member) : id; };
   return <section className="inspector-section quant-sync" aria-label="Other quants">
-    <div className="section-heading"><div className="page-title"><h3>Other quants</h3><HelpTip label="Other quants">Copies this model's saved launch settings to other quants of {view.group.label}. A setting that doesn't fit a quant stays as it is and is listed after copying. Loaded quants restart.</HelpTip></div></div>
+    <div className="section-heading"><div className="page-title"><h3>Other quants</h3><HelpTip label="Other quants">Copies this model's saved launch settings, generation defaults and extra arguments to other quants of {view.group.label}. A setting that doesn't fit a quant stays as it is and is listed after copying. Loaded quants restart.</HelpTip></div></div>
     <ul className="quant-sync-list">{view.members.map((member) => <li key={member.model}>
       <label title={member.model}>
         <input type="checkbox" checked={selected.includes(member.model) && selectable(member)} disabled={disabled || !selectable(member)} onChange={(event) => setSelected(event.target.checked ? [...selected, member.model] : selected.filter((id) => id !== member.model))} />

@@ -53,15 +53,16 @@ export function Engines({ client, online, importer }: { client: Client; online: 
 
 function Chip({ chip, name, online, onInstall }: { chip: BackendChip; name: string; online: boolean; onInstall: () => void }) {
   const star = chip.recommended ? <span className="engine-star" aria-label="Recommended">★</span> : null;
-  if (chip.state === "installable") return <button type="button" className="engine-chip installable" disabled={!online} title={chip.download_bytes ? `Install · ${downloadSize(chip.download_bytes)} download` : "Install"} aria-label={`Install ${name} ${chip.label}${chip.download_bytes ? `, ${downloadSize(chip.download_bytes)}` : ""}${chip.recommended ? ", recommended" : ""}`} onClick={onInstall}>
-    <Icon name="download" size={12} />{star}{chip.label}{chip.download_bytes ? <span className="muted">{downloadSize(chip.download_bytes)}</span> : null}
+  const version = chip.version ? <span className="engine-version" title={chip.version} aria-hidden="true">{chip.version}</span> : null;
+  if (chip.state === "installable") return <button type="button" className={`engine-chip installable ${chip.replaces ? "update" : ""}`} disabled={!online} title={`${chip.replaces ? `Update from ${chip.replaces}` : "Install"}${chip.version ? ` ${chip.version}` : ""}${chip.download_bytes ? ` · ${downloadSize(chip.download_bytes)} download` : ""}${chip.replaces ? ". Models switch to it when you choose it in their Settings." : ""}`} aria-label={`${chip.replaces ? "Update" : "Install"} ${name} ${chip.label}${chip.download_bytes ? `, ${downloadSize(chip.download_bytes)}` : ""}${chip.recommended ? ", recommended" : ""}`} onClick={onInstall}>
+    <Icon name={chip.replaces ? "upload" : "download"} size={12} />{star}{chip.replaces ? `Update ${chip.label}` : chip.label}{version}{chip.download_bytes ? <span className="muted">{downloadSize(chip.download_bytes)}</span> : null}
   </button>;
   if (chip.state === "installing") {
     const total = chip.job?.total_bytes, done = chip.job?.downloaded_bytes ?? 0;
     return <span className="engine-chip installing" role="status">{star}{chip.label}<progress aria-label={`Installing ${name} ${chip.label}`} max={total ?? 1} value={total ? done : undefined} /><span className="muted">{total ? `${Math.floor(done / total * 100)}%` : chip.job?.state ?? "queued"}</span></span>;
   }
   if (chip.state === "installed") return <span className="engine-chip installed" title={chip.models ? `Installed · used by ${chip.models} model${chip.models === 1 ? "" : "s"}` : "Installed · not used by any model yet"}>
-    <span aria-hidden="true">✓</span><span className="sr-only">Installed: </span>{star}{chip.label}{chip.models ? <span className="muted">{chip.models} model{chip.models === 1 ? "" : "s"}</span> : null}
+    <span aria-hidden="true">✓</span><span className="sr-only">Installed: </span>{star}{chip.label}{version}{chip.models ? <span className="muted">{chip.models} model{chip.models === 1 ? "" : "s"}</span> : null}
   </span>;
   return <span className={`engine-chip ${chip.state}`} title={chip.reason || undefined}>{chip.label}{chip.reason ? <span className="sr-only">: {chip.reason}</span> : null}</span>;
 }

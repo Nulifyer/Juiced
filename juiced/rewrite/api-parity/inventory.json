@@ -53,7 +53,7 @@
     },
     {
       "path": "docs/api/openai.md",
-      "sha256": "22e6d0fbb81ce8f7f5c9b3fe575cd290bc2e64c8ecc46626bbd6b6657e48f70b",
+      "sha256": "ccf0182254d1abde591aaf6bcd49062817f10eeeaac0e0dd5a43213a3fbf6f98",
       "hash_check": "snapshot_only"
     },
     {
@@ -73,7 +73,7 @@
     },
     {
       "path": "juiced/rewrite/rust-tests/tests/api_end_to_end.rs",
-      "sha256": "664400adecc8ae8f6af7f9d1874e41842c23c407f86f72d82dc3089b4401e4fa",
+      "sha256": "b5c7c0da88c8f194ad0a74143fca9bf9ad02b9299f0280957fdc75cd6baaaca8",
       "hash_check": "snapshot_only"
     },
     {
@@ -118,7 +118,7 @@
     },
     {
       "path": "juiced/rewrite/rust-tests/tests/support/mod.rs",
-      "sha256": "853ad76a5ec8372a62dae16828fc5c0c64ceb1c4b70c0e9cc2e79ffd69e6ea28",
+      "sha256": "37c416b809e7f1911623a9fb8840f3d9e5c0c90bf45fff888c1e520996c7d3b5",
       "hash_check": "snapshot_only"
     },
     {

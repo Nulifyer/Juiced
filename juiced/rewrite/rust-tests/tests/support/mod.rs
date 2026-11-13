@@ -133,6 +133,8 @@ pub const MULTIPART_INFERENCE_ROUTES: [&str; 3] = [
 pub const MEDIA_INFERENCE_ROUTES: [&str; 3] =
     ["/images/generations", "/audio/speech", "/images/upscale"];
 pub const WEBSOCKET_INFERENCE_ROUTES: [&str; 1] = ["/realtime"];
+/// Quad-prefixed POST actions that take no body, with their authority.
+pub const ACTION_ROUTES: [(&str, &str, &str); 1] = [("POST", "/models/check-updates", "operator")];
 pub const LLAMA_ROUTES: [(&str, &str, &str); 9] = [
     ("POST", "/rerank", "inference"),
     ("POST", "/reranking", "inference"),
@@ -189,6 +191,7 @@ pub fn route_matrix() -> BTreeSet<(String, String)> {
             COMPAT_ROUTES
                 .iter()
                 .chain(LLAMA_ROUTES.iter())
+                .chain(ACTION_ROUTES.iter())
                 .map(|(method, path, _)| ((*method).into(), (*path).into())),
         )
         .collect()

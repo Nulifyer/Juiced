@@ -10,6 +10,9 @@ Enable the model and wait for its worker to load first.
 3. Send a short prompt and check that the answer completes.
 4. Use **Stop** to cancel the request.
 
+**Max tokens** caps each reply, up to the model's output limit. Turn **Thinking**
+off to ask a reasoning model to answer directly; other models ignore it.
+
 Replies render as Markdown: tables, lists, links and code blocks with a copy
 button. When the model reasons first, a **Thinking** line shows while it works
 and becomes **Thought for Ns**; select it to read the reasoning.
@@ -25,14 +28,13 @@ own saved conversations.
 
 ## Test transcription
 
-1. Open **Test services → Transcribe**.
-2. Select a loaded transcription model.
-3. Drop or choose an audio file up to 120 seconds long.
-4. Start transcription and review the text.
-5. Copy or download the transcript if you need to keep it.
+1. Open **Test services → Try a model** and choose a speech-to-text model.
+2. Choose an audio file, or select **Record** and speak, then **Stop**.
+3. Select **Transcribe** (a recording transcribes when you stop) and review the text.
 
-The browser converts audio to 16 kHz mono PCM. This test requests English
-transcription. The 120-second limit belongs to this browser test flow.
+Any audio the browser can play works. The browser converts it to 16 kHz mono WAV
+before upload, up to 8 MiB (about 4 minutes). Recording needs HTTPS or localhost.
+Use **auto** or a language code such as `en`.
 
 ## Test speech
 

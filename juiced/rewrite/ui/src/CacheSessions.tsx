@@ -1,14 +1,14 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { Client } from "./api";
 import { Meter } from "./charts";
 import { pathNames } from "./performance";
-import { Badge, Button, Empty, HelpTip } from "./ui";
+import { Badge, Button, Empty, HelpTip, Icon } from "./ui";
 import { useOperation, useResource } from "./useResource";
 
 export type SessionMode = "off" | "memory" | "persistent";
-type Settings = { mode: SessionMode; budget_bytes: number; model_budget_bytes: number; max_sessions: number; save_delay_ms: number; models: Record<string, SessionMode> };
+type Settings = { mode: SessionMode; budget_bytes: number; model_budget_bytes: number; max_sessions: number; save_delay_ms: number; models: Record<string, SessionMode>; retention_days?: number };
 type ModelRow = { model: string; mode: string; effective: string; reason: string | null; sessions: number; used_bytes: number; budget_bytes: number };
-type Session = { session: string; model: string | null; protocol: string; kind: string; bytes: number; last_used_unix_ms: number; execution_current: boolean | null; state: string };
+type Session = { session: string; model: string | null; protocol: string; kind: string; bytes: number; last_used_unix_ms: number; execution_current: boolean | null; state: string; retained: boolean; expires_unix_ms: number | null };
 export type SessionView = { generation: number; settings: Settings; models: ModelRow[]; sessions: Session[]; totalBytes: number; totalSessions: number; explicit: boolean };
 export type Turn = { id: number; model: string; path: string; restoreMs: number | null; cached: number | null; processed: number | null; elapsedMs: number | null };
 
@@ -33,9 +33,9 @@ export function parseSessions(value: unknown): SessionView {
   if (num(body.configuration_generation) === null || !Array.isArray(body.models) || !Array.isArray(body.sessions)) throw new Error("The service returned an unexpected session list.");
   return {
     generation: num(body.configuration_generation)!, explicit: body.explicit_snapshots_enabled === true,
-    settings: { mode: mode(settings.mode), budget_bytes: num(settings.budget_bytes) ?? 0, model_budget_bytes: num(settings.model_budget_bytes) ?? 0, max_sessions: num(settings.max_sessions) ?? 0, save_delay_ms: num(settings.save_delay_ms) ?? 0, models: Object.fromEntries(Object.entries(record(settings.models)).map(([key, item]) => [key, mode(item)])) },
+    settings: { mode: mode(settings.mode), budget_bytes: num(settings.budget_bytes) ?? 0, model_budget_bytes: num(settings.model_budget_bytes) ?? 0, max_sessions: num(settings.max_sessions) ?? 0, save_delay_ms: num(settings.save_delay_ms) ?? 0, models: Object.fromEntries(Object.entries(record(settings.models)).map(([key, item]) => [key, mode(item)])), ...(num(settings.retention_days) !== null ? { retention_days: num(settings.retention_days)! } : {}) },
     models: body.models.map((item) => { const row = record(item); return { model: str(row.model) ?? "", mode: str(row.mode) ?? "off", effective: str(row.effective) ?? "off", reason: str(row.reason), sessions: num(row.sessions) ?? 0, used_bytes: num(row.used_bytes) ?? 0, budget_bytes: num(row.budget_bytes) ?? 0 }; }),
-    sessions: body.sessions.map((item) => { const row = record(item); return { session: str(row.session) ?? "", model: str(row.model), protocol: str(row.protocol) ?? "", kind: str(row.kind) ?? "", bytes: num(row.bytes) ?? 0, last_used_unix_ms: num(row.last_used_unix_ms) ?? 0, execution_current: typeof row.execution_current === "boolean" ? row.execution_current : null, state: str(row.state) ?? "" }; }),
+    sessions: body.sessions.map((item) => { const row = record(item); return { session: str(row.session) ?? "", model: str(row.model), protocol: str(row.protocol) ?? "", kind: str(row.kind) ?? "", bytes: num(row.bytes) ?? 0, last_used_unix_ms: num(row.last_used_unix_ms) ?? 0, execution_current: typeof row.execution_current === "boolean" ? row.execution_current : null, state: str(row.state) ?? "", retained: row.retained === true, expires_unix_ms: num(row.expires_unix_ms) }; }),
     totalBytes: num(totals.bytes) ?? 0, totalSessions: num(totals.sessions) ?? 0,
   };
 }
@@ -61,6 +61,39 @@ function ago(ms: number) {
   if (seconds < 3600) return `${Math.round(seconds / 60)}m ago`;
   if (seconds < 86400) return `${Math.round(seconds / 3600)}h ago`;
   return `${Math.round(seconds / 86400)}d ago`;
+}
+
+function remaining(ms: number) {
+  const days = (ms - Date.now()) / 86400000;
+  return days < 1 ? "expires today" : `expires in ${Math.floor(days)}d`;
+}
+
+const gib = 1024 ** 3;
+
+function StorageLimits({ settings, blocked, configure }: { settings: Settings; blocked: boolean; configure: (settings: Settings, success: string) => Promise<unknown> }) {
+  const [budget, setBudget] = useState(String(Math.round(settings.budget_bytes / gib * 10) / 10));
+  const [days, setDays] = useState(settings.retention_days ? String(settings.retention_days) : "");
+  const [error, setError] = useState("");
+  useEffect(() => { setBudget(String(Math.round(settings.budget_bytes / gib * 10) / 10)); setDays(settings.retention_days ? String(settings.retention_days) : ""); }, [settings.budget_bytes, settings.retention_days]);
+  const savedBudget = String(Math.round(settings.budget_bytes / gib * 10) / 10), savedDays = settings.retention_days ? String(settings.retention_days) : "";
+  const dirty = budget.trim() !== savedBudget || days.trim() !== savedDays;
+  function save() {
+    const size = Number(budget), keep = days.trim() ? Number(days) : null;
+    if (!Number.isFinite(size) || size < 0.0625 || size > 128) return setError("Disk budget must be 0.0625 to 128 GiB.");
+    if (keep !== null && (!Number.isSafeInteger(keep) || keep < 1 || keep > 365)) return setError("Keep conversations for 1 to 365 days, or leave it empty to keep them until space is needed.");
+    setError("");
+    const total = Math.round(size * gib);
+    const next: Settings = { ...settings, budget_bytes: total, model_budget_bytes: Math.min(settings.model_budget_bytes, total) };
+    if (keep === null) delete next.retention_days; else next.retention_days = keep;
+    void configure(next, "Saved the conversation cache limits.");
+  }
+  return <form className="storage-limits" aria-label="Cache limits" onSubmit={(event) => { event.preventDefault(); save(); }}>
+    <label className="inline-field">Disk budget <input className="short-input" inputMode="decimal" aria-label="Disk budget in GiB" value={budget} disabled={blocked} onChange={(event) => setBudget(event.target.value)} /> GiB</label>
+    <label className="inline-field">Keep for <input className="short-input" inputMode="numeric" aria-label="Days to keep unused conversations" value={days} placeholder="Until full" disabled={blocked} onChange={(event) => setDays(event.target.value)} /> days</label>
+    <HelpTip label="Cache limits">When the disk budget is full, the least recently used conversations are deleted first. With a number of days, conversations unused for that long are also deleted. Kept conversations are never deleted automatically.</HelpTip>
+    {dirty && <><Button type="submit" variant="primary" disabled={blocked}>Save</Button><Button variant="ghost" onClick={() => { setBudget(savedBudget); setDays(savedDays); setError(""); }}>Cancel</Button></>}
+    {error && <p className="inline-error" role="alert">{error}</p>}
+  </form>;
 }
 
 const reasons: Record<string, string> = {
@@ -104,6 +137,7 @@ export function ConversationCache({ client, online }: { client: Client; online: 
       <div className="summary-usage">
         <Meter label="Disk used by saved conversations" value={data.settings.budget_bytes ? data.totalBytes / data.settings.budget_bytes * 100 : null} />
         <span className="muted">{size(data.totalBytes)} of {size(data.settings.budget_bytes)} used · {count}</span>
+        <StorageLimits settings={data.settings} blocked={blocked} configure={configure} />
       </div>
     </section>
     {operation.error && <p className="inline-error" role="alert">{operation.error}</p>}
@@ -140,9 +174,9 @@ export function ConversationCache({ client, online }: { client: Client; online: 
           {data.sessions.map((session) => <div role="row" className="data-row" key={`${session.session}-${session.model}-${session.last_used_unix_ms}`} aria-label={`Conversation ${session.session.slice(0, 8)}`}>
             <span role="cell"><code title={session.session}>{session.session.slice(0, 8)}</code> <span className="muted">{apiNames[session.protocol] ?? session.protocol}{session.kind === "header" ? " · client session ID" : ""}</span>{session.execution_current === false && <span title="Saved by a different engine build or launch settings. It can't be restored and will be replaced."><Badge tone="warning">Engine changed</Badge></span>}{session.state !== "saved" && <span title="The save didn't finish. Its space is returned once the engine that wrote it has exited."><Badge tone="warning">Incomplete</Badge></span>}</span>
             <span role="cell" className="break-word">{session.model ?? <span className="muted">Removed model</span>}</span>
-            <span role="cell" className="muted">{ago(session.last_used_unix_ms)}</span>
+            <span role="cell" className="muted">{ago(session.last_used_unix_ms)}{session.expires_unix_ms ? <span className="field-help">{remaining(session.expires_unix_ms)}</span> : null}</span>
             <span role="cell" className="numeric">{size(session.bytes)}</span>
-            <span role="cell" className="row-end"><Button variant="ghost" disabled={blocked} onClick={() => forget({ session: session.session }, "Conversation forgotten.")}>Forget</Button></span>
+            <span role="cell" className="row-end"><Button variant="ghost" className={session.retained ? "kept" : ""} aria-pressed={session.retained} title={session.retained ? "Kept: never deleted automatically" : "Keep: never delete automatically"} disabled={blocked || session.state !== "saved"} onClick={() => void operation.run("juiced/cache/sessions", { action: "retain", session: session.session, retained: !session.retained }, session.retained ? "Conversation can be deleted automatically again." : "Conversation kept.")}><Icon name="pin" size={14} /><span className="sr-only">{session.retained ? "Kept" : "Keep"}</span></Button><Button variant="ghost" disabled={blocked} onClick={() => forget({ session: session.session }, "Conversation forgotten.")}>Forget</Button></span>
           </div>)}
         </div>}
     </section>

@@ -17,7 +17,7 @@ export async function transcriptionForm(model: string, file: File, language: str
   if (file.size === 0 || file.size > MAX_AUDIO_UPLOAD_BYTES) throw new Error("Choose a nonempty WAV file under 8 MiB, including form fields.");
   const header = new Uint8Array(await file.slice(0, 12).arrayBuffer());
   const tag = (start: number, end: number) => String.fromCharCode(...header.subarray(start, end));
-  if (header.length < 12 || !["RIFF", "RIFX", "RF64", "BW64"].includes(tag(0, 4)) || tag(8, 12) !== "WAVE") throw new Error("Choose a WAV audio file. This console does not convert or repack audio.");
+  if (header.length < 12 || !["RIFF", "RIFX", "RF64", "BW64"].includes(tag(0, 4)) || tag(8, 12) !== "WAVE") throw new Error("Choose a WAV audio file, or audio the browser can convert to WAV.");
   const code = language.trim().toLowerCase();
   if (code !== "auto" && !/^[a-z]{2,3}$/.test(code)) throw new Error("Use auto or a two- or three-letter audio language code.");
   const form = new FormData(); form.set("model", model); form.set("file", file, file.name); form.set("language", code); form.set("response_format", "json");

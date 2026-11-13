@@ -545,8 +545,16 @@ async fn sessions_can_be_retained_and_expire_only_after_their_retention() {
     assert_eq!(view["sessions"][0]["retained"], false);
     assert_eq!(view["sessions"][0]["expires_unix_ms"], Value::Null);
     for (body, status, code) in [
-        (json!({"action":"retain","session":"short","retained":true}), StatusCode::BAD_REQUEST, "invalid_session"),
-        (json!({"action":"retain","session":"0".repeat(64),"retained":true}), StatusCode::NOT_FOUND, "unknown_session"),
+        (
+            json!({"action":"retain","session":"short","retained":true}),
+            StatusCode::BAD_REQUEST,
+            "invalid_session",
+        ),
+        (
+            json!({"action":"retain","session":"0".repeat(64),"retained":true}),
+            StatusCode::NOT_FOUND,
+            "unknown_session",
+        ),
     ] {
         let (actual, error) = server.post("juiced/cache/sessions", body).await;
         assert_eq!(actual, status, "{error}");
