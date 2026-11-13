@@ -1,7 +1,7 @@
 export type QuantJob = { id: string; state: string; downloaded_bytes: number; expected_bytes: number | null };
 export type QuantFile = { file: string; bytes: number | null; member: string | null };
 export type Quant = { label: string; kind: "quant" | "bundle" | "checkpoint"; engine: string | null; file: string; parts: number; bytes: number | null; recommended: boolean; pullable: boolean; present: boolean; presentFiles: number; set: string | null; localPath: string | null; readOnly: boolean; sha256: string | null; files: QuantFile[]; jobs: QuantJob[] };
-export type LibraryModel = { id: string; repo: string; name: string; publisher: string | null; task: string | null; source: "catalog" | "huggingface" | "local"; downloads: number | null; likes: number | null; license: string | null; gated: boolean; quants: Quant[] };
+export type LibraryModel = { id: string; repo: string; name: string; nativeId: string | null; publisher: string | null; task: string | null; source: "catalog" | "huggingface" | "local"; downloads: number | null; likes: number | null; license: string | null; gated: boolean; quants: Quant[] };
 export type SearchResult = { generation: number; offline: boolean; hub: string; authenticated: boolean; models: LibraryModel[]; next: string | null };
 export type PullFile = { file: string; bytes: number | null; sha256: string | null; state: string; downloaded_bytes: number; job: string | null; error: string | null };
 export type Pull = { id: string; state: string; error: string | null; repo: string; label: string | null; files: PullFile[]; set: string | null };
@@ -19,7 +19,7 @@ export function parseSearch(value: unknown): SearchResult {
   return {
     generation: number(item.artifact_generation) ?? 0, offline: item.offline === true, hub: text(hub.status) ?? "unavailable", authenticated: hub.authenticated === true, next: text(page.next_cursor),
     models: list(item.data, 64).map((model) => ({
-      id: text(model.id) ?? text(model.repo) ?? "", repo: text(model.repo) ?? "", name: text(model.name) ?? text(model.repo) ?? "", publisher: text(model.publisher), task: text(model.task),
+      id: text(model.id) ?? text(model.repo) ?? "", repo: text(model.repo) ?? "", name: text(model.name) ?? text(model.repo) ?? "", nativeId: text(model.native_id), publisher: text(model.publisher), task: text(model.task),
       source: model.source === "catalog" || model.source === "local" ? model.source : "huggingface",
       downloads: number(model.downloads), likes: number(model.likes), license: text(model.license), gated: model.gated === true,
       quants: list(model.quants, 64).map((quant) => {

@@ -113,7 +113,7 @@ export function FindModels({ client, online, onRegistered, onOpenModel, onDownlo
   const file = local.file;
   const checkpoint = quant?.kind === "checkpoint";
   const target: AddTarget | null = file ? file.artifact ? { artifact: file.artifact } : file.path ? { path: file.path } : null : checkpoint ? quant?.set ? { artifact_set: quant.set } : null : quant?.localPath ? { path: quant.localPath } : quant?.sha256 ? { artifact: quant.sha256 } : null;
-  const targetId = file ? file.id.trim() : checkpoint ? model?.name ?? "" : quant ? modelId(quant.file) : "";
+  const targetId = file ? file.id.trim() : checkpoint ? model?.name ?? "" : quant?.kind === "bundle" && model?.nativeId ? model.nativeId : quant ? modelId(quant.file) : "";
   const gatedNote = model?.gated && !quant?.present ? result?.authenticated ? "Gated on Hugging Face: accept its license there first. Juiced downloads with the server's HF_TOKEN." : "Gated on Hugging Face. Set HF_TOKEN on the server and accept the license there to download it." : "";
   const ready = file ? !!target && !file.error : !!quant?.present;
   const resetKey = file ? `file:${file.name}` : `${selected?.repo}:${selected?.label}`;

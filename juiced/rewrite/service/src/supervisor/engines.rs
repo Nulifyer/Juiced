@@ -855,7 +855,11 @@ impl Manager {
                 .and_then(|store| self.library().checkpoint_id(&store, artifact)),
             _ => None,
         };
-        let id = match request.id.or(checkpoint_id) {
+        let pulled_id = match (&request.id, &checkpoint_id, artifact_set.as_deref()) {
+            (None, None, Some(set)) => self.library().set_suggested_id(set),
+            _ => None,
+        };
+        let id = match request.id.or(checkpoint_id).or(pulled_id) {
             Some(id) => id,
             None => models::native_default_id(&format)
                 .or_else(|| name.as_deref().and_then(models::default_id))

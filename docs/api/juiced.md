@@ -212,7 +212,7 @@ Juiced downloads the whole variant at the repository's current commit, or at
 against their git blob id (`library_file_mismatch`, 502, when they differ). The
 reply and `GET /v1/juiced/library/pulls/ID` return the pull with `state`
 (`downloading`, `waiting`, `publishing`, `complete` or `failed`), `files`, `jobs`,
-`set` and, for checkpoints, `format`, `engine` and `suggested_id`. Pause, resume or
+`set`, `suggested_id` and, for checkpoints, `format` and `engine`. Pause, resume or
 cancel a pull through its `jobs` with `POST /v1/juiced/artifacts/jobs/ID`.
 
 Register a finished checkpoint with `POST /v1/juiced/models/add`:
@@ -221,7 +221,9 @@ Register a finished checkpoint with `POST /v1/juiced/models/add`:
 {"artifact_set": "set-…", "policy": "on-demand"}
 ```
 
-The id defaults to the repository name. Pass `"engine": "thenoise"` for split
+The id defaults to the repository name for a checkpoint and to the catalog name
+(`TRELLIS-3D-Q4`, `kokoro-v1`) for a catalog bundle; the pull reports it as
+`suggested_id`. Pass `"engine": "thenoise"` for split
 diffusion checkpoints that sd.cpp could also read. The engine reads the set as a
 folder of its member names. Without the engine installed the reply is 409
 `engine_not_installed` with the build to install; on a host the engine cannot run

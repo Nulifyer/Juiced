@@ -281,6 +281,24 @@ struct PullRecord {
 }
 
 impl PullRecord {
+    /// A checkpoint is named after its repository and a catalog bundle by its native name;
+    /// a bundle's first file (`ss_flow.gguf`) says nothing about the model.
+    fn suggested_id(&self) -> Option<String> {
+        if self.checkpoint.is_some() {
+            return Some(suggested_id(&self.repo));
+        }
+        let primary = self.parts.first()?.file.as_str();
+        catalog::catalog()
+            .models
+            .iter()
+            .find(|model| {
+                model.repo == self.repo
+                    && !model.companions.is_empty()
+                    && model.recommended_file.as_deref() == Some(primary)
+            })
+            .map(|model| model.native_id.clone())
+    }
+
     fn state(&self) -> (&'static str, Option<&'static str>) {
         if let Some(code) = self.parts.iter().find_map(|part| match part.status {
             PartStatus::Failed(code) => Some(code),
@@ -373,7 +391,7 @@ impl PullRecord {
             "files": files, "jobs": jobs,
             "format": self.checkpoint,
             "engine": self.checkpoint.map(|kind| kind.engine().name()),
-            "suggested_id": self.checkpoint.map(|_| suggested_id(&self.repo)),
+            "suggested_id": self.suggested_id(),
             "set": self.set.as_ref().map(|set| set.id.as_str()),
             "set_state": set_state, "set_error": set_error,
         })
@@ -1369,6 +1387,20 @@ impl Library {
                 Some(((repo, revision, path), record.sha256))
             })
             .collect()
+    }
+
+    /// The model id the pull that published `set` suggests.
+    pub fn set_suggested_id(&self, set: &str) -> Option<String> {
+        self.pulls
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .iter()
+            .find_map(|record| {
+                let record = record.lock().unwrap_or_else(|error| error.into_inner());
+                (record.set.as_ref().is_some_and(|planned| planned.id == set))
+                    .then(|| record.suggested_id())
+                    .flatten()
+            })
     }
 
     /// The repository name a downloaded checkpoint's primary file came from, as a model id.

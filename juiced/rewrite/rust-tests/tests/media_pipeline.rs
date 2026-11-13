@@ -620,6 +620,7 @@ mod engines {
             artifacts.insert(repo, hub.file(repo, path).sha256());
             if repo == KOKORO_REPO {
                 assert_eq!(done["set_state"], "published", "{done}");
+                assert_eq!(done["suggested_id"], "kokoro-v1", "{done}");
                 let set = server
                     .get(&format!(
                         "juiced/artifacts/sets/{}",
@@ -680,7 +681,7 @@ mod engines {
         );
         assert!(speech_model["artifact_set"].is_string());
         let speech_id = speech_model["model"]["id"].as_str().unwrap().to_owned();
-        assert_eq!(speech_id, "kokoro-v1.0");
+        assert_eq!(speech_id, "kokoro-v1");
 
         for prefix in PREFIXES {
             let (status, reply) = image(

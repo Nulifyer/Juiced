@@ -28,7 +28,7 @@
     },
     {
       "path": "docs/api/juiced.md",
-      "sha256": "dd35c8048a11cd0c3a8b463ad4e3a077e6aef7e451d3a178438d3759dceb35ec",
+      "sha256": "3bea4ee7b70f9b1c12d899121a97b9226814501c3a182197b16eb7f5a69cce7f",
       "hash_check": "snapshot_only"
     },
     {
@@ -208,7 +208,7 @@
     },
     {
       "path": "juiced/rewrite/rust-tests/tests/media_pipeline.rs",
-      "sha256": "4f5bcee470c0e4761411994e2cde9714d5c7864ff7402c21dfaef2d13ac8673a",
+      "sha256": "95f59121e912c51ebbadb1f069746b3fad6e98fdd0f921b4dfb7328695b4ab9a",
       "hash_check": "snapshot_only"
     },
     {
