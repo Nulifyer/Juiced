@@ -31,6 +31,7 @@ use std::{
 const POLL: Duration = Duration::from_millis(250);
 const COMPLETED_RETENTION: Duration = Duration::from_secs(120);
 const MAXIMUM_JOBS: usize = 64;
+const MAXIMUM_PENDING: usize = 256;
 const INSTALL_DEADLINE: Duration = Duration::from_secs(3600);
 
 fn error(status: StatusCode, code: &'static str, message: impl Into<String>) -> ApiError {
@@ -257,6 +258,23 @@ impl Registry {
             .unwrap_or_else(|error| error.into_inner())
             .retain(|job| job.id != id);
     }
+    fn remember(&self, public: &str, pending: Pending) -> Result<(), ApiError> {
+        let mut entries = self
+            .pending
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if entries.len() >= MAXIMUM_PENDING && !entries.contains_key(public) {
+            return Err(error(
+                StatusCode::CONFLICT,
+                "registration_limit",
+                format!(
+                    "At most {MAXIMUM_PENDING} models can wait for a pull. Pull or delete some first."
+                ),
+            ));
+        }
+        entries.insert(public.to_owned(), pending);
+        Ok(())
+    }
     fn pending(&self, public: &str) -> Option<Pending> {
         self.pending
             .lock()
@@ -406,17 +424,13 @@ async fn plan(manager: &Manager, body: &PullBody) -> Result<Plan, ApiError> {
         let selection = library
             .select_checkpoint(&repo, variant.as_deref(), None)
             .await?;
-        registry()
-            .pending
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .insert(
-                public.clone(),
-                Pending {
-                    recipe,
-                    checkpoint: Some(checkpoint.clone()),
-                },
-            );
+        registry().remember(
+            &public,
+            Pending {
+                recipe,
+                checkpoint: Some(checkpoint.clone()),
+            },
+        )?;
         let extras = body
             .mmproj
             .iter()
@@ -1058,7 +1072,7 @@ pub(crate) async fn native_registry_search(
         .as_array()
         .into_iter()
         .flatten()
-        .filter(|entry| entry["source"] != "local")
+        .filter(|entry| entry["source"] == "huggingface")
         .take(limit)
         .map(|entry| {
             let gguf = entry["quants"]
@@ -1169,17 +1183,13 @@ pub(crate) async fn native_register(
     let installed = registered(&state.manager, public).await.is_some();
     let labels = body.labels.clone().unwrap_or_default();
     if !installed {
-        registry()
-            .pending
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .insert(
-                public.to_owned(),
-                Pending {
-                    recipe: recipe.clone(),
-                    checkpoint: checkpoint.clone(),
-                },
-            );
+        registry().remember(
+            public,
+            Pending {
+                recipe: recipe.clone(),
+                checkpoint: checkpoint.clone(),
+            },
+        )?;
     }
     Ok(Json(json!({
         "status": "success", "model_name": public, "canonical_model_name": name,
@@ -1509,6 +1519,7 @@ async fn load_model(manager: &Arc<Manager>, name: &str, request: &Map<String, Va
             _ => {}
         }
         let mut body = success(format!("Loaded model: {name}"));
+        body["options_saved"] = json!(changed);
         body["model"] = json!(view);
         Ok(Json(body).into_response())
     }
@@ -1831,7 +1842,12 @@ pub(crate) async fn native_uninstall(
     ApiBytes(bytes): ApiBytes,
 ) -> Result<Json<Value>, ApiError> {
     let (_, engine, backend) = backend_request(&bytes)?;
-    let mut body = state.manager.uninstall_engine(engine, &backend).await?;
+    let mut body = match state.manager.uninstall_engine(engine, &backend).await {
+        Err(failure) if failure.code == "engine_not_installed" => {
+            json!({"engine": engine.name(), "backend": backend, "removed_packages": [], "freed_bytes": 0})
+        }
+        other => other?,
+    };
     body["status"] = json!("success");
     body["recipe"] = json!(engine.recipe());
     Ok(Json(body))
@@ -1910,6 +1926,12 @@ pub(crate) async fn native_system_info(
     })?;
     if let Ok(engines) = state.manager.engines().await {
         body["recipes"] = recipes(&engines, &body);
+    }
+    if let Some(name) = body["devices"]["cpu"]["name"].as_str() {
+        body["Processor"] = json!(name);
+    }
+    if let Some(bytes) = body["devices"]["memory"]["total_bytes"].as_u64() {
+        body["Physical Memory"] = json!(format!("{:.2} GB", bytes as f64 / 1024f64.powi(3)));
     }
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(body)).into_response())
 }
