@@ -66,5 +66,7 @@ group("barista", () => {
     expect(prompt).toContain("GPUs: Radeon 16.0 GiB");
     expect(prompt).toContain("llamacpp: vulkan");
     expect(prompt.length).toBeLessThan(1600);
+    const later = systemPrompt("m", "full", { host: { os: "linux", architecture: "x86_64" }, cpu: { name: "Ryzen", logical_threads: 16 }, ram: { total_bytes: 32 * 1024 ** 3, available_bytes: 3 * 1024 ** 3 }, gpus: [{ name: "Radeon", vram_total_bytes: 16 * 1024 ** 3 }], memory: { resident_budget_bytes: 24 * 1024 ** 3, reserved_bytes: 20 * 1024 ** 3 }, recommended_backends: { llamacpp: "vulkan" }, loaded_models: [{ id: "x" }] });
+    expect(later).toBe(prompt);
   });
 });
