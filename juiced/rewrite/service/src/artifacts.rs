@@ -327,6 +327,7 @@ pub struct ArtifactStore {
     runtime: Mutex<Runtime>,
     publication: Mutex<()>,
     stopping: AtomicBool,
+    free_reserve: std::sync::atomic::AtomicU64,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -447,6 +448,7 @@ pub enum ArtifactError {
     SetBinding,
     SetUnsupported,
     RootUnavailable,
+    InsufficientSpace(Box<crate::disk::Shortfall>),
     Io(io::Error),
     Persistence(AtomicWriteError),
 }
@@ -471,6 +473,7 @@ impl ArtifactError {
             Self::SetBinding => "artifact_set_binding_mismatch",
             Self::SetUnsupported => "artifact_set_execution_unsupported",
             Self::RootUnavailable => "storage_root_unavailable",
+            Self::InsufficientSpace(_) => "insufficient_storage",
             Self::Io(_) => "artifact_io",
             Self::Persistence(_) => "artifact_persistence",
         }
@@ -514,6 +517,9 @@ impl ArtifactError {
             }
             Self::RootUnavailable => {
                 "A retained storage root is unavailable. Restore its owned identity before retrying filesystem effects."
+            }
+            Self::InsufficientSpace(_) => {
+                "Not enough free space for this download. Free space, then retry."
             }
             Self::Io(_) => {
                 "The artifact storage operation failed. Inspect the managed storage location."
@@ -665,7 +671,25 @@ impl ArtifactStore {
             }),
             publication: Mutex::new(()),
             stopping: AtomicBool::new(false),
+            free_reserve: std::sync::atomic::AtomicU64::new(0),
         }))
+    }
+
+    pub fn root(&self) -> &Path {
+        self.lease.root()
+    }
+
+    /// Free space every new or resumed transfer must leave on the store's volume.
+    pub fn set_free_reserve(&self, bytes: u64) {
+        self.free_reserve.store(bytes, Ordering::Release);
+    }
+
+    pub fn require_space(&self, bytes: u64) -> Result<(), ArtifactError> {
+        crate::disk::require(
+            &[(self.lease.root(), bytes)],
+            self.free_reserve.load(Ordering::Acquire),
+        )
+        .map_err(|shortfall| ArtifactError::InsufficientSpace(Box::new(shortfall)))
     }
 
     pub fn generation(&self) -> u64 {
@@ -697,6 +721,9 @@ impl ArtifactStore {
             request.maximum_bytes,
             &self.limits,
         )?;
+        if let Some(bytes) = request.expected_bytes {
+            self.require_space(bytes)?;
+        }
         let (view, control) = self.begin(
             Some(url.to_string()),
             request.expected_sha256.to_ascii_lowercase(),
@@ -999,6 +1026,10 @@ impl ArtifactStore {
             if self.policy == SourcePolicy::Offline {
                 return Err(ArtifactError::Offline);
             }
+            let committed = if cold { 0 } else { job.downloaded_bytes };
+            if let Some(bytes) = job.expected_bytes {
+                self.require_space(bytes.saturating_sub(committed))?;
+            }
             if file.is_some() {
                 return Err(ArtifactError::Invalid);
             }
@@ -1105,6 +1136,28 @@ impl ArtifactStore {
                 .get(id)
                 .ok_or(ArtifactError::NotFound)?,
             &runtime,
+        ))
+    }
+
+    /// Every retained transfer plus the unindexed leftovers whose space stays reserved.
+    pub fn transfers(&self) -> Result<(Vec<JobView>, Vec<QuarantinedFileView>), ArtifactError> {
+        let runtime = self.runtime.lock().map_err(|_| ArtifactError::Corrupt)?;
+        Ok((
+            runtime
+                .manifest
+                .jobs
+                .iter()
+                .map(|(id, job)| job_view(id, job, &runtime))
+                .collect(),
+            runtime
+                .quarantined_files
+                .iter()
+                .map(|(filename, reserved_bytes)| QuarantinedFileView {
+                    filename: filename.clone(),
+                    reserved_bytes: *reserved_bytes,
+                    reason: "unreferenced_generated_file",
+                })
+                .collect(),
         ))
     }
 

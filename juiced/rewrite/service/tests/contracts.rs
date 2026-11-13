@@ -83,6 +83,7 @@ impl Harness {
             wyoming: Default::default(),
             protocols: Default::default(),
             barista: Default::default(),
+            storage: Default::default(),
             native_adoption: None,
             log_level: None,
             allowed_origins: None,

@@ -1,4 +1,5 @@
 mod catalog;
+mod durable;
 mod hub;
 mod local;
 pub(crate) mod native;
@@ -366,6 +367,7 @@ pub struct Library {
     pulls: Mutex<Vec<Arc<Mutex<PullRecord>>>>,
     local_scan: tokio::sync::Mutex<()>,
     local: Mutex<Option<CachedLocal>>,
+    journal: std::sync::OnceLock<Arc<crate::acquisitions::Journal>>,
     updates: Mutex<(u64, BTreeMap<String, bool>)>,
 }
 
@@ -399,6 +401,7 @@ impl Library {
             pulls: Mutex::new(Vec::new()),
             local_scan: tokio::sync::Mutex::new(()),
             local: Mutex::new(None),
+            journal: std::sync::OnceLock::new(),
             updates: Mutex::new((0, BTreeMap::new())),
         }
     }
@@ -584,6 +587,8 @@ impl Library {
             ));
         }
         pulls.remove(index);
+        drop(pulls);
+        self.forget_saved(id);
         Ok(json!({"pull": id, "dismissed": true}))
     }
 
@@ -863,7 +868,14 @@ impl Library {
                 .unwrap_or_else(|error| error.into_inner())
                 .terminal()
         }) {
-            pulls.remove(index);
+            let removed = pulls.remove(index);
+            drop(pulls);
+            let id = removed
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .id
+                .clone();
+            self.forget_saved(&id);
             return Ok(());
         }
         Err(library_error(
@@ -1056,6 +1068,19 @@ impl Library {
         for part in &mut parts {
             part.status = existing_status(&presence, &part.request.expected_sha256);
         }
+        let remaining: u64 = parts
+            .iter()
+            .map(|part| match &part.status {
+                PartStatus::Queued => part.request.maximum_bytes,
+                PartStatus::Job {
+                    downloaded_bytes, ..
+                } => part.request.maximum_bytes.saturating_sub(*downloaded_bytes),
+                _ => 0,
+            })
+            .sum();
+        if let Err(ArtifactError::InsufficientSpace(shortfall)) = store.require_space(remaining) {
+            return Err(shortfall.into_error("download this model"));
+        }
         let mut guarded = Some(request.expected_generation);
         for part in &mut parts {
             if !matches!(part.status, PartStatus::Queued) {
@@ -1085,10 +1110,11 @@ impl Library {
             parts,
             set,
         }));
-        let view = record
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .view();
+        let view = {
+            let record = record.lock().unwrap_or_else(|error| error.into_inner());
+            self.persist(&record);
+            record.view()
+        };
         self.pulls
             .lock()
             .unwrap_or_else(|error| error.into_inner())
@@ -1135,8 +1161,18 @@ impl Library {
             }
             let publish = {
                 let mut record = record.lock().unwrap_or_else(|error| error.into_inner());
+                let changed = updates.iter().any(|(index, status)| {
+                    !matches!(
+                        (&record.parts[*index].status, status),
+                        (PartStatus::Job { id: left, state: a, .. }, PartStatus::Job { id: right, state: b, .. })
+                            if left == right && a == b
+                    )
+                });
                 for (index, status) in updates {
                     record.parts[index].status = status;
+                }
+                if changed {
+                    self.persist(&record);
                 }
                 (record.state().0 == "publishing")
                     .then(|| record.set.as_ref().map(|set| set.specification.clone()))
@@ -1148,6 +1184,7 @@ impl Library {
                 if let Some(set) = &mut record.set {
                     set.state = state;
                 }
+                self.persist(&record);
                 return;
             }
             tokio::time::sleep(self.poll).await;

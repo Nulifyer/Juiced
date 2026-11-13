@@ -11,7 +11,7 @@ const imported = async (page: Page) => Number(/Imported(?: ×(\d+))?/.exec(await
 test("one screen shows this machine and the engines it can run, with Show all for the rest", async ({ page }) => {
   await open(page);
   await navigate(page, "Engines & hardware");
-  await expect(page.getByRole("main").getByRole("tablist")).toHaveCount(0);
+  await expect(page.getByRole("main").getByRole("tablist", { name: "Engines & hardware views" }).getByRole("tab")).toHaveText(["Engines", "Storage"]);
   const machine = page.getByRole("region", { name: "This machine" });
   await expect(machine.getByRole("group", { name: "CPU" })).toContainText("Fixture CPU");
   await expect(machine.getByRole("group", { name: "CPU" })).toContainText("4 cores");

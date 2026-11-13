@@ -280,6 +280,7 @@ async fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
         None
     };
     manager.start_residency();
+    manager.recover_acquisitions().await;
     let adoption = juiced_service::supervisor::native_adoption_from_env()
         .map(|(source, roots)| manager.start_native_adoption(source, roots));
     let startup_manager = manager.clone();

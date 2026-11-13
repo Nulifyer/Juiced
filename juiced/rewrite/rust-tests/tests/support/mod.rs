@@ -28,7 +28,7 @@ pub const CLIENT_KEY: &str = "isolated-e2e-client-key";
 pub const ADMIN_KEY: &str = "isolated-e2e-admin-key";
 const ROTATED_CLIENT_KEY: &str = "isolated-e2e-rotated-client-key";
 const ROTATED_ADMIN_KEY: &str = "isolated-e2e-rotated-admin-key";
-pub const READ_ROUTES: [&str; 18] = [
+pub const READ_ROUTES: [&str; 19] = [
     "/health",
     "/docs",
     "/docs/{*page}",
@@ -47,6 +47,7 @@ pub const READ_ROUTES: [&str; 18] = [
     "/system-info",
     "/system-stats",
     "/models/{model}/files",
+    "/juiced/storage",
 ];
 /// Read routes whose operator view adds process details; `Server::get` reads them as operator.
 pub const OPERATOR_DETAIL_ROUTES: [&str; 1] = ["/juiced/context"];
@@ -80,7 +81,7 @@ pub const OPERATOR_READ_ROUTES: [&str; 28] = [
     "/juiced/protocols/health",
     "/juiced/barista",
 ];
-pub const WRITE_ROUTES: [&str; 41] = [
+pub const WRITE_ROUTES: [&str; 42] = [
     "/juiced/runtime-packages/import",
     "/juiced/engines/install",
     "/juiced/models/add",
@@ -108,6 +109,7 @@ pub const WRITE_ROUTES: [&str; 41] = [
     "/juiced/library/pull",
     "/juiced/library/pulls/{pull}",
     "/juiced/library/local/delete",
+    "/juiced/storage/reclaim",
     "/juiced/aliases",
     "/juiced/residency",
     "/juiced/library/upload",
@@ -474,6 +476,46 @@ pub struct Server {
     isolated_loader_environment: bool,
     environment: BTreeMap<OsString, Option<OsString>>,
     working_directory: Option<PathBuf>,
+}
+
+/// Published runtime packages are read-only; restore owner write access so `TempDir` cleanup
+/// can remove them instead of leaking the tree.
+pub fn writable_tree(path: &std::path::Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let Ok(metadata) = std::fs::symlink_metadata(path) else {
+            return;
+        };
+        if metadata.file_type().is_symlink() {
+            return;
+        }
+        let mode = metadata.permissions().mode();
+        let wanted = if metadata.is_dir() {
+            mode | 0o700
+        } else {
+            mode | 0o200
+        };
+        if wanted != mode {
+            let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(wanted));
+        }
+        if metadata.is_dir()
+            && let Ok(entries) = std::fs::read_dir(path)
+        {
+            for entry in entries.flatten() {
+                writable_tree(&entry.path());
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+}
+
+impl Drop for Server {
+    fn drop(&mut self) {
+        self.process.take();
+        writable_tree(self.directory.path());
+    }
 }
 
 impl Server {

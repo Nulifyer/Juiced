@@ -357,6 +357,25 @@ impl Manager {
                 json!({"job": null, "already_installed": true, "package": existing, "build": build}),
             ));
         }
+        // The archive, its extracted staging tree and the published package can coexist
+        // until the import commits; the extracted size is estimated as twice the archive.
+        let archive = build
+            .archive_bytes
+            .saturating_add(build.runtime.map_or(0, |runtime| runtime.archive_bytes));
+        let root = self.config_path.parent().map(std::path::Path::to_owned);
+        if let Some(root) = root {
+            self.require_space(
+                vec![
+                    (root.join(STAGING), archive.saturating_mul(3)),
+                    (
+                        self.package_directory().unwrap_or_else(|| root.clone()),
+                        archive.saturating_mul(2),
+                    ),
+                ],
+                "install this engine",
+            )
+            .await?;
+        }
         let job = self.engine_jobs.begin(build)?;
         let manager = self.clone();
         let running = job.clone();
