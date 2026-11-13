@@ -63,6 +63,10 @@ Model discovery contract restored (helper-discovery). Deployed through Portainer
 
 rc.14 (FLM fixture race on CI) and rc.15 (image smoke test expected 401 on /v1/system-info, superseded by v0.9.2 admin-only semantics) never published. rc.16 = parity batches B1-B5 + integrated-GPU shared memory. Deployed through Portainer: Ollama `think:false` with Ornith Q6_K returns no reasoning (0.7 s) and `think:true` 215 chars of reasoning; Anthropic `metadata` ignored with a warning; A1111 sd-models lists z-image, samplers default; /metrics 39 lines; system-stats integrated true, 37 GiB of 72 GiB GTT; container logs show service and llama.cpp lines. Release page created; Homelab compose matches live (uncommitted). Open: the 66 GiB resident budget was set at first boot under the old compose's memory limit; user to choose a new value (suggested ~80 GiB).
 
+## Live verification (v1.0.0-rc.17, 2026-11-13)
+
+B6 settings, Barista tools (38) and storage management. Deployed through Portainer: Hot models ready; storage view 1.44 TiB free on /data, models 945 GiB, legacy v0.9.2 leftovers 28.8 GiB (reported, not removed), 29 unreferenced files, every engine build in use with its models listed. Release page created; Homelab compose matches live (uncommitted). Next: rc.18 with LLM and media engines (merged 5be757cb, 585bfbec) and the Barista wiring helper; homelab engine checks per the helpers' check plans.
+
 ## Pending (2026-11-12, after rc.12)
 
 In progress, round 11 (user feedback after enabling Barista on production):
