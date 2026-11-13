@@ -21,7 +21,9 @@ worker. Review unsaved changes before leaving a pane.
 Start with the model's defaults. Increase total context only when the workload
 needs it and enough memory is available. Total context can be shared across
 runtime slots. Do not assume the configured total is available independently
-to every concurrent request.
+to every concurrent request. Clients read the tokens one request can use from
+`context.per_request_tokens` in the model catalog; see
+[Juiced management](../api/juiced.md#discover-models-for-a-client).
 
 Temperature, token budget, and other generation defaults provide fallback values.
 An explicit supported client parameter takes precedence. Runtime capability

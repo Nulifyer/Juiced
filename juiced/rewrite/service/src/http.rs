@@ -195,7 +195,8 @@ define_routes! {
     (get, "/juiced/runtimes", runtime_catalog, "read"),
     (get, "/juiced/runtimes/resolve", runtime_resolve, "read"),
     (get, "/juiced/suitability", suitability, "operator"),
-    (get, "/juiced/context", context, "operator"),
+    (get, "/juiced/context", context, "read"),
+    (get, "/juiced/capabilities", capabilities, "read"),
     (get, "/juiced/endpoints", endpoints, "read"),
     (get, "/juiced/admission", admission, "operator"),
     (post, "/juiced/admission", pause, "operator"),
@@ -662,11 +663,8 @@ async fn logs(
         })),
     ))
 }
-async fn health() -> impl IntoResponse {
-    (
-        [(header::CONTENT_TYPE, "application/json")],
-        "{\"status\":\"ok\"}",
-    )
+async fn health(State(state): State<AppState>) -> Json<Value> {
+    Json(crate::discovery_http::health(&state.manager).await)
 }
 async fn endpoints(State(state): State<AppState>) -> Json<Value> {
     let gate = state.manager.protocol_gate();
@@ -1157,14 +1155,16 @@ async fn model_detail(
                 "The model is not registered.",
             )
         })?;
+    let mut entry = match state.manager.discovered_model(lookup).await {
+        Some(discovered) => discovered.openai(&id, target.as_deref()),
+        None => json!({"id":id,"object":"model","created":0,"owned_by":"juiced"}),
+    };
     if let Some(target) = target {
-        return Ok(Json(
-            json!({"id":id,"object":"model","created":0,"owned_by":"juiced-alias","aliased_to":target,"juiced":model}),
-        ));
+        entry["owned_by"] = json!("juiced-alias");
+        entry["aliased_to"] = json!(target);
     }
-    Ok(Json(
-        json!({"id":model.id,"object":"model","created":0,"owned_by":"juiced","juiced":model}),
-    ))
+    entry["juiced"] = json!(model);
+    Ok(Json(entry))
 }
 
 async fn register(
@@ -1265,25 +1265,27 @@ pub fn router(manager: Arc<Manager>, auth: Auth, ui: Option<PathBuf>) -> Router 
     )
 }
 
-async fn catalog(State(state): State<AppState>) -> Json<Value> {
-    Json(json!({ "schema_version": 1, "data": state.manager.catalog().await }))
+async fn catalog(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    crate::discovery_http::catalog(&state.manager, &headers).await
 }
 
-async fn models(State(state): State<AppState>) -> Json<Value> {
-    let catalog = state.manager.catalog().await;
-    let aliases = state.manager.aliased_views(&catalog);
-    let models: Vec<_> = catalog
-        .into_iter()
-        .filter(|model| model.policy != Policy::Disabled && model.downloaded)
-        .map(|model| json!({"id": model.id, "object": "model", "created": 0, "owned_by": "juiced"}))
-        .chain(
-            aliases
-                .into_iter()
-                .filter(|(_, model)| model.policy != Policy::Disabled && model.downloaded)
-                .map(|(alias, model)| json!({"id": alias, "object": "model", "created": 0, "owned_by": "juiced-alias", "aliased_to": model.id})),
-        )
-        .collect();
-    Json(json!({"object": "list", "data": models}))
+async fn models(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    ApiQuery(query): ApiQuery<crate::discovery_http::ModelsQuery>,
+) -> Result<Response, ApiError> {
+    crate::discovery_http::models(&state.manager, &headers, query).await
+}
+
+async fn capabilities(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let protocols = protocols(State(state.clone())).await.0;
+    crate::discovery_http::capabilities(
+        &state.manager,
+        &headers,
+        protocols["data"].clone(),
+        state.auth.enforcing(),
+    )
+    .await
 }
 
 async fn service_state(State(state): State<AppState>) -> Json<Value> {
@@ -1304,6 +1306,7 @@ struct SuitabilityQuery {
 
 async fn context(
     State(state): State<AppState>,
+    Extension(caller): Extension<RequestContext>,
     ApiQuery(query): ApiQuery<SuitabilityQuery>,
 ) -> Result<Response, ApiError> {
     let id = query
@@ -1317,7 +1320,14 @@ async fn context(
                 "Specify a registered model for context inspection.",
             )
         })?;
-    state.manager.context(id).await?.into_response().await
+    let discovered = state.manager.discovered_model(id).await;
+    state
+        .manager
+        .context(id)
+        .await?
+        .map(|value| crate::discovery_http::context(value, discovered, caller.operator()))
+        .into_response()
+        .await
 }
 
 async fn suitability(
@@ -1778,7 +1788,11 @@ async fn forward_prioritized(
     cache_context: Option<(&RequestContext, Option<&str>, &str)>,
     automatic: Option<&str>,
 ) -> Result<Response, ApiError> {
-    let original_body = body;
+    let original_body = if operation == Operation::Chat && !manager.memory_protected() {
+        crate::model_discovery::normalize_thinking(&body).map_or(body, Bytes::from)
+    } else {
+        body
+    };
     let model = request_model(&original_body)?;
     let (base, mut lease, body) = if manager.memory_protected() {
         let prepared = manager.prepare_protected_request(&model, operation, &original_body)?;

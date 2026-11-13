@@ -731,6 +731,65 @@ pub fn read_gguf<R: Read + Seek>(reader: &mut R) -> Result<DeclaredContext, Erro
     read_gguf_shape(reader).map(|(declared, _)| declared)
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct GgufSummary {
+    pub architecture: Option<String>,
+    pub training_context_tokens: Option<u64>,
+    pub chat_template: Option<String>,
+}
+
+/// One metadata pass for discovery: architecture, training context and `tokenizer.chat_template`.
+pub fn read_gguf_summary<R: Read + Seek>(reader: &mut R) -> Result<GgufSummary, Error> {
+    let file_bytes = reader
+        .seek(SeekFrom::End(0))
+        .map_err(|_| Error::new("gguf_io", "The GGUF metadata size is unavailable."))?;
+    reader
+        .seek(SeekFrom::Start(0))
+        .map_err(|_| Error::new("gguf_io", "The GGUF metadata could not be inspected."))?;
+    let mut input = MetadataReader {
+        reader: BufReader::with_capacity(64 * 1024, reader),
+        position: 0,
+        file_bytes,
+    };
+    if input.bytes::<4>()? != *b"GGUF" || !matches!(input.u32()?, 2 | 3) {
+        return Err(Error::new(
+            "invalid_gguf",
+            "The artifact is not a supported GGUF file.",
+        ));
+    }
+    let _tensors = input.u64()?;
+    let entries = input.u64()?;
+    if entries > MAX_METADATA_ENTRIES {
+        return Err(Error::new(
+            "gguf_limit",
+            "The GGUF header exceeds its metadata-entry count limit.",
+        ));
+    }
+    let mut summary = GgufSummary::default();
+    let mut contexts = Vec::new();
+    for _ in 0..entries {
+        let key = input.string(1024)?;
+        let kind = input.u32()?;
+        if key == "general.architecture" && kind == 8 {
+            summary.architecture = Some(input.string(128)?);
+        } else if key == "tokenizer.chat_template" && kind == 8 {
+            summary.chat_template = Some(input.string(MAX_STRING_BYTES)?);
+        } else if key.ends_with(".context_length") && matches!(kind, 0..=5 | 10 | 11) {
+            contexts.push((key, input.integer(kind)?));
+        } else {
+            input.skip_value(kind)?;
+        }
+    }
+    summary.training_context_tokens = summary.architecture.as_ref().and_then(|architecture| {
+        let target = format!("{architecture}.context_length");
+        contexts
+            .into_iter()
+            .find(|(key, _)| *key == target)
+            .and_then(|(_, value)| value)
+    });
+    Ok(summary)
+}
+
 /// Visits at most `limit` tensor names after skipping the bounded metadata section.
 pub fn visit_gguf_tensor_names<R: Read + Seek>(
     reader: &mut R,
@@ -1004,6 +1063,35 @@ mod tests {
         let mut bytes = Vec::new();
         string(&mut bytes, value.as_bytes());
         bytes
+    }
+
+    #[test]
+    fn discovery_summary_reads_template_and_training_context_in_one_pass() {
+        let bytes = gguf(
+            3,
+            &[
+                ("general.architecture", 8, text("qwen3")),
+                ("other.context_length", 4, 99_u32.to_le_bytes().to_vec()),
+                ("qwen3.context_length", 4, 40960_u32.to_le_bytes().to_vec()),
+                ("tokenizer.ggml.tokens", 9, {
+                    let mut array = 8_u32.to_le_bytes().to_vec();
+                    array.extend(2_u64.to_le_bytes());
+                    array.extend(text("a"));
+                    array.extend(text("b"));
+                    array
+                }),
+                ("tokenizer.chat_template", 8, text("{{ enable_thinking }}")),
+            ],
+        );
+        let summary = read_gguf_summary(&mut Cursor::new(bytes)).unwrap();
+        assert_eq!(summary.architecture.as_deref(), Some("qwen3"));
+        assert_eq!(summary.training_context_tokens, Some(40960));
+        assert_eq!(
+            summary.chat_template.as_deref(),
+            Some("{{ enable_thinking }}")
+        );
+        let empty = read_gguf_summary(&mut Cursor::new(gguf(3, &[]))).unwrap();
+        assert_eq!(empty, GgufSummary::default());
     }
 
     #[test]

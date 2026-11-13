@@ -18,10 +18,14 @@ Use its own provider documentation for the exact configuration file format.
 
 ## Use model discovery
 
-`GET /v1/models` lists enabled models. Optional native discovery at
-`GET /v1/juiced/capabilities` adds declared operations, limits, and qualification
-status. A client's Juiced-aware integration can use that metadata for filtering.
-It should preserve public model IDs and handle unknown capability values.
+`GET /v1/models` lists enabled models. `GET /v1/juiced/catalog` gives each model's
+per-request context, output limit, image input, thinking and tool-call support in one
+request, with the evidence behind each value. A Juiced-aware integration reads
+`context.per_request_tokens` instead of dividing a launch total by slots, and
+switches thinking with `chat_template_kwargs.enable_thinking` when
+`thinking.request_control` names it. Send `If-None-Match` with the last `ETag` to
+refresh cheaply. It should preserve public model IDs and treat `null` as unknown.
+See [Juiced management](../api/juiced.md#discover-models-for-a-client).
 
 A bundled model label does not establish tool-use quality. Test a small file
 inspection or tool call in the actual client before assigning a long task.
@@ -33,8 +37,8 @@ Use Memory mode if the client's protocol path cannot use qualified persistent
 snapshots. For supported Chat Completions session reuse, send full current
 history and a stable `X-Juiced-Session-Id` for each conversation.
 
-Configure the client's context budget from the selected model/profile. Total
-runtime context can be shared across slots. See [model settings](../guide/settings.md)
+Configure the client's context budget from `context.per_request_tokens`. The launch
+context is a total that llama.cpp splits across slots. See [model settings](../guide/settings.md)
 and [cache](../guide/cache.md).
 
 This repository does not bundle a universal Pi/T3 provider installer. Existing

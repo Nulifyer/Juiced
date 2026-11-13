@@ -62,9 +62,9 @@
     },
     {
       "path": "juiced/CAPABILITIES.md",
-      "sha256": "18d5feac1c830786f1e4f64ec4a6a995416f81531901afd867f5e1c4eba2e56d",
+      "sha256": "ad5fbb508e0a9686749f9372e70a95f0d4b2fae5aec159c1a31ad7d84b6d0b16",
       "source_state": "committed",
-      "updated_in_rewrite": false
+      "updated_in_rewrite": true
     },
     {
       "path": "juiced/UI-DESIGN.md",
