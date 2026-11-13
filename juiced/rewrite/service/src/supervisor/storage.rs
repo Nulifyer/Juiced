@@ -501,14 +501,13 @@ fn reclaim_lock() -> &'static AsyncMutex<()> {
 }
 
 impl Manager {
-    pub fn start_acquisitions(self: &Arc<Self>) {
-        let manager = self.clone();
-        tokio::spawn(async move {
-            if let Some(store) = manager.artifacts.clone() {
-                manager.library.recover(store).await;
-            }
-            crate::native_api::recover(manager).await;
-        });
+    /// Reloads journaled downloads before the service answers, so the first listing after a
+    /// restart already shows them. Transfers continue in background tasks.
+    pub async fn recover_acquisitions(self: &Arc<Self>) {
+        if let Some(store) = self.artifacts.clone() {
+            self.library.recover(store).await;
+        }
+        crate::native_api::recover(self.clone()).await;
     }
 
     fn storage_root(&self) -> Option<PathBuf> {
