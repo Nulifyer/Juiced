@@ -87,7 +87,11 @@ Deployed 2026-11-13; healthy in 50 s with Ornith, kokoro-v1 and whisper ready. R
 
 Deployed; healthy in 40 s with the three Hot models. vLLM ROCm 0.20.1 with a test Qwen3-0.6B added on rc.23 (parsers from the new defaults): thinking on returned `reasoning_content` and content "Paris" (40.3 s cold); `enable_thinking: false` returned no reasoning (0.3 s); a `get_weather` tool request returned `finish_reason: tool_calls` with `{"city": "Paris"}` (0.7 s). Test model deleted (1,519,182,365 bytes freed). Barista tools report the 890M as integrated with `addressable_bytes` 88 GiB (16 GiB carve-out plus 72 GiB GTT); asked how big a model the GPU holds, Ornith answered ~88 GiB with the 80 GiB budget as the limit (it also said "no dedicated VRAM", which is wrong; minor).
 
-## Pending (2026-11-13, after rc.23)
+## Barista functional test (rc.23 and rc.24, 2026-11-13)
+
+User scope: no candidate comparison or B1 qualification; confirm Barista works with Ornith Q6_K. Ran the frozen suite with `ui/scripts/barista-eval.ts --dry-run` against the homelab (every change sent as a preview and reported as skipped; 81 of 90 tasks; policies and Barista settings verified unchanged after each run). rc.23: 296 tool calls, 1 malformed (truncated `juiced_fit` arguments), 77/77 first responses valid, no secret, no permission bypass, no false change claim; injection and read-only tasks refused correctly; 4 transient `chat_failed` (queue wait behind Ornith's single slot; reruns passed). Defects: 2 empty replies (Ornith spent the 2048-token harness limit thinking), retries of skipped changes, how-to answers as tool calls, "done" headings over skipped changes. rc.24 (prompt v3 plus a thinking-off retry when a reply ends at the limit with no answer): rerun of the 9 affected tasks: no empty replies, each skipped change proposed once; how-to answers partly console steps (one invented "Library → Find & run models" and a per-model Logs tab); 2 of 3 still open with "Done"/"I set…" before saying the change was skipped; write-03 misattributed the Q8_0 file to the Q4_K_M registration.
+
+## Pending (2026-11-13, after rc.24)
 
 - TRELLIS on gfx1150: Vulkan measured ~11% faster than ROCm; consider recommending Vulkan for TRELLIS on RDNA 3.5.
 
@@ -99,7 +103,7 @@ Decided by the user (2026-11-13):
 - Budget may change (now 80 GiB); v0.9.2 leftovers removed.
 - `juiced_*` tools stay inside Barista, never on the network `/mcp` (current behaviour).
 - CORS: keep same-origin plus loopback by default; `LEMONADE_ALLOWED_ORIGINS` opts in other origins (current behaviour).
-- Barista: test it (done above). B1 qualification (90 frozen tasks, 62 held out, 3 reps per candidate) not run: the suite needs the homelab model set and a disposable service. Asked the user to choose: disposable stack on mage beside production (budget-limited), on mage with production stopped, or small models only on the local RTX 5080.
+- Barista: functional test with Ornith Q6 only (see above); the user does not want the B1 candidate qualification for now.
 - "Engine changed": explained; recommended keeping it strict. No answer yet.
 
 Client (pi-t3-agent) follow-ups: told to use `/v1/models?service=chat`, `thinking.request_values` and the well-known `credential` block. Final field names shipped in rc.22.
@@ -110,6 +114,7 @@ Agreed later work:
 - Remaining P2 and console gaps (v092-parity.md): Discover filters, log download, request filters, GPU picker, inline README; upscale model type.
 
 Known gaps:
+- Barista how-to answers can invent console paths and still lead with "done" over skipped changes (Ornith ignores the v3 rules there); next step would be docs-grounded how-to (juiced_docs first) or a console-side check.
 - `api-keys.json` is not in settings backups.
 - Split GGUF and mmproj files are refused by upload/import-path (adopted native mmproj companions work).
 - Test runs leak read-only temp dirs in /tmp (published runtime packages are 0500); remove by hand with chmod -R u+w.
@@ -118,4 +123,4 @@ Known gaps:
 
 ## Next action
 
-Waiting on the user's choice of qualification setup. Otherwise: typed vLLM settings (parsers), then the engine-management round.
+Typed vLLM settings (parsers), then the engine-management round.
