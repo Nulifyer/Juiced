@@ -79,6 +79,7 @@ Known gaps:
 - Quant sync does not copy extra launch args.
 - Old `/data/cache` leftovers from v0.9.2 on the live volume; ask the user before deleting.
 - Split GGUF and mmproj files are refused by upload/import-path (adopted native mmproj companions work).
+- Test runs leak temp dirs: published runtime packages are read-only (dirs 0500), so `tempfile::TempDir` cleanup fails silently and every gate leaves ~128 MB fixture dirs in /tmp (155 dirs, 12 GB, filled the 16 GB tmpfs on 2026-11-12; removed by hand). Fix: make test roots writable before drop.
 - Homelab `stacks/juiced/compose.yaml` matches live but is uncommitted (another session's untracked file).
 
 ## Next action
