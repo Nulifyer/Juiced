@@ -5,6 +5,97 @@ use tokio::sync::OwnedMutexGuard;
 
 const SAVE_ATTEMPTS: u32 = 4;
 const LISTED_SESSIONS: usize = 256;
+const LINEAGE_FILE: &str = "session-lineage.json";
+const LINEAGE_FILE_BYTES: u64 = 16 * 1024 * 1024;
+const LINEAGE_STALE: usize = 64;
+
+/// The leading message digests of each saved prefix session. A snapshot identity names only
+/// a conversation's last digest, so without these a new conversation that repeats a saved
+/// system prompt cannot find the state that already holds it. The file is advisory: identity
+/// and execution checks still gate every restore, and the engine reuses only matching tokens.
+pub(super) struct Lineages {
+    sessions: Mutex<std::collections::HashMap<String, Arc<Key>>>,
+    root: Option<crate::storage::DirectoryLease>,
+}
+
+#[derive(Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct LineageFile {
+    schema_version: u32,
+    sessions: std::collections::BTreeMap<String, crate::sessions::LineageRecord>,
+}
+
+impl Lineages {
+    pub(super) fn load(root: Option<&crate::storage::DirectoryLease>) -> Self {
+        let sessions = root
+            .and_then(|root| root.read_bytes(LINEAGE_FILE, LINEAGE_FILE_BYTES).ok())
+            .and_then(|bytes| serde_json::from_slice::<LineageFile>(&bytes).ok())
+            .filter(|file| file.schema_version == 1)
+            .map(|file| {
+                file.sessions
+                    .iter()
+                    .filter_map(|(id, record)| {
+                        Some((id.clone(), Arc::new(Key::from_record(record)?)))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        Self {
+            sessions: Mutex::new(sessions),
+            root: root.cloned(),
+        }
+    }
+
+    fn shared_with(&self, key: &Key) -> std::collections::HashMap<String, usize> {
+        if key.kind != KeyKind::Prefix {
+            return std::collections::HashMap::new();
+        }
+        self.sessions
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .iter()
+            .filter_map(|(id, saved)| {
+                let (units, bytes) = key.shared(saved);
+                (units > 0 && bytes >= crate::sessions::MINIMUM_SHARED_BYTES)
+                    .then(|| (id.clone(), units))
+            })
+            .collect()
+    }
+
+    fn record(
+        &self,
+        id: &str,
+        key: &Key,
+        discarded: &std::collections::HashSet<String>,
+        listed: &std::collections::HashSet<String>,
+    ) {
+        // The lock also orders file writes, so a slower concurrent save cannot persist an
+        // older map over a newer one.
+        let mut sessions = self
+            .sessions
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        sessions.retain(|known, _| !discarded.contains(known));
+        // Entries missing from the listing may belong to a save that finished after it, so
+        // they go only once forgotten sessions accumulate.
+        if sessions.len() > listed.len() + LINEAGE_STALE {
+            sessions.retain(|known, _| listed.contains(known));
+        }
+        if key.kind == KeyKind::Prefix {
+            sessions.insert(id.to_owned(), Arc::new(key.lineage()));
+        }
+        if let Some(root) = &self.root {
+            let file = LineageFile {
+                schema_version: 1,
+                sessions: sessions
+                    .iter()
+                    .map(|(id, key)| (id.clone(), key.to_record()))
+                    .collect(),
+            };
+            let _ = root.write_json(LINEAGE_FILE, &file);
+        }
+    }
+}
 
 pub(super) struct SlotTable {
     entries: Box<[Arc<AsyncMutex<SlotEntry>>]>,
@@ -373,6 +464,7 @@ impl Manager {
             .candidates()
             .map(|(units, digest)| (digest, units))
             .collect::<std::collections::HashMap<_, _>>();
+        let shared = self.session_lineage.shared_with(key);
         tokio::task::spawn_blocking(move || {
             let rows = cache
                 .session_rows(
@@ -381,13 +473,16 @@ impl Manager {
                         identity.principal == scope.principal
                             && identity.credential_epoch == *scope.credential_epoch
                             && identity.protocol == scope.protocol
-                            && candidates.contains_key(&identity.session_digest)
                     },
                     false,
                 )
                 .ok()?;
-            let mut best: Option<Found> = None;
+            let mut best: Option<(Found, u64)> = None;
             for row in rows {
+                let exact = candidates.get(&row.identity.session_digest).copied();
+                let Some(units) = exact.max(shared.get(&row.id).copied()) else {
+                    continue;
+                };
                 if row.state != crate::cache::SnapshotState::Saved {
                     continue;
                 }
@@ -397,16 +492,23 @@ impl Manager {
                     }
                     continue;
                 }
-                let units = candidates[&row.identity.session_digest];
-                if best.as_ref().is_none_or(|best| units > best.units) {
-                    best = Some(Found {
-                        id: row.id,
-                        identity: row.identity,
-                        units,
-                    });
+                // Equal shared units diverge at the same message, so the smaller state restores
+                // the same reusable prefix faster.
+                if best.as_ref().is_none_or(|(best, charged)| {
+                    (units, std::cmp::Reverse(row.charged))
+                        > (best.units, std::cmp::Reverse(*charged))
+                }) {
+                    best = Some((
+                        Found {
+                            id: row.id,
+                            identity: row.identity,
+                            units,
+                        },
+                        row.charged,
+                    ));
                 }
             }
-            best
+            best.map(|(found, _)| found)
         })
         .await
         .ok()
@@ -655,6 +757,14 @@ impl Manager {
             )
             .unwrap_or_default(),
         );
+        let listed = rows
+            .iter()
+            .map(|row| row.id.clone())
+            .collect::<std::collections::HashSet<_>>();
+        let discarded = discard
+            .iter()
+            .map(|index| rows[*index].id.clone())
+            .collect::<std::collections::HashSet<_>>();
         let targets = discard
             .into_iter()
             .map(|index| {
@@ -662,10 +772,13 @@ impl Manager {
                 (row.id.clone(), row.identity.clone(), row.revision)
             })
             .collect::<Vec<_>>();
+        let lineage = self.session_lineage.clone();
+        let key = holder.key.clone();
         let _ = tokio::task::spawn_blocking(move || {
             for (id, identity, revision) in targets {
                 let _ = cache.forget(&id, &identity, revision);
             }
+            lineage.record(&saved, &key, &discarded, &listed);
         })
         .await;
         Ok(())
