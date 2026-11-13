@@ -278,7 +278,7 @@ pub fn installable(
     installed: &[Installed],
 ) -> Vec<Installable> {
     let mut seen = Vec::new();
-    for build in catalog::BUILDS {
+    for build in catalog::builds() {
         if !seen.contains(&(build.engine, build.backend)) {
             seen.push((build.engine, build.backend));
         }

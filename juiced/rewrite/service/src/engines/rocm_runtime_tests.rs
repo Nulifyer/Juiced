@@ -127,8 +127,7 @@ fn gfx1150_resolves_the_native_v0_9_2_pins() {
     );
     assert_eq!(
         resolve(Engine::Kokoros, "cpu", &host).unwrap().tag,
-        catalog::BUILDS
-            .iter()
+        catalog::builds()
             .find(|build| build.engine == Engine::Kokoros)
             .unwrap()
             .tag
@@ -155,10 +154,7 @@ fn other_rocm_targets_keep_the_bundled_nightly_and_sd_rocm_stays_gfx1150_only() 
         resolve(Engine::StableDiffusionCpp, "rocm", &host).unwrap_err(),
         Unresolved::NoMatchingGpu
     );
-    for build in catalog::BUILDS
-        .iter()
-        .filter(|build| build.runtime.is_some())
-    {
+    for build in catalog::builds().filter(|build| build.runtime.is_some()) {
         assert_eq!(build.gpu_target, Some("gfx1150"), "{}", build.asset);
     }
 }
@@ -317,8 +313,7 @@ impl Tar {
 }
 
 fn rocm_build() -> Build {
-    *catalog::BUILDS
-        .iter()
+    *catalog::builds()
         .find(|build| build.engine == Engine::LlamaCpp && build.runtime.is_some())
         .unwrap()
 }
@@ -432,8 +427,7 @@ fn a_runtime_build_without_its_runtime_or_with_a_colliding_directory_is_refused(
         assemble(&rocm_build(), &engine, None, &fresh("missing"), &stop),
         Err(ArchiveError::Layout)
     ));
-    let vulkan = *catalog::BUILDS
-        .iter()
+    let vulkan = *catalog::builds()
         .find(|build| build.engine == Engine::LlamaCpp && build.backend == "vulkan")
         .unwrap();
     assert!(matches!(
