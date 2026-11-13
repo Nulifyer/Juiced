@@ -609,3 +609,17 @@ fn openmoss_cuda_needs_an_avx512_cpu() {
     unknown.devices.cpu = None;
     assert!(resolve(Engine::OpenMoss, "cuda", &unknown).is_ok());
 }
+
+#[test]
+fn media_engines_on_strix_recommend_a_published_backend_not_the_unbuilt_rocm_row() {
+    let strix = report(&strix_host(true));
+    let inventory = inventory(&strix);
+    for engine in [Engine::AceStep, Engine::ThinkSound, Engine::OpenMoss] {
+        let backend = recommended(engine, &inventory, &strix)
+            .map(|recommendation| recommendation.backend)
+            .or_else(|| fallback_backend(&inventory, engine, &strix))
+            .unwrap();
+        assert_eq!(backend, "vulkan", "{}", engine.name());
+        assert!(resolve(engine, &backend, &strix).is_ok());
+    }
+}

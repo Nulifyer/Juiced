@@ -15,7 +15,7 @@ mod speech_engine_tests;
 #[cfg(test)]
 mod tests;
 
-use crate::hardware::{Availability, HostReport, Inventory};
+use crate::hardware::{Availability, BackendVariant, HostReport, Inventory};
 use catalog::{Build, Engine};
 use serde::Serialize;
 use serde_json::Value;
@@ -128,18 +128,21 @@ fn selectable(inventory: &Inventory, engine: Engine, backend: &str) -> bool {
     })
 }
 
-fn fallback_backend(inventory: &Inventory, engine: Engine) -> Option<String> {
+fn fallback_backend(inventory: &Inventory, engine: Engine, host: &HostReport) -> Option<String> {
     if !engine.accepts_experimental() {
         return None;
     }
+    let available = |variant: &&BackendVariant| {
+        variant.recipe == catalog::recipe_of(engine, &variant.backend)
+            && variant.state == Availability::Available
+            && selectable(inventory, engine, &variant.backend)
+    };
     inventory
         .backends
         .iter()
-        .find(|variant| {
-            variant.recipe == catalog::recipe_of(engine, &variant.backend)
-                && variant.state == Availability::Available
-                && selectable(inventory, engine, &variant.backend)
-        })
+        .filter(available)
+        .find(|variant| catalog::resolve(engine, &variant.backend, host).is_ok())
+        .or_else(|| inventory.backends.iter().find(available))
         .map(|variant| variant.backend.clone())
 }
 
@@ -179,6 +182,24 @@ pub fn recommended(
             backend: variant.backend.clone(),
             unpublished: Some(preferred.clone()),
         })
+        // Engines with no core build (the media engines) rank nothing above; fall back to the
+        // first available backend that has a published build for this host.
+        .or_else(|| {
+            engine
+                .accepts_experimental()
+                .then(|| {
+                    inventory.backends.iter().find(|variant| {
+                        variant.recipe == catalog::recipe_of(engine, &variant.backend)
+                            && variant.state == Availability::Available
+                            && catalog::resolve(engine, &variant.backend, host).is_ok()
+                    })
+                })
+                .flatten()
+                .map(|variant| Recommendation {
+                    backend: variant.backend.clone(),
+                    unpublished: Some(preferred.clone()),
+                })
+        })
         .or(Some(Recommendation {
             backend: preferred,
             unpublished: None,
@@ -208,7 +229,7 @@ pub fn choose(
             }
             None => {
                 fallback = true;
-                fallback_backend(inventory, engine).ok_or(ChoiceError::NoUsableBackend)?
+                fallback_backend(inventory, engine, host).ok_or(ChoiceError::NoUsableBackend)?
             }
         },
     };
