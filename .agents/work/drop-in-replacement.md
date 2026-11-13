@@ -16,11 +16,11 @@ Request source: user, 2026-11-12. The homelab switched stack 83 to `rewrite-prev
 
 ## Acceptance
 
-- [ ] Same compose (image tag change only, optional junk removal) serves on 8080 with the healthcheck passing.
-- [ ] First boot adopts `/data/config` automatically: every native model with the same ID, policy, options, companions and weights in place; engines for non-Disabled models installed without operator steps; idempotent on restart.
-- [ ] HA llama_cpp, HA Ollama, HA Wyoming (same identity), Pi and Tavern work unchanged.
-- [ ] Rollback to v0.9.2 by image tag still works on the same volume.
-- [ ] Released via `juiced-release.yml` as `v1.0.0-rc.N`, deployed with Portainer, inspected live.
+- [x] Same compose (image tag change only, optional junk removal) serves on 8080 with the healthcheck passing. (rc.3 onward)
+- [x] First boot adopts `/data/config` automatically: every native model with the same ID, policy, options, companions and weights in place; engines for non-Disabled models installed without operator steps; idempotent on restart. (rc.3; three Qwen3.8-27B variants needed a context cut, rc.5)
+- [ ] HA llama_cpp, HA Ollama, HA Wyoming (same identity), Pi and Tavern work unchanged. HA Wyoming verified live from the HA container (rc.3, rc.5, rc.9); HA llama_cpp traffic seen in live request records; HA Ollama, Pi and Tavern not explicitly checked on the live host.
+- [ ] Rollback to v0.9.2 by image tag still works on the same volume. Not rechecked since the rc.3 cutover; older rcs cannot load a config.json that contains the `barista` key (written once Barista is enabled, which the user did after rc.10).
+- [x] Released via `juiced-release.yml` as `v1.0.0-rc.N`, deployed with Portainer, inspected live. (rc.3, rc.5, rc.9, rc.10)
 
 ## Workstreams
 
@@ -51,6 +51,36 @@ rc.6 to rc.8 were stopped by release checks and never published: a touch-drag te
 
 Five merged helper rounds: Library folded into Models (Installed, Discover, Downloads, Aliases; Import UI removed, adoption API kept), one Engines & hardware screen (AMD GPU names in live stats), one Conversation cache page, and Barista per juiced/BARISTA.md rev 2 (off by default; operator routes /juiced/barista and /juiced/barista/tools/call; /mcp back to four inference tools; B1 qualification not done). Full gate passed (Playwright 215). Deployed through Portainer: Hot models ready, GPU named "AMD Radeon Graphics (RADV STRIX1)", Barista off, /mcp tools unchanged. Open: rc.9-saved Ornith conversations show "Engine changed" after the image upgrade because the execution fingerprint covers the whole mapped-file closure (image libraries included); same-image restarts are unaffected. Release page created; Homelab compose matches live (uncommitted).
 
+## Pending (2026-11-12, after rc.10)
+
+In progress, round 11 (user feedback after enabling Barista on production):
+
+- Committed, not released: disabling a loaded model (Hot included) unloads it; refused only while requests run (`worker_busy`) or the worker is starting (`worker_starting`). e312333b, 9e82e999.
+- Helper `helper-chat`: chat rendering adapted from T3 Code (MIT) for Barista and Test services (GFM tables, code blocks, reasoning row, tool rows), image input for vision models, pinnable Barista panel, settings only via the gear once configured.
+- Helper `helper-dashboard`: Dashboard = health at a glance, Diagnostics = performance and causes (per-request cached vs processed tokens).
+- Helper `helper-prefill`: Hot models still pay a full prefill on a new conversation. Live evidence: a cold 6,477-token prompt took 16.9 s vs 1.5-3 s on slot hits; Ornith has 2 slots shared by Home Assistant (~6.5k-token prompt) and Barista (~2.5k); saved prefix sessions never restored (`saved_previous` false). Ornith is a hybrid architecture, so llama.cpp checkpoint/prompt-cache behaviour matters.
+- Then: merge, full gate, `v1.0.0-rc.11`, Portainer deploy, live check (repeat the cold/warm request comparison).
+
+Decisions waiting on the user:
+
+- Saved conversations after an image upgrade show "Engine changed" (fingerprint covers every mapped file, image libraries included). Loosen to llama.cpp build + launch plan, or keep strict.
+- Barista: B1 qualification (60 tasks on real models) not run; external MCP clients no longer get `juiced_*` tools; the console must be same-origin; no native installation ID (invitation keyed by origin in localStorage); `barista` key breaks rollback to older rcs.
+- vLLM: the rewrite lists "vLLM ROCm" (experimental, no installer). Proper vLLM (ROCm and CUDA, safetensors) is a separate engine project; proposed for the engine-management round.
+
+Agreed later work:
+
+- Engine-management round: version catalog as data with tested pins per release, update checks against release sources, nightly opt-in, remove/update engines (no API yet), admin-added release sources, custom OpenAI-compatible engine in the UI.
+- Real NPU check (FastFlowLM, llama.cpp hybrid) on mage.
+
+Known gaps:
+
+- `api-keys.json` is not in settings backups.
+- KV cache type is not a saved per-model option.
+- Quant sync does not copy extra launch args.
+- Old `/data/cache` leftovers from v0.9.2 on the live volume; ask the user before deleting.
+- Split GGUF and mmproj files are refused by upload/import-path (adopted native mmproj companions work).
+- Homelab `stacks/juiced/compose.yaml` matches live but is uncommitted (another session's untracked file).
+
 ## Next action
 
-Engine-management round agreed with the user: version catalog as data with tested pins per release, update checks against release sources, nightly opt-in, remove, admin-added release sources, custom OpenAI-compatible engine in the UI. Then a real NPU check (FastFlowLM, hybrid) on mage.
+Integrate the three round-11 helpers, then release rc.11. After that, the engine-management round.

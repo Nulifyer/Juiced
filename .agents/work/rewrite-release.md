@@ -7,6 +7,8 @@ Base: 62e82570d2d5625addff0da636420f68d27b80d7
 Project: [rewrite plan](../../juiced/rewrite/PLAN.md)
 Request source: User requested completing the new design, full functional API/data/model/cache end-to-end tests in rust-tests, separate Bun UI tests, tiny real models where useful, measured efficiency/speed improvements including avoiding allocations and flame graphs, final full T3 Code browser inspection, and a communicating cross-perspective subagent council before release readiness. The later runtime-catalog handoff requests incorporating its five owned design files at a planning boundary without claiming runtime support.
 
+Note 2026-11-12: the user moved priority to shipping the rewrite as a drop-in replacement (`v1.0.0-rc.N`, see [drop-in-replacement.md](drop-in-replacement.md)). The open items below (artifact controller ownership, R4 network acquisition/reclamation, final full-product T3 inspection, council) were not completed and are not tracked anywhere else.
+
 ## Goal
 
 Complete the required rewrite systems and their functional evidence before claiming release readiness. The prior R0 prototype and plan import are inputs, not release completion. Model output quality is outside this functional test request; protocol shape, actual worker execution, artifacts, cache continuation/restart and lifecycle remain required.

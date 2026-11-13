@@ -65,8 +65,6 @@ Container: merged 39d38274 (juiced/rewrite/container). Image 473 MB; CPU and RTX
 
 ## Next action
 
-Verified 2026-11-12 14:24 UTC: localhost/juiced-rewrite:dev rebuilt (483.7 MB), CPU and RTX 5080 smoke tests pass with FUTO installed on first boot; full gate `quick-check --full --real --speech --power --resources` passed, 31 steps, no source change, Playwright 176 passed / 1 skipped.
+Superseded as the coordination record by [drop-in-replacement.md](drop-in-replacement.md), which holds pending work since rc.3. Status of the open items listed on 2026-11-12 14:24 UTC: ROCm on the homelab Strix verified (rc.3 onward); real Home Assistant Wyoming verified (rc.3); native_store owner_busy flake fixed (11a7b166); real AMD NPU check still open; split GGUF and mmproj upload/import still refused; transcription_rejected 400 mapping for parakeet/FUTO not rechecked.
 
-Open items: real AMD NPU/ROCm host check (homelab Strix), real Home Assistant Wyoming check, split GGUF and mmproj companions, transcription_rejected 400 mapping for parakeet/FUTO, intermittent native_store::generations owner_busy unit flake under parallel load.
-
-Fixed 2026-11-12: `GET /juiced/engines` returned 503 `runtime_index_publishing` when an engine install was publishing its index; the inventory read now waits up to 3 s (52e7b38e). PLATFORM-PLAN.md is bound to PLATFORM-APPROVAL.json, so its "eight screens" wording stays until the approval is re-recorded; the rewrite PLAN.md lists the nine pages.
+Fixed 2026-11-12: `GET /juiced/engines` returned 503 `runtime_index_publishing` when an engine install was publishing its index; the inventory read now waits up to 3 s (52e7b38e). The console now has eight destinations (PLAN.md line 9, 20a5c1a3).
