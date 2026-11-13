@@ -28,6 +28,7 @@ fn concrete_route(path: &str) -> &str {
         }
         "/juiced/library/pulls/{pull}" => "/juiced/library/pulls/00000000000000000000000000000000",
         "/juiced/library/search" => "/juiced/library/search?q=qwen3",
+        "/docs/{*page}" => "/docs/api/openai",
         _ => path,
     }
 }
@@ -113,6 +114,8 @@ async fn all_prefixes_enforce_read_inference_and_operator_authority() {
                     assert_eq!(response.status(), StatusCode::OK, "{method} {path}");
                     if method == Method::HEAD {
                         assert!(response.bytes().await.unwrap().is_empty());
+                    } else if suffix == "/docs/{*page}" {
+                        assert!(response.text().await.unwrap().starts_with("# "));
                     } else {
                         response.json::<Value>().await.unwrap();
                     }

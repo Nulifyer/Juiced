@@ -22,7 +22,7 @@ Open <http://localhost:8080>. Without API keys the service runs in trusted-LAN m
 
 `build.sh` accepts extra `podman build` arguments. `JUICED_IMAGE` changes the tag and `CONTAINER_ENGINE=docker` builds with Docker. Under Podman the script passes `--format docker`, because the OCI format drops the `HEALTHCHECK`.
 
-The build has three stages. A Rust stage runs `cargo build --release --locked` for `lemond` and the `lemonade` CLI. A Bun stage builds `ui/dist`. The runtime stage is `debian:trixie-slim` with the Vulkan loader, Mesa from `trixie-backports`, libgomp, libnuma, ca-certificates, curl and tini. The build context is the repository root, because the service embeds `src/cpp/resources/server_models.json` and the console uses fonts and license files from `juiced/ui`. `Containerfile.dockerignore` keeps the context to those paths.
+The build has three stages. A Rust stage runs `cargo build --release --locked` for `lemond` and the `lemonade` CLI. A Bun stage builds `ui/dist`. The runtime stage is `debian:trixie-slim` with the Vulkan loader, Mesa from `trixie-backports`, libgomp, libnuma, ca-certificates, curl and tini. The build context is the repository root, because the service embeds `src/cpp/resources/server_models.json` and the `docs/api` pages, and the console uses fonts and license files from `juiced/ui`. `Containerfile.dockerignore` keeps the context to those paths.
 
 ## Engines
 

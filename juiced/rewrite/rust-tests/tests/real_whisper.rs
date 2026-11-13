@@ -296,3 +296,25 @@ async fn actual_cpu_whisper_disconnect_retires_its_generation_after_observed_cpu
     assert_eq!(status, StatusCode::OK, "{unloaded}");
     assert!(!Path::new(&format!("/proc/{}", after["pid"].as_u64().unwrap())).exists());
 }
+
+#[tokio::test]
+#[ignore = "requires JUICED_TEST_WHISPER_SERVER, JUICED_TEST_WHISPER_MODEL and JUICED_TEST_WHISPER_BUNDLE; MCP transcription through a real worker"]
+async fn mcp_transcribe_audio_tool_uses_the_real_whisper_worker() {
+    use base64::Engine;
+    let (server, audio) = real_server(false).await;
+    let (status, reply) = server
+        .json(
+            reqwest::Method::POST,
+            "/mcp",
+            Some(json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"lemonade_transcribe_audio","arguments":{"audio_base64":base64::engine::general_purpose::STANDARD.encode(&audio),"filename":"speech.wav"}}})),
+            server.read_key(),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{reply}");
+    let result = &reply["result"];
+    assert_eq!(result["isError"], false, "{reply}");
+    let transcript = result["content"][0]["text"].as_str().unwrap();
+    println!("MCP transcript: {transcript}");
+    assert!(transcript.trim().len() > 3, "{reply}");
+    assert_eq!(result["structuredContent"]["text"], transcript);
+}

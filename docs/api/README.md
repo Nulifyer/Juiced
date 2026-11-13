@@ -30,6 +30,17 @@ Neither declaration establishes model quality or hardware qualification.
 Use the exact enabled model ID from discovery. Add the configured
 [API credential](../guide/access.md) to the examples when authentication is enabled.
 
+## Read the API reference from the server
+
+```bash
+curl --fail-with-body http://localhost:8080/v1/docs
+curl --fail-with-body http://localhost:8080/v1/docs/api/openai
+```
+
+The index lists the pages built into this release with their `id`, `title`,
+`bytes` and `url`. Each page is Markdown. The MCP `lemonade_docs` tool returns
+the same pages.
+
 ## Handle limits
 
 Model and engine support determine which operations, request fields, streaming

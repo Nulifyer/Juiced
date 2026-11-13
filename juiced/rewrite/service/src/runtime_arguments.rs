@@ -1342,7 +1342,8 @@ fn fixture_arity(flag: &str) -> Option<u8> {
             | "--speech-physical-release-file"
             | "--speech-status"
             | "--startup-log"
-            | "--chatty-bytes" => Some(1),
+            | "--chatty-bytes"
+            | "--capture-bodies" => Some(1),
             _ => None,
         }
     }

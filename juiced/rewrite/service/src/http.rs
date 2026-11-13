@@ -25,6 +25,7 @@ use crate::barista::{
     call as barista_call, settings_set as barista_set, settings_view as barista_view,
 };
 use crate::connect::{access, health as protocol_health, key_create, key_revoke, protocol_set};
+use crate::docs_api::{document as docs_page, index as docs_index};
 
 #[derive(Clone)]
 pub(crate) struct AppState {
@@ -186,6 +187,8 @@ macro_rules! define_routes {
 }
 define_routes! {
     (get, "/health", health, "read"),
+    (get, "/docs", docs_index, "read"),
+    (get, "/docs/{*page}", docs_page, "read"),
     (get, "/models", models, "read"),
     (get, "/system-info", system_info, "operator"),
     (get, "/juiced/catalog", catalog, "read"),

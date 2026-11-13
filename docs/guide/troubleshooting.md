@@ -61,6 +61,14 @@ Ollama, Anthropic, Responses, or MCP when that path is rejected.
 For supported persistent reuse, check the stable session ID and full current
 message history. Key or profile changes can require a cold rebuild.
 
+## A client setting has no effect
+
+Check the response for an `X-Lemonade-Warning` header. Juiced ignores request
+fields that the selected protocol or engine cannot use, and names each one there.
+The service log records the same warning. For example, `Ignored 'num_thread' option`
+means the Ollama client sent a setting that Juiced controls through the model's
+loading settings.
+
 ## Speech or images fail
 
 Test the selected service directly under **Test services** first. For speech,

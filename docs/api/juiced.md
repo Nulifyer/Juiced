@@ -103,21 +103,20 @@ URL-encode model IDs in query parameters. Request metadata is not a stored
 conversation API. The default native port for a source build is `13305`.
 The Juiced container explicitly uses `8080`.
 
-## Retained workflow history
+## Workflow jobs and stored conversations
 
-`GET /v1/jobs` and `GET /v1/jobs/ID` inspect historical workflow records.
-Queued or running history appears as interrupted; Juiced never executes it.
-Creating, resuming, pausing, or interrupting arbitrary workflows returns HTTP501.
-These endpoints also use the other native API prefixes and require operator access.
+Juiced runs no caller-defined workflows and stores no conversations. These
+routes answer under every native API prefix so clients can detect that:
 
-`DELETE /v1/jobs/ID` deletes only the selected historical metadata and returns
-`metadata_only: true`. It does not stop workers or remove models, artifacts,
-or resource charges. Failed storage publication preserves the committed record.
-The list response includes `recovery`: unresolved prior cleanup is quarantined,
-with up to 50 record IDs and its total count. Ordinary deletion returns HTTP409
-for those records. Malformed or unsupported storage also blocks deletion and
-preserves the file. Recovery of an uncertain prior writer requires its own
-termination evidence; removing history cannot establish that it stopped.
+| Request | Reply |
+| --- | --- |
+| `POST /v1/jobs`, `POST /v1/jobs/ID/resume` | HTTP 501 `{"error":"Juiced does not execute caller-defined workflows or resume legacy graphs"}` |
+| `GET /v1/jobs` | `{"jobs":[]}` |
+| `GET` or `DELETE /v1/jobs/ID` | HTTP 404 `{"error":"unknown job"}` |
+| `POST /v1/jobs/ID/pause` or `/interrupt` | HTTP 404 |
+| `GET /v1/juiced/threads`, `GET` or `POST /v1/juiced/thread` | HTTP 410 `{"error":"Juiced does not store conversations. Downstream clients own chat history."}` |
+
+Writes and the thread routes need operator access.
 
 ## Pause new work for maintenance
 

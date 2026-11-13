@@ -105,50 +105,123 @@ pub struct ProtocolRequest {
     pub operation: &'static str,
     pub body: Value,
     pub stream: bool,
+    /// Request parts the translation ignored, as native v0.9.2 reported them.
+    pub warnings: Vec<String>,
 }
 
-fn text_blocks(value: &Value) -> Result<String, CodecError> {
+const MAX_WARNINGS: usize = 16;
+fn warn(warnings: &mut Vec<String>, message: impl Into<String>) {
+    let message = message.into();
+    if warnings.len() < MAX_WARNINGS && !warnings.contains(&message) {
+        warnings.push(message);
+    }
+}
+fn label(text: &str) -> String {
+    text.chars()
+        .take(64)
+        .map(|c| if c.is_ascii_graphic() { c } else { '?' })
+        .collect()
+}
+fn ignore_extra(
+    value: &Value,
+    allowed: &[&str],
+    warnings: &mut Vec<String>,
+) -> Result<(), CodecError> {
+    for key in object(value)?.keys() {
+        if !allowed.contains(&key.as_str()) {
+            warn(warnings, format!("Ignored '{}' field", label(key)));
+        }
+    }
+    Ok(())
+}
+
+fn text_blocks(value: &Value, warnings: &mut Vec<String>) -> Result<String, CodecError> {
     if let Some(value) = value.as_str() {
         return Ok(value.to_owned());
     }
     let blocks = value
         .as_array()
         .ok_or_else(|| invalid("Content must be text or an array of text blocks."))?;
-    let mut result = String::new();
+    let mut parts = Vec::new();
     for block in blocks {
-        fields(block, &["type", "text"])?;
-        if block["type"] != "text" {
-            return Err(unsupported("Only text blocks are supported in this field."));
+        if block.get("type").and_then(Value::as_str) != Some("text") {
+            warn(
+                warnings,
+                format!(
+                    "Ignored unsupported block type: {}",
+                    label(block.get("type").and_then(Value::as_str).unwrap_or(""))
+                ),
+            );
+            continue;
         }
-        result.push_str(
+        ignore_extra(block, &["type", "text"], warnings)?;
+        parts.push(
             block
                 .get("text")
                 .and_then(Value::as_str)
                 .ok_or_else(|| invalid("A text block needs a text string."))?,
         );
     }
-    Ok(result)
+    Ok(parts.join("\n"))
+}
+
+const ANTHROPIC_FIELDS: &[&str] = &[
+    "model",
+    "messages",
+    "system",
+    "max_tokens",
+    "temperature",
+    "top_p",
+    "top_k",
+    "stop_sequences",
+    "stream",
+    "tools",
+    "tool_choice",
+    "thinking",
+    "output_config",
+];
+
+fn anthropic_image(
+    source: &Value,
+    warnings: &mut Vec<String>,
+) -> Result<Option<String>, CodecError> {
+    match text(source, "type")? {
+        "base64" => {
+            ignore_extra(source, &["type", "media_type", "data"], warnings)?;
+            let media = text(source, "media_type")?;
+            if !["image/png", "image/jpeg", "image/webp", "image/gif"].contains(&media) {
+                warn(
+                    warnings,
+                    format!("Ignored image with media type {}", label(media)),
+                );
+                return Ok(None);
+            }
+            Ok(Some(format!(
+                "data:{media};base64,{}",
+                text(source, "data")?
+            )))
+        }
+        "url" => {
+            ignore_extra(source, &["type", "url"], warnings)?;
+            let url = text(source, "url")?;
+            if !url.starts_with("https://") && !url.starts_with("http://") {
+                return Err(invalid("Image URLs must use HTTP or HTTPS."));
+            }
+            Ok(Some(url.to_owned()))
+        }
+        kind => {
+            warn(
+                warnings,
+                format!("Ignored image source type: {}", label(kind)),
+            );
+            Ok(None)
+        }
+    }
 }
 
 pub fn anthropic_request(input: Value, count_tokens: bool) -> Result<ProtocolRequest, CodecError> {
-    fields(
-        &input,
-        &[
-            "model",
-            "messages",
-            "system",
-            "max_tokens",
-            "temperature",
-            "top_p",
-            "top_k",
-            "stop_sequences",
-            "stream",
-            "tools",
-            "tool_choice",
-            "thinking",
-            "output_config",
-        ],
-    )?;
+    let mut warnings = Vec::new();
+    ignore_extra(&input, ANTHROPIC_FIELDS, &mut warnings)?;
     text(&input, "model")?;
     let stream = boolean(&input, "stream", false)?;
     if count_tokens && stream {
@@ -159,15 +232,25 @@ pub fn anthropic_request(input: Value, count_tokens: bool) -> Result<ProtocolReq
     }
     let mut messages = Vec::new();
     if let Some(system) = input.get("system") {
-        messages.push(json!({"role":"system", "content":text_blocks(system)?}));
+        let system = text_blocks(system, &mut warnings)?;
+        if !system.is_empty() {
+            messages.push(json!({"role":"system", "content":system}));
+        }
     }
     let source_messages = array(&input, "messages")?;
     if source_messages.is_empty() {
         return Err(invalid("messages must not be empty."));
     }
     for message in source_messages {
-        fields(message, &["role", "content"])?;
+        ignore_extra(message, &["role", "content"], &mut warnings)?;
         let role = text(message, "role")?;
+        if role == "system" {
+            warn(
+                &mut warnings,
+                "Ignored 'system' role in messages; use the top-level system field",
+            );
+            continue;
+        }
         if !["user", "assistant"].contains(&role) {
             return Err(invalid("Messages roles must be user or assistant."));
         }
@@ -182,7 +265,7 @@ pub fn anthropic_request(input: Value, count_tokens: bool) -> Result<ProtocolReq
         for block in blocks {
             match text(block, "type")? {
                 "text" => {
-                    fields(block, &["type", "text"])?;
+                    ignore_extra(block, &["type", "text"], &mut warnings)?;
                     let value = block
                         .get("text")
                         .and_then(Value::as_str)
@@ -190,65 +273,51 @@ pub fn anthropic_request(input: Value, count_tokens: bool) -> Result<ProtocolReq
                     parts.push(json!({"type":"text","text":value}));
                 }
                 "image" => {
-                    fields(block, &["type", "source"])?;
-                    let source = &block["source"];
-                    let url = match text(source, "type")? {
-                        "base64" => {
-                            fields(source, &["type", "media_type", "data"])?;
-                            let media = text(source, "media_type")?;
-                            if !["image/png", "image/jpeg", "image/webp", "image/gif"]
-                                .contains(&media)
-                            {
-                                return Err(unsupported("Unsupported image media type."));
-                            }
-                            format!("data:{media};base64,{}", text(source, "data")?)
-                        }
-                        "url" => {
-                            fields(source, &["type", "url"])?;
-                            let url = text(source, "url")?;
-                            if !url.starts_with("https://") && !url.starts_with("http://") {
-                                return Err(invalid("Image URLs must use HTTP or HTTPS."));
-                            }
-                            url.to_owned()
-                        }
-                        _ => return Err(unsupported("Unsupported image source.")),
-                    };
-                    parts.push(json!({"type":"image_url","image_url":{"url":url}}));
+                    ignore_extra(block, &["type", "source"], &mut warnings)?;
+                    if let Some(url) = anthropic_image(&block["source"], &mut warnings)? {
+                        parts.push(json!({"type":"image_url","image_url":{"url":url}}));
+                    }
                 }
                 "tool_use" => {
-                    fields(block, &["type", "id", "name", "input"])?;
-                    if role != "assistant" || !block["input"].is_object() {
-                        return Err(invalid(
-                            "tool_use needs assistant role and an object input.",
-                        ));
+                    ignore_extra(block, &["type", "id", "name", "input"], &mut warnings)?;
+                    if role != "assistant" {
+                        warn(
+                            &mut warnings,
+                            "Ignored tool_use block outside assistant role",
+                        );
+                        continue;
+                    }
+                    if !block["input"].is_object() {
+                        return Err(invalid("tool_use needs an object input."));
                     }
                     tool_calls.push(json!({"id":text(block,"id")?,"type":"function","function":{"name":text(block,"name")?,"arguments":serde_json::to_string(&block["input"]).unwrap()}}));
                 }
                 "tool_result" => {
-                    fields(block, &["type", "tool_use_id", "content", "is_error"])?;
+                    ignore_extra(
+                        block,
+                        &["type", "tool_use_id", "content", "is_error"],
+                        &mut warnings,
+                    )?;
                     if role != "user" {
-                        return Err(invalid("tool_result needs user role."));
+                        warn(&mut warnings, "Ignored tool_result block outside user role");
+                        continue;
                     }
                     if boolean(block, "is_error", false)? {
-                        return Err(unsupported(
-                            "Tool error flags cannot be translated through OpenAI tool messages.",
-                        ));
-                    }
-                    if !parts.is_empty() {
-                        return Err(invalid("Tool results must precede user text or images."));
+                        warn(&mut warnings, "Ignored tool_result is_error flag");
                     }
                     let content = match block.get("content") {
-                        Some(value) => text_blocks(value)?,
+                        Some(value) => text_blocks(value, &mut warnings)?,
                         None => String::new(),
                     };
                     results.push(json!({"role":"tool","tool_call_id":text(block,"tool_use_id")?,"content":content}));
                 }
                 "thinking" | "redacted_thinking" => {
-                    return Err(unsupported(
-                        "Signed prior thinking blocks cannot be translated through OpenAI.",
-                    ));
+                    warn(&mut warnings, "Ignored prior thinking blocks");
                 }
-                _ => return Err(unsupported("Unsupported Messages content block.")),
+                kind => warn(
+                    &mut warnings,
+                    format!("Ignored unsupported content block type: {}", label(kind)),
+                ),
             }
         }
         let has_results = !results.is_empty();
@@ -291,7 +360,20 @@ pub fn anthropic_request(input: Value, count_tokens: bool) -> Result<ProtocolReq
             .as_array()
             .ok_or_else(|| invalid("tools must be an array."))?
         {
-            fields(tool, &["name", "description", "input_schema"])?;
+            if let Some(kind) = tool.get("type").and_then(Value::as_str)
+                && kind != "custom"
+            {
+                warn(
+                    &mut warnings,
+                    format!("Ignored server tool type: {}", label(kind)),
+                );
+                continue;
+            }
+            ignore_extra(
+                tool,
+                &["type", "name", "description", "input_schema"],
+                &mut warnings,
+            )?;
             if !tool["input_schema"].is_object() {
                 return Err(invalid("Tool input_schema must be an object."));
             }
@@ -303,10 +385,16 @@ pub fn anthropic_request(input: Value, count_tokens: bool) -> Result<ProtocolReq
             }
             converted.push(json!({"type":"function","function":{"name":text(tool,"name")?,"description":tool.get("description").cloned().unwrap_or(json!("")),"parameters":tool["input_schema"]}}));
         }
-        output["tools"] = Value::Array(converted);
+        if !converted.is_empty() {
+            output["tools"] = Value::Array(converted);
+        }
     }
     if let Some(choice) = input.get("tool_choice") {
-        fields(choice, &["type", "name", "disable_parallel_tool_use"])?;
+        ignore_extra(
+            choice,
+            &["type", "name", "disable_parallel_tool_use"],
+            &mut warnings,
+        )?;
         if let Some(disabled) = choice.get("disable_parallel_tool_use") {
             output["parallel_tool_calls"] = json!(
                 !disabled
@@ -317,48 +405,73 @@ pub fn anthropic_request(input: Value, count_tokens: bool) -> Result<ProtocolReq
         if choice.get("name").is_some() && choice["type"] != "tool" {
             return Err(invalid("A tool-choice name requires type tool."));
         }
-        output["tool_choice"] = match text(choice, "type")? {
-            "auto" => json!("auto"),
-            "any" => json!("required"),
-            "none" => json!("none"),
-            "tool" => json!({"type":"function","function":{"name":text(choice,"name")?}}),
-            _ => return Err(unsupported("Unsupported tool choice.")),
-        };
+        match text(choice, "type")? {
+            "auto" => output["tool_choice"] = json!("auto"),
+            "any" => output["tool_choice"] = json!("required"),
+            "none" => output["tool_choice"] = json!("none"),
+            "tool" => {
+                output["tool_choice"] =
+                    json!({"type":"function","function":{"name":text(choice,"name")?}})
+            }
+            kind => warn(
+                &mut warnings,
+                format!("Ignored unsupported tool_choice.type: {}", label(kind)),
+            ),
+        }
     }
     if let Some(thinking) = input.get("thinking") {
-        fields(thinking, &["type"])?;
-        output["enable_thinking"] = match text(thinking, "type")? {
-            "enabled" => json!(true),
-            "disabled" => json!(false),
-            _ => return Err(unsupported("Unsupported thinking mode.")),
-        };
+        ignore_extra(thinking, &["type"], &mut warnings)?;
+        match text(thinking, "type")? {
+            "enabled" => output["enable_thinking"] = json!(true),
+            "disabled" => output["enable_thinking"] = json!(false),
+            kind => warn(
+                &mut warnings,
+                format!("Ignored unsupported thinking.type: {}", label(kind)),
+            ),
+        }
     }
     if let Some(config) = input.get("output_config") {
-        fields(config, &["format"])?;
-        let format = &config["format"];
-        fields(format, &["type", "schema"])?;
-        output["response_format"] = match text(format, "type")? {
-            "json_object" if format.get("schema").is_none() => json!({"type":"json_object"}),
-            "json_schema" if format["schema"].is_object() => {
-                json!({"type":"json_schema","json_schema":{"name":"response","schema":format["schema"]}})
+        ignore_extra(config, &["format"], &mut warnings)?;
+        if let Some(format) = config.get("format") {
+            ignore_extra(format, &["type", "schema"], &mut warnings)?;
+            match text(format, "type")? {
+                "json_object" => output["response_format"] = json!({"type":"json_object"}),
+                "json_schema" if format["schema"].is_object() => {
+                    output["response_format"] = json!({"type":"json_schema","json_schema":{"name":"response","schema":format["schema"]}})
+                }
+                "json_schema" => {
+                    return Err(invalid("A json_schema format needs a schema object."));
+                }
+                kind => warn(
+                    &mut warnings,
+                    format!(
+                        "Ignored unsupported output_config.format type: {}",
+                        label(kind)
+                    ),
+                ),
             }
-            _ => return Err(unsupported("Unsupported output format.")),
-        };
+        }
     }
     if stream {
         output["stream_options"] = json!({"include_usage":true});
     }
     if count_tokens {
+        let mut body = input;
+        if let Some(fields) = body.as_object_mut() {
+            fields.retain(|key, _| ANTHROPIC_FIELDS.contains(&key.as_str()));
+        }
         Ok(ProtocolRequest {
             operation: "messages/count_tokens",
-            body: input,
+            body,
             stream: false,
+            warnings,
         })
     } else {
         Ok(ProtocolRequest {
             operation: "chat/completions",
             body: output,
             stream,
+            warnings,
         })
     }
 }
@@ -494,23 +607,52 @@ pub enum OllamaOperation {
     LegacyEmbed,
 }
 
+/// Ollama sampler options forwarded under the same name; llama-server reads each of them.
+const OLLAMA_SAMPLERS: &[&str] = &[
+    "temperature",
+    "top_p",
+    "top_k",
+    "min_p",
+    "typical_p",
+    "seed",
+    "presence_penalty",
+    "frequency_penalty",
+    "repeat_penalty",
+    "repeat_last_n",
+    "mirostat",
+    "mirostat_tau",
+    "mirostat_eta",
+];
+const OLLAMA_LIMITS: &[&str] = &["num_predict", "num_ctx", "stop"];
+
+fn ollama_option(key: &str) -> bool {
+    OLLAMA_SAMPLERS.contains(&key) || OLLAMA_LIMITS.contains(&key)
+}
+
 pub fn ollama_request(
     input: Value,
     operation: OllamaOperation,
 ) -> Result<ProtocolRequest, CodecError> {
+    let mut warnings = Vec::new();
     let allowed: &[&str] = match operation {
         OllamaOperation::Chat => &[
             "model", "messages", "stream", "options", "format", "think", "tools",
         ],
         OllamaOperation::Generate => &["model", "prompt", "stream", "options", "format", "raw"],
-        OllamaOperation::Embed => &["model", "input", "options", "truncate"],
+        OllamaOperation::Embed => &["model", "input", "options"],
         OllamaOperation::LegacyEmbed => &["model", "prompt", "input", "options"],
     };
-    fields(&input, allowed)?;
+    let generative = matches!(operation, OllamaOperation::Chat | OllamaOperation::Generate);
+    for key in object(&input)?.keys() {
+        if !allowed.contains(&key.as_str()) && !(generative && ollama_option(key)) {
+            warn(&mut warnings, format!("Ignored '{}' field", label(key)));
+        }
+    }
     text(&input, "model")?;
-    let stream = match operation {
-        OllamaOperation::Chat | OllamaOperation::Generate => boolean(&input, "stream", true)?,
-        _ => false,
+    let stream = if generative {
+        boolean(&input, "stream", true)?
+    } else {
+        false
     };
     let mut output = json!({"model":input["model"],"stream":stream});
     let route = match operation {
@@ -518,7 +660,7 @@ pub fn ollama_request(
             let mut messages = Vec::new();
             let mut unanswered: Vec<(String, String)> = Vec::new();
             for message in array(&input, "messages")? {
-                fields(
+                ignore_extra(
                     message,
                     &[
                         "role",
@@ -529,35 +671,43 @@ pub fn ollama_request(
                         "tool_name",
                         "thinking",
                     ],
+                    &mut warnings,
                 )?;
                 let role = text(message, "role")?;
                 if !["system", "user", "assistant", "tool"].contains(&role) {
                     return Err(invalid("Unsupported chat message role."));
                 }
-                if message
-                    .get("thinking")
-                    .is_some_and(|thinking| role != "assistant" || !thinking.is_string())
-                {
-                    return Err(invalid("thinking must be assistant text."));
+                if message.get("thinking").is_some() && role != "assistant" {
+                    warn(
+                        &mut warnings,
+                        "Ignored 'thinking' outside assistant messages",
+                    );
                 }
                 let content = match message.get("content") {
-                    None | Some(Value::Null) if role == "assistant" => "",
+                    None | Some(Value::Null) => "",
                     content => content
                         .and_then(Value::as_str)
                         .ok_or_else(|| invalid("Message content must be text."))?,
                 };
                 let mut converted = json!({"role":role,"content":content});
-                if let Some(images) = message.get("images") {
-                    let images = images
-                        .as_array()
-                        .ok_or_else(|| invalid("images must be an array of base64 strings."))?;
+                if let Some(images) = message
+                    .get("images")
+                    .filter(|images| !images.is_null())
+                    .map(|images| {
+                        images
+                            .as_array()
+                            .ok_or_else(|| invalid("images must be an array of base64 strings."))
+                    })
+                    .transpose()?
+                    .filter(|images| !images.is_empty())
+                {
                     let mut parts = vec![json!({"type":"text","text":content})];
                     for image in images {
                         parts.push(json!({"type":"image_url","image_url":{"url":format!("data:image/png;base64,{}", image.as_str().filter(|s| !s.is_empty()).ok_or_else(|| invalid("Images must be nonempty base64 strings."))?)}}));
                     }
                     converted["content"] = Value::Array(parts);
                 }
-                if let Some(calls) = message.get("tool_calls") {
+                if let Some(calls) = message.get("tool_calls").filter(|calls| !calls.is_null()) {
                     if role != "assistant" {
                         return Err(invalid("tool_calls requires assistant role."));
                     }
@@ -566,7 +716,7 @@ pub fn ollama_request(
                         .ok_or_else(|| invalid("tool_calls must be an array."))?;
                     let mut normalized = Vec::new();
                     for (index, call) in calls.iter().enumerate() {
-                        fields(call, &["id", "type", "function"])?;
+                        ignore_extra(call, &["id", "type", "function"], &mut warnings)?;
                         if call.get("type").is_some_and(|kind| kind != "function")
                             || call
                                 .get("id")
@@ -576,7 +726,11 @@ pub fn ollama_request(
                                 "Tool calls need function type and nonempty text IDs when supplied.",
                             ));
                         }
-                        fields(&call["function"], &["name", "arguments"])?;
+                        ignore_extra(
+                            &call["function"],
+                            &["name", "arguments", "index"],
+                            &mut warnings,
+                        )?;
                         if !call["function"]["arguments"].is_object() {
                             return Err(invalid("Ollama tool arguments must be an object."));
                         }
@@ -609,7 +763,10 @@ pub fn ollama_request(
                 } else if message.get("tool_call_id").is_some()
                     || message.get("tool_name").is_some()
                 {
-                    return Err(invalid("tool_call_id and tool_name require the tool role."));
+                    warn(
+                        &mut warnings,
+                        "Ignored 'tool_call_id' and 'tool_name' outside tool messages",
+                    );
                 }
                 messages.push(converted);
             }
@@ -617,15 +774,22 @@ pub fn ollama_request(
                 return Err(invalid("messages must not be empty."));
             }
             output["messages"] = Value::Array(messages);
-            if let Some(tools) = input.get("tools") {
+            if let Some(tools) = input.get("tools").filter(|tools| !tools.is_null()) {
                 validate_openai_tools(tools)?;
-                output["tools"] = tools.clone();
-            }
-            if let Some(thinking) = input.get("think") {
-                if !thinking.is_boolean() {
-                    return Err(unsupported("think must be boolean."));
+                if tools.as_array().is_some_and(|tools| !tools.is_empty()) {
+                    output["tools"] = tools.clone();
                 }
-                output["enable_thinking"] = thinking.clone();
+            }
+            match input.get("think") {
+                None | Some(Value::Null) => {}
+                Some(Value::Bool(enabled)) => output["enable_thinking"] = json!(enabled),
+                Some(Value::String(level))
+                    if ["low", "medium", "high"].contains(&level.as_str()) =>
+                {
+                    warn(&mut warnings, "Mapped think level to enabled thinking");
+                    output["enable_thinking"] = json!(true);
+                }
+                Some(_) => warn(&mut warnings, "Ignored unsupported think value"),
             }
             "chat/completions"
         }
@@ -635,9 +799,10 @@ pub fn ollama_request(
                 .and_then(Value::as_str)
                 .ok_or_else(|| invalid("prompt must be text."))?;
             if input.get("raw").is_some() && !boolean(&input, "raw", false)? {
-                return Err(unsupported(
-                    "raw=false requires a chat-template-aware generate contract.",
-                ));
+                warn(
+                    &mut warnings,
+                    "Ignored raw=false; the prompt is sent without a chat template",
+                );
             }
             output["prompt"] = json!(prompt);
             "completions"
@@ -664,69 +829,61 @@ pub fn ollama_request(
             if operation == OllamaOperation::LegacyEmbed && !value.is_string() {
                 return Err(invalid("Legacy embeddings accepts one prompt."));
             }
-            if input.get("truncate").is_some() {
-                return Err(unsupported(
-                    "Embedding truncation requires a provider-qualified contract.",
-                ));
-            }
             output.as_object_mut().unwrap().remove("stream");
             output["input"] = value.clone();
             "embeddings"
         }
     };
-    if let Some(options) = input.get("options") {
-        if matches!(
-            operation,
-            OllamaOperation::Embed | OllamaOperation::LegacyEmbed
-        ) && !object(options)?.is_empty()
-        {
-            return Err(unsupported(
-                "Embedding options require a provider-qualified contract.",
-            ));
+    let mut options = match input.get("options") {
+        None | Some(Value::Null) => Map::new(),
+        Some(options) => object(options)?.clone(),
+    };
+    if generative {
+        for (key, value) in object(&input)? {
+            if ollama_option(key) {
+                options.insert(key.clone(), value.clone());
+            }
         }
-        fields(
-            options,
-            &[
-                "num_ctx",
-                "temperature",
-                "top_p",
-                "top_k",
-                "seed",
-                "stop",
-                "num_predict",
-                "presence_penalty",
-                "frequency_penalty",
-            ],
-        )?;
-        for (from, to) in [
-            ("temperature", "temperature"),
-            ("top_p", "top_p"),
-            ("top_k", "top_k"),
-            ("seed", "seed"),
-            ("presence_penalty", "presence_penalty"),
-            ("frequency_penalty", "frequency_penalty"),
-        ] {
-            copy_number(options, from, &mut output, to)?;
-        }
-        if options.get("num_ctx").is_some() {
-            positive_integer(options, "num_ctx")?;
-        }
-        if options.get("num_predict").is_some() {
-            output["max_tokens"] = json!(positive_integer(options, "num_predict")?);
-        }
-        if let Some(stop) = options.get("stop") {
-            stop_sequences(stop)?;
-            output["stop"] = stop.clone();
+    } else if !options.is_empty() {
+        warn(&mut warnings, "Ignored embedding options");
+        options.clear();
+    }
+    let options = Value::Object(options);
+    for key in object(&options)?.keys() {
+        if !ollama_option(key) {
+            warn(&mut warnings, format!("Ignored '{}' option", label(key)));
         }
     }
-    if let Some(format) = input.get("format") {
-        output["response_format"] = if format == "json" {
-            json!({"type":"json_object"})
-        } else if format.is_object() {
-            json!({"type":"json_schema","json_schema":{"name":"response","schema":format}})
-        } else {
-            return Err(unsupported("format must be json or a JSON schema object."));
-        };
+    for key in OLLAMA_SAMPLERS {
+        copy_number(&options, key, &mut output, key)?;
+    }
+    if options.get("num_ctx").is_some() {
+        positive_integer(&options, "num_ctx")?;
+    }
+    match options.get("num_predict") {
+        None | Some(Value::Null) => {}
+        Some(value) => match value.as_i64() {
+            Some(count) if count > 0 => output["max_tokens"] = json!(count),
+            // Ollama spells "no limit" as -1 and "fill the context" as -2.
+            Some(-1 | -2) => {}
+            _ => return Err(invalid("num_predict must be a positive integer, -1 or -2.")),
+        },
+    }
+    if let Some(stop) = options.get("stop") {
+        stop_sequences(stop)?;
+        output["stop"] = stop.clone();
+    }
+    match input.get("format") {
+        None | Some(Value::Null) => {}
+        Some(Value::String(format)) if format.is_empty() => {}
+        Some(Value::String(format)) if format == "json" => {
+            output["response_format"] = json!({"type":"json_object"});
+        }
+        Some(format) if format.is_object() => {
+            output["response_format"] =
+                json!({"type":"json_schema","json_schema":{"name":"response","schema":format}});
+        }
+        Some(_) => warn(&mut warnings, "Ignored unsupported format value"),
     }
     if stream {
         output["stream_options"] = json!({"include_usage":true});
@@ -735,6 +892,7 @@ pub fn ollama_request(
         operation: route,
         body: output,
         stream,
+        warnings,
     })
 }
 
@@ -925,9 +1083,205 @@ pub fn ollama_error(error: &CodecError) -> Value {
 pub enum McpDispatch {
     Reply(Value),
     Notification,
-    Cancel { request_id: Value },
-    ListModels { id: Value },
-    Inference { id: Value, request: ProtocolRequest },
+    Cancel {
+        request_id: Value,
+    },
+    ListModels {
+        id: Value,
+    },
+    /// A missing chat model is chosen by the gateway from enabled downloaded models.
+    Inference {
+        id: Value,
+        request: ProtocolRequest,
+    },
+    Transcribe {
+        id: Value,
+        request: McpTranscription,
+    },
+    Image {
+        id: Value,
+        request: McpImage,
+    },
+    Docs {
+        id: Value,
+        page: Option<String>,
+    },
+}
+
+#[derive(Debug)]
+pub struct McpTranscription {
+    pub model: Option<String>,
+    pub audio: Vec<u8>,
+    pub filename: String,
+    pub language: String,
+    pub prompt: String,
+    pub response_format: String,
+    pub temperature: f64,
+}
+
+#[derive(Debug)]
+pub struct McpImage {
+    pub model: Option<String>,
+    /// An `images/generations` body without its model.
+    pub body: Value,
+    pub count: u64,
+}
+
+const MAX_MCP_AUDIO_BYTES: usize = 8 * 1024 * 1024;
+const MAX_MCP_IMAGES: u64 = 4;
+
+fn tool_failure(id: Value, message: &str) -> McpDispatch {
+    McpDispatch::Reply(mcp_result(
+        id,
+        json!({"content":[{"type":"text","text":message}],"isError":true}),
+    ))
+}
+fn optional_model(args: &Value) -> Result<Option<String>, ()> {
+    match args.get("model") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(model)) if !model.is_empty() => Ok(Some(model.clone())),
+        Some(_) => Err(()),
+    }
+}
+fn mcp_transcription(args: &Value) -> Result<McpTranscription, ()> {
+    use base64::Engine;
+    fields(
+        args,
+        &[
+            "allow_download",
+            "audio_base64",
+            "filename",
+            "language",
+            "model",
+            "prompt",
+            "response_format",
+            "temperature",
+        ],
+    )
+    .map_err(|_| ())?;
+    if args
+        .get("allow_download")
+        .is_some_and(|value| !value.is_boolean())
+    {
+        return Err(());
+    }
+    let encoded = args["audio_base64"].as_str().ok_or(())?;
+    let encoded = match encoded.split_once(";base64,") {
+        Some((scheme, data)) if scheme.starts_with("data:") => data,
+        _ => encoded,
+    };
+    if encoded.len() > MAX_MCP_AUDIO_BYTES / 3 * 4 + 4 {
+        return Err(());
+    }
+    let audio = base64::engine::general_purpose::STANDARD
+        .decode(encoded.trim())
+        .map_err(|_| ())?;
+    if audio.is_empty() {
+        return Err(());
+    }
+    let optional_text = |name: &str, limit: usize| match args.get(name) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(value))
+            if value.len() <= limit && !value.chars().any(char::is_control) =>
+        {
+            Ok(Some(value.clone()))
+        }
+        Some(_) => Err(()),
+    };
+    let filename = optional_text("filename", 255)?
+        .map(|name| {
+            name.rsplit(['/', '\\'])
+                .next()
+                .unwrap_or_default()
+                .to_owned()
+        })
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| "audio".to_owned());
+    let language = optional_text("language", 3)?
+        .map(|language| language.to_ascii_lowercase())
+        .unwrap_or_else(|| "auto".to_owned());
+    if language != "auto"
+        && !((2..=3).contains(&language.len()) && language.bytes().all(|b| b.is_ascii_alphabetic()))
+    {
+        return Err(());
+    }
+    let response_format =
+        optional_text("response_format", 16)?.unwrap_or_else(|| "json".to_owned());
+    if !["json", "text", "srt", "verbose_json", "vtt"].contains(&response_format.as_str()) {
+        return Err(());
+    }
+    let temperature = match args.get("temperature") {
+        None | Some(Value::Null) => 0.0,
+        Some(value) => value
+            .as_f64()
+            .filter(|value| (0.0..=1.0).contains(value))
+            .ok_or(())?,
+    };
+    Ok(McpTranscription {
+        model: optional_model(args)?,
+        audio,
+        filename,
+        language,
+        prompt: match args.get("prompt") {
+            None | Some(Value::Null) => String::new(),
+            Some(Value::String(prompt)) if prompt.len() <= 16 * 1024 => prompt.clone(),
+            Some(_) => return Err(()),
+        },
+        response_format,
+        temperature: if temperature == 0.0 { 0.0 } else { temperature },
+    })
+}
+fn mcp_image(args: &Value) -> Result<McpImage, ()> {
+    fields(
+        args,
+        &[
+            "allow_download",
+            "cfg_scale",
+            "model",
+            "n",
+            "negative_prompt",
+            "prompt",
+            "seed",
+            "size",
+            "steps",
+        ],
+    )
+    .map_err(|_| ())?;
+    if args
+        .get("allow_download")
+        .is_some_and(|value| !value.is_boolean())
+    {
+        return Err(());
+    }
+    args["prompt"]
+        .as_str()
+        .filter(|prompt| !prompt.is_empty())
+        .ok_or(())?;
+    let count = match args.get("n") {
+        None | Some(Value::Null) => 1,
+        Some(value) => value
+            .as_u64()
+            .filter(|count| (1..=MAX_MCP_IMAGES).contains(count))
+            .ok_or(())?,
+    };
+    let mut body = Map::new();
+    for key in [
+        "prompt",
+        "size",
+        "negative_prompt",
+        "steps",
+        "cfg_scale",
+        "seed",
+    ] {
+        if let Some(value) = args.get(key).filter(|value| !value.is_null()) {
+            body.insert(key.to_owned(), value.clone());
+        }
+    }
+    Ok(McpImage {
+        model: optional_model(args)?,
+        body: Value::Object(body),
+        count,
+    })
 }
 
 pub fn mcp_error(id: Value, code: i64, message: &str) -> Value {
@@ -1030,12 +1384,68 @@ pub fn mcp_request(mut input: Value) -> McpDispatch {
                     "Tool arguments must be an object.",
                 ));
             }
-            if name == "lemonade_list_models" {
-                return if object(&args).unwrap().is_empty() {
-                    McpDispatch::ListModels { id }
-                } else {
-                    McpDispatch::Reply(mcp_error(id, -32602, "Model listing accepts no arguments."))
-                };
+            match name {
+                "lemonade_list_models" => {
+                    return if fields(&args, &["include_available", "include_suggested"]).is_ok()
+                        && object(&args).unwrap().values().all(Value::is_boolean)
+                    {
+                        McpDispatch::ListModels { id }
+                    } else {
+                        McpDispatch::Reply(mcp_error(
+                            id,
+                            -32602,
+                            "Model listing accepts only include_available and include_suggested.",
+                        ))
+                    };
+                }
+                "lemonade_docs" => {
+                    return match args.get("page") {
+                        _ if fields(&args, &["page"]).is_err() => McpDispatch::Reply(mcp_error(
+                            id,
+                            -32602,
+                            "Documentation accepts only a page argument.",
+                        )),
+                        None | Some(Value::Null) => McpDispatch::Docs { id, page: None },
+                        Some(Value::String(page)) => McpDispatch::Docs {
+                            id,
+                            page: Some(page.clone()),
+                        },
+                        Some(_) => McpDispatch::Reply(mcp_error(id, -32602, "page must be text.")),
+                    };
+                }
+                "lemonade_transcribe_audio" => {
+                    if args.get("audio_path").is_some() {
+                        return tool_failure(
+                            id,
+                            "audio_path is unavailable: Juiced reads no files from the caller's machine. Send the audio as audio_base64.",
+                        );
+                    }
+                    return match mcp_transcription(&args) {
+                        Ok(request) => McpDispatch::Transcribe { id, request },
+                        Err(()) => McpDispatch::Reply(mcp_error(
+                            id,
+                            -32602,
+                            "Tool arguments do not match the transcription schema.",
+                        )),
+                    };
+                }
+                "lemonade_generate_image" => {
+                    if args.get("output_path").is_some() || args.get("output_dir").is_some() {
+                        return tool_failure(
+                            id,
+                            "output_path and output_dir are unavailable: Juiced writes no files for MCP callers. Omit them to receive image content blocks.",
+                        );
+                    }
+                    return match mcp_image(&args) {
+                        Ok(request) => McpDispatch::Image { id, request },
+                        Err(()) => McpDispatch::Reply(mcp_error(
+                            id,
+                            -32602,
+                            "Tool arguments do not match the image schema.",
+                        )),
+                    };
+                }
+                _ => {}
             }
             let (operation, allowed, required): (&str, &[&str], &[&str]) = match name {
                 "lemonade_chat" => (
@@ -1051,8 +1461,10 @@ pub fn mcp_request(mut input: Value) -> McpDispatch {
                         "tools",
                         "tool_choice",
                         "response_format",
+                        "chat_template_kwargs",
+                        "allow_download",
                     ],
-                    &["model", "messages"],
+                    &["messages"],
                 ),
                 "lemonade_complete" => (
                     "completions",
@@ -1079,7 +1491,7 @@ pub fn mcp_request(mut input: Value) -> McpDispatch {
                 || required
                     .iter()
                     .any(|key| !args.as_object().unwrap().contains_key(*key))
-                || text(&args, "model").is_err()
+                || optional_model(&args).is_err()
             {
                 return McpDispatch::Reply(mcp_error(
                     id,
@@ -1124,11 +1536,27 @@ pub fn mcp_request(mut input: Value) -> McpDispatch {
                 && args
                     .get("tools")
                     .is_none_or(|value| validate_openai_tools(value).is_ok())
-                && args.get("response_format").is_none_or(Value::is_object);
+                && args.get("response_format").is_none_or(Value::is_object)
+                && args
+                    .get("chat_template_kwargs")
+                    .is_none_or(Value::is_object)
+                && args.get("allow_download").is_none_or(Value::is_boolean);
             if !parameters_valid {
                 return McpDispatch::Reply(mcp_error(id, -32602, "Invalid inference parameters."));
             }
             let mut body = args;
+            body.as_object_mut().unwrap().remove("allow_download");
+            if operation == "chat/completions" {
+                // Native v0.9.2 kept small MCP token budgets from being spent on reasoning.
+                body.as_object_mut()
+                    .unwrap()
+                    .entry("chat_template_kwargs")
+                    .or_insert_with(|| json!({}))
+                    .as_object_mut()
+                    .unwrap()
+                    .entry("enable_thinking")
+                    .or_insert(json!(false));
+            }
             body["stream"] = json!(false);
             McpDispatch::Inference {
                 id,
@@ -1140,6 +1568,7 @@ pub fn mcp_request(mut input: Value) -> McpDispatch {
                     },
                     body,
                     stream: false,
+                    warnings: Vec::new(),
                 },
             }
         }
@@ -1149,10 +1578,13 @@ pub fn mcp_request(mut input: Value) -> McpDispatch {
 
 pub fn mcp_tools() -> Value {
     json!({"tools":[
-        {"name":"lemonade_list_models","description":"List policy-enabled downloaded model services.","inputSchema":{"type":"object","properties":{},"additionalProperties":false}},
-        {"name":"lemonade_chat","description":"Run one chat request. Tools execute in the client, never here.","inputSchema":{"type":"object","required":["model","messages"],"properties":{"model":{"type":"string","minLength":1},"messages":{"type":"array","minItems":1},"temperature":{"type":"number"},"top_p":{"type":"number"},"max_tokens":{"type":"integer","minimum":1},"stop":{},"seed":{"type":"integer"},"tools":{"type":"array"},"tool_choice":{},"response_format":{"type":"object"}},"additionalProperties":false}},
+        {"name":"lemonade_list_models","description":"List policy-enabled downloaded model services.","inputSchema":{"type":"object","properties":{"include_available":{"type":"boolean"},"include_suggested":{"type":"boolean"}},"additionalProperties":false}},
+        {"name":"lemonade_chat","description":"Run one chat request. Tools execute in the client, never here. Omit model to use a loaded chat model, else a downloaded one. Thinking is off unless chat_template_kwargs.enable_thinking is true.","inputSchema":{"type":"object","required":["messages"],"properties":{"model":{"type":"string","minLength":1},"messages":{"type":"array","minItems":1},"temperature":{"type":"number"},"top_p":{"type":"number"},"max_tokens":{"type":"integer","minimum":1},"stop":{},"seed":{"type":"integer"},"tools":{"type":"array"},"tool_choice":{},"response_format":{"type":"object"},"chat_template_kwargs":{"type":"object"},"allow_download":{"type":"boolean","description":"Accepted for compatibility; Juiced never downloads from inference."}},"additionalProperties":false}},
         {"name":"lemonade_complete","description":"Run one prompt completion.","inputSchema":{"type":"object","required":["model","prompt"],"properties":{"model":{"type":"string","minLength":1},"prompt":{"type":"string"},"temperature":{"type":"number"},"top_p":{"type":"number"},"max_tokens":{"type":"integer","minimum":1},"stop":{},"seed":{"type":"integer"}},"additionalProperties":false}},
-        {"name":"lemonade_embed","description":"Embed text using one enabled embedding model.","inputSchema":{"type":"object","required":["model","input"],"properties":{"model":{"type":"string","minLength":1},"input":{}},"additionalProperties":false}}
+        {"name":"lemonade_embed","description":"Embed text using one enabled embedding model.","inputSchema":{"type":"object","required":["model","input"],"properties":{"model":{"type":"string","minLength":1},"input":{}},"additionalProperties":false}},
+        {"name":"lemonade_transcribe_audio","description":"Transcribe base64 audio (WAV preferred) with an enabled transcription model. Omit model to use a loaded one, else a downloaded one. Returns the transcript, then the full JSON response for JSON formats.","inputSchema":{"type":"object","required":["audio_base64"],"properties":{"audio_base64":{"type":"string","minLength":1},"model":{"type":"string","minLength":1},"filename":{"type":"string"},"language":{"type":"string","description":"auto or a two- or three-letter code."},"prompt":{"type":"string"},"response_format":{"type":"string","enum":["json","text","srt","verbose_json","vtt"]},"temperature":{"type":"number","minimum":0,"maximum":1},"allow_download":{"type":"boolean","description":"Accepted for compatibility; Juiced never downloads from inference."}},"additionalProperties":false}},
+        {"name":"lemonade_generate_image","description":"Generate PNG images from a prompt with an enabled image model. Omit model to use a loaded one, else a downloaded one. Returns one image content block per image.","inputSchema":{"type":"object","required":["prompt"],"properties":{"prompt":{"type":"string","minLength":1},"model":{"type":"string","minLength":1},"n":{"type":"integer","minimum":1,"maximum":MAX_MCP_IMAGES},"size":{"type":"string","description":"WIDTHxHEIGHT, for example 512x512."},"negative_prompt":{"type":"string"},"steps":{"type":"integer"},"cfg_scale":{"type":"number"},"seed":{"type":"integer"},"allow_download":{"type":"boolean","description":"Accepted for compatibility; Juiced never downloads from inference."}},"additionalProperties":false}},
+        {"name":"lemonade_docs","description":"Read this server's API reference. Call with no arguments to list pages, then pass page (an id from the list) to read one as Markdown. The same pages are served by GET /v1/docs.","inputSchema":{"type":"object","properties":{"page":{"type":"string","description":"Page id from the listing, for example api/openai."}},"additionalProperties":false}}
     ]})
 }
 
@@ -1333,9 +1765,14 @@ pub struct AnthropicStream {
     tools: BTreeMap<u64, ToolFragment>,
     finish_reason: Option<String>,
     output_tokens: Option<u64>,
+    warnings: Vec<String>,
 }
 
 impl AnthropicStream {
+    pub fn with_warnings(mut self, warnings: Vec<String>) -> Self {
+        self.warnings = warnings;
+        self
+    }
     pub fn new(model: impl Into<String>) -> Self {
         Self {
             model: model.into(),
@@ -1346,6 +1783,7 @@ impl AnthropicStream {
             tools: BTreeMap::new(),
             finish_reason: None,
             output_tokens: None,
+            warnings: Vec::new(),
         }
     }
     fn start(&mut self, input: &Value, output: &mut Vec<u8>) {
@@ -1474,7 +1912,11 @@ impl AnthropicStream {
                 json!({"type":"content_block_stop","index":index}),
             ));
         }
-        output.extend(sse("message_delta",json!({"type":"message_delta","delta":{"stop_reason":if self.tools.is_empty(){stop_reason(self.finish_reason.as_deref())?}else{"tool_use"},"stop_sequence":null},"usage":{"output_tokens":self.output_tokens}})));
+        let mut delta = json!({"type":"message_delta","delta":{"stop_reason":if self.tools.is_empty(){stop_reason(self.finish_reason.as_deref())?}else{"tool_use"},"stop_sequence":null},"usage":{"output_tokens":self.output_tokens}});
+        if !self.warnings.is_empty() {
+            delta["warnings"] = json!(self.warnings);
+        }
+        output.extend(sse("message_delta", delta));
         output.extend(sse("message_stop", json!({"type":"message_stop"})));
         self.terminal = true;
         Ok(output)
@@ -1665,10 +2107,9 @@ mod tests {
         let mut request = anthropic();
         request["messages"][0]["content"] =
             json!([{"type":"tool_result","tool_use_id":"call","is_error":true,"content":"failed"}]);
-        assert_eq!(
-            anthropic_request(request, false).unwrap_err().code,
-            "unsupported_parameter"
-        );
+        let converted = anthropic_request(request, false).unwrap();
+        assert_eq!(converted.body["messages"][0]["content"], "failed");
+        assert_eq!(converted.warnings, ["Ignored tool_result is_error flag"]);
         assert!(
             ollama_request(
                 json!({"model":"tiny","prompt":"a","input":"b"}),
@@ -1683,24 +2124,60 @@ mod tests {
     }
 
     #[test]
-    fn anthropic_rejects_ignored_or_host_executed_semantics() {
-        for (field, value) in [
-            ("metadata", json!({"user_id":"private"})),
-            ("context_management", json!({})),
-            ("service_tier", json!("priority")),
+    fn anthropic_ignores_unsupported_fields_with_warnings_like_native() {
+        let mut request = anthropic();
+        request["metadata"] = json!({"user_id":"private"});
+        request["service_tier"] = json!("auto");
+        request["context_management"] = json!({});
+        request["system"] = json!([{"type":"text","text":"a","cache_control":{"type":"ephemeral"}},{"type":"text","text":"b"}]);
+        request["messages"] = json!([
+            {"role":"user","content":[{"type":"text","text":"hi","cache_control":{"type":"ephemeral"}},{"type":"document","source":{}}]},
+            {"role":"assistant","content":[{"type":"thinking","thinking":"t","signature":"s"},{"type":"text","text":"ok"}]},
+            {"role":"user","content":"again"}
+        ]);
+        request["tools"] = json!([{"type":"web_search_20250305","name":"web_search"},{"name":"f","input_schema":{"type":"object"},"cache_control":{"type":"ephemeral"}}]);
+        request["thinking"] = json!({"type":"enabled","budget_tokens":1024});
+        request["output_config"] = json!({"effort":"low"});
+        let converted = anthropic_request(request, false).unwrap();
+        assert_eq!(converted.body["messages"][0]["content"], "a\nb");
+        assert_eq!(converted.body["messages"][1]["content"], "hi");
+        assert_eq!(converted.body["messages"][2]["content"], "ok");
+        assert_eq!(converted.body["tools"].as_array().unwrap().len(), 1);
+        assert_eq!(converted.body["enable_thinking"], true);
+        for field in [
+            "metadata",
+            "service_tier",
+            "context_management",
+            "cache_control",
+            "budget_tokens",
+            "effort",
         ] {
-            let mut request = anthropic();
-            request[field] = value;
-            assert_eq!(
-                anthropic_request(request, false).unwrap_err().code,
-                "unsupported_parameter"
+            assert!(
+                converted
+                    .warnings
+                    .contains(&format!("Ignored '{field}' field")),
+                "{field}: {:?}",
+                converted.warnings
             );
         }
+        assert!(converted.body.get("metadata").is_none());
         let mut request = anthropic();
-        request["tools"] = json!([{"type":"web_search_20250305","name":"web_search"}]);
-        assert!(anthropic_request(request, false).is_err());
+        request["thinking"] = json!({"type":"adaptive"});
+        let converted = anthropic_request(request, false).unwrap();
+        assert!(converted.body.get("enable_thinking").is_none());
         let mut request = anthropic();
-        request["thinking"] = json!({"type":"enabled","budget_tokens":100});
+        request["thinking"] = json!({"type":"disabled"});
+        assert_eq!(
+            anthropic_request(request, false).unwrap().body["enable_thinking"],
+            false
+        );
+        let mut request = anthropic();
+        request["metadata"] = json!({"user_id":"private"});
+        request.as_object_mut().unwrap().remove("max_tokens");
+        let counted = anthropic_request(request, true).unwrap();
+        assert!(counted.body.get("metadata").is_none());
+        let mut request = anthropic();
+        request["messages"] = json!("not an array");
         assert!(anthropic_request(request, false).is_err());
     }
     #[test]
@@ -1749,20 +2226,36 @@ mod tests {
         .unwrap();
         assert_eq!(generate.operation, "completions");
         assert!(!generate.stream);
-        assert!(
-            ollama_request(
-                json!({"model":"tiny","prompt":"abc","system":"must not drop"}),
-                OllamaOperation::Generate
-            )
-            .is_err()
-        );
-        assert!(
-            ollama_request(
-                json!({"model":"tiny","prompt":"abc","options":{"mirostat":2}}),
-                OllamaOperation::Generate
-            )
-            .is_err()
-        );
+        let lenient = ollama_request(
+            json!({"model":"tiny","prompt":"abc","system":"s","context":[1,2],"raw":false,"temperature":0.5,
+                   "options":{"mirostat":2,"min_p":0.05,"repeat_penalty":1.1,"num_predict":-1,"num_thread":8,"temperature":0.1}}),
+            OllamaOperation::Generate,
+        )
+        .unwrap();
+        assert_eq!(lenient.body["mirostat"], 2);
+        assert_eq!(lenient.body["min_p"], 0.05);
+        assert_eq!(lenient.body["repeat_penalty"], 1.1);
+        assert_eq!(lenient.body["temperature"], 0.5);
+        assert!(lenient.body.get("max_tokens").is_none());
+        assert!(lenient.body.get("system").is_none());
+        for warning in [
+            "Ignored 'system' field",
+            "Ignored 'context' field",
+            "Ignored 'num_thread' option",
+        ] {
+            assert!(
+                lenient.warnings.iter().any(|item| item == warning),
+                "{:?}",
+                lenient.warnings
+            );
+        }
+        let embed = ollama_request(
+            json!({"model":"e","input":"a","truncate":true,"options":{"num_ctx":8}}),
+            OllamaOperation::Embed,
+        )
+        .unwrap();
+        assert!(embed.body.get("truncate").is_none());
+        assert_eq!(embed.warnings.len(), 2);
         let sized = ollama_request(
             json!({"model":"tiny","prompt":"abc","options":{"num_ctx":8192}}),
             OllamaOperation::Generate,
@@ -1803,19 +2296,26 @@ mod tests {
         assert_ne!(calls[0]["id"], calls[1]["id"]);
         assert!(messages[4].get("tool_call_id").is_none());
         assert_eq!(chat.body["enable_thinking"], true);
-        for bad in [
+        for lenient in [
             json!({"role":"user","content":"x","tool_name":"a"}),
             json!({"role":"user","content":"x","thinking":"a"}),
-            json!({"role":"user"}),
+            json!({"role":"user","images":null}),
         ] {
-            assert!(
-                ollama_request(
-                    json!({"model":"tiny","messages":[bad]}),
-                    OllamaOperation::Chat
-                )
-                .is_err()
-            );
+            let request = ollama_request(
+                json!({"model":"tiny","messages":[lenient],"think":false,"format":"","keep_alive":"5m"}),
+                OllamaOperation::Chat,
+            )
+            .unwrap();
+            assert_eq!(request.body["enable_thinking"], false);
+            assert!(request.body.get("response_format").is_none());
         }
+        assert!(
+            ollama_request(
+                json!({"model":"tiny","messages":[{"role":"robot","content":"x"}]}),
+                OllamaOperation::Chat
+            )
+            .is_err()
+        );
     }
     #[test]
     fn ollama_embeddings_and_discovery_do_not_invent_measurements() {
@@ -1889,6 +2389,53 @@ mod tests {
         let bad = json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"lemonade_chat","arguments":{"messages":[],"allow_download":true}}});
         assert!(
             matches!(mcp_request(bad),McpDispatch::Reply(value) if value["error"]["code"]==-32602)
+        );
+        for name in [
+            "lemonade_list_models",
+            "lemonade_chat",
+            "lemonade_transcribe_audio",
+            "lemonade_generate_image",
+            "lemonade_docs",
+        ] {
+            assert!(names.contains(&name), "{name}");
+        }
+        let unnamed = json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"lemonade_chat","arguments":{"messages":[{"role":"user","content":"hi"}],"allow_download":false}}});
+        let McpDispatch::Inference { request, .. } = mcp_request(unnamed) else {
+            panic!("chat without model dispatches")
+        };
+        assert!(request.body.get("model").is_none());
+        assert!(request.body.get("allow_download").is_none());
+        assert_eq!(
+            request.body["chat_template_kwargs"]["enable_thinking"],
+            false
+        );
+        let audio = json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"lemonade_transcribe_audio","arguments":{"audio_base64":"UklGRg==","language":"EN","response_format":"text"}}});
+        let McpDispatch::Transcribe { request, .. } = mcp_request(audio) else {
+            panic!("transcription dispatches")
+        };
+        assert_eq!(request.audio, b"RIFF");
+        assert_eq!(request.language, "en");
+        assert!(request.model.is_none());
+        let path = json!({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"lemonade_transcribe_audio","arguments":{"audio_path":"/etc/passwd"}}});
+        assert!(
+            matches!(mcp_request(path),McpDispatch::Reply(value) if value["result"]["isError"]==true)
+        );
+        let image = json!({"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"lemonade_generate_image","arguments":{"prompt":"cat","n":2,"seed":7,"size":"64x64"}}});
+        let McpDispatch::Image { request, .. } = mcp_request(image) else {
+            panic!("image dispatches")
+        };
+        assert_eq!(request.count, 2);
+        assert_eq!(
+            request.body,
+            json!({"prompt":"cat","seed":7,"size":"64x64"})
+        );
+        let disk = json!({"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"lemonade_generate_image","arguments":{"prompt":"cat","output_dir":"x"}}});
+        assert!(
+            matches!(mcp_request(disk),McpDispatch::Reply(value) if value["result"]["isError"]==true)
+        );
+        let docs = json!({"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"lemonade_docs","arguments":{"page":"api/mcp"}}});
+        assert!(
+            matches!(mcp_request(docs),McpDispatch::Docs{page:Some(page),..} if page=="api/mcp")
         );
     }
     #[test]
