@@ -68,7 +68,7 @@ fn file_bytes(path: &Path) -> u64 {
     std::fs::metadata(path).map_or(0, |metadata| metadata.len())
 }
 
-fn bundle_gpu(bundle: Option<&BundleSpec>) -> Option<bool> {
+pub(super) fn bundle_gpu(bundle: Option<&BundleSpec>) -> Option<bool> {
     bundle.map(|bundle| {
         bundle.files.iter().any(|file| {
             file.path

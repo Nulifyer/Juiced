@@ -18,6 +18,13 @@ impl<T: Serialize + Send + 'static> CacheReply<T> {
         }
     }
 
+    pub fn map(self, change: impl FnOnce(T) -> T) -> Self {
+        Self {
+            value: change(self.value),
+            ..self
+        }
+    }
+
     pub async fn into_response(self) -> Result<Response, ApiError> {
         crate::bounded_json::respond(
             self.value,

@@ -30,6 +30,12 @@ const MAX_PENDING_MCP: usize = 128;
 
 pub const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
+        method: "GET",
+        path: "/.well-known/juiced.json",
+        authority: "read",
+        prefixes: &[""],
+    },
+    Endpoint {
         method: "POST",
         path: "/v1/messages",
         authority: "inference",
@@ -185,6 +191,10 @@ impl PendingMcp {
 
 pub fn router(manager: Arc<Manager>) -> Router {
     Router::new()
+        .route(
+            "/.well-known/juiced.json",
+            get(|| async { Json(crate::discovery_http::well_known()) }),
+        )
         .route("/v1/messages", post(messages))
         .route("/v1/messages/count_tokens", post(count_tokens))
         .route("/api/chat", post(ollama_chat))

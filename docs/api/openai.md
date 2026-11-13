@@ -14,6 +14,26 @@ curl --fail-with-body http://localhost:8080/v1/chat/completions \
 ```
 
 For authenticated deployments, add `Authorization: Bearer` with your inference key.
+
+## Turn thinking on or off per request
+
+Send `chat_template_kwargs.enable_thinking` with `true` or `false`. Juiced passes it
+to llama-server, which renders it into the model's chat template. Check
+`thinking.request_control` in the model's catalog entry first; models whose template
+has no switch ignore it.
+
+```json
+{"model":"your-thinking-model","messages":[{"role":"user","content":"Hi"}],"chat_template_kwargs":{"enable_thinking":false}}
+```
+
+Native clients' forms also work on `/v1/chat/completions`: a top-level
+`enable_thinking` boolean, `thinking: true|false` and
+`thinking: {"type":"enabled"|"disabled"}`. Juiced moves them into
+`chat_template_kwargs.enable_thinking` and drops the top-level fields; a value already
+in `chat_template_kwargs` wins. Anthropic `thinking` and Ollama `think` map the same
+way. Juiced does not add `reasoning_effort` and does not prepend `/no_think`; a
+`reasoning_effort` you send reaches llama-server unchanged. Under a protected request
+profile these fields are refused.
 Set `stream` to `true` for a supported streaming path and use a client that reads
 server-sent events. Tool use and vision require model and backend support.
 
@@ -21,7 +41,7 @@ server-sent events. Tool use and vision require model and backend support.
 
 | Method and path | Requirement |
 | --- | --- |
-| `GET /v1/models` | Returns enabled consumer models |
+| `GET /v1/models` | Returns enabled consumer models with native fields |
 | `POST /v1/chat/completions` | Enabled chat model |
 | `POST /v1/responses` | Backend implementing the supported Responses subset |
 | `POST /v1/embeddings` | Compatible embedding model |
@@ -29,6 +49,16 @@ server-sent events. Tool use and vision require model and backend support.
 | `POST /v1/audio/speech` | Compatible speech model and voice |
 | `GET /v1/audio/voices?model=MODEL_ID` | Voice discovery supported by that speech backend |
 | `POST /v1/images/generations` | Compatible image model |
+
+Each `GET /v1/models` entry has the OpenAI fields plus `recipe`, `downloaded`,
+`labels`, `context`, `context_length` (tokens one request can use), `vision`,
+`thinking`, `tool_calls` and, when the launch sets `--predict`, `max_output_tokens`
+and `max_completion_tokens`. [Juiced management](juiced.md#discover-models-for-a-client)
+defines them. Aliases appear as their own entries with `aliased_to`.
+`?show_all=true` also lists disabled and missing models, `?service=chat|transcribe|speak|images|embeddings`
+filters by model type, and an `anthropic-version` header returns the Anthropic model
+list shape with chat models only. Responses carry a weak `ETag`; send `If-None-Match`
+to get `304` when the list is unchanged.
 
 Responses support does not include provider-hosted tools or stored conversation
 management. Token counting, structured output, vision, and tool behavior depend

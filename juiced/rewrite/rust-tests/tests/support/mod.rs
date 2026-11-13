@@ -28,8 +28,10 @@ pub const CLIENT_KEY: &str = "isolated-e2e-client-key";
 pub const ADMIN_KEY: &str = "isolated-e2e-admin-key";
 const ROTATED_CLIENT_KEY: &str = "isolated-e2e-rotated-client-key";
 const ROTATED_ADMIN_KEY: &str = "isolated-e2e-rotated-admin-key";
-pub const READ_ROUTES: [&str; 11] = [
+pub const READ_ROUTES: [&str; 13] = [
     "/health",
+    "/juiced/context",
+    "/juiced/capabilities",
     "/models",
     "/juiced/catalog",
     "/juiced/state",
@@ -41,13 +43,14 @@ pub const READ_ROUTES: [&str; 11] = [
     "/models/{model}/options",
     "/juiced/voices",
 ];
-pub const OPERATOR_READ_ROUTES: [&str; 31] = [
+/// Read routes whose operator view adds process details; `Server::get` reads them as operator.
+pub const OPERATOR_DETAIL_ROUTES: [&str; 1] = ["/juiced/context"];
+pub const OPERATOR_READ_ROUTES: [&str; 30] = [
     "/system-info",
     "/juiced/cache/inspect",
     "/juiced/cache/sessions",
     "/juiced/requests",
     "/juiced/suitability",
-    "/juiced/context",
     "/juiced/admission",
     "/juiced/cache",
     "/juiced/artifacts",
@@ -125,7 +128,8 @@ pub const INFERENCE_ROUTES: [&str; 4] = [
 pub const MULTIPART_INFERENCE_ROUTES: [&str; 1] = ["/audio/transcriptions"];
 pub const MEDIA_INFERENCE_ROUTES: [&str; 2] = ["/images/generations", "/audio/speech"];
 pub const WEBSOCKET_INFERENCE_ROUTES: [&str; 1] = ["/realtime"];
-pub const COMPAT_ROUTES: [(&str, &str, &str); 12] = [
+pub const COMPAT_ROUTES: [(&str, &str, &str); 13] = [
+    ("GET", "/.well-known/juiced.json", "read"),
     ("POST", "/v1/messages", "inference"),
     ("POST", "/v1/messages/count_tokens", "inference"),
     ("POST", "/api/chat", "inference"),
@@ -724,7 +728,9 @@ impl Server {
 
     pub async fn get(&self, suffix: &str) -> Value {
         let path = format!("/v1/{suffix}");
-        let operator = OPERATOR_READ_ROUTES.contains(&diagnostic_route(&path));
+        let route = diagnostic_route(&path);
+        let operator =
+            OPERATOR_READ_ROUTES.contains(&route) || OPERATOR_DETAIL_ROUTES.contains(&route);
         let key = if operator {
             self.admin_key()
         } else {

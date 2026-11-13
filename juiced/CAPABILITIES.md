@@ -52,6 +52,28 @@ The operator's Effective pane shows declared model services with contextual evid
 The Service APIs screen links discovery without presenting it as an OpenAI standard.
 No saved-chat interface or agent tool runner is added.
 
+## Rust service
+
+The Rust service (v1.0) serves the same route on read authority with schema
+version 1 and adds `implementation` (`rust-experiment`) and
+`discovery_schema_version`. Its differences:
+
+- `revision` is an opaque catalog digest shared with `/v1/juiced/catalog` and
+  `/v1/models`, not a state counter. The response has a weak `ETag` and answers
+  `If-None-Match` with 304.
+- `limits.per_request_context_tokens` is the context one request can use: the
+  engine's `/props` slot size when loaded, otherwise computed from the launch
+  arguments the way llama-server sizes slots. `limits.context_scope` names its
+  source (`runtime_observation`, `applied_options`, `configured_options`,
+  `model_metadata` or `unknown`).
+- `features.tools` and `features.reasoning` come from the chat template (the loaded
+  engine's template caps, else the GGUF `tokenizer.chat_template`), not from
+  registry labels. `features.vision` follows the bound vision projector. Each
+  contract also carries `thinking`, `tool_calls` and `vision` with their evidence.
+- `artifact.components_complete`, `missing_components`, `source_claims`,
+  `execution.requested_backend`, `profile`, `compatibility` and the qualification
+  fields are not reported.
+
 ## Runtime-only enforcement
 
 Juiced does not promote, discover or execute `collection.omni`/`lemonade_omni`

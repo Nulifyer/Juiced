@@ -24,6 +24,47 @@ JSON request limit includes any images. Consumer discovery at
 declared operations, component status, selected execution, and unknowns.
 
 `/.well-known/juiced.json` points clients to native discovery.
+
+## Discover models for a client
+
+A client that registers models needs one request: `GET /v1/juiced/catalog`
+(read key). Check `discovery_schema_version` (currently `1`) before parsing the
+fields below; `/.well-known/juiced.json` and `GET /v1/juiced/capabilities`
+carry the same number. Fields not listed here are operator details and may change.
+
+| Field | Meaning |
+| --- | --- |
+| `id` | Exact model ID for inference requests |
+| `operations` | Served APIs; a chat model lists `chat/completions` |
+| `policy`, `downloaded`, `loaded`, `state` | Usable now: not `disabled`, weights present; `loaded` says whether a worker is running |
+| `context.per_request_tokens` | Tokens one request can use. Same value as `context_length` |
+| `context.per_request_source` | `observed` (the running engine reported its slot size), `applied` or `configured` (computed from the launch settings the way llama-server sizes slots), `declared` (the engine sizes the context itself; this is the training context split by slots, and `--fit` may lower it), or `null` (unknown) |
+| `context.declared_tokens`, `configured_tokens`, `configured_slots`, `kv_unified` | Training context, the `--ctx-size` total budget, the slot count and whether slots share one cache |
+| `context.observed_per_request_tokens`, `observed_slots` | What a loaded llama.cpp worker reported on `/props`; `null` otherwise |
+| `max_output_tokens` | Present only when the launch sets `--predict` |
+| `vision` | `true` when image input is accepted (`image_url` parts) |
+| `thinking.supported` | `true`, `false` or `null` (unknown) |
+| `thinking.request_control` | The per-request switch the template reads, usually `chat_template_kwargs.enable_thinking` |
+| `thinking.default` | `on` or `off` for requests that do not set the switch |
+| `tool_calls.supported` | `true`, `false` or `null` |
+| `thinking.source`, `tool_calls.source` | Evidence: `engine_template_caps` or `engine_chat_template` (the loaded engine), `gguf_chat_template` (the weights' chat template), `launch_chat_template`, `launch_arguments` or `operations`; `reason` explains a `null` |
+| `labels` | Native labels derived from the same evidence: `chat`, `embeddings`, `transcription`, `tts`, `image`, `vision`, `reasoning`, `tool-calling` |
+| `capability_contract` | The native contract entry, including `limits.per_request_context_tokens` and `features` |
+
+Context is never a naive division of the launch total: llama-server pads the total
+to 256 tokens, divides it between slots unless the cache is unified, pads again and
+caps the result at the training context. For example `--ctx-size 1000 --parallel 3`
+gives 512 tokens per request, not 333.
+
+The catalog response carries a top-level `revision` and a weak `ETag`. Both change
+when a model is added or removed, its policy, options or load state change, or an
+alias changes. Send `If-None-Match` with the last `ETag` to get `304 Not Modified`
+when nothing changed. `GET /v1/models` and `GET /v1/juiced/capabilities` use the same
+revision.
+
+`GET /v1/juiced/context?model=MODEL_ID` (read key) gives the same `per_request_tokens`
+and `per_request_source` for one model, loaded or not, plus the engine observation.
+Operator credentials also see the worker process details.
 The [capability contract](https://github.com/Nulifyer/Juiced/blob/main/juiced/CAPABILITIES.md) defines fields and their
 limits. Unknown or unrecorded qualification is not a successful test.
 
@@ -38,6 +79,7 @@ limits. Unknown or unrecorded qualification is not a successful test.
 | `GET /v1/juiced/cache` | Cache settings, snapshots, and operational state |
 | `GET /v1/juiced/admission` | Pending work, reservations, allocations, and uncertain termination |
 | `GET /v1/juiced/requests` | Bounded request metadata for diagnostics |
+| `GET /v1/health` | Liveness plus `version`, `model_loaded`, `all_models_loaded` (one entry per running worker with `model_name`, `type`, `recipe`, `status`, `pid`, `context_length`), `max_models` and `pinned_models` per model type |
 
 Each `GET /v1/juiced/requests` record carries `id`, `model`, `operation`,
 `outcome`, `status`, `elapsed_ms`, `queue_wait_ms`, `completed_at_ms` (Unix
