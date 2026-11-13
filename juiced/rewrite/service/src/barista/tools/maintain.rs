@@ -341,8 +341,7 @@ async fn forget(context: &Context<'_>, args: Value) -> Result<Outcome> {
 }
 
 fn recipe(engine: &str) -> Option<&'static str> {
-    crate::engines::catalog::Engine::ALL
-        .iter()
+    crate::engines::catalog::Engine::all()
         .find(|known| {
             known.name().eq_ignore_ascii_case(engine) || known.recipe().eq_ignore_ascii_case(engine)
         })

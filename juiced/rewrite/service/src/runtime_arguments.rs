@@ -338,6 +338,7 @@ pub fn validate(adapter: Provider, arguments: &[String]) -> Result<ArgumentTempl
             adapter,
             fixture: false,
             typed_spans: Vec::new(),
+            extra_spans: Vec::new(),
             bindings,
             members: Vec::new(),
         });
