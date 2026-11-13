@@ -1070,6 +1070,11 @@ impl ArtifactStore {
         self.retained_job(id)
     }
 
+    /// Where a stored artifact lives on disk; existence is not checked.
+    pub fn stored_path(&self, id: &str) -> Option<PathBuf> {
+        artifact_id(id).ok().map(|()| self.artifact_path(id))
+    }
+
     pub fn source_file_name(&self, artifact: &str) -> Option<String> {
         let runtime = self.runtime.lock().ok()?;
         runtime

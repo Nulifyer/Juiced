@@ -1,6 +1,6 @@
 use crate::{
     ApiError,
-    config::{Operation, Policy, Registration},
+    config::{Operation, Policy},
     extract::{ApiBytes, ApiJson, ApiMultipart, ApiQuery},
     supervisor::{CacheForget, CacheRecovery, CacheRestore, CacheSave, Manager, RequestLease},
 };
@@ -11,7 +11,7 @@ use axum::{
     http::{HeaderMap, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{delete, get, post},
 };
 use futures_util::{StreamExt, stream};
 use serde::Deserialize;
@@ -25,6 +25,12 @@ use crate::barista::{
     call as barista_call, settings_set as barista_set, settings_view as barista_view,
 };
 use crate::connect::{access, health as protocol_health, key_create, key_revoke, protocol_set};
+use crate::native_api::{
+    native_delete as unregister, native_download_control, native_downloads, native_install,
+    native_install_dry_run, native_load as load, native_model_files, native_options_reset,
+    native_pull, native_pull_variants, native_register as register, native_registry_search,
+    native_system_info as system_info, native_uninstall, native_unload as unload,
+};
 
 #[derive(Clone)]
 pub(crate) struct AppState {
@@ -54,6 +60,7 @@ async fn authorize(State(state): State<AppState>, mut request: Request, next: Ne
             if request.method() != axum::http::Method::GET
                 && request.method() != axum::http::Method::HEAD
                 || path.starts_with("/juiced/")
+                || raw_path.starts_with("/internal/")
             {
                 Authority::Operator
             } else {
@@ -173,6 +180,9 @@ macro_rules! method_name {
     (post) => {
         "POST"
     };
+    (delete) => {
+        "DELETE"
+    };
 }
 macro_rules! define_routes {
     ($(($method:ident, $path:literal, $handler:ident, $authority:literal)),* $(,)?) => {
@@ -217,6 +227,16 @@ define_routes! {
     (post, "/models/{model}/artifacts", model_artifacts_set, "operator"),
     (post, "/models/register", register, "operator"),
     (post, "/delete", unregister, "operator"),
+    (post, "/pull", native_pull, "operator"),
+    (get, "/pull/variants", native_pull_variants, "operator"),
+    (get, "/downloads", native_downloads, "operator"),
+    (post, "/downloads/control", native_download_control, "operator"),
+    (get, "/registry/search", native_registry_search, "operator"),
+    (get, "/models/{model}/files", native_model_files, "read"),
+    (delete, "/models/{model}/options", native_options_reset, "operator"),
+    (post, "/install", native_install, "operator"),
+    (post, "/install/dry-run", native_install_dry_run, "operator"),
+    (post, "/uninstall", native_uninstall, "operator"),
     (get, "/juiced/artifacts", artifact_inventory, "operator"),
     (post, "/juiced/artifacts/pull", artifact_pull, "operator"),
     (get, "/juiced/artifacts/jobs/{job}", artifact_job, "operator"),
@@ -1141,11 +1161,12 @@ async fn model_detail(
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
     let target = state.manager.alias_target(&id);
-    let lookup = target.as_deref().unwrap_or(&id);
-    let model = state
-        .manager
-        .catalog()
-        .await
+    let catalog = state.manager.catalog().await;
+    let lookup = target
+        .as_deref()
+        .or_else(|| crate::native_api::namespaced(&id, &catalog))
+        .unwrap_or(&id);
+    let model = catalog
         .into_iter()
         .find(|model| model.id == lookup)
         .ok_or_else(|| {
@@ -1165,53 +1186,6 @@ async fn model_detail(
     }
     entry["juiced"] = json!(model);
     Ok(Json(entry))
-}
-
-async fn register(
-    State(state): State<AppState>,
-    ApiJson(Registration(spec)): ApiJson<Registration>,
-) -> Result<Json<Value>, ApiError> {
-    tokio::spawn(async move {
-        state
-            .manager
-            .register(spec)
-            .await
-            .map(|model| Json(json!(model)))
-    })
-    .await
-    .map_err(|_| {
-        ApiError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "registration_interrupted",
-            "Registration was interrupted. Inspect the current catalog before retrying.",
-        )
-    })?
-}
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RemoveRegistration {
-    model: String,
-    expected_revision: u64,
-}
-async fn unregister(
-    State(state): State<AppState>,
-    ApiJson(request): ApiJson<RemoveRegistration>,
-) -> Result<Json<Value>, ApiError> {
-    tokio::spawn(async move {
-        state
-            .manager
-            .unregister(&request.model, request.expected_revision)
-            .await
-            .map(Json)
-    })
-    .await
-    .map_err(|_| {
-        ApiError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "removal_interrupted",
-            "Removal was interrupted. Inspect the current catalog before retrying.",
-        )
-    })?
 }
 
 pub fn router(manager: Arc<Manager>, auth: Auth, ui: Option<PathBuf>) -> Router {
@@ -1251,6 +1225,7 @@ pub fn router(manager: Arc<Manager>, auth: Auth, ui: Option<PathBuf>) -> Router 
         .layer(Extension(wyoming))
         .layer(Extension(Arc::new(crate::realtime::Sessions::default())))
         .merge(crate::compat::router(state.manager.clone()))
+        .merge(crate::native_api::internal_router(state.clone()))
         .layer(DefaultBodyLimit::max(crate::admission::JSON_INGRESS_BYTES))
         .layer(middleware::from_fn_with_state(state.clone(), authorize));
     let _ = state.probe.set(app.clone());
@@ -1348,16 +1323,6 @@ async fn suitability(
     Ok(Json(state.manager.suitability(id)?))
 }
 
-async fn system_info(State(state): State<AppState>) -> Result<impl IntoResponse, ApiError> {
-    Ok((
-        [
-            (header::CONTENT_TYPE, "application/json"),
-            (header::CACHE_CONTROL, "no-store"),
-        ],
-        state.manager.system_info().await?,
-    ))
-}
-
 async fn runtime_catalog(State(state): State<AppState>) -> impl IntoResponse {
     (
         [
@@ -1428,12 +1393,6 @@ struct PolicyChange {
     expected_revision: u64,
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ModelAction {
-    model: String,
-}
-
 async fn policy(
     State(state): State<AppState>,
     ApiJson(change): ApiJson<PolicyChange>,
@@ -1454,20 +1413,6 @@ async fn policy(
             "The policy operation did not complete.",
         )
     })?
-}
-
-async fn load(
-    State(state): State<AppState>,
-    ApiJson(action): ApiJson<ModelAction>,
-) -> Result<Json<Value>, ApiError> {
-    Ok(Json(json!(state.manager.load(&action.model).await?)))
-}
-
-async fn unload(
-    State(state): State<AppState>,
-    ApiJson(action): ApiJson<ModelAction>,
-) -> Result<Json<Value>, ApiError> {
-    Ok(Json(json!(state.manager.unload(&action.model).await?)))
 }
 
 async fn chat(

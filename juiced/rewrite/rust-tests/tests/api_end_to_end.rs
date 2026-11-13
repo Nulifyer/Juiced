@@ -15,6 +15,7 @@ fn concrete_route(path: &str) -> &str {
     match path {
         "/models/{model}" => "/models/fixture.one",
         "/models/{model}/options" => "/models/fixture.one/options",
+        "/models/{model}/files" => "/models/fixture.one/files",
         "/models/{model}/artifacts" => "/models/fixture.one/artifacts",
         "/models/{model}/runtime" => "/models/fixture.one/runtime",
         "/models/{model}/variants" => "/models/fixture.one/variants",
@@ -141,6 +142,11 @@ async fn all_prefixes_enforce_read_inference_and_operator_authority() {
                 .request(Method::POST, &path, Some(json!({})), Some(ADMIN_KEY))
                 .await
                 .unwrap();
+            if suffix == "/unload" {
+                // The native contract reads an empty body as "unload every model".
+                assert_eq!(malformed.status(), StatusCode::OK, "POST {path}");
+                continue;
+            }
             assert!(
                 malformed.status().is_client_error(),
                 "POST {path} must reject missing fields"
