@@ -79,21 +79,27 @@ Checkpoint acquisition. Qwen/Qwen3-0.6B pulled through library/pull in ~20 s (1.
 
 rc.20 never published (phone-width URL-download test raced on CI; fixed with expect.poll). rc.21 deployed through Portainer, Hot models ready in 50 s, `cc` and stdlib.h in the image. vLLM ROCm on Qwen3-0.6B: "Paris" 40.1 s cold incl. engine start, follow-up 0.2 s, 34 tok/s decode; unload left no vLLM process, GTT back to 34.6 GiB. TRELLIS ROCm reinstalled (rc.19 package removed, 1,440,756,286 bytes), TRELLIS.2 Q4 re-pulled (70 s, suggested_id TRELLIS-3D-Q4), added as TRELLIS-3D-Q4 on rocm: two 512 meshes 662.2 s and 661.7 s (Vulkan 590 s / 593 s). Test models deleted (6,546,263,488 + 1,519,182,365 bytes); vLLM ROCm, TRELLIS ROCm and Vulkan engines kept installed. Release pages rc.18, rc.19, rc.21 created; Homelab compose synced to rc.21 (uncommitted).
 
-## Pending (2026-11-13, after rc.21)
+## Live verification (v1.0.0-rc.22, 2026-11-13)
 
-- Real Barista session with Ornith.
+Deployed 2026-11-13; healthy in 50 s with Ornith, kokoro-v1 and whisper ready. Removed the v0.9.2 leftovers through storage reclaim (`legacy:cache`, `legacy:prompt-state`; 30,966,667,750 bytes freed; `/data/config` kept for rollback and import). Model memory budget changed from 66 to 80 GiB through `POST /v1/juiced/residency` with no restart; `/juiced/state` reports 80 GiB. `/v1/models?service=chat`: Ornith and Qwen3.5-4B report `enable_thinking` with `request_values` [false, true]; TheDrummer Skyfall 31B now reports `supported: null`, reason `template_renders_reasoning_only`; text-only models show `features.vision: false`. `/.well-known/juiced.json` reports all three authorities `open`; a wrong key shows `presented: true, accepted: false`. Barista with Ornith (Full permission; browser allowed read-only tools only), on rc.21 and again on rc.22: correct cold-load diagnosis, Open WebUI steps, budget refusal; rc.21 summed loaded memory wrong and called ds4 a vision engine, both fixed in rc.22 (40.7 GiB used, 39.3 GiB free; vision engines llama.cpp and vLLM; budget answer names Model memory on Loading policy). Replies took 21-64 s.
+
+## Pending (2026-11-13, after rc.22)
+
 - TRELLIS on gfx1150: Vulkan measured ~11% faster than ROCm; consider recommending Vulkan for TRELLIS on RDNA 3.5.
+- Barista sees VRAM carve-out (16 GiB) but not GTT on the 890M, so it calls GPU room tight; give juiced_status/juiced_hardware the shared-memory totals.
 
 Engine gaps found:
 - vLLM starts without `--reasoning-parser` / `--enable-auto-tool-choice --tool-call-parser`: Qwen3 replies keep `<think></think>` in content and tool calls are not parsed. Proposed: pick parsers from the checkpoint's config.json (`model_type`/architectures) with an override in model settings.
 - Installed packages match a build by engine/backend/gpu_target/tag, so a fixed runtime member list does not mark an rc.19 TRELLIS ROCm package as outdated; covered by the engine-management round (update checks).
 
-Decisions waiting on the user:
-- Resident budget: 66 GiB set at first boot; suggested ~80 GiB.
-- Delete the 28.8 GiB of v0.9.2 leftovers (/data/cache, /data/prompt-state).
-- Saved conversations after an image upgrade show "Engine changed" (fingerprint covers every mapped file). Loosen to llama.cpp build + launch plan, or keep strict.
-- Barista: B1 qualification (60 tasks) not run; external MCP clients no longer get `juiced_*` tools; console must be same-origin; `barista` key breaks rollback to older rcs; two edited held-out eval tasks.
-- CORS: set `LEMONADE_ALLOWED_ORIGINS` for exact v0.9.2 behaviour or keep same-origin default.
+Decided by the user (2026-11-13):
+- Budget may change (now 80 GiB); v0.9.2 leftovers removed.
+- `juiced_*` tools stay inside Barista, never on the network `/mcp` (current behaviour).
+- CORS: keep same-origin plus loopback by default; `LEMONADE_ALLOWED_ORIGINS` opts in other origins (current behaviour).
+- Barista: test it (done above). B1 qualification (60 tasks) still not run.
+- "Engine changed": explained; recommended keeping it strict. No answer yet.
+
+Client (pi-t3-agent) follow-ups: told to use `/v1/models?service=chat`, `thinking.request_values` and the well-known `credential` block. Final field names shipped in rc.22.
 
 Agreed later work:
 - Engine-management round: version catalog as data with tested pins per release, update checks, nightly opt-in, remove/update engines, admin-added release sources, custom OpenAI-compatible engine in the UI.
@@ -104,8 +110,9 @@ Known gaps:
 - `api-keys.json` is not in settings backups.
 - Split GGUF and mmproj files are refused by upload/import-path (adopted native mmproj companions work).
 - Test runs leak read-only temp dirs in /tmp (published runtime packages are 0500); remove by hand with chmod -R u+w.
-- Homelab `stacks/juiced/compose.yaml` matches live but is uncommitted (another session's untracked file).
+- Homelab `stacks/juiced/compose.yaml` matches live (rc.22) but is uncommitted (another session's untracked file).
+- Editing `juiced/CAPABILITIES.md` requires updating its hash in `juiced/rewrite/MAIN-SNAPSHOT.json` (plan.test.ts).
 
 ## Next action
 
-Barista session with Ornith on rc.21. After that: vLLM parser defaults, then the engine-management round. v0.9.2 parity batches B1-B6 and round 12 (downloads survive restarts, storage management, Barista tools, engine support for discovered backends) are merged and live.
+vLLM parser defaults, plus GTT in Barista's hardware view. Then the engine-management round.
