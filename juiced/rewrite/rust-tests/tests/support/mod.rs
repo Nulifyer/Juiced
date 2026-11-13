@@ -28,7 +28,7 @@ pub const CLIENT_KEY: &str = "isolated-e2e-client-key";
 pub const ADMIN_KEY: &str = "isolated-e2e-admin-key";
 const ROTATED_CLIENT_KEY: &str = "isolated-e2e-rotated-client-key";
 const ROTATED_ADMIN_KEY: &str = "isolated-e2e-rotated-admin-key";
-pub const READ_ROUTES: [&str; 17] = [
+pub const READ_ROUTES: [&str; 18] = [
     "/health",
     "/docs",
     "/docs/{*page}",
@@ -46,6 +46,7 @@ pub const READ_ROUTES: [&str; 17] = [
     "/juiced/voices",
     "/system-info",
     "/system-stats",
+    "/models/{model}/files",
 ];
 /// Read routes whose operator view adds process details; `Server::get` reads them as operator.
 pub const OPERATOR_DETAIL_ROUTES: [&str; 1] = ["/juiced/context"];
@@ -127,6 +128,18 @@ pub const INFERENCE_ROUTES: [&str; 4] = [
     "/responses",
     "/embeddings",
 ];
+/// v0.9.2 management routes; `native_management.rs` exercises each one.
+pub const NATIVE_MANAGEMENT_ROUTES: [(&str, &str); 9] = [
+    ("POST", "/pull"),
+    ("GET", "/pull/variants"),
+    ("GET", "/downloads"),
+    ("POST", "/downloads/control"),
+    ("GET", "/registry/search"),
+    ("DELETE", "/models/{model}/options"),
+    ("POST", "/install"),
+    ("POST", "/install/dry-run"),
+    ("POST", "/uninstall"),
+];
 pub const MULTIPART_INFERENCE_ROUTES: [&str; 3] = [
     "/audio/transcriptions",
     "/images/edits",
@@ -199,6 +212,11 @@ pub fn route_matrix() -> BTreeSet<(String, String)> {
                 .iter()
                 .chain(LLAMA_ROUTES.iter())
                 .map(|(method, path, _)| ((*method).into(), (*path).into())),
+        )
+        .chain(
+            NATIVE_MANAGEMENT_ROUTES
+                .iter()
+                .map(|(method, path)| ((*method).into(), (*path).into())),
         )
         .collect()
 }

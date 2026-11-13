@@ -13,7 +13,7 @@ use std::{
 const MAX_JSON: usize = 2 * 1024 * 1024;
 const HELP: &str = r#"lemonade — client for the Juiced Rust service
 Usage: lemonade [connection flags] COMMAND [command flags]
-Connection: --url ORIGIN | --host HOST --port PORT (default 127.0.0.1:13306)
+Connection: --url ORIGIN | --host HOST --port PORT (default 127.0.0.1:13306; 8080 in the container)
             --api-key KEY  --json  --timeout-ms MS  --discovery  --no-discovery
 Environment: LEMONADE_ADMIN_API_KEY, then LEMONADE_API_KEY; explicit --api-key wins.
              LEMONADE_HOST and LEMONADE_PORT select an explicit target.
@@ -24,10 +24,15 @@ Commands:
   models                                  Models exposed to clients
   status                                  Service state and reservations
   pause | resume                          Pause or resume new work; policies retained
-  load MODEL | unload MODEL               Change an existing worker's state
+  load MODEL [--ctx-size N] [--llamacpp-args ARGS] [--save-options] [--pin]
+                                          Load a model; launch options are saved for it
+  unload [MODEL]                          Unload one model, or every loaded model
   policy MODEL disabled|on-demand|hot --revision N
   register --file PATH|-                  Register a complete ModelSpec JSON; starts Disabled
-  delete MODEL --revision N               Remove registration; retain weight files
+  delete MODEL                            Unload, unregister and free unshared managed weights
+  delete MODEL --revision N               Remove registration only; retain weight files
+  pull MODEL [--checkpoint OWNER/REPO[:VARIANT]] [--recipe RECIPE]
+                                          Download and register a catalog or Hugging Face model
   pull --file PATH|- --generation N       Submit DownloadRequest JSON, with bounded size + SHA256
   job [ID [pause|resume|retry|cancel|forget --revision N]]
   artifacts [remove SHA256 --generation N]
@@ -42,11 +47,13 @@ Page flags: --limit N --after ID --generation N --view TOKEN
   context MODEL                           Declared, configured, applied and observed context
   options MODEL [--file PATH|- --revision N]  Read or change LaunchOptions JSON
   backends                                Configured model providers and physical slots
+  backends install|uninstall RECIPE:BACKEND  Install or remove an engine build, e.g. llamacpp:cpu
+  logs [--source SOURCE] [--limit N]      Recent service and worker log lines
   scan                                    Read-only native UDP beacon scan
   --help | --version
 JSON files and '-' stdin are bounded to 2 MiB. Errors use stderr, JSON results stdout.
 Cache saves require a prior completed session-bound /v1/completions request.
-This client never starts, shuts down or installs a daemon or engine.
+This client never starts or shuts down a daemon. It installs engines only on request.
 Exit codes: 0 success, 1 local I/O, 2 usage, 3 connection/discovery, 4 authentication,
             5 service rejection, 6 incompatible or unreadable response.
 "#;
@@ -102,6 +109,14 @@ enum Command {
     Call {
         path: String,
         body: Option<Value>,
+    },
+    Stream {
+        path: String,
+        body: Value,
+    },
+    Logs {
+        source: Option<String>,
+        limit: u64,
     },
     Input {
         kind: InputKind,
@@ -188,9 +203,16 @@ fn parse(args: Vec<String>, env: impl Fn(&str) -> Option<String>) -> Result<Invo
     let mut host = env("LEMONADE_HOST")
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "127.0.0.1".to_owned());
+    // The container image sets JUICED_DATA and serves on 8080.
     let mut port = env("LEMONADE_PORT")
         .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "13306".to_owned());
+        .unwrap_or_else(|| {
+            if env("JUICED_DATA").is_some_and(|value| !value.is_empty()) {
+                "8080".to_owned()
+            } else {
+                "13306".to_owned()
+            }
+        });
     let env_target = env("LEMONADE_HOST").is_some_and(|value| !value.is_empty())
         || env("LEMONADE_PORT").is_some_and(|value| !value.is_empty());
     let mut explicit_parts = false;
@@ -491,6 +513,44 @@ fn parse_command(mut args: Vec<String>) -> Result<Command> {
                 filter: args.options.get("--filter").cloned(),
             })
         }
+        "backends" if !args.is_empty() => {
+            let args = Arguments::parse(&args, &[], &[])?;
+            args.count(2)?;
+            let (recipe, backend) = args.positional[1]
+                .split_once(':')
+                .filter(|(recipe, backend)| !recipe.is_empty() && !backend.is_empty())
+                .ok_or_else(|| {
+                    Failure::usage("Name the engine as RECIPE:BACKEND, for example llamacpp:cpu.")
+                })?;
+            match args.positional[0].as_str() {
+                "install" => Ok(Command::Stream {
+                    path: "install".into(),
+                    body: json!({"recipe":recipe,"backend":backend,"stream":true}),
+                }),
+                "uninstall" => Ok(call(
+                    "uninstall",
+                    Some(json!({"recipe":recipe,"backend":backend})),
+                )),
+                _ => Err(Failure::usage(
+                    "Use backends install|uninstall RECIPE:BACKEND.",
+                )),
+            }
+        }
+        "logs" => {
+            let args = Arguments::parse(&args, &["--source", "--limit"], &[])?;
+            args.count(0)?;
+            let source = args
+                .options
+                .get("--source")
+                .map(|source| bounded(source, 256, "Log sources are at most 256 bytes."))
+                .transpose()?;
+            let limit = if args.options.contains_key("--limit") {
+                args.number("--limit")?
+            } else {
+                50
+            };
+            Ok(Command::Logs { source, limit })
+        }
         "models" | "status" | "pause" | "resume" | "backends" | "scan" => {
             Arguments::parse(&args, &[], &[])?.count(0)?;
             Ok(match command.as_str() {
@@ -502,7 +562,32 @@ fn parse_command(mut args: Vec<String>) -> Result<Command> {
                 _ => Command::Scan,
             })
         }
-        "load" | "unload" | "context" => {
+        "unload" if args.is_empty() => Ok(call("unload", Some(json!({})))),
+        "load" => {
+            let args = Arguments::parse(
+                &args,
+                &["--ctx-size", "--llamacpp-args"],
+                &["--save-options", "--pin"],
+            )?;
+            args.count(1)?;
+            let model = args.model(0)?;
+            if args.options.is_empty() && args.flags.is_empty() {
+                return Ok(call("load", Some(json!({"model":model}))));
+            }
+            let mut body =
+                json!({"model_name": model, "save_options": args.flags.contains("--save-options")});
+            if args.options.contains_key("--ctx-size") {
+                body["ctx_size"] = json!(args.number("--ctx-size")?);
+            }
+            if let Some(arguments) = args.options.get("--llamacpp-args") {
+                body["llamacpp_args"] = json!(arguments);
+            }
+            if args.flags.contains("--pin") {
+                body["pinned"] = json!(true);
+            }
+            Ok(call("load", Some(body)))
+        }
+        "unload" | "context" => {
             let args = Arguments::parse(&args, &[], &[])?;
             args.count(1)?;
             let model = args.model(0)?;
@@ -521,6 +606,9 @@ fn parse_command(mut args: Vec<String>) -> Result<Command> {
             let args = Arguments::parse(&args, &["--revision"], &[])?;
             args.count(if command == "policy" { 2 } else { 1 })?;
             let model = args.model(0)?;
+            if command == "delete" && !args.options.contains_key("--revision") {
+                return Ok(call("delete", Some(json!({"model_name":model}))));
+            }
             let revision = args.number("--revision")?;
             if command == "delete" {
                 Ok(call(
@@ -537,6 +625,29 @@ fn parse_command(mut args: Vec<String>) -> Result<Command> {
                     Some(json!({"model":model,"policy":policy,"expected_revision":revision})),
                 ))
             }
+        }
+        "pull" if args.first().is_some_and(|first| !first.starts_with('-')) => {
+            let args = Arguments::parse(&args, &["--checkpoint", "--recipe"], &[])?;
+            args.count(1)?;
+            let mut model = args.model(0)?;
+            if args.options.contains_key("--checkpoint") && !model.starts_with("user.") {
+                model = format!("user.{model}");
+            }
+            let mut body = json!({"model_name": model, "stream": true});
+            if let Some(checkpoint) = args.options.get("--checkpoint") {
+                body["checkpoint"] = json!(checkpoint);
+                body["recipe"] = json!(
+                    args.options
+                        .get("--recipe")
+                        .map_or("llamacpp", String::as_str)
+                );
+            } else if args.options.contains_key("--recipe") {
+                return Err(Failure::usage("--recipe requires --checkpoint."));
+            }
+            Ok(Command::Stream {
+                path: "pull".into(),
+                body,
+            })
         }
         "register" | "pull" => {
             let args = Arguments::parse(
@@ -879,6 +990,143 @@ async fn request(
     }
     Ok(value)
 }
+/// Follows a native SSE progress stream to its `complete` or `error` event.
+async fn stream(
+    client: &Client,
+    connection: &Connection,
+    path: &str,
+    body: &Value,
+    quiet: bool,
+) -> Result<Value> {
+    let url = connection
+        .origin
+        .join(&format!("v1/{path}"))
+        .map_err(|_| Failure::usage("The API path could not be constructed."))?;
+    let mut request = client.post(url).json(body);
+    if !connection.key.is_empty() {
+        request = request.bearer_auth(&connection.key);
+    }
+    let interrupted = || {
+        Failure::new(
+            3,
+            "stream_interrupted",
+            "The progress stream ended early. The service keeps downloading; inspect GET /v1/downloads.",
+        )
+    };
+    let mut response = request.send().await.map_err(|_| {
+        Failure::new(
+            3,
+            "connection_failed",
+            "The service did not confirm this request. Inspect current state before retrying.",
+        )
+    })?;
+    let status = response.status();
+    if !status.is_success() {
+        let bytes = response.bytes().await.unwrap_or_default();
+        let value: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+        return Err(Failure {
+            exit: if matches!(status.as_u16(), 401 | 403) {
+                4
+            } else {
+                5
+            },
+            code: value
+                .pointer("/error/code")
+                .and_then(Value::as_str)
+                .unwrap_or("service_rejected")
+                .to_owned(),
+            message: value
+                .pointer("/error/message")
+                .and_then(Value::as_str)
+                .unwrap_or("The service rejected the command.")
+                .to_owned(),
+            status: Some(status.as_u16()),
+        });
+    }
+    let mut buffer = Vec::new();
+    let mut shown = String::new();
+    while let Some(chunk) = response.chunk().await.map_err(|_| interrupted())? {
+        buffer.extend_from_slice(&chunk);
+        if buffer.len() > MAX_JSON {
+            return Err(Failure::new(
+                6,
+                "response_limit",
+                "A progress event exceeds the 2 MiB limit.",
+            ));
+        }
+        while let Some(end) = buffer.windows(2).position(|window| window == b"\n\n") {
+            let message: Vec<u8> = buffer.drain(..end + 2).collect();
+            let text = String::from_utf8_lossy(&message);
+            let mut kind = "message";
+            let mut data = Value::Null;
+            for line in text.lines() {
+                if let Some(value) = line.strip_prefix("event:") {
+                    kind = match value.trim() {
+                        "progress" => "progress",
+                        "complete" => "complete",
+                        "error" => "error",
+                        _ => "message",
+                    };
+                } else if let Some(value) = line.strip_prefix("data:") {
+                    data = serde_json::from_str(value.trim()).unwrap_or(Value::Null);
+                }
+            }
+            match kind {
+                "progress" if !quiet => {
+                    let line = format!(
+                        "[{}/{}] {} {}%",
+                        data["file_index"],
+                        data["total_files"],
+                        data["file"]
+                            .as_str()
+                            .unwrap_or("")
+                            .chars()
+                            .filter(|ch| !ch.is_control())
+                            .collect::<String>(),
+                        data["percent"]
+                    );
+                    if line != shown {
+                        let _ = writeln!(io::stderr().lock(), "{line}");
+                        shown = line;
+                    }
+                }
+                "complete" => {
+                    let message = match (body["model_name"].as_str(), body["recipe"].as_str()) {
+                        (Some(model), _) => format!("Installed model: {model}"),
+                        (None, Some(recipe)) => format!(
+                            "Installed backend: {recipe}:{}",
+                            body["backend"].as_str().unwrap_or_default()
+                        ),
+                        _ => "Done".to_owned(),
+                    };
+                    let mut done = json!({"status": "success", "message": message});
+                    for key in ["model_name", "recipe", "backend"] {
+                        if body.get(key).is_some() {
+                            done[key] = body[key].clone();
+                        }
+                    }
+                    return Ok(done);
+                }
+                "error" => {
+                    return Err(Failure {
+                        exit: 5,
+                        code: data["code"]
+                            .as_str()
+                            .unwrap_or("service_rejected")
+                            .to_owned(),
+                        message: data["error"]
+                            .as_str()
+                            .unwrap_or("The service reported a failure.")
+                            .to_owned(),
+                        status: Some(status.as_u16()),
+                    });
+                }
+                _ => {}
+            }
+        }
+    }
+    Err(interrupted())
+}
 async fn state(client: &Client, connection: &Connection, timeout: Duration) -> Result<Value> {
     let value = request(client, connection, "juiced/state", None, timeout).await?;
     if value["schema_version"] != 1 || value["implementation"] != "rust-experiment" {
@@ -981,6 +1229,36 @@ fn human(value: &Value) -> String {
             .expect("string formatting");
         }
         output.trim_end().to_owned()
+    } else if let Some(lines) = value.get("data").and_then(Value::as_array)
+        && value.get("next").is_some()
+    {
+        lines
+            .iter()
+            .map(|line| {
+                format!(
+                    "{} {}",
+                    line["source"].as_str().unwrap_or("?"),
+                    line["text"].as_str().unwrap_or("")
+                )
+                .chars()
+                .map(|ch| if ch.is_control() { ' ' } else { ch })
+                .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    } else if value["status"] == "success" && value["message"].is_string() {
+        value["message"].as_str().unwrap_or_default().to_owned()
+    } else if value["registration_removed"] == true && value.get("freed_bytes").is_some() {
+        format!(
+            "Deleted {}. Freed {} bytes{}.",
+            value["model"],
+            value["freed_bytes"],
+            if value["weights_retained"] == true {
+                "; shared or unmanaged weight files were kept"
+            } else {
+                ""
+            }
+        )
     } else if value["registration_removed"] == true {
         format!(
             "Removed registration for {}. Weight files retained.{}",
@@ -1012,7 +1290,7 @@ async fn run(invocation: Invocation) -> Result<Value> {
     let Invocation {
         mut connection,
         command,
-        ..
+        json: json_output,
     } = invocation;
     let command = if let Command::Input { kind, file } = command {
         input_call(kind, &read_json(&file)?)?
@@ -1046,6 +1324,35 @@ async fn run(invocation: Invocation) -> Result<Value> {
                 &connection,
                 &path,
                 body.as_ref(),
+                connection.timeout,
+            )
+            .await
+        }
+        Command::Stream { path, body } => {
+            stream(&client, &connection, &path, &body, json_output).await
+        }
+        Command::Logs { source, limit } => {
+            let path = |after: u64, limit: u64| {
+                let mut url = Url::parse("http://localhost/juiced/logs").expect("constant URL");
+                {
+                    let mut query = url.query_pairs_mut();
+                    query.append_pair("after", &after.to_string());
+                    query.append_pair("limit", &limit.to_string());
+                    if let Some(source) = &source {
+                        query.append_pair("source", source);
+                    }
+                }
+                format!("juiced/logs?{}", url.query().unwrap_or_default())
+            };
+            let latest = request(&client, &connection, &path(0, 1), None, connection.timeout)
+                .await?["latest"]
+                .as_u64()
+                .unwrap_or(0);
+            request(
+                &client,
+                &connection,
+                &path(latest.saturating_sub(limit), limit.max(1)),
+                None,
                 connection.timeout,
             )
             .await
@@ -1184,6 +1491,95 @@ mod tests {
             |_| None,
         )
     }
+    fn native(args: &[&str]) -> (String, Value) {
+        match cli(args).unwrap().command {
+            Command::Call {
+                path,
+                body: Some(body),
+            }
+            | Command::Stream { path, body } => (path, body),
+            _ => panic!("expected a request with a body"),
+        }
+    }
+    #[test]
+    fn native_management_commands_build_v092_request_bodies() {
+        assert_eq!(
+            native(&["pull", "Tiny", "--checkpoint", "owner/repo:Q4_0"]),
+            (
+                "pull".into(),
+                json!({"model_name":"user.Tiny","stream":true,"checkpoint":"owner/repo:Q4_0","recipe":"llamacpp"})
+            )
+        );
+        assert_eq!(
+            native(&["pull", "Qwen3-0.6B-GGUF"]),
+            (
+                "pull".into(),
+                json!({"model_name":"Qwen3-0.6B-GGUF","stream":true})
+            )
+        );
+        assert_eq!(
+            native(&[
+                "load",
+                "one",
+                "--ctx-size",
+                "8192",
+                "--llamacpp-args",
+                "-np 2",
+                "--pin"
+            ]),
+            (
+                "load".into(),
+                json!({"model_name":"one","save_options":false,"ctx_size":8192,"llamacpp_args":"-np 2","pinned":true})
+            )
+        );
+        assert_eq!(
+            native(&["load", "one"]),
+            ("load".into(), json!({"model":"one"}))
+        );
+        assert_eq!(native(&["unload"]), ("unload".into(), json!({})));
+        assert_eq!(
+            native(&["delete", "one"]),
+            ("delete".into(), json!({"model_name":"one"}))
+        );
+        assert_eq!(
+            native(&["backends", "install", "llamacpp:cpu"]),
+            (
+                "install".into(),
+                json!({"recipe":"llamacpp","backend":"cpu","stream":true})
+            )
+        );
+        assert_eq!(
+            native(&["backends", "uninstall", "whispercpp:vulkan"]),
+            (
+                "uninstall".into(),
+                json!({"recipe":"whispercpp","backend":"vulkan"})
+            )
+        );
+        let Command::Logs { source, limit } =
+            cli(&["logs", "--source", "service", "--limit", "20"])
+                .unwrap()
+                .command
+        else {
+            panic!("logs reads recent lines");
+        };
+        assert_eq!((source.as_deref(), limit), (Some("service"), 20));
+    }
+    #[test]
+    fn the_container_default_target_is_its_published_port() {
+        let invocation = parse(vec!["status".into()], |name| {
+            (name == "JUICED_DATA").then(|| "/data".to_owned())
+        })
+        .unwrap();
+        assert_eq!(
+            invocation.connection.origin.as_str(),
+            "http://127.0.0.1:8080/"
+        );
+        assert!(!invocation.connection.explicit);
+        assert_eq!(
+            cli(&["status"]).unwrap().connection.origin.as_str(),
+            "http://127.0.0.1:13306/"
+        );
+    }
     #[test]
     fn explicit_origins_reject_credentials_paths_queries_fragments_and_invalid_ports() {
         for value in [
@@ -1210,7 +1606,10 @@ mod tests {
     fn command_specific_options_reject_unknown_flags_and_missing_cas_values() {
         for args in [
             vec!["load", "one", "--generation", "0"],
-            vec!["delete", "one"],
+            vec!["delete", "one", "--revision"],
+            vec!["pull", "one", "--recipe", "llamacpp"],
+            vec!["backends", "install", "llamacpp"],
+            vec!["load", "one", "--ctx-size", "large"],
             vec!["policy", "one", "hot"],
             vec!["cache", "save", "--model", "one"],
             vec!["status", "--file", "-"],

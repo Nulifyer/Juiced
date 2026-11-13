@@ -377,6 +377,76 @@ impl Store {
             }
         }
     }
+    /// Removes an unleased package. The payload goes before its index record: an interrupted
+    /// removal leaves an indexed package whose payload no longer verifies, which a retry
+    /// finishes, never an unindexed directory that would stop the store from opening.
+    pub(crate) fn remove(&self, id: &str, expected_generation: u64) -> Result<u64> {
+        if !valid_id(id) {
+            return Err(Error::new("invalid_package_id"));
+        }
+        let _import = self.enter_import()?;
+        let head = self.head()?;
+        if head.manifest.generation != expected_generation {
+            return Err(Error::new("manifest_revision_conflict"));
+        }
+        let package = head
+            .manifest
+            .packages
+            .iter()
+            .find(|package| package.id == id)
+            .ok_or_else(|| Error::new("package_not_found"))?;
+        if package.specification.binding_leases.load(Ordering::Acquire) != 0 {
+            return Err(Error::new("package_in_use"));
+        }
+        let reserved = package.reserved_bytes;
+        self.roots()?;
+        let payload = self.owner.root().join(id);
+        match std::fs::symlink_metadata(&payload) {
+            Ok(metadata) if metadata.is_dir() => {
+                writable_tree(&payload).map_err(storage)?;
+                std::fs::remove_dir_all(&payload).map_err(storage)?;
+            }
+            Ok(_) => return Err(Error::new("store_unindexed")),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(storage(error)),
+        }
+        let mut next = head.manifest.clone();
+        next.packages.retain(|package| package.id != id);
+        next.generation = next
+            .generation
+            .checked_add(1)
+            .ok_or_else(|| Error::new("generation_exhausted"))?;
+        next.validate()?;
+        {
+            let current = self
+                .current
+                .write()
+                .map_err(|_| Error::new("package_owner_unavailable"))?;
+            if !Arc::ptr_eq(&current, &head) || self.publishing.swap(true, Ordering::AcqRel) {
+                return Err(Error::new("runtime_index_publishing"));
+            }
+        }
+        let mut publication = Publication {
+            store: self,
+            known: false,
+        };
+        let operation = super::Operation {
+            deadline: Instant::now() + std::time::Duration::from_secs(60),
+            cancelled: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        };
+        super::commit(&self.owner, &self.scope, &next, &operation)?;
+        let observed = self
+            .owner
+            .observe_private_metadata(self.scope.clone(), Path::new(MANIFEST), MAX_MANIFEST)
+            .map_err(storage)?;
+        self.replace(Arc::new(Head {
+            observed: Some(observed),
+            manifest: next,
+            uncertain: None,
+        }))?;
+        publication.known = true;
+        Ok(reserved)
+    }
     pub(crate) fn inventory(&self) -> Result<serde_json::Value> {
         let head = self.head()?;
         let packages: Vec<_> = head.manifest.packages.iter().map(|package| serde_json::json!({
@@ -505,4 +575,27 @@ impl Lease {
 
 fn empty_directory(path: &Path) -> bool {
     std::fs::read_dir(path).is_ok_and(|mut entries| entries.next().is_none())
+}
+
+/// Published payloads are read-only; directories must be writable before their entries unlink.
+fn writable_tree(root: &Path) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let mut pending = vec![root.to_owned()];
+    while let Some(directory) = pending.pop() {
+        let metadata = std::fs::symlink_metadata(&directory)?;
+        if !metadata.is_dir() {
+            continue;
+        }
+        let mode = metadata.permissions().mode();
+        if mode & 0o700 != 0o700 {
+            std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(mode | 0o700))?;
+        }
+        for entry in std::fs::read_dir(&directory)? {
+            let entry = entry?;
+            if entry.file_type()?.is_dir() {
+                pending.push(entry.path());
+            }
+        }
+    }
+    Ok(())
 }

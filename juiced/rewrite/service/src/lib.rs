@@ -31,6 +31,7 @@ pub mod logs;
 pub mod media;
 pub mod metrics;
 pub mod model_discovery;
+mod native_api;
 pub mod native_execution;
 pub mod native_import;
 pub mod native_settings;

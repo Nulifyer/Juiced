@@ -56,7 +56,9 @@ pub use native_adoption::{
     from_env as native_adoption_from_env,
 };
 mod native_import;
+mod native_management;
 pub use native_import::{NativeImportModel, NativeImportRequest};
+pub use native_management::{NativeModel, ReleasedWeights};
 mod physical;
 mod publication;
 mod quant_sync;

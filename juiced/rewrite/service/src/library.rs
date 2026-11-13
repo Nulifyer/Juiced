@@ -1,6 +1,7 @@
 mod catalog;
 mod hub;
 mod local;
+pub(crate) mod native;
 mod quant;
 #[cfg(test)]
 mod tests;

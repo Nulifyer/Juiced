@@ -26,6 +26,9 @@ impl Store {
     pub(crate) fn inventory(&self) -> Result<serde_json::Value> {
         Err(Error::new("platform_unsupported"))
     }
+    pub(crate) fn remove(&self, _: &str, _: u64) -> Result<u64> {
+        Err(Error::new("platform_unsupported"))
+    }
     pub(crate) fn hold(
         self: &Arc<Self>,
         _: &str,

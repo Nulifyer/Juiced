@@ -961,3 +961,180 @@ fn interrupted() -> ApiError {
         "Automatic registration was interrupted. Inspect the catalog before retrying.",
     )
 }
+
+impl Manager {
+    /// Resolves the build `install_engine` would fetch, without fetching it. `arch` stands in
+    /// for GPU detection so callers can check targets this host lacks.
+    pub async fn engine_dry_run(
+        &self,
+        engine: Engine,
+        backend: &str,
+        arch: Option<&str>,
+    ) -> Result<Value, ApiError> {
+        let (snapshot, _) = self.host().await?;
+        let host = &snapshot.report.host;
+        let unresolved = |reason: &str| {
+            ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "engine_build_unavailable",
+                format!("No install metadata resolves for this recipe and backend ({reason})."),
+            )
+        };
+        let (build, supported) = match arch {
+            Some(arch) => {
+                let candidates: Vec<&Build> = catalog::BUILDS
+                    .iter()
+                    .filter(|build| {
+                        build.engine == engine
+                            && build.backend == backend
+                            && build.os == host.os
+                            && build.architecture == host.architecture
+                    })
+                    .collect();
+                let family = catalog::rocm_asset_family(arch);
+                match candidates.iter().find(|build| {
+                    build.gpu_target.is_none()
+                        || build.gpu_target == Some(arch)
+                        || build.gpu_target == Some(family)
+                }) {
+                    Some(build) => (**build, true),
+                    None => (
+                        **candidates
+                            .first()
+                            .ok_or_else(|| unresolved("backend_unknown"))?,
+                        false,
+                    ),
+                }
+            }
+            None => (
+                catalog::resolve(engine, backend, &snapshot.report)
+                    .map_err(|reason| unresolved(&format!("{reason:?}")))?,
+                true,
+            ),
+        };
+        Ok(json!({
+            "engine": engine.name(), "backend": backend, "arch": arch.unwrap_or(""),
+            "repo": build.repository, "version": build.tag, "filename": build.asset,
+            "gpu_target": build.gpu_target,
+            "url": build.download_url(&self.engine_releases.downloads),
+            "supports_split_archive": false, "supported": supported,
+        }))
+    }
+
+    /// Removes every installed package of one engine backend that no registration uses.
+    pub async fn uninstall_engine(&self, engine: Engine, backend: &str) -> Result<Value, ApiError> {
+        if self
+            .engine_jobs
+            .views()
+            .iter()
+            .any(|job| !matches!(job["state"].as_str(), Some("complete" | "failed")))
+        {
+            return Err(ApiError::new(
+                StatusCode::CONFLICT,
+                "engine_install_busy",
+                "An engine installation is running. Wait for it to finish before removing one.",
+            ));
+        }
+        let packages = self.package_inventory().await?;
+        let targets: Vec<String> = crate::engines::installed_packages(&packages)
+            .into_iter()
+            .filter(|package| {
+                package.engine == Some(engine) && package.backend.as_deref() == Some(backend)
+            })
+            .map(|package| package.package)
+            .collect();
+        if targets.is_empty() {
+            return Err(ApiError::new(
+                StatusCode::NOT_FOUND,
+                "engine_not_installed",
+                format!("{} {backend} is not installed.", engine.recipe()),
+            ));
+        }
+        let users: Vec<String> = self
+            .config
+            .lock()
+            .await
+            .models
+            .iter()
+            .filter(|model| {
+                let profile = &model.execution_profile;
+                [
+                    profile.runtime_package(),
+                    profile.previous_runtime_package(),
+                ]
+                .into_iter()
+                .flatten()
+                .any(|package| targets.iter().any(|target| target == package))
+            })
+            .map(|model| model.id.clone())
+            .collect();
+        if !users.is_empty() {
+            return Err(ApiError::new(
+                StatusCode::CONFLICT,
+                "engine_in_use",
+                format!(
+                    "Delete or re-point the models that use this backend first: {}.",
+                    users.join(", ")
+                ),
+            ));
+        }
+        let store = self.runtime_packages.get().cloned().ok_or_else(|| {
+            ApiError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "runtime_packages_unavailable",
+                "Installed engine storage is unavailable.",
+            )
+        })?;
+        let removed = tokio::task::spawn_blocking(move || {
+            let mut freed = 0u64;
+            let mut removed = Vec::new();
+            for package in targets {
+                let generation = store
+                    .inventory()
+                    .ok()
+                    .and_then(|inventory| inventory["generation"].as_u64())
+                    .unwrap_or_default();
+                freed += store
+                    .remove(&package, generation)
+                    .map_err(|error| (error, removed.clone()))?;
+                removed.push(package);
+            }
+            Ok::<_, (crate::runtime_packages::Error, Vec<String>)>((removed, freed))
+        })
+        .await
+        .map_err(|_| {
+            ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "engine_uninstall_interrupted",
+                "Engine removal was interrupted. Review GET /juiced/engines before retrying.",
+            )
+        })?;
+        match removed {
+            Ok((removed, freed)) => Ok(json!({
+                "engine": engine.name(), "backend": backend,
+                "removed_packages": removed, "freed_bytes": freed,
+            })),
+            Err((error, removed)) => Err(ApiError::new(
+                if error.reason() == "package_in_use" {
+                    StatusCode::CONFLICT
+                } else {
+                    StatusCode::INTERNAL_SERVER_ERROR
+                },
+                "engine_uninstall_failed",
+                format!(
+                    "Engine removal stopped ({}) after removing {} package(s). Retry to finish.",
+                    error.reason(),
+                    removed.len()
+                ),
+            )),
+        }
+    }
+
+    /// One engine installation job, for callers that wait on `install_engine`.
+    pub fn engine_job(&self, id: &str) -> Option<Value> {
+        self.engine_jobs
+            .views()
+            .into_iter()
+            .find(|job| job["id"] == id)
+    }
+}
