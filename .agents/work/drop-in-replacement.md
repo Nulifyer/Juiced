@@ -100,7 +100,11 @@ Request (user): find the best coding/dev agent model that fits and stays respons
 - HA's llama_cpp agent still targets `Ornith-1.5-35B-A3B-GGUF-Q6_K`, which cannot load beside Hot Coder-Next. HA must move to `Qwen3-4B-Instruct-2507-GGUF` (user to confirm the HA change).
 - Coder-Next has no MTP head (checkpoint has 0 `mtp.*` tensors); its GGUF carries `general.sampling` temp 1.0 / top-p 0.95 / top-k 40, which llama.cpp applies because the registration passes no sampler flags.
 
-Fixed in the working tree (not released yet):
+- Coder-Next launch A/B (nothing else on the GPU): `-ub 1024` prefill 332 -> 379 tok/s; `-ub 2048` 371; `-fa on` slightly slower; `--spec-type ngram-simple` file-rewrite decode 22.8 -> 48.9 tok/s (ngram-mod 45.2), chat decode unchanged. Applied `ubatch_size 1024` + `--spec-type ngram-simple`; 12-task agent check 11/12 (bowling hit max steps), decode within ~5%.
+- Hot first request: a 10.9k-token system prompt costs 30 s once; a new conversation with the same system prompt reuses 10,869 cached tokens (2.6 s). Slow first turns come from new or changing system prompts and from reloads.
+- UX audit (read-only, 53 models) fixed in rc.26: shared ModelSelect, state-sorted Models list, task names, engine false error, settings lock reason, Connect example model, log names, copy cuts.
+
+Released in rc.26 (gate 281 e2e passed; live: 4 Hot models loaded, Coder-Next settings kept, alias picker 10 options instead of 54):
 - Family sampler defaults (`architecture_defaults.json`) no longer override a GGUF's `general.sampling.*` (the `qwen3next` entry is the Thinking recipe).
 - `--spec-draft-n-max` / `--spec-draft-n-min` are accepted; other `--spec-draft-*` stay refused.
 - New registrations start at min(trained, 32768) context, reduced to fit; native adoption keeps v0.9.2's largest-that-fits. The settings line shows trained, fits-up-to and running.
@@ -137,4 +141,4 @@ Known gaps:
 
 ## Next action
 
-Finish the Coder-Next launch A/B (ubatch, n-gram speculation, ROCm vs Vulkan) with nothing else on the GPU, release the fixes above as the next rc, then typed vLLM settings and the engine-management round.
+User to confirm moving HA's conversation agent from Ornith to Qwen3-4B-Instruct-2507-GGUF. Open from the UX audit: Hot-lane fit preview on policy changes, unified memory precision, Downloads next step, control heights. Then ROCm vs Vulkan for Coder-Next, typed vLLM settings and the engine-management round.
