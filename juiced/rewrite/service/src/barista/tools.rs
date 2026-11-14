@@ -6,6 +6,8 @@
 
 mod acquire;
 mod check;
+mod tune;
+pub(crate) use tune::Progress as TuneProgress;
 mod configure;
 mod explain;
 mod inspect;
@@ -660,6 +662,30 @@ pub(super) async fn model_check(
         internal: headers.is_none(),
     };
     check::run(&context, model)
+        .await
+        .map_err(|failure| failure.error())
+}
+
+/// Runs Tune for `model` with service authority; the caller has checked operator access.
+pub(super) async fn model_tune(
+    state: &AppState,
+    app: axum::Router,
+    model: &str,
+    progress: TuneProgress,
+) -> std::result::Result<Value, Value> {
+    let empty = HeaderMap::new();
+    let context = Context {
+        state,
+        app,
+        headers: &empty,
+        permission: Permission::Full,
+        revision: 0,
+        assistant_model: None,
+        preview: false,
+        sources: Mutex::default(),
+        internal: true,
+    };
+    tune::run(&context, model, progress)
         .await
         .map_err(|failure| failure.error())
 }

@@ -35,3 +35,15 @@ test("an empty generation field names the model file or Juiced default before ll
   expect(fallback("min_p", {}, { min_p: 0.05 }, sampler)).toBe("Default 0.05");
   expect(fallback("temperature", { temperature: 0.9 }, {}, sampler)).toBe("0.9 (profile)");
 });
+
+import { parseTune } from "../src/modelDefaults";
+
+test("a tune view reads running progress and a finished result", () => {
+  const running = parseTune({ state: "running", step: "Measuring physical batch 1024", candidates: [{ label: "current settings", speed: { prefill_tps: 332.4, decode_tps: 22.8, rewrite_tps: 22.7 } }] });
+  expect(running.state).toBe("running");
+  expect(running.candidates[0]!.speed.prefill_tps).toBe(332.4);
+  const done = parseTune({ state: "done", result: { arguments: ["--ubatch-size", "1024"], measurements: { candidates: [{ label: "a", speed: {} }] } } });
+  expect(done.arguments).toEqual(["--ubatch-size", "1024"]);
+  expect(done.candidates).toHaveLength(1);
+  expect(parseTune({ state: "weird" }).state).toBe("idle");
+});

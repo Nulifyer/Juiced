@@ -1940,6 +1940,8 @@ pub struct Manager {
     /// The last model check per model, with the launch fingerprint it ran against.
     checks: Mutex<std::collections::HashMap<String, (Arc<str>, serde_json::Value)>>,
     ready_events: tokio::sync::broadcast::Sender<(String, Arc<str>)>,
+    /// The latest Tune job per model: `{state: running|done|failed, ...}`.
+    tunes: Mutex<std::collections::HashMap<String, serde_json::Value>>,
 }
 
 impl Manager {
@@ -1975,6 +1977,34 @@ impl Manager {
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .insert(id.to_owned(), (fingerprint, result));
+    }
+
+    pub fn tune_view(&self, id: &str) -> Option<serde_json::Value> {
+        self.tunes
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .get(id)
+            .cloned()
+    }
+
+    pub fn set_tune(&self, id: &str, view: serde_json::Value) {
+        self.tunes
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .insert(id.to_owned(), view);
+    }
+
+    /// Marks a Tune job as running unless one already runs for this model.
+    pub fn begin_tune(&self, id: &str) -> bool {
+        let mut tunes = self.tunes.lock().unwrap_or_else(|error| error.into_inner());
+        if tunes.get(id).is_some_and(|view| view["state"] == "running") {
+            return false;
+        }
+        tunes.insert(
+            id.to_owned(),
+            serde_json::json!({"state": "running", "step": "Starting", "candidates": []}),
+        );
+        true
     }
 
     pub fn is_registered(&self, id: &str) -> bool {
@@ -2305,6 +2335,7 @@ impl Manager {
             protocol_gate: Arc::new(crate::protocol_access::Gate::new(&config.protocols)),
             checks: Mutex::default(),
             ready_events: tokio::sync::broadcast::channel(64).0,
+            tunes: Mutex::default(),
             config: Arc::new(AsyncMutex::new(config)),
             publications: publication::Publications::new(),
             config_path,
@@ -2497,6 +2528,8 @@ impl Manager {
             .1;
         let mut view = serde_json::json!({"model":id,"revision":spec.revision,"provider":spec.execution_profile.adapter,"physical_slots":spec.max_inflight,"reservation_bytes":self.worker(id)?.spec.resident_bytes,"context_semantics":"context_tokens is a total launch budget; serving context requires engine observation"});
         options::settings_view(&spec.execution_profile, effective.as_ref(), &mut view);
+        view["tuned"] = serde_json::to_value(&spec.tuned).unwrap_or(serde_json::Value::Null);
+        view["juiced_defaults"] = serde_json::Value::Bool(spec.juiced_defaults);
         drop(config);
         if let Some((fields, metrics, defaults)) = self.launch_provenance(id).await {
             view["fields"] = fields;

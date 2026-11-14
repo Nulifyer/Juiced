@@ -22,6 +22,7 @@ fn concrete_route(path: &str) -> &str {
         "/models/{model}/variants" => "/models/fixture.one/variants",
         "/models/{model}/fit" => "/models/fixture.one/fit",
         "/models/{model}/check" => "/models/fixture.one/check",
+        "/models/{model}/tune" => "/models/fixture.one/tune",
         "/juiced/suitability" => "/juiced/suitability?model=fixture.one",
         "/juiced/context" => "/juiced/context?model=fixture.one",
         "/juiced/runtimes/resolve" => "/juiced/runtimes/resolve?recipe=llamacpp&backend=cpu",
@@ -1066,4 +1067,69 @@ async fn a_model_check_sends_real_requests_and_is_kept_for_its_launch() {
         )
         .await;
     assert_eq!(status, StatusCode::NOT_FOUND, "{missing}");
+}
+
+#[tokio::test]
+async fn tune_refuses_engines_it_cannot_measure_and_bad_tuned_arguments() {
+    let server = Server::new(true).await;
+    let (status, idle) = server
+        .json(
+            Method::GET,
+            "/v1/models/fixture.one/tune",
+            None,
+            Some(CLIENT_KEY),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{idle}");
+    assert_eq!(idle["state"], "idle");
+    let (status, refused) = server
+        .json(
+            Method::POST,
+            "/v1/models/fixture.one/tune",
+            Some(json!({})),
+            Some(CLIENT_KEY),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{refused}");
+    let (status, started) = server
+        .json(
+            Method::POST,
+            "/v1/models/fixture.one/tune",
+            Some(json!({})),
+            Some(ADMIN_KEY),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{started}");
+    let mut view = Value::Null;
+    for _ in 0..100 {
+        view = server
+            .json(
+                Method::GET,
+                "/v1/models/fixture.one/tune",
+                None,
+                Some(CLIENT_KEY),
+            )
+            .await
+            .1;
+        if view["state"] != "running" {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert_eq!(view["state"], "failed", "{view}");
+    assert!(
+        view["error"].as_str().unwrap().contains("llama.cpp"),
+        "{view}"
+    );
+    let model = server.model("fixture.one").await;
+    let (status, invalid) = server
+        .json(
+            Method::POST,
+            "/v1/models/fixture.one/options",
+            Some(json!({"expected_revision": model["revision"], "tuned": {"arguments": ["--host", "0.0.0.0"], "measured_at_ms": 1}})),
+            Some(ADMIN_KEY),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{invalid}");
+    assert_eq!(invalid["error"]["code"], "invalid_tuned_arguments");
 }

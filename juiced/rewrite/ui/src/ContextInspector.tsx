@@ -4,7 +4,8 @@ import { bytes, type Model } from "./domain";
 import type { Mutate } from "./Models";
 import { launchDraft, editedLaunchOptions, parseModelContext, parseModelOptions, sameDraft, servingContext, type LaunchDraft, type ModelOptions } from "./profiles";
 import { asrFields, engineDraft, enginePatch, fallback, imageFields, sameTuned, splitArgs, tunedDraft, tunedFields, tunedOptions, type EngineField, type Field as SettingField, type TunedDraft } from "./modelSettings";
-import { appliedKey, argument, changedSince, parseModelDefaults, sourceLabels, type ModelDefaults } from "./modelDefaults";
+import { appliedKey, argument, changedSince, parseModelDefaults, parseTune, sourceLabels, type ModelDefaults, type TuneView } from "./modelDefaults";
+import { notify } from "./toast";
 import { Button, HelpTip, Switch } from "./ui";
 import { useResource } from "./useResource";
 
@@ -140,7 +141,7 @@ export function ContextInspector({ model, client, online, busy, policyDirty, onD
       {!advanced && fields?.mtp && <p className="setting-status"><strong>Multi-token prediction</strong> {mtp ? "on" : "off"}{mtp && extras.data?.mtp?.acceptance_rate != null ? ` · ${Math.round(extras.data.mtp.acceptance_rate * 100)}% of drafts accepted` : ""}</p>}
       {!advanced && fields?.thinking && fields.thinking.effective !== null && fields.thinking.effective !== undefined && <p className="setting-status"><strong>Thinking</strong> {show(fields.thinking.effective)}</p>}
       {llama && !imported && <TunedGrid title="Generation defaults" help="Used when a request doesn't set its own value. Empty keeps the profile's argument, Juiced's or the model file's default, or llama.cpp's default." fields={tunedFields.filter((field) => !field.advanced)} draft={tuned} onChange={setTuned} view={view} sampler={extras.data?.defaults?.sampler} disabled={blocked} />}
-      {llama && !imported && extras.data?.defaults?.available && <JuicedDefaults model={model} defaults={extras.data.defaults} revision={revision.current ?? model.revision} disabled={blocked || dirty} mutate={mutate} />}
+      {llama && !imported && extras.data?.defaults?.available && <JuicedDefaults model={model} client={client} defaults={extras.data.defaults} revision={revision.current ?? model.revision} disabled={blocked || dirty} mutate={mutate} />}
       {advanced && !imported && <div className="setting-group"><div className="group-title"><span>Runtime</span><HelpTip label="Runtime">CPU threads, offload and batching. Changes apply when the engine next starts.</HelpTip></div><div className="profile-option-grid"><div><label htmlFor="profile-threads">Threads</label><input id="profile-threads" inputMode="numeric" value={draft.threads} disabled={blocked} placeholder="Engine default" onChange={(event) => setDraft({ ...draft, threads: event.target.value })} /></div><div><label htmlFor="profile-gpu">GPU layers</label><input id="profile-gpu" inputMode="numeric" value={draft.gpu} disabled={blocked} placeholder="All" onChange={(event) => setDraft({ ...draft, gpu: event.target.value })} /></div>
         {tunedFields.filter((field) => field.advanced).map((field) => <TunedInput key={field.key} field={field} draft={tuned} onChange={setTuned} view={view} disabled={blocked} />)}</div></div>}
       {advanced && !imported && llama && <div className="setting-group"><div className="field-head"><label htmlFor="profile-extra">Extra arguments</label><HelpTip label="Extra arguments">Passed to llama-server after Juiced's own arguments, for example --spec-type draft-mtp. Quote values that contain spaces. Settings above have their own fields; the host, port, model and cache paths stay with Juiced.</HelpTip></div>
@@ -180,9 +181,29 @@ function readSeen(key: string) { try { return localStorage.getItem(key); } catch
 function writeSeen(key: string, value: string) { try { localStorage.setItem(key, value); } catch { /* Storage can be unavailable in private sessions. */ } }
 
 /** What Juiced adds to this model's launch, with a per-client note when a release changes it. */
-function JuicedDefaults({ model, defaults, revision, disabled, mutate }: { model: Model; defaults: ModelDefaults; revision: number; disabled: boolean; mutate: Mutate }) {
+function JuicedDefaults({ model, client, defaults, revision, disabled, mutate }: { model: Model; client: Client; defaults: ModelDefaults; revision: number; disabled: boolean; mutate: Mutate }) {
   const key = `juiced.defaultsSeen.${model.id}`;
   const [seen, setSeen] = useState(() => readSeen(key));
+  const [tune, setTune] = useState<TuneView>({ state: "idle", candidates: [] });
+  const tunePath = `models/${encodeURIComponent(model.id)}/tune`;
+  useEffect(() => {
+    let cancelled = false, timer = 0;
+    const poll = async () => {
+      try {
+        const view = parseTune(await client.request<unknown>(tunePath));
+        if (cancelled) return;
+        setTune((previous) => { if (previous.state === "running" && view.state === "done") notify(view.arguments?.length ? `Tune kept ${view.arguments.join(" ")} for ${model.id}.` : `Tune found nothing faster than ${model.id}'s current settings.`); if (previous.state === "running" && view.state === "failed") notify(view.error ?? "Tune failed.", "error"); return view; });
+        if (view.state === "running") timer = window.setTimeout(() => void poll(), 2000);
+      } catch { /* The tune view is optional. */ }
+    };
+    void poll();
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [client, tunePath, model.id, tune.state === "running"]);
+  const startTune = async () => {
+    try { setTune(parseTune(await client.request<unknown>(tunePath, {}))); } catch (error) { notify(error instanceof Error ? error.message : "Tune could not start.", "error"); }
+  };
+  const tuned = defaults.entries.some((entry) => entry.source === "tuned");
+  const clearTuned = () => void mutate(`models/${encodeURIComponent(model.id)}/options`, { expected_revision: revision, clear_tuned: true, ...(model.loaded ? { apply: "reload" } : {}) }, `Cleared the tuned settings for ${model.id}.`);
   const shown = defaults.entries.filter((entry) => entry.source !== "juiced" && entry.state !== "shadowed");
   const changed = changedSince(defaults, seen);
   const acknowledge = () => { const current = appliedKey(defaults); writeSeen(key, current); setSeen(current); };
@@ -193,6 +214,11 @@ function JuicedDefaults({ model, defaults, revision, disabled, mutate }: { model
     {changed.length > 0 && <div className="inline-note" role="status"><span>{seen === null ? "Juiced adds" : "Juiced now also adds"} <code>{changed.join(" · ")}</code> at launch.</span><span className="action-row"><Button variant="ghost" onClick={acknowledge}>OK</Button><Button variant="ghost" disabled={disabled} onClick={() => toggle(false)}>Turn off</Button></span></div>}
     {shown.length === 0 ? <p className="field-help">Nothing beyond the engine's own defaults for this model.</p>
       : <ul className="defaults-list">{shown.map((entry) => <li key={`${entry.source}${entry.flag}`} className={entry.state === "applied" ? undefined : "muted"}><code>{argument(entry)}</code><span className="muted">{sourceLabels[entry.source]}{entry.state === "overridden" ? " · your setting wins" : entry.state === "off" ? " · off" : ""}</span><HelpTip label={argument(entry)}>{entry.reason}</HelpTip></li>)}</ul>}
+    {tune.state === "running" && <p className="field-help" role="status">Tuning: {tune.step ?? "starting"}…</p>}
+    {tune.state === "failed" && tune.error && <p className="inline-error">{tune.error}</p>}
+    {tune.candidates.length > 0 && <div className="data-table tune-table" role="table" aria-label="Tune measurements"><div className="data-head" role="row"><span role="columnheader">Tried</span><span role="columnheader" className="numeric">Prompt</span><span role="columnheader" className="numeric">Chat</span><span role="columnheader" className="numeric">Rewrite</span></div>
+      {tune.candidates.map((candidate) => <div className="data-row" role="row" key={candidate.label}><span role="cell">{candidate.label}</span><span role="cell" className="numeric">{Math.round(candidate.speed.prefill_tps)}</span><span role="cell" className="numeric">{candidate.speed.decode_tps.toFixed(1)}</span><span role="cell" className="numeric">{candidate.speed.rewrite_tps.toFixed(1)}</span></div>)}</div>}
+    <div className="action-row"><Button disabled={disabled || tune.state === "running" || model.policy === "disabled"} onClick={() => void startTune()}>{tune.state === "running" ? "Tuning…" : "Tune for this machine"}</Button>{tuned && <Button variant="ghost" disabled={disabled || tune.state === "running"} onClick={clearTuned}>Clear tuned</Button>}<HelpTip label="Tune">Tries a larger prompt batch, flash attention and speculative decoding on this machine, measuring prompt, chat and code-rewrite speed (tokens per second). It keeps a change only when it is clearly faster, then restores your saved settings. Takes a few minutes and reloads the model several times.</HelpTip></div>
   </div>;
 }
 

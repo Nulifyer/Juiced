@@ -343,10 +343,13 @@ New registrations and library adds start at 32768 tokens, or the trained context
 
 Every llama.cpp launch adds Juiced's model defaults to the saved arguments. They are resolved when the worker starts, so existing models pick up a newer release's defaults on their next load. An argument the model's saved settings or extra arguments already set always wins, and an earlier source wins over a later one for the same flag:
 
-1. A tested recipe for this model from `service/src/model_recipes.json`, matched by the GGUF's `general.basename` (for example `--spec-type ngram-simple` for Qwen3-Coder-Next).
-2. What the model file declares: `--spec-type draft-mtp` when the GGUF has an MTP head and the model has one slot, unless a recipe chose another speculative type.
-3. `--metrics`.
-4. Native per-architecture defaults from `architecture_defaults.json`. Their sampler flags are left out when the GGUF names its publisher's sampler (`general.sampling.*`), which llama.cpp then applies itself; one architecture covers differently tuned checkpoints (`qwen3next` defaults are the Thinking model's, while Qwen3-Coder-Next ships temperature 1.0, top-p 0.95, top-k 40).
+1. What Tune measured as faster for this model on this host (see below).
+2. A tested recipe for this model from `service/src/model_recipes.json`, matched by the GGUF's `general.basename` (for example `--spec-type ngram-simple` for Qwen3-Coder-Next).
+3. What the model file declares: `--spec-type draft-mtp` when the GGUF has an MTP head and the model has one slot, unless a recipe chose another speculative type.
+4. `--metrics`.
+5. Native per-architecture defaults from `architecture_defaults.json`. Their sampler flags are left out when the GGUF names its publisher's sampler (`general.sampling.*`), which llama.cpp then applies itself; one architecture covers differently tuned checkpoints (`qwen3next` defaults are the Thinking model's, while Qwen3-Coder-Next ships temperature 1.0, top-p 0.95, top-k 40).
+
+`POST /v1/models/{model}/tune` (operator, 202) starts Tune for a llama.cpp model with its own settings; `GET` (read) returns `{state: idle|running|done|failed, step, candidates, result | error}`. Tune measures prompt, chat and code-rewrite speed (tokens per second) with the current settings, then a physical batch of 1024 and 2048 (kept with at least 8% faster prompts and at most 3% slower chat), flash attention on (kept with a 5% prompt or 3% chat gain and no 3% loss), and speculative decoding switched the other way from what applies now (kept when chat × rewrite speed improves by 10%). Each try reloads the model through the settings route. Tune always restores the saved options and extra arguments, unloads a model that was not loaded, and saves the kept arguments as the model's `tuned` layer, which outranks recipes in the launch defaults (`source: "tuned"`) and records the runtime package it ran on. `POST .../options` takes `clear_tuned: true` to drop it, or `tuned: {arguments, measured_at_ms, runtime_package?, measurements?}` limited to accepted extra-argument flags and typed batch, flash-attention and sampler flags.
 
 Models from a native settings store keep native semantics. `POST /v1/models/{model}/options` with `{"expected_revision": N, "juiced_defaults": false}` turns the defaults off for one model (add `"apply": "reload"` for a loaded model); `true` turns them back on. The launch fingerprint covers the added arguments, and the memory estimate and reservation count them.
 

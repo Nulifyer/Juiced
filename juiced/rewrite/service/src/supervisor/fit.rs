@@ -72,6 +72,11 @@ pub(super) fn with_model_defaults(
             .and_then(|options| options.parallel_slots)
             .map_or(u64::from(spec.max_inflight), u64::from);
         memory::LlamaDefaults::for_model(&shape.1, shape.0.architecture.as_deref(), slots)
+            .with_tuned(
+                spec.tuned
+                    .as_ref()
+                    .map_or(&[], |tuned| tuned.arguments.as_slice()),
+            )
             .apply(&mut args);
     }
     args
@@ -720,7 +725,12 @@ fn defaults_view(
     let slots = options
         .and_then(|options| options.parallel_slots)
         .map_or(u64::from(spec.max_inflight), u64::from);
-    let defaults = memory::LlamaDefaults::for_model(shape, declared.architecture.as_deref(), slots);
+    let defaults = memory::LlamaDefaults::for_model(shape, declared.architecture.as_deref(), slots)
+        .with_tuned(
+            spec.tuned
+                .as_ref()
+                .map_or(&[], |tuned| tuned.arguments.as_slice()),
+        );
     let mut seen: Vec<String> = Vec::new();
     let entries: Vec<Value> = defaults
         .entries()

@@ -102,8 +102,48 @@ pub struct SettingsChange {
     /// Turns Juiced's model defaults on or off for this model; applies at its next launch.
     #[serde(default)]
     pub juiced_defaults: Option<bool>,
+    /// A Tune result to apply at launch, or `clear_tuned: true` to drop it.
+    #[serde(default)]
+    pub tuned: Option<crate::config::TunedLaunch>,
+    #[serde(default)]
+    pub clear_tuned: Option<bool>,
     #[serde(default)]
     pub apply: OptionsApply,
+}
+
+/// Tune results carry only flags an operator could pass as extra arguments.
+fn validate_tuned(tuned: &crate::config::TunedLaunch) -> Result<(), ApiError> {
+    let invalid = |message: &str| {
+        ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_tuned_arguments",
+            message.to_owned(),
+        )
+    };
+    if tuned.arguments.len() > crate::config::MAXIMUM_TUNED_ARGUMENTS {
+        return Err(invalid("Send at most 16 tuned arguments."));
+    }
+    let mut position = 0;
+    while position < tuned.arguments.len() {
+        let flag = &tuned.arguments[position];
+        let typed = crate::profiles::option_field(flag)
+            .is_some_and(|field| !crate::profiles::legacy_field(field));
+        match crate::runtime_arguments::passthrough(Provider::LlamaCpp, flag) {
+            _ if typed => position += 2,
+            crate::runtime_arguments::Passthrough::Accepted(arity) => {
+                position += 1 + usize::from(arity);
+            }
+            _ => {
+                return Err(invalid(
+                    "Tuned arguments must be llama-server flags Juiced accepts as extra arguments or typed settings such as --ubatch-size.",
+                ));
+            }
+        }
+    }
+    if position != tuned.arguments.len() {
+        return Err(invalid("A tuned flag is missing its value."));
+    }
+    Ok(())
 }
 
 /// The editable settings of a local profile beside its saved and effective typed options.
@@ -163,8 +203,16 @@ impl Manager {
         options: LaunchOptions,
         apply: OptionsApply,
     ) -> Result<serde_json::Value, OptionsError> {
-        self.apply_llama(id, expected_revision, Some(options), None, None, apply)
-            .await
+        self.apply_llama(
+            id,
+            expected_revision,
+            Some(options),
+            None,
+            None,
+            None,
+            apply,
+        )
+        .await
     }
 
     pub async fn apply_settings(
@@ -179,10 +227,31 @@ impl Manager {
             image_defaults,
             asr_options,
             juiced_defaults,
+            tuned,
+            clear_tuned,
             apply,
         } = change;
+        if let Some(tuned) = &tuned {
+            validate_tuned(tuned)?;
+        }
+        let tuned = match (tuned, clear_tuned) {
+            (Some(_), Some(true)) => {
+                return Err(ApiError::new(
+                    StatusCode::BAD_REQUEST,
+                    "options_body",
+                    "Send tuned or clear_tuned, not both.",
+                )
+                .into());
+            }
+            (Some(tuned), _) => Some(Some(tuned)),
+            (None, Some(true)) => Some(None),
+            (None, _) => None,
+        };
         match (
-            options.is_some() || extra_args.is_some() || juiced_defaults.is_some(),
+            options.is_some()
+                || extra_args.is_some()
+                || juiced_defaults.is_some()
+                || tuned.is_some(),
             image_defaults,
             asr_options,
         ) {
@@ -193,6 +262,7 @@ impl Manager {
                     options,
                     extra_args,
                     juiced_defaults,
+                    tuned,
                     apply,
                 )
                 .await
@@ -221,6 +291,7 @@ impl Manager {
         options: Option<LaunchOptions>,
         extra_args: Option<Vec<String>>,
         juiced_defaults: Option<bool>,
+        tuned: Option<Option<crate::config::TunedLaunch>>,
         apply: OptionsApply,
     ) -> Result<serde_json::Value, OptionsError> {
         if let Some(options) = &options {
@@ -262,8 +333,8 @@ impl Manager {
             .into());
         }
         if worker.spec.execution_profile.native_model_id().is_some() {
-            let Some(options) =
-                options.filter(|_| extra_args.is_none() && juiced_defaults.is_none())
+            let Some(options) = options
+                .filter(|_| extra_args.is_none() && juiced_defaults.is_none() && tuned.is_none())
             else {
                 return Err(ApiError::new(
                     StatusCode::BAD_REQUEST,
@@ -325,6 +396,9 @@ impl Manager {
                 }
                 if let Some(enabled) = juiced_defaults {
                     spec.juiced_defaults = enabled;
+                }
+                if let Some(tuned) = tuned {
+                    spec.tuned = tuned;
                 }
                 if let Some((_, corrected)) = super::fit::formula_reservation(
                     &spec.resolved(&parent),

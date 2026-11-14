@@ -63,6 +63,12 @@ added, Settings says so once, with **OK** and **Turn off**. Your own settings an
 extra arguments always win. Turn the switch off to start the model with only your
 settings; a loaded model restarts.
 
+**Tune for this machine** tries a larger prompt batch, flash attention and
+speculative decoding, measuring prompt, chat and code-rewrite speed, and keeps a
+change only when it is clearly faster. It reloads the model several times, takes a
+few minutes and then restores your saved settings. Kept changes show as
+**Measured here**; **Clear tuned** removes them.
+
 Empty generation fields show the value that applies, such as `1 (model file)`
 for a model whose file names its publisher's temperature.
 

@@ -1,15 +1,31 @@
 /** Juiced's launch defaults for one llama.cpp model, as `GET /models/{id}/options` reports them. */
-export type DefaultSource = "juiced" | "family" | "model-file" | "recipe";
+export type DefaultSource = "juiced" | "family" | "model-file" | "recipe" | "tuned";
 export type DefaultState = "applied" | "overridden" | "shadowed" | "off";
 export type DefaultEntry = { flag: string; value: string | null; source: DefaultSource; reason: string; state: DefaultState };
 export type SamplerValue = { value: string | number; source: "saved" | "juiced" | "model-file" };
 export type ModelDefaults = { available: boolean; enabled: boolean; entries: DefaultEntry[]; sampler: Record<string, SamplerValue | null> };
 
-const sources: DefaultSource[] = ["juiced", "family", "model-file", "recipe"];
+const sources: DefaultSource[] = ["juiced", "family", "model-file", "recipe", "tuned"];
 const states: DefaultState[] = ["applied", "overridden", "shadowed", "off"];
 const record = (value: unknown): Record<string, unknown> => value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 
-export const sourceLabels: Record<DefaultSource, string> = { juiced: "Juiced", family: "Model family", "model-file": "Model file", recipe: "Tested recipe" };
+export const sourceLabels: Record<DefaultSource, string> = { juiced: "Juiced", family: "Model family", "model-file": "Model file", recipe: "Tested recipe", tuned: "Measured here" };
+
+export type TuneSpeed = { prefill_tps: number; decode_tps: number; rewrite_tps: number };
+export type TuneView = { state: "idle" | "running" | "done" | "failed"; step?: string; error?: string; candidates: { label: string; speed: TuneSpeed }[]; arguments?: string[] };
+
+export function parseTune(value: unknown): TuneView {
+  const body = record(value);
+  const state = ["idle", "running", "done", "failed"].includes(body.state as string) ? body.state as TuneView["state"] : "idle";
+  const result = record(body.result);
+  const list = Array.isArray(body.candidates) ? body.candidates : Array.isArray(record(result.measurements).candidates) ? record(result.measurements).candidates as unknown[] : [];
+  const candidates = list.flatMap((item) => {
+    const entry = record(item), speed = record(entry.speed);
+    const number = (key: string) => typeof speed[key] === "number" ? speed[key] as number : 0;
+    return typeof entry.label === "string" ? [{ label: entry.label, speed: { prefill_tps: number("prefill_tps"), decode_tps: number("decode_tps"), rewrite_tps: number("rewrite_tps") } }] : [];
+  });
+  return { state, step: typeof body.step === "string" ? body.step : undefined, error: typeof body.error === "string" ? body.error : undefined, candidates, arguments: Array.isArray(result.arguments) ? result.arguments.filter((item): item is string => typeof item === "string") : undefined };
+}
 
 export function parseModelDefaults(value: unknown): ModelDefaults | null {
   const body = record(value);

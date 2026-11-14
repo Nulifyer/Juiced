@@ -232,6 +232,8 @@ define_routes! {
     (get, "/models/{model}/fit", model_fit, "operator"),
     (get, "/models/{model}/check", model_check_view, "read"),
     (post, "/models/{model}/check", model_check_run, "operator"),
+    (get, "/models/{model}/tune", model_tune_view, "read"),
+    (post, "/models/{model}/tune", model_tune_start, "operator"),
     (get, "/models/{model}/runtime", model_runtime, "operator"),
     (post, "/models/{model}/runtime", model_runtime_set, "operator"),
     (get, "/juiced/runtime-packages", runtime_packages, "operator"),
@@ -1074,6 +1076,37 @@ async fn model_check_view(
         },
     );
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(view)))
+}
+async fn model_tune_view(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    if !state.manager.is_registered(&id) {
+        return Err(ApiError::new(
+            StatusCode::NOT_FOUND,
+            "unknown_model",
+            "The model is not registered.",
+        ));
+    }
+    let view = state
+        .manager
+        .tune_view(&id)
+        .unwrap_or_else(|| serde_json::json!({"state": "idle"}));
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(view)))
+}
+async fn model_tune_start(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    if !state.manager.is_registered(&id) {
+        return Err(ApiError::new(
+            StatusCode::NOT_FOUND,
+            "unknown_model",
+            "The model is not registered.",
+        ));
+    }
+    let view = crate::barista::start_tune(state.clone(), id)?;
+    Ok((StatusCode::ACCEPTED, Json(view)))
 }
 async fn model_check_run(
     State(state): State<AppState>,

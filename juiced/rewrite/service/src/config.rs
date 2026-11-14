@@ -438,7 +438,26 @@ pub struct ModelSpec {
     /// operator turns them off per model; saved arguments always win either way.
     #[serde(default = "juiced_defaults_on", skip_serializing_if = "is_on")]
     pub juiced_defaults: bool,
+    /// Launch arguments Tune measured as faster on this host, applied before recipes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tuned: Option<TunedLaunch>,
 }
+
+/// The result of a Tune run that Juiced applies at launch.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct TunedLaunch {
+    pub arguments: Vec<String>,
+    /// The engine package the measurement ran on; another package makes the result stale.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_package: Option<String>,
+    pub measured_at_ms: u64,
+    /// Per-candidate measurements, kept for the settings view.
+    #[serde(default)]
+    pub measurements: serde_json::Value,
+}
+
+pub const MAXIMUM_TUNED_ARGUMENTS: usize = 16;
 
 fn juiced_defaults_on() -> bool {
     true
@@ -594,6 +613,7 @@ impl From<LegacyModelSpec> for ModelSpec {
             idle_unload_after_ms: None,
             companions: Vec::new(),
             juiced_defaults: true,
+            tuned: None,
         }
     }
 }

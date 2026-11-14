@@ -797,6 +797,8 @@ pub enum DefaultSource {
     ModelFile,
     /// A curated, measured recipe for this model.
     Recipe,
+    /// What Tune measured as faster for this model on this host.
+    Tuned,
 }
 
 /// One argument (a flag and its value, if any) Juiced adds at launch.
@@ -856,6 +858,7 @@ pub struct LlamaDefaults {
     pub architecture: Vec<String>,
     pub recipe: Vec<String>,
     recipe_reason: String,
+    pub tuned: Vec<String>,
 }
 
 impl LlamaDefaults {
@@ -880,21 +883,41 @@ impl LlamaDefaults {
             recipe_reason: recipe
                 .map(|recipe| recipe.reason.clone())
                 .unwrap_or_default(),
+            tuned: Vec::new(),
         }
+    }
+
+    /// Adds Tune's measured arguments, which outrank every other default.
+    pub fn with_tuned(mut self, arguments: &[String]) -> Self {
+        if has_flag(arguments, "--spec-type") {
+            self.mtp = false;
+        }
+        self.tuned = arguments.to_vec();
+        self
     }
 
     /// The defaults in precedence order: an earlier entry wins over a later one for the same
     /// flag.
     pub fn entries(&self) -> Vec<DefaultEntry> {
-        let mut entries: Vec<DefaultEntry> = pairs(&self.recipe)
+        let mut entries: Vec<DefaultEntry> = pairs(&self.tuned)
             .into_iter()
             .map(|(flag, value)| DefaultEntry {
                 flag,
                 value,
-                source: DefaultSource::Recipe,
-                reason: self.recipe_reason.clone(),
+                source: DefaultSource::Tuned,
+                reason: "Tune measured this as faster for this model on this machine.".into(),
             })
             .collect();
+        entries.extend(
+            pairs(&self.recipe)
+                .into_iter()
+                .map(|(flag, value)| DefaultEntry {
+                    flag,
+                    value,
+                    source: DefaultSource::Recipe,
+                    reason: self.recipe_reason.clone(),
+                }),
+        );
         if self.mtp {
             entries.push(DefaultEntry {
                 flag: "--spec-type".into(),

@@ -338,6 +338,40 @@ pub(crate) async fn model_check(
         })
 }
 
+/// Starts Tune for `model` in the background and returns its first view.
+pub(crate) fn start_tune(state: AppState, model: String) -> Result<Value, ApiError> {
+    let app = state.probe.get().cloned().ok_or_else(|| {
+        ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "tune_not_ready",
+            "The service is still starting. Retry.",
+        )
+    })?;
+    if !state.manager.begin_tune(&model) {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "tune_running",
+            "Tune is already running for this model.",
+        ));
+    }
+    let started = state.manager.tune_view(&model).unwrap_or(Value::Null);
+    tokio::spawn(async move {
+        let manager = state.manager.clone();
+        let id = model.clone();
+        let progress: tools::TuneProgress = std::sync::Arc::new(move |update: Value| {
+            let mut view = update;
+            view["state"] = json!("running");
+            manager.set_tune(&id, view);
+        });
+        let finished = match tools::model_tune(&state, app, &model, progress).await {
+            Ok(result) => json!({"state": "done", "result": result}),
+            Err(error) => json!({"state": "failed", "error": error["message"]}),
+        };
+        state.manager.set_tune(&model, finished);
+    });
+    Ok(started)
+}
+
 /// Checks each chat model once per launch fingerprint after its worker becomes ready.
 pub(crate) fn spawn_automatic_checks(state: AppState) {
     let Ok(runtime) = tokio::runtime::Handle::try_current() else {

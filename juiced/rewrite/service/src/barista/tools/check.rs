@@ -40,7 +40,7 @@ fn excerpt(text: &str) -> String {
 }
 
 /// The thinking switch this model takes, as `(field, off, on)`, when the catalog declares one.
-fn thinking_switch(model: &Value) -> Option<(String, Value, Value)> {
+pub(super) fn thinking_switch(model: &Value) -> Option<(String, Value, Value)> {
     let thinking = &model["thinking"];
     if thinking["supported"] != true {
         return None;
@@ -52,7 +52,11 @@ fn thinking_switch(model: &Value) -> Option<(String, Value, Value)> {
     (off != on).then(|| (control.to_owned(), off, on))
 }
 
-fn with_switch(mut body: Value, switch: &Option<(String, Value, Value)>, on: bool) -> Value {
+pub(super) fn with_switch(
+    mut body: Value,
+    switch: &Option<(String, Value, Value)>,
+    on: bool,
+) -> Value {
     if let Some((control, off_value, on_value)) = switch {
         let value = if on {
             on_value.clone()

@@ -780,3 +780,4 @@ html, body { height: 100%; overflow: hidden; }
 .check-pass .check-mark { color: var(--good); }
 .check-fail .check-mark, .check-fail > span:nth-child(2) { color: var(--bad); }
 .model-check .section-heading { display: flex; align-items: center; justify-content: space-between; }
+.tune-table .data-head, .tune-table .data-row { grid-template-columns: minmax(0, 1fr) 64px 56px 64px; font-size: .78rem; }
