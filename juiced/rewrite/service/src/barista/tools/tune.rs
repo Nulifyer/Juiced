@@ -109,13 +109,27 @@ impl Run<'_, '_> {
         })
     }
 
+    /// Saves through the settings route, waiting out a worker that is briefly busy with a
+    /// client request.
     async fn save(&self, body: Value) -> Result<()> {
-        let mut body = body;
-        body["expected_revision"] = json!(self.revision().await?);
-        self.context
-            .post(&format!("models/{}/options", self.id), body)
-            .await
-            .map(|_| ())
+        let mut attempt = 0;
+        loop {
+            let mut body = body.clone();
+            body["expected_revision"] = json!(self.revision().await?);
+            match self
+                .context
+                .post(&format!("models/{}/options", self.id), body)
+                .await
+            {
+                Err(Failure::Route(error))
+                    if error["error"]["code"] == "worker_busy" && attempt < 40 =>
+                {
+                    attempt += 1;
+                    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                }
+                result => return result.map(|_| ()),
+            }
+        }
     }
 
     async fn chat(&self, content: String, max_tokens: u32) -> Result<Value> {
