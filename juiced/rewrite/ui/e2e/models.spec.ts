@@ -10,8 +10,8 @@ test("one search and service chips filter the model table", async ({ page }) => 
   await expect(names).toHaveCount(6);
   await expect(page.getByRole("searchbox")).toHaveCount(1);
   const chips = page.getByRole("group", { name: "Service filter" });
-  await chips.getByRole("button", { name: /^Transcription/ }).click();
-  await expect(chips.getByRole("button", { name: /^Transcription/ })).toHaveAttribute("aria-pressed", "true");
+  await chips.getByRole("button", { name: /^Speech to text/ }).click();
+  await expect(chips.getByRole("button", { name: /^Speech to text/ })).toHaveAttribute("aria-pressed", "true");
   await expect(names).toHaveCount(1);
   await expect(table.getByRole("button", { name: speechModel, exact: true })).toBeVisible();
   await chips.getByRole("button", { name: /^All/ }).click();
