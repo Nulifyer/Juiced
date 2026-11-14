@@ -766,7 +766,7 @@ impl Manager {
                 let share = self.auto_fit_share(id);
                 let base = Plan::from_arguments(&args, 1, slots, gpu);
                 let context =
-                    memory::auto_context(declared.training_context_tokens, share, |context| {
+                    memory::default_context(declared.training_context_tokens, share, |context| {
                         let plan = Plan {
                             context_tokens: context,
                             ..base.clone()

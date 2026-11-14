@@ -14,6 +14,9 @@ pub const ENGINE_CACHE_RAM_MIB: u64 = 8192;
 pub const JUICED_CACHE_RAM_MIB: u64 = 1024;
 pub const MINIMUM_AUTO_CONTEXT: u64 = 4096;
 pub const UNKNOWN_TRAINED_CAP: u64 = 32_768;
+/// New registrations start here; larger contexts cost memory most requests never use, and the
+/// model settings offer the largest that fits and the trained size.
+pub const DEFAULT_CONTEXT_CAP: u64 = 32_768;
 const AUTO_CONTEXT_STEP: u64 = 1024;
 const DEFAULT_UBATCH: u64 = 512;
 const DEFAULT_CHECKPOINTS: u64 = 32;
@@ -524,6 +527,21 @@ pub fn auto_context(
     low * AUTO_CONTEXT_STEP
 }
 
+/// The context a new registration starts with: [`auto_context`] capped at
+/// [`DEFAULT_CONTEXT_CAP`].
+pub fn default_context(
+    trained: Option<u64>,
+    share: u64,
+    total_at: impl Fn(u64) -> Option<u64>,
+) -> u64 {
+    let cap = trained
+        .filter(|trained| *trained > 0)
+        .map_or(DEFAULT_CONTEXT_CAP, |trained| {
+            trained.min(DEFAULT_CONTEXT_CAP)
+        });
+    auto_context(Some(cap), share, total_at)
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct FitDevice {
     pub device: String,
@@ -732,6 +750,40 @@ pub fn has_flag(args: &[String], flag: &str) -> bool {
     })
 }
 
+const SAMPLER_FLAGS: &[&str] = &[
+    "--temp",
+    "--top-k",
+    "--top-p",
+    "--min-p",
+    "--repeat-penalty",
+    "--presence-penalty",
+    "--frequency-penalty",
+];
+
+/// One family default can cover differently tuned checkpoints (`qwen3next` is Instruct,
+/// Thinking and Coder-Next), so the publisher's own sampler wins over all of it.
+fn without_samplers(arguments: Vec<String>) -> Vec<String> {
+    let mut kept = Vec::new();
+    let mut position = 0;
+    while position < arguments.len() {
+        let flag = &arguments[position];
+        let has_value = arguments
+            .get(position + 1)
+            .is_some_and(|value| !value.starts_with("--"));
+        if !SAMPLER_FLAGS
+            .iter()
+            .any(|sampler| has_flag(std::slice::from_ref(flag), sampler))
+        {
+            kept.push(flag.clone());
+            if has_value {
+                kept.push(arguments[position + 1].clone());
+            }
+        }
+        position += if has_value { 2 } else { 1 };
+    }
+    kept
+}
+
 /// What Juiced adds to a llama.cpp launch that leaves these choices unset.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LlamaDefaults {
@@ -741,9 +793,13 @@ pub struct LlamaDefaults {
 
 impl LlamaDefaults {
     pub fn for_model(shape: &ModelShape, architecture: Option<&str>, slots: u64) -> Self {
+        let mut architecture = architecture_arguments(architecture);
+        if shape.publisher_sampling {
+            architecture = without_samplers(architecture);
+        }
         Self {
             mtp: has_mtp_head(shape) && slots == 1,
-            architecture: architecture_arguments(architecture),
+            architecture,
         }
     }
 

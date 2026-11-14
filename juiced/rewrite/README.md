@@ -337,11 +337,11 @@ Saving launch options recomputes the reservation and refuses settings that excee
 - Results are cached by model file, runtime and arguments.
 - `available_bytes` counts a loaded model's own reservation as free.
 
-New registrations, library adds and native adoption without a saved context get the largest context that fits the budget left by Hot models, up to the trained context (32768 when unknown). They also get:
+New registrations and library adds start at 32768 tokens, or the trained context when it is smaller, reduced to what fits the budget left by Hot models. Native adoption without a saved context keeps v0.9.2's choice: the largest context that fits, up to the trained context (32768 when unknown). The model settings show the trained context and the largest context that fits, with buttons for each. New registrations, library adds and native adoption also get:
 
 - `--parallel 1` and all layers on GPU backends
 - `--metrics`
-- native per-architecture sampler defaults from `architecture_defaults.json`, unless an argument already sets them
+- native per-architecture sampler defaults from `architecture_defaults.json`, unless an argument already sets them or the GGUF names its publisher's sampler (`general.sampling.*`), which llama.cpp then applies itself. One architecture covers differently tuned checkpoints; `qwen3next` defaults are the Thinking model's, while Qwen3-Coder-Next ships temperature 1.0, top-p 0.95, top-k 40.
 - `--spec-type draft-mtp` when the GGUF has an MTP head and one slot
 
 Flash attention, threads on GPU, mmap and reasoning stay at engine defaults.

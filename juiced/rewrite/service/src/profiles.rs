@@ -1083,6 +1083,10 @@ pub struct ModelShape {
     pub vocab_size: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tied_embedding_bytes: Option<u64>,
+    /// The file declares the publisher's sampler (`general.sampling.*`), which llama.cpp applies
+    /// when no sampler flag is passed.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub publisher_sampling: bool,
 }
 
 const SHAPE_KEYS: [&str; 18] = [
@@ -1274,6 +1278,7 @@ pub fn read_gguf_shape<R: Read + Seek>(
     let mut shape_arrays: Vec<(String, Vec<u64>)> = Vec::new();
     let mut vocabulary = None;
     let mut alignment = None;
+    let mut publisher_sampling = false;
     for _ in 0..entries {
         let key = input.string(1024)?;
         if key.is_empty() || key.chars().any(char::is_control) || seen.contains(&key) {
@@ -1320,6 +1325,7 @@ pub fn read_gguf_shape<R: Read + Seek>(
         } else if key == "general.alignment" && matches!(kind, 4 | 10) {
             alignment = input.integer(kind)?;
         } else {
+            publisher_sampling |= key.starts_with("general.sampling.");
             input.skip_value(kind)?;
         }
         seen.insert(key);
@@ -1375,6 +1381,7 @@ pub fn read_gguf_shape<R: Read + Seek>(
         shortconv_cache: shape_value(SHORTCONV_KEY),
         vocab_size: shape_value(SHAPE_KEYS[17]).or(vocabulary),
         tied_embedding_bytes: tied_embedding_bytes(&mut input, tensors, alignment.unwrap_or(32)),
+        publisher_sampling,
     };
     Ok((
         DeclaredContext {
@@ -1453,6 +1460,26 @@ mod tests {
         let mut bytes = Vec::new();
         string(&mut bytes, value.as_bytes());
         bytes
+    }
+
+    #[test]
+    fn the_shape_records_a_publisher_sampler() {
+        let entries = |sampling: bool| {
+            let mut entries = vec![
+                ("general.architecture", 8, text("qwen3next")),
+                ("qwen3next.block_count", 4, 48_u32.to_le_bytes().to_vec()),
+            ];
+            if sampling {
+                entries.push(("general.sampling.temp", 6, 1.0_f32.to_le_bytes().to_vec()));
+            }
+            entries
+        };
+        let shape = |sampling: bool| {
+            read_gguf_shape(&mut std::io::Cursor::new(gguf(3, &entries(sampling))))
+                .map(|(_, shape)| shape)
+        };
+        assert!(shape(true).unwrap().publisher_sampling);
+        assert!(!shape(false).unwrap().publisher_sampling);
     }
 
     #[test]

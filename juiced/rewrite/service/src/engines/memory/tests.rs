@@ -464,3 +464,43 @@ fn real_gguf_headers_estimate() {
         }
     }
 }
+
+#[test]
+fn a_publisher_sampler_replaces_the_family_sampler_but_keeps_template_defaults() {
+    let shape = ModelShape {
+        publisher_sampling: true,
+        ..qwen35moe()
+    };
+    let defaults = LlamaDefaults::for_model(&shape, Some("qwen35moe"), 1);
+    assert_eq!(
+        defaults.architecture,
+        ["--chat-template-kwargs", "{\"preserve_thinking\":true}"]
+    );
+    assert!(defaults.mtp);
+    let coder = ModelShape {
+        publisher_sampling: true,
+        ..ModelShape::default()
+    };
+    assert!(
+        LlamaDefaults::for_model(&coder, Some("qwen3next"), 1)
+            .architecture
+            .is_empty()
+    );
+    assert!(
+        !LlamaDefaults::for_model(&ModelShape::default(), Some("qwen3next"), 1)
+            .architecture
+            .is_empty()
+    );
+}
+
+#[test]
+fn a_new_registration_starts_at_most_at_the_default_cap() {
+    let total = |context: u64| Some(context * 1024);
+    assert_eq!(
+        default_context(Some(262_144), u64::MAX, total),
+        DEFAULT_CONTEXT_CAP
+    );
+    assert_eq!(default_context(Some(8192), u64::MAX, total), 8192);
+    assert_eq!(default_context(None, u64::MAX, total), DEFAULT_CONTEXT_CAP);
+    assert_eq!(default_context(Some(262_144), 16_384 * 1024, total), 16_384);
+}

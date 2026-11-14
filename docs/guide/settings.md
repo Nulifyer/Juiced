@@ -13,6 +13,12 @@ the values Juiced actually applies.
 3. Select **Save**. A loaded model shows **Save and reload** and restarts with
    the new settings.
 
+New models start at a 32K context, or the trained size when that is smaller.
+Under **Context**, **Auto** fills in the largest context that fits the memory
+budget and **Max** the size the model was trained for; the line below the field
+shows both numbers. A larger context reserves more memory whether or not a
+request uses it.
+
 An empty field shows what applies instead: `0.9 (profile)` is a value the
 profile already passes to the engine, and `Default 0.8` is llama.cpp's default.
 Total context is shared by the model's slots; clients read the tokens one request
@@ -26,7 +32,10 @@ budget of `0` turns thinking off; `-1` is unlimited.
 **Extra arguments** are passed to llama-server after Juiced's own, for example
 `--spec-type draft-mtp` or `--chat-template-kwargs '{"enable_thinking":false}'`.
 Quote values that contain spaces. Flags that have their own field, and the host,
-port, model, projector and cache paths, are refused.
+port, model, projector and cache paths, are refused. Speculative decoding takes
+`--spec-type` with its `--spec-ngram-*` sizes and `--spec-draft-n-max` /
+`--spec-draft-n-min`; a separate draft model (`--spec-draft-model` and the other
+`--spec-draft-*` flags) is refused.
 
 Models adopted from Juiced 0.9 keep their `llamacpp_args`: typed flags such as
 `--temp` show as the profile value, the rest appear under **Extra arguments**.

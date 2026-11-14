@@ -964,7 +964,7 @@ impl Manager {
                     plan
                 };
                 let share = self.auto_fit_share(&id);
-                let context = crate::engines::memory::auto_context(
+                let context = crate::engines::memory::default_context(
                     declared.training_context_tokens,
                     share,
                     |context| {

@@ -604,6 +604,10 @@ pub enum Passthrough {
     Unknown,
 }
 
+/// Draft lengths tune MTP and n-gram drafting; every other `--spec-draft-*` flag configures a
+/// separate draft model, which Juiced does not manage.
+const DRAFT_LENGTHS: &[&str] = &["--spec-draft-n-max", "--spec-draft-n-min"];
+
 /// Classifies one operator-supplied worker flag the way [`validate`] would treat it.
 pub fn passthrough(adapter: Provider, flag: &str) -> Passthrough {
     let flag = normalized_flag(adapter, flag);
@@ -1079,7 +1083,7 @@ fn forbidden(flag: &str, adapter: Provider) -> bool {
         ),
         Provider::LlamaCpp => {
             flag.starts_with("--models-")
-                || flag.starts_with("--spec-draft-")
+                || (flag.starts_with("--spec-draft-") && !DRAFT_LENGTHS.contains(&flag))
                 || matches!(
                     flag,
                     "-mu"
@@ -1416,6 +1420,8 @@ fn llama_arity(flag: &str) -> Option<u8> {
         "--spec-ngram-size-n",
         "--spec-ngram-size-m",
         "--spec-ngram-min-hits",
+        "--spec-draft-n-max",
+        "--spec-draft-n-min",
     ];
     if SWITCHES.contains(&flag) {
         Some(0)
@@ -2037,6 +2043,14 @@ mod tests {
         assert_eq!(
             passthrough(Provider::LlamaCpp, "--spec-type"),
             Passthrough::Accepted(1)
+        );
+        assert_eq!(
+            passthrough(Provider::LlamaCpp, "--spec-draft-n-max"),
+            Passthrough::Accepted(1)
+        );
+        assert_eq!(
+            passthrough(Provider::LlamaCpp, "--spec-draft-model"),
+            Passthrough::Forbidden
         );
         assert_eq!(
             passthrough(Provider::LlamaCpp, "--jinja"),
