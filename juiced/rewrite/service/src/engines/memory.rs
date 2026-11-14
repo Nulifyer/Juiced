@@ -784,48 +784,160 @@ fn without_samplers(arguments: Vec<String>) -> Vec<String> {
     kept
 }
 
+/// Where a launch default comes from, lowest to highest precedence among defaults. The
+/// operator's saved arguments outrank all of them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DefaultSource {
+    /// Juiced's own launch baseline.
+    Juiced,
+    /// Native Juiced's per-architecture sampler and template defaults.
+    Family,
+    /// Something the model file declares, such as an MTP head.
+    ModelFile,
+    /// A curated, measured recipe for this model.
+    Recipe,
+}
+
+/// One argument (a flag and its value, if any) Juiced adds at launch.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct DefaultEntry {
+    pub flag: String,
+    pub value: Option<String>,
+    pub source: DefaultSource,
+    pub reason: String,
+}
+
+#[derive(serde::Deserialize)]
+struct RecipeFile {
+    schema_version: u32,
+    recipes: Vec<RecipeEntry>,
+}
+
+#[derive(Clone, serde::Deserialize)]
+struct RecipeEntry {
+    basename: String,
+    arguments: Vec<String>,
+    reason: String,
+}
+
+fn recipes() -> &'static [RecipeEntry] {
+    static RECIPES: std::sync::OnceLock<Vec<RecipeEntry>> = std::sync::OnceLock::new();
+    RECIPES.get_or_init(|| {
+        serde_json::from_str::<RecipeFile>(include_str!("../model_recipes.json"))
+            .ok()
+            .filter(|file| file.schema_version == 1)
+            .map(|file| file.recipes)
+            .unwrap_or_default()
+    })
+}
+
+/// Splits a flat argument list into flag/value pairs; a value is the next token unless it is
+/// itself a flag.
+fn pairs(arguments: &[String]) -> Vec<(String, Option<String>)> {
+    let mut found = Vec::new();
+    let mut position = 0;
+    while position < arguments.len() {
+        let flag = arguments[position].clone();
+        let value = arguments
+            .get(position + 1)
+            .filter(|value| !value.starts_with("--"))
+            .cloned();
+        position += if value.is_some() { 2 } else { 1 };
+        found.push((flag, value));
+    }
+    found
+}
+
 /// What Juiced adds to a llama.cpp launch that leaves these choices unset.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LlamaDefaults {
     pub mtp: bool,
     pub architecture: Vec<String>,
+    pub recipe: Vec<String>,
+    recipe_reason: String,
 }
 
 impl LlamaDefaults {
     pub fn for_model(shape: &ModelShape, architecture: Option<&str>, slots: u64) -> Self {
-        let mut architecture = architecture_arguments(architecture);
+        let mut family = architecture_arguments(architecture);
         if shape.publisher_sampling {
-            architecture = without_samplers(architecture);
+            family = without_samplers(family);
         }
+        let recipe = shape.basename.as_deref().and_then(|name| {
+            recipes()
+                .iter()
+                .find(|recipe| recipe.basename.eq_ignore_ascii_case(name.trim()))
+        });
+        let speculative_recipe =
+            recipe.is_some_and(|recipe| has_flag(&recipe.arguments, "--spec-type"));
         Self {
-            mtp: has_mtp_head(shape) && slots == 1,
-            architecture,
+            mtp: has_mtp_head(shape) && slots == 1 && !speculative_recipe,
+            architecture: family,
+            recipe: recipe
+                .map(|recipe| recipe.arguments.clone())
+                .unwrap_or_default(),
+            recipe_reason: recipe
+                .map(|recipe| recipe.reason.clone())
+                .unwrap_or_default(),
         }
     }
 
-    /// Appends each default whose option the arguments do not already set.
-    pub fn apply(&self, args: &mut Vec<String>) {
-        if !has_flag(args, "--metrics") {
-            args.push("--metrics".into());
+    /// The defaults in precedence order: an earlier entry wins over a later one for the same
+    /// flag.
+    pub fn entries(&self) -> Vec<DefaultEntry> {
+        let mut entries: Vec<DefaultEntry> = pairs(&self.recipe)
+            .into_iter()
+            .map(|(flag, value)| DefaultEntry {
+                flag,
+                value,
+                source: DefaultSource::Recipe,
+                reason: self.recipe_reason.clone(),
+            })
+            .collect();
+        if self.mtp {
+            entries.push(DefaultEntry {
+                flag: "--spec-type".into(),
+                value: Some("draft-mtp".into()),
+                source: DefaultSource::ModelFile,
+                reason: "The model file has an MTP head; drafting with it speeds up decoding."
+                    .into(),
+            });
         }
-        if self.mtp && !has_flag(args, "--spec-type") {
-            args.extend(["--spec-type".into(), "draft-mtp".into()]);
-        }
-        let mut position = 0;
-        while position < self.architecture.len() {
-            let flag = &self.architecture[position];
-            let value = self
-                .architecture
-                .get(position + 1)
-                .filter(|value| !value.starts_with("--"));
-            if !has_flag(args, flag) {
-                args.push(flag.clone());
-                if let Some(value) = value {
-                    args.push(value.clone());
-                }
+        entries.push(DefaultEntry {
+            flag: "--metrics".into(),
+            value: None,
+            source: DefaultSource::Juiced,
+            reason: "Reports engine counters such as speculative-decoding acceptance.".into(),
+        });
+        entries.extend(
+            pairs(&self.architecture)
+                .into_iter()
+                .map(|(flag, value)| DefaultEntry {
+                    flag,
+                    value,
+                    source: DefaultSource::Family,
+                    reason: "Native Juiced's default for this model family.".into(),
+                }),
+        );
+        entries
+    }
+
+    /// Appends each default whose option the arguments do not already set; returns the
+    /// entries it added.
+    pub fn apply(&self, args: &mut Vec<String>) -> Vec<DefaultEntry> {
+        let mut added = Vec::new();
+        for entry in self.entries() {
+            if has_flag(args, &entry.flag) {
+                continue;
             }
-            position += if value.is_some() { 2 } else { 1 };
+            args.push(entry.flag.clone());
+            if let Some(value) = &entry.value {
+                args.push(value.clone());
+            }
+            added.push(entry);
         }
+        added
     }
 }
 

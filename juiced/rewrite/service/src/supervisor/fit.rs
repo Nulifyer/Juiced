@@ -59,6 +59,24 @@ fn fit_gate() -> &'static tokio::sync::Semaphore {
     GATE.get_or_init(|| tokio::sync::Semaphore::new(1))
 }
 
+/// The arguments a launch of `spec` passes once Juiced's model defaults are added; the same
+/// rule as the launch plan, so fit and settings views match the running engine.
+pub(super) fn with_model_defaults(
+    spec: &ModelSpec,
+    mut args: Vec<String>,
+    shape: &(DeclaredContext, ModelShape),
+    options: Option<&LaunchOptions>,
+) -> Vec<String> {
+    if spec.juiced_defaults && spec.execution_profile.native_model_id().is_none() {
+        let slots = options
+            .and_then(|options| options.parallel_slots)
+            .map_or(u64::from(spec.max_inflight), u64::from);
+        memory::LlamaDefaults::for_model(&shape.1, shape.0.architecture.as_deref(), slots)
+            .apply(&mut args);
+    }
+    args
+}
+
 fn read_shape(path: &Path) -> Option<(DeclaredContext, ModelShape)> {
     let mut file = std::fs::File::open(path).ok()?;
     crate::profiles::read_gguf_shape(&mut file).ok()
@@ -129,14 +147,16 @@ pub(super) fn formula_reservation(spec: &ModelSpec, worker: Option<&Worker>) -> 
     }
     let (template, options) = spec.execution_profile.resolved_arguments().ok()?;
     let options = options?;
-    let (declared, shape) = read_shape(&spec.model_file)?;
+    let read = read_shape(&spec.model_file)?;
+    let args = with_model_defaults(spec, template.arguments().to_vec(), &read, Some(&options));
+    let (declared, shape) = read;
     let format = ModelFormat::Gguf {
         declared: declared.clone(),
         shape: Box::new(shape),
     };
     let model = file_bytes(&spec.model_file);
     let projector = projector_bytes(spec, worker);
-    let plan = launch_plan(spec, template.arguments(), &options, &declared);
+    let plan = launch_plan(spec, &args, &options, &declared);
     let legacy = models::legacy_resident_bytes(
         &format,
         model.saturating_add(projector),
@@ -426,7 +446,7 @@ impl Manager {
             ]);
         }
         let model_file = spec.model_file.clone();
-        let (declared, shape) = tokio::task::spawn_blocking(move || read_shape(&model_file))
+        let read = tokio::task::spawn_blocking(move || read_shape(&model_file))
             .await
             .ok()
             .flatten()
@@ -437,6 +457,8 @@ impl Manager {
                     "The model file is not a readable GGUF, so no memory layout is available.",
                 )
             })?;
+        let args = with_model_defaults(spec, args, &read, Some(&resolved.applied));
+        let (declared, shape) = read;
         let model_bytes = file_bytes(&spec.model_file);
         let projector = projector_bytes(spec, Some(&worker));
         let plan = launch_plan(spec, &args, &resolved.applied, &declared);
@@ -685,6 +707,71 @@ fn settings_fields(
     })
 }
 
+/// What Juiced's model defaults add to this model's launch, where each comes from, and the sampler
+/// a request gets when neither it nor the saved settings choose one.
+fn defaults_view(
+    spec: &ModelSpec,
+    saved: &[String],
+    planned: &[String],
+    (declared, shape): &(DeclaredContext, ModelShape),
+    options: Option<&LaunchOptions>,
+) -> Value {
+    let native = spec.execution_profile.native_model_id().is_some();
+    let slots = options
+        .and_then(|options| options.parallel_slots)
+        .map_or(u64::from(spec.max_inflight), u64::from);
+    let defaults = memory::LlamaDefaults::for_model(shape, declared.architecture.as_deref(), slots);
+    let mut seen: Vec<String> = Vec::new();
+    let entries: Vec<Value> = defaults
+        .entries()
+        .into_iter()
+        .map(|entry| {
+            let state = if memory::has_flag(saved, &entry.flag) {
+                "overridden"
+            } else if seen.iter().any(|flag| memory::has_flag(std::slice::from_ref(flag), &entry.flag)) {
+                "shadowed"
+            } else if spec.juiced_defaults && !native {
+                "applied"
+            } else {
+                "off"
+            };
+            seen.push(entry.flag.clone());
+            json!({"flag": entry.flag, "value": entry.value, "source": entry.source, "reason": entry.reason, "state": state})
+        })
+        .collect();
+    let value =
+        |flags: &[&str]| -> Option<String> { flag_value(planned, flags).map(str::to_owned) };
+    let from = |flags: &[&str], file: Option<Value>| -> Value {
+        match value(flags) {
+            Some(text) => {
+                let source = if flags.iter().any(|flag| memory::has_flag(saved, flag)) {
+                    "saved"
+                } else {
+                    "juiced"
+                };
+                json!({"value": text, "source": source})
+            }
+            None => file.map_or(
+                Value::Null,
+                |value| json!({"value": value, "source": "model-file"}),
+            ),
+        }
+    };
+    let sampling = shape.sampling;
+    json!({
+        "available": !native,
+        "enabled": spec.juiced_defaults && !native,
+        "entries": entries,
+        "sampler": {
+            "temperature": from(&["--temp", "--temperature"], sampling.temperature.map(Value::from)),
+            "top_k": from(&["--top-k"], sampling.top_k.map(Value::from)),
+            "top_p": from(&["--top-p"], sampling.top_p.map(Value::from)),
+            "min_p": from(&["--min-p"], sampling.min_p.map(Value::from)),
+            "repeat_penalty": from(&["--repeat-penalty"], sampling.repeat_penalty.map(Value::from)),
+        },
+    })
+}
+
 /// Speculative decoding counters from llama-server's Prometheus `/metrics`.
 pub(super) fn parse_mtp_metrics(text: &str) -> Option<Value> {
     let counter = |name: &str| {
@@ -731,14 +818,25 @@ impl Manager {
     }
 
     /// Per-setting provenance for the model inspector (`fields`) and MTP acceptance.
-    pub(super) async fn launch_provenance(&self, id: &str) -> Option<(Value, Value)> {
+    pub(super) async fn launch_provenance(&self, id: &str) -> Option<(Value, Value, Value)> {
         let worker = self.worker(id).ok()?;
         let spec = &worker.spec;
         if spec.execution_profile.adapter != Provider::LlamaCpp {
             return None;
         }
         let (template, options) = spec.execution_profile.resolved_arguments().ok()?;
-        let saved = Settings::read(template.arguments(), options.as_ref());
+        let model_file = spec.model_file.clone();
+        let shape = tokio::task::spawn_blocking(move || read_shape(&model_file))
+            .await
+            .ok()
+            .flatten();
+        let planned = match &shape {
+            Some(read) => {
+                with_model_defaults(spec, template.arguments().to_vec(), read, options.as_ref())
+            }
+            None => template.arguments().to_vec(),
+        };
+        let saved = Settings::read(&planned, options.as_ref());
         let running = {
             let state = worker.state.lock().await;
             state.running.as_ref().map(|run| {
@@ -749,22 +847,14 @@ impl Manager {
                 )
             })
         };
-        let model_file = spec.model_file.clone();
-        let shape = tokio::task::spawn_blocking(move || read_shape(&model_file))
-            .await
-            .ok()
-            .flatten();
         let automatic = match &shape {
             Some((declared, shape)) => {
                 let model = file_bytes(&spec.model_file);
                 let projector = projector_bytes(spec, Some(&worker));
                 let gpu = bundle_gpu(spec.execution_profile.runtime_bundle()).unwrap_or(true);
                 let slots = saved.slots.unwrap_or(1);
-                let mut args = template.arguments().to_vec();
-                memory::LlamaDefaults::for_model(shape, declared.architecture.as_deref(), slots)
-                    .apply(&mut args);
                 let share = self.auto_fit_share(id);
-                let base = Plan::from_arguments(&args, 1, slots, gpu);
+                let base = Plan::from_arguments(&planned, 1, slots, gpu);
                 let context =
                     memory::default_context(declared.training_context_tokens, share, |context| {
                         let plan = Plan {
@@ -818,6 +908,9 @@ impl Manager {
             }
             None => ((None, None), None),
         };
+        let defaults = shape.as_ref().map_or(Value::Null, |read| {
+            defaults_view(spec, template.arguments(), &planned, read, options.as_ref())
+        });
         Some((
             settings_fields(
                 &saved,
@@ -826,6 +919,7 @@ impl Manager {
                 &automatic,
             ),
             metrics.unwrap_or(Value::Null),
+            defaults,
         ))
     }
 }

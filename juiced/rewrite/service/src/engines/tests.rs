@@ -910,7 +910,6 @@ fn profiles_and_estimates_follow_the_documented_formula() {
         format: &format,
         estimate: &estimate,
         companion_arguments: &[],
-        llama: None,
     };
     let gpu = models::registration(&inputs(true));
     assert_eq!(
@@ -931,21 +930,13 @@ fn profiles_and_estimates_follow_the_documented_formula() {
         Some("qwen3"),
         1,
     );
-    let with_defaults = models::registration(&models::ProfileInputs {
-        llama: Some(&defaults),
-        ..inputs(true)
-    });
+    // Registration stores only the operator-visible profile; the launch adds model defaults.
+    let mut launched: Vec<String> =
+        serde_json::from_value(gpu["execution_profile"]["args"].clone()).unwrap();
+    defaults.apply(&mut launched);
     assert_eq!(
-        with_defaults["execution_profile"]["args"],
-        serde_json::json!([
-            "--host",
-            "127.0.0.1",
-            "--port",
-            "{port}",
-            "--model",
-            "{model}",
-            "--slots",
-            "--jinja",
+        launched[8..],
+        [
             "--metrics",
             "--temp",
             "0.6",
@@ -957,7 +948,7 @@ fn profiles_and_estimates_follow_the_documented_formula() {
             "0.0",
             "--repeat-penalty",
             "1.0"
-        ])
+        ]
     );
     assert_eq!(gpu["execution_profile"]["options"]["gpu_layers"], 29);
     assert_eq!(gpu["execution_profile"]["options"]["context_tokens"], 8192);
@@ -1013,7 +1004,6 @@ fn profiles_and_estimates_follow_the_documented_formula() {
         format: &whisper,
         estimate: &estimate,
         companion_arguments: &[],
-        llama: None,
     });
     let crate::config::Registration(spec) = serde_json::from_value(registration).unwrap();
     assert_eq!(spec.operations, [crate::config::Operation::Transcription]);
@@ -1362,7 +1352,6 @@ fn media_registrations_bind_every_companion_and_pass_the_argument_grammar() {
             format,
             estimate: &estimate,
             companion_arguments: &arguments,
-            llama: None,
         });
         let crate::config::Registration(spec) = serde_json::from_value(registration).unwrap();
         assert_eq!(spec.operations, [operation]);

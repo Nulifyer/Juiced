@@ -955,7 +955,6 @@ pub struct ProfileInputs<'a> {
     pub format: &'a ModelFormat,
     pub estimate: &'a Estimate,
     pub companion_arguments: &'a [String],
-    pub llama: Option<&'a super::memory::LlamaDefaults>,
 }
 
 pub fn registration(inputs: &ProfileInputs<'_>) -> Value {
@@ -982,7 +981,7 @@ pub fn registration(inputs: &ProfileInputs<'_>) -> Value {
                 }
                 options
             };
-            let mut args: Vec<String> = [
+            let args: Vec<String> = [
                 "--host",
                 "127.0.0.1",
                 "--port",
@@ -994,9 +993,6 @@ pub fn registration(inputs: &ProfileInputs<'_>) -> Value {
             ]
             .map(str::to_owned)
             .into();
-            if let Some(defaults) = inputs.llama {
-                defaults.apply(&mut args);
-            }
             (
                 json!(args),
                 options,

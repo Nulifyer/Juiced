@@ -644,6 +644,34 @@ async fn automatic_registration_fits_the_context_and_applies_llama_defaults() {
         .map(|argument| argument.as_str().unwrap())
         .collect();
     let joined = args.join(" ");
+    // The registration keeps only the operator-visible profile; the launch adds the defaults.
+    assert!(!joined.contains("--metrics"), "{joined}");
+    let (status, options) = server
+        .json(
+            Method::GET,
+            "/v1/models/hybrid-mtp/options",
+            None,
+            Some(ADMIN_KEY),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{options}");
+    let defaults = &options["model_defaults"];
+    assert_eq!(defaults["enabled"], true, "{defaults}");
+    let applied: Vec<String> = defaults["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|entry| entry["state"] == "applied")
+        .map(|entry| {
+            format!(
+                "{} {}",
+                entry["flag"].as_str().unwrap(),
+                entry["value"].as_str().unwrap_or_default()
+            )
+            .trim()
+            .to_owned()
+        })
+        .collect();
     for expected in [
         "--metrics",
         "--spec-type draft-mtp",
@@ -653,8 +681,8 @@ async fn automatic_registration_fits_the_context_and_applies_llama_defaults() {
         "--chat-template-kwargs {\"preserve_thinking\":true}",
     ] {
         assert!(
-            joined.contains(expected),
-            "{expected} missing from {joined}"
+            applied.iter().any(|argument| argument == expected),
+            "{expected} missing from {applied:?}"
         );
     }
     for engine_default in [

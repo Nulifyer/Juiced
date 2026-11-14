@@ -768,3 +768,9 @@ html, body { height: 100%; overflow: hidden; }
 .bulk-bar { position: sticky; top: 0; z-index: 3; }
 @media (pointer: coarse) { .pick { width: 20px; height: 20px; margin-top: 12px; } [role="columnheader"].picked .pick { margin-top: 0; } }
 .pick-space { display: inline-block; visibility: hidden; cursor: default; }
+.juiced-defaults .group-title .switch { margin-left: auto; }
+.inline-note { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 12px; padding: 6px 10px; margin-bottom: 8px; border: 1px solid var(--border); border-radius: 6px; font-size: .8rem; }
+.inline-note .action-row { gap: 4px; }
+.defaults-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; font-size: .8rem; }
+.defaults-list li { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.defaults-list code { overflow-wrap: anywhere; }

@@ -48,10 +48,13 @@ export function tunedOptions(draft: TunedDraft): TunedOptions {
   })) as TunedOptions;
 }
 
-/** What an empty field falls back to: the value the profile already passes, else the engine default. */
-export function fallback(key: TunedKey, effective: unknown, defaults: unknown): string {
+/** What an empty field falls back to: the value the profile already passes, then Juiced's or the
+ * model file's default, else the engine default. */
+export function fallback(key: TunedKey, effective: unknown, defaults: unknown, model?: Record<string, { value: string | number; source: string } | null>): string {
   const current = record(effective)[key], engine = record(defaults)[key];
   if (current !== undefined && current !== null) return `${text(current)} (profile)`;
+  const chosen = model?.[key];
+  if (chosen && chosen.source !== "saved") return `${text(chosen.value)} (${chosen.source === "model-file" ? "model file" : "Juiced"})`;
   if (engine !== undefined && engine !== null) return `Default ${text(engine)}`;
   return "Engine default";
 }

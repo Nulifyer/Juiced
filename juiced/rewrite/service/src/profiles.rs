@@ -881,6 +881,21 @@ impl<R: Read + Seek> MetadataReader<'_, R> {
             .map_err(|_| Error::new("gguf_io", "The GGUF metadata could not be inspected."))?;
         Ok(())
     }
+    /// Optional text: a value longer than `maximum` or not UTF-8 is skipped instead of failing
+    /// the whole header.
+    fn lenient_string(&mut self, maximum: u64) -> Result<Option<String>, Error> {
+        let length = self.u64()?;
+        if length > maximum {
+            self.skip(length)?;
+            return Ok(None);
+        }
+        self.advance(length)?;
+        let mut bytes = vec![0; length as usize];
+        self.reader
+            .read_exact(&mut bytes)
+            .map_err(|_| Error::new("gguf_io", "The GGUF metadata could not be read."))?;
+        Ok(String::from_utf8(bytes).ok())
+    }
     fn string(&mut self, maximum: u64) -> Result<String, Error> {
         let length = self.u64()?;
         if length > maximum {
@@ -1007,6 +1022,32 @@ impl<R: Read + Seek> MetadataReader<'_, R> {
         }
         Ok(count)
     }
+    /// A finite scalar as a number; other kinds are skipped and read as `None`.
+    fn number(&mut self, kind: u32) -> Result<Option<f64>, Error> {
+        let value = match kind {
+            // f32 0.95 widens to 0.949999988; six decimals keep what the publisher wrote.
+            6 => (f64::from(f32::from_le_bytes(self.bytes()?)) * 1e6).round() / 1e6,
+            12 => f64::from_le_bytes(self.bytes()?),
+            0..=5 | 10 | 11 => {
+                let raw = match kind {
+                    0 => i128::from(self.bytes::<1>()?[0]),
+                    1 => i128::from(i8::from_le_bytes(self.bytes()?)),
+                    2 => i128::from(u16::from_le_bytes(self.bytes()?)),
+                    3 => i128::from(i16::from_le_bytes(self.bytes()?)),
+                    4 => i128::from(self.u32()?),
+                    5 => i128::from(i32::from_le_bytes(self.bytes()?)),
+                    10 => i128::from(self.u64()?),
+                    _ => i128::from(i64::from_le_bytes(self.bytes()?)),
+                };
+                raw as f64
+            }
+            _ => {
+                self.skip_value(kind)?;
+                return Ok(None);
+            }
+        };
+        Ok(value.is_finite().then_some(value))
+    }
     fn integer(&mut self, kind: u32) -> Result<Option<u64>, Error> {
         let value = match kind {
             0 => self.bytes::<1>()?[0] as i128,
@@ -1087,7 +1128,36 @@ pub struct ModelShape {
     /// when no sampler flag is passed.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub publisher_sampling: bool,
+    #[serde(skip_serializing_if = "PublisherSampling::is_empty")]
+    pub sampling: PublisherSampling,
+    /// `general.basename`, the model name without quant or publisher, for curated recipes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub basename: Option<String>,
 }
+
+/// The `general.sampling.*` values llama.cpp reads from a GGUF.
+#[derive(Clone, Copy, Debug, Default, Serialize, PartialEq)]
+pub struct PublisherSampling {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top_k: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top_p: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_p: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repeat_penalty: Option<f64>,
+}
+
+impl PublisherSampling {
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+// Values are finite (the reader drops NaN and infinities), so equality is reflexive.
+impl Eq for PublisherSampling {}
 
 const SHAPE_KEYS: [&str; 18] = [
     "block_count",
@@ -1279,6 +1349,8 @@ pub fn read_gguf_shape<R: Read + Seek>(
     let mut vocabulary = None;
     let mut alignment = None;
     let mut publisher_sampling = false;
+    let mut sampling = PublisherSampling::default();
+    let mut basename = None;
     for _ in 0..entries {
         let key = input.string(1024)?;
         if key.is_empty() || key.chars().any(char::is_control) || seen.contains(&key) {
@@ -1324,8 +1396,26 @@ pub fn read_gguf_shape<R: Read + Seek>(
             vocabulary = Some(input.array_count()?);
         } else if key == "general.alignment" && matches!(kind, 4 | 10) {
             alignment = input.integer(kind)?;
+        } else if key == "general.basename" && kind == 8 {
+            basename = input
+                .lenient_string(256)?
+                .filter(|name| !name.trim().is_empty());
+        } else if let Some(name) = key.strip_prefix("general.sampling.") {
+            publisher_sampling = true;
+            let value = input.number(kind)?;
+            match name {
+                "temp" => sampling.temperature = value,
+                "top_k" => {
+                    sampling.top_k = value
+                        .filter(|value| *value >= 0.0)
+                        .map(|value| value as u64)
+                }
+                "top_p" => sampling.top_p = value,
+                "min_p" => sampling.min_p = value,
+                "penalty_repeat" => sampling.repeat_penalty = value,
+                _ => {}
+            }
         } else {
-            publisher_sampling |= key.starts_with("general.sampling.");
             input.skip_value(kind)?;
         }
         seen.insert(key);
@@ -1382,6 +1472,8 @@ pub fn read_gguf_shape<R: Read + Seek>(
         vocab_size: shape_value(SHAPE_KEYS[17]).or(vocabulary),
         tied_embedding_bytes: tied_embedding_bytes(&mut input, tensors, alignment.unwrap_or(32)),
         publisher_sampling,
+        sampling,
+        basename,
     };
     Ok((
         DeclaredContext {

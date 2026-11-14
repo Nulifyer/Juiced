@@ -942,7 +942,7 @@ impl Manager {
                 },
             })),
         })?;
-        let (estimate, llama) = match &format {
+        let estimate = match &format {
             models::ModelFormat::Gguf { declared, shape }
                 if crate::engines::memory::llama(
                     shape,
@@ -973,15 +973,9 @@ impl Manager {
                             .map(|breakdown| breakdown.total())
                     },
                 );
-                (
-                    models::estimate_with(&format, file_bytes, 0, Some(&plan(context))),
-                    Some(defaults),
-                )
+                models::estimate_with(&format, file_bytes, 0, Some(&plan(context)))
             }
-            _ => (
-                models::estimate(&format, file_bytes, models::context_tokens(&format)),
-                None,
-            ),
+            _ => models::estimate(&format, file_bytes, models::context_tokens(&format)),
         };
         let cpu_threads = snapshot
             .report
@@ -1001,7 +995,6 @@ impl Manager {
             format: &format,
             estimate: &estimate,
             companion_arguments: &companion_arguments,
-            llama: llama.as_ref(),
         });
         if engine == Engine::Vllm {
             self.environment_registration(&mut registration, &choice, &snapshot.report)

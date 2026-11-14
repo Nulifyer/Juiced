@@ -1,0 +1,37 @@
+import { expect, test } from "bun:test";
+import { appliedKey, changedSince, parseModelDefaults } from "../src/modelDefaults";
+import { fallback } from "../src/modelSettings";
+
+const view = {
+  available: true, enabled: true,
+  entries: [
+    { flag: "--spec-type", value: "ngram-simple", source: "recipe", reason: "Measured.", state: "applied" },
+    { flag: "--metrics", value: null, source: "juiced", reason: "Counters.", state: "applied" },
+    { flag: "--temp", value: "0.6", source: "family", reason: "Family.", state: "overridden" },
+    { flag: "--bogus", value: 3, source: "recipe", reason: "", state: "applied" },
+  ],
+  sampler: { temperature: { value: 1, source: "model-file" }, top_k: { value: "20", source: "juiced" }, min_p: null, top_p: { value: 1, source: "elsewhere" } },
+};
+
+test("defaults parse entries and sampler values and drop malformed ones", () => {
+  const defaults = parseModelDefaults(view)!;
+  expect(defaults.entries.map((entry) => entry.flag)).toEqual(["--spec-type", "--metrics", "--temp"]);
+  expect(defaults.sampler.top_p).toBeNull();
+  expect(parseModelDefaults({ enabled: true })).toBeNull();
+});
+
+test("the change note lists new non-Juiced arguments once per client", () => {
+  const defaults = parseModelDefaults(view)!;
+  expect(changedSince(defaults, null)).toEqual(["--spec-type ngram-simple"]);
+  expect(changedSince(defaults, appliedKey(defaults))).toEqual([]);
+  expect(changedSince(defaults, "--metrics")).toEqual(["--spec-type ngram-simple"]);
+  expect(changedSince({ ...defaults, enabled: false }, null)).toEqual([]);
+});
+
+test("an empty generation field names the model file or Juiced default before llama.cpp's", () => {
+  const sampler = parseModelDefaults(view)!.sampler;
+  expect(fallback("temperature", {}, { temperature: 0.8 }, sampler)).toBe("1 (model file)");
+  expect(fallback("top_k", {}, { top_k: 40 }, sampler)).toBe("20 (Juiced)");
+  expect(fallback("min_p", {}, { min_p: 0.05 }, sampler)).toBe("Default 0.05");
+  expect(fallback("temperature", { temperature: 0.9 }, {}, sampler)).toBe("0.9 (profile)");
+});

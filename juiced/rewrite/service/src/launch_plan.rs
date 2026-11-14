@@ -259,6 +259,39 @@ pub(crate) struct Summary<'a> {
     runtime_package: Option<&'a str>,
 }
 
+/// The model defaults (recipe, model file, Juiced and family arguments) a llama.cpp launch adds
+/// to arguments that leave them unset. Native settings-store profiles keep native semantics, and
+/// an operator can turn the defaults off per model.
+fn model_defaults(
+    spec: &ModelSpec,
+    bindings: &VerifiedLaunchBindings,
+    arguments: &[String],
+    effective: Option<&crate::profiles::LaunchOptions>,
+) -> Vec<crate::engines::memory::DefaultEntry> {
+    let profile = &spec.execution_profile;
+    if profile.adapter != Provider::LlamaCpp
+        || profile.native_model_id().is_some()
+        || !spec.juiced_defaults
+    {
+        return Vec::new();
+    }
+    let Some((declared, shape)) = std::fs::File::open(bindings.model.path())
+        .ok()
+        .and_then(|mut file| crate::profiles::read_gguf_shape(&mut file).ok())
+    else {
+        return Vec::new();
+    };
+    let slots = effective
+        .and_then(|options| options.parallel_slots)
+        .map_or(u64::from(spec.max_inflight), u64::from);
+    crate::engines::memory::LlamaDefaults::for_model(
+        &shape,
+        declared.architecture.as_deref(),
+        slots,
+    )
+    .apply(&mut arguments.to_vec())
+}
+
 impl LaunchPlan {
     pub(crate) fn resolve(
         spec: &ModelSpec,
@@ -355,6 +388,8 @@ impl LaunchPlan {
         } else {
             None
         };
+        let model_defaults =
+            model_defaults(spec, &bindings, template.arguments(), effective.as_ref());
         let managed_cache = profile.adapter == Provider::LlamaCpp && !template.has_cache_binding();
         let managed_prompt_cache = profile.adapter == Provider::LlamaCpp
             && !crate::engines::memory::has_flag(template.arguments(), "--cache-ram");
@@ -401,6 +436,12 @@ impl LaunchPlan {
         }
         if managed_prompt_cache {
             digest.update(b"\0juiced-launch-managed-prompt-cache-v1\0");
+        }
+        for entry in &model_defaults {
+            digest.update(b"\0juiced-launch-model-default-v1\0");
+            digest.update(entry.flag.as_bytes());
+            digest.update(b"=");
+            digest.update(entry.value.as_deref().unwrap_or_default().as_bytes());
         }
         for companion in &spec.companions {
             let metadata = std::fs::metadata(&companion.path)
@@ -601,6 +642,10 @@ impl LaunchPlan {
                 members: &members,
             })
             .map_err(|error| Error::new(error.code, error.message))?;
+        for entry in &model_defaults {
+            args.push(entry.flag.clone());
+            args.extend(entry.value.clone());
+        }
         if let Some(alias) = public_alias {
             args.extend(["--alias".to_owned(), alias.to_owned()]);
         }

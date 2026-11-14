@@ -43,6 +43,20 @@ Per-backend arguments (`llamacpp.rocm_args`, `vulkan_args`, `cpu_args`, and the
 same for sd-cpp and whisper.cpp) are used for the backend the host runs, unless
 the model saved its own arguments.
 
+## Juiced defaults
+
+**Juiced defaults** in Settings lists what Juiced adds when the model starts and
+where each argument comes from: a tested recipe for that model, something its file
+declares (such as an MTP head for faster decoding), or native Juiced's default for
+its model family. Juiced works these out at every start, so a newer release
+improves existing models on their next load; the first time something new is
+added, Settings says so once, with **OK** and **Turn off**. Your own settings and
+extra arguments always win. Turn the switch off to start the model with only your
+settings; a loaded model restarts.
+
+Empty generation fields show the value that applies, such as `1 (model file)`
+for a model whose file names its publisher's temperature.
+
 ### From a script
 
 ```bash

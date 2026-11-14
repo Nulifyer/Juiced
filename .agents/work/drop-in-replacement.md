@@ -109,6 +109,18 @@ Released in rc.26 (gate 281 e2e passed; live: 4 Hot models loaded, Coder-Next se
 - `--spec-draft-n-max` / `--spec-draft-n-min` are accepted; other `--spec-draft-*` stay refused.
 - New registrations start at min(trained, 32768) context, reduced to fit; native adoption keeps v0.9.2's largest-that-fits. The settings line shows trained, fits-up-to and running.
 
+## Model defaults at launch (approved 2026-11-14)
+
+Request (user, "this sounds good, I like this, do it"): every engine runs each model with its best features and performance. Plan, in order:
+1. Resolve a defaults layer at every launch, not once at registration. Precedence low to high: engine default < host profile < model file < curated recipe < measured tuning < operator saved value. Existing models pick up new defaults on their next load automatically, with a "defaults changed" note and a one-click turn-off (user accepted the recommendation).
+2. Read what the model file declares per engine (GGUF sampler values, MTP head, template, projector, layout; vLLM architecture/parsers, generation_config) and show it with its source.
+3. Curated recipes as data, keyed by model (start: Qwen3-Coder-Next `--spec-type ngram-simple`, measured).
+4. Opt-in Tune per model (prefill/decode probes over ubatch, backend, flash attention, speculation), cached per model file, engine build and host.
+5. Post-add / engine-change check: loads, chat, tool-call parse, thinking toggle, vision, speed.
+Native-adopted (v0.9.2 settings store) models keep native semantics.
+
+Progress: batch A (steps 1-3 for llama.cpp and vLLM parsers) in progress.
+
 ## Pending (2026-11-13, after rc.24)
 
 - TRELLIS on gfx1150: Vulkan measured ~11% faster than ROCm; consider recommending Vulkan for TRELLIS on RDNA 3.5.

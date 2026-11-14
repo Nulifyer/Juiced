@@ -378,7 +378,6 @@ fn generation_registrations_pass_the_argument_grammar() {
             format: &format,
             estimate: &estimate,
             companion_arguments: &arguments,
-            llama: None,
         });
         let crate::config::Registration(spec) = serde_json::from_value(registration).unwrap();
         assert_eq!(spec.operations, [operation]);

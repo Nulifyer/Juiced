@@ -292,7 +292,6 @@ fn gguf_formats_offer_ds4_and_checkpoints_register_on_vllm() {
         format: &format,
         estimate: &estimate,
         companion_arguments: &[],
-        llama: None,
     });
     let profile = &registration["execution_profile"];
     assert_eq!(profile["adapter"], "vllm");

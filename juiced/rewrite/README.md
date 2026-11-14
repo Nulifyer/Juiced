@@ -337,18 +337,22 @@ Saving launch options recomputes the reservation and refuses settings that excee
 - Results are cached by model file, runtime and arguments.
 - `available_bytes` counts a loaded model's own reservation as free.
 
-New registrations and library adds start at 32768 tokens, or the trained context when it is smaller, reduced to what fits the budget left by Hot models. Native adoption without a saved context keeps v0.9.2's choice: the largest context that fits, up to the trained context (32768 when unknown). The model settings show the trained context and the largest context that fits, with buttons for each. New registrations, library adds and native adoption also get:
+New registrations and library adds start at 32768 tokens, or the trained context when it is smaller, reduced to what fits the budget left by Hot models. Native adoption without a saved context keeps v0.9.2's choice: the largest context that fits, up to the trained context (32768 when unknown). The model settings show the trained context and the largest context that fits, with buttons for each. Registrations get `--parallel 1` and all layers on GPU backends.
 
-- `--parallel 1` and all layers on GPU backends
-- `--metrics`
-- native per-architecture sampler defaults from `architecture_defaults.json`, unless an argument already sets them or the GGUF names its publisher's sampler (`general.sampling.*`), which llama.cpp then applies itself. One architecture covers differently tuned checkpoints; `qwen3next` defaults are the Thinking model's, while Qwen3-Coder-Next ships temperature 1.0, top-p 0.95, top-k 40.
-- `--spec-type draft-mtp` when the GGUF has an MTP head and one slot
+Every llama.cpp launch adds Juiced's model defaults to the saved arguments. They are resolved when the worker starts, so existing models pick up a newer release's defaults on their next load. An argument the model's saved settings or extra arguments already set always wins, and an earlier source wins over a later one for the same flag:
+
+1. A tested recipe for this model from `service/src/model_recipes.json`, matched by the GGUF's `general.basename` (for example `--spec-type ngram-simple` for Qwen3-Coder-Next).
+2. What the model file declares: `--spec-type draft-mtp` when the GGUF has an MTP head and the model has one slot, unless a recipe chose another speculative type.
+3. `--metrics`.
+4. Native per-architecture defaults from `architecture_defaults.json`. Their sampler flags are left out when the GGUF names its publisher's sampler (`general.sampling.*`), which llama.cpp then applies itself; one architecture covers differently tuned checkpoints (`qwen3next` defaults are the Thinking model's, while Qwen3-Coder-Next ships temperature 1.0, top-p 0.95, top-k 40).
+
+Models from a native settings store keep native semantics. `POST /v1/models/{model}/options` with `{"expected_revision": N, "juiced_defaults": false}` turns the defaults off for one model (add `"apply": "reload"` for a loaded model); `true` turns them back on. The launch fingerprint covers the added arguments, and the memory estimate and reservation count them.
 
 Flash attention, threads on GPU, mmap and reasoning stay at engine defaults.
 
 Every llama.cpp launch that does not set `--cache-ram` passes `--cache-ram 1024`. The reservation charges it. Without the flag, llama-server's 8 GiB prompt cache would grow outside the reservation, and Juiced's own session cache already keeps conversations on disk.
 
-`GET /v1/models/{model}/options` adds `reservation_bytes` and `fields`. `fields` holds context, gpu_layers, slots, threads, kv_cache_type, flash_attention, mtp and thinking. Each field is `{saved, launched, effective, source, restart_needed}`, and `source` is one of:
+`GET /v1/models/{model}/options` adds `reservation_bytes`, `fields` and `model_defaults`. `model_defaults` is `{available, enabled, entries: [{flag, value, source, reason, state}], sampler}`: `source` is `recipe`, `model-file`, `juiced` or `family`; `state` is `applied`, `overridden` (a saved argument sets the flag), `shadowed` (an earlier default sets it) or `off`; `sampler` gives temperature, top_k, top_p, min_p and repeat_penalty as `{value, source}` with source `saved`, `juiced` or `model-file`, or null when llama.cpp's own default applies. `fields` holds context, gpu_layers, slots, threads, kv_cache_type, flash_attention, mtp and thinking. Each field is `{saved, launched, effective, source, restart_needed}`, and `source` is one of:
 
 - `reported` (from the running engine's `/props` or `/slots`)
 - `auto` (matches Juiced's automatic choice)

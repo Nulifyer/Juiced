@@ -2436,9 +2436,10 @@ impl Manager {
         let mut view = serde_json::json!({"model":id,"revision":spec.revision,"provider":spec.execution_profile.adapter,"physical_slots":spec.max_inflight,"reservation_bytes":self.worker(id)?.spec.resident_bytes,"context_semantics":"context_tokens is a total launch budget; serving context requires engine observation"});
         options::settings_view(&spec.execution_profile, effective.as_ref(), &mut view);
         drop(config);
-        if let Some((fields, metrics)) = self.launch_provenance(id).await {
+        if let Some((fields, metrics, defaults)) = self.launch_provenance(id).await {
             view["fields"] = fields;
             view["mtp_metrics"] = metrics;
+            view["model_defaults"] = defaults;
         }
         Ok(view)
     }

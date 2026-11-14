@@ -62,6 +62,7 @@ impl Harness {
             revision: 0,
             idle_unload_after_ms: None,
             companions: Vec::new(),
+            juiced_defaults: true,
         };
         let mut config = Config {
             schema_version: 2,

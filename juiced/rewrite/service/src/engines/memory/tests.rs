@@ -504,3 +504,36 @@ fn a_new_registration_starts_at_most_at_the_default_cap() {
     assert_eq!(default_context(None, u64::MAX, total), DEFAULT_CONTEXT_CAP);
     assert_eq!(default_context(Some(262_144), 16_384 * 1024, total), 16_384);
 }
+
+#[test]
+fn a_recipe_matches_by_basename_and_outranks_the_model_file_and_family() {
+    let coder = ModelShape {
+        basename: Some("qwen3-coder-next".into()),
+        publisher_sampling: true,
+        nextn_predict_layers: Some(1),
+        ..ModelShape::default()
+    };
+    let defaults = LlamaDefaults::for_model(&coder, Some("qwen3next"), 1);
+    assert!(!defaults.mtp, "a speculative recipe replaces MTP drafting");
+    let sources: Vec<(String, DefaultSource)> = defaults
+        .entries()
+        .into_iter()
+        .map(|entry| (entry.flag, entry.source))
+        .collect();
+    assert_eq!(
+        sources,
+        [
+            ("--spec-type".to_owned(), DefaultSource::Recipe),
+            ("--metrics".to_owned(), DefaultSource::Juiced),
+        ]
+    );
+    let mut saved: Vec<String> = ["--spec-type", "none"].map(str::to_owned).into();
+    let added = defaults.apply(&mut saved);
+    assert_eq!(saved, ["--spec-type", "none", "--metrics"]);
+    assert_eq!(added.len(), 1);
+    let other = ModelShape {
+        basename: Some("Qwen3-Coder-Next-Base".into()),
+        ..ModelShape::default()
+    };
+    assert!(LlamaDefaults::for_model(&other, None, 1).recipe.is_empty());
+}

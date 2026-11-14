@@ -99,6 +99,9 @@ pub struct SettingsChange {
     pub image_defaults: Option<serde_json::Map<String, serde_json::Value>>,
     #[serde(default)]
     pub asr_options: Option<serde_json::Map<String, serde_json::Value>>,
+    /// Turns Juiced's model defaults on or off for this model; applies at its next launch.
+    #[serde(default)]
+    pub juiced_defaults: Option<bool>,
     #[serde(default)]
     pub apply: OptionsApply,
 }
@@ -160,7 +163,7 @@ impl Manager {
         options: LaunchOptions,
         apply: OptionsApply,
     ) -> Result<serde_json::Value, OptionsError> {
-        self.apply_llama(id, expected_revision, Some(options), None, apply)
+        self.apply_llama(id, expected_revision, Some(options), None, None, apply)
             .await
     }
 
@@ -175,16 +178,24 @@ impl Manager {
             extra_args,
             image_defaults,
             asr_options,
+            juiced_defaults,
             apply,
         } = change;
         match (
-            options.is_some() || extra_args.is_some(),
+            options.is_some() || extra_args.is_some() || juiced_defaults.is_some(),
             image_defaults,
             asr_options,
         ) {
             (true, None, None) => {
-                self.apply_llama(id, expected_revision, options, extra_args, apply)
-                    .await
+                self.apply_llama(
+                    id,
+                    expected_revision,
+                    options,
+                    extra_args,
+                    juiced_defaults,
+                    apply,
+                )
+                .await
             }
             (false, Some(patch), None) => {
                 self.apply_image_defaults(id, expected_revision, patch, apply)
@@ -197,7 +208,7 @@ impl Manager {
             _ => Err(ApiError::new(
                 StatusCode::BAD_REQUEST,
                 "options_body",
-                "Send options and extra_args, image_defaults, or asr_options.",
+                "Send options, extra_args and juiced_defaults, image_defaults, or asr_options.",
             )
             .into()),
         }
@@ -209,6 +220,7 @@ impl Manager {
         expected_revision: u64,
         options: Option<LaunchOptions>,
         extra_args: Option<Vec<String>>,
+        juiced_defaults: Option<bool>,
         apply: OptionsApply,
     ) -> Result<serde_json::Value, OptionsError> {
         if let Some(options) = &options {
@@ -250,7 +262,9 @@ impl Manager {
             .into());
         }
         if worker.spec.execution_profile.native_model_id().is_some() {
-            let Some(options) = options.filter(|_| extra_args.is_none()) else {
+            let Some(options) =
+                options.filter(|_| extra_args.is_none() && juiced_defaults.is_none())
+            else {
                 return Err(ApiError::new(
                     StatusCode::BAD_REQUEST,
                     "native_options_authority",
@@ -308,6 +322,9 @@ impl Manager {
                         .map_err(|error| {
                             ApiError::new(StatusCode::BAD_REQUEST, error.code, error.message)
                         })?;
+                }
+                if let Some(enabled) = juiced_defaults {
+                    spec.juiced_defaults = enabled;
                 }
                 if let Some((_, corrected)) = super::fit::formula_reservation(
                     &spec.resolved(&parent),

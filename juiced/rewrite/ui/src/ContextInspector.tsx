@@ -4,7 +4,8 @@ import { bytes, type Model } from "./domain";
 import type { Mutate } from "./Models";
 import { launchDraft, editedLaunchOptions, parseModelContext, parseModelOptions, sameDraft, servingContext, type LaunchDraft, type ModelOptions } from "./profiles";
 import { asrFields, engineDraft, enginePatch, fallback, imageFields, sameTuned, splitArgs, tunedDraft, tunedFields, tunedOptions, type EngineField, type Field as SettingField, type TunedDraft } from "./modelSettings";
-import { Button, HelpTip } from "./ui";
+import { appliedKey, argument, changedSince, parseModelDefaults, sourceLabels, type ModelDefaults } from "./modelDefaults";
+import { Button, HelpTip, Switch } from "./ui";
 import { useResource } from "./useResource";
 
 const emptyDraft: LaunchDraft = { context: "", threads: "", gpu: "" };
@@ -14,7 +15,7 @@ const tokens = (value: number | null | undefined) => value == null ? "—" : val
 type Breakdown = { weights_bytes: number; context_bytes: number; compute_bytes: number; projector_bytes: number; draft_bytes: number; other_bytes: number };
 export type Fit = { source: string; total_bytes: number; budget_bytes: number; available_bytes: number; fits: boolean; loaded: boolean; largest_context_that_fits: number | null; trained_context: number | null; breakdown: Breakdown; warnings: string[] };
 type Field = { saved: unknown; launched: unknown; effective: unknown; source: string; restart_needed: boolean };
-type Extras = { fields: Record<string, Field> | null; mtp: { acceptance_rate: number | null; accepted_per_draft: number | null } | null };
+type Extras = { fields: Record<string, Field> | null; mtp: { acceptance_rate: number | null; accepted_per_draft: number | null } | null; defaults: ModelDefaults | null };
 
 const number = (value: unknown) => typeof value === "number" && Number.isFinite(value) ? value : null;
 const record = (value: unknown): Record<string, unknown> => value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -35,6 +36,7 @@ function parseExtras(value: unknown): Extras {
   return {
     fields: body.fields ? Object.fromEntries(Object.entries(fields).map(([key, item]) => { const field = record(item); return [key, { saved: field.saved, launched: field.launched, effective: field.effective, source: typeof field.source === "string" ? field.source : "", restart_needed: field.restart_needed === true }]; })) : null,
     mtp: body.mtp_metrics ? { acceptance_rate: number(metrics.acceptance_rate), accepted_per_draft: number(metrics.accepted_per_draft) } : null,
+    defaults: parseModelDefaults(body.model_defaults),
   };
 }
 
@@ -137,7 +139,8 @@ export function ContextInspector({ model, client, online, busy, policyDirty, onD
         <div className="segmented" role="radiogroup" aria-labelledby="gpu-label">{([["gpu", "GPU"], ["cpu", "CPU only"]] as const).map(([value, label]) => <button key={value} type="button" role="radio" aria-checked={value === "gpu" ? gpuAll || (Number(draft.gpu) > 0 && Number(draft.gpu) < 99) : draft.gpu.trim() === "0"} disabled={blocked} onClick={() => setDraft({ ...draft, gpu: value === "gpu" ? "" : "0" })}>{label}</button>)}</div></div>}
       {!advanced && fields?.mtp && <p className="setting-status"><strong>Multi-token prediction</strong> {mtp ? "on" : "off"}{mtp && extras.data?.mtp?.acceptance_rate != null ? ` · ${Math.round(extras.data.mtp.acceptance_rate * 100)}% of drafts accepted` : ""}</p>}
       {!advanced && fields?.thinking && fields.thinking.effective !== null && fields.thinking.effective !== undefined && <p className="setting-status"><strong>Thinking</strong> {show(fields.thinking.effective)}</p>}
-      {llama && !imported && <TunedGrid title="Generation defaults" help="Used when a request doesn't set its own value. Empty keeps the profile's argument or llama.cpp's default." fields={tunedFields.filter((field) => !field.advanced)} draft={tuned} onChange={setTuned} view={view} disabled={blocked} />}
+      {llama && !imported && <TunedGrid title="Generation defaults" help="Used when a request doesn't set its own value. Empty keeps the profile's argument, Juiced's or the model file's default, or llama.cpp's default." fields={tunedFields.filter((field) => !field.advanced)} draft={tuned} onChange={setTuned} view={view} sampler={extras.data?.defaults?.sampler} disabled={blocked} />}
+      {llama && !imported && extras.data?.defaults?.available && <JuicedDefaults model={model} defaults={extras.data.defaults} revision={revision.current ?? model.revision} disabled={blocked || dirty} mutate={mutate} />}
       {advanced && !imported && <div className="setting-group"><div className="group-title"><span>Runtime</span><HelpTip label="Runtime">CPU threads, offload and batching. Changes apply when the engine next starts.</HelpTip></div><div className="profile-option-grid"><div><label htmlFor="profile-threads">Threads</label><input id="profile-threads" inputMode="numeric" value={draft.threads} disabled={blocked} placeholder="Engine default" onChange={(event) => setDraft({ ...draft, threads: event.target.value })} /></div><div><label htmlFor="profile-gpu">GPU layers</label><input id="profile-gpu" inputMode="numeric" value={draft.gpu} disabled={blocked} placeholder="All" onChange={(event) => setDraft({ ...draft, gpu: event.target.value })} /></div>
         {tunedFields.filter((field) => field.advanced).map((field) => <TunedInput key={field.key} field={field} draft={tuned} onChange={setTuned} view={view} disabled={blocked} />)}</div></div>}
       {advanced && !imported && llama && <div className="setting-group"><div className="field-head"><label htmlFor="profile-extra">Extra arguments</label><HelpTip label="Extra arguments">Passed to llama-server after Juiced's own arguments, for example --spec-type draft-mtp. Quote values that contain spaces. Settings above have their own fields; the host, port, model and cache paths stay with Juiced.</HelpTip></div>
@@ -157,9 +160,9 @@ export function ContextInspector({ model, client, online, busy, policyDirty, onD
   </section>;
 }
 
-function TunedInput({ field, draft, onChange, view, disabled }: { field: SettingField; draft: TunedDraft; onChange: (draft: TunedDraft) => void; view: ModelOptions; disabled: boolean }) {
+function TunedInput({ field, draft, onChange, view, sampler, disabled }: { field: SettingField; draft: TunedDraft; onChange: (draft: TunedDraft) => void; view: ModelOptions; sampler?: ModelDefaults["sampler"]; disabled: boolean }) {
   const id = `profile-${field.key}`;
-  const empty = fallback(field.key, view.effective_launch, view.defaults);
+  const empty = fallback(field.key, view.effective_launch, view.defaults, sampler);
   return <div>
     <div className="field-head"><label htmlFor={id}>{field.label}</label><HelpTip label={field.label}>{field.help}</HelpTip></div>
     {field.kind === "choice"
@@ -168,9 +171,29 @@ function TunedInput({ field, draft, onChange, view, disabled }: { field: Setting
   </div>;
 }
 
-function TunedGrid({ title, help, fields, draft, onChange, view, disabled }: { title: string; help: string; fields: SettingField[]; draft: TunedDraft; onChange: (draft: TunedDraft) => void; view: ModelOptions; disabled: boolean }) {
+function TunedGrid({ title, help, fields, draft, onChange, view, sampler, disabled }: { title: string; help: string; fields: SettingField[]; draft: TunedDraft; onChange: (draft: TunedDraft) => void; view: ModelOptions; sampler?: ModelDefaults["sampler"]; disabled: boolean }) {
   return <div className="setting-group"><div className="group-title"><span>{title}</span><HelpTip label={title}>{help}</HelpTip></div>
-    <div className="profile-option-grid">{fields.map((field) => <TunedInput key={field.key} field={field} draft={draft} onChange={onChange} view={view} disabled={disabled} />)}</div></div>;
+    <div className="profile-option-grid">{fields.map((field) => <TunedInput key={field.key} field={field} draft={draft} onChange={onChange} view={view} sampler={sampler} disabled={disabled} />)}</div></div>;
+}
+
+function readSeen(key: string) { try { return localStorage.getItem(key); } catch { return null; } }
+function writeSeen(key: string, value: string) { try { localStorage.setItem(key, value); } catch { /* Storage can be unavailable in private sessions. */ } }
+
+/** What Juiced adds to this model's launch, with a per-client note when a release changes it. */
+function JuicedDefaults({ model, defaults, revision, disabled, mutate }: { model: Model; defaults: ModelDefaults; revision: number; disabled: boolean; mutate: Mutate }) {
+  const key = `juiced.defaultsSeen.${model.id}`;
+  const [seen, setSeen] = useState(() => readSeen(key));
+  const shown = defaults.entries.filter((entry) => entry.source !== "juiced" && entry.state !== "shadowed");
+  const changed = changedSince(defaults, seen);
+  const acknowledge = () => { const current = appliedKey(defaults); writeSeen(key, current); setSeen(current); };
+  const toggle = (enabled: boolean) => void mutate(`models/${encodeURIComponent(model.id)}/options`, { expected_revision: revision, juiced_defaults: enabled, ...(model.loaded ? { apply: "reload" } : {}) }, enabled ? `Juiced defaults are on for ${model.id}.` : `Juiced defaults are off for ${model.id}.`).then((saved) => { if (saved) acknowledge(); });
+  return <div className="setting-group juiced-defaults">
+    <div className="group-title"><span>Juiced defaults</span><HelpTip label="Juiced defaults">Arguments Juiced adds when the model starts: tested recipes for this model, what its file declares (such as an MTP head), and native Juiced's defaults for its family. Your own settings and extra arguments always win. {model.loaded ? "Turning this on or off restarts the model." : "Changes apply when the model next loads."}</HelpTip>
+      <Switch checked={defaults.enabled} label="Use Juiced defaults" disabled={disabled} onChange={toggle} /></div>
+    {changed.length > 0 && <div className="inline-note" role="status"><span>{seen === null ? "Juiced adds" : "Juiced now also adds"} <code>{changed.join(" · ")}</code> at launch.</span><span className="action-row"><Button variant="ghost" onClick={acknowledge}>OK</Button><Button variant="ghost" disabled={disabled} onClick={() => toggle(false)}>Turn off</Button></span></div>}
+    {shown.length === 0 ? <p className="field-help">Nothing beyond the engine's own defaults for this model.</p>
+      : <ul className="defaults-list">{shown.map((entry) => <li key={`${entry.source}${entry.flag}`} className={entry.state === "applied" ? undefined : "muted"}><code>{argument(entry)}</code><span className="muted">{sourceLabels[entry.source]}{entry.state === "overridden" ? " · your setting wins" : entry.state === "off" ? " · off" : ""}</span><HelpTip label={argument(entry)}>{entry.reason}</HelpTip></li>)}</ul>}
+  </div>;
 }
 
 function EngineDefaults({ view, model, online, busy, blockedByOther, onDirty, mutate }: { view: ModelOptions; model: Model; online: boolean; busy: boolean; blockedByOther: boolean; onDirty: (dirty: boolean) => void; mutate: Mutate }) {

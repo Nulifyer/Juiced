@@ -434,6 +434,18 @@ pub struct ModelSpec {
     pub idle_unload_after_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub companions: Vec<CompanionFile>,
+    /// Juiced adds its model defaults (model file, family and recipe arguments) at launch. The
+    /// operator turns them off per model; saved arguments always win either way.
+    #[serde(default = "juiced_defaults_on", skip_serializing_if = "is_on")]
+    pub juiced_defaults: bool,
+}
+
+fn juiced_defaults_on() -> bool {
+    true
+}
+
+fn is_on(value: &bool) -> bool {
+    *value
 }
 
 pub const MAXIMUM_COMPANIONS: usize = 8;
@@ -581,6 +593,7 @@ impl From<LegacyModelSpec> for ModelSpec {
             revision: legacy.revision,
             idle_unload_after_ms: None,
             companions: Vec::new(),
+            juiced_defaults: true,
         }
     }
 }

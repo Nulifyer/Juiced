@@ -712,7 +712,6 @@ impl Manager {
                             } else {
                                 &companion_arguments
                             },
-                            llama: None,
                         });
                         let profile = &mut value["execution_profile"];
                         if let Some(arguments) = profile["args"].as_array_mut() {

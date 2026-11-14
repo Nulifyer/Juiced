@@ -1,0 +1,11 @@
+{
+  "_comment": "Curated llama.cpp arguments for specific models, matched by the GGUF general.basename (case-insensitive). Juiced adds them at launch unless the model's saved arguments set the same flag or the operator turns Juiced defaults off. Add a recipe only with a measurement behind it.",
+  "schema_version": 1,
+  "recipes": [
+    {
+      "basename": "Qwen3-Coder-Next",
+      "arguments": ["--spec-type", "ngram-simple"],
+      "reason": "N-gram drafting doubles decode speed when the model repeats code it has seen (file rewrites: 22.8 to 48.9 tok/s on a Radeon 890M) and leaves chat speed unchanged."
+    }
+  ]
+}
