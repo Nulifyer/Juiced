@@ -361,7 +361,13 @@ mod tests {
         assert!(staged(directory.path()).is_empty());
         let short = store.begin_intake("short.gguf".into(), 8).unwrap();
         assert!(matches!(short.finish(), Err(ArtifactError::SizeMismatch)));
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        // Cleanup runs in the background; a slow runner needs more than a fixed short sleep.
+        for _ in 0..200 {
+            if store.inspect().unwrap().jobs.is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
         assert!(store.inspect().unwrap().jobs.is_empty());
     }
 
