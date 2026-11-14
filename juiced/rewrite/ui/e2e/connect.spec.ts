@@ -77,6 +77,7 @@ test("Endpoints list every registered route with its authority", async ({ page }
   await expect(table.getByRole("row").filter({ hasText: "GET /v1/health" })).toContainText("read");
   await expect(table.getByRole("row").filter({ hasText: /^POST \/v1\/juiced\/access\/keys\s*operator$/ })).toBeVisible();
   await expect(table.getByRole("row").filter({ hasText: "POST /mcp" })).toBeVisible();
+  await page.getByRole("button", { name: "About Endpoints" }).click();
   await expect(page.getByText("Management routes also answer under /api/v0, /api/v1 and /v0.", { exact: false })).toBeVisible();
 });
 

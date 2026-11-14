@@ -768,5 +768,3 @@ html, body { height: 100%; overflow: hidden; }
 .bulk-bar { position: sticky; top: 0; z-index: 3; }
 @media (pointer: coarse) { .pick { width: 20px; height: 20px; margin-top: 12px; } [role="columnheader"].picked .pick { margin-top: 0; } }
 .pick-space { display: inline-block; visibility: hidden; cursor: default; }
-.model-table .fold-row, .has-inspector .model-table .fold-row { grid-template-columns: 1fr; cursor: default; }
-.model-table .fold-row:hover { background: none; }

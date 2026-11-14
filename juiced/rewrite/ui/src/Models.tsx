@@ -132,10 +132,7 @@ export function ModelList({ models, selected, onSelect, mode, mutate, busy, onli
   const [service, setService] = useState<Service | "files" | null>(null);
   const [dragging, setDragging] = useState("");
   const dragged = useRef("");
-  const [showDisabled, setShowDisabled] = useState(false);
-  const matched = sortModels(service === "files" ? [] : matchingModels(service ? models.filter((model) => offers(model, service)) : models, query), sort);
-  const folded = mode === "models" && !showDisabled && !query.trim() && sort === null ? matched.filter((model) => model.policy === "disabled" && !model.loaded).length : 0;
-  const visible = mode === "models" && folded > 0 ? matched.filter((model) => !(model.policy === "disabled" && !model.loaded)) : matched;
+  const visible = sortModels(service === "files" ? [] : matchingModels(service ? models.filter((model) => offers(model, service)) : models, query), sort);
   const onSort = (key: SortKey) => setSort((current) => current?.key === key ? (current.descending ? null : { key, descending: true }) : { key, descending: false });
   const allChosen = visible.length > 0 && visible.every((model) => chosen.has(model.id));
   const toggle = (id: string) => setChosen((current) => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; });
@@ -176,7 +173,6 @@ export function ModelList({ models, selected, onSelect, mode, mutate, busy, onli
         <div role="cell" className="numeric muted">{bytes(model.resident_bytes)}</div>
         <div role="cell" className="row-end"><RowAction model={model} mutate={mutate} disabled={locked} /></div>
       </div>)}
-      {folded > 0 && <div className="data-row fold-row" role="row"><div role="cell"><button className="link-button" onClick={() => setShowDisabled(true)}>Show {folded} disabled model{folded === 1 ? "" : "s"}</button></div></div>}
       {visibleFiles.map((group) => <FileRow key={group.id} group={group} selected={selectedFile === group.id} onSelect={() => onSelectFile?.(group.id)} />)}
     </div>}
   </section>;

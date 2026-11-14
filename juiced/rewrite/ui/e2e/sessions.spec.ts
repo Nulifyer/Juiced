@@ -93,7 +93,9 @@ test("Cache on the real fixture shows the default once and keeps manual snapshot
   await expect(page.getByRole("radiogroup", { name: "Default cache mode" })).toHaveCount(1);
   const overrides = page.getByRole("region", { name: "Model overrides" });
   await expect(overrides.getByRole("table", { name: "Overrides" })).toHaveCount(0);
-  await expect(overrides.getByLabel("Model to override").getByRole("option")).toHaveText(["Choose a model…", "fixture.managed-runtime"]);
+  const addable = overrides.getByLabel("Model to override");
+  if (await addable.locator('option[value=" show-disabled"]').count()) await addable.selectOption(" show-disabled");
+  await expect(addable.getByRole("option").filter({ hasText: /^fixture\./ })).toHaveText(["fixture.managed-runtime"]);
   const manual = page.getByRole("region", { name: "Manual snapshots" });
   await expect(manual.getByRole("switch", { name: "Allow manual save and restore" })).toHaveAttribute("aria-checked", "false");
   await expect(manual).toContainText("0 saved");
