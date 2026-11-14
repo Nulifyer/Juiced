@@ -73,7 +73,7 @@
     },
     {
       "path": "juiced/rewrite/rust-tests/tests/api_end_to_end.rs",
-      "sha256": "e94956ef679c3a33db9060c124f7fcb2f8c1d35d06607b5b1e0ef743452b82bd",
+      "sha256": "087ab062d2a3cff5a8c3e5474c350bc3d9fdbbedb0f882f1a3fa67e8e380129c",
       "hash_check": "snapshot_only"
     },
     {
@@ -133,7 +133,7 @@
     },
     {
       "path": "juiced/rewrite/service/src/http.rs",
-      "sha256": "d0efbe3ce193c46b1df887c360a96e634b23e5ee40e308936d74a49815b496ac",
+      "sha256": "fdfb20eaf12a119b46a98303a1ed5eae3198d0d80a5a3e00867e7ff17ec54258",
       "hash_check": "snapshot_only"
     },
     {

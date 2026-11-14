@@ -208,6 +208,8 @@ Model files that are not on Hugging Face enter the library two ways. Both reject
 
 Admission queues default to 64 shared pending and 16 pending per service, with configurable 2/10/30 second essential/interactive/batch waits. Physical slots and the resident budget remain separate. No principal or conversation quota is enabled by default. Native `X-Juiced-Priority` accepts interactive or batch; essential requires operator authority. Pause rejects new inference and clears waiting requests while preserving active work and policies. Queue expiry is 504; bounded overflow is 429. Resident pressure does not evict other workers.
 
+`request_timeout_ms` (default 300000) bounds a worker that stops producing, not how long a reply may take. Chat, completion and responses requests wait up to five times that for the first byte (prefill, or a whole non-streamed reply), then end only when the worker sends nothing for a full `request_timeout_ms`; a stalled request ends with 504 `upstream_timeout` or a cut stream. A model with a protected resource profile keeps its completion deadline as a cap on the whole transfer. Other operations use `request_timeout_ms` as their total limit.
+
 ## Rust CLI and discovery
 
 Build the management client with `cargo build -p juiced-service --bin lemonade --locked`. Use an explicit isolated origin:

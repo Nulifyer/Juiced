@@ -1512,6 +1512,8 @@ pub struct RequestLease {
     speech: Option<SpeechTransfer>,
     protected: Option<physical::ProtectedTransfer>,
     upstream_timeout: Duration,
+    /// A resource profile's completion deadline caps the whole transfer.
+    completion_deadline: bool,
 }
 
 struct PhysicalClaims {
@@ -1609,6 +1611,12 @@ impl RequestLease {
 
     pub fn upstream_timeout(&self) -> Duration {
         self.upstream_timeout
+    }
+
+    /// Text generation waits on progress, as native Juiced did: a reply may take as long as it
+    /// keeps producing bytes. `None` when a completion deadline caps the whole transfer.
+    pub fn stall_timeout(&self) -> Option<Duration> {
+        (!self.completion_deadline).then_some(self.upstream_timeout)
     }
 
     pub fn adapter(&self) -> crate::config::Provider {
@@ -4611,6 +4619,7 @@ impl Manager {
         } else {
             (Some(physical), None, None)
         };
+        let completion_deadline = worker.spec.resource_profile.is_some() && self.memory_protected();
         let upstream_timeout = worker
             .spec
             .resource_profile
@@ -4632,6 +4641,7 @@ impl Manager {
                 speech,
                 protected,
                 upstream_timeout,
+                completion_deadline,
                 fingerprint,
                 generation,
                 session: None,

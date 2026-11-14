@@ -602,6 +602,48 @@ async fn unsupported_methods_and_invalid_query_fields_have_structured_errors() {
 }
 
 #[tokio::test]
+async fn a_streamed_reply_may_outlast_the_request_timeout_while_it_keeps_producing() {
+    let server =
+        Server::configured(false, |config| config["request_timeout_ms"] = json!(200)).await;
+    let stream = async |extra: Value| {
+        let mut body = json!({"model":"fixture.one","stream":true,"messages":[{"role":"user","content":"hi"}]});
+        body.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        let response = server
+            .client
+            .post(format!("{}/v1/chat/completions", server.base))
+            .json(&body)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let text = response.text().await.unwrap_or_default();
+        text.matches("\"content\"").count()
+    };
+    let started = std::time::Instant::now();
+    assert_eq!(stream(json!({})).await, 200);
+    assert!(started.elapsed() > std::time::Duration::from_millis(1000));
+    let chunks = stream(json!({"fixture_stall_ms": 2000})).await;
+    assert!(
+        chunks < 200,
+        "a stalled stream must be cut, got {chunks} chunks"
+    );
+    server
+        .wait_for(async || server.get("juiced/state").await["resources"]["active_requests"] == 0)
+        .await;
+    let requests = server.get("juiced/requests").await;
+    assert!(
+        requests["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|record| record["outcome"] == "timeout"),
+        "{requests}"
+    );
+}
+
+#[tokio::test]
 async fn upstream_errors_and_timeouts_preserve_status_and_release_slots() {
     let server =
         Server::configured(false, |config| config["request_timeout_ms"] = json!(100)).await;

@@ -445,10 +445,16 @@ async fn inference(
         )
             .into_response();
     }
+    let stall = body["fixture_stall_ms"].as_u64();
     if body["stream"] == true {
         let events = stream::unfold((0u32, observation), move |(index, mut observation)| {
             let emulated = emulated.clone();
             async move {
+                if index == 10
+                    && let Some(stall) = stall
+                {
+                    tokio::time::sleep(Duration::from_millis(stall)).await;
+                }
                 if observation.fixture.finite_stream {
                     let event = match index {
                         0 | 1 => format!(

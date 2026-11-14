@@ -1858,38 +1858,54 @@ pub(crate) async fn forward_prioritized(
     } else {
         format!("/v1/{}", operation.path())
     };
-    let upstream = manager
+    let generating = matches!(
+        operation,
+        Operation::Chat | Operation::Completion | Operation::Responses
+    );
+    let stall = lease.stall_timeout().filter(|_| generating);
+    let request = manager
         .client
         .post(format!("{base}{path}"))
         .header(header::CONTENT_TYPE, "application/json")
-        .body(body)
-        .timeout(lease.upstream_timeout())
-        .send()
-        .await
-        .map_err(|error| {
-            let timed_out = error.is_timeout();
-            lease.finish(
-                if timed_out {
-                    "timeout"
-                } else {
-                    "upstream_error"
-                },
-                None,
-            );
-            ApiError::new(
-                if timed_out {
-                    StatusCode::GATEWAY_TIMEOUT
-                } else {
-                    StatusCode::BAD_GATEWAY
-                },
-                if timed_out {
-                    "upstream_timeout"
-                } else {
-                    "upstream_unavailable"
-                },
-                "The engine request failed. Retry or inspect the selected worker.",
-            )
-        })?;
+        .body(body);
+    let sent = match stall {
+        Some(idle) => {
+            match tokio::time::timeout(idle.saturating_mul(FIRST_BYTE_STALL_FACTOR), request.send())
+                .await
+            {
+                Ok(result) => result.map_err(|error| error.is_timeout()),
+                Err(_) => Err(true),
+            }
+        }
+        None => request
+            .timeout(lease.upstream_timeout())
+            .send()
+            .await
+            .map_err(|error| error.is_timeout()),
+    };
+    let upstream = sent.map_err(|timed_out| {
+        lease.finish(
+            if timed_out {
+                "timeout"
+            } else {
+                "upstream_error"
+            },
+            None,
+        );
+        ApiError::new(
+            if timed_out {
+                StatusCode::GATEWAY_TIMEOUT
+            } else {
+                StatusCode::BAD_GATEWAY
+            },
+            if timed_out {
+                "upstream_timeout"
+            } else {
+                "upstream_unavailable"
+            },
+            "The engine request failed. Retry or inspect the selected worker.",
+        )
+    })?;
     let status = upstream.status();
     let content_type = upstream.headers().get(header::CONTENT_TYPE).cloned();
     let tail = (status.is_success()
@@ -1909,7 +1925,17 @@ pub(crate) async fn forward_prioritized(
             if failed {
                 return None;
             }
-            match upstream.next().await {
+            let next = match stall {
+                Some(idle) => match tokio::time::timeout(idle, upstream.next()).await {
+                    Ok(item) => item.map(|item| item.map_err(|error| error.is_timeout())),
+                    Err(_) => Some(Err(true)),
+                },
+                None => upstream
+                    .next()
+                    .await
+                    .map(|item| item.map_err(|error| error.is_timeout())),
+            };
+            match next {
                 Some(Ok(bytes)) => {
                     if let Some(tail) = tail.as_mut() {
                         tail.push(&bytes);
@@ -1919,9 +1945,9 @@ pub(crate) async fn forward_prioritized(
                         (upstream, lease, false, tail),
                     ))
                 }
-                Some(Err(error)) => {
+                Some(Err(timed_out)) => {
                     lease.finish(
-                        if error.is_timeout() {
+                        if timed_out {
                             "timeout"
                         } else {
                             "upstream_error"
@@ -1963,6 +1989,10 @@ pub(crate) async fn forward_prioritized(
         .insert(header::CACHE_CONTROL, "no-store".parse().unwrap());
     Ok(response)
 }
+/// Text generation may wait this many stall periods for its first byte: prefill of a long prompt,
+/// or a whole non-streamed reply, arrives only then. Native Juiced used the same factor.
+const FIRST_BYTE_STALL_FACTOR: u32 = 5;
+
 async fn native_import(
     State(state): State<AppState>,
     ApiJson(request): ApiJson<crate::supervisor::NativeImportRequest>,
