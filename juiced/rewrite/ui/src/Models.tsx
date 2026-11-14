@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { bytes, loadReason, matchingModels, offers, policyNames, services, unloadReason, workerState, workerTone, type Model, type Policy, type Service } from "./domain";
+import { bytes, loadReason, matchingModels, offers, policyNames, services, taskNames, unloadReason, workerState, workerTone, type Model, type Policy, type Service } from "./domain";
 import { Badge, Button, Empty, HelpTip, Icon, Switch } from "./ui";
 import { Client } from "./api";
 import { removalReason } from "./management";
@@ -42,8 +42,9 @@ export function parseUpdates(value: unknown): string[] {
   return (Array.isArray(data) ? data : []).filter((item) => item && typeof item === "object" && item.update_available === true && typeof item.id === "string").map((item) => item.id as string);
 }
 
-export function sortModels(models: Model[], sort: { key: SortKey; descending: boolean } | null): Model[] {
-  if (!sort) return models;
+/** Without a chosen column, loaded models come first, then loading, enabled and disabled ones. */
+export function sortModels(models: Model[], chosen: { key: SortKey; descending: boolean } | null): Model[] {
+  const sort = chosen ?? { key: "state" as const, descending: false };
   const rank = (model: Model) => sort.key === "memory" ? model.resident_bytes ?? -1 : sort.key === "state" ? (model.loaded ? 0 : model.state === "loading" ? 1 : model.policy === "disabled" ? 3 : 2) : 0;
   const sorted = [...models].sort((left, right) => (sort.key === "name" ? left.id.localeCompare(right.id) : rank(left) - rank(right)) || left.id.localeCompare(right.id));
   return sort.descending ? sorted.reverse() : sorted;
@@ -84,6 +85,7 @@ function PolicySelect({ model, mutate, disabled }: { model: Model; mutate: Mutat
 
 function RowAction({ model, mutate, disabled }: { model: Model; mutate: Mutate; disabled: boolean }) {
   const unload = model.loaded || model.state === "cleanup-pending";
+  if (!unload && model.policy === "disabled") return null;
   const reason = unload ? unloadReason(model) : loadReason(model);
   return <Button className="row-action" disabled={disabled || !!reason} title={reason ?? undefined} onClick={(event) => { event.stopPropagation(); void mutate(unload ? "unload" : "load", { model: model.id }, unload ? `Unloaded ${model.id}.` : `Loaded ${model.id}.`); }}>{unload ? "Unload" : "Load"}</Button>;
 }
@@ -130,7 +132,10 @@ export function ModelList({ models, selected, onSelect, mode, mutate, busy, onli
   const [service, setService] = useState<Service | "files" | null>(null);
   const [dragging, setDragging] = useState("");
   const dragged = useRef("");
-  const visible = sortModels(service === "files" ? [] : matchingModels(service ? models.filter((model) => offers(model, service)) : models, query), sort);
+  const [showDisabled, setShowDisabled] = useState(false);
+  const matched = sortModels(service === "files" ? [] : matchingModels(service ? models.filter((model) => offers(model, service)) : models, query), sort);
+  const folded = mode === "models" && !showDisabled && !query.trim() && sort === null ? matched.filter((model) => model.policy === "disabled" && !model.loaded).length : 0;
+  const visible = mode === "models" && folded > 0 ? matched.filter((model) => !(model.policy === "disabled" && !model.loaded)) : matched;
   const onSort = (key: SortKey) => setSort((current) => current?.key === key ? (current.descending ? null : { key, descending: true }) : { key, descending: false });
   const allChosen = visible.length > 0 && visible.every((model) => chosen.has(model.id));
   const toggle = (id: string) => setChosen((current) => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; });
@@ -154,7 +159,7 @@ export function ModelList({ models, selected, onSelect, mode, mutate, busy, onli
       {(["hot", "on-demand", "disabled"] as Policy[]).map((policy) => <section className={`policy-lane ${dragging ? "droppable" : ""}`} key={policy} aria-label={`${policyNames[policy]} models`}
         onDragOver={(event) => { if (dragged.current) event.preventDefault(); }}
         onDrop={(event) => { event.preventDefault(); const model = models.find((item) => item.id === dragged.current); dragged.current = ""; setDragging(""); if (model && !(policy === "disabled" && model.active_requests > 0)) setPolicy(mutate, model, policy); }}>
-        <header><h2>{policyNames[policy]}</h2><span className="muted">{visible.filter((model) => model.policy === policy).length}</span></header>
+        <header><h2>{policyNames[policy]}</h2><span className="muted">{visible.filter((model) => model.policy === policy).length}{policy === "hot" ? ` · ${bytes(models.filter((model) => model.policy === "hot").reduce((sum, model) => sum + (model.resident_bytes ?? 0), 0))} held` : ""}</span></header>
         <p className="muted">{policy === "hot" ? "Loaded at startup and kept ready" : policy === "on-demand" ? "Loads on the first request" : "Hidden from apps"}</p>
         {policy === "on-demand" && idleControl}
         {visible.filter((model) => model.policy === policy).map((model) => <div key={model.id} className={`lane-model ${selected === model.id ? "selected" : ""}`} draggable={!locked} onDragStart={(event) => { dragged.current = model.id; setDragging(model.id); event.dataTransfer.effectAllowed = "move"; }} onDragEnd={() => { dragged.current = ""; setDragging(""); }}>
@@ -165,12 +170,13 @@ export function ModelList({ models, selected, onSelect, mode, mutate, busy, onli
     </div> : <div className="data-table model-table" role="table" aria-label="Registered models">
       <div className="data-head" role="row"><SortHeader label="Model" id="name" sort={sort} onSort={onSort} pick={<input type="checkbox" className="pick" aria-label="Select all shown models" checked={allChosen} onChange={() => setChosen(allChosen ? new Set() : new Set(visible.map((model) => model.id)))} />} /><SortHeader label="State" id="state" sort={sort} onSort={onSort} /><span role="columnheader">Policy</span><SortHeader label="Memory" id="memory" sort={sort} onSort={onSort} numeric /><span role="columnheader"><span className="sr-only">Action</span></span></div>
       {visible.map((model) => <div className={`data-row model-row ${selected === model.id ? "selected" : ""} ${chosen.has(model.id) ? "chosen" : ""}`} role="row" key={model.id} onClick={() => onSelect(model.id)}>
-        <div role="cell" className="model-identity picked"><input type="checkbox" className="pick" aria-label={`Select ${model.id}`} checked={chosen.has(model.id)} onClick={(event) => event.stopPropagation()} onChange={() => toggle(model.id)} /><div className="identity-text"><button className="model-name" aria-pressed={selected === model.id} onClick={(event) => { event.stopPropagation(); onSelect(model.id); }}>{model.id}</button><span className="model-meta">{model.operations.slice(0, 3).join(" · ")}{updates.has(model.id) && <> · <span className="update-note">update available</span></>}</span></div></div>
+        <div role="cell" className="model-identity picked"><input type="checkbox" className="pick" aria-label={`Select ${model.id}`} checked={chosen.has(model.id)} onClick={(event) => event.stopPropagation()} onChange={() => toggle(model.id)} /><div className="identity-text"><button className="model-name" aria-pressed={selected === model.id} onClick={(event) => { event.stopPropagation(); onSelect(model.id); }}>{model.id}</button><span className="model-meta">{taskNames(model).join(" · ")}{updates.has(model.id) && <> · <span className="update-note">update available</span></>}</span></div></div>
         <div role="cell" className="model-state" title={residencyNote(model) ?? undefined}><span className={`status-dot ${workerTone(model)}`} />{workerState(model)}{model.loaded ? <span className="muted"> · {model.active_requests}/{model.max_inflight}</span> : null}</div>
         <div role="cell"><PolicySelect model={model} mutate={mutate} disabled={locked} /></div>
         <div role="cell" className="numeric muted">{bytes(model.resident_bytes)}</div>
         <div role="cell" className="row-end"><RowAction model={model} mutate={mutate} disabled={locked} /></div>
       </div>)}
+      {folded > 0 && <div className="data-row fold-row" role="row"><div role="cell"><button className="link-button" onClick={() => setShowDisabled(true)}>Show {folded} disabled model{folded === 1 ? "" : "s"}</button></div></div>}
       {visibleFiles.map((group) => <FileRow key={group.id} group={group} selected={selectedFile === group.id} onSelect={() => onSelectFile?.(group.id)} />)}
     </div>}
   </section>;

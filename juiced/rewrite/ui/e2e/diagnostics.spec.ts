@@ -1,4 +1,4 @@
-import { api, expect, hotModel, navigate, open, tab, test } from "./support";
+import { api, expect, hotModel, navigate, open, pickModel, tab, test } from "./support";
 
 test("Performance shows per-model timings, resource history and declared reservations", async ({ page, request }) => {
   const response = await request.post("/v1/chat/completions", { data: { model: hotModel, messages: [{ role: "user", content: "Performance fixture prompt" }], stream: false, max_tokens: 4 } });
@@ -99,7 +99,7 @@ test("Logs show service and worker lines with search, level, source and follow c
     await search.fill("");
     await levels.getByRole("button", { name: "All" }).click();
 
-    await page.getByLabel("Log source").selectOption(chatty);
+    await pickModel(page.getByLabel("Log source"), chatty);
     await expect(log).toContainText(`fixture stdout ${marker}`);
     await expect(log).not.toContainText(`Worker ${failing}`);
     await page.getByLabel("Log source").selectOption("service");

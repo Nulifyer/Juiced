@@ -5,7 +5,7 @@ import { withImages, withoutImages } from "./chatImages";
 import { AssistantBody, Composer, UserBody, thinkingClock, useAttachments } from "./ChatParts";
 import { Copy } from "./Connect";
 import type { Model } from "./domain";
-import { Badge, Button, Empty, HelpTip, Icon } from "./ui";
+import { Badge, Button, Empty, HelpTip, Icon, ModelSelect } from "./ui";
 import "./barista.css";
 
 type Step = "running" | "pending" | "done" | "failed" | "skipped";
@@ -104,9 +104,9 @@ function Setup({ settings, models, client, online, onSaved, onDisable, onChanged
     {!settings.enabled && <p>Barista manages Juiced for you from a chat. It uses one of your downloaded chat models.</p>}
     {choices.length === 0 ? <Empty title="No downloaded chat models">Download a chat model in Models, then come back here.</Empty> : <>
       <div><label htmlFor="barista-model">Model</label>
-        <select id="barista-model" value={model?.id ?? ""} disabled={saving} onChange={(event) => setModelId(event.target.value)}>{choices.map((entry) => <option key={entry.id} value={entry.id}>{entry.id}</option>)}</select>
+        <ModelSelect id="barista-model" models={choices} value={model?.id ?? ""} disabled={saving} onChange={setModelId} />
         {model && <p className="field-help">{implication(model)}</p>}
-        {model && !settings.qualified && <p className="barista-unqualified">Not yet tested with Barista. Check what it tells you. <HelpTip label="Barista model testing">Juiced plans to test models on a fixed set of management tasks before it recommends one for Barista. No model has been tested yet, including this one. Barista still checks every change against your permissions.</HelpTip></p>}
+        {model && !settings.qualified && <p className="barista-unqualified">Not yet tested with Barista. <HelpTip label="Barista model testing">Juiced plans to test models on a fixed set of management tasks before it recommends one for Barista. No model has been tested yet, including this one. Barista still checks every change against your permissions.</HelpTip></p>}
       </div>
       <div><span className="field-label" id="barista-permission-label">Permissions</span>
         <div className="segmented wide" role="radiogroup" aria-labelledby="barista-permission-label">{(["full", "ask", "read_only"] as Permission[]).map((value) => <button key={value} type="button" role="radio" aria-checked={permission === value} disabled={saving} onClick={() => setPermission(value)}>{permissionNames[value]}</button>)}</div>

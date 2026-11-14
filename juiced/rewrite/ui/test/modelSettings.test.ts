@@ -55,9 +55,9 @@ describe("speech audio conversion", () => {
 
 describe("model list helpers", () => {
   const model = (id: string, extra: Partial<Model>) => ({ id, loaded: false, state: "unloaded", policy: "on-demand", resident_bytes: 1, ...extra }) as Model;
-  test("sorting is stable by name and reversible", () => {
+  test("sorting defaults to state, is stable by name and reversible", () => {
     const models = [model("b", { resident_bytes: 5 }), model("a", { loaded: true, resident_bytes: 9 }), model("c", { policy: "disabled", resident_bytes: 1 })];
-    expect(sortModels(models, null).map((item) => item.id)).toEqual(["b", "a", "c"]);
+    expect(sortModels(models, null).map((item) => item.id)).toEqual(["a", "b", "c"]);
     expect(sortModels(models, { key: "name", descending: false }).map((item) => item.id)).toEqual(["a", "b", "c"]);
     expect(sortModels(models, { key: "memory", descending: true }).map((item) => item.id)).toEqual(["a", "b", "c"]);
     expect(sortModels(models, { key: "state", descending: false }).map((item) => item.id)).toEqual(["a", "b", "c"]);

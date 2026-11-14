@@ -91,6 +91,20 @@ Deployed; healthy in 40 s with the three Hot models. vLLM ROCm 0.20.1 with a tes
 
 User scope: no candidate comparison or B1 qualification; confirm Barista works with Ornith Q6_K. Ran the frozen suite with `ui/scripts/barista-eval.ts --dry-run` against the homelab (every change sent as a preview and reported as skipped; 81 of 90 tasks; policies and Barista settings verified unchanged after each run). rc.23: 296 tool calls, 1 malformed (truncated `juiced_fit` arguments), 77/77 first responses valid, no secret, no permission bypass, no false change claim; injection and read-only tasks refused correctly; 4 transient `chat_failed` (queue wait behind Ornith's single slot; reruns passed). Defects: 2 empty replies (Ornith spent the 2048-token harness limit thinking), retries of skipped changes, how-to answers as tool calls, "done" headings over skipped changes. rc.24 (prompt v3 plus a thinking-off retry when a reply ends at the limit with no answer): rerun of the 9 affected tasks: no empty replies, each skipped change proposed once; how-to answers partly console steps (one invented "Library → Find & run models" and a per-model Logs tab); 2 of 3 still open with "Done"/"I set…" before saying the change was skipped; write-03 misattributed the Q8_0 file to the Q4_K_M registration.
 
+## Model selection on mage (2026-11-14)
+
+Request (user): find the best coding/dev agent model that fits and stays responsive, review a smaller Home Assistant model, make Juiced use the hardware properly, saner context defaults, MTP support, and why a Hot model's first request is slow.
+- Coding agent, 34 Aider polyglot Python exercises (harness and results in the session scratchpad `bench/`): Qwen3-Coder-Next Q4_K_M 28/34, median 64 s/task, 69 min total, 78k output tokens; Ornith Q6_K 27/34, 415 s, 279 min, 321k; Qwopus Q4 25/34, 266 s, 186 min, 340k. Qwen3.8-27B screened 8/12 at ~11 tok/s (too slow).
+- Applied (user-approved): Qwen3-Coder-Next Hot (131072 context), Ornith Q6_K on-demand, Qwen3-4B-Instruct-2507 Hot at 8192 context (5.1 GiB), Whisper and Kokoro Hot. Reserved ~59 of 80 GiB. Only idle on-demand models are evicted; a Hot model never is.
+- Home Assistant (30 utterances x2, HA intent tools): Qwen3-4B-Instruct-2507 at 8K 60/60, median 1.75 s, first request 3.4 s (1,616-token prompt). Nemotron-3.5-Bolt-E4B UD-Q4_K_XL (registered disabled) thinking off 59/60, median 2.4 s (run overlapped a Coder-Next test); thinking on 10-24 s per reply.
+- HA's llama_cpp agent still targets `Ornith-1.5-35B-A3B-GGUF-Q6_K`, which cannot load beside Hot Coder-Next. HA must move to `Qwen3-4B-Instruct-2507-GGUF` (user to confirm the HA change).
+- Coder-Next has no MTP head (checkpoint has 0 `mtp.*` tensors); its GGUF carries `general.sampling` temp 1.0 / top-p 0.95 / top-k 40, which llama.cpp applies because the registration passes no sampler flags.
+
+Fixed in the working tree (not released yet):
+- Family sampler defaults (`architecture_defaults.json`) no longer override a GGUF's `general.sampling.*` (the `qwen3next` entry is the Thinking recipe).
+- `--spec-draft-n-max` / `--spec-draft-n-min` are accepted; other `--spec-draft-*` stay refused.
+- New registrations start at min(trained, 32768) context, reduced to fit; native adoption keeps v0.9.2's largest-that-fits. The settings line shows trained, fits-up-to and running.
+
 ## Pending (2026-11-13, after rc.24)
 
 - TRELLIS on gfx1150: Vulkan measured ~11% faster than ROCm; consider recommending Vulkan for TRELLIS on RDNA 3.5.
@@ -123,4 +137,4 @@ Known gaps:
 
 ## Next action
 
-Typed vLLM settings (parsers), then the engine-management round.
+Finish the Coder-Next launch A/B (ubatch, n-gram speculation, ROCm vs Vulkan) with nothing else on the GPU, release the fixes above as the next rc, then typed vLLM settings and the engine-management round.

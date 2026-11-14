@@ -17,7 +17,7 @@ function pagePath(base: string, cursor: Cursor) {
 
 export function Cache({ client, models, online }: { client: Client; models: Model[]; online: boolean }) {
   return <div className="page-body cache-page">
-    <ConversationCache client={client} online={online} />
+    <ConversationCache client={client} models={models} online={online} />
     <ManualSnapshots client={client} models={models} online={online} />
   </div>;
 }

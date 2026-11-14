@@ -115,8 +115,11 @@ export function ContextInspector({ model, client, online, busy, policyDirty, onD
   const gpuAll = draft.gpu.trim() === "" || Number(draft.gpu) >= 99;
   const restart = fields ? Object.values(fields).some((field) => field.restart_needed) : false;
   return <section className="inspector-section launch-settings" aria-label="Context and launch profile">
-    <div className="section-heading"><div className="page-title"><h3>Launch settings</h3><HelpTip label="Launch settings">Context is the total token budget the engine starts with, shared by its slots. Auto picks the largest context that fits the memory budget; Max uses the size the model was trained for. A loaded model restarts when you save.</HelpTip></div></div>
+    <div className="section-heading"><div className="page-title"><h3>Launch settings</h3><HelpTip label="Launch settings">Context is the total token budget the engine starts with, shared by its slots. New models start at 32K or less. Auto picks the largest context that fits the memory budget; Max uses the size the model was trained for. A larger context reserves more memory. A loaded model restarts when you save.</HelpTip></div></div>
     {options.error && <p role="alert" className="inline-error">{options.error}</p>}
+    {llama && (model.active_requests > 0 || model.state === "loading" ? <p className="inline-warning">{model.state === "loading" ? "Loading. Settings unlock when it is ready." : "Requests are running. Settings unlock when they finish."}</p>
+      : model.loaded && imported ? <p className="inline-warning">Unload the model to edit these.</p> : null)}
+    {!view && !options.error && <p className="muted">Reading settings…</p>}
     {fit && <MemoryBar fit={fit} />}
     {llama && fit?.warnings.map((warning) => <p className="field-help" key={warning}>{warning}</p>)}
     {view && !llama && (view.provider === "stable-diffusion-cpp" || view.provider === "asr4all") && <EngineDefaults view={view} model={model} online={online} busy={busy} blockedByOther={policyDirty} onDirty={onDirty} mutate={mutate} />}
@@ -125,22 +128,20 @@ export function ContextInspector({ model, client, online, busy, policyDirty, onD
       <label htmlFor="profile-context">Context</label>
       <div className="context-row">
         <input id="profile-context" inputMode="numeric" value={draft.context} disabled={blocked} placeholder={imported ? "Registered setting" : fit?.largest_context_that_fits ? `Auto · ${tokens(fit.largest_context_that_fits)}` : "Engine default"} onChange={(event) => setDraft({ ...draft, context: event.target.value })} />
+        <span className="muted">tokens</span>
         {fit?.largest_context_that_fits && <Button disabled={blocked} title="Largest context that fits the memory budget" onClick={() => setDraft({ ...draft, context: String(fit.largest_context_that_fits) })}>Auto</Button>}
         {trained && <Button disabled={blocked} title="The context the model was trained for" onClick={() => setDraft({ ...draft, context: String(trained) })}>Max</Button>}
       </div>
-      <p className="field-help">{[trained ? `Trained ${tokens(trained)}` : null, running ? `running ${tokens(running)}` : null, view.physical_slots > 1 ? `${view.physical_slots} slots share it` : null].filter(Boolean).join(" · ") || "Empty uses the engine default."}</p>
+      <p className="field-help">{[trained ? `Trained ${tokens(trained)}` : null, fit?.largest_context_that_fits ? `fits up to ${tokens(fit.largest_context_that_fits)}` : null, running ? `running ${tokens(running)}` : null, view.physical_slots > 1 ? `${view.physical_slots} slots share it` : null].filter(Boolean).join(" · ") || "Empty uses the engine default."}</p>
       {llama && !imported && <div className="setting-line"><span className="field-label" id="gpu-label">Run on</span>
         <div className="segmented" role="radiogroup" aria-labelledby="gpu-label">{([["gpu", "GPU"], ["cpu", "CPU only"]] as const).map(([value, label]) => <button key={value} type="button" role="radio" aria-checked={value === "gpu" ? gpuAll || (Number(draft.gpu) > 0 && Number(draft.gpu) < 99) : draft.gpu.trim() === "0"} disabled={blocked} onClick={() => setDraft({ ...draft, gpu: value === "gpu" ? "" : "0" })}>{label}</button>)}</div></div>}
-      {fields?.mtp && <p className="setting-status"><strong>Multi-token prediction</strong> {mtp ? "on" : "off"}{mtp && extras.data?.mtp?.acceptance_rate != null ? ` · ${Math.round(extras.data.mtp.acceptance_rate * 100)}% of drafts accepted` : ""}</p>}
-      {fields?.thinking && fields.thinking.effective !== null && fields.thinking.effective !== undefined && <p className="setting-status"><strong>Thinking</strong> {show(fields.thinking.effective)}</p>}
+      {!advanced && fields?.mtp && <p className="setting-status"><strong>Multi-token prediction</strong> {mtp ? "on" : "off"}{mtp && extras.data?.mtp?.acceptance_rate != null ? ` · ${Math.round(extras.data.mtp.acceptance_rate * 100)}% of drafts accepted` : ""}</p>}
+      {!advanced && fields?.thinking && fields.thinking.effective !== null && fields.thinking.effective !== undefined && <p className="setting-status"><strong>Thinking</strong> {show(fields.thinking.effective)}</p>}
       {llama && !imported && <TunedGrid title="Generation defaults" help="Used when a request doesn't set its own value. Empty keeps the profile's argument or llama.cpp's default." fields={tunedFields.filter((field) => !field.advanced)} draft={tuned} onChange={setTuned} view={view} disabled={blocked} />}
       {advanced && !imported && <div className="setting-group"><div className="group-title"><span>Runtime</span><HelpTip label="Runtime">CPU threads, offload and batching. Changes apply when the engine next starts.</HelpTip></div><div className="profile-option-grid"><div><label htmlFor="profile-threads">Threads</label><input id="profile-threads" inputMode="numeric" value={draft.threads} disabled={blocked} placeholder="Engine default" onChange={(event) => setDraft({ ...draft, threads: event.target.value })} /></div><div><label htmlFor="profile-gpu">GPU layers</label><input id="profile-gpu" inputMode="numeric" value={draft.gpu} disabled={blocked} placeholder="All" onChange={(event) => setDraft({ ...draft, gpu: event.target.value })} /></div>
         {tunedFields.filter((field) => field.advanced).map((field) => <TunedInput key={field.key} field={field} draft={tuned} onChange={setTuned} view={view} disabled={blocked} />)}</div></div>}
       {advanced && !imported && llama && <div className="setting-group"><div className="field-head"><label htmlFor="profile-extra">Extra arguments</label><HelpTip label="Extra arguments">Passed to llama-server after Juiced's own arguments, for example --spec-type draft-mtp. Quote values that contain spaces. Settings above have their own fields; the host, port, model and cache paths stay with Juiced.</HelpTip></div>
         <textarea id="profile-extra" className="code-input" rows={Math.min(6, Math.max(2, Math.ceil(tuned.extra.length / 36) + 1))} spellCheck={false} value={tuned.extra} disabled={blocked} placeholder="None" onChange={(event) => setTuned({ ...tuned, extra: event.target.value })} /></div>}
-      {!llama ? null
-        : model.active_requests > 0 || model.state === "loading" ? <p className="field-help">Wait for running requests and loading to finish to edit these.</p>
-        : model.loaded && imported ? <p className="field-help">Unload the model to edit these.</p> : null}
       {restart && !dirty && <p className="inline-warning">Saved settings differ from the running engine. Reload the model to apply them.</p>}
       {policyDirty && <p className="inline-warning">Save or cancel the other change first.</p>}
       {dirty && revision.current !== model.revision && <p className="inline-warning">Another client changed this model. Your draft is kept; cancel it to see the latest.</p>}

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { chatTestTokenLimit, type Client } from "./api";
-import { eligible, offers, type Model } from "./domain";
-import { Button, Empty } from "./ui";
+import { bytes, eligible, offers, type Model } from "./domain";
+import { Button, Empty, ModelSelect } from "./ui";
 import { AssistantBody, Composer, thinkingClock, useAttachments } from "./ChatParts";
 import { withImages } from "./chatImages";
 
@@ -44,7 +44,7 @@ export function EmbeddingsTest({ model: selected, client, online }: { model: Mod
 type Column = { model: string; content: string; reasoning: string; since?: number; thoughtMs?: number; tokens: number | null; rate: number | null; firstToken: number | null; total: number | null; error: string; streaming: boolean };
 
 export function CompareTest({ models, client, online }: { models: Model[]; client: Client; online: boolean }) {
-  const ready = models.filter((model) => eligible(model) && offers(model, "chat"));
+  const ready = models.filter((model) => eligible(model) && offers(model, "chat")).sort((left, right) => Number(right.loaded) - Number(left.loaded) || left.id.localeCompare(right.id));
   const [picked, setPicked] = useState<string[]>(() => ready.slice(0, 2).map((model) => model.id));
   const [prompt, setPrompt] = useState("");
   const [columns, setColumns] = useState<Column[]>([]);
@@ -72,7 +72,8 @@ export function CompareTest({ models, client, online }: { models: Model[]; clien
   }
   if (ready.length < 2) return <Empty title="Add another chat model to compare">Compare needs at least two chat models that are Hot or On demand.</Empty>;
   return <section className="test-panel compare" aria-label="Compare models">
-    <div className="toolbar">{[0, 1, 2].slice(0, Math.min(3, ready.length)).map((slot) => <select key={slot} aria-label={`Model ${slot + 1}`} value={picked[slot] ?? ""} disabled={busy} onChange={(event) => setPicked((current) => { const next = [...current]; next[slot] = event.target.value; return next; })}><option value="">{slot < 2 ? "Choose a model…" : "Optional third model"}</option>{ready.map((model) => <option key={model.id} value={model.id}>{model.id}</option>)}</select>)}</div>
+    <div className="toolbar">{[0, 1, 2].slice(0, Math.min(3, ready.length)).map((slot) => <ModelSelect key={slot} aria-label={`Model ${slot + 1}`} models={ready} value={picked[slot] ?? ""} disabled={busy} placeholder={slot < 2 ? "Choose a model…" : "Optional third model"} onChange={(id) => setPicked((current) => { const next = [...current]; next[slot] = id; return next; })} />)}</div>
+    {chosen.some((model) => !model.loaded) && <p className="field-help">Loads {chosen.filter((model) => !model.loaded).map((model) => `${model.id}${model.resident_bytes ? ` (${bytes(model.resident_bytes)})` : ""}`).join(" and ")} first.</p>}
     <Composer label="Prompt" placeholder={vision ? "Ask all selected models, or add images" : "Ask all selected models the same thing"} value={prompt} onChange={setPrompt} onSubmit={() => void run()} busy={busy} onStop={() => controllers.current.forEach((controller) => controller.abort())} canSend={(!!prompt.trim() || attachments.list.length > 0) && online && new Set(picked.filter(Boolean)).size >= 2} attachments={attachments} vision={vision} submitLabel="Compare" />
     {columns.length > 0 && <div className="compare-grid" style={{ gridTemplateColumns: `repeat(${columns.length}, minmax(0, 1fr))` }}>{columns.map((column) => <article className="panel compare-column" key={column.model} aria-label={column.model}>
       <header className="panel-head"><h3 className="break-word">{column.model}</h3></header>

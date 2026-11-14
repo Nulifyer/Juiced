@@ -37,6 +37,8 @@ describe("managed runtime observations", () => {
   test("history is distinct, exact and attached to a current package; unsupported adapters cannot grant mutation authority", () => {
     for (const change of [{ previous: packageId }, { current: null }, { current: "../private" }, { adapter: "external-http" }, { revision: -1 }, { revision: Number.MAX_SAFE_INTEGER + 1 }, { supported: "true" }, { compatibility: "qualified" }]) expect(() => parseRuntimeSelection({ ...selection(), ...change })).toThrow();
     expect(parseRuntimeSelection({ ...selection(), adapter: "external-http", supported: false, current: null, previous: null }).supported).toBe(false);
+    expect(parseRuntimeSelection({ ...selection(), adapter: "kokoros" }).adapter).toBe("kokoros");
+    expect(() => parseRuntimeSelection({ ...selection(), adapter: "../x" })).toThrow();
     expect(() => parseRuntimeSelection(null)).toThrow();
   });
   test("only installed matching declarations for the selected concrete adapter become replacement candidates", () => {

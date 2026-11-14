@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { Client } from "./api";
 import { policyNames, type Model } from "./domain";
-import { Badge, Button, Empty, HelpTip, Icon } from "./ui";
+import { Badge, Button, Empty, HelpTip, Icon, ModelSelect } from "./ui";
 import { useOperation, useResource } from "./useResource";
 
 export type Alias = { alias: string; target: string; target_state: string | null; target_policy: string | null; available: boolean };
@@ -48,7 +48,7 @@ export function Aliases({ client, models, online, onOpenModel }: { client: Clien
   return <section className="page-body aliases" aria-label="Aliases">
     <form className="alias-create toolbar" aria-label="New alias" onSubmit={(event) => { event.preventDefault(); void create(); }}>
       <input aria-label="Alias name" placeholder="Alias, e.g. default-chat" value={name} disabled={blocked} onChange={(event) => setName(event.target.value)} />
-      <select aria-label="Alias target" value={target} disabled={blocked} onChange={(event) => setTarget(event.target.value)}><option value="">Choose a model…</option>{ids.map((id) => <option key={id} value={id}>{id}</option>)}</select>
+      <ModelSelect aria-label="Alias target" models={models} value={target} disabled={blocked} placeholder="Choose a model…" onChange={setTarget} />
       <Button type="submit" variant="primary" disabled={blocked || !name.trim() || !target || nameTaken || data.aliases.length >= data.maximum}>Add alias</Button>
       <HelpTip label="Aliases">Clients send the alias as the model name. Swap the target here and new requests go to the new model; requests already running finish on the old one.</HelpTip>
     </form>
@@ -60,7 +60,7 @@ export function Aliases({ client, models, online, onOpenModel }: { client: Clien
         <div role="row" className="data-head"><span role="columnheader">Alias</span><span role="columnheader">Points to</span><span role="columnheader">Status</span><span role="columnheader"><span className="sr-only">Actions</span></span></div>
         {data.aliases.map((alias) => <div role="row" className="data-row" key={alias.alias} aria-label={alias.alias}>
           <span role="cell"><code className="break-word">{alias.alias}</code></span>
-          <span role="cell"><select aria-label={`Target for ${alias.alias}`} value={alias.target} disabled={blocked} onChange={(event) => void save(alias.alias, event.target.value, `${alias.alias} now points to ${event.target.value}.`)}>{!ids.includes(alias.target) && <option value={alias.target}>{alias.target}</option>}{ids.map((id) => <option key={id} value={id}>{id}</option>)}</select></span>
+          <span role="cell"><ModelSelect aria-label={`Target for ${alias.alias}`} models={models} value={alias.target} disabled={blocked} onChange={(next) => void save(alias.alias, next, `${alias.alias} now points to ${next}.`)} /></span>
           <span role="cell" className="alias-status">{targetNote(alias)}{alias.target_policy && alias.target_policy !== "disabled" && <span className="muted">{policyNames[alias.target_policy as keyof typeof policyNames] ?? alias.target_policy}</span>}</span>
           <span role="cell" className="row-end"><Button variant="ghost" disabled={!ids.includes(alias.target)} onClick={() => onOpenModel(alias.target)}>Open model</Button><Button variant="ghost" aria-label={`Remove ${alias.alias}`} disabled={blocked} onClick={() => void save(alias.alias, null, `Removed ${alias.alias}.`)}><Icon name="close" size={14} /></Button></span>
         </div>)}

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { chatTestTokenLimit, chatTokenCeiling, type Client } from "./api";
-import { eligible, operationEligible, type Model } from "./domain";
+import { bytes, eligible, operationEligible, type Model } from "./domain";
 import { speechModels } from "./speech";
 import { Badge, Button, Empty, HelpTip, Switch } from "./ui";
 import { AssistantBody, Composer, UserBody, thinkingClock, useAttachments } from "./ChatParts";
@@ -32,7 +32,7 @@ export function ServiceTest({ mode, models, client, online }: { models: Model[];
 function TryModel({ models, client, online }: { models: Model[]; client: Client; online: boolean }) {
   const [id, setId] = useState(() => readLocal("juiced.rewrite.testModel"));
   const seen = new Set<string>();
-  const groups = kinds.map(([kind, label, accepts]) => ({ kind, label, list: models.filter((model) => accepts(model) && !seen.has(model.id) && (seen.add(model.id), true)) })).filter((group) => group.list.length > 0);
+  const groups = kinds.map(([kind, label, accepts]) => ({ kind, label, list: models.filter((model) => accepts(model) && !seen.has(model.id) && (seen.add(model.id), true)).sort((left, right) => Number(right.loaded) - Number(left.loaded) || left.id.localeCompare(right.id)) })).filter((group) => group.list.length > 0);
   const choices = groups.flatMap((group) => group.list.map((model) => ({ model, kind: group.kind, label: group.label })));
   const current = choices.find((choice) => choice.model.id === id) ?? choices.find((choice) => choice.kind === "chat" && choice.model.loaded) ?? choices[0];
   const [maxTokens, setMaxTokens] = useState("");
@@ -42,7 +42,7 @@ function TryModel({ models, client, online }: { models: Model[]; client: Client;
   return <section className="service-tests" aria-label="Try a model">
     <div className="toolbar test-toolbar">
       <select aria-label="Model" value={current.model.id} onChange={(event) => { setId(event.target.value); writeLocal("juiced.rewrite.testModel", event.target.value); }}>
-        {groups.map((group) => <optgroup key={group.kind} label={group.label}>{group.list.map((model) => <option key={model.id} value={model.id}>{model.id}</option>)}</optgroup>)}
+        {groups.map((group) => <optgroup key={group.kind} label={group.label}>{group.list.map((model) => <option key={model.id} value={model.id}>{model.loaded ? model.id : `${model.id} · not loaded${model.resident_bytes ? `, ${bytes(model.resident_bytes)}` : ""}`}</option>)}</optgroup>)}
       </select>
       <Badge>{current.label}</Badge>
       <span className="muted">{current.model.loaded ? "Loaded" : "Loads on first use"}{current.kind === "chat" && current.model.vision ? " · accepts images" : ""}</span>

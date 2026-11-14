@@ -1,5 +1,5 @@
 import type { Page, Route } from "@playwright/test";
-import { api, capture, expect, hotModel, modelId, noHorizontalOverflow, open, picture, sourceOrigin, speechModel, test, withVision } from "./support";
+import { api, capture, expect, hotModel, modelId, noHorizontalOverflow, open, pickModel, picture, sourceOrigin, speechModel, test, withVision } from "./support";
 
 const shots = (page: Page, name: string, ready: () => Promise<void>) => capture(page, `barista-${name}`, ready);
 
@@ -77,7 +77,7 @@ test.describe("Barista", () => {
     const setup = panel.getByRole("form", { name: "Set up Barista" });
     await expect(setup.getByLabel("Model", { exact: true })).toHaveValue(hotModel);
     await expect(setup).toContainText("Hot, so Juiced keeps it loaded.");
-    await setup.getByLabel("Model", { exact: true }).selectOption(modelId);
+    await pickModel(setup.getByLabel("Model", { exact: true }), modelId);
     await expect(setup).toContainText(`${modelId} is Disabled. Turning Barista on sets it to On demand.`);
     await expect(setup).toContainText("Not yet tested with Barista.");
     await expect(setup.getByRole("radio", { name: "Full control" })).toHaveAttribute("aria-checked", "true");

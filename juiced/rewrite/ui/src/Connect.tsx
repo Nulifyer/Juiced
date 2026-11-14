@@ -2,10 +2,10 @@ import { useEffect, useRef, useState } from "react";
 import type { Client } from "./api";
 import { ApiError } from "./api";
 import { baseUrl, checkText, clientHints, lastRequest, parseHealth, snippets, statusLabels, statusTones, summary, type ProtocolHealth } from "./connectData";
-import type { Model } from "./domain";
+import { eligible, type Model } from "./domain";
 import { parseProtocols } from "./management";
 import { notify } from "./toast";
-import { Badge, Button, HelpTip, Switch } from "./ui";
+import { Badge, Button, HelpTip, ModelSelect, Switch } from "./ui";
 import { useResource } from "./useResource";
 import { WyomingSettings } from "./Wyoming";
 
@@ -28,6 +28,7 @@ export function Protocols({ base, client, models, online, keyed }: { base: strin
   const restricted = !health.data && operatorOnly(health.error);
   const rows: ProtocolHealth[] = health.data ?? (restricted ? (inventory.data ?? []).map((entry) => ({ id: entry.id as ProtocolHealth["id"], title: entry.id, enabled: true, status: "idle", models: 0, check: null, last: null, address: null, listen: null, support: entry.support, note: entry.note ?? null, operations: entry.operations ?? [] })) : []);
   const current = rows.find((row) => row.id === selected) ?? rows[0];
+  const [picked, setPicked] = useState("");
   const toggle = async (protocol: ProtocolHealth, enabled: boolean) => {
     setPending(protocol.id);
     try {
@@ -40,7 +41,9 @@ export function Protocols({ base, client, models, online, keyed }: { base: strin
   };
   const select = (id: string) => { setSelected(id); if (matchMedia("(max-width: 860px)").matches) requestAnimationFrame(() => detail.current?.scrollIntoView({ block: "start", behavior: "smooth" })); };
   if (!rows.length) return <div className="page-body">{health.error ? <div className="action-row"><p role="alert" className="inline-error">{health.error}</p><Button onClick={() => void health.reload()}>Retry</Button></div> : <p className="muted">Checking protocols…</p>}</div>;
-  const examples = current ? snippets(current.id, baseUrl(current, origin, location.hostname), keyed) : [];
+  const chat = models.filter(eligible);
+  const exampleModel = chat.find((model) => model.id === picked) ?? chat.find((model) => model.loaded) ?? chat[0];
+  const examples = current ? snippets(current.id, baseUrl(current, origin, location.hostname), keyed, exampleModel?.id) : [];
   const example = examples[Math.min(language, examples.length - 1)];
   return <div className="connect-layout">
     <section className="connect-main" aria-label="Protocols">
@@ -73,7 +76,8 @@ export function Protocols({ base, client, models, online, keyed }: { base: strin
           : example && <div className="connect-example" role="region" aria-label="Example request">
             <div className="panel-head"><h3>How to connect</h3>{examples.length > 1 && <div className="segmented" role="group" aria-label="Example language">{examples.map((item, index) => <button key={item.label} aria-pressed={example === item} onClick={() => setLanguage(index)}>{item.label}</button>)}</div>}</div>
             <pre className="code-block">{example.text}</pre>
-            <div className="action-row"><Copy value={example.text} label="Copy example" /><span className="field-help">Use a model ID from Models.{keyed ? " Replace YOUR_API_KEY with a key from API keys." : ""}</span></div>
+            {exampleModel && example.text.includes(exampleModel.id) && <div className="copy-row"><ModelSelect aria-label="Example model" models={chat} disabledModels="never" value={exampleModel.id} onChange={setPicked} /><Copy value={exampleModel.id} label="Copy model ID" /></div>}
+            <div className="action-row"><Copy value={example.text} label="Copy example" />{keyed && <span className="field-help">Replace YOUR_API_KEY with a key from API keys.</span>}</div>
           </div>}
         {(current.note || current.operations.length > 0) && <div className="connect-support">
           <span className="field-label">Support <HelpTip label={`${current.title} support`}>Juiced implements the parts of this protocol listed here. Other features answer with a clear error.</HelpTip></span>

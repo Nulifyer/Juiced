@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Client } from "./api";
 import { Sparkline } from "./charts";
-import { bytes, type RequestRecord, type Snapshot } from "./domain";
+import { bytes, type Model, type RequestRecord, type Snapshot } from "./domain";
 import { gib, parseLogPage, percent, rate, type LogLine, type StatsPoint, type SystemStats } from "./live";
 import { count, failed, formatMs, modelPerformance, pathNames, timing } from "./performance";
-import { Badge, Button, Empty, HelpTip } from "./ui";
+import { Badge, Button, Empty, HelpTip, ModelSelect } from "./ui";
 
 type Tab = "performance" | "requests" | "logs";
 type Props = { client: Client; snapshot: Snapshot; stats: SystemStats | null; history: StatsPoint[]; tab: Tab };
@@ -13,7 +13,7 @@ export function Diagnostics({ client, snapshot, stats, history, tab }: Props) {
   return <>
     {tab === "performance" && <Performance snapshot={snapshot} stats={stats} history={history} />}
     {tab === "requests" && <Requests snapshot={snapshot} />}
-    {tab === "logs" && <Logs client={client} models={snapshot.models.map((model) => model.id)} />}
+    {tab === "logs" && <Logs client={client} models={snapshot.models} />}
   </>;
 }
 
@@ -50,7 +50,7 @@ function Performance({ snapshot, stats, history }: { snapshot: Snapshot; stats: 
     </section>
     <div className="stat-grid" aria-label="Resource history">{charts.map(([label, value, series]) => <article className="chart-card" key={label} aria-label={label}><div className="stat-head"><span>{label}</span><strong>{value}</strong></div><Sparkline values={[...series]} height={72} label={`${label} over the last two minutes`} /></article>)}</div>
     <section className="panel" aria-label="Reservations">
-      <header className="panel-head"><h2>Reservations</h2><span className="muted">Declared limits used to admit work</span></header>
+      <header className="panel-head"><h2>Reservations</h2></header>
       <dl className="fact-grid">
         <div><dt>Budget</dt><dd>{bytes(resources.resident_budget_bytes ?? null)}</dd></div>
         <div><dt>Reserved</dt><dd>{bytes(resources.reserved_bytes)}</dd></div>
@@ -111,7 +111,17 @@ function Requests({ snapshot }: { snapshot: Snapshot }) {
 }
 
 const MAX_LINES = 2000;
-function Logs({ client, models }: { client: Client; models: string[] }) {
+/** Keeps the end of a long model name, where quant and variant names differ. */
+export function tailName(name: string, limit = 22): string {
+  return name.length <= limit ? name : `…${name.slice(name.length - limit + 1)}`;
+}
+
+/** llama.cpp prefixes its own uptime clock; the row already shows the time. */
+export function logText(text: string): string {
+  return text.replace(/^\d+\.\d{2}\.\d{3}\.\d{3} /, "");
+}
+
+function Logs({ client, models }: { client: Client; models: Model[] }) {
   const [lines, setLines] = useState<LogLine[]>([]);
   const [source, setSource] = useState("");
   const [level, setLevel] = useState<"all" | "warning" | "error">("all");
@@ -153,15 +163,15 @@ function Logs({ client, models }: { client: Client; models: string[] }) {
   return <div className="logs">
     <div className="toolbar">
       <input type="search" aria-label="Search logs" placeholder="Search logs" value={query} onChange={(event) => setQuery(event.target.value)} />
-      <select aria-label="Log source" value={source} onChange={(event) => setSource(event.target.value)}><option value="">All sources</option><option value="service">Service</option>{models.map((model) => <option key={model} value={model}>{model}</option>)}</select>
+      <ModelSelect aria-label="Log source" models={models} value={source} placeholder="All sources" leading={[["service", "Service"]]} onChange={setSource} />
       <div className="segmented" role="group" aria-label="Log level">{(["all", "warning", "error"] as const).map((value) => <button key={value} aria-pressed={level === value} onClick={() => setLevel(value)}>{value === "all" ? "All" : value === "warning" ? "Warnings" : "Errors"}</button>)}</div>
       <Button variant={follow ? "outline" : "primary"} onClick={() => setFollow(!follow)}>{follow ? "Pause" : "Follow"}</Button>
     </div>
     {error && <p className="inline-error" role="alert">{error}</p>}
-    {dropped > 0 && <p className="field-help">{dropped} older lines were dropped before they could be shown.</p>}
+    {dropped > 0 && <p className="field-help">Showing the latest lines. Older ones were not kept.</p>}
     <div ref={view} className="log-view" role="log" aria-live="off" aria-label="Log lines" onWheel={() => { if (view.current && view.current.scrollTop + view.current.clientHeight < view.current.scrollHeight - 8) setFollow(false); }}>
       {visible.length === 0 ? <p className="muted log-empty">{lines.length ? "No lines match." : "Waiting for log output…"}</p> : visible.map((line) => <div className={`log-line ${line.level ?? ""}`} key={line.seq}>
-        <time>{new Date(line.timestamp_ms).toLocaleTimeString([], { hour12: false })}</time><span className="log-source">{line.source}</span><span className="log-text">{line.text}{line.truncated ? " …" : ""}</span>
+        <time>{new Date(line.timestamp_ms).toLocaleTimeString([], { hour12: false })}</time><span className="log-source" title={line.source}>{tailName(line.source)}</span><span className="log-text">{logText(line.text)}{line.truncated ? " …" : ""}</span>
       </div>)}
     </div>
   </div>;

@@ -3,7 +3,7 @@ import type { Client } from "./api";
 import type { Model } from "./domain";
 import { parseVoices } from "./MediaTests";
 import { wyomingHost } from "./connectData";
-import { Button } from "./ui";
+import { Button, ModelSelect } from "./ui";
 import { useOperation, useResource } from "./useResource";
 
 type Settings = { enabled: boolean; listen: string; stt_model: string | null; tts_model: string | null; tts_voice: string | null };
@@ -49,12 +49,12 @@ export function WyomingSettings({ client, models, online }: { client: Client; mo
   const address = wyomingHost(data.settings.listen, data.address, location.hostname);
   return <div className="wyoming">
     {data.error && <p className="inline-error" role="alert">{data.error}</p>}
-    {data.settings.enabled && data.listening && <p className="field-help">Listening on <code>{address}</code> · {data.connections} {data.connections === 1 ? "connection" : "connections"}. No authentication: keep it on a trusted network.</p>}
+    {data.settings.enabled && data.listening && <p className="field-help">Listening on <code>{address}</code> · {data.connections} {data.connections === 1 ? "connection" : "connections"}.</p>}
     {!data.settings.enabled && <p className="field-help">Turn Wyoming on in the list to start its listener.</p>}
     <div className="form-grid wyoming-grid">
       <div><label htmlFor="wyoming-listen">Listen on</label><input id="wyoming-listen" value={current.listen} disabled={blocked} spellCheck={false} onChange={(event) => edit({ listen: event.target.value })} /></div>
-      <div><label htmlFor="wyoming-stt">Speech to text</label><select id="wyoming-stt" value={current.stt_model ?? ""} disabled={blocked} onChange={(event) => edit({ stt_model: event.target.value || null })}><option value="">Every enabled speech model</option>{speech.map((model) => <option key={model.id} value={model.id}>{model.id}</option>)}</select></div>
-      <div><label htmlFor="wyoming-tts">Text to speech</label><select id="wyoming-tts" value={current.tts_model ?? ""} disabled={blocked} onChange={(event) => edit({ tts_model: event.target.value || null, tts_voice: null })}><option value="">First enabled voice model</option>{tts.map((model) => <option key={model.id} value={model.id}>{model.id}</option>)}</select></div>
+      <div><label htmlFor="wyoming-stt">Speech to text</label><ModelSelect id="wyoming-stt" models={speech} disabledModels="never" value={current.stt_model ?? ""} disabled={blocked} placeholder="Every enabled speech model" onChange={(id) => edit({ stt_model: id || null })} /></div>
+      <div><label htmlFor="wyoming-tts">Text to speech</label><ModelSelect id="wyoming-tts" models={tts} disabledModels="never" value={current.tts_model ?? ""} disabled={blocked} placeholder="First enabled voice model" onChange={(id) => edit({ tts_model: id || null, tts_voice: null })} /></div>
       <div><label htmlFor="wyoming-voice">Voice</label><select id="wyoming-voice" value={current.tts_voice ?? ""} disabled={blocked || voiceList.length === 0} onChange={(event) => edit({ tts_voice: event.target.value || null })}><option value="">{voiceList[0] ? `Default (${voiceList[0]})` : "Default"}</option>{voiceList.map((voice) => <option key={voice} value={voice}>{voice}</option>)}</select></div>
     </div>
     {dirty && <div className="action-row"><Button variant="primary" disabled={blocked} onClick={() => save(current, "Wyoming settings saved.")}>Save</Button><Button disabled={operation.busy} onClick={() => setDraft(null)}>Cancel</Button></div>}

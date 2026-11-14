@@ -3,7 +3,7 @@ import { ApiKeys } from "./ApiKeys";
 import { Protocols } from "./Connect";
 import type { Model } from "./domain";
 import { parseEndpoints } from "./management";
-import { Badge, Button } from "./ui";
+import { Badge, Button, HelpTip } from "./ui";
 import { useResource } from "./useResource";
 
 export type ConnectTab = "protocols" | "keys" | "endpoints";
@@ -12,7 +12,7 @@ function Endpoints({ client }: { client: Client }) {
   const endpoints = useResource(client, "juiced/endpoints", parseEndpoints, 0);
   return <section className="page-body" aria-label="All endpoints">
     {endpoints.error && <div className="action-row"><p role="alert" className="inline-error">{endpoints.error}</p><Button onClick={() => void endpoints.reload()}>Retry</Button></div>}
-    <p className="field-help">Management routes also answer under /api/v0, /api/v1 and /v0. Routes of turned-off protocols are hidden.</p>
+    <div className="page-title"><h2>Endpoints</h2><HelpTip label="Endpoints">Management routes also answer under /api/v0, /api/v1 and /v0. Routes of turned-off protocols are hidden. The API guide in the docs describes each one.</HelpTip></div>
     {endpoints.data && <div className="data-table endpoint-table" role="table" aria-label="Endpoints">{endpoints.data.map((endpoint) => <div className="data-row" role="row" key={endpoint.method + endpoint.path}><code role="cell" className="break-word">{endpoint.method} {endpoint.prefixes.includes("/v1") ? "/v1" : endpoint.prefixes[0]}{endpoint.path}</code><span role="cell"><Badge>{endpoint.authority}</Badge></span></div>)}</div>}
   </section>;
 }

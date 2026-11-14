@@ -1,4 +1,4 @@
-import { api, expect, hotModel, modelId, navigate, open, tab, test, toasts } from "./support";
+import { api, expect, hotModel, modelId, navigate, open, pickModel, tab, test, toasts } from "./support";
 
 type AliasList = { revision: number; aliases: { alias: string; target: string }[] };
 
@@ -26,7 +26,7 @@ test("an alias is created, serves requests, swaps to another model and is remove
     await expect(view).toContainText("already a model or an alias");
     await expect(form.getByRole("button", { name: "Add alias" })).toBeDisabled();
     await form.getByLabel("Alias name").fill(alias);
-    await form.getByLabel("Alias target").selectOption(hotModel);
+    await pickModel(form.getByLabel("Alias target"), hotModel);
     await form.getByRole("button", { name: "Add alias" }).click();
     await expect(toasts(page).getByRole("status")).toContainText(`${alias} now points to ${hotModel}.`);
     await expect(form.getByLabel("Alias name")).toHaveValue("");
@@ -38,7 +38,7 @@ test("an alias is created, serves requests, swaps to another model and is remove
     const reply = await request.post("/v1/chat/completions", { data: { model: alias, messages: [{ role: "user", content: "hi" }], max_tokens: 4 } });
     expect(reply.ok(), await reply.text()).toBe(true);
 
-    await row.getByLabel(`Target for ${alias}`).selectOption(modelId);
+    await pickModel(row.getByLabel(`Target for ${alias}`), modelId);
     await expect(toasts(page).getByRole("status")).toContainText(`${alias} now points to ${modelId}.`);
     await expect.poll(async () => (await service.json<AliasList>("/v1/juiced/aliases")).aliases.find((entry) => entry.alias === alias)?.target).toBe(modelId);
 
@@ -74,7 +74,7 @@ test("a stale alias revision reports the conflict and keeps the list intact", as
     });
     const form = view.getByRole("form", { name: "New alias" });
     await form.getByLabel("Alias name").fill(alias);
-    await form.getByLabel("Alias target").selectOption(hotModel);
+    await pickModel(form.getByLabel("Alias target"), hotModel);
     await form.getByRole("button", { name: "Add alias" }).click();
     await expect(view.getByRole("alert")).toContainText("changed in another client");
     await expect(form.getByLabel("Alias name")).toHaveValue(alias);

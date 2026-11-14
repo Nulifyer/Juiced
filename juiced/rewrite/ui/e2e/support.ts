@@ -167,6 +167,12 @@ export async function storedText(page: Page) {
   return page.evaluate(() => { try { return Object.entries(localStorage).map(([key, value]) => `${key}=${value}`).join("\n"); } catch { return ""; } });
 }
 
+/** Picks a model in a ModelSelect, opening its Disabled group first when the model is hidden there. */
+export async function pickModel(select: Locator, id: string) {
+  if (await select.locator(`option[value="${id}"]`).count() === 0) await select.selectOption(" show-disabled");
+  await select.selectOption(id);
+}
+
 export function rowFor(table: Locator, id: string) {
   return table.getByRole("row").filter({ has: table.page().getByRole("button", { name: id, exact: true }) });
 }

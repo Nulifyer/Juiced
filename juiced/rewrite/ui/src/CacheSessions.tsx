@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import type { Client } from "./api";
 import { Meter } from "./charts";
 import { pathNames } from "./performance";
-import { Badge, Button, Empty, HelpTip, Icon } from "./ui";
+import type { Model } from "./domain";
+import { Badge, Button, Empty, HelpTip, Icon, ModelSelect } from "./ui";
 import { useOperation, useResource } from "./useResource";
 
 export type SessionMode = "off" | "memory" | "persistent";
@@ -89,7 +90,7 @@ function StorageLimits({ settings, blocked, configure }: { settings: Settings; b
   }
   return <form className="storage-limits" aria-label="Cache limits" onSubmit={(event) => { event.preventDefault(); save(); }}>
     <label className="inline-field">Disk budget <input className="short-input" inputMode="decimal" aria-label="Disk budget in GiB" value={budget} disabled={blocked} onChange={(event) => setBudget(event.target.value)} /> GiB</label>
-    <label className="inline-field">Keep for <input className="short-input" inputMode="numeric" aria-label="Days to keep unused conversations" value={days} placeholder="Until full" disabled={blocked} onChange={(event) => setDays(event.target.value)} /> days</label>
+    <label className="inline-field">Keep unused for <input className="short-input" inputMode="numeric" aria-label="Days to keep unused conversations" value={days} placeholder="—" disabled={blocked} onChange={(event) => setDays(event.target.value)} /> days{days.trim() === "" && <span className="muted"> (until full)</span>}</label>
     <HelpTip label="Cache limits">When the disk budget is full, the least recently used conversations are deleted first. With a number of days, conversations unused for that long are also deleted. Kept conversations are never deleted automatically.</HelpTip>
     {dirty && <><Button type="submit" variant="primary" disabled={blocked}>Save</Button><Button variant="ghost" onClick={() => { setBudget(savedBudget); setDays(savedDays); setError(""); }}>Cancel</Button></>}
     {error && <p className="inline-error" role="alert">{error}</p>}
@@ -102,7 +103,7 @@ const reasons: Record<string, string> = {
   cache_storage_unavailable: "Cache storage is unavailable, so only memory is used.",
 };
 
-export function ConversationCache({ client, online }: { client: Client; online: boolean }) {
+export function ConversationCache({ client, models: registered = [], online }: { client: Client; models?: Model[]; online: boolean }) {
   const view = useResource(client, "juiced/cache/sessions", parseSessions, 3000);
   const turns = useResource(client, "juiced/requests", parseTurns, 3000);
   const operation = useOperation(client, async () => { await view.reload(); await turns.reload(); });
@@ -130,7 +131,6 @@ export function ConversationCache({ client, online }: { client: Client; online: 
       <div className="summary-mode">
         <div className="summary-title">
           <div className="page-title"><h2>Conversation cache</h2><HelpTip label="Conversation cache"><p><strong>Off:</strong> Juiced doesn't track conversations. A turn is fast only if the engine still holds that exact prompt.</p><p><strong>Memory only:</strong> each conversation goes back to the engine slot that still holds it. Needs a model with more than one slot. Lost when the model unloads.</p><p><strong>Memory and disk:</strong> also saves each conversation to disk after a reply, so it comes back after an unload, reload or restart. A new conversation that opens with the same messages, such as a client's system prompt, starts from the saved one.</p><p>Hybrid models such as Qwen3.5 reuse a prompt only up to the start of a message. A system prompt that changes every time, for example with the clock or free memory, is processed in full.</p><p>Only llama.cpp models use this. Juiced stores fingerprints of the messages, never their text.</p></HelpTip></div>
-          <p className="muted">Saves each conversation's processed prompt so the next turn only processes the new message.</p>
         </div>
         <div className="segmented" role="radiogroup" aria-label="Default cache mode">{modes.map((item) => <button key={item} role="radio" aria-checked={fallback === item} disabled={blocked} onClick={() => fallback !== item && void configure({ ...data.settings, mode: item, models: Object.fromEntries(Object.entries(data.settings.models).filter(([, value]) => value !== item)) }, `Conversation cache: ${modeNames[item]}.`)}>{modeNames[item]}</button>)}</div>
       </div>
@@ -156,7 +156,7 @@ export function ConversationCache({ client, online }: { client: Client; online: 
         })}
       </div>}
       {addable.length > 0 && <div className="toolbar override-add" aria-label="Add an override">
-        <select aria-label="Model to override" value={adding} disabled={blocked} onChange={(event) => setAdding(event.target.value)}><option value="">Choose a model…</option>{addable.map((model) => <option key={model} value={model}>{model}</option>)}</select>
+        <ModelSelect aria-label="Model to override" models={addable.map((id) => registered.find((model) => model.id === id) ?? ({ id, policy: "on-demand", loaded: false } as Model))} value={adding} disabled={blocked} placeholder="Choose a model…" onChange={setAdding} />
         <select aria-label="Override mode" value={chosenMode} disabled={blocked} onChange={(event) => setAddMode(event.target.value as SessionMode)}>{otherModes.map((item) => <option key={item} value={item}>{modeNames[item]}</option>)}</select>
         <Button disabled={blocked || !adding} onClick={async () => { if (await setModelMode(adding, chosenMode) !== undefined) setAdding(""); }}>Add override</Button>
       </div>}

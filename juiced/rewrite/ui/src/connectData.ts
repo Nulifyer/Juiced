@@ -79,8 +79,7 @@ export function baseUrl(protocol: ProtocolHealth | { id: ProtocolId; listen?: st
 }
 
 export type Snippet = { label: string; text: string };
-export function snippets(id: ProtocolId, base: string, keyed: boolean): Snippet[] {
-  const model = "YOUR_MODEL_ID";
+export function snippets(id: ProtocolId, base: string, keyed: boolean, model = "YOUR_MODEL_ID"): Snippet[] {
   const key = keyed ? "YOUR_API_KEY" : "unused";
   const bearer = keyed ? ` \\\n  -H 'Authorization: Bearer ${key}'` : "";
   const json = (path: string, body: string, extra = "") => `curl ${base}${path}${bearer}${extra} \\\n  -H 'Content-Type: application/json' \\\n  -d '${body}'`;

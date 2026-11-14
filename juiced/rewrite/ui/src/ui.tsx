@@ -1,4 +1,6 @@
-import { useEffect, useId, useRef, type ButtonHTMLAttributes, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ButtonHTMLAttributes, type ReactNode } from "react";
+import type { Model } from "./domain";
+import { modelGroups, SHOW_DISABLED } from "./modelPicker";
 
 export function Switch({ checked, label, disabled, onChange, children }: { checked: boolean; label: string; disabled?: boolean; onChange: (next: boolean) => void; children?: ReactNode }) {
   return <button type="button" role="switch" className="switch" aria-checked={checked} aria-label={label} disabled={disabled} onClick={() => onChange(!checked)}><span className="switch-track"><span className="switch-thumb" /></span>{children}</button>;
@@ -106,4 +108,18 @@ export function Menu({ label, trigger, children }: { label: string; trigger: Rea
     <button ref={button} type="button" className="menu-trigger" aria-label={label} aria-haspopup="menu" popoverTarget={id}>{trigger}</button>
     <div id={id} popover="auto" className="menu-popup" role="menu" onToggle={(event) => { if ((event as unknown as ToggleEvent).newState === "open") place(event.currentTarget); }} onClick={(event) => { if ((event.target as HTMLElement).closest("button")) (event.currentTarget as HTMLElement).hidePopover(); }}>{children}</div>
   </>;
+}
+
+/** A model picker that lists loaded models first and keeps Disabled ones behind one option. */
+export function ModelSelect({ models, value, onChange, placeholder, leading = [], disabledModels = "toggle", id, ...rest }: { models: Model[]; value: string; onChange: (id: string) => void; placeholder?: string; leading?: [string, string][]; disabledModels?: "toggle" | "never"; id?: string; disabled?: boolean; "aria-label"?: string; "aria-labelledby"?: string }) {
+  const [showDisabled, setShowDisabled] = useState(false);
+  const { groups, hidden } = modelGroups(disabledModels === "never" ? models.filter((model) => model.policy !== "disabled" || model.id === value) : models, showDisabled, value);
+  const known = groups.some((group) => group.ids.includes(value)) || leading.some(([option]) => option === value);
+  return <select id={id} value={value} {...rest} onChange={(event) => { if (event.target.value === SHOW_DISABLED) setShowDisabled(true); else onChange(event.target.value); }}>
+    {placeholder !== undefined && <option value="">{placeholder}</option>}
+    {leading.map(([option, label]) => <option key={option} value={option}>{label}</option>)}
+    {value && !known && <option value={value}>{value}</option>}
+    {groups.map((group) => <optgroup key={group.label} label={group.label}>{group.ids.map((model) => <option key={model} value={model}>{model}</option>)}</optgroup>)}
+    {hidden > 0 && <option value={SHOW_DISABLED}>Show {hidden} disabled…</option>}
+  </select>;
 }

@@ -84,9 +84,14 @@ export function unloadReason(model: Model): string | undefined {
   if (model.policy === "hot") return "Change to On demand before unloading.";
 }
 
-export const services = [["chat", "Chat"], ["transcription", "Transcription"], ["embeddings", "Embeddings"]] as const;
+export const services = [["chat", "Chat"], ["transcription", "Speech to text"], ["speech", "Text to speech"], ["images", "Images"], ["embeddings", "Embeddings"]] as const;
 export type Service = typeof services[number][0];
-const serviceOperations: Record<Service, string[]> = { chat: ["chat/completions", "completions", "responses"], transcription: ["audio/transcriptions"], embeddings: ["embeddings"] };
+const serviceOperations: Record<Service, string[]> = { chat: ["chat/completions", "completions", "responses"], transcription: ["audio/transcriptions"], speech: ["audio/speech"], images: ["images/generations", "images/edits"], embeddings: ["embeddings"] };
+
+/** The tasks a model serves, named the way the console names them. */
+export function taskNames(model: Model): string[] {
+  return services.filter(([id]) => offers(model, id)).map(([, label]) => label);
+}
 export function offers(model: Model, service: Service): boolean {
   return model.operations.some((operation) => serviceOperations[service].includes(operation));
 }
