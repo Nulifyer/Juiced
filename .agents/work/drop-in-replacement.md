@@ -119,7 +119,10 @@ Request (user, "this sounds good, I like this, do it"): every engine runs each m
 5. Post-add / engine-change check: loads, chat, tool-call parse, thinking toggle, vision, speed.
 Native-adopted (v0.9.2 settings store) models keep native semantics.
 
-Progress: batch A (steps 1-3 for llama.cpp and vLLM parsers) in progress.
+Progress:
+- Steps 1-3 (llama.cpp) and step 5 released in rc.28 (rc.27 build failed on a flaky intake test, never deployed; deploying it anyway caused a ~3 min outage, rolled back). Live on rc.28: Coder-Next defaults = recipe `--spec-type ngram-simple` + `--metrics`, sampler from the model file (1.0/40/0.95); Qwen3-4B gets the qwen3 family sampler (0.6/0.85/20) and still passes HA 60/60 (median 1.49 s); automatic checks ran on both (chat and tools pass; Coder-Next 19.8 tok/s during startup, 4B 26.1).
+- Step 4 (Tune) committed for rc.29; not yet run on the homelab.
+- Not done: vLLM parsers at launch (models added before rc.23 keep old args), check results persist only in memory, host-profile layer.
 
 ## Pending (2026-11-13, after rc.24)
 
