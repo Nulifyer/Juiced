@@ -24,6 +24,11 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 #[derive(Clone, Copy)]
 pub(crate) struct Probe;
 
+/// Marks a request the service sends itself through its own router, which no client can set,
+/// so it runs with service authority even when access keys are enforced.
+#[derive(Clone, Copy)]
+pub(crate) struct Internal;
+
 fn access_view(state: &AppState) -> Value {
     let auth = &state.auth;
     let mut keys = auth.environment_keys();

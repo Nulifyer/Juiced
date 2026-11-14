@@ -21,6 +21,7 @@ fn concrete_route(path: &str) -> &str {
         "/models/{model}/runtime" => "/models/fixture.one/runtime",
         "/models/{model}/variants" => "/models/fixture.one/variants",
         "/models/{model}/fit" => "/models/fixture.one/fit",
+        "/models/{model}/check" => "/models/fixture.one/check",
         "/juiced/suitability" => "/juiced/suitability?model=fixture.one",
         "/juiced/context" => "/juiced/context?model=fixture.one",
         "/juiced/runtimes/resolve" => "/juiced/runtimes/resolve?recipe=llamacpp&backend=cpu",
@@ -1004,4 +1005,65 @@ async fn policy_and_worker_mutations_function_under_each_native_prefix() {
         0
     );
     assert_eq!(server.model("fixture.disabled").await["policy"], "disabled");
+}
+
+#[tokio::test]
+async fn a_model_check_sends_real_requests_and_is_kept_for_its_launch() {
+    let server = Server::new(true).await;
+    let (status, before) = server
+        .json(
+            Method::GET,
+            "/v1/models/fixture.one/check",
+            None,
+            Some(CLIENT_KEY),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{before}");
+    assert_eq!(before["checked"], false);
+    let (status, refused) = server
+        .json(
+            Method::POST,
+            "/v1/models/fixture.one/check",
+            Some(json!({})),
+            Some(CLIENT_KEY),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{refused}");
+    let (status, checked) = server
+        .json(
+            Method::POST,
+            "/v1/models/fixture.one/check",
+            Some(json!({})),
+            Some(ADMIN_KEY),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{checked}");
+    let steps = checked["steps"].as_array().unwrap();
+    let chat = steps.iter().find(|step| step["id"] == "chat").unwrap();
+    assert_eq!(chat["status"], "pass", "{checked}");
+    assert!(
+        steps.iter().all(
+            |step| ["pass", "fail", "skip", "info"].contains(&step["status"].as_str().unwrap())
+        )
+    );
+    let (_, after) = server
+        .json(
+            Method::GET,
+            "/v1/models/fixture.one/check",
+            None,
+            Some(CLIENT_KEY),
+        )
+        .await;
+    assert_eq!(after["checked"], true, "{after}");
+    assert_eq!(after["current"], true, "{after}");
+    assert_eq!(after["steps"], checked["steps"]);
+    let (status, missing) = server
+        .json(
+            Method::GET,
+            "/v1/models/no-such-model/check",
+            None,
+            Some(CLIENT_KEY),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{missing}");
 }

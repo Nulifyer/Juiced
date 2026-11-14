@@ -1937,9 +1937,69 @@ pub struct Manager {
     paused: std::sync::atomic::AtomicBool,
     residency: residency::Residency,
     protocol_gate: Arc<crate::protocol_access::Gate>,
+    /// The last model check per model, with the launch fingerprint it ran against.
+    checks: Mutex<std::collections::HashMap<String, (Arc<str>, serde_json::Value)>>,
+    ready_events: tokio::sync::broadcast::Sender<(String, Arc<str>)>,
 }
 
 impl Manager {
+    /// `(model, launch fingerprint)` each time a worker becomes ready.
+    pub fn ready_events(&self) -> tokio::sync::broadcast::Receiver<(String, Arc<str>)> {
+        self.ready_events.subscribe()
+    }
+
+    /// The fingerprint of the model's running worker.
+    pub async fn running_fingerprint(&self, id: &str) -> Option<Arc<str>> {
+        let worker = self.worker(id).ok()?;
+        let state = worker.state.lock().await;
+        state.running.as_ref().map(|run| run.fingerprint.clone())
+    }
+
+    /// The last check for `id` and whether it ran against the worker running now.
+    pub async fn model_check_view(&self, id: &str) -> Option<serde_json::Value> {
+        let stored = self
+            .checks
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .get(id)
+            .cloned();
+        let current = self.running_fingerprint(id).await;
+        stored.map(|(fingerprint, mut result)| {
+            result["current"] = serde_json::Value::Bool(current.as_deref() == Some(&*fingerprint));
+            result
+        })
+    }
+
+    pub fn store_model_check(&self, id: &str, fingerprint: Arc<str>, result: serde_json::Value) {
+        self.checks
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .insert(id.to_owned(), (fingerprint, result));
+    }
+
+    pub fn is_registered(&self, id: &str) -> bool {
+        self.worker(id).is_ok()
+    }
+
+    /// Whether the registered model serves chat completions.
+    pub fn serves_chat(&self, id: &str) -> bool {
+        self.worker(id).is_ok_and(|worker| {
+            worker
+                .spec
+                .operations
+                .contains(&crate::config::Operation::Chat)
+        })
+    }
+
+    /// Whether a check already ran against this launch fingerprint.
+    pub fn checked(&self, id: &str, fingerprint: &str) -> bool {
+        self.checks
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .get(id)
+            .is_some_and(|(stored, _)| &**stored == fingerprint)
+    }
+
     async fn verify_storage(&self) -> Result<(), ApiError> {
         let Some(scope) = self.live_roots.clone() else {
             return Ok(());
@@ -2243,6 +2303,8 @@ impl Manager {
             session_saves: Arc::new(tokio::sync::Semaphore::new(2)),
             residency: residency::Residency::new(&config),
             protocol_gate: Arc::new(crate::protocol_access::Gate::new(&config.protocols)),
+            checks: Mutex::default(),
+            ready_events: tokio::sync::broadcast::channel(64).0,
             config: Arc::new(AsyncMutex::new(config)),
             publications: publication::Publications::new(),
             config_path,
@@ -4320,6 +4382,11 @@ impl Manager {
             .unwrap_or_else(|e| e.into_inner()) = None;
         self.residency.touch(&worker.spec.id);
         Self::publish(worker, state);
+        if let Some(run) = &state.running {
+            let _ = self
+                .ready_events
+                .send((worker.spec.id.clone(), run.fingerprint.clone()));
+        }
         Ok(())
     }
 

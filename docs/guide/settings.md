@@ -43,6 +43,15 @@ Per-backend arguments (`llamacpp.rocm_args`, `vulkan_args`, `cpu_args`, and the
 same for sd-cpp and whisper.cpp) are used for the backend the host runs, unless
 the model saved its own arguments.
 
+## Check a model
+
+**Check** on a model's Overview sends a few short real requests: a chat reply,
+a tool call, the thinking switch and an image, for the features the model
+declares, and shows its decode speed. Each line passes, fails or is skipped with
+the reason. Juiced runs it by itself after a chat model starts with new settings
+or a new engine; **Run check** runs it again, and **Load and check** loads an On
+demand model first.
+
 ## Juiced defaults
 
 **Juiced defaults** in Settings lists what Juiced adds when the model starts and

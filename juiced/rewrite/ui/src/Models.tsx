@@ -7,6 +7,7 @@ import { ContextInspector } from "./ContextInspector";
 import { QuantSync } from "./QuantSync";
 import { ArtifactRevisionInspector } from "./ArtifactRevisionInspector";
 import { RuntimeInspector } from "./RuntimeInspector";
+import { ModelCheck } from "./ModelCheck";
 import { ModelIdle, residencyNote } from "./Residency";
 import { ModelFiles, modelFiles, removalNote, unusedQuants } from "./LocalModels";
 import { notify } from "./toast";
@@ -215,6 +216,7 @@ export function Inspector({ model, busy, online, onClose, onDirty, mutate, clien
         {(model.policy === "disabled" || !model.downloaded || model.active_requests > 0 || model.policy === "hot") && <p className="field-help">{!model.loaded ? loadBlocked : unloadBlocked}</p>}
         {dirty && <p className="field-help">Save or cancel your changes first.</p>}
       </section>
+      <ModelCheck model={model} client={client} online={online} disabled={busy || dirty} />
       </div>
       <div role="tabpanel" id="panel-settings" aria-labelledby="tab-settings" hidden={tab !== "settings"}>
       <ContextInspector model={model} client={client} online={online} busy={busy} policyDirty={artifactDirty || runtimeDirty} onDirty={setProfileDirty} mutate={mutate} advanced={advanced} />

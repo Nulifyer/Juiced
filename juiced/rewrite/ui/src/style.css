@@ -774,3 +774,9 @@ html, body { height: 100%; overflow: hidden; }
 .defaults-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; font-size: .8rem; }
 .defaults-list li { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .defaults-list code { overflow-wrap: anywhere; }
+.check-steps { list-style: none; margin: 0 0 6px; padding: 0; display: grid; gap: 3px; font-size: .8rem; }
+.check-steps li { display: grid; grid-template-columns: 14px auto minmax(0, 1fr); gap: 8px; align-items: baseline; }
+.check-steps .muted { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.check-pass .check-mark { color: var(--good); }
+.check-fail .check-mark, .check-fail > span:nth-child(2) { color: var(--bad); }
+.model-check .section-heading { display: flex; align-items: center; justify-content: space-between; }

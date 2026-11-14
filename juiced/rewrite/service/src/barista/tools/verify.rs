@@ -185,6 +185,13 @@ fn multipart(model: &str, audio: &[u8]) -> (String, Vec<u8>) {
     (format!("multipart/form-data; boundary={boundary}"), body)
 }
 
+/// One fixed-input request of the model's own kind, for the model check.
+pub(super) async fn test_once(context: &Context<'_>, id: &str) -> Result<String> {
+    test(context, json!({"model": id}))
+        .await
+        .map(|outcome| outcome.summary)
+}
+
 async fn test(context: &Context<'_>, args: Value) -> Result<Outcome> {
     let test: TestArgs = parse(args)?;
     model_id(&test.model)?;

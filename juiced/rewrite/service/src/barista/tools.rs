@@ -5,6 +5,7 @@
 //! authoritative. Every tool answers with one bounded, redacted result envelope.
 
 mod acquire;
+mod check;
 mod configure;
 mod explain;
 mod inspect;
@@ -237,6 +238,8 @@ pub(super) struct Context<'a> {
     pub(super) assistant_model: Option<String>,
     pub(super) preview: bool,
     sources: Mutex<Vec<Value>>,
+    /// Requests carry the in-process `Internal` marker instead of the caller's credentials.
+    internal: bool,
 }
 
 pub(super) struct Raw {
@@ -269,6 +272,9 @@ impl Context<'_> {
         }
         if let Some(content_type) = content_type {
             request = request.header(header::CONTENT_TYPE, content_type);
+        }
+        if self.internal {
+            request = request.extension(crate::connect::Internal);
         }
         let request = request
             .extension(crate::connect::Probe)
@@ -621,6 +627,7 @@ pub(super) async fn call(
         assistant_model: dispatch.assistant_model,
         preview: dispatch.preview,
         sources: Mutex::default(),
+        internal: false,
     };
     let result = run(&context, tool, args).await;
     let sources = std::mem::take(
@@ -630,6 +637,31 @@ pub(super) async fn call(
             .unwrap_or_else(|error| error.into_inner()),
     );
     envelope(tool, context.preview, sources, result)
+}
+
+/// Runs the model check with the caller's credentials, or with in-process authority when
+/// `headers` is `None` (the automatic check after a worker starts).
+pub(super) async fn model_check(
+    state: &AppState,
+    app: axum::Router,
+    headers: Option<&HeaderMap>,
+    model: &str,
+) -> std::result::Result<Value, Value> {
+    let empty = HeaderMap::new();
+    let context = Context {
+        state,
+        app,
+        headers: headers.unwrap_or(&empty),
+        permission: Permission::Full,
+        revision: 0,
+        assistant_model: None,
+        preview: false,
+        sources: Mutex::default(),
+        internal: headers.is_none(),
+    };
+    check::run(&context, model)
+        .await
+        .map_err(|failure| failure.error())
 }
 
 async fn run(context: &Context<'_>, tool: &Tool, args: Value) -> Result<Outcome> {

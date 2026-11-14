@@ -130,6 +130,15 @@ impl Authorization {
         }
     }
 
+    /// The identity of a request the service sends itself (see `connect::Internal`).
+    pub fn internal(&self) -> RequestContext {
+        RequestContext {
+            principal: "juiced-internal",
+            role: Role::Operator,
+            credential_epoch: "juiced-internal-v1".into(),
+        }
+    }
+
     pub fn keys(&self) -> &Arc<crate::api_keys::KeyStore> {
         &self.keys
     }

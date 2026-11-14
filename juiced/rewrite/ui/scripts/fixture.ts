@@ -258,7 +258,7 @@ source = Bun.serve({
   }
   const { HF_TOKEN: _token, ...environment } = process.env;
   const child = Bun.spawn([executable("lemond"), "--config", config, "--listen", `127.0.0.1:${process.env.JUICED_PREVIEW_PORT ?? 13306}`, "--ui", resolve(root, "ui/dist")], {
-    cwd: root, stdout: "inherit", stderr: "inherit", env: { ...environment, LEMONADE_API_KEY: "", LEMONADE_ADMIN_API_KEY: "", JUICED_HUGGINGFACE_URL: `http://127.0.0.1:${source!.port}`, JUICED_TEST_ENGINE_RELEASES: `http://127.0.0.1:${source!.port}`, JUICED_TEST_HARDWARE_ROOT: hardware },
+    cwd: root, stdout: "inherit", stderr: "inherit", env: { ...environment, LEMONADE_API_KEY: "", LEMONADE_ADMIN_API_KEY: "", JUICED_AUTOMATIC_MODEL_CHECKS: "0", JUICED_HUGGINGFACE_URL: `http://127.0.0.1:${source!.port}`, JUICED_TEST_ENGINE_RELEASES: `http://127.0.0.1:${source!.port}`, JUICED_TEST_HARDWARE_ROOT: hardware },
   });
   const stop = () => child.kill("SIGTERM");
   process.once("SIGINT", stop); process.once("SIGTERM", stop);

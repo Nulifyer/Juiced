@@ -87,7 +87,15 @@ async fn authorize(State(state): State<AppState>, mut request: Request, next: Ne
         }
         response
     };
-    match state.auth.authenticate(request.headers(), authority) {
+    let internal = request
+        .extensions()
+        .get::<crate::connect::Internal>()
+        .is_some();
+    match if internal {
+        Ok(state.auth.internal())
+    } else {
+        state.auth.authenticate(request.headers(), authority)
+    } {
         Ok(context) => {
             request.extensions_mut().insert(context);
         }
@@ -222,6 +230,8 @@ define_routes! {
     (get, "/models/{model}/variants", model_variants, "operator"),
     (post, "/models/{model}/variants", model_variants_sync, "operator"),
     (get, "/models/{model}/fit", model_fit, "operator"),
+    (get, "/models/{model}/check", model_check_view, "read"),
+    (post, "/models/{model}/check", model_check_run, "operator"),
     (get, "/models/{model}/runtime", model_runtime, "operator"),
     (post, "/models/{model}/runtime", model_runtime_set, "operator"),
     (get, "/juiced/runtime-packages", runtime_packages, "operator"),
@@ -1045,6 +1055,42 @@ async fn model_options(
 ) -> Result<Json<Value>, ApiError> {
     state.manager.options(&id).await.map(Json)
 }
+async fn model_check_view(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    if !state.manager.is_registered(&id) {
+        return Err(ApiError::new(
+            StatusCode::NOT_FOUND,
+            "unknown_model",
+            "The model is not registered.",
+        ));
+    }
+    let view = state.manager.model_check_view(&id).await.map_or_else(
+        || serde_json::json!({"schema_version": 1, "model": id, "checked": false}),
+        |mut view| {
+            view["checked"] = Value::Bool(true);
+            view
+        },
+    );
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(view)))
+}
+async fn model_check_run(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ApiError> {
+    let result = crate::barista::model_check(&state, Some(&headers), &id).await?;
+    if let Some(fingerprint) = state.manager.running_fingerprint(&id).await {
+        state
+            .manager
+            .store_model_check(&id, fingerprint, result.clone());
+    }
+    let mut result = result;
+    result["current"] = Value::Bool(true);
+    result["checked"] = Value::Bool(true);
+    Ok(Json(result))
+}
 async fn model_fit(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -1280,7 +1326,9 @@ pub fn router(manager: Arc<Manager>, auth: Auth, ui: Option<PathBuf>) -> Router 
         .layer(DefaultBodyLimit::max(crate::admission::JSON_INGRESS_BYTES))
         .layer(middleware::from_fn_with_state(state.clone(), authorize))
         .merge(crate::llama_routes::public());
-    let _ = state.probe.set(app.clone());
+    if state.probe.set(app.clone()).is_ok() {
+        crate::barista::spawn_automatic_checks(state.clone());
+    }
     if let Some(ui) = ui {
         app = app.fallback_service(ServeDir::new(ui).append_index_html_on_directories(true));
     }

@@ -28,7 +28,7 @@ pub const CLIENT_KEY: &str = "isolated-e2e-client-key";
 pub const ADMIN_KEY: &str = "isolated-e2e-admin-key";
 const ROTATED_CLIENT_KEY: &str = "isolated-e2e-rotated-client-key";
 const ROTATED_ADMIN_KEY: &str = "isolated-e2e-rotated-admin-key";
-pub const READ_ROUTES: [&str; 19] = [
+pub const READ_ROUTES: [&str; 20] = [
     "/health",
     "/docs",
     "/docs/{*page}",
@@ -48,6 +48,7 @@ pub const READ_ROUTES: [&str; 19] = [
     "/system-stats",
     "/models/{model}/files",
     "/juiced/storage",
+    "/models/{model}/check",
 ];
 /// Read routes whose operator view adds process details; `Server::get` reads them as operator.
 pub const OPERATOR_DETAIL_ROUTES: [&str; 1] = ["/juiced/context"];
@@ -81,7 +82,7 @@ pub const OPERATOR_READ_ROUTES: [&str; 28] = [
     "/juiced/protocols/health",
     "/juiced/barista",
 ];
-pub const WRITE_ROUTES: [&str; 42] = [
+pub const WRITE_ROUTES: [&str; 43] = [
     "/juiced/runtime-packages/import",
     "/juiced/engines/install",
     "/juiced/models/add",
@@ -124,6 +125,7 @@ pub const WRITE_ROUTES: [&str; 42] = [
     "/juiced/barista",
     "/juiced/barista/tools/call",
     "/juiced/barista/handles/{handle}",
+    "/models/{model}/check",
 ];
 pub const INFERENCE_ROUTES: [&str; 4] = [
     "/chat/completions",
@@ -298,6 +300,12 @@ fn diagnostic_route(path: &str) -> &'static str {
                 .is_some_and(|id| !id.is_empty() && !id.contains('/'))
             {
                 return "/models/{model}/fit";
+            }
+            if model
+                .strip_suffix("/check")
+                .is_some_and(|id| !id.is_empty() && !id.contains('/'))
+            {
+                return "/models/{model}/check";
             }
             if !model.is_empty() && !model.contains('/') {
                 return "/models/{model}";

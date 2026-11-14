@@ -1,0 +1,4 @@
+# Test servers start chat workers constantly; their automatic model checks would add requests
+# the tests count. The container runs lemond directly, so checks stay on in production.
+[env]
+JUICED_AUTOMATIC_MODEL_CHECKS = "0"

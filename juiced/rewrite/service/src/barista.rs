@@ -309,6 +309,66 @@ pub(crate) async fn call(
     ))
 }
 
+/// Runs the model check for `model` with the caller's credentials, or with service authority
+/// when `headers` is `None`.
+pub(crate) async fn model_check(
+    state: &AppState,
+    headers: Option<&HeaderMap>,
+    model: &str,
+) -> Result<Value, ApiError> {
+    let app = state.probe.get().cloned().ok_or_else(|| {
+        ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "model_check_not_ready",
+            "The service is still starting. Retry the check.",
+        )
+    })?;
+    tools::model_check(state, app, headers, model)
+        .await
+        .map_err(|error| {
+            let status = error["status"]
+                .as_u64()
+                .and_then(|status| StatusCode::from_u16(status as u16).ok())
+                .unwrap_or(StatusCode::BAD_GATEWAY);
+            let message = error["message"]
+                .as_str()
+                .unwrap_or("The model check failed.")
+                .to_owned();
+            ApiError::new(status, "model_check_failed", message)
+        })
+}
+
+/// Checks each chat model once per launch fingerprint after its worker becomes ready.
+pub(crate) fn spawn_automatic_checks(state: AppState) {
+    let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+        return;
+    };
+    if std::env::var("JUICED_AUTOMATIC_MODEL_CHECKS").is_ok_and(|value| value == "0") {
+        return;
+    }
+    let mut events = state.manager.ready_events();
+    runtime.spawn(async move {
+        loop {
+            let (id, fingerprint) = match events.recv().await {
+                Ok(event) => event,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+            };
+            if !state.manager.serves_chat(&id) || state.manager.checked(&id, &fingerprint) {
+                continue;
+            }
+            let state = state.clone();
+            tokio::spawn(async move {
+                let result = match model_check(&state, None, &id).await {
+                    Ok(result) => result,
+                    Err(error) => serde_json::json!({"schema_version": 1, "model": id, "passed": false, "error": error.message, "steps": []}),
+                };
+                state.manager.store_model_check(&id, fingerprint, result);
+            });
+        }
+    });
+}
+
 /// Releases a value a tool kept out of model context: a new key's secret once, or test media.
 pub(crate) async fn handle(Path(id): Path<String>) -> Result<Response, ApiError> {
     let missing = || {
