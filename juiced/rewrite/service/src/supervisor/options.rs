@@ -111,6 +111,14 @@ pub struct SettingsChange {
     pub apply: OptionsApply,
 }
 
+/// The parts of a llama.cpp profile one settings change may replace.
+struct LlamaChange {
+    options: Option<LaunchOptions>,
+    extra_args: Option<Vec<String>>,
+    juiced_defaults: Option<bool>,
+    tuned: Option<Option<crate::config::TunedLaunch>>,
+}
+
 /// Tune results carry only flags an operator could pass as extra arguments.
 fn validate_tuned(tuned: &crate::config::TunedLaunch) -> Result<(), ApiError> {
     let invalid = |message: &str| {
@@ -206,10 +214,12 @@ impl Manager {
         self.apply_llama(
             id,
             expected_revision,
-            Some(options),
-            None,
-            None,
-            None,
+            LlamaChange {
+                options: Some(options),
+                extra_args: None,
+                juiced_defaults: None,
+                tuned: None,
+            },
             apply,
         )
         .await
@@ -259,10 +269,12 @@ impl Manager {
                 self.apply_llama(
                     id,
                     expected_revision,
-                    options,
-                    extra_args,
-                    juiced_defaults,
-                    tuned,
+                    LlamaChange {
+                        options,
+                        extra_args,
+                        juiced_defaults,
+                        tuned,
+                    },
                     apply,
                 )
                 .await
@@ -288,12 +300,15 @@ impl Manager {
         self: &Arc<Self>,
         id: &str,
         expected_revision: u64,
-        options: Option<LaunchOptions>,
-        extra_args: Option<Vec<String>>,
-        juiced_defaults: Option<bool>,
-        tuned: Option<Option<crate::config::TunedLaunch>>,
+        change: LlamaChange,
         apply: OptionsApply,
     ) -> Result<serde_json::Value, OptionsError> {
+        let LlamaChange {
+            options,
+            extra_args,
+            juiced_defaults,
+            tuned,
+        } = change;
         if let Some(options) = &options {
             options.validate().map_err(|error| {
                 ApiError::new(StatusCode::BAD_REQUEST, error.code, error.message)
