@@ -14,12 +14,20 @@ Request source: user, 2026-11-12. The homelab switched stack 83 to `rewrite-prev
 - Native config: 40 user models plus builtins; non-Disabled: Ornith Q6_K (hot, mmproj companion, ROCm, llamacpp_args incl. `--spec-type draft-mtp`), asr4all-l (hot, local path `/library/asr/models/...`), kokoro-v1 (hot, builtin), Qwen3.5-4B Q8_0 (on-demand), Skyfall IQ4_NL (on-demand, ROCm, ctx 32768), z-image-turbo-nsfw-v2 (on-demand, sd.cpp vulkan, text_encoder + vae companions, image_defaults). Recipes in use: llamacpp, sd-cpp, asr4all, parakeet, whispercpp, hybrid, kokoro, flm.
 - First rewrite boot on the live volume (rewrite-preview) wrote only new paths (`/data/config.json`, `artifacts`, `runtime-packages`, `bundled-engines`, `home`, `import`, `.juiced-store.lock`); v0.9.2 was restored at 14:5x UTC with all six models serving.
 
+## Release decision (user, 2026-11-15)
+
+- Ship the rewrite as **v0.10.0** (a non-rc tag, so it moves `latest`), not v1.0.0.
+- Skip legacy and past-support work: rollback to v0.9.2 is not a release requirement and is no longer checked.
+- Home Assistant's conversation model: handled by the user. HA Ollama, Pi and SillyTavern: "it seemed to work", accepted.
+- The agent handles the flaky release-runner tests and the remaining gaps (NPU engines on real hardware, vLLM parsers at launch for old registrations, api-keys in settings backups, split GGUF and separate mmproj import, persisted model checks, the "Engine changed" decision, the UX audit leftovers, Barista how-to grounding).
+- The older release-plan checks in rewrite-release.md (council, full T3 inspection, profiling and flame graphs, R4 network acquisition) are out of the v0.10.0 criteria; see that ledger.
+
 ## Acceptance
 
 - [x] Same compose (image tag change only, optional junk removal) serves on 8080 with the healthcheck passing. (rc.3 onward)
 - [x] First boot adopts `/data/config` automatically: every native model with the same ID, policy, options, companions and weights in place; engines for non-Disabled models installed without operator steps; idempotent on restart. (rc.3; three Qwen3.8-27B variants needed a context cut, rc.5)
-- [ ] HA llama_cpp, HA Ollama, HA Wyoming (same identity), Pi and Tavern work unchanged. HA Wyoming verified live from the HA container (rc.3, rc.5, rc.9); HA llama_cpp traffic seen in live request records; HA Ollama, Pi and Tavern not explicitly checked on the live host.
-- [ ] Rollback to v0.9.2 by image tag still works on the same volume. Not rechecked since the rc.3 cutover; older rcs cannot load a config.json that contains the `barista` key (written once Barista is enabled, which the user did after rc.10).
+- [x] HA llama_cpp, HA Ollama, HA Wyoming (same identity), Pi and Tavern work unchanged (user, 2026-11-15: HA model handled, other clients seemed to work). HA Wyoming verified live from the HA container (rc.3, rc.5, rc.9); HA llama_cpp traffic seen in live request records; HA Ollama, Pi and Tavern not explicitly checked on the live host.
+- [~] Dropped by the user 2026-11-15 (no legacy support): rollback to v0.9.2 by image tag still works on the same volume. Not rechecked since the rc.3 cutover; older rcs cannot load a config.json that contains the `barista` key (written once Barista is enabled, which the user did after rc.10).
 - [x] Released via `juiced-release.yml` as `v1.0.0-rc.N`, deployed with Portainer, inspected live. (rc.3, rc.5, rc.9, rc.10)
 
 ## Workstreams

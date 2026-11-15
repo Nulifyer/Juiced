@@ -1,6 +1,6 @@
 # Rust rewrite release completion
 
-Status: active
+Status: superseded for v0.10.0 (later work only)
 Owner: primary agent in explore/rust-bun-rewrite
 Repository: /home/nulifyer/Projects/Juiced-rust-rewrite
 Base: 62e82570d2d5625addff0da636420f68d27b80d7
@@ -8,6 +8,10 @@ Project: [rewrite plan](../../juiced/rewrite/PLAN.md)
 Request source: User requested completing the new design, full functional API/data/model/cache end-to-end tests in rust-tests, separate Bun UI tests, tiny real models where useful, measured efficiency/speed improvements including avoiding allocations and flame graphs, final full T3 Code browser inspection, and a communicating cross-perspective subagent council before release readiness. The later runtime-catalog handoff requests incorporating its five owned design files at a planning boundary without claiming runtime support.
 
 Note 2026-11-12: the user moved priority to shipping the rewrite as a drop-in replacement (`v1.0.0-rc.N`, see [drop-in-replacement.md](drop-in-replacement.md)). The open items below (artifact controller ownership, R4 network acquisition/reclamation, final full-product T3 inspection, council) were not completed and are not tracked anywhere else.
+
+## Decision 2026-11-15 (user)
+
+The rewrite ships as v0.10.0 under [drop-in-replacement.md](drop-in-replacement.md). These checks from the acceptance list below are not v0.10.0 release criteria: the communicating council, the full final T3 browser inspection, matched profiling with flame graphs, and R4 runtime network acquisition/reclamation, along with the remaining artifact-controller ownership work. They stay listed as later work. Release readiness for v0.10.0 is judged by the drop-in ledger's acceptance list and the full verification gate.
 
 ## Goal
 
