@@ -23,9 +23,9 @@ Logs stay in memory and in the container log; they use no space on `/data`.
 
 A volume that ran Juiced v0.9.2 still holds `/data/cache` (native engine builds,
 about 29 GB on a typical install) and `/data/prompt-state`. This release does not
-use them. Juiced lists them under **v0.9.2 leftovers** and never removes them on
-its own; delete them from the Storage page. `/data/config` is listed too but kept,
-because the first start adopts models and settings from it.
+use them. **Usage** totals them as **v0.9.2 leftovers**, and **Reclaim space**
+lists each one. Juiced never removes them on its own. `/data/config` is listed
+too but kept, because the first start adopts models and settings from it.
 
 ## Reclaim space
 
@@ -33,9 +33,10 @@ because the first start adopts models and settings from it.
 uses, and v0.9.2 leftovers, largest first.
 
 1. Select the items to delete.
-2. Select **Review**. The dialog shows the space it frees and which downloads or
-   models each item affects.
-3. Select **Delete**. Juiced checks every reference again before deleting.
+2. Select **Review**. The button shows the selected size. The dialog shows the
+   space it frees and which downloads or models each item affects.
+3. Select **Delete** with the item count, such as **Delete 2 items**. Juiced
+   checks every reference again before deleting.
 
 Juiced refuses an item that a model registration, a running download, a running
 worker or a saved session still uses, and never deletes from a read-only library

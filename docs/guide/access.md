@@ -14,9 +14,37 @@ A remote client's `localhost` means the client machine. Use the Juiced host's
 reachable address instead. The UI and API share the listener. An anonymous
 installation exposes management operations to any caller that can reach it.
 
-## Configure HTTP API keys
+## Issue API keys from the console
 
-The current native server retains these environment variable names:
+Without any keys, Juiced is open to every caller that can reach it.
+**Connect → API keys** shows **Open to this network** in that state.
+
+1. Open **Connect → API keys**.
+2. Enter a **Name**. The first key is always an operator key without expiry, so
+   select **Create operator key**. Key checks turn on, and this console switches
+   to the new key for this tab.
+3. Copy the key from **Copy the new key** and store it. Juiced keeps only a hash
+   and cannot show it again.
+4. For each client, create another key. Choose a **Scope** and when it
+   **Expires**, then select **Create key**.
+
+| Scope | Allows |
+| --- | --- |
+| Read only | Models and discovery |
+| Inference | Also chat, embeddings, speech, images and transcription |
+| Operator | Everything, including the console |
+
+Select **Revoke** to remove a key. Clients using it stop working at once.
+If no environment key is set, revoking the last key turns key checks off again. Juiced stores issued keys as
+hashes in `/data/api-keys.json`.
+
+After a reload, the console needs the key again. Open the status menu in the
+top bar, select **Connection settings**, and enter an operator key under
+**API key**. The console keeps it in that browser tab only.
+
+## Set API keys in the environment
+
+The service also reads these environment variables:
 
 | Variable | Purpose |
 | --- | --- |
@@ -57,7 +85,8 @@ Read routes include `/v1/models`, `/v1/health`, `/v1/system-info`,
 `/v1/system-stats`, `/metrics` and `/logs/stream`. Setting only the admin key
 protects model lifecycle and configuration but leaves inference open to anyone
 who can reach the port. Keys issued from **Connect** make every route require a
-key. A refused request answers `401` with
+key. Environment keys appear in the **API keys** list with an **Environment**
+badge. Change or remove them in the service environment, then restart Juiced. A refused request answers `401` with
 `{"error":{"code":"unauthorized","message":"...","type":"juiced_error"}}` and a
 `WWW-Authenticate: Bearer` header. Clients should check the status rather than
 parse the message.
@@ -89,11 +118,8 @@ same-site rule, so add the address you open the console at as well. Loopback
 stays allowed. Restart the service after a change. A plain-HTTP page opened by
 host name, such as `http://juiced.lan:8080`, also needs to be listed.
 
-The current console sends same-origin requests without an API-key entry form.
-For an authenticated console, an access-controlled proxy must supply the operator
-credential to its upstream requests. Keep that proxy entry restricted to trusted
-operators. An inference client's key should not gain access through this operator
-entry point.
+When keys are on, enter an operator key in **Connection settings** to use the
+console. The console page itself loads without a key.
 
 `GET /live` answers `{"status":"ok"}` without a key, so load balancers and
 orchestrators can check liveness. It reveals nothing else.
@@ -107,6 +133,6 @@ See [Home Assistant speech](../integrations/home-assistant.md).
 
 ## Understand retained state
 
-Prompt snapshots can contain sensitive computation state. Restrict access to
+Saved conversations and snapshots can contain sensitive data. Restrict access to
 the persistent volume and its backups. Session IDs partition cache reuse, and
 do not establish user authority. See [cache](cache.md) for identity boundaries.

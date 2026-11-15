@@ -105,9 +105,11 @@ limit the copy with `fields` (`context_tokens`, `threads`, `gpu_layers`,
 
 ## Set image defaults
 
-An image model's defaults apply to every image request that leaves the field
-unset, from any client. They are the image worker's launch settings, so they
-take effect on the next load. To apply them now, use a reload.
+An image model's **Settings** tab has **Image defaults**: steps, CFG scale,
+width, height, sampler, scheduler, flow shift and seed. They apply to every image
+request that leaves the field unset, from any client. They are the image worker's
+launch settings, so they take effect on the next load. A loaded model shows
+**Save and reload**.
 
 ```bash
 curl --fail-with-body http://localhost:8080/v1/models/your-image-model-id/options
@@ -135,9 +137,13 @@ Empty a field and save. An empty field is different from entering zero.
 
 ## Verify a change
 
-Send a small representative request through **Test services** or your client.
-Check the worker, effective configuration, error details, and output.
-Compare one change at a time if you are investigating quality or speed.
+With **Advanced** on, **Setting sources** lists each setting's **Saved** and
+**Running** value and where it came from. **restart** marks a saved value that the
+running engine does not use yet.
 
-[Cache mode](cache.md) controls computation reuse separately from model generation
-settings. [Runtime profiles](runtimes.md) control the engine and hardware choice.
+Send a small representative request through **Test services** or your client.
+Check the model's state, any error, and the output. Compare one change at a time
+if you are investigating quality or speed.
+
+The [conversation cache](cache.md) controls prompt reuse separately from these
+settings. [Runtimes and hardware](runtimes.md) covers the engine choice.

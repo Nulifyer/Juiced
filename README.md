@@ -32,15 +32,16 @@ browser on your desktop, laptop, or phone.
 
 | Task | What Juiced gives you |
 | --- | --- |
-| Build a model library | Bundled catalog, Hugging Face search, quant selection, downloads, and local GGUF import |
-| Choose how models run | Per-model runtime profiles with package, hardware, and file compatibility information |
-| Keep services ready | Hot, On-demand, and Disabled policies, with worker status and load/unload controls |
-| Tune without guessing | Model settings, profile-specific overrides, and an Effective view showing where values come from |
+| Build a model library | Recommended models, Hugging Face search, quant selection with a fit estimate, downloads, and local file import |
+| Choose how models run | An engine build picked for your hardware, installed on demand, and switchable per model |
+| Keep services ready | Hot, On demand, and Disabled policies, with a model memory budget, idle unload, and load/unload controls |
+| Tune without guessing | Launch settings, generation defaults, a measured tune run, and a view of where each value comes from |
 | Connect your apps | OpenAI, Ollama, Anthropic, and AUTOMATIC1111 compatibility subsets, MCP, and optional Wyoming speech |
 | Test before connecting | Temporary chat, transcription, speech, image, and side-by-side model tests |
-| Reuse computation | Memory caching and qualified persistent prompt snapshots, with storage and retention controls |
+| Reuse computation | A conversation cache in memory and on disk, with budget and retention controls |
 | See what is happening | Hardware metrics, token throughput, worker activity, and searchable logs |
 | Choose a published variant | Find compatible existing formats and quants while preserving original weights |
+| Manage from a chat | Barista, an optional assistant that checks and changes Juiced with one of your own models |
 
 Juiced hosts models and manages their runtime. Your connected clients own saved
 conversations, coding sessions, documents, and creative projects.
@@ -59,8 +60,8 @@ docker run -d --name juiced \
 ```
 
 Open **http://localhost:8080**. Find a small chat model under **Models →
-Discover**, add it, and set it to **On demand**. Use **Test services** to send
-your first prompt.
+Discover**, select **Download**, then **Add model**. New models are **On demand**
+by default. Use **Test services** to send your first prompt.
 
 The [installation guide](docs/guide/install/README.md) covers Compose, GPU access,
 permissions, and release selection. For remote access, follow the
@@ -70,18 +71,15 @@ NVIDIA CUDA, AMD ROCm, and AMD or Intel Vulkan.
 
 ## Use your hardware
 
-Choose CPU or a compatible GPU profile for each model. llama.cpp profiles can
-reuse the same compatible GGUF across CPU, Vulkan, ROCm, CUDA, or native Apple
-Metal. Other engines have their own model-format and hardware requirements.
+Juiced detects your CPU, GPUs and NPUs and offers the engine builds that fit.
+The container ships no engines. It downloads each build you choose into the data
+volume and checks it against a pinned checksum. The llama.cpp CPU, Vulkan, ROCm
+and CUDA builds all run the same GGUF file. Other engines have their own
+model-format and hardware requirements.
 
-The Linux container includes a Vulkan llama.cpp runtime and CPU speech workers.
-Additional backends depend on their packages and the host. Native core builds
-are checked on Linux, Windows, and macOS; that does not establish packaged
-Juiced desktop support or qualify every accelerator.
-
-The experimental XDNA2 + ROCm profile accelerates eligible prefill operations on
-specific AMD hardware. It requires a matched runtime bundle and does not promise
-a speed gain. See [runtimes and hardware](docs/guide/runtimes.md).
+The experimental XDNA2 + ROCm build accelerates eligible prefill operations on
+specific AMD hardware. It does not promise a speed gain. See
+[runtimes and hardware](docs/guide/runtimes.md).
 
 ## Find your next step
 
@@ -89,7 +87,8 @@ a speed gain. See [runtimes and hardware](docs/guide/runtimes.md).
 - [Choose loading policies](docs/guide/loading-policy.md)
 - [Tune a model](docs/guide/settings.md)
 - [Connect an application](docs/integrations/README.md)
-- [Manage cache and storage](docs/guide/cache.md)
+- [Manage the conversation cache](docs/guide/cache.md)
+- [Manage storage](docs/guide/storage.md)
 - [Diagnose a problem](docs/guide/troubleshooting.md)
 
 ## Development and credits
@@ -100,5 +99,4 @@ notices. See [credits](docs/credits.md) and the
 [contributor guide](CONTRIBUTING.md).
 
 Product plans and native contracts live under [juiced/](juiced/README.md).
-Planned work, including the optional Barista operator assistant, is separate
-from the capabilities described above.
+Planned work is separate from the capabilities described above.

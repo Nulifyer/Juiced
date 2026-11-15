@@ -48,6 +48,26 @@ docker compose logs --tail 100 juiced
 The container health check shows that the service answers. It does not prove
 that every model, accelerator or voice works.
 
+## Move from v0.9.2
+
+Juiced v0.10.0 uses the same `/data` volume and port `8080` as v0.9.2.
+
+1. Make a consistent backup of the v0.9.2 volume.
+2. Change the image to `v0.10.0`. Keep the volume, mounts, devices and port.
+3. Start the container. On its first start, Juiced adopts the models in
+   `/data/config` in the background. Each model keeps its ID, loading policy and
+   settings. The weights stay where they are, and Juiced only reads the v0.9.2
+   files.
+4. Check the models under **Models → Installed**. For an enabled model whose
+   engine is missing, Juiced installs the engine first. A Disabled model waits
+   until you install its engine under **Engines & hardware**.
+5. Send a real request from each connected client.
+
+`GET /v1/juiced/state` reports adoption progress and each model's outcome under
+`native_adoption`. When everything works, you can delete the v0.9.2 engine builds
+and prompt snapshots under **Engines & hardware → Storage**. See
+[v0.9.2 leftovers](storage.md#v092-leftovers).
+
 ## Restore
 
 1. Stop the current container.

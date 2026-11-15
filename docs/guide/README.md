@@ -7,50 +7,47 @@ and enough memory for the model and its context.
 ## Download a model
 
 1. Open `http://localhost:8080`, or your server's configured address.
-2. Select **Models → Discover**.
-3. Search for a model, or open **Filter known models** and choose **Chat**.
-4. Select **Review download** on a small GGUF model, review its files, then select
-   **Download model**. For other published models, use the same query and
-   **Search published models**, then **Choose files** and select a quant.
-5. Follow download activity on the same page. Errors and **Resume / retry** stay
-   beside the transfer. Select **Review model** when it completes.
+2. Select **Models**, then the **Discover** tab.
+3. Search for a model, for example `qwen3`, and select the **Chat** task.
+4. Select a quant chip, such as **Q4_K_M**, on a small GGUF model. The detail
+   panel lists every quant with its size and whether it fits this machine.
+5. Select **Download**. The quant shows **✓ downloaded** when the files are on disk.
+   The **Downloads** tab shows progress, errors, **Pause** and **Retry**.
 
 Download size describes the weights on disk. Runtime memory also includes
-context, engine buffers, and any companion components.
+context, engine buffers, and any companion files.
 
-## Choose where it runs
+## Add the model
 
-1. Open the downloaded model's details.
-2. Select **Runtime**.
-3. Choose **llama.cpp** and a compatible hardware variant under **Run on**.
-4. Select **Use this profile** for an unloaded model.
+1. In the same detail panel, choose a policy under **Make available as**.
+   **On demand** is selected by default and loads the model on its first request.
+2. Select **Add model**. If the model needs an engine that is not installed,
+   Juiced names the engine and its download size. Select **Install engine and add**.
+3. Select **Open model** to see it in **Models → Installed**.
 
-Use CPU for a first test if accelerator access is not configured. An unavailable
-choice explains which package, hardware, or model requirement is missing.
-See [runtimes and hardware](runtimes.md) before selecting an experimental profile.
+Juiced picks the engine build for this machine. To run on the CPU instead of a
+GPU, open the model's **Settings** tab and select **CPU only** under **Run on**.
+See [runtimes and hardware](runtimes.md) to install another engine build.
 
-## Enable and test it
+## Test it
 
-New downloads start **Disabled**.
+1. Open **Test services**. The **Try a model** tab opens.
+2. Choose the model. A model that is not loaded shows **Loads on first use**.
+3. Send a short prompt and check that the model returns a complete answer.
 
-1. Set the model's **Loading policy** to **Hot** to keep it ready.
-2. Wait for its worker to load.
-3. Select **Test this variant**, or open **Test services → Chat**.
-4. Choose the loaded model and send a short prompt.
-5. Check that the model returns a complete answer.
-
-A loaded worker confirms startup. A completed request checks that the selected
-model can serve this operation.
+The model's **Overview** tab also has **Load and check**, which loads the model
+and sends a few short real requests.
 
 The test page is temporary. Leaving the page, changing models, or reloading
 clears chat results. Use a connected client for conversations you want to keep.
 
 ## Connect an app
 
-Open **Service APIs** and choose your client's protocol. For an OpenAI-compatible
-client on the same machine, use `http://localhost:8080/v1` and the exact model ID
-shown under **Model ID**. The model you just tested is selected; use **Copy model ID**
-to keep its spelling intact. Follow [connect an application](../integrations/README.md) for
-remote addresses, API keys, and compatibility limits.
+Open **Connect** and choose your client's protocol under **Protocols**. Copy the
+address shown for it. For an OpenAI-compatible client on the same machine, the
+address is `http://localhost:8080/v1`. Under **How to connect**, pick the model
+and select **Copy model ID** to keep its spelling intact. Follow
+[connect an application](../integrations/README.md) for remote addresses, API
+keys, and compatibility limits.
 
-Choose [On-demand](loading-policy.md) if the model should load only when requested.
+Choose [Hot](loading-policy.md) if the model should stay loaded and ready.

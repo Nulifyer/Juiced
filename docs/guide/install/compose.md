@@ -9,8 +9,9 @@ cd deploy/compose
 ```
 
 The examples pin the Linux x86-64 release image `v0.10.0`. They publish the console
-and API at `http://localhost:8080`. They do not download model weights or select
-a model's runtime automatically.
+and API at `http://localhost:8080`. They do not download model weights or engines.
+Juiced installs an engine when you add a model that needs it, or when you
+install one under **Engines & hardware**.
 
 ## CPU
 
@@ -18,7 +19,7 @@ a model's runtime automatically.
 docker compose up -d
 ```
 
-Open your model's **Runtime** pane and select a CPU profile.
+Juiced picks the llama.cpp CPU build for new models on a host without a GPU.
 
 ## NVIDIA CUDA
 
@@ -36,10 +37,9 @@ This override uses Docker's
 It exposes all NVIDIA GPUs. To restrict access, replace `count: all` with
 `device_ids: ["0"]` or your GPU UUID.
 
-Under **Backends & hardware**, install the CUDA package for your chosen backend.
-Select that CUDA profile for your model, enable it, and send a test request.
-The default image bundles Vulkan and CPU llama.cpp workers. CUDA packages are
-additional downloads stored in `/data`.
+Open **Engines & hardware** and check that the GPU appears in the machine
+summary. Install the llama.cpp CUDA build, add a model, and send a test request.
+Engines download into `/data`, not into the image.
 
 ### NVIDIA with Podman and CDI
 
@@ -53,7 +53,7 @@ podman-compose -f compose.yaml -f nvidia-cdi.yaml up -d
 podman-compose -f compose.yaml -f nvidia-cdi.yaml exec juiced nvidia-smi
 ```
 
-The CUDA package and model profile steps are the same as for Docker.
+The engine and model steps are the same as for Docker.
 
 ## AMD or Intel Vulkan
 
@@ -69,9 +69,9 @@ docker compose -f compose.yaml -f vulkan.yaml up -d
 ```
 
 Use the actual numeric device group IDs if your host uses different group names.
-The override requires both variables and exposes `/dev/dri`. Select a compatible
-Vulkan profile for your model. The image includes Mesa Vulkan drivers and a
-Vulkan llama.cpp worker. GPU support still depends on the driver and device.
+The override requires both variables and exposes `/dev/dri`. The image includes
+Mesa Vulkan drivers. Install the llama.cpp Vulkan build under
+**Engines & hardware**. GPU support still depends on the driver and device.
 
 ## AMD ROCm
 
@@ -86,11 +86,10 @@ export VIDEO_GID=$(getent group video | cut -d: -f3)
 docker compose -f compose.yaml -f rocm.yaml up -d
 ```
 
-Set the group IDs to match your devices. Install the appropriate ROCm backend
-package in **Backends & hardware**, select its profile for your model, and test
-inference. Passing devices through does not install ROCm or establish GPU support.
-Use the Vulkan override when your hardware supports Vulkan but lacks a compatible
-ROCm package.
+Set the group IDs to match your devices. Install the llama.cpp ROCm build under
+**Engines & hardware**, add a model, and test inference. Passing devices through
+does not install ROCm or prove GPU support. Use the Vulkan override when your
+hardware supports Vulkan but has no compatible ROCm build.
 
 Apple Metal requires a native macOS process. Linux containers cannot use Metal.
 See [runtimes and hardware](../runtimes.md) for other accelerator requirements.
@@ -106,8 +105,9 @@ export JUICED_IMAGE=ghcr.io/nulifyer/juiced:v0.10.0
 
 `JUICED_BIND_ADDRESS` defaults to `127.0.0.1`. Follow
 [access and API keys](../access.md) before changing it for remote access.
-To use a local source build, build `juiced/Dockerfile` and set `JUICED_IMAGE` to
-that image's tag.
+To use a local source build, run `CONTAINER_ENGINE=docker juiced/rewrite/container/build.sh`
+from the repository root. It tags the image `localhost/juiced-rewrite:dev`. Set
+`JUICED_IMAGE` to that tag.
 
 ## Inspect, stop, and preserve data
 

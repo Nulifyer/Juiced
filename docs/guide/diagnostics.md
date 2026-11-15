@@ -61,7 +61,8 @@ not inferred from another request.
 
 1. Open **Diagnostics → Logs**.
 2. Search, or choose a level and a source, to narrow the lines.
-3. Select **Pause** to stop following new lines while you read.
+3. Select **Pause** to stop following new lines while you read. **Follow**
+   starts again.
 4. Check the worker error alongside the model's current state.
 
 Buffered warnings can remain after the original condition clears. Check the

@@ -1,56 +1,68 @@
 # Choose a loading policy
 
-Set each downloaded model's policy to control when Juiced loads it and whether
-clients can discover it.
+Set each model's policy to control when Juiced loads it and whether clients can
+discover it.
 
 | Policy | Behavior | Use it for |
 | --- | --- | --- |
-| Hot | Keeps the model loaded and attempts startup recovery | Services you want ready without a first-request load |
-| On-demand | Allows client requests to load the model when needed | Models you use occasionally |
-| Disabled | Unloads the model and excludes it from client discovery and inference | Stored weights you are not serving |
+| Hot | Loads at startup and stays loaded | Services you want ready without a first-request load |
+| On demand | Loads on the first request and can unload when idle | Models you use occasionally |
+| Disabled | Unloads the model and hides it from apps | Stored weights you are not serving |
 
 ## Change a policy
 
-1. Open **Loading policy**, or open a model's details.
-2. Select **Hot**, **On-demand**, or **Disabled**. The change applies at once.
-   With a memory budget set, **Hot** first shows the model's reservation and the
-   free model memory, such as `Hot keeps 51.1 GiB loaded · 21.0 GiB free`. If it
-   doesn't fit, idle On demand models unload to make room. If Hot or busy models
-   hold the rest, it won't load.
-3. Watch the model's operation and worker state until the change settles.
-4. Test the model if you have enabled a new service.
+1. Open **Loading policy**. The page has one column for each policy.
+2. Drag a model to another column, or choose the policy in the model's menu.
+   You can also change it on the model's **Overview** tab under **Models**.
+   The change applies at once.
+3. Watch the model's state until the change settles.
+4. Test the model if you enabled a new service.
 
-A downloaded model can be unloaded. An enabled model can also be waiting for
-memory, a runtime package, or an accelerator. Check the state and error details
-rather than treating its policy as proof of readiness.
+Before you make a model Hot, Juiced shows its reservation and the free model
+memory, such as `Hot keeps 51.1 GiB loaded · 21.0 GiB free`. If it does not fit,
+idle On demand models unload to make room. If Hot or busy models hold the rest,
+it does not load.
+
+An enabled model can also be waiting for memory, an engine, or an accelerator.
+Check its state and error rather than treating its policy as proof of readiness.
+
+## Unload idle models
+
+**Unload when idle** in the **On demand** column sets how long an unused On demand
+model stays loaded, from **never** to **after 4 h**. A model's **Overview** tab has
+its own **Unload when idle** setting, which starts at **Default**. A client that
+sends Ollama `keep_alive` overrides it until the model's next request.
 
 ## Load or unload a worker
 
-Use the model's load/unload controls in **Models**. Loading starts its runtime
-process. Unloading releases the worker's resources and preserves its weights.
+Open the model under **Models**. On the **Overview** tab, select **Load worker**
+or **Unload** under **Worker**. Loading starts the engine process. Unloading
+releases its memory and keeps its weights. **Stop waiting** stops the console
+from waiting for a slow load.
 
-To stop a Hot model, set it to Disabled. That unloads it in one step. Busy
-workers refuse operations that would interrupt service, including Disabled. Wait for the request to finish, then review the policy and retry.
-Do not repeatedly restart the server to force a runtime change.
+To stop a Hot model, set it to Disabled. That unloads it in one step. A model
+with running requests cannot be disabled. Wait for the requests to finish, then
+retry. Do not restart the server repeatedly to force a change.
 
 ## Fit several services on one host
 
-Start with one small model. Add Hot services while watching **Model memory**
-and **GPU memory** on the Dashboard. The **Hot** column in **Loading policy**
-shows the same model memory, such as `59.4 of 80.0 GiB used`. Allow room for
-context, runtime buffers, speech, image jobs, and the host operating system.
+**Model memory** in the **Loading policy** toolbar is the memory that loaded
+models may reserve together. The container sets it to three quarters of the
+host or container memory limit on first start. Select it to change the value
+in GiB. When a load would go over it, idle On demand models unload first. Hot
+and busy models stay.
 
-The default container configuration limits loaded models to four. Changing a
-count limit does not create memory or qualify a concurrent workload. Engines
-also have different slot and device restrictions. NPU workers can require
-exclusive accelerator access.
+Start with one small model. Add Hot services while you watch **Model memory**
+and **GPU memory** on the Dashboard. The **Hot** column shows the same figure,
+such as `59.4 of 80.0 GiB used`. Leave room for context, engine buffers, speech,
+image jobs, and the host operating system.
 
-If a request waits or returns a capacity error, inspect the active workload
-before increasing limits. See [troubleshooting](troubleshooting.md).
+Engines also have their own slot and device limits. NPU workers can need
+exclusive access to the accelerator.
 
-There is no default per-user conversation quota. The engine's observed execution
-slots, available resources and the shared queue bound active work. For supported
-llama.cpp profiles, queued JSON and streaming requests use the same slot owner.
-Operators can set explicit limits. A fixed one-slot engine can serve many threads
-in turn; changing slot count requires a compatible, resource-qualified load profile
-and enough context memory per request.
+If a request waits or returns a capacity error, check the active workload
+before raising limits. See [troubleshooting](troubleshooting.md).
+
+There is no default per-user conversation quota. The engine's slots, the memory
+budget and the shared request queue limit active work. A one-slot engine can
+serve many conversations in turn. More slots need more context memory.

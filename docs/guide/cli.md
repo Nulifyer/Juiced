@@ -90,10 +90,3 @@ shows the same service output.
 
 The client never starts or stops the service. For settings the CLI does not
 cover, use the console or the [API](../api/juiced.md).
-
-## The v0.9.2 client
-
-The `lemonade` binary from Juiced v0.9.2 also works against this service for
-`list`, `pull`, `load`, `unload`, `delete`, `pin`/`unpin`, `alias` and
-`backends install|uninstall`. It defaults to port `13305`, so pass
-`--port 8080`.

@@ -1,18 +1,29 @@
 # Choose runtimes and hardware
 
-Select an execution profile for a downloaded model. A profile identifies the
-engine, hardware variant, and settings used to run its weights.
+Each model runs on one installed engine build, such as llama.cpp Vulkan or
+llama.cpp CPU. Juiced picks the build when you add a model. You can install
+other builds and switch a model to one of them.
 
 ## Inspect the host
 
-1. Open **Engines & hardware**.
-2. Check the detected devices and their access status.
-3. Find the engine and inspect its hardware variants.
-4. Install a required package through its available action.
-5. Use the top-bar download button to open Library activity if installation queues a transfer.
+1. Open **Engines & hardware**. The **Engines** tab opens.
+2. Check the machine summary at the top. It lists the CPU, memory, GPUs and NPUs
+   that Juiced detected. **No access** means the container cannot open that
+   device, so builds for it will not run.
+3. Find the engine in the list. Each build is a chip:
+   - ★ marks the build Juiced picks for new models on this machine.
+   - Select a build with a download icon to install it. Its progress shows on the
+     chip and under **Models → Downloads**.
+   - ✓ marks an installed build, with the number of models that use it.
+   - **Update** followed by the build name installs a newer release.
+4. Turn on **Show all** to list builds this host cannot install. Hover a build
+   to see why.
 
-A detected device, an installed package, and a compatible model are separate
+A detected device, an installed engine, and a compatible model are separate
 requirements. Complete an inference test after all three are available.
+
+To install an engine bundle that is already on the server, use
+**Import a local engine bundle** at the bottom of the **Engines** tab.
 
 ## Text engines
 
@@ -26,10 +37,10 @@ requirements. Complete an inference test after all three are available.
 | FastFlowLM | NPU | FLM checkpoints | XDNA2 NPU |
 | ONNX Runtime | CPU | Exported encoder classifiers | Any x86_64 or arm64 CPU |
 
-**Engines & hardware** lists every backend. A backend this host cannot run shows
-the reason, such as a missing GPU or an unsupported GPU target. Ryzen AI LLM and
-Metal builds exist only for Windows and macOS, so the container shows them as
-unsupported.
+With **Show all** on, **Engines & hardware** lists every build. A build this host
+cannot run shows the reason, such as a missing GPU or an unsupported GPU target.
+Ryzen AI LLM and Metal builds exist only for Windows and macOS, so the container
+shows them as unsupported.
 
 Engines install into the data volume, never into the image. vLLM installs as a
 Python environment of about 10 GB and needs that much free space before the
@@ -80,33 +91,31 @@ or add a folder with `model.onnx`, `tokenizer.json` and `config.json` (an
 `optimum-cli export onnx` classifier). Juiced installs ONNX Runtime if needed. Send
 `POST /v1/classify` with `model` and `input`; the reply lists label scores.
 
-## Select a profile
+## Switch a model's engine
 
-1. Open the model and select **Runtime**.
-2. Choose the runtime provider.
-3. Choose a hardware variant under **Run on**.
-4. Select an accelerator device if the profile offers that control.
-5. Review compatibility information and any experimental notice.
-6. Select **Use this profile**, or **Apply & reload** for a loaded model.
-7. Wait for the operation to settle, then test a request.
+1. Install the build you want under **Engines & hardware**.
+2. Open the model under **Models** and unload it.
+3. On the **Settings** tab, turn on **Advanced**.
+4. Under **Engine**, choose the build in **Switch to**, then select **Switch engine**.
+5. Load the model and test a request.
 
-Busy models refuse a profile switch. If the new profile fails to load, Juiced
-restores the previous profile and attempts to reload it. Inspect the operation
-error if recovery cannot complete.
+The previous build stays available. Select **Roll back to previous** to return to
+it. Switching does not change the weights, settings or loading policy.
+Saved conversations restore only with the engine build that made them.
+
+To keep a llama.cpp model on its GPU build but run it on the processor, select
+**CPU only** under **Run on** in **Launch settings**. **GPU** offloads every layer.
 
 ## Reuse a GGUF
 
-Compatible llama.cpp CPU, Vulkan, ROCm, CUDA, and Metal profiles can use the same
-GGUF without conversion. The host and runtime must support the selected variant.
-Metal needs native macOS execution, outside the Linux container.
+The llama.cpp CPU, Vulkan, ROCm and CUDA builds can all run the same GGUF file.
+The host must support the selected build.
 
-Other engines need their own architecture, tokenizer, and artifact support.
-A successful llama.cpp load does not qualify the same file for vLLM or FastFlowLM.
-vLLM runs original checkpoint folders, not GGUF. DwarfStar4 runs only its own
-GGUFs; choose it with the `engine` field when you add one. An unavailable
-profile explains its restriction.
+Other engines need their own architecture, tokenizer and file support.
+A successful llama.cpp load does not mean the same file works on vLLM or
+FastFlowLM. vLLM runs original checkpoint folders, not GGUF. DwarfStar4 runs only
+its own GGUFs. Choose it with the `engine` field of `POST /v1/juiced/models/add`.
 
-Use **Find a prepared version** to search for another publisher artifact.
 Use [published variants](variants.md) when another format or quant is needed.
 
 ## Speech, audio, image and 3D engines
@@ -148,8 +157,8 @@ published SHA-256.
 2. Download the model. ACE-Step, ThinkSound, TRELLIS and OpenMOSS models come as a
    set of files, and Juiced downloads all of them.
 3. Select **Add model**. If its engine is missing, select **Install engine and add**.
-4. Try it in **Test services**: **Audio** makes a clip from a prompt and optional
-   lyrics, and **3D** turns an object photo into a `.glb` file.
+4. Try it in **Test services → Try a model**. An audio model makes a clip from a
+   prompt and optional lyrics. A 3D model turns an object photo into a `.glb` file.
 
 ACE-Step 1.5 Turbo is the smallest music set (about 3.3 GB). TRELLIS.2 Q4 is the
 smallest 3D set (about 6.5 GB with BiRefNet). Generation models load only when a
@@ -157,29 +166,30 @@ request arrives if their policy is On demand, and loading can take a minute.
 
 ### Parakeet models from an earlier Juiced
 
-If your earlier installation had a Parakeet model, it appears under **Models** as
-Disabled and waiting for its engine. Install **Parakeet · CPU** in **Engines &
-hardware**. Juiced then registers the model, still Disabled; enable it in
-**Loading policy**.
+If your v0.9.2 volume had a Disabled Parakeet model, adoption waits for its
+engine. Install the Parakeet CPU build in **Engines & hardware**. Juiced then
+registers the model, still Disabled. Enable it in **Loading policy**.
 
 ## Try experimental XDNA2 + ROCm
 
-This profile requires Linux, a gfx1150 Radeon GPU, an XDNA2 NPU, and a matched
+This build requires Linux, a gfx1150 Radeon GPU, an XDNA2 NPU, and a matched
 llama.cpp/GGML/XDNA runtime bundle. Both accelerators must be accessible.
 Map `/dev/dri`, `/dev/kfd`, and `/dev/accel/accel0` into the container, with the
 required host groups and sufficient memlock. Host drivers and firmware remain
 host-managed.
 
-1. Release any conflicting NPU worker.
-2. Choose the experimental hybrid profile.
-3. Review the NPU copy budget and prefill settings.
-4. Apply the profile and run a representative prompt.
-5. Refresh **Current worker** and inspect actual NPU activity.
-6. Compare latency with the previous profile before keeping the change.
+1. Unload any other model that uses the NPU.
+2. Install the llama.cpp hybrid build under **Engines & hardware**. It can be
+   installed only when Juiced detects both devices.
+3. Unload the model and switch it to the hybrid build under
+   **Settings → Engine**, as in [switch a model's engine](#switch-a-models-engine).
+4. Load the model and run a representative prompt.
+5. Check NPU use in the footer.
+6. Compare latency with the previous build before you keep the change.
 
 Eligible prefill matrices can run on the NPU. Attention, recurrent state, routed
 experts, and decode remain on ROCm. This partial acceleration does not promise
-a speed gain. A selected profile alone does not prove that the NPU did work.
+a speed gain. A selected build alone does not prove that the NPU did work.
 Do not mix the plugin with libraries from another llama.cpp build.
 
-For tuning within a profile, see [model settings](settings.md).
+For tuning a model's launch settings, see [model settings](settings.md).

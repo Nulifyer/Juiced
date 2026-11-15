@@ -18,7 +18,8 @@ comparing controls with a tagged release.
 - [Set loading policies](guide/loading-policy.md)
 - [Change model settings](guide/settings.md)
 - [Choose a published variant](guide/variants.md)
-- [Manage prompt cache and storage](guide/cache.md)
+- [Manage the conversation cache](guide/cache.md)
+- [Manage storage](guide/storage.md)
 
 ## Use and check services
 
