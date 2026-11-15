@@ -269,10 +269,13 @@ fn model_defaults(
     effective: Option<&crate::profiles::LaunchOptions>,
 ) -> Vec<crate::engines::memory::DefaultEntry> {
     let profile = &spec.execution_profile;
-    if profile.adapter != Provider::LlamaCpp
-        || profile.native_model_id().is_some()
-        || !spec.juiced_defaults
-    {
+    if profile.native_model_id().is_some() || !spec.juiced_defaults {
+        return Vec::new();
+    }
+    if profile.adapter == Provider::Vllm {
+        return vllm_defaults(spec, bindings, arguments);
+    }
+    if profile.adapter != Provider::LlamaCpp {
         return Vec::new();
     }
     let Some((declared, shape)) = std::fs::File::open(bindings.model.path())
@@ -295,6 +298,66 @@ fn model_defaults(
             .map_or(&[], |tuned| tuned.arguments.as_slice()),
     )
     .apply(&mut arguments.to_vec())
+}
+
+/// The reasoning and tool parsers for the checkpoint's architecture, so a vLLM registration
+/// made before Juiced chose parsers gets them at launch. A saved parser flag wins.
+fn vllm_defaults(
+    spec: &ModelSpec,
+    bindings: &VerifiedLaunchBindings,
+    arguments: &[String],
+) -> Vec<crate::engines::memory::DefaultEntry> {
+    let Some(architecture) = std::fs::read(bindings.model.path())
+        .ok()
+        .filter(|bytes| bytes.len() <= 1024 * 1024)
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .and_then(|config| config["architectures"][0].as_str().map(str::to_owned))
+    else {
+        return Vec::new();
+    };
+    let hint = format!("{} {}", spec.id, spec.model_file.display());
+    parser_entries(
+        &crate::vllm::family_arguments(&architecture, Some(&hint)),
+        arguments,
+    )
+}
+
+/// The family parser arguments a launch still needs; the tool parser and auto tool choice
+/// travel together.
+fn parser_entries(
+    family: &[String],
+    arguments: &[String],
+) -> Vec<crate::engines::memory::DefaultEntry> {
+    let set = |flag: &str| {
+        arguments
+            .iter()
+            .any(|argument| argument == flag || argument.starts_with(&format!("{flag}=")))
+    };
+    let mut entries = Vec::new();
+    let mut position = 0;
+    while position < family.len() {
+        let flag = family[position].clone();
+        let value = family
+            .get(position + 1)
+            .filter(|value| !value.starts_with("--"))
+            .cloned();
+        position += if value.is_some() { 2 } else { 1 };
+        let tool_flag = flag == "--enable-auto-tool-choice" || flag == "--tool-call-parser";
+        let taken = if tool_flag {
+            set("--tool-call-parser") || set("--enable-auto-tool-choice")
+        } else {
+            set(&flag)
+        };
+        if !taken {
+            entries.push(crate::engines::memory::DefaultEntry {
+                flag,
+                value,
+                source: crate::engines::memory::DefaultSource::Family,
+                reason: "vLLM parser for this checkpoint's architecture.".into(),
+            });
+        }
+    }
+    entries
 }
 
 impl LaunchPlan {
@@ -916,6 +979,46 @@ impl LaunchPlan {
 mod tests {
     use super::*;
     use std::ffi::OsStr;
+
+    #[test]
+    fn a_saved_vllm_parser_keeps_its_pair_and_missing_ones_are_added() {
+        let family: Vec<String> = [
+            "--reasoning-parser",
+            "qwen3",
+            "--enable-auto-tool-choice",
+            "--tool-call-parser",
+            "hermes",
+        ]
+        .map(str::to_owned)
+        .into();
+        let flags = |saved: &[&str]| {
+            let saved: Vec<String> = saved.iter().map(|value| (*value).to_owned()).collect();
+            parser_entries(&family, &saved)
+                .into_iter()
+                .map(|entry| entry.flag)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            flags(&["--model", "{model}"]),
+            [
+                "--reasoning-parser",
+                "--enable-auto-tool-choice",
+                "--tool-call-parser"
+            ]
+        );
+        assert_eq!(
+            flags(&["--tool-call-parser=qwen3_coder"]),
+            ["--reasoning-parser"]
+        );
+        assert!(
+            flags(&[
+                "--reasoning-parser",
+                "deepseek_r1",
+                "--enable-auto-tool-choice"
+            ])
+            .is_empty()
+        );
+    }
 
     #[test]
     fn service_restart_metadata_is_neither_child_authority_nor_cache_identity() {

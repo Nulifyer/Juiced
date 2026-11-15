@@ -69,7 +69,7 @@ Barista deletes only what the storage view lists as unused, and only after a
 preview. With **Ask before changes**, the approval card shows the space it
 frees, and Barista deletes exactly what the card showed. If storage changed in
 the meantime, nothing is deleted and Barista previews again. It deletes v0.9.2
-leftovers only when you name them, because a rollback to v0.9.2 uses them.
+leftovers only when you name them.
 
 Typed settings exist for llama.cpp models, sd.cpp image defaults and asr4all
 options. Barista says so when you ask to change settings on another engine,

@@ -14,6 +14,7 @@ much space each store uses, what is safe to delete, and how much room is left.
 | `/data/runtime-packages` | Installed engines (often a separate volume) | Only engines no model uses, when you reclaim them |
 | `/data/kv-cache` | Saved sessions and manual snapshots | Saved sessions are evicted to stay within the session budget |
 | `/data/acquisitions.json` | In-flight downloads, so they survive a restart | Entries leave when a download finishes or is dismissed |
+| `/data/api-keys.json` | Access keys, stored as hashes | Only keys you revoke |
 | `/library/*` | Read-only weight mounts | Never |
 
 Logs stay in memory and in the container log; they use no space on `/data`.
@@ -21,10 +22,10 @@ Logs stay in memory and in the container log; they use no space on `/data`.
 ### v0.9.2 leftovers
 
 A volume that ran Juiced v0.9.2 still holds `/data/cache` (native engine builds,
-about 29 GB on a typical install) and `/data/prompt-state`. Juiced lists them under
-**v0.9.2 leftovers** and never removes them on its own. Delete them from the
-Storage page when you no longer plan to roll back. `/data/config` is listed too
-but kept: rollback and settings import read it.
+about 29 GB on a typical install) and `/data/prompt-state`. This release does not
+use them. Juiced lists them under **v0.9.2 leftovers** and never removes them on
+its own; delete them from the Storage page. `/data/config` is listed too but kept,
+because the first start adopts models and settings from it.
 
 ## Reclaim space
 

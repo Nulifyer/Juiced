@@ -1058,6 +1058,18 @@ async fn a_model_check_sends_real_requests_and_is_kept_for_its_launch() {
     assert_eq!(after["checked"], true, "{after}");
     assert_eq!(after["current"], true, "{after}");
     assert_eq!(after["steps"], checked["steps"]);
+    let mut server = server;
+    server.restart().await;
+    let (_, kept) = server
+        .json(
+            Method::GET,
+            "/v1/models/fixture.one/check",
+            None,
+            Some(CLIENT_KEY),
+        )
+        .await;
+    assert_eq!(kept["checked"], true, "{kept}");
+    assert_eq!(kept["steps"], checked["steps"]);
     let (status, missing) = server
         .json(
             Method::GET,

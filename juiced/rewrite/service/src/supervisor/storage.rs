@@ -132,7 +132,7 @@ fn refusal_message(refusal: &str, references: &[String]) -> String {
                 .into()
         }
         "install_running" => "An engine install is running. Retry when it finishes.".into(),
-        "kept" => "Kept for rollback to v0.9.2 and for settings import.".into(),
+        "kept" => "Kept because the first start adopts models and settings from it.".into(),
         _ => "Not found. Refresh the storage view.".into(),
     }
 }

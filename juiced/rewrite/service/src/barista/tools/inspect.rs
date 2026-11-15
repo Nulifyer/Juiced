@@ -1463,7 +1463,7 @@ async fn storage(context: &Context<'_>, args: Value) -> Result<Outcome> {
     .next(&["juiced_delete_files", "juiced_remove_model", "juiced_forget_sessions"]);
     if legacy_bytes > 0 {
         outcome = outcome.warn(format!(
-            "v0.9.2 leftovers hold {}. Delete them only when the operator names them; they are what a rollback to v0.9.2 uses.",
+            "v0.9.2 leftovers hold {}. This release does not use them; delete them only when the operator names them.",
             size(legacy_bytes)
         ));
     }

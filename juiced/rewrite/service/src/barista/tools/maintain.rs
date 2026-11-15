@@ -502,7 +502,7 @@ async fn delete(context: &Context<'_>, args: Value) -> Result<Outcome> {
     if !legacy.is_empty() && !request.legacy {
         return Err(Failure::new(
             "legacy_requires_operator",
-            "v0.9.2 leftovers are deleted only when the operator names them, because a rollback to v0.9.2 uses them. Ask the operator, then pass legacy: true.",
+            "v0.9.2 leftovers are deleted only when the operator names them. Ask the operator, then pass legacy: true.",
             403,
         ));
     }

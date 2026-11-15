@@ -1944,6 +1944,29 @@ pub struct Manager {
     tunes: Mutex<std::collections::HashMap<String, serde_json::Value>>,
 }
 
+const MODEL_CHECKS_FILE: &str = "model-checks.json";
+const MODEL_CHECKS_BYTES: u64 = 4 * 1024 * 1024;
+
+/// Check results saved by an earlier run, so a restart does not forget them.
+fn load_model_checks(
+    root: Option<&crate::storage::DirectoryLease>,
+) -> std::collections::HashMap<String, (Arc<str>, serde_json::Value)> {
+    root.and_then(|root| root.read_bytes(MODEL_CHECKS_FILE, MODEL_CHECKS_BYTES).ok())
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .filter(|file| file["schema_version"] == 1)
+        .and_then(|file| file["checks"].as_object().cloned())
+        .map(|checks| {
+            checks
+                .into_iter()
+                .filter_map(|(model, entry)| {
+                    let fingerprint = entry["fingerprint"].as_str()?;
+                    Some((model, (Arc::from(fingerprint), entry["result"].clone())))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 impl Manager {
     /// `(model, launch fingerprint)` each time a worker becomes ready.
     pub fn ready_events(&self) -> tokio::sync::broadcast::Receiver<(String, Arc<str>)> {
@@ -1973,10 +1996,26 @@ impl Manager {
     }
 
     pub fn store_model_check(&self, id: &str, fingerprint: Arc<str>, result: serde_json::Value) {
-        self.checks
+        let mut checks = self
+            .checks
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .insert(id.to_owned(), (fingerprint, result));
+            .unwrap_or_else(|error| error.into_inner());
+        checks.insert(id.to_owned(), (fingerprint, result));
+        let known = self
+            .workers
+            .read()
+            .unwrap_or_else(|error| error.into_inner());
+        checks.retain(|model, _| known.contains_key(model));
+        drop(known);
+        if let Some(root) = &self.config_root {
+            let file = serde_json::json!({
+                "schema_version": 1,
+                "checks": checks.iter().map(|(model, (fingerprint, result))| {
+                    (model.clone(), serde_json::json!({"fingerprint": &**fingerprint, "result": result}))
+                }).collect::<serde_json::Map<_, _>>(),
+            });
+            let _ = root.write_json(MODEL_CHECKS_FILE, &file);
+        }
     }
 
     pub fn tune_view(&self, id: &str) -> Option<serde_json::Value> {
@@ -2333,7 +2372,7 @@ impl Manager {
             session_saves: Arc::new(tokio::sync::Semaphore::new(2)),
             residency: residency::Residency::new(&config),
             protocol_gate: Arc::new(crate::protocol_access::Gate::new(&config.protocols)),
-            checks: Mutex::default(),
+            checks: Mutex::new(load_model_checks(config_root.as_ref())),
             ready_events: tokio::sync::broadcast::channel(64).0,
             tunes: Mutex::default(),
             config: Arc::new(AsyncMutex::new(config)),
