@@ -68,8 +68,9 @@ that stop before **Resume / retry** becomes available. Retry uses the retained
 registration and source. Downloads continue after a restart from the bytes already
 on disk; paused ones stay paused. See [manage storage](storage.md).
 
-After completion, select **Review model** or find the downloaded row in the same
-search. Downloading never enables the model automatically.
+A finished download in **Downloads** offers **Add model**, which opens its file
+details, or **Open model** once a model uses the files. Repeated downloads of the
+same file show as one row. Downloading never enables the model automatically.
 
 ## Import a local GGUF
 

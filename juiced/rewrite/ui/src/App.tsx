@@ -16,7 +16,7 @@ import { Diagnostics } from "./Diagnostics";
 import { Aliases } from "./Aliases";
 import { Barista, BaristaInvite, invitationKey, useBarista, useBaristaPanel } from "./Barista";
 import { IdleDefault, MemoryBudget } from "./Residency";
-import { gib, percent, rate, useSystemStats } from "./live";
+import { memorySize, percent, rate, useSystemStats } from "./live";
 import { clearToasts, dismiss, notify, useToasts } from "./toast";
 import { Badge, Button, Dialog, Empty, Icon, Menu, Tabs, type IconName } from "./ui";
 import logo from "../../../ui/public/juiced-icon.svg";
@@ -46,6 +46,7 @@ export function App() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [selected, setSelected] = useState("");
   const [selectedFile, setSelectedFile] = useState("");
+  const [fileQuant, setFileQuant] = useState("");
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [online, setOnline] = useState(false);
   const [connectionError, setConnectionError] = useState("");
@@ -133,7 +134,7 @@ export function App() {
   const model = snapshot?.models.find((model) => model.id === selected);
   const installed = screen === "models" && modelsTab === "installed";
   const modelScreen = installed || screen === "policy";
-  const local = useLocalFiles(client, modelScreen && online);
+  const local = useLocalFiles(client, (modelScreen || (screen === "models" && modelsTab === "downloads")) && online);
   const downloads = useActiveDownloads(client, screen === "models" && online);
   const files = useMemo(() => notAdded(local.data), [local.data]);
   const fileGroup = installed && !model ? local.data?.groups.find((group) => group.id === selectedFile) : undefined;
@@ -144,6 +145,7 @@ export function App() {
   const togglePause = () => void mutate("juiced/admission", { paused: !resources?.paused }, resources?.paused ? "Resumed new requests." : "Paused new requests.");
   const openModel = (id: string) => leave(() => { setScreen("models"); setModelsTab("installed"); setSelected(id); setSelectedFile(""); });
   const modelsView = (tab: typeof modelsTab) => leave(() => { setScreen("models"); setModelsTab(tab); setSelected(""); setSelectedFile(""); });
+  const openFile = (group: string, quant: string | null) => leave(() => { setScreen("models"); setModelsTab("installed"); setSelected(""); setSelectedFile(group); setFileQuant(quant ?? ""); });
   const status = !online ? "Offline" : resources?.paused ? "Paused" : "Online";
   const gpu = live.stats?.gpus[0];
   const tabs = screen === "models" ? <Tabs label="Models views" value={modelsTab} onChange={modelsView} items={[["installed", "Installed"], ["discover", "Discover"], ["downloads", downloads ? `Downloads ${downloads}` : "Downloads"], ["aliases", "Aliases"]]} />
@@ -180,11 +182,11 @@ export function App() {
       <div className="page-header"><h1>{title}</h1>{tabs}</div>
       {!snapshot ? <Empty title={refreshing ? "Connecting to Juiced" : "Service unavailable"}>{refreshing ? "Reading models and service state…" : "Check the address and API key in Connection settings."}</Empty> : <>
         {screen === "dashboard" && <Dashboard client={client} snapshot={snapshot} stats={live.stats} onOpenModel={openModel} onOpenRequests={() => { setDiagnosticsTab("requests"); setScreen("diagnostics"); }} onOpenConnect={() => { setConnectTab("protocols"); setScreen("connect"); }} onOpenStorage={() => { setBackendTab("storage"); setScreen("backend"); }} />}
-        {modelScreen && <div className="model-workspace"><ModelList models={snapshot.models} selected={selected} onSelect={(id) => leave(() => { setSelected(id); setSelectedFile(""); })} mode={screen as "models" | "policy"} mutate={mutate} busy={busy} online={online} idleControl={screen === "policy" ? <IdleDefault client={client} online={online} /> : undefined} budgetControl={screen === "policy" ? <MemoryBudget client={client} online={online} /> : undefined} files={installed ? files : undefined} inventory={installed ? local.data : undefined} selectedFile={fileGroup?.id} onSelectFile={(id) => leave(() => { setSelected(""); setSelectedFile(id); })} onDiscover={() => modelsView("discover")} client={client} />
-          {hasInspector && model && <Inspector key={`${model.id}:${epoch}`} model={model} busy={busy} online={online} onClose={() => leave(() => setSelected(""))} onDirty={setDirty} mutate={mutate} client={client} stopLoad={loadingModel === model.id ? stopLoad : undefined} inventory={local.data} onRemoved={() => { const { groups } = modelFiles(model, local.data); setSelected(""); if (installed && groups.length === 1 && groups[0]!.usedBy.every((id) => id === model.id)) setSelectedFile(groups[0]!.id); void local.reload(); }} />}
-          {hasInspector && fileGroup && <FileInspector key={`${fileGroup.id}:${epoch}`} group={fileGroup} client={client} online={online} onClose={() => setSelectedFile("")} onRegistered={refresh} onOpenModel={openModel} onChanged={local.reload} />}</div>}
+        {modelScreen && <div className="model-workspace"><ModelList models={snapshot.models} selected={selected} onSelect={(id) => leave(() => { setSelected(id); setSelectedFile(""); })} mode={screen as "models" | "policy"} mutate={mutate} busy={busy} online={online} idleControl={screen === "policy" ? <IdleDefault client={client} online={online} /> : undefined} budgetControl={screen === "policy" ? <MemoryBudget client={client} online={online} /> : undefined} files={installed ? files : undefined} inventory={installed ? local.data : undefined} selectedFile={fileGroup?.id} onSelectFile={(id) => leave(() => { setSelected(""); setSelectedFile(id); setFileQuant(""); })} onDiscover={() => modelsView("discover")} client={client} resources={snapshot.resources} />
+          {hasInspector && model && <Inspector key={`${model.id}:${epoch}`} model={model} models={snapshot.models} resources={snapshot.resources} busy={busy} online={online} onClose={() => leave(() => setSelected(""))} onDirty={setDirty} mutate={mutate} client={client} stopLoad={loadingModel === model.id ? stopLoad : undefined} inventory={local.data} onRemoved={() => { const { groups } = modelFiles(model, local.data); setSelected(""); if (installed && groups.length === 1 && groups[0]!.usedBy.every((id) => id === model.id)) setSelectedFile(groups[0]!.id); void local.reload(); }} />}
+          {hasInspector && fileGroup && <FileInspector key={`${fileGroup.id}:${fileQuant}:${epoch}`} group={fileGroup} quant={fileQuant} client={client} online={online} onClose={() => setSelectedFile("")} onRegistered={refresh} onOpenModel={openModel} onChanged={local.reload} />}</div>}
         {screen === "models" && modelsTab === "discover" && <FindModels key={epoch} client={client} online={online} onRegistered={refresh} onOpenModel={openModel} onDownloads={() => modelsView("downloads")} />}
-        {screen === "models" && modelsTab === "downloads" && <Downloading key={epoch} client={client} online={online} onSearch={() => modelsView("discover")} />}
+        {screen === "models" && modelsTab === "downloads" && <Downloading key={epoch} client={client} online={online} onSearch={() => modelsView("discover")} local={local.data} onOpenModel={openModel} onAddFile={openFile} />}
         {screen === "models" && modelsTab === "aliases" && <Aliases key={epoch} client={client} models={snapshot.models} online={online} onOpenModel={openModel} />}
         {screen === "diagnostics" && <Diagnostics client={client} snapshot={snapshot} stats={live.stats} history={live.history} tab={diagnosticsTab} />}
         {screen === "test" && <ServiceTest key={`${epoch}:${testMode}`} mode={testMode} models={snapshot.models} client={client} online={online} />}
@@ -196,8 +198,8 @@ export function App() {
     </main>
     <footer className="global-footer" aria-label="Live usage">
       <span><Icon name="cpu" size={13} />CPU <strong>{percent(live.stats?.cpu_percent)}</strong></span>
-      <span>RAM <strong>{gib(live.stats?.memory?.used_bytes)}</strong></span>
-      {gpu && <><span>GPU <strong>{percent(gpu.gpu_percent)}</strong></span><span>{gpu.shared ? "GPU mem" : "VRAM"} <strong>{gib(gpu.memory_used_bytes)}</strong></span></>}
+      <span>RAM <strong>{memorySize(live.stats?.memory?.used_bytes)}</strong></span>
+      {gpu && <><span>GPU <strong>{percent(gpu.gpu_percent)}</strong></span><span>{gpu.shared ? "GPU mem" : "VRAM"} <strong>{memorySize(gpu.memory_used_bytes)}</strong></span></>}
       {live.stats?.npu_percent != null && <span>NPU <strong>{percent(live.stats.npu_percent)}</strong></span>}
       <span className="footer-right">Last decode <strong>{rate(live.stats?.last_inference?.decode_tokens_per_second)}</strong></span>
       <span>Active <strong>{resources?.active_requests ?? "—"}</strong></span>

@@ -1,5 +1,5 @@
 import type { Client } from "./api";
-import type { Model } from "./domain";
+import { bytes, type Model } from "./domain";
 import { useState } from "react";
 import { Button, HelpTip } from "./ui";
 import { useOperation, useResource } from "./useResource";
@@ -101,7 +101,7 @@ export function MemoryBudget({ client, online }: { client: Client; online: boole
   };
   return <span className="inline-field memory-budget">
     {draft === null
-      ? <Button variant="ghost" disabled={!online} aria-label={`Model memory ${current} GiB. Change`} onClick={() => setDraft(String(current))}>Model memory {current} GiB</Button>
+      ? <Button variant="ghost" disabled={!online} aria-label={`Model memory ${bytes(data.budget)}. Change`} onClick={() => setDraft(String(current))}>Model memory {bytes(data.budget)}</Button>
       : <form onSubmit={(event) => { event.preventDefault(); save(); }}>
           <label>Model memory <input type="number" min="1" step="1" inputMode="decimal" autoFocus aria-label="Model memory in GiB" value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") setDraft(null); }} /> GiB</label>
           <Button type="submit" variant="primary" disabled={!valid || operation.busy}>Save</Button>

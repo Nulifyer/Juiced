@@ -42,16 +42,26 @@ test("the model memory budget changes from the Loading policy screen", async ({ 
   try {
     await open(page);
     await navigate(page, "Loading policy");
-    await page.getByRole("button", { name: `Model memory ${current} GiB. Change` }).click();
+    await page.getByRole("button", { name: `Model memory ${current.toFixed(1)} GiB. Change` }).click();
     const field = page.getByLabel("Model memory in GiB");
     await expect(field).toHaveValue(String(current));
     await field.fill(String(next));
     await page.getByRole("button", { name: "Save" }).click();
     await expect(toasts(page).getByRole("status")).toContainText(`Models may now reserve up to ${next} GiB.`);
     await expect.poll(async () => (await service.json<{ resident_budget_bytes: number }>("/v1/juiced/residency")).resident_budget_bytes).toBe(next * gib);
-    await expect(page.getByRole("button", { name: `Model memory ${next} GiB. Change` })).toBeVisible();
+    await expect(page.getByRole("button", { name: `Model memory ${next.toFixed(1)} GiB. Change` })).toBeVisible();
   } finally {
     const latest = await service.json<Residency & { resident_budget_bytes: number }>("/v1/juiced/residency");
     if (latest.resident_budget_bytes !== before.resident_budget_bytes) await service.post("/v1/juiced/residency", { expected_generation: latest.configuration_generation, resident_budget_bytes: before.resident_budget_bytes });
   }
+});
+
+test("the Hot lane shows model memory used and a Hot choice says whether it fits before it applies", async ({ page }) => {
+  await open(page);
+  await navigate(page, "Loading policy");
+  await expect(page.getByRole("region", { name: "Hot models" }).locator("header")).toContainText(/\d+ · .+ of 6\.0 GiB used/);
+  const lane = page.getByRole("region", { name: "On demand models" });
+  await expect(lane.getByLabel(`Loading policy for ${modelId}`).locator('option[value="hot"]')).toHaveText(/^Hot · \d+\.\d (KiB|MiB|GiB), fits$/);
+  await lane.getByRole("button", { name: new RegExp(modelId) }).click();
+  await expect(page.getByRole("complementary", { name: "Model inspector" })).toContainText(/Hot keeps \d+\.\d (KiB|MiB|GiB) loaded · \d+\.\d GiB free/);
 });

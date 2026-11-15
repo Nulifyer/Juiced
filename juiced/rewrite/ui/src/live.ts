@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { Client } from "./api";
+import { bytes } from "./domain";
 
 export type GpuStats = { id: string; name: string | null; vendor: string | null; gpu_percent: number | null; memory_used_bytes: number | null; memory_total_bytes: number | null; shared: { dedicated_used: number | null; dedicated_total: number | null; shared_used: number; shared_total: number } | null };
 
@@ -92,6 +93,6 @@ export function percent(value: number | null | undefined): string {
 export function rate(value: number | null | undefined): string {
   return value == null ? "—" : `${value < 10 ? value.toFixed(1) : Math.round(value)} tok/s`;
 }
-export function gib(value: number | null | undefined): string {
-  return value == null ? "—" : `${(value / 1024 ** 3).toFixed(value >= 10 * 1024 ** 3 ? 0 : 1)} GiB`;
+export function memorySize(value: number | null | undefined): string {
+  return value == null ? "—" : bytes(value);
 }

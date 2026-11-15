@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { bytes, loadReason, matchingModels, offers, policyNames, services, taskNames, unloadReason, workerState, workerTone, type Model, type Policy, type Service } from "./domain";
+import { bytes, bytesPair, hotFit, hotFitNote, hotOption, loadReason, matchingModels, offers, policyNames, services, taskNames, unloadReason, workerState, workerTone, type Model, type Policy, type Resources, type Service } from "./domain";
 import { Badge, Button, Empty, HelpTip, Icon, Switch } from "./ui";
 import { Client } from "./api";
 import { removalReason } from "./management";
@@ -34,7 +34,7 @@ function workerFailure(code: string): string {
   return "The worker needs attention. Review its current state before retrying.";
 }
 
-type ListProps = { models: Model[]; selected?: string; onSelect: (id: string) => void; mode: "models" | "policy"; mutate: Mutate; busy: boolean; online: boolean; idleControl?: ReactNode; budgetControl?: ReactNode; files?: LocalGroup[]; inventory?: LocalInventory | null; selectedFile?: string; onSelectFile?: (id: string) => void; onDiscover?: () => void; client?: Client };
+type ListProps = { models: Model[]; selected?: string; onSelect: (id: string) => void; mode: "models" | "policy"; mutate: Mutate; busy: boolean; online: boolean; idleControl?: ReactNode; budgetControl?: ReactNode; files?: LocalGroup[]; inventory?: LocalInventory | null; selectedFile?: string; onSelectFile?: (id: string) => void; onDiscover?: () => void; client?: Client; resources?: Resources };
 type SortKey = "name" | "state" | "memory";
 const placeholderClient = new Client("", "");
 
@@ -78,9 +78,9 @@ function setPolicy(mutate: Mutate, model: Model, policy: Policy) {
   void mutate("juiced/policy", { model: model.id, policy, expected_revision: model.revision }, policy === "disabled" && model.loaded ? `Disabled and unloaded ${model.id}.` : `${model.id} is now ${policyNames[policy]}.`);
 }
 
-function PolicySelect({ model, mutate, disabled }: { model: Model; mutate: Mutate; disabled: boolean }) {
+function PolicySelect({ model, models, resources, mutate, disabled }: { model: Model; models: Model[]; resources?: Resources; mutate: Mutate; disabled: boolean }) {
   return <select className="policy-select" aria-label={`Loading policy for ${model.id}`} data-policy={model.policy} value={model.policy} disabled={disabled} onClick={(event) => event.stopPropagation()} onChange={(event) => setPolicy(mutate, model, event.target.value as Policy)}>
-    <option value="hot">Hot</option><option value="on-demand">On demand</option><option value="disabled" disabled={model.active_requests > 0}>Disabled</option>
+    <option value="hot">{hotOption(model, hotFit(model, models, resources))}</option><option value="on-demand">On demand</option><option value="disabled" disabled={model.active_requests > 0}>Disabled</option>
   </select>;
 }
 
@@ -109,7 +109,7 @@ function FileRow({ group, selected, onSelect }: { group: LocalGroup; selected: b
   </div>;
 }
 
-export function ModelList({ models, selected, onSelect, mode, mutate, busy, online, idleControl, budgetControl, files = [], inventory, selectedFile, onSelectFile, onDiscover, client }: ListProps) {
+export function ModelList({ models, selected, onSelect, mode, mutate, busy, online, idleControl, budgetControl, files = [], inventory, selectedFile, onSelectFile, onDiscover, client, resources }: ListProps) {
   const [query, setQuery] = useState("");
   const [chosen, setChosen] = useState<Set<string>>(() => new Set());
   const [sort, setSort] = useState<{ key: SortKey; descending: boolean } | null>(null);
@@ -142,6 +142,9 @@ export function ModelList({ models, selected, onSelect, mode, mutate, busy, onli
   const filtered = service !== null && service !== "files" && !chips.some(([id]) => id === service);
   useEffect(() => { if (filtered || (service === "files" && files.length === 0)) setService(null); }, [filtered, service, files.length]);
   const locked = busy || !online;
+  const budget = resources?.resident_budget_bytes;
+  const draggedModel = models.find((model) => model.id === dragging);
+  const dragFit = draggedModel && draggedModel.policy !== "hot" ? hotFit(draggedModel, models, resources) : null;
   const updateAction = client && mode === "models" && models.length > 0 ? <span className="update-action"><Button variant="ghost" disabled={!online || checking} onClick={() => void checkUpdates()}>{checking ? "Checking…" : "Check for updates"}</Button><HelpTip label="Check for updates">Compares each downloaded Hugging Face model with the file upstream. Nothing is downloaded.</HelpTip></span> : null;
   const disk = inventory && <span className="muted library-total">{bytes(inventory.totalBytes)} on disk<HelpTip label="disk use">Model files on this machine, including read-only libraries.{inventory.removableBytes > 0 ? ` ${bytes(inventory.removableBytes)} isn't used by a model and can be deleted.` : ""}{inventory.truncated ? " Large folders are counted up to a limit." : ""}</HelpTip></span>;
   return <section className="inventory" aria-label="Model inventory">
@@ -157,20 +160,20 @@ export function ModelList({ models, selected, onSelect, mode, mutate, busy, onli
       {(["hot", "on-demand", "disabled"] as Policy[]).map((policy) => <section className={`policy-lane ${dragging ? "droppable" : ""}`} key={policy} aria-label={`${policyNames[policy]} models`}
         onDragOver={(event) => { if (dragged.current) event.preventDefault(); }}
         onDrop={(event) => { event.preventDefault(); const model = models.find((item) => item.id === dragged.current); dragged.current = ""; setDragging(""); if (model && !(policy === "disabled" && model.active_requests > 0)) setPolicy(mutate, model, policy); }}>
-        <header><h2>{policyNames[policy]}</h2><span className="muted">{visible.filter((model) => model.policy === policy).length}{policy === "hot" ? ` · ${bytes(models.filter((model) => model.policy === "hot").reduce((sum, model) => sum + (model.resident_bytes ?? 0), 0))} held` : ""}</span></header>
-        <p className="muted">{policy === "hot" ? "Loaded at startup and kept ready" : policy === "on-demand" ? "Loads on the first request" : "Hidden from apps"}</p>
+        <header><h2>{policyNames[policy]}</h2><span className="muted">{visible.filter((model) => model.policy === policy).length}{policy === "hot" ? ` · ${budget ? `${bytesPair(resources!.reserved_bytes, budget, " of ")} used` : `${bytes(models.filter((model) => model.policy === "hot").reduce((sum, model) => sum + (model.resident_bytes ?? 0), 0))} held`}` : ""}</span></header>
+        <p className={policy === "hot" && dragFit && dragFit.fit !== "fits" ? "tone-warning" : "muted"}>{policy === "hot" ? (dragFit ? hotFitNote(draggedModel!, dragFit) : "Loaded at startup and kept ready") : policy === "on-demand" ? "Loads on the first request" : "Hidden from apps"}</p>
         {policy === "on-demand" && idleControl}
         {visible.filter((model) => model.policy === policy).map((model) => <div key={model.id} className={`lane-model ${selected === model.id ? "selected" : ""}`} draggable={!locked} onDragStart={(event) => { dragged.current = model.id; setDragging(model.id); event.dataTransfer.effectAllowed = "move"; }} onDragEnd={() => { dragged.current = ""; setDragging(""); }}>
           <button className="lane-open" aria-pressed={selected === model.id} onClick={() => onSelect(model.id)}><strong>{model.id}</strong><span className="muted"><span className={`status-dot ${workerTone(model)}`} /> {workerState(model)} · {bytes(model.resident_bytes)}</span></button>
-          <PolicySelect model={model} mutate={mutate} disabled={locked} />
+          <PolicySelect model={model} models={models} resources={resources} mutate={mutate} disabled={locked} />
         </div>)}
       </section>)}
     </div> : <div className="data-table model-table" role="table" aria-label="Registered models">
-      <div className="data-head" role="row"><SortHeader label="Model" id="name" sort={sort} onSort={onSort} pick={<input type="checkbox" className="pick" aria-label="Select all shown models" checked={allChosen} onChange={() => setChosen(allChosen ? new Set() : new Set(visible.map((model) => model.id)))} />} /><SortHeader label="State" id="state" sort={sort} onSort={onSort} /><span role="columnheader">Policy</span><SortHeader label="Memory" id="memory" sort={sort} onSort={onSort} numeric /><span role="columnheader"><span className="sr-only">Action</span></span></div>
+      <div className="data-head" role="row"><SortHeader label="Model" id="name" sort={sort} onSort={onSort} pick={<label className="pick-hit"><input type="checkbox" className="pick" aria-label="Select all shown models" checked={allChosen} onChange={() => setChosen(allChosen ? new Set() : new Set(visible.map((model) => model.id)))} /></label>} /><SortHeader label="State" id="state" sort={sort} onSort={onSort} /><span role="columnheader">Policy</span><SortHeader label="Memory" id="memory" sort={sort} onSort={onSort} numeric /><span role="columnheader"><span className="sr-only">Action</span></span></div>
       {visible.map((model) => <div className={`data-row model-row ${selected === model.id ? "selected" : ""} ${chosen.has(model.id) ? "chosen" : ""}`} role="row" key={model.id} onClick={() => onSelect(model.id)}>
-        <div role="cell" className="model-identity picked"><input type="checkbox" className="pick" aria-label={`Select ${model.id}`} checked={chosen.has(model.id)} onClick={(event) => event.stopPropagation()} onChange={() => toggle(model.id)} /><div className="identity-text"><button className="model-name" aria-pressed={selected === model.id} onClick={(event) => { event.stopPropagation(); onSelect(model.id); }}>{model.id}</button><span className="model-meta">{taskNames(model).join(" · ")}{updates.has(model.id) && <> · <span className="update-note">update available</span></>}</span></div></div>
+        <div role="cell" className="model-identity picked"><label className="pick-hit" onClick={(event) => event.stopPropagation()}><input type="checkbox" className="pick" aria-label={`Select ${model.id}`} checked={chosen.has(model.id)} onChange={() => toggle(model.id)} /></label><div className="identity-text"><button className="model-name" aria-pressed={selected === model.id} onClick={(event) => { event.stopPropagation(); onSelect(model.id); }}>{model.id}</button><span className="model-meta">{taskNames(model).join(" · ")}{updates.has(model.id) && <> · <span className="update-note">update available</span></>}</span></div></div>
         <div role="cell" className="model-state" title={residencyNote(model) ?? undefined}><span className={`status-dot ${workerTone(model)}`} />{workerState(model)}{model.loaded ? <span className="muted"> · {model.active_requests}/{model.max_inflight}</span> : null}</div>
-        <div role="cell"><PolicySelect model={model} mutate={mutate} disabled={locked} /></div>
+        <div role="cell"><PolicySelect model={model} models={models} resources={resources} mutate={mutate} disabled={locked} /></div>
         <div role="cell" className="numeric muted">{bytes(model.resident_bytes)}</div>
         <div role="cell" className="row-end"><RowAction model={model} mutate={mutate} disabled={locked} /></div>
       </div>)}
@@ -179,7 +182,7 @@ export function ModelList({ models, selected, onSelect, mode, mutate, busy, onli
   </section>;
 }
 
-export function Inspector({ model, busy, online, onClose, onDirty, mutate, client, stopLoad, inventory = null, onRemoved }: { model: Model; busy: boolean; online: boolean; onClose: () => void; onDirty: (value: boolean) => void; mutate: Mutate; client: Client; stopLoad?: () => void; inventory?: LocalInventory | null; onRemoved?: () => void }) {
+export function Inspector({ model, models = [], resources, busy, online, onClose, onDirty, mutate, client, stopLoad, inventory = null, onRemoved }: { model: Model; models?: Model[]; resources?: Resources; busy: boolean; online: boolean; onClose: () => void; onDirty: (value: boolean) => void; mutate: Mutate; client: Client; stopLoad?: () => void; inventory?: LocalInventory | null; onRemoved?: () => void }) {
   const [profileDirty, setProfileDirty] = useState(false);
   const [artifactDirty, setArtifactDirty] = useState(false);
   const [runtimeDirty, setRuntimeDirty] = useState(false);
@@ -191,6 +194,7 @@ export function Inspector({ model, busy, online, onClose, onDirty, mutate, clien
   const [tab, setTab] = useState<"overview" | "settings" | "manage">("overview");
   const repo = modelFiles(model, inventory).groups.find((group) => group.repo)?.repo ?? null;
   const [advanced, setAdvanced] = useState(() => readLocal("juiced.rewrite.inspectorAdvanced") === "1");
+  const fit = hotFit(model, models, resources);
   const tabs = [["overview", "Overview", false], ["settings", "Settings", dirty], ["manage", "Manage", false]] as const;
   return <aside className="inspector" aria-label="Model inspector">
     <div className="inspector-top"><Button variant="ghost" className="back-button" onClick={onClose}><Icon name="back" /> Back to models</Button><Button variant="ghost" className="close-inspector" aria-label="Close model inspector" onClick={onClose}><Icon name="close" /></Button></div>
@@ -204,6 +208,7 @@ export function Inspector({ model, busy, online, onClose, onDirty, mutate, clien
       <section className="inspector-section"><span className="field-label" id="policy-label">Loading policy</span>
         <div className="segmented wide" role="radiogroup" aria-labelledby="policy-label">{(["hot", "on-demand", "disabled"] as Policy[]).map((policy) => <button key={policy} role="radio" aria-checked={model.policy === policy} disabled={busy || !online || dirty || (policy === "disabled" && model.active_requests > 0)} title={policy === "disabled" && model.active_requests > 0 ? "Requests are still running on this model" : policy === "disabled" && model.loaded ? "Disabling also unloads the model" : undefined} onClick={() => setPolicy(mutate, model, policy)}>{policyNames[policy]}</button>)}</div>
         <p className="field-help">{model.policy === "hot" ? (cleanupRetry ? "Retrying cleanup keeps the Hot policy." : "Loads at startup and stays loaded.") : model.policy === "on-demand" ? "Loads on the first request." : "Hidden from apps."}</p>
+        {fit && <p className={`field-help ${fit.fit !== "fits" && !(model.policy === "hot" && model.loaded) ? "tone-warning" : ""}`}>{hotFitNote(model, fit)}</p>}
         <ModelIdle model={model} client={client} online={online} disabled={busy || dirty} />
       </section>
       <section className="inspector-section"><h3>Worker</h3><dl className="facts"><div><dt>Process</dt><dd>{model.pid ?? "Not running"}</dd></div><div><dt>Requests</dt><dd>{model.active_requests} / {model.max_inflight}</dd></div><div><dt>Reserved</dt><dd>{bytes(model.resident_bytes)}</dd></div><div><dt>Weights</dt><dd>{model.downloaded ? "Present" : "Missing"}</dd></div></dl>

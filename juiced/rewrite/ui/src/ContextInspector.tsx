@@ -52,7 +52,7 @@ export function MemoryBar({ fit }: { fit: Fit }) {
     <div className="memory-bar" role="img" aria-label={`${bytes(fit.total_bytes)} of ${bytes(fit.available_bytes)} available`}>{parts.filter(([, value]) => value > 0).map(([label, value, tone]) => <span key={label} className={`memory-part ${tone}`} style={{ width: `${Math.min(100, value / room * 100)}%` }} title={`${label} ${bytes(value)}`} />)}</div>
     <div className="memory-legend">
       {parts.filter(([, value]) => value > 0).map(([label, value, tone]) => <span key={label}><i className={`memory-dot ${tone}`} />{label} {bytes(value)}</span>)}
-      <span className={`memory-total ${fit.fits ? "" : "over"}`}>{bytes(fit.total_bytes)} of {bytes(fit.available_bytes)} available{fit.fits ? "" : " · doesn't fit"}</span>
+      <span className={`memory-total ${fit.fits ? "" : "over"}`}>{fit.source === "reservation" ? "Reserved" : "Estimated"} {bytes(fit.total_bytes)} of {bytes(fit.available_bytes)} available{fit.fits ? "" : " · doesn't fit"}</span>
     </div>
   </div>;
 }

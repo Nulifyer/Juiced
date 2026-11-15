@@ -5,7 +5,7 @@
 .quant-sync-list input[type="checkbox"] { width: 16px; height: 16px; min-height: 0; padding: 0; margin: 0; accent-color: var(--ring); }
 .quant-sync-name { display: grid; min-width: 0; font-size: .8rem; line-height: 1.35; }
 .quant-sync-name strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
-.quant-sync-name span { font-size: .74rem; overflow-wrap: anywhere; }
+.quant-sync-name span { font-size: .75rem; overflow-wrap: anywhere; }
 .quant-sync-report { gap: 4px; margin-top: 10px; font-size: .78rem; }
 .quant-sync-report li { margin: 0; overflow-wrap: anywhere; }
 .quant-sync-list label:has(input:disabled) input { opacity: .4; }

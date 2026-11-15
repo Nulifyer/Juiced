@@ -15,7 +15,7 @@
 .markdown :not(pre) > code { font-size: .88em; padding: 1px 5px; border-radius: 4px; background: var(--secondary); overflow-wrap: anywhere; }
 .markdown strong { font-weight: 600; }
 .md-code { border: 1px solid var(--border); border-radius: 8px; background: #101114; overflow: hidden; }
-.md-code-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 3px 4px 3px 10px; border-bottom: 1px solid var(--border); color: var(--muted); font-size: .7rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.md-code-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 3px 4px 3px 10px; border-bottom: 1px solid var(--border); color: var(--muted); font-size: .75rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .md-code pre { margin: 0; padding: 10px 12px; overflow-x: auto; font-size: .78rem; line-height: 1.55; white-space: pre; }
 .md-code code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .copy-code { display: inline-flex; align-items: center; gap: 4px; border: 0; background: transparent; color: var(--muted); font: inherit; font-family: Inter, system-ui, sans-serif; padding: 3px 6px; border-radius: 5px; cursor: pointer; min-height: 0; }

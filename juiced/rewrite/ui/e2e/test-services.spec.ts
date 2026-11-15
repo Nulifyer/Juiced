@@ -12,6 +12,7 @@ test.describe("Chat", () => {
     await expect(chat.getByRole("button", { name: "Send" })).toBeDisabled();
     await expect(page.getByRole("region", { name: "Try a model" })).toContainText("Loaded");
     await expect(page.getByLabel("Max tokens per reply")).toHaveAttribute("placeholder", "1024");
+    await expect(page.locator("label", { has: page.getByLabel("Max tokens per reply") })).toHaveText(/^Max reply\s+tokens$/);
     await chat.getByLabel("Prompt").fill(prompt);
     const sent = page.waitForRequest((outgoing) => outgoing.method() === "POST" && new URL(outgoing.url()).pathname === "/v1/chat/completions");
     await chat.getByRole("button", { name: "Send" }).click();

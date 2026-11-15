@@ -12,7 +12,11 @@ clients can discover it.
 ## Change a policy
 
 1. Open **Loading policy**, or open a model's details.
-2. Select **Hot**, **On-demand**, or **Disabled**.
+2. Select **Hot**, **On-demand**, or **Disabled**. The change applies at once.
+   With a memory budget set, **Hot** first shows the model's reservation and the
+   free model memory, such as `Hot keeps 51.1 GiB loaded · 21.0 GiB free`. If it
+   doesn't fit, idle On demand models unload to make room. If Hot or busy models
+   hold the rest, it won't load.
 3. Watch the model's operation and worker state until the change settles.
 4. Test the model if you have enabled a new service.
 
@@ -32,8 +36,9 @@ Do not repeatedly restart the server to force a runtime change.
 ## Fit several services on one host
 
 Start with one small model. Add Hot services while watching **Model memory**
-and **GPU memory** on the Dashboard. Allow room for context, runtime buffers,
-speech, image jobs, and the host operating system.
+and **GPU memory** on the Dashboard. The **Hot** column in **Loading policy**
+shows the same model memory, such as `59.4 of 80.0 GiB used`. Allow room for
+context, runtime buffers, speech, image jobs, and the host operating system.
 
 The default container configuration limits loaded models to four. Changing a
 count limit does not create memory or qualify a concurrent workload. Engines

@@ -2,8 +2,8 @@ import type { ReactNode } from "react";
 import type { Client } from "./api";
 import { Meter } from "./charts";
 import { ago, parseHealth, summary } from "./connectData";
-import { policyNames, workerState, workerTone, type Model, type Snapshot } from "./domain";
-import { gib, gpuName, percent, type SystemStats } from "./live";
+import { bytesPair, policyNames, workerState, workerTone, type Model, type Snapshot } from "./domain";
+import { memorySize, gpuName, percent, type SystemStats } from "./live";
 import { failed } from "./performance";
 import { remaining } from "./Residency";
 import { lowSpace, parseStorageSummary } from "./storageData";
@@ -35,7 +35,7 @@ function usage(model: Model, now: number): string {
 }
 
 function pair(used: number | null | undefined, total: number | null | undefined) {
-  return `${gib(used).replace(" GiB", "")} / ${gib(total)}`;
+  return used == null || total == null ? `${memorySize(used)} / ${memorySize(total)}` : bytesPair(used, total);
 }
 
 function Tile({ label, value, children, foot }: { label: string; value: ReactNode; children: ReactNode; foot: ReactNode }) {
@@ -81,11 +81,11 @@ export function Dashboard({ client, snapshot, stats, onOpenModel, onOpenRequests
       <Tile label="Requests" value={`${active} active${queued ? ` · ${queued} queued` : ""}`} foot={<Meter plain value={slots ? active / slots * 100 : 0} label="Request slots in use" />}>
         {`of ${slots} ${slots === 1 ? "slot" : "slots"}`}{latest?.completed_at_ms ? ` · last ${ago(latest.completed_at_ms, now)}` : ""}
       </Tile>
-      <Tile label="Model memory" value={budget ? pair(resources.reserved_bytes, budget) : gib(resources.reserved_bytes)} foot={budget ? <Meter value={share(resources.reserved_bytes, budget)} label="Model memory reserved" /> : null}>
-        {budget ? `${gib(Math.max(0, budget - resources.reserved_bytes))} free for another model` : "No memory budget set"}
+      <Tile label="Model memory" value={budget ? pair(resources.reserved_bytes, budget) : memorySize(resources.reserved_bytes)} foot={budget ? <Meter value={share(resources.reserved_bytes, budget)} label="Model memory reserved" /> : null}>
+        {budget ? `${memorySize(Math.max(0, budget - resources.reserved_bytes))} free for another model` : "No memory budget set"}
       </Tile>
       <Tile label="GPU memory" value={gpu ? pair(gpu.memory_used_bytes, gpu.memory_total_bytes) : "—"} foot={gpu ? <Meter plain value={share(gpu.memory_used_bytes, gpu.memory_total_bytes)} label="GPU memory used" /> : null}>
-        {gpu ? `${gpu.gpu_percent == null ? "Utilization unavailable" : `${percent(gpu.gpu_percent)} busy`} · ${gpu.shared ? `shared · ${gib(gpu.shared.dedicated_total)} reserved + ${gib(gpu.shared.shared_total)} system` : gpuName(gpu)}` : "No GPU detected"}
+        {gpu ? `${gpu.gpu_percent == null ? "Utilization unavailable" : `${percent(gpu.gpu_percent)} busy`} · ${gpu.shared ? `shared · ${memorySize(gpu.shared.dedicated_total)} reserved + ${memorySize(gpu.shared.shared_total)} system` : gpuName(gpu)}` : "No GPU detected"}
       </Tile>
     </section>
     <div className="dashboard-columns">
@@ -94,7 +94,7 @@ export function Dashboard({ client, snapshot, stats, onOpenModel, onOpenRequests
         {running.length === 0 ? <Empty title="Nothing loaded">On demand models load on their first request.</Empty> : <ul className="row-list">
           {running.map((model) => <li key={model.id}><button className="row-button" onClick={() => onOpenModel(model.id)}>
             <span className={`status-dot ${workerTone(model)}`} />
-            <span className="row-main"><strong>{model.id}</strong><span className="muted">{workerState(model)} · {policyNames[model.policy]}{model.resident_bytes ? ` · ${gib(model.resident_bytes)}` : ""}</span></span>
+            <span className="row-main"><strong>{model.id}</strong><span className="muted">{workerState(model)} · {policyNames[model.policy]}{model.resident_bytes ? ` · ${memorySize(model.resident_bytes)}` : ""}</span></span>
             <span className="row-meta"><span>{model.active_requests}/{model.max_inflight} busy</span><span className="muted">{usage(model, now)}</span></span>
           </button></li>)}
         </ul>}

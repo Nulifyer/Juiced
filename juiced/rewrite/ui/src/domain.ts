@@ -40,9 +40,42 @@ export type Snapshot = { models: Model[]; requests: RequestRecord[]; resources: 
 export function bytes(value: number | null): string {
   if (value === null) return "Unavailable";
   if (value < 1024) return `${value} B`;
-  if (value < 1024 ** 2) return `${(value / 1024).toFixed(1)} KiB`;
-  if (value < 1024 ** 3) return `${(value / 1024 ** 2).toFixed(1)} MiB`;
+  // Thresholds sit half a tenth below each unit so 1023.96 MiB reads "1.0 GiB", not "1024.0 MiB".
+  if (value < 1024 ** 2 - 0.05 * 1024) return `${(value / 1024).toFixed(1)} KiB`;
+  if (value < 1024 ** 3 - 0.05 * 1024 ** 2) return `${(value / 1024 ** 2).toFixed(1)} MiB`;
   return `${(value / 1024 ** 3).toFixed(1)} GiB`;
+}
+
+/** Two sizes in one unit read as one figure: "59.4 / 80.0 GiB". */
+export function bytesPair(used: number, total: number, joiner = " / "): string {
+  const left = bytes(used), right = bytes(total);
+  const unit = left.slice(left.indexOf(" "));
+  return right.endsWith(unit) ? `${left.slice(0, -unit.length)}${joiner}${right}` : `${left}${joiner}${right}`;
+}
+
+export type HotFit = { bytes: number; free: number; fit: "fits" | "evicts" | "over" };
+
+/** Juiced makes room only by unloading idle On demand models; Hot and busy ones stay. */
+export function hotFit(model: Model, models: Model[], resources: Resources | undefined): HotFit | null {
+  const budget = resources?.resident_budget_bytes;
+  if (!resources || !budget || !model.resident_bytes) return null;
+  const free = Math.max(0, budget - resources.reserved_bytes);
+  const adds = model.loaded ? 0 : model.resident_bytes;
+  if (adds <= free) return { bytes: model.resident_bytes, free, fit: "fits" };
+  const idle = models.filter((other) => other.id !== model.id && other.loaded && other.policy === "on-demand" && other.active_requests === 0).reduce((sum, other) => sum + (other.resident_bytes ?? 0), 0);
+  return { bytes: model.resident_bytes, free, fit: adds <= free + idle ? "evicts" : "over" };
+}
+
+export function hotFitNote(model: Model, fit: HotFit): string {
+  if (model.policy === "hot" && model.loaded) return `Holds ${bytes(fit.bytes)} · ${bytes(fit.free)} free`;
+  if (fit.fit === "fits") return `Hot keeps ${bytes(fit.bytes)} loaded · ${bytes(fit.free)} free`;
+  if (fit.fit === "evicts") return `Hot keeps ${bytes(fit.bytes)} loaded. Only ${bytes(fit.free)} is free, so idle On demand models unload first.`;
+  return `Hot needs ${bytes(fit.bytes)}; only ${bytes(fit.free)} is free. It won't load until a Hot or busy model unloads.`;
+}
+
+export function hotOption(model: Model, fit: HotFit | null): string {
+  if (!fit || model.policy === "hot") return "Hot";
+  return `Hot · ${bytes(fit.bytes)}, ${fit.fit === "fits" ? "fits" : fit.fit === "evicts" ? "unloads idle models" : "doesn't fit"}`;
 }
 
 export function operationEligible(model: Model, operation: string): boolean {

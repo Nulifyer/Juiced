@@ -47,9 +47,9 @@ function TryModel({ models, client, online }: { models: Model[]; client: Client;
       <Badge>{current.label}</Badge>
       <span className="muted">{current.model.loaded ? "Loaded" : "Loads on first use"}{current.kind === "chat" && current.model.vision ? " · accepts images" : ""}</span>
       {current.kind === "chat" && <span className="chat-options">
-        <label className="inline-field">Max tokens <input className="short-input" inputMode="numeric" aria-label="Max tokens per reply" value={maxTokens} placeholder={String(chatTestTokenLimit(current.model))} onChange={(event) => setMaxTokens(event.target.value.replace(/\D/g, ""))} /></label>
+        <label className="inline-field">Max reply <input className="short-input" inputMode="numeric" aria-label="Max tokens per reply" value={maxTokens} placeholder={String(chatTestTokenLimit(current.model))} onChange={(event) => setMaxTokens(event.target.value.replace(/\D/g, ""))} /> tokens</label>
         <Switch checked={thinking} label="Thinking" onChange={setThinking}>Thinking</Switch>
-        <HelpTip label="Chat test options">Max tokens caps each reply, up to {chatTokenCeiling(current.model).toLocaleString()}. Turning thinking off asks a reasoning model to answer directly; other models ignore it.</HelpTip>
+        <HelpTip label="Chat test options">Max reply caps each reply, up to {chatTokenCeiling(current.model).toLocaleString()} tokens. Turning thinking off asks a reasoning model to answer directly; other models ignore it.</HelpTip>
       </span>}
     </div>
     {current.kind === "chat" ? <ChatTest {...props} maxTokens={Math.min(chatTokenCeiling(current.model), Math.max(1, Number(maxTokens) || chatTestTokenLimit(current.model)))} thinking={thinking ? undefined : false} />

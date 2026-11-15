@@ -138,3 +138,32 @@ test("Add model with a name that is already registered reports it in the detail 
     await fixture.cleanup(artifact);
   }
 });
+
+test("a finished download offers Add model, then Open model once a model uses it", async ({ page, request }) => {
+  test.setTimeout(90000);
+  const fixture = library(request);
+  const artifact = await fixture.sha();
+  await fixture.cleanup(artifact);
+  await fixture.installEngine();
+  await fixture.pull(artifact);
+  const search = await fixture.service.json<any>("/v1/juiced/library/search?q=tiny-chat&limit=12");
+  await fixture.service.post("/v1/juiced/library/pull", { repo, file, expected_generation: search.artifact_generation });
+  await expect.poll(async () => (await fixture.service.json<any>("/v1/juiced/library/pulls")).data.filter((pull: any) => pull.repo === repo && pull.state === "complete").length, { timeout: 15000 }).toBeGreaterThan(1);
+  try {
+    await open(page);
+    await modelsView(page, "Downloads");
+    const row = page.getByRole("list", { name: "Download list" }).getByRole("listitem", { name: "Tiny-Chat-GGUF Q8_0" });
+    await expect(row, "repeated pulls of one quant share a row").toHaveCount(1);
+    await row.getByRole("button", { name: "Add model" }).click();
+    const details = page.getByRole("complementary", { name: "File details" });
+    await expect(details.getByRole("listbox", { name: "Quants on disk" }).getByRole("option", { selected: true })).toContainText("Q8_0");
+    await details.getByRole("button", { name: "Add model" }).click();
+    await expect(details.getByRole("status").filter({ hasText: `Added ${added}.` })).toBeVisible({ timeout: 15000 });
+
+    await modelsView(page, "Downloads");
+    await row.getByRole("button", { name: "Open model" }).click();
+    await expect(page.getByRole("complementary", { name: "Model inspector" }).getByRole("heading", { name: added, level: 2 })).toBeVisible();
+  } finally {
+    await fixture.cleanup(artifact);
+  }
+});

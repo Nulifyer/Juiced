@@ -69,7 +69,7 @@ test("the GPU memory tile names the GPU and says when utilization has no reading
   });
   await open(page);
   const card = page.getByRole("region", { name: "At a glance" }).getByRole("article", { name: "GPU memory" });
-  await expect(card).toContainText("5.0 / 16 GiB");
+  await expect(card).toContainText("5.0 / 16.0 GiB");
   await expect(card).toContainText("0.0% busy · AMD GPU");
   await expect(card.getByRole("meter", { name: "GPU memory used" })).toBeVisible();
   gpu = { ...gpu, name: "AMD Radeon 890M", gpu_percent: null };

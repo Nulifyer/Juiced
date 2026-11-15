@@ -26,8 +26,8 @@ function UsedBy({ ids, onOpenModel }: { ids: string[]; onOpenModel: (id: string)
   return <span className="used-by">{ids.map((id) => <button key={id} className="link-button" onClick={() => onOpenModel(id)}>{id}</button>)}</span>;
 }
 
-export function FileInspector({ group, client, online, onClose, onRegistered, onOpenModel, onChanged }: { group: LocalGroup; client: Client; online: boolean; onClose: () => void; onRegistered: () => Promise<void>; onOpenModel: (id: string) => void; onChanged: () => Promise<unknown> }) {
-  const [picked, setPicked] = useState(() => (unusedQuants(group)[0] ?? group.quants[0])?.file ?? "");
+export function FileInspector({ group, quant: initialQuant, client, online, onClose, onRegistered, onOpenModel, onChanged }: { group: LocalGroup; quant?: string; client: Client; online: boolean; onClose: () => void; onRegistered: () => Promise<void>; onOpenModel: (id: string) => void; onChanged: () => Promise<unknown> }) {
+  const [picked, setPicked] = useState(() => (group.quants.find((item) => item.file === initialQuant) ?? unusedQuants(group)[0] ?? group.quants[0])?.file ?? "");
   const [confirming, setConfirming] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState("");

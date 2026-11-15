@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { Client } from "./api";
 import { Sparkline } from "./charts";
 import { bytes, type Model, type RequestRecord, type Snapshot } from "./domain";
-import { gib, parseLogPage, percent, rate, type LogLine, type StatsPoint, type SystemStats } from "./live";
+import { memorySize, parseLogPage, percent, rate, type LogLine, type StatsPoint, type SystemStats } from "./live";
 import { count, failed, formatMs, modelPerformance, pathNames, timing } from "./performance";
 import { Badge, Button, Empty, HelpTip, ModelSelect } from "./ui";
 
@@ -23,9 +23,9 @@ function Performance({ snapshot, stats, history }: { snapshot: Snapshot; stats: 
   const models = modelPerformance(snapshot.requests);
   const charts = [
     ["CPU", percent(stats?.cpu_percent), history.map((point) => point.cpu)],
-    ["Memory", `${gib(stats?.memory?.used_bytes)} / ${gib(stats?.memory?.total_bytes)}`, history.map((point) => point.memory)],
+    ["Memory", `${memorySize(stats?.memory?.used_bytes)} / ${memorySize(stats?.memory?.total_bytes)}`, history.map((point) => point.memory)],
     ["GPU", gpu ? percent(gpu.gpu_percent) : "No GPU", history.map((point) => point.gpu)],
-    ["VRAM", gpu ? `${gib(gpu.memory_used_bytes)} / ${gib(gpu.memory_total_bytes)}` : "No GPU", history.map((point) => point.vram)],
+    ["VRAM", gpu ? `${memorySize(gpu.memory_used_bytes)} / ${memorySize(gpu.memory_total_bytes)}` : "No GPU", history.map((point) => point.vram)],
   ] as const;
   const cache = resources.cache_control_memory, runtime = resources.runtime_control_memory;
   return <div className="performance">

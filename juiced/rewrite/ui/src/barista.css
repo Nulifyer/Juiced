@@ -20,7 +20,7 @@
 .barista-thread > .empty { margin: auto 0; }
 .barista-panel .chat-turn { font-size: .82rem; }
 .barista-panel .chat-turn.user { max-width: 88%; }
-.barista-step { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: .74rem; line-height: 1.35; color: var(--muted); }
+.barista-step { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: .75rem; line-height: 1.35; color: var(--muted); }
 .barista-step + .barista-step { margin-top: -6px; }
 .barista-step-label { min-width: 0; overflow-wrap: anywhere; }
 .barista-detail { flex-basis: 100%; padding-left: 19px; color: var(--bad); overflow-wrap: anywhere; }
@@ -55,8 +55,8 @@
 .barista-lines { margin: 0; padding: 0; list-style: none; display: grid; gap: 2px; color: var(--muted); font-size: .76rem; font-variant-numeric: tabular-nums; }
 .barista-lines li { overflow-wrap: anywhere; }
 .barista-preview { color: var(--foreground); font-size: .78rem; line-height: 1.4; overflow-wrap: anywhere; }
-.barista-warning { color: var(--warning); font-size: .74rem; overflow-wrap: anywhere; }
-.barista-job { display: grid; gap: 4px; font-size: .74rem; color: var(--muted); }
+.barista-warning { color: var(--warning); font-size: .75rem; overflow-wrap: anywhere; }
+.barista-job { display: grid; gap: 4px; font-size: .75rem; color: var(--muted); }
 .barista-job.failed { color: var(--bad); }
 .barista-job-line { overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
 .barista-job progress { width: 100%; height: 4px; appearance: none; border: 0; border-radius: 2px; background: var(--secondary); overflow: hidden; }

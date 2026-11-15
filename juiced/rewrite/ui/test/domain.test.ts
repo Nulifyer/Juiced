@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { bytes, eligible, loadReason, matchingModels, normalizeBase, parseSnapshot, parseSuitability, unloadReason, workerState, workerReady, workerTone, type Model, type Suitability } from "../src/domain";
+import { bytes, bytesPair, eligible, hotFit, hotFitNote, hotOption, loadReason, matchingModels, normalizeBase, parseSnapshot, parseSuitability, unloadReason, workerState, workerReady, workerTone, type Model, type Resources, type Suitability } from "../src/domain";
 
 const model: Model = { id: "Publisher/Long-Model-Q4", policy: "on-demand", revision: 0, state: "unloaded", downloaded: true, loaded: false, pid: null, active_requests: 0, max_inflight: 2, resident_bytes: 1024 ** 3, operations: ["chat/completions"], error: null };
 
@@ -131,4 +131,34 @@ test("cache controller reservations remain distinct from model claims and unknow
   expect(parseSnapshot(catalog, { ...state, resources:{ reserved_bytes:0, outstanding_bytes:0, cache_control_memory:unavailable } }, { data:[] }).resources.cache_control_memory?.state).toBe("unavailable");
   expect(() => parseSnapshot(catalog, { ...state, resources:{ cache_control_memory:{ ...unavailable, metadata_bytes:1, reserved_bytes:1 } } }, { data:[] })).toThrow("cache memory");
   expect(() => parseSnapshot(catalog, { ...state, resources:{ cache_control_memory:{ ...unavailable, state:["legacy"] } } }, { data:[] })).toThrow("cache memory");
+});
+
+describe("memory figures", () => {
+  const GiB = 1024 ** 3, MiB = 1024 ** 2;
+  test("one rule for every size: one decimal in the largest unit that keeps it at least 1", () => {
+    expect(bytes(51.1 * GiB)).toBe("51.1 GiB");
+    expect(bytes(849.4 * MiB)).toBe("849.4 MiB");
+    expect(bytes(1023.97 * MiB)).toBe("1.0 GiB");
+    expect(bytesPair(59.4 * GiB, 80 * GiB)).toBe("59.4 / 80.0 GiB");
+    expect(bytesPair(849.4 * MiB, 80 * GiB, " of ")).toBe("849.4 MiB of 80.0 GiB");
+  });
+  const resources: Resources = { resident_budget_bytes: 80 * GiB, reserved_bytes: 59 * GiB, measured_memory_bytes: null, reservation_source: "configured", active_requests: 0 };
+  const coder = { ...model, id: "coder", resident_bytes: 51 * GiB };
+  test("choosing Hot says whether the reservation fits the free budget", () => {
+    const small = { ...model, resident_bytes: 4 * GiB };
+    expect(hotFit(small, [small], resources)).toEqual({ bytes: 4 * GiB, free: 21 * GiB, fit: "fits" });
+    expect(hotFitNote(small, hotFit(small, [small], resources)!)).toBe("Hot keeps 4.0 GiB loaded · 21.0 GiB free");
+    expect(hotOption(small, hotFit(small, [small], resources))).toBe("Hot · 4.0 GiB, fits");
+    const idle = { ...model, id: "idle", loaded: true, resident_bytes: 40 * GiB };
+    expect(hotFit(coder, [coder, idle], resources)?.fit).toBe("evicts");
+    expect(hotFit(coder, [coder, { ...idle, policy: "hot" }], resources)?.fit).toBe("over");
+    expect(hotOption(coder, hotFit(coder, [coder], resources))).toBe("Hot · 51.0 GiB, doesn't fit");
+    expect(hotFitNote(coder, hotFit(coder, [coder], resources)!)).toBe("Hot needs 51.0 GiB; only 21.0 GiB is free. It won't load until a Hot or busy model unloads.");
+  });
+  test("a loaded model adds nothing, and no budget means no claim", () => {
+    const loaded = { ...coder, loaded: true, policy: "hot" as const };
+    expect(hotFitNote(loaded, hotFit(loaded, [loaded], resources)!)).toBe("Holds 51.0 GiB · 21.0 GiB free");
+    expect(hotOption(loaded, hotFit(loaded, [loaded], resources))).toBe("Hot");
+    expect(hotFit(coder, [coder], { ...resources, resident_budget_bytes: null })).toBeNull();
+  });
 });

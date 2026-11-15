@@ -10,8 +10,9 @@ Enable the model and wait for its worker to load first.
 3. Send a short prompt and check that the answer completes.
 4. Use **Stop** to cancel the request.
 
-**Max tokens** caps each reply, up to the model's output limit. Turn **Thinking**
-off to ask a reasoning model to answer directly; other models ignore it.
+**Max reply** caps each reply in tokens, up to the model's output limit. Turn
+**Thinking** off to ask a reasoning model to answer directly; other models
+ignore it.
 
 Replies render as Markdown: tables, lists, links and code blocks with a copy
 button. When the model reasons first, a **Thinking** line shows while it works
