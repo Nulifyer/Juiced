@@ -1,6 +1,6 @@
 # Rewrite as a drop-in replacement for Juiced v0.9.2
 
-Status: active
+Status: released as v0.10.0 (2026-11-15); later work listed below
 Owner: primary agent (integration, container, release, deployment, this ledger)
 Request source: user, 2026-11-12. The homelab switched stack 83 to `rewrite-preview` and it failed: existing models missing, port changed. "The rewrite should be a drop in replacement for the existing stable release of juiced." Use the same release pipeline (`juiced-release.yml`) with `.rc` releases; this is a major version. Deploy with the homelab Portainer tooling and inspect https://juiced.swarm.nulteck.com/ yourself. Compose settings may be tweaked (Codex added junk), but keep volume data and Traefik settings.
 
@@ -30,6 +30,10 @@ Request source: user, 2026-11-12. The homelab switched stack 83 to `rewrite-prev
 - Known limitation kept for v0.10.0: an absent llama.cpp config (`/etc/llama.cpp/config.ini`, `$XDG_CONFIG_HOME` or `$HOME/.config/llama.cpp/config.ini`) is pinned by the nearest existing folder's stamp (service/src/runtime_inputs.rs), so adding or removing any entry in `/etc` or `~/.config` marks running llama.cpp workers stale and refuses their cache save/restore with `unbound_runtime_config`. In the container those folders change about once (first library cache folder); on a desktop they churn. Possible later fix: create dedicated empty `llama.cpp` folders in the image, or re-check only the missing path.
 - Later: copy-mode import of split models, attaching a projector to an already registered model, deleting FastFlowLM weights from Storage (`/data/flm`), MAIN-SNAPSHOT reference-lead hashes for models.md and cache.md.
 - Settings backup: the offline capsule covers only the legacy native settings store; api-keys.json lives in /data and a /data backup covers it. Maintenance guide rewritten for this release.
+
+## v0.10.0 released (2026-11-15)
+
+Tag v0.10.0 at b1c96641 (gate: 296 e2e passed; release run 43686536491 green; image `ghcr.io/nulifyer/juiced:v0.10.0` and `latest`). Release page https://github.com/Nulifyer/Juiced/releases/tag/v0.10.0. Deployed to stack 83: version 0.10.0, Hot models Qwen3-Coder-Next, Qwen3-4B-Instruct-2507, kokoro-v1, whisper-large-v3-turbo loaded (59.4 GiB reserved); Coder-Next defaults tuned `--ubatch-size 1024`, recipe `--spec-type ngram-simple`, `--metrics`; persisted model checks current and passed for both chat models; chat 0.4 s and 0.1 s; Barista on Coder-Next. Homelab stacks/juiced/compose.yaml pins v0.10.0 (uncommitted, as before).
 
 ## Acceptance
 
@@ -174,4 +178,4 @@ Known gaps:
 
 ## Next action
 
-User to confirm moving HA's conversation agent from Ornith to Qwen3-4B-Instruct-2507-GGUF (still pending). Open from the UX audit: Hot-lane fit preview on policy changes, unified memory precision, Downloads next step, control heights. Then ROCm vs Vulkan for Coder-Next, typed vLLM settings and the engine-management round.
+Later work, in order: the llama.cpp config-folder stale check (see v0.10.0 gap work), copy-mode split import and attaching projectors later, FastFlowLM weight deletion, typed vLLM settings, the engine-management round, then the deferred release-plan checks in rewrite-release.md if the user wants them.
