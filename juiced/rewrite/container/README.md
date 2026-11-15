@@ -299,4 +299,4 @@ Arguments after the script name go to `podman run`. With `EXPECT_GPU`, the test 
 
 ## Published images
 
-Pushing a `v*` tag runs `.github/workflows/juiced-release.yml` at that commit. It runs the service, process and console checks, builds this Containerfile with the tag as the service version, smoke-tests the exact image with Docker and pushes `ghcr.io/nulifyer/juiced:<tag>`. Only tags without a hyphen move `latest`, so release candidates such as `v1.0.0-rc.1` never replace the stable image.
+Pushing a `v*` tag runs `.github/workflows/juiced-release.yml` at that commit. It runs the service, process and console checks, builds this Containerfile with the tag as the service version, smoke-tests the exact image with Docker and pushes `ghcr.io/nulifyer/juiced:<tag>`. Only tags without a hyphen move `latest`, so release candidates such as `v0.11.0-rc.1` never replace the stable image.

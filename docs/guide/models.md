@@ -1,11 +1,11 @@
 # Download or import models
 
-Add weights through **Library**, then enable the model when you are ready to use it.
+Add weights through **Models → Discover** or a local file, then enable the model when you are ready to use it.
 New downloads and imports start **Disabled**.
 
 ## Find and download a model
 
-1. Open **Library → Find & run models**.
+1. Open **Models → Discover**.
 2. Search the known models by name. Use **Filter known models** for service,
    capability, runtime, size or availability. Running and downloaded models appear first.
 3. For a known model, select **Review download** to inspect its declared files,
@@ -112,7 +112,7 @@ An unknown result needs an execution-specific estimate; weight size alone does
 not establish fit. Save draft changes before checking them. A successful check
 reserves no capacity and does not enable the model or qualify its output quality.
 
-1. Open **Models** or **Library → Find & run models**.
+1. Open **Models**.
 2. Open the model details.
 3. Review **Runtime** and **Settings**, then choose [Hot or On-demand](loading-policy.md).
 4. Load it and [complete a service test](testing.md). A running model also offers **Try model** in Library.

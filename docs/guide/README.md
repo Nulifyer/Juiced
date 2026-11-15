@@ -7,7 +7,7 @@ and enough memory for the model and its context.
 ## Download a model
 
 1. Open `http://localhost:8080`, or your server's configured address.
-2. Select **Library → Find & run models**.
+2. Select **Models → Discover**.
 3. Search for a model, or open **Filter known models** and choose **Chat**.
 4. Select **Review download** on a small GGUF model, review its files, then select
    **Download model**. For other published models, use the same query and

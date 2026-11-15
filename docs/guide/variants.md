@@ -4,7 +4,7 @@ Juiced downloads or imports existing weights. It does not convert or quantize
 models. A model family can have several repositories, formats and numerical
 variants. Check what each candidate contains before downloading.
 
-1. Open **Library** and search for the model family or publisher.
+1. Open **Models → Discover** and search for the model family or publisher.
 2. Review the repository and revision. Similar model names do not prove common
    provenance, licensing or equivalent behavior.
 3. Inspect format, architecture and quantization. Choose a variant compatible

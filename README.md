@@ -55,12 +55,12 @@ docker run -d --name juiced \
   -p 127.0.0.1:8080:8080 \
   -v juiced-data:/data \
   --restart unless-stopped \
-  ghcr.io/nulifyer/juiced:v0.9.2
+  ghcr.io/nulifyer/juiced:v0.10.0
 ```
 
-Open **http://localhost:8080**. Download a small chat model under **Library**,
-choose a compatible runtime, and enable it under **Loading policy**.
-Use **Test services** to send your first prompt.
+Open **http://localhost:8080**. Find a small chat model under **Models →
+Discover**, add it, and set it to **On demand**. Use **Test services** to send
+your first prompt.
 
 The [installation guide](docs/guide/install/README.md) covers Compose, GPU access,
 permissions, and release selection. For remote access, follow the
