@@ -67,7 +67,7 @@ export function FileInspector({ group, quant: initialQuant, client, online, onCl
       {companions.length > 0 && <ul className="file-list" aria-label="Other files">{companions.map((file) => <li key={file.id}><span className="break-word">{file.name}</span><span className="muted">{roleNames[file.role] ?? file.role}</span><span className="muted numeric">{bytes(file.bytes)}</span></li>)}</ul>}
       {quant && <>
         {quant.add && <div className="add-name"><label htmlFor="file-model-id">Model name</label><input id="file-model-id" value={name} maxLength={128} onChange={(event) => { const value = event.target.value; setNames((old) => ({ ...old, [quant.file]: value })); }} /></div>}
-        {!quant.add && <p className="field-help">{quant.parts > 1 ? "Split models can't be added yet. Merge the parts with llama-gguf-split --merge." : "This file can't be added on its own."}</p>}
+        {!quant.add && <p className="field-help">{quant.parts > 1 && !quant.complete ? "Some parts of this split model are missing." : "This file can't be added on its own."}</p>}
         <AddModel client={client} online={online} target={quant.add} id={name.trim()} ready={!!quant.add} resetKey={`${group.id}:${quant.file}`} onRegistered={async () => { await onRegistered(); await onChanged(); }} onOpenModel={onOpenModel} />
         <div className="action-row wrap delete-row"><Button variant="danger" disabled={!online || !quant.removable || deleting} title={refusal} onClick={() => { setDeleteError(""); setConfirming(true); }}>Delete {quant.label}</Button></div>
         {refusal && <p className="field-help">{refusal}</p>}

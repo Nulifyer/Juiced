@@ -168,13 +168,19 @@ pub struct EngineInstall {
     pub expected_generation: u64,
 }
 
-#[derive(Deserialize)]
+#[derive(Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ModelAdd {
     #[serde(default)]
     pub artifact: Option<String>,
     #[serde(default)]
     pub artifact_set: Option<String>,
+    /// The stored artifacts of every part of one split GGUF, in any order.
+    #[serde(default)]
+    pub parts: Option<Vec<String>>,
+    /// A llama.cpp vision projector: an artifact for stored models, a path for linked ones.
+    #[serde(default)]
+    pub projector: Option<String>,
     #[serde(default)]
     pub id: Option<String>,
     #[serde(default)]
@@ -662,156 +668,225 @@ impl Manager {
     }
 
     pub async fn add_model(self: &Arc<Self>, request: ModelAdd) -> Result<Value, AddModelError> {
-        let (artifact, artifact_set, name, format, file_bytes, model_file, companions) =
-            if let Some(path) = request.path.as_deref() {
-                if request.artifact.is_some() || request.artifact_set.is_some() {
-                    return Err(invalid(
-                        "model_source_ambiguous",
-                        "Provide an artifact, an artifact set or a linked import path, not several.",
-                    )
-                    .into());
+        let sources = [
+            request.path.is_some(),
+            request.artifact.is_some() || request.artifact_set.is_some(),
+            request.parts.is_some(),
+        ];
+        if sources.into_iter().filter(|given| *given).count() > 1 {
+            return Err(invalid(
+                "model_source_ambiguous",
+                "Provide an artifact, an artifact set, split parts or a linked import path, not several.",
+            )
+            .into());
+        }
+        let mut in_place = Vec::new();
+        let (
+            artifact,
+            artifact_set,
+            name,
+            format,
+            file_bytes,
+            projector_bytes,
+            model_file,
+            companions,
+        ) = if let Some(path) = request.path.as_deref() {
+            let linked = self.linked_import(path).await?;
+            if models::is_projector(&linked.format) {
+                return Err(super::companion_sets::projector_needs_model().into());
+            }
+            let parts = u32::try_from(linked.parts.len()).unwrap_or(u32::MAX);
+            for (index, part) in linked.parts.iter().enumerate().skip(1) {
+                in_place.push(crate::config::CompanionFile {
+                    name: crate::engines::split::name("part", index as u32 + 1, parts),
+                    role: crate::artifacts::ArtifactRole::WeightShard,
+                    path: part.path.clone(),
+                });
+            }
+            let mut projector_bytes = 0;
+            if let Some(raw) = request.projector.as_deref() {
+                let projector = self.linked_import(raw).await?;
+                if !models::is_projector(&projector.format) {
+                    return Err(super::companion_sets::projector_invalid().into());
                 }
-                let linked = self.linked_import(path).await?;
-                (
-                    None,
-                    None,
-                    Some(linked.name),
-                    linked.format,
-                    linked.bytes,
-                    linked.path,
-                    Vec::new(),
-                )
-            } else {
-                let store = self.artifacts()?;
-                let set_id = request.artifact_set.clone();
-                let requested_artifact = request.artifact.clone();
-                let inspect = store.clone();
-                let (artifact, artifact_set, name) =
-                    tokio::task::spawn_blocking(move || -> Result<_, ApiError> {
-                        match (requested_artifact, set_id) {
-                            (None, None) => Err(invalid(
+                projector_bytes = projector.bytes;
+                in_place.push(crate::config::CompanionFile {
+                    name: "mmproj".into(),
+                    role: crate::artifacts::ArtifactRole::Projector,
+                    path: projector.path,
+                });
+            }
+            let companions = in_place
+                .iter()
+                .map(|companion| models::Companion {
+                    name: companion.name.clone(),
+                    role: companion.role,
+                })
+                .collect();
+            (
+                None,
+                None,
+                Some(linked.name),
+                linked.format,
+                linked.bytes,
+                projector_bytes,
+                linked.path,
+                companions,
+            )
+        } else {
+            let store = self.artifacts()?;
+            let set_id = request.artifact_set.clone();
+            let requested_artifact = request.artifact.clone();
+            let parts = request.parts.clone();
+            let projector = request.projector.clone();
+            let inspect = store.clone();
+            let (artifact, artifact_set, name) =
+                tokio::task::spawn_blocking(move || -> Result<_, ApiError> {
+                    let (artifact, set) = match (requested_artifact, set_id, parts) {
+                        (None, None, None) => {
+                            return Err(invalid(
                                 "artifact_required",
-                                "Provide an artifact or an artifact set.",
-                            )),
-                            (artifact, Some(set)) => {
-                                let view = inspect.artifact_set(&set).map_err(ApiError::from)?;
-                                let primary = view
-                                    .specification
-                                    .members
-                                    .iter()
-                                    .find(|member| member.name == view.specification.primary)
-                                    .ok_or_else(|| {
-                                        ApiError::from(crate::artifacts::ArtifactError::SetBinding)
-                                    })?;
-                                if artifact
-                                    .as_ref()
-                                    .is_some_and(|artifact| *artifact != primary.artifact)
-                                {
-                                    return Err(ApiError::from(
-                                        crate::artifacts::ArtifactError::SetBinding,
-                                    ));
-                                }
-                                Ok((
-                                    primary.artifact.clone(),
-                                    Some(set),
-                                    Some(primary.name.clone()),
-                                ))
+                                "Provide an artifact, an artifact set or split parts.",
+                            ));
+                        }
+                        (_, _, Some(parts)) => {
+                            let set = super::companion_sets::split_set(
+                                &inspect,
+                                &parts,
+                                projector.as_deref(),
+                            )?;
+                            return set_primary(&inspect, None, set);
+                        }
+                        (artifact, Some(set), None) => {
+                            let (artifact, set, name) = set_primary(&inspect, artifact, set)?;
+                            if projector.is_none() {
+                                return Ok((artifact, set, name));
                             }
-                            (Some(artifact), None) => {
+                            (artifact, set)
+                        }
+                        (Some(artifact), None, None) => {
+                            if projector.is_some() {
+                                (artifact, None)
+                            } else {
                                 let name = inspect.source_file_name(&artifact);
                                 let set = companion_set(&inspect, &artifact)?;
-                                Ok((artifact, set, name))
+                                return Ok((artifact, set, name));
                             }
                         }
-                    })
-                    .await
-                    .map_err(|_| interrupted())??;
-                let held_artifact = artifact.clone();
-                let held_set = artifact_set.clone();
-                let held_name = name.clone();
-                let (format, file_bytes, model_file, companions) =
-                    tokio::task::spawn_blocking(move || {
-                        let lease = store
-                            .hold_binding_with(&held_artifact, held_set.as_deref(), true)
-                            .map_err(ApiError::from)?;
-                        let path = lease.path().to_owned();
-                        let (format, bytes) = match lease.primary_name() {
-                            Some(primary)
-                                if models::checkpoint_primary(primary)
-                                    && !lease.companions().is_empty() =>
-                            {
-                                let members: Vec<(&str, &std::path::Path)> = lease
-                                    .companions()
-                                    .into_iter()
-                                    .map(|(name, _, path)| (name, path))
-                                    .collect();
-                                models::detect_checkpoint_set(primary, &path, &members)
-                            }
-                            _ => models::detect(&path),
+                    };
+                    let projector = projector.as_deref().unwrap_or_default();
+                    let set = super::companion_sets::with_projector(
+                        &inspect,
+                        &artifact,
+                        set.as_deref(),
+                        projector,
+                    )?;
+                    set_primary(&inspect, Some(artifact), set)
+                })
+                .await
+                .map_err(|_| interrupted())??;
+            let held_artifact = artifact.clone();
+            let held_set = artifact_set.clone();
+            let held_name = name.clone();
+            let (format, file_bytes, projector_bytes, model_file, companions) =
+                tokio::task::spawn_blocking(move || {
+                    let lease = store
+                        .hold_binding_with(&held_artifact, held_set.as_deref(), true)
+                        .map_err(ApiError::from)?;
+                    let path = lease.path().to_owned();
+                    let (format, bytes) = match lease.primary_name() {
+                        Some(primary)
+                            if models::checkpoint_primary(primary)
+                                && !lease.companions().is_empty() =>
+                        {
+                            let members: Vec<(&str, &std::path::Path)> = lease
+                                .companions()
+                                .into_iter()
+                                .map(|(name, _, path)| (name, path))
+                                .collect();
+                            models::detect_checkpoint_set(primary, &path, &members)
                         }
-                        .map_err(format_error)?;
-                        let mut total = bytes;
-                        let mut companions = Vec::new();
-                        for (name, role, path) in lease.companions() {
-                            if role == crate::artifacts::ArtifactRole::Voice {
-                                models::voices(path).map_err(format_error)?;
-                            }
-                            let size = std::fs::metadata(path)
-                                .map_err(|_| format_error(models::FormatError::Unavailable))?
-                                .len();
+                        _ => models::detect(&path),
+                    }
+                    .map_err(format_error)?;
+                    if models::is_projector(&format) {
+                        return Err(super::companion_sets::projector_needs_model());
+                    }
+                    if matches!(format, models::ModelFormat::Gguf { .. }) {
+                        super::companion_sets::verify_stored(
+                            lease.primary_name(),
+                            &path,
+                            &lease.companions(),
+                        )?;
+                    }
+                    let mut total = bytes;
+                    let mut projector = 0u64;
+                    let mut companions = Vec::new();
+                    for (name, role, path) in lease.companions() {
+                        if role == crate::artifacts::ArtifactRole::Voice {
+                            models::voices(path).map_err(format_error)?;
+                        }
+                        let size = std::fs::metadata(path)
+                            .map_err(|_| format_error(models::FormatError::Unavailable))?
+                            .len();
+                        if role == crate::artifacts::ArtifactRole::Projector {
+                            projector = projector.saturating_add(size);
+                        } else {
                             total = total.saturating_add(size);
-                            companions.push(models::Companion {
-                                name: name.to_owned(),
-                                role,
-                            });
                         }
-                        let format = match format {
-                            models::ModelFormat::MoonshineOrt { .. } => {
-                                models::ModelFormat::MoonshineOrt {
-                                    model_arch: lease
-                                        .companions()
-                                        .into_iter()
-                                        .find(|(name, role, _)| {
-                                            *name == models::MOONSHINE_CONFIG
-                                                && *role
-                                                    == crate::artifacts::ArtifactRole::Configuration
-                                        })
-                                        .map(|(_, _, path)| models::moonshine_arch(path))
-                                        .transpose()
-                                        .map_err(format_error)?,
-                                }
-                            }
-                            models::ModelFormat::Gguf { .. } => {
-                                let sidecar = held_name.as_deref().map(models::moss_sidecar);
-                                match lease
+                        companions.push(models::Companion {
+                            name: name.to_owned(),
+                            role,
+                        });
+                    }
+                    let format = match format {
+                        models::ModelFormat::MoonshineOrt { .. } => {
+                            models::ModelFormat::MoonshineOrt {
+                                model_arch: lease
                                     .companions()
                                     .into_iter()
-                                    .find(|(name, _, _)| Some(*name) == sidecar.as_deref())
-                                    .map(|(_, _, path)| models::moss_family(path))
+                                    .find(|(name, role, _)| {
+                                        *name == models::MOONSHINE_CONFIG
+                                            && *role
+                                                == crate::artifacts::ArtifactRole::Configuration
+                                    })
+                                    .map(|(_, _, path)| models::moonshine_arch(path))
                                     .transpose()
-                                    .map_err(format_error)?
-                                    .flatten()
-                                {
-                                    Some(family) => models::ModelFormat::MossGguf { family },
-                                    None => format,
-                                }
+                                    .map_err(format_error)?,
                             }
-                            other => other,
-                        };
-                        Ok::<_, ApiError>((format, total, path, companions))
-                    })
-                    .await
-                    .map_err(|_| interrupted())??;
-                (
-                    Some(artifact),
-                    artifact_set,
-                    name,
-                    format,
-                    file_bytes,
-                    model_file,
-                    companions,
-                )
-            };
+                        }
+                        models::ModelFormat::Gguf { .. } => {
+                            let sidecar = held_name.as_deref().map(models::moss_sidecar);
+                            match lease
+                                .companions()
+                                .into_iter()
+                                .find(|(name, _, _)| Some(*name) == sidecar.as_deref())
+                                .map(|(_, _, path)| models::moss_family(path))
+                                .transpose()
+                                .map_err(format_error)?
+                                .flatten()
+                            {
+                                Some(family) => models::ModelFormat::MossGguf { family },
+                                None => format,
+                            }
+                        }
+                        other => other,
+                    };
+                    Ok::<_, ApiError>((format, total, projector, path, companions))
+                })
+                .await
+                .map_err(|_| interrupted())??;
+            (
+                Some(artifact),
+                artifact_set,
+                name,
+                format,
+                file_bytes,
+                projector_bytes,
+                model_file,
+                companions,
+            )
+        };
         let format = match format {
             models::ModelFormat::Gguf { .. } if request.path.is_some() => {
                 let sidecar = model_file
@@ -948,7 +1023,7 @@ impl Manager {
                     shape,
                     declared.architecture.as_deref(),
                     file_bytes,
-                    0,
+                    projector_bytes,
                     &crate::engines::memory::Plan::new(1, 1, choice.gpu),
                 )
                 .is_some() =>
@@ -968,14 +1043,23 @@ impl Manager {
                     declared.training_context_tokens,
                     share,
                     |context| {
-                        models::estimate_with(&format, file_bytes, 0, Some(&plan(context)))
-                            .breakdown
-                            .map(|breakdown| breakdown.total())
+                        models::estimate_with(
+                            &format,
+                            file_bytes,
+                            projector_bytes,
+                            Some(&plan(context)),
+                        )
+                        .breakdown
+                        .map(|breakdown| breakdown.total())
                     },
                 );
-                models::estimate_with(&format, file_bytes, 0, Some(&plan(context)))
+                models::estimate_with(&format, file_bytes, projector_bytes, Some(&plan(context)))
             }
-            _ => models::estimate(&format, file_bytes, models::context_tokens(&format)),
+            _ => models::estimate(
+                &format,
+                file_bytes.saturating_add(projector_bytes),
+                models::context_tokens(&format),
+            ),
         };
         let cpu_threads = snapshot
             .report
@@ -1008,7 +1092,7 @@ impl Manager {
         {
             args.extend(crate::hrx::DEVICE.map(|value| json!(value)));
         }
-        let crate::config::Registration(spec) =
+        let crate::config::Registration(mut spec) =
             serde_json::from_value(registration.clone()).map_err(|_| {
                 ApiError::new(
                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -1016,6 +1100,7 @@ impl Manager {
                     "The automatically built execution profile was rejected by the registration schema.",
                 )
             })?;
+        spec.companions = in_place;
         let mut view = self.register(spec).await?;
         if let Some(policy) = request.policy.filter(|policy| *policy != Policy::Disabled) {
             view = self.set_policy(&id, policy, view.revision).await?;
@@ -1093,6 +1178,29 @@ pub(super) fn format_error(error: models::FormatError) -> ApiError {
             "The model metadata is invalid or exceeds inspection limits.",
         ),
     }
+}
+
+/// The primary artifact and name of `set`, which must match `artifact` when one is given.
+fn set_primary(
+    store: &crate::artifacts::ArtifactStore,
+    artifact: Option<String>,
+    set: String,
+) -> Result<(String, Option<String>, Option<String>), ApiError> {
+    let view = store.artifact_set(&set).map_err(ApiError::from)?;
+    let primary = view
+        .specification
+        .members
+        .iter()
+        .find(|member| member.name == view.specification.primary)
+        .ok_or_else(|| ApiError::from(crate::artifacts::ArtifactError::SetBinding))?;
+    if artifact.is_some_and(|artifact| artifact != primary.artifact) {
+        return Err(ApiError::from(crate::artifacts::ArtifactError::SetBinding));
+    }
+    Ok((
+        primary.artifact.clone(),
+        Some(set),
+        Some(primary.name.clone()),
+    ))
 }
 
 /// A primary that anchors exactly one complete companion set adds that set; split shards

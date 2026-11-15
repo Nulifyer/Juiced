@@ -627,6 +627,7 @@ async fn register_download(
         backend,
         path: None,
         engine: request.engine.clone(),
+        ..ModelAdd::default()
     };
     let failure = match manager.add_model(retry(None)).await {
         Err(AddModelError::NotInstalled(body)) => body,
@@ -741,6 +742,7 @@ async fn run(manager: &Arc<Manager>, job: &Arc<Download>, resumed: Option<String
         backend: None,
         path: None,
         engine: job.selection.engine.clone(),
+        ..ModelAdd::default()
     };
     let added = register_download(&manager, request).await;
     let _ = manager.library().dismiss_pull(&pull);

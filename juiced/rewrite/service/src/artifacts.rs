@@ -1285,7 +1285,11 @@ impl ArtifactStore {
         Ok(held)
     }
 
-    fn reserve_lease(self: &Arc<Self>, id: &str) -> Result<ArtifactLease, ArtifactError> {
+    /// Holds a stored artifact without rehashing it; set publication verifies it later.
+    pub(crate) fn reserve_lease(
+        self: &Arc<Self>,
+        id: &str,
+    ) -> Result<ArtifactLease, ArtifactError> {
         artifact_id(id)?;
         self.lease.verify()?;
         let (artifact, hold) = {

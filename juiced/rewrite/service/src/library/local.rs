@@ -643,10 +643,14 @@ fn finish(draft: Draft, store_in_use: &BTreeSet<String>) -> LocalGroup {
                     .artifact
                     .as_ref()
                     .map(|artifact| json!({"artifact": artifact}))
-            } else if parts == 1 {
+            } else if parts == 1 || first.storage != Storage::ArtifactStore {
                 Some(json!({"path": first.location}))
             } else {
-                None
+                members
+                    .iter()
+                    .map(|file| file.artifact.clone())
+                    .collect::<Option<Vec<_>>>()
+                    .map(|parts| json!({"parts": parts}))
             };
             LocalQuant {
                 label: label.unwrap_or_else(|| extension_label(&first.path)),

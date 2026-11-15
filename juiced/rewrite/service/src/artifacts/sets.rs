@@ -499,11 +499,12 @@ impl ArtifactStore {
             .find(|member| member.name == view.specification.primary)
             .ok_or(ArtifactError::SetBinding)?;
         if primary.artifact != artifact
-            || view
-                .specification
-                .members
-                .iter()
-                .any(|member| member.role == ArtifactRole::WeightShard)
+            || (!companions
+                && view
+                    .specification
+                    .members
+                    .iter()
+                    .any(|member| member.role == ArtifactRole::WeightShard))
         {
             return Err(if primary.artifact != artifact {
                 ArtifactError::SetBinding

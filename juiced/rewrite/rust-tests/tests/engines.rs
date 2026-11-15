@@ -279,6 +279,8 @@ async fn engine_server_from(
     });
     server.set_environment("JUICED_TEST_HARDWARE_ROOT", hardware.path());
     server.set_environment("JUICED_TEST_ENGINE_RELEASES", &github.base);
+    let launches = server.directory.path().join("launches.log");
+    server.set_environment("FIXTURE_LAUNCH_RECORD", &launches);
     server.start().await;
     EngineServer {
         server,
@@ -864,4 +866,358 @@ async fn uploaded_and_linked_local_files_use_the_automatic_add_flow() {
     );
     assert_eq!(model.get("artifact"), None);
     assert!(linked_file.is_file());
+}
+
+/// Part `part` of a `parts`-part split llama GGUF; only the first carries the model metadata.
+fn split_part(part: u32, parts: u32) -> Vec<u8> {
+    use support::gguf::Entry::*;
+    let mut entries = Vec::new();
+    if part == 1 {
+        entries.extend([
+            ("general.architecture", Text("llama")),
+            ("llama.context_length", U32(2048)),
+            ("llama.block_count", U32(2)),
+            ("llama.embedding_length", U32(64)),
+            ("llama.attention.head_count", U32(4)),
+            ("llama.attention.head_count_kv", U32(2)),
+            ("llama.attention.key_length", U32(16)),
+            ("llama.attention.value_length", U32(16)),
+            ("llama.vocab_size", U32(1000)),
+        ]);
+    }
+    entries.extend([("split.no", U32(part - 1)), ("split.count", U32(parts))]);
+    support::gguf::build(&entries)
+}
+
+fn projector_gguf() -> Vec<u8> {
+    use support::gguf::Entry::*;
+    support::gguf::build(&[
+        ("general.architecture", Text("clip")),
+        ("clip.has_vision_encoder", Bool(true)),
+    ])
+}
+
+async fn upload_file(server: &Server, name: &str, bytes: &[u8]) -> (StatusCode, Value) {
+    let response = server
+        .client
+        .post(format!(
+            "{}/v1/juiced/library/upload?filename={name}&size={}",
+            server.base,
+            bytes.len()
+        ))
+        .bearer_auth(ADMIN_KEY)
+        .header("content-type", "application/octet-stream")
+        .body(bytes.to_vec())
+        .send()
+        .await
+        .unwrap();
+    let status = response.status();
+    (status, response.json().await.unwrap())
+}
+
+async fn install_llama(server: &Server) {
+    let (status, accepted) = server
+        .post(
+            "juiced/engines/install",
+            json!({"engine":"llama.cpp","backend":"cpu","expected_generation":0}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{accepted}");
+    let job = wait_for_job(server, accepted["job"]["id"].as_str().unwrap()).await;
+    assert_eq!(job["state"], "complete", "{job}");
+}
+
+/// The value after `flag` in the newest recorded launch that passes `flag`.
+fn launched(server: &Server, flag: &str) -> Option<String> {
+    let record =
+        std::fs::read_to_string(server.directory.path().join("launches.log")).unwrap_or_default();
+    record.lines().rev().find_map(|line| {
+        let words: Vec<&str> = line.strip_prefix("argv:")?.split(' ').collect();
+        let index = words.iter().position(|word| *word == flag)?;
+        words.get(index + 1).map(|value| (*value).to_owned())
+    })
+}
+
+fn has_pair(args: &Value, flag: &str, value: &str) -> bool {
+    args.as_array()
+        .unwrap()
+        .windows(2)
+        .any(|pair| pair[0] == flag && pair[1] == value)
+}
+
+#[tokio::test]
+async fn uploaded_split_parts_and_projector_add_as_one_vision_model() {
+    let server = engine_server().await;
+    install_llama(&server).await;
+    let parts: Vec<Vec<u8>> = (1..=3).map(|part| split_part(part, 3)).collect();
+    let projector = projector_gguf();
+    let mut digests = Vec::new();
+    for (index, bytes) in parts.iter().enumerate() {
+        let name = format!("Vision-Q4_K_M-{:05}-of-00003.gguf", index + 1);
+        let (status, uploaded) = upload_file(&server, &name, bytes).await;
+        assert_eq!(status, StatusCode::OK, "{uploaded}");
+        assert_eq!(uploaded["role"], "model");
+        assert_eq!(uploaded["split"], json!({"part": index + 1, "parts": 3}));
+        assert_eq!(uploaded["add"], Value::Null);
+        assert_eq!(uploaded["suggested_id"], "Vision-Q4_K_M");
+        digests.push(uploaded["artifact"].as_str().unwrap().to_owned());
+    }
+    let (status, uploaded) = upload_file(&server, "mmproj-Vision-F16.gguf", &projector).await;
+    assert_eq!(status, StatusCode::OK, "{uploaded}");
+    assert_eq!(uploaded["role"], "projector");
+    assert_eq!(uploaded["split"], Value::Null);
+    assert_eq!(uploaded["add"], Value::Null);
+    assert_eq!(uploaded["engines"], json!([]));
+    let projector_digest = uploaded["artifact"].as_str().unwrap().to_owned();
+
+    // A part whose header disagrees with its name is refused before anything is stored.
+    let (status, refused) =
+        upload_file(&server, "Wrong-00002-of-00003.gguf", &split_part(3, 3)).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+    assert_eq!(refused["error"]["code"], "split_part_mismatch");
+
+    for (body, code) in [
+        (json!({"artifact": digests[0]}), "split_parts_required"),
+        (
+            json!({"parts": [digests[0], digests[1]]}),
+            "split_parts_incomplete",
+        ),
+        (
+            json!({"parts": [digests[0], digests[0], digests[1]]}),
+            "split_part_mismatch",
+        ),
+        (
+            json!({"parts": digests, "projector": digests[1]}),
+            "projector_invalid",
+        ),
+        (
+            json!({"artifact": projector_digest}),
+            "projector_needs_model",
+        ),
+    ] {
+        let (status, refused) = server.post("juiced/models/add", body.clone()).await;
+        assert_eq!(
+            status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{body}: {refused}"
+        );
+        assert_eq!(refused["error"]["code"], code, "{body}");
+    }
+    let (status, refused) = server
+        .post(
+            "juiced/models/add",
+            json!({"parts": digests, "artifact": digests[0]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert_eq!(refused["error"]["code"], "model_source_ambiguous");
+
+    let shuffled = [&digests[2], &digests[0], &digests[1]];
+    let (status, added) = server
+        .post(
+            "juiced/models/add",
+            json!({"parts": shuffled, "projector": projector_digest, "policy": "on-demand"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{added}");
+    assert_eq!(added["model"]["id"], "Vision-Q4_K_M");
+    let roles: Vec<&str> = added["companions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|companion| companion["role"].as_str().unwrap())
+        .collect();
+    assert_eq!(roles, ["weight-shard", "weight-shard", "projector"]);
+    assert!(
+        has_pair(
+            &added["execution_profile"]["args"],
+            "--mmproj",
+            "{member:mmproj-Vision-F16.gguf}"
+        ),
+        "{added}"
+    );
+    // The projector is charged its file plus its encoder workspace.
+    assert!(
+        added["estimate"]["breakdown"]["projector_bytes"]
+            .as_u64()
+            .is_some_and(|bytes| bytes > projector.len() as u64),
+        "{added}"
+    );
+    let set = server
+        .get(&format!(
+            "juiced/artifacts/sets/{}",
+            added["artifact_set"].as_str().unwrap()
+        ))
+        .await;
+    assert_eq!(
+        set["specification"]["primary"],
+        "Vision-Q4_K_M-00001-of-00003.gguf"
+    );
+
+    chat(&server, "Vision-Q4_K_M").await;
+    let model = launched(&server, "--model").expect("the split model launched");
+    let model = Path::new(&model);
+    assert_eq!(
+        model.file_name().unwrap().to_str().unwrap(),
+        "model-00001-of-00003.gguf"
+    );
+    for (index, bytes) in parts.iter().enumerate() {
+        let sibling = model.with_file_name(format!("model-{:05}-of-00003.gguf", index + 1));
+        assert_eq!(&std::fs::read(&sibling).unwrap(), bytes, "{sibling:?}");
+    }
+    let mmproj = launched(&server, "--mmproj").expect("the projector is passed");
+    assert_eq!(std::fs::read(mmproj).unwrap(), projector);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn linked_split_models_find_their_parts_and_projector_in_place() {
+    let imports = tempfile::tempdir().unwrap();
+    let root = std::fs::canonicalize(imports.path()).unwrap();
+    let server = engine_server_with(|config| config["import_roots"] = json!([root])).await;
+    install_llama(&server).await;
+    let folder = root.join("models--acme--Vision-GGUF/snapshots/abc123");
+    let blobs = root.join("models--acme--Vision-GGUF/blobs");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::create_dir_all(&blobs).unwrap();
+    let parts: Vec<Vec<u8>> = (1..=2).map(|part| split_part(part, 2)).collect();
+    for (index, bytes) in parts.iter().enumerate() {
+        let blob = blobs.join(digest(bytes));
+        std::fs::write(&blob, bytes).unwrap();
+        std::os::unix::fs::symlink(
+            &blob,
+            folder.join(format!("Vision-Q8_0-{:05}-of-00002.gguf", index + 1)),
+        )
+        .unwrap();
+    }
+    let projector = folder.join("mmproj-Vision-F16.gguf");
+    std::fs::write(&projector, projector_gguf()).unwrap();
+    let missing = root.join("missing");
+    std::fs::create_dir(&missing).unwrap();
+    std::fs::write(missing.join("Gone-00001-of-00002.gguf"), &parts[0]).unwrap();
+
+    let (status, refused) = server
+        .post(
+            "juiced/library/import-path",
+            json!({"path": missing.join("Gone-00001-of-00002.gguf"), "mode": "link"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+    assert_eq!(refused["error"]["code"], "split_part_missing");
+    assert!(
+        refused["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Gone-00002-of-00002.gguf"),
+        "{refused}"
+    );
+    let (status, refused) = server
+        .post(
+            "juiced/library/import-path",
+            json!({"path": folder, "mode": "copy"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+    assert_eq!(refused["error"]["code"], "split_copy_unsupported");
+
+    let first = folder.join("Vision-Q8_0-00001-of-00002.gguf");
+    let second = folder.join("Vision-Q8_0-00002-of-00002.gguf");
+    for path in [folder.clone(), second.clone()] {
+        let (status, linked) = server
+            .post(
+                "juiced/library/import-path",
+                json!({"path": path, "mode": "link"}),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{linked}");
+        assert_eq!(linked["role"], "model");
+        assert_eq!(linked["bytes"], parts[0].len() + parts[1].len());
+        assert_eq!(linked["parts"].as_array().unwrap().len(), 2);
+        assert_eq!(linked["add"], json!({"path": first, "id": "Vision-Q8_0"}));
+        assert_eq!(
+            linked["projectors"],
+            json!([{"name": "mmproj-Vision-F16.gguf", "path": projector, "bytes": projector_gguf().len()}])
+        );
+    }
+    let (status, linked) = server
+        .post(
+            "juiced/library/import-path",
+            json!({"path": projector, "mode": "link"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{linked}");
+    assert_eq!(linked["role"], "projector");
+    assert_eq!(linked["add"], Value::Null);
+
+    for (body, code) in [
+        (json!({"path": projector}), "projector_needs_model"),
+        (
+            json!({"path": first, "projector": second}),
+            "projector_invalid",
+        ),
+    ] {
+        let (status, refused) = server.post("juiced/models/add", body.clone()).await;
+        assert_eq!(
+            status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{body}: {refused}"
+        );
+        assert_eq!(refused["error"]["code"], code, "{body}");
+    }
+    let (status, added) = server
+        .post(
+            "juiced/models/add",
+            json!({"path": first, "projector": projector, "id": "Vision-Q8_0", "policy": "on-demand"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{added}");
+    assert!(
+        has_pair(
+            &added["execution_profile"]["args"],
+            "--mmproj",
+            "{member:mmproj}"
+        ),
+        "{added}"
+    );
+    assert!(
+        added["estimate"]["breakdown"]["projector_bytes"]
+            .as_u64()
+            .is_some_and(|bytes| bytes > projector_gguf().len() as u64),
+        "{added}"
+    );
+    assert_eq!(
+        added["estimate"]["breakdown"]["weights_bytes"],
+        parts[0].len() + parts[1].len(),
+        "{added}"
+    );
+    let saved: Value =
+        serde_json::from_slice(&std::fs::read(&server.config_path).unwrap()).unwrap();
+    let model = saved["models"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|model| model["id"] == "Vision-Q8_0")
+        .unwrap();
+    assert_eq!(model["model_file"], json!(first));
+    assert_eq!(
+        model["companions"],
+        json!([
+            {"name": "part-00002-of-00002.gguf", "role": "weight-shard", "path": second},
+            {"name": "mmproj", "role": "projector", "path": projector},
+        ])
+    );
+    chat(&server, "Vision-Q8_0").await;
+    assert_eq!(
+        launched(&server, "--model").as_deref(),
+        first.to_str(),
+        "the first part launches from its folder"
+    );
+    assert_eq!(launched(&server, "--mmproj").as_deref(), projector.to_str());
+
+    std::fs::remove_file(&second).unwrap();
+    let (status, refused) = server
+        .post("juiced/models/add", json!({"path": first, "id": "again"}))
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+    assert_eq!(refused["error"]["code"], "split_part_missing");
 }

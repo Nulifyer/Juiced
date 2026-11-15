@@ -33,6 +33,7 @@ mod artifact_revision;
 mod runtime_selection;
 pub use runtime_selection::{RuntimeChange, RuntimeReply};
 mod cache_reply;
+mod companion_sets;
 mod discovery;
 pub use artifact_revision::ArtifactRevisionChange;
 pub(crate) use discovery::{Discovered, loaded_entry, model_type, revision as catalog_revision};
@@ -2251,7 +2252,7 @@ impl Manager {
                     let held = store.hold_binding_with(
                         id,
                         spec.artifact_set.as_deref(),
-                        spec.execution_profile.adapter.accepts_companions(),
+                        spec.execution_profile.adapter.holds_companion_sets(),
                     )?;
                     let reference = format!("model:{}", spec.id);
                     if let Some(previous) = &spec.previous_artifact_set {
@@ -2751,7 +2752,7 @@ impl Manager {
             let store = self.artifacts()?;
             let id = id.clone();
             let set = spec.artifact_set.clone();
-            let companions = spec.execution_profile.adapter.accepts_companions();
+            let companions = spec.execution_profile.adapter.holds_companion_sets();
             let held = tokio::task::spawn_blocking(move || {
                 store.hold_binding_with(&id, set.as_deref(), companions)
             })
@@ -2769,7 +2770,12 @@ impl Manager {
         } else {
             None
         };
-        if spec.execution_profile.adapter.accepts_companions() || !spec.companions.is_empty() {
+        if spec.execution_profile.adapter.accepts_companions()
+            || !spec.companions.is_empty()
+            || artifact
+                .as_ref()
+                .is_some_and(|held| !held.companions().is_empty())
+        {
             let (template, _) = spec
                 .execution_profile
                 .resolved_arguments()
@@ -4117,6 +4123,20 @@ impl Manager {
                             .tempdir()
                             .map_err(preparation_identity_error)?,
                     ),
+                    crate::config::Provider::LlamaCpp
+                        if artifact.as_ref().is_some_and(|artifact| {
+                            artifact.companions().iter().any(|(_, role, _)| {
+                                *role == crate::artifacts::ArtifactRole::WeightShard
+                            })
+                        }) =>
+                    {
+                        Some(
+                            tempfile::Builder::new()
+                                .prefix("juiced-split-")
+                                .tempdir()
+                                .map_err(preparation_identity_error)?,
+                        )
+                    }
                     _ => None,
                 };
                 let public_directory = workspace

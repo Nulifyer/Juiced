@@ -1,5 +1,5 @@
 export type Storage = "huggingface_cache" | "artifact_store" | "local";
-export type AddSource = { path: string } | { artifact: string } | { artifact_set: string };
+export type AddSource = { path: string } | { artifact: string } | { artifact_set: string } | { parts: string[] };
 export type LocalFile = { id: string; name: string; path: string; quant: string | null; role: string; bytes: number; location: string; storage: Storage; artifact: string | null; readOnly: boolean; removable: boolean; refusal: string | null; usedBy: string[] };
 export type LocalQuant = { label: string; file: string; parts: number; complete: boolean; bytes: number; files: string[]; usedBy: string[]; removable: boolean; add: AddSource | null };
 export type LocalGroup = { id: string; repo: string | null; name: string; publisher: string | null; storage: Storage[]; location: string | null; readOnly: boolean; bytes: number; removableBytes: number; usedBy: string[]; quants: LocalQuant[]; files: LocalFile[] };
@@ -21,6 +21,8 @@ function addSource(value: unknown): AddSource | null {
   if (typeof item.path === "string") return { path: item.path };
   if (typeof item.artifact_set === "string") return { artifact_set: item.artifact_set };
   if (typeof item.artifact === "string") return { artifact: item.artifact };
+  const parts = strings(item.parts);
+  if (parts.length > 1) return { parts };
   return null;
 }
 

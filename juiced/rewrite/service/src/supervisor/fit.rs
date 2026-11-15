@@ -102,11 +102,15 @@ pub(super) fn bundle_gpu(bundle: Option<&BundleSpec>) -> Option<bool> {
     })
 }
 
-fn projector_bytes(spec: &ModelSpec, worker: Option<&Worker>) -> u64 {
+fn companion_bytes(
+    spec: &ModelSpec,
+    worker: Option<&Worker>,
+    wanted: crate::artifacts::ArtifactRole,
+) -> u64 {
     let in_place: u64 = spec
         .companions
         .iter()
-        .filter(|companion| companion.role == crate::artifacts::ArtifactRole::Projector)
+        .filter(|companion| companion.role == wanted)
         .map(|companion| file_bytes(&companion.path))
         .sum();
     let managed: u64 = worker
@@ -115,12 +119,25 @@ fn projector_bytes(spec: &ModelSpec, worker: Option<&Worker>) -> u64 {
             artifact
                 .companions()
                 .into_iter()
-                .filter(|(_, role, _)| *role == crate::artifacts::ArtifactRole::Projector)
+                .filter(|(_, role, _)| *role == wanted)
                 .map(|(_, _, path)| file_bytes(path))
                 .sum()
         })
         .unwrap_or(0);
     in_place.saturating_add(managed)
+}
+
+fn projector_bytes(spec: &ModelSpec, worker: Option<&Worker>) -> u64 {
+    companion_bytes(spec, worker, crate::artifacts::ArtifactRole::Projector)
+}
+
+/// The model file plus the other parts of a split model.
+fn weight_bytes(spec: &ModelSpec, worker: Option<&Worker>) -> u64 {
+    file_bytes(&spec.model_file).saturating_add(companion_bytes(
+        spec,
+        worker,
+        crate::artifacts::ArtifactRole::WeightShard,
+    ))
 }
 
 /// The memory plan a llama.cpp registration launches with: its resolved arguments, context
@@ -159,7 +176,7 @@ pub(super) fn formula_reservation(spec: &ModelSpec, worker: Option<&Worker>) -> 
         declared: declared.clone(),
         shape: Box::new(shape),
     };
-    let model = file_bytes(&spec.model_file);
+    let model = weight_bytes(spec, worker);
     let projector = projector_bytes(spec, worker);
     let plan = launch_plan(spec, &args, &options, &declared);
     let legacy = models::legacy_resident_bytes(
@@ -464,7 +481,7 @@ impl Manager {
             })?;
         let args = with_model_defaults(spec, args, &read, Some(&resolved.applied));
         let (declared, shape) = read;
-        let model_bytes = file_bytes(&spec.model_file);
+        let model_bytes = weight_bytes(spec, Some(&worker));
         let projector = projector_bytes(spec, Some(&worker));
         let plan = launch_plan(spec, &args, &resolved.applied, &declared);
         let architecture = declared.architecture.as_deref();
@@ -859,7 +876,7 @@ impl Manager {
         };
         let automatic = match &shape {
             Some((declared, shape)) => {
-                let model = file_bytes(&spec.model_file);
+                let model = weight_bytes(spec, Some(&worker));
                 let projector = projector_bytes(spec, Some(&worker));
                 let gpu = bundle_gpu(spec.execution_profile.runtime_bundle()).unwrap_or(true);
                 let slots = saved.slots.unwrap_or(1);

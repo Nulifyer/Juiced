@@ -1,13 +1,14 @@
-use super::*;
+use super::{companion_sets, *};
 use crate::{
     artifacts::{ArtifactStore, Intake},
-    engines::{ChoiceError, models},
+    engines::{ChoiceError, models, split},
 };
 use axum::body::Body;
 use futures_util::StreamExt;
 use serde_json::{Value, json};
 use std::{
     fs::{self, File},
+    io::{Seek, SeekFrom},
     path::{Component, Path, PathBuf},
     time::UNIX_EPOCH,
 };
@@ -52,7 +53,27 @@ pub(super) struct Linked {
     pub path: PathBuf,
     pub bytes: u64,
     pub format: models::ModelFormat,
+    /// Every part of a split GGUF in order, the first included; empty for one file.
+    pub parts: Vec<Part>,
 }
+
+pub(super) struct Part {
+    pub name: String,
+    pub path: PathBuf,
+    pub bytes: u64,
+}
+
+impl Linked {
+    fn role(&self) -> &'static str {
+        if models::is_projector(&self.format) {
+            "projector"
+        } else {
+            "model"
+        }
+    }
+}
+
+const MAXIMUM_PROJECTORS: usize = 8;
 
 fn failure(status: StatusCode, code: &'static str, message: impl Into<String>) -> ApiError {
     ApiError::new(status, code, message)
@@ -84,28 +105,117 @@ fn valid_name(name: &str) -> Result<(), ApiError> {
     Ok(())
 }
 
-/// Returns N for `name-0000k-of-0000N.gguf` with N > 1.
-fn split_parts(name: &str) -> Option<u32> {
-    let stem = name.to_ascii_lowercase();
-    let stem = stem.strip_suffix(".gguf")?;
-    let (rest, total) = stem.rsplit_once("-of-")?;
-    let (_, part) = rest.rsplit_once('-')?;
-    let digits = |text: &str| text.len() == 5 && text.bytes().all(|byte| byte.is_ascii_digit());
-    if !digits(part) || !digits(total) {
-        return None;
+/// Checks the header of a file named or declared as a split part; returns `(part, parts)`.
+fn split_header(name: &str, file: &mut File) -> Result<Option<(u32, u32)>, ApiError> {
+    match split::parse(name) {
+        Some((_, part, parts)) => {
+            if parts > split::MAXIMUM_PARTS {
+                return Err(companion_sets::parts_limit());
+            }
+            split::verify(file, part, parts)
+                .map_err(|_| companion_sets::part_mismatch(name, part, parts))?;
+            Ok(Some((part, parts)))
+        }
+        None => match split::declared_parts(file) {
+            Ok(Some(_)) => Err(companion_sets::name_invalid()),
+            _ => Ok(None),
+        },
     }
-    total.parse().ok().filter(|total| *total > 1)
 }
 
-fn reject_split(name: &str) -> Result<(), ApiError> {
-    if split_parts(name).is_some() {
-        return Err(failure(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "split_model_unsupported",
-            "Split GGUF parts cannot be added as one model yet. Merge them with llama-gguf-split --merge and import the merged file.",
-        ));
+/// Every part of the split model `name` belongs to, read from `directory` under the names
+/// llama.cpp derives; each must stay inside the roots and agree with its header.
+fn split_group(
+    roots: &[PathBuf],
+    directory: &Path,
+    name: &str,
+) -> Result<Option<(Vec<Part>, File)>, ApiError> {
+    let Some((prefix, _, parts)) = split::parse(name) else {
+        return Ok(None);
+    };
+    if parts > split::MAXIMUM_PARTS {
+        return Err(companion_sets::parts_limit());
     }
-    Ok(())
+    let mut group = Vec::with_capacity(parts as usize);
+    let mut first = None;
+    for part in 1..=parts {
+        let name = split::name(prefix, part, parts);
+        let path = directory.join(&name);
+        let canonical = match fs::canonicalize(&path) {
+            Ok(canonical) => canonical,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Err(companion_sets::part_missing(&name, part, parts));
+            }
+            Err(_) => {
+                return Err(failure(
+                    StatusCode::FORBIDDEN,
+                    "import_path_unreadable",
+                    "The service cannot read this import path.",
+                ));
+            }
+        };
+        if !contained(roots, &canonical) {
+            return Err(failure(
+                StatusCode::FORBIDDEN,
+                "import_path_outside_roots",
+                "Only files under the configured import_roots can be imported; links that resolve outside them are refused.",
+            ));
+        }
+        let (mut file, bytes) = open_regular(&canonical)?;
+        split::verify(&mut file, part, parts)
+            .map_err(|_| companion_sets::part_mismatch(&name, part, parts))?;
+        if part == 1 {
+            first = Some(file);
+        }
+        group.push(Part { name, path, bytes });
+    }
+    Ok(first.map(|file| (group, file)))
+}
+
+/// The first part of the only split model in `directory`.
+fn split_in_directory(directory: &Path) -> Option<String> {
+    let mut found = None;
+    for entry in fs::read_dir(directory).ok()?.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if split::parse(&name).is_some_and(|(_, part, _)| part == 1) {
+            if found.is_some() {
+                return None;
+            }
+            found = Some(name);
+        }
+    }
+    found
+}
+
+/// Vision projectors beside a model, offered for its `projector`.
+fn projector_candidates(roots: &[PathBuf], directory: &Path) -> Vec<Value> {
+    let Ok(reader) = fs::read_dir(directory) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = reader
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| {
+            let lower = name.to_ascii_lowercase();
+            !name.starts_with('.') && lower.ends_with(".gguf") && lower.contains("mmproj")
+        })
+        .collect();
+    names.sort();
+    names
+        .into_iter()
+        .filter_map(|name| {
+            let path = directory.join(&name);
+            let canonical = fs::canonicalize(&path).ok()?;
+            if !contained(roots, &canonical) {
+                return None;
+            }
+            let (_, bytes) = open_regular(&canonical).ok()?;
+            let (format, _) = models::detect(&canonical).ok()?;
+            models::is_projector(&format)
+                .then(|| json!({"name": name, "path": path, "bytes": bytes}))
+        })
+        .take(MAXIMUM_PROJECTORS)
+        .collect()
 }
 
 /// A Hugging Face cache snapshot is named by its revision, so the repository name two
@@ -122,19 +232,6 @@ fn directory_name(directory: &Path) -> Option<String> {
         .and_then(|name| name.rsplit("--").next())
         .map(str::to_owned);
     Some(repository.unwrap_or(name))
-}
-
-fn single_model(format: &models::ModelFormat) -> Result<(), ApiError> {
-    if let models::ModelFormat::Gguf { declared, .. } = format
-        && declared.architecture.as_deref() == Some("clip")
-    {
-        return Err(failure(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "projector_unsupported",
-            "Vision projector (mmproj) files are companions, and companion projectors cannot be added yet. Import the language model GGUF.",
-        ));
-    }
-    Ok(())
 }
 
 fn free_space(store: &ArtifactStore, bytes: u64) -> Result<(), ApiError> {
@@ -230,35 +327,64 @@ fn open_regular(path: &Path) -> Result<(File, u64), ApiError> {
 }
 
 fn inspect_file(roots: &[PathBuf], raw: &str) -> Result<(Linked, File), ApiError> {
+    let requested = requested_path(raw)?;
     let mut path = canonical_within(roots, raw)?;
-    // Checkpoint directories register by an anchor file. In a Hugging Face snapshot the
-    // anchor links into `blobs/`, so the opened file is the link target while the
-    // registered path stays in the snapshot beside its siblings.
+    // Checkpoint directories and split GGUF parts register by a path beside their siblings.
+    // In a Hugging Face snapshot that path links into `blobs/`, so the opened file is the
+    // link target while the registered path stays in the snapshot.
     let mut anchor = None;
-    if path.is_dir()
-        && let Some(found) = ["model.onnx", "config.json"]
+    if path.is_dir() {
+        if let Some(found) = ["model.onnx", "config.json"]
             .into_iter()
             .map(|name| path.join(name))
             .find(|anchor| anchor.is_file())
+        {
+            path = canonical_within(roots, &found.to_string_lossy())?;
+            anchor = Some(found);
+        } else if let Some(first) = split_in_directory(&path) {
+            anchor = Some(path.join(first));
+        }
+    } else if let (Some(name), Some(parent)) = (
+        requested.file_name().and_then(|name| name.to_str()),
+        requested.parent(),
+    ) && split::parse(name).is_some()
     {
-        path = canonical_within(roots, &found.to_string_lossy())?;
-        anchor = Some(found);
+        anchor = Some(canonical_within(roots, &parent.to_string_lossy())?.join(name));
     }
-    let (file, mut bytes) = open_regular(&path)?;
-    let path = anchor.unwrap_or(path);
-    let name = path
+    let not_file = || {
+        failure(
+            StatusCode::BAD_REQUEST,
+            "import_path_not_file",
+            "Import one regular, nonempty model file.",
+        )
+    };
+    let registered = anchor.clone().unwrap_or_else(|| path.clone());
+    let name = registered
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
-        .ok_or_else(|| {
-            failure(
-                StatusCode::BAD_REQUEST,
-                "import_path_not_file",
-                "Import one regular, nonempty model file.",
-            )
-        })?;
-    reject_split(&name)?;
+        .ok_or_else(not_file)?;
+    let directory = registered.parent().ok_or_else(not_file)?;
+    let (mut file, mut bytes, path, name, parts) = match split_group(roots, directory, &name)? {
+        Some((parts, file)) => (
+            file,
+            parts.iter().map(|part| part.bytes).sum(),
+            parts[0].path.clone(),
+            parts[0].name.clone(),
+            parts,
+        ),
+        None => {
+            let (mut file, bytes) = open_regular(&path)?;
+            if let Ok(Some(_)) = split::declared_parts(&mut file) {
+                return Err(companion_sets::name_invalid());
+            }
+            (file, bytes, registered, name, Vec::new())
+        }
+    };
+    file.seek(SeekFrom::Start(0)).map_err(|_| not_file())?;
     let (format, detected) = models::detect(&path).map_err(super::engines::format_error)?;
-    single_model(&format)?;
+    if !parts.is_empty() && models::is_projector(&format) {
+        return Err(companion_sets::projector_invalid());
+    }
     let name = match &format {
         models::ModelFormat::Transformers { .. } | models::ModelFormat::OnnxClassifier { .. } => {
             bytes = detected.max(bytes);
@@ -272,6 +398,7 @@ fn inspect_file(roots: &[PathBuf], raw: &str) -> Result<(Linked, File), ApiError
             path,
             bytes,
             format,
+            parts,
         },
         file,
     ))
@@ -397,7 +524,9 @@ impl Manager {
                 "Declare the exact nonzero file size with size and send exactly that many bytes.",
             ));
         }
-        reject_split(&query.filename)?;
+        if split::parse(&query.filename).is_some_and(|(_, _, parts)| parts > split::MAXIMUM_PARTS) {
+            return Err(companion_sets::parts_limit());
+        }
         let store = self.artifacts()?;
         free_space(&store, query.size)?;
         let name = query.filename.clone();
@@ -474,16 +603,34 @@ impl Manager {
         if !buffer.is_empty() {
             (intake, _) = write_buffer(intake, buffer).await?;
         }
-        let (published, format) = tokio::task::spawn_blocking(move || {
-            let (format, _) =
-                models::detect(&intake.staging_path()).map_err(super::engines::format_error)?;
-            single_model(&format)?;
+        let filename = query.filename.clone();
+        let (published, format, part) = tokio::task::spawn_blocking(move || {
+            let staging = intake.staging_path();
+            let (format, _) = models::detect(&staging).map_err(super::engines::format_error)?;
+            let part = match &format {
+                models::ModelFormat::Gguf { .. } => {
+                    let mut file = File::open(&staging).map_err(|_| interrupted())?;
+                    split_header(&filename, &mut file)?
+                }
+                _ => None,
+            };
+            if part.is_some() && models::is_projector(&format) {
+                return Err(companion_sets::projector_invalid());
+            }
             let published = intake.finish().map_err(ApiError::from)?;
-            Ok::<_, ApiError>((published, format))
+            Ok::<_, ApiError>((published, format, part))
         })
         .await
         .map_err(|_| interrupted())??;
         let suggested = models::default_id(&query.filename);
+        let projector = models::is_projector(&format);
+        let add = (!projector && part.is_none())
+            .then(|| json!({"artifact": published.artifact, "id": suggested}));
+        let engines = if projector {
+            json!([])
+        } else {
+            self.engine_options(&format).await
+        };
         Ok(json!({
             "schema_version": 1,
             "artifact": published.artifact,
@@ -492,10 +639,12 @@ impl Manager {
             "bytes": published.bytes,
             "sha256": published.artifact,
             "format": format,
+            "role": if projector { "projector" } else { "model" },
+            "split": part.map(|(part, parts)| json!({"part": part, "parts": parts})),
             "duplicate": published.duplicate,
             "suggested_id": suggested,
-            "engines": self.engine_options(&format).await,
-            "add": {"artifact": published.artifact, "id": suggested},
+            "engines": engines,
+            "add": add,
             "artifact_generation": store.generation(),
         }))
     }
@@ -581,7 +730,7 @@ impl Manager {
                     "name": name, "path": entry.path(), "kind": kind,
                     "bytes": (kind == "file").then_some(metadata.len()),
                     "modified_unix_ms": modified_ms(&metadata),
-                    "split": kind == "file" && split_parts(&name).is_some(),
+                    "split": kind == "file" && split::parse(&name).is_some(),
                 }));
             }
             entries.sort_by(|left, right| {
@@ -638,16 +787,29 @@ impl Manager {
         };
         let raw = request.path.clone();
         let mode = request.mode;
-        let (linked, job) = tokio::task::spawn_blocking(move || {
+        let (linked, job, projectors) = tokio::task::spawn_blocking(move || {
             let (linked, file) = inspect_file(&roots, &raw)?;
+            let projectors = match (linked.role(), &linked.format, linked.path.parent()) {
+                ("model", models::ModelFormat::Gguf { .. }, Some(directory)) => {
+                    projector_candidates(&roots, directory)
+                }
+                _ => Vec::new(),
+            };
             let Some(store) = store else {
-                return Ok((linked, None));
+                return Ok((linked, None, projectors));
             };
             if matches!(linked.format, models::ModelFormat::Transformers { .. }) {
                 return Err(failure(
                     StatusCode::UNPROCESSABLE_ENTITY,
                     "checkpoint_copy_unsupported",
                     "Transformers checkpoint directories are registered in place. Import with mode link.",
+                ));
+            }
+            if !linked.parts.is_empty() {
+                return Err(failure(
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "split_copy_unsupported",
+                    "Split GGUF models are registered in place. Import with mode link.",
                 ));
             }
             if linked.bytes > maximum {
@@ -661,12 +823,24 @@ impl Manager {
             let job = store
                 .start_copy(file, linked.name.clone())
                 .map_err(ApiError::from)?;
-            Ok::<_, ApiError>((linked, Some(job)))
+            Ok::<_, ApiError>((linked, Some(job), projectors))
         })
         .await
         .map_err(|_| interrupted())??;
         let suggested = models::default_id(&linked.name);
-        let add = (mode == ImportMode::Link).then(|| json!({"path": linked.path, "id": suggested}));
+        let role = linked.role();
+        let add = (mode == ImportMode::Link && role == "model")
+            .then(|| json!({"path": linked.path, "id": suggested}));
+        let engines = if role == "model" {
+            self.engine_options(&linked.format).await
+        } else {
+            json!([])
+        };
+        let parts: Vec<Value> = linked
+            .parts
+            .iter()
+            .map(|part| json!({"name": part.name, "path": part.path, "bytes": part.bytes}))
+            .collect();
         Ok(json!({
             "schema_version": 1,
             "mode": if mode == ImportMode::Link { "link" } else { "copy" },
@@ -675,8 +849,11 @@ impl Manager {
             "file": linked.name,
             "bytes": linked.bytes,
             "format": linked.format,
+            "role": role,
+            "parts": parts,
+            "projectors": projectors,
             "suggested_id": suggested,
-            "engines": self.engine_options(&linked.format).await,
+            "engines": engines,
             "add": add,
         }))
     }
@@ -687,12 +864,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn split_parts_and_names_are_recognized() {
-        assert_eq!(split_parts("Qwen3-30B-Q4_K_M-00001-of-00003.gguf"), Some(3));
-        assert_eq!(split_parts("model-00002-OF-00002.GGUF"), Some(2));
-        assert_eq!(split_parts("single-00001-of-00001.gguf"), None);
-        assert_eq!(split_parts("model-1-of-3.gguf"), None);
-        assert_eq!(split_parts("plain.gguf"), None);
+    fn upload_names_are_single_bounded_file_names() {
         for name in [
             "",
             ".",

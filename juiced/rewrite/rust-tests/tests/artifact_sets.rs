@@ -650,10 +650,7 @@ async fn primary_set_registration_inference_cache_restart_and_revision_change_pr
             }
             "companions" => {
                 invalid["artifact_set"] = extra["id"].clone();
-                (
-                    StatusCode::NOT_IMPLEMENTED,
-                    "artifact_set_execution_unsupported",
-                )
+                (StatusCode::CONFLICT, "artifact_set_binding_mismatch")
             }
             _ => {
                 invalid["artifact"] = Value::Null;

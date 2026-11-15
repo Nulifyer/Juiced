@@ -910,9 +910,27 @@ pub fn companion_arguments(
             .map_err(|_| CompanionError::Required("moonshine_companions_required"))?;
             Ok(Vec::new())
         }
+        ModelFormat::Gguf { .. } => {
+            let mut arguments = Vec::new();
+            for companion in companions {
+                match companion.role {
+                    ArtifactRole::WeightShard => {}
+                    ArtifactRole::Projector if arguments.is_empty() => {
+                        arguments.extend(["--mmproj".into(), placeholder(&companion.name)]);
+                    }
+                    _ => return Err(CompanionError::Unsupported),
+                }
+            }
+            Ok(arguments)
+        }
         _ if companions.is_empty() => Ok(Vec::new()),
         _ => Err(CompanionError::Unsupported),
     }
+}
+
+/// A llama.cpp vision projector (`mmproj`) is a GGUF of architecture `clip`.
+pub fn is_projector(format: &ModelFormat) -> bool {
+    matches!(format, ModelFormat::Gguf { declared, .. } if declared.architecture.as_deref() == Some("clip"))
 }
 
 #[derive(Deserialize)]
@@ -981,7 +999,7 @@ pub fn registration(inputs: &ProfileInputs<'_>) -> Value {
                 }
                 options
             };
-            let args: Vec<String> = [
+            let mut args: Vec<String> = [
                 "--host",
                 "127.0.0.1",
                 "--port",
@@ -993,6 +1011,7 @@ pub fn registration(inputs: &ProfileInputs<'_>) -> Value {
             ]
             .map(str::to_owned)
             .into();
+            args.extend(inputs.companion_arguments.iter().cloned());
             (
                 json!(args),
                 options,
@@ -1283,9 +1302,13 @@ pub fn native_default_id(format: &ModelFormat) -> Option<String> {
 
 pub fn default_id(name: &str) -> Option<String> {
     let file = name.rsplit(['/', '\\']).next()?;
-    let stem = [".gguf", ".bin", ".safetensors", ".onnx", ".ort"]
-        .iter()
-        .find_map(|suffix| file.strip_suffix(suffix))
+    let stem = super::split::parse(file)
+        .map(|(prefix, ..)| prefix)
+        .or_else(|| {
+            [".gguf", ".bin", ".safetensors", ".onnx", ".ort"]
+                .iter()
+                .find_map(|suffix| file.strip_suffix(suffix))
+        })
         .unwrap_or(file);
     let id: String = stem
         .chars()

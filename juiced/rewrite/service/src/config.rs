@@ -399,6 +399,11 @@ impl Provider {
                 | Self::OnnxRuntime
         )
     }
+    /// Adapters whose managed artifact sets may carry companions: llama.cpp binds a projector
+    /// through `--mmproj` and reads split parts beside the first one.
+    pub fn holds_companion_sets(self) -> bool {
+        self.accepts_companions() || self == Self::LlamaCpp
+    }
     pub fn transcription_path(self) -> &'static str {
         match self {
             Self::Parakeet => "/v1/audio/transcriptions",

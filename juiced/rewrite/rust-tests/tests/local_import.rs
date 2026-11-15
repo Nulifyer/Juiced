@@ -193,10 +193,10 @@ async fn uploads_publish_dedupe_and_reject_without_keeping_partial_bytes() {
         ),
         (
             "model-00001-of-00002.gguf",
-            4,
-            b"GGUF".to_vec(),
+            metadata_gguf(2048).len() as u64,
+            metadata_gguf(2048),
             StatusCode::UNPROCESSABLE_ENTITY,
-            "split_model_unsupported",
+            "split_part_mismatch",
         ),
         (
             "empty.gguf",

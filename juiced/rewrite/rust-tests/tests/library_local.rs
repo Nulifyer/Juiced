@@ -196,7 +196,10 @@ async fn local_inventory_groups_cache_store_and_in_place_files_and_guards_deleti
     let split = quant(mounted_group, "Q4_0");
     assert_eq!(split["parts"], 2);
     assert_eq!(split["complete"], true);
-    assert_eq!(split["add"], Value::Null);
+    assert_eq!(
+        split["add"],
+        json!({"path": file(mounted_group, "Big-Q4_0-00001-of-00002.gguf")["location"]})
+    );
     assert_eq!(
         file(mounted_group, "Big-Q4_0-00001-of-00002.gguf")["role"],
         "shard"

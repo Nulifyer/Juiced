@@ -188,6 +188,61 @@ fn moonshine_directory(
     Ok(directory)
 }
 
+/// Stored parts are named by digest, so the launch links them into the private workspace
+/// under the sibling names llama.cpp derives from the first part.
+fn split_model(
+    bindings: &VerifiedLaunchBindings,
+    companions: &[(&str, crate::artifacts::ArtifactRole, &Path)],
+) -> Result<PathBuf, Error> {
+    use crate::engines::split;
+    let failure = || {
+        Error::new(
+            "split_parts_incomplete",
+            "The split model's set does not hold every part under its llama.cpp part name.",
+        )
+    };
+    let (_, first, parts) = bindings
+        .artifact
+        .as_ref()
+        .and_then(|artifact| artifact.primary_name())
+        .and_then(split::parse)
+        .ok_or_else(failure)?;
+    if first != 1 {
+        return Err(failure());
+    }
+    let directory = bindings
+        .workspace
+        .as_ref()
+        .ok_or_else(failure)?
+        .path()
+        .join("model");
+    std::fs::create_dir(&directory).map_err(|_| failure())?;
+    let link = |part: u32, path: &Path| {
+        let link = directory.join(split::name("model", part, parts));
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(path, &link).map_err(|_| failure())?;
+        #[cfg(not(unix))]
+        std::fs::hard_link(path, &link).map_err(|_| failure())?;
+        Ok::<_, Error>(link)
+    };
+    let model = link(1, bindings.model.path())?;
+    let mut linked = 1;
+    for (name, role, path) in companions {
+        if *role != crate::artifacts::ArtifactRole::WeightShard {
+            continue;
+        }
+        match split::parse(name) {
+            Some((_, part, total)) if total == parts && part > 1 => link(part, path)?,
+            _ => return Err(failure()),
+        };
+        linked += 1;
+    }
+    if linked != parts {
+        return Err(failure());
+    }
+    Ok(model)
+}
+
 /// The WebSocket and TCP streaming listeners are manager-owned loopback ports outside the
 /// semantic launch identity, like the HTTP port.
 fn auxiliary_ports() -> Result<[u16; 2], Error> {
@@ -693,7 +748,21 @@ impl LaunchPlan {
             ),
             _ => directory,
         };
-        let model = match &directory {
+        // A linked split model keeps its registered path: the verified file is the link
+        // target, whose name in a Hugging Face cache is a digest rather than a part name.
+        let split = if profile.adapter == Provider::LlamaCpp
+            && companions
+                .iter()
+                .any(|(_, role, _)| *role == crate::artifacts::ArtifactRole::WeightShard)
+        {
+            Some(match bindings.artifact {
+                Some(_) => split_model(&bindings, &companions)?,
+                None => spec.model_file.clone(),
+            })
+        } else {
+            None
+        };
+        let model = match directory.as_ref().or(split.as_ref()) {
             Some(directory) => directory.as_os_str().to_str().ok_or_else(|| {
                 Error::new(
                     "launch_path_encoding",

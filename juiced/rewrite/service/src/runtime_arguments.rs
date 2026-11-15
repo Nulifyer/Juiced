@@ -679,6 +679,10 @@ impl ArgumentTemplate {
         };
         let mut available = std::collections::BTreeMap::new();
         for (name, role) in companions {
+            // llama.cpp finds the other parts of a split model beside the first one.
+            if self.adapter == Provider::LlamaCpp && role == ArtifactRole::WeightShard {
+                continue;
+            }
             if available.insert(name, role).is_some() {
                 return Err(mismatch());
             }

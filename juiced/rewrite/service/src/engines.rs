@@ -12,6 +12,7 @@ pub mod models;
 mod rocm_runtime_tests;
 #[cfg(test)]
 mod speech_engine_tests;
+pub mod split;
 #[cfg(test)]
 mod tests;
 

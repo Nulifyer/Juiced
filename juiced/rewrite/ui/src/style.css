@@ -665,7 +665,7 @@ a.button { color: var(--foreground); text-decoration: none; }
 .folder-list li + li { border-top: 1px solid var(--border); }
 .folder-list button { display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 10px; border: 0; background: transparent; text-align: left; font-size: .8rem; }
 .folder-list button:hover:not(:disabled) { background: var(--secondary); }
-.folder-list button .numeric { margin-left: auto; }
+.folder-list button .numeric { margin-left: auto; white-space: nowrap; }
 .add-name { display: grid; gap: 4px; margin: 10px 0; }
 .protocol-row[aria-label="Wyoming"] { grid-column: 1 / -1; }
 .wyoming { display: grid; gap: 10px; }

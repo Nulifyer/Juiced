@@ -17,13 +17,19 @@ const hubRevision = "0123456789abcdef0123456789abcdef01234567";
 type HubFile = { path: string; bytes: Uint8Array; declared?: number; small?: boolean };
 const hubBytes = (seed: number, length: number) => Uint8Array.from({ length }, (_, index) => (index % 239) ^ seed);
 function metadataGguf(context: number, length: number) {
+  return ggufFile([["general.architecture", "llama"], ["llama.context_length", context]], length);
+}
+/** A metadata-only GGUF of text and u32 entries, zero-padded to `length` bytes. */
+function ggufFile(entries: [string, string | number][], length: number) {
   const encoder = new TextEncoder();
   const parts: Uint8Array[] = [encoder.encode("GGUF")];
   const integer = (bits: 32 | 64, value: number) => { const view = new DataView(new ArrayBuffer(bits / 8)); if (bits === 32) view.setUint32(0, value, true); else view.setBigUint64(0, BigInt(value), true); parts.push(new Uint8Array(view.buffer)); };
   const string = (text: string) => { const bytes = encoder.encode(text); integer(64, bytes.length); parts.push(bytes); };
-  integer(32, 3); integer(64, 0); integer(64, 2);
-  string("general.architecture"); integer(32, 8); string("llama");
-  string("llama.context_length"); integer(32, 4); integer(32, context);
+  integer(32, 3); integer(64, 0); integer(64, entries.length);
+  for (const [key, value] of entries) {
+    string(key);
+    if (typeof value === "string") { integer(32, 8); string(value); } else { integer(32, 4); integer(32, value); }
+  }
   const bytes = new Uint8Array(length);
   let offset = 0;
   for (const part of parts) { bytes.set(part, offset); offset += part.length; }
@@ -136,7 +142,7 @@ source = Bun.serve({
   hostname: "127.0.0.1", port: Number(process.env.JUICED_SOURCE_PORT ?? 13308),
   fetch(request) {
     const url = new URL(request.url);
-    if (url.pathname === "/fixture.json") return Response.json({ model_file: resolve(directory, "fixture.gguf"), source_url: `${url.origin}/weights.gguf`, upload_file: resolve(directory, "Upload-Sample-Q8_0.gguf"), import_root: resolve(directory, "import"), cache_hub: resolve(directory, "huggingface", "hub"), library_root: resolve(directory, "library"), sha256, bytes: weights.length, command: executable("juiced-test-worker"), args: ["--port", "{port}", "--model", "{model}", "--events", resolve(directory, "managed.events"), "--slot-save-path", "{cache}"] });
+    if (url.pathname === "/fixture.json") return Response.json({ model_file: resolve(directory, "fixture.gguf"), source_url: `${url.origin}/weights.gguf`, upload_file: resolve(directory, "Upload-Sample-Q8_0.gguf"), upload_split: ["Upload-Split-00001-of-00002.gguf", "Upload-Split-00002-of-00002.gguf", "mmproj-Upload-F16.gguf"].map((name) => resolve(directory, "upload-split", name)), import_root: resolve(directory, "import"), cache_hub: resolve(directory, "huggingface", "hub"), library_root: resolve(directory, "library"), sha256, bytes: weights.length, command: executable("juiced-test-worker"), args: ["--port", "{port}", "--model", "{model}", "--events", resolve(directory, "managed.events"), "--slot-save-path", "{cache}"] });
     if (url.pathname === "/speech-fixture.wav") return new Response(Bun.file(resolve(root, "../../test/test_speech_de.wav")));
     const releaseResponse = engineRelease(url);
     if (releaseResponse) return releaseResponse;
@@ -168,6 +174,14 @@ source = Bun.serve({
   await mkdir(resolve(importRoot, "nested"), { recursive: true });
   await writeFile(resolve(importRoot, "nested", "Local-Import-Q8_0.gguf"), metadataGguf(2048, 48 * 1024));
   await writeFile(resolve(directory, "Upload-Sample-Q8_0.gguf"), metadataGguf(2048, 40 * 1024));
+  const splitPart = (part: number, length: number) => ggufFile([...(part === 1 ? [["general.architecture", "llama"], ["llama.context_length", 2048]] as [string, number | string][] : []), ["split.no", part - 1], ["split.count", 2]], length);
+  const projector = () => ggufFile([["general.architecture", "clip"]], 8 * 1024);
+  for (const [folder, prefix] of [[resolve(importRoot, "vision"), "Vision-Q8_0"], [resolve(directory, "upload-split"), "Upload-Split"]] as const) {
+    await mkdir(folder, { recursive: true });
+    await writeFile(resolve(folder, `${prefix}-00001-of-00002.gguf`), splitPart(1, 32 * 1024));
+    await writeFile(resolve(folder, `${prefix}-00002-of-00002.gguf`), splitPart(2, 16 * 1024));
+    await writeFile(resolve(folder, `mmproj-${prefix === "Upload-Split" ? "Upload" : "Vision"}-F16.gguf`), projector());
+  }
   await mkdir(resolve(directory, "cache", "llama", "bin"), { recursive: true });
   await writeFile(resolve(directory, "cache", "llama", "bin", "llama-server"), new Uint8Array(96 * 1024));
   await mkdir(resolve(directory, "prompt-state"), { recursive: true });

@@ -6,7 +6,8 @@ import { AddModel, type AddTarget } from "./AddModel";
 import { UrlDownload } from "./UrlDownload";
 import { engineNames, parseSearch, progress, searchEngines, tasks, type LibraryModel, type Quant, type SearchResult } from "./libraryData";
 import { Badge, Button, Empty, HelpTip, Icon, Menu } from "./ui";
-import { LocalProgress, ServerFolder, useLocalFile } from "./LocalFiles";
+import { LocalProgress, ProjectorChoice, ServerFolder, localTarget, useLocalFile } from "./LocalFiles";
+import { splitPart } from "./localFilesData";
 import { FlmModels } from "./FlmModels";
 import { notify } from "./toast";
 import { useResource } from "./useResource";
@@ -30,7 +31,7 @@ const compact = (value: number | null) => value === null ? null : value >= 1e6 ?
 const searchTimeout = 45000;
 function modelId(file: string): string {
   const name = file.split(/[\\/]/).pop() ?? file;
-  return name.replace(/\.(gguf|bin|safetensors|onnx)$/, "").trim();
+  return (splitPart(name)?.prefix ?? name.replace(/\.(gguf|bin|safetensors|onnx)$/, "")).trim();
 }
 export function FindModels({ client, online, onRegistered, onOpenModel, onDownloads }: { client: Client; online: boolean; onRegistered: () => Promise<void>; onOpenModel: (id: string) => void; onDownloads: () => void }) {
   const quantList = useRef<HTMLDivElement>(null);
@@ -112,7 +113,8 @@ export function FindModels({ client, online, onRegistered, onOpenModel, onDownlo
   const models = useMemo(() => result?.models ?? [], [result]);
   const file = local.file;
   const checkpoint = quant?.kind === "checkpoint";
-  const target: AddTarget | null = file ? file.artifact ? { artifact: file.artifact } : file.path ? { path: file.path } : null : checkpoint ? quant?.set ? { artifact_set: quant.set } : null : quant?.localPath ? { path: quant.localPath } : quant?.sha256 ? { artifact: quant.sha256 } : null;
+  const split = !checkpoint && (quant?.parts ?? 1) > 1;
+  const target: AddTarget | null = file ? localTarget(file) : checkpoint || split ? quant?.set ? { artifact_set: quant.set } : split && quant?.localPath ? { path: quant.localPath } : null : quant?.localPath ? { path: quant.localPath } : quant?.sha256 ? { artifact: quant.sha256 } : null;
   const targetId = file ? file.id.trim() : checkpoint ? model?.name ?? "" : quant?.kind === "bundle" && model?.nativeId ? model.nativeId : quant ? modelId(quant.file) : "";
   const gatedNote = model?.gated && !quant?.present ? result?.authenticated ? "Gated on Hugging Face: accept its license there first. Juiced downloads with the server's HF_TOKEN." : "Gated on Hugging Face. Set HF_TOKEN on the server and accept the license there to download it." : "";
   const ready = file ? !!target && !file.error : !!quant?.present;
@@ -128,7 +130,7 @@ export function FindModels({ client, online, onRegistered, onOpenModel, onDownlo
           <button role="menuitem" disabled={!online} onClick={() => setFolderOpen(true)}>Pick from the server…</button>
           <button role="menuitem" disabled={!online} onClick={() => setUrlOpen(true)}>Download from a URL…</button>
         </Menu>
-        <input ref={picker} type="file" hidden accept=".gguf,.bin,.safetensors,.onnx" aria-label="Model file" onChange={(event) => { const picked = event.target.files?.[0]; event.target.value = ""; if (picked) { setSelected(null); void local.upload(picked); } }} />
+        <input ref={picker} type="file" multiple hidden accept=".gguf,.bin,.safetensors,.onnx" aria-label="Model file" onChange={(event) => { const picked = Array.from(event.target.files ?? []); event.target.value = ""; if (picked.length) { setSelected(null); void local.upload(picked); } }} />
       </div>
       {urlOpen && <UrlDownload client={client} onClose={() => setUrlOpen(false)} onStarted={() => { setUrlOpen(false); notify("Download started. Follow it under Downloads."); onDownloads(); }} />}
       {folderOpen && <ServerFolder client={client} onClose={() => setFolderOpen(false)} onPick={(entry, mode) => { setFolderOpen(false); setSelected(null); void local.pick(entry, mode); }} />}
@@ -162,12 +164,14 @@ export function FindModels({ client, online, onRegistered, onOpenModel, onDownlo
       <div className="inspector-body">
         <div className="inspector-title"><h2 className="break-word">{file.name}</h2></div>
         <dl className="facts">
-          <div><dt>Size</dt><dd>{bytes(file.bytes)}</dd></div>
+          <div><dt>Size</dt><dd>{bytes(file.bytes)}{file.partCount > 1 ? ` · ${file.partCount} parts` : ""}</dd></div>
           <div><dt>Stored</dt><dd>{file.path ? "Used where it is" : file.job ? "Copied to library" : "Uploaded to library"}</dd></div>
+          {!file.projectors?.length && file.projector && <div><dt>Vision projector</dt><dd className="break-word">{file.projector.name}</dd></div>}
           <div><dt>This machine</dt><dd><Badge tone={fit(file.bytes, gpu, ram)[1]}>{fit(file.bytes, gpu, ram)[0]}</Badge></dd></div>
         </dl>
         <LocalProgress file={file} onCancel={local.clear} />
         {ready && <div className="add-name"><label htmlFor="local-model-id">Model name</label><input id="local-model-id" value={file.id} maxLength={128} onChange={(event) => local.rename(event.target.value)} /></div>}
+        {ready && <ProjectorChoice file={file} onChoose={local.chooseProjector} />}
         <AddModel client={client} online={online} target={target} id={targetId} ready={ready} resetKey={resetKey} onRegistered={onRegistered} onOpenModel={onOpenModel} />
       </div>
     </aside>}
@@ -190,7 +194,7 @@ export function FindModels({ client, online, onRegistered, onOpenModel, onDownlo
         </dl>
         {checkpoint && <div className="checkpoint-files"><span className="field-label">Files <HelpTip label="Checkpoint files">The weights, config and tokenizer files the engine reads as one folder. READMEs, images and other formats are skipped.</HelpTip></span><ul aria-label="Checkpoint files">{quant.files.map((part) => <li key={part.file}><span className="break-word">{part.member ?? part.file}</span><span className="numeric muted">{bytes(part.bytes)}</span></li>)}</ul></div>}
         {progress(quant) !== null && <><progress aria-label="Download progress" max={100} value={progress(quant)!} /><p className="field-help">Downloading… {Math.round(progress(quant)!)}%</p></>}
-        <AddModel client={client} online={online} target={target} id={targetId} engine={quant.engine === "thenoise" ? "thenoise" : undefined} ready={ready} resetKey={resetKey} blocked={!checkpoint && !quant.localPath && quant.parts > 1 ? "Split models can't be added yet" : undefined} onRegistered={onRegistered} onOpenModel={onOpenModel} fallback={progress(quant) === null && <Button variant="primary" disabled={!online || !quant.pullable || (model.gated && !result?.authenticated)} onClick={() => void download(model, quant)}>Download</Button>} />
+        <AddModel client={client} online={online} target={target} id={targetId} engine={quant.engine === "thenoise" ? "thenoise" : undefined} ready={ready} resetKey={resetKey} blocked={split && !target ? "Every part must finish downloading first" : undefined} onRegistered={onRegistered} onOpenModel={onOpenModel} fallback={progress(quant) === null && <Button variant="primary" disabled={!online || !quant.pullable || (model.gated && !result?.authenticated)} onClick={() => void download(model, quant)}>Download</Button>} />
         {gatedNote && <p className="field-help">{gatedNote}</p>}
       </div>
     </aside>}

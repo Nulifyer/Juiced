@@ -5,7 +5,8 @@ import { installEngine, parseEngines, type EngineJob } from "./engines";
 import { backendNames } from "./hardware";
 import { Button } from "./ui";
 
-export type AddTarget = { path: string } | { artifact: string } | { artifact_set: string };
+/** `projector` is an artifact for stored models and a path for models used in place. */
+export type AddTarget = ({ path: string } | { artifact: string } | { artifact_set: string } | { parts: string[] }) & { projector?: string };
 type Install = { engine: string; backend: string; size: number | null };
 
 /** Policy choice, engine install and the Add model action for one ready source. */

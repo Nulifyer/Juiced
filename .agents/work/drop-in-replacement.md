@@ -164,7 +164,7 @@ Agreed later work:
 Known gaps:
 - Barista how-to answers can invent console paths and still lead with "done" over skipped changes (Ornith ignores the v3 rules there); next step would be docs-grounded how-to (juiced_docs first) or a console-side check.
 - `api-keys.json` is not in settings backups.
-- Split GGUF and mmproj files are refused by upload/import-path (adopted native mmproj companions work).
+- Split GGUF and mmproj files now add through upload, import-path (link mode) and `models/add` `parts`/`projector`; copy-mode import of split models and projector selection on library pull remain open.
 - Test runs leak read-only temp dirs in /tmp (published runtime packages are 0500); remove by hand with chmod -R u+w.
 - Homelab `stacks/juiced/compose.yaml` matches live (rc.22) but is uncommitted (another session's untracked file).
 - Editing `juiced/CAPABILITIES.md` requires updating its hash in `juiced/rewrite/MAIN-SNAPSHOT.json` (plan.test.ts).

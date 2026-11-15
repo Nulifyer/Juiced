@@ -74,18 +74,34 @@ same file show as one row. Downloading never enables the model automatically.
 
 ## Import a local GGUF
 
-1. Open **Library → Import GGUF**.
-2. Choose a local upload or a path visible to the server.
-3. Supply the model information requested by the form.
-4. Review the registration and finish the import.
-5. Open the imported model and choose a compatible runtime.
+1. Open **Models → Discover** and select **Add file**.
+2. Select **Upload from this computer** to send files to Juiced, or **Pick from the
+   server** to use files the server can already read under `import_roots`. For
+   Docker, that is a container path such as `/library`, not the path on your laptop.
+3. Check the model name and, for a vision model, the projector. Then select
+   **Add model**. If the engine is missing, **Install engine and add** installs it first.
 
-A browser file selection uploads bytes to Juiced. A server path references files
-already accessible to the server. For Docker, use a container path such as
-`/library/model.gguf`, rather than the path on your laptop.
+A split GGUF keeps its parts as files named `Model-00001-of-00003.gguf`,
+`Model-00002-of-00003.gguf` and so on. Keep those names, because llama.cpp finds
+the other parts from the first one's name.
 
-Vision models can require a separate projector. Check **Weights & variants** and
-**Effective** for resolved components before enabling the model.
+- To upload a split model, select every part in the file picker at once. Juiced
+  checks that no part is missing before it uploads anything, then uploads the parts
+  one at a time. If an upload fails partway, the parts that finished stay in the
+  library. Pick the same files again to finish.
+- On the server, the folder shows a split model once, as its first part with the part
+  count and total size. Juiced uses split models where they are, so pick
+  **Where it is**. If a part is missing, Juiced names it and adds nothing.
+
+A vision model needs its projector, usually a file named `mmproj-…gguf`.
+
+- When uploading, select the projector together with the model file or parts.
+- When picking from the server, Juiced offers the projectors in the model's folder
+  under **Vision projector** and selects the first one. Choose **None (text only)** to
+  add the model without image input.
+
+Uploading or picking only a projector is refused, because it cannot run alone. The
+memory estimate counts every part and the projector.
 
 ## Enable the model
 

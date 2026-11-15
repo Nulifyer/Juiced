@@ -1254,6 +1254,63 @@ pub fn read_gguf_summary<R: Read + Seek>(reader: &mut R) -> Result<GgufSummary, 
     Ok(summary)
 }
 
+/// The `split.no` (zero-based) and `split.count` entries llama-gguf-split writes into every
+/// part of a split model.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct GgufSplit {
+    pub number: Option<u64>,
+    pub count: Option<u64>,
+}
+
+pub fn read_gguf_split<R: Read + Seek>(reader: &mut R) -> Result<GgufSplit, Error> {
+    let file_bytes = reader
+        .seek(SeekFrom::End(0))
+        .map_err(|_| Error::new("gguf_io", "The GGUF metadata size is unavailable."))?;
+    reader
+        .seek(SeekFrom::Start(0))
+        .map_err(|_| Error::new("gguf_io", "The GGUF metadata could not be inspected."))?;
+    let mut input = MetadataReader {
+        reader: BufReader::with_capacity(64 * 1024, reader),
+        position: 0,
+        file_bytes,
+    };
+    if input.bytes::<4>()? != *b"GGUF" || !matches!(input.u32()?, 2 | 3) {
+        return Err(Error::new(
+            "invalid_gguf",
+            "The artifact is not a supported GGUF file.",
+        ));
+    }
+    let _tensors = input.u64()?;
+    let entries = input.u64()?;
+    if entries > MAX_METADATA_ENTRIES {
+        return Err(Error::new(
+            "gguf_limit",
+            "The GGUF header exceeds its metadata-entry count limit.",
+        ));
+    }
+    let mut split = GgufSplit::default();
+    for _ in 0..entries {
+        let key = input.string(1024)?;
+        let kind = input.u32()?;
+        let slot = match key.as_str() {
+            "split.no" => &mut split.number,
+            "split.count" => &mut split.count,
+            _ => {
+                input.skip_value(kind)?;
+                continue;
+            }
+        };
+        if !matches!(kind, 0..=5 | 10 | 11) {
+            return Err(Error::new(
+                "invalid_gguf",
+                "GGUF split entries must be integers.",
+            ));
+        }
+        *slot = Some(input.integer(kind)?.unwrap_or(0));
+    }
+    Ok(split)
+}
+
 /// Visits at most `limit` tensor names after skipping the bounded metadata section.
 pub fn visit_gguf_tensor_names<R: Read + Seek>(
     reader: &mut R,

@@ -65,3 +65,61 @@ test("a file in the server import folder is added in place", async ({ page, requ
     await service.remove(id);
   }
 });
+
+test("a split vision model in the server folder is added with its projector", async ({ page, request }) => {
+  const service = api(request);
+  const id = `browser-split-${test.info().project.name}`;
+  await service.remove(id);
+  try {
+    await openMenu(page);
+    await page.getByRole("menuitem", { name: "Pick from the server…" }).click();
+    const dialog = page.getByRole("dialog", { name: "Add from the server" });
+    const files = dialog.getByRole("list", { name: "Server files" });
+    await files.getByRole("button").first().click();
+    await files.getByRole("button", { name: "vision" }).click();
+    await expect(files.getByRole("button", { name: /Vision-Q8_0-00002-of-00002/ })).toHaveCount(0);
+    await files.getByRole("button", { name: /Vision-Q8_0-00001-of-00002\.gguf.*2 parts/ }).click();
+    const detail = page.getByRole("complementary", { name: "Model detail" });
+    await expect(detail).toContainText("2 parts");
+    await expect(detail.getByLabel("Model name")).toHaveValue("Vision-Q8_0");
+    await expect(detail.getByLabel("Vision projector")).toHaveValue(/mmproj-Vision-F16\.gguf$/);
+    await addFrom(detail, id);
+    const model = (await service.json<{ data: { id: string; vision: boolean }[] }>("/v1/juiced/catalog")).data.find((entry) => entry.id === id);
+    expect(model?.vision).toBe(true);
+  } finally {
+    await service.remove(id);
+  }
+});
+
+test("every part of a split model and its projector upload as one model", async ({ page, request }) => {
+  const service = api(request);
+  const id = `browser-split-upload-${test.info().project.name}`;
+  const fixture = await service.source();
+  await service.remove(id);
+  try {
+    await openMenu(page);
+    const chooser = page.waitForEvent("filechooser");
+    await page.getByRole("menuitem", { name: "Upload from this computer…" }).click();
+    await (await chooser).setFiles(fixture.upload_split);
+    const detail = page.getByRole("complementary", { name: "Model detail" });
+    await expect(detail.getByRole("heading", { name: "Upload-Split-00001-of-00002.gguf" })).toBeVisible();
+    await expect(detail).toContainText("mmproj-Upload-F16.gguf");
+    await expect(detail.getByLabel("Model name")).toHaveValue("Upload-Split");
+    await addFrom(detail, id);
+    const model = (await service.json<{ data: { id: string; vision: boolean }[] }>("/v1/juiced/catalog")).data.find((entry) => entry.id === id);
+    expect(model?.vision).toBe(true);
+  } finally {
+    await service.remove(id);
+  }
+});
+
+test("a partial pick of split parts is refused before anything uploads", async ({ page, request }) => {
+  const fixture = await api(request).source();
+  await openMenu(page);
+  const chooser = page.waitForEvent("filechooser");
+  await page.getByRole("menuitem", { name: "Upload from this computer…" }).click();
+  await (await chooser).setFiles(fixture.upload_split.slice(1, 2));
+  const detail = page.getByRole("complementary", { name: "Model detail" });
+  await expect(detail.getByRole("alert")).toHaveText("Pick all 2 parts of Upload-Split. Missing part 1.");
+  await expect(detail.getByRole("button", { name: "Add model" })).toHaveCount(0);
+});
