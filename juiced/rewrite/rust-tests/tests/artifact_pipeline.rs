@@ -115,7 +115,13 @@ async fn pause_resume_cancel_and_restart_preserve_verified_transfer_state() {
         .wait_for(async || job(&server, id).await["downloaded_bytes"].as_u64().unwrap() > 0)
         .await;
     control(&server, id, "pause", "/api/v0").await;
-    let paused = wait_state(&server, id, &["paused"]).await;
+    server
+        .wait_for(async || {
+            let job = job(&server, id).await;
+            job["state"] == "paused" && job["writer_active"] == false
+        })
+        .await;
+    let paused = job(&server, id).await;
     assert!(paused["downloaded_bytes"].as_u64().unwrap() > 0);
     assert_eq!(paused["writer_active"], false);
     let (status, stale) = server
@@ -134,11 +140,22 @@ async fn pause_resume_cancel_and_restart_preserve_verified_transfer_state() {
     assert!(source.ranges.load(Ordering::Acquire) > 0);
     let second = pull(&server, &source, "/v0").await;
     let second_id = second["id"].as_str().unwrap();
+    // The queued-to-downloading transition bumps the revision `control` reads.
+    server
+        .wait_for(async || {
+            job(&server, second_id).await["downloaded_bytes"]
+                .as_u64()
+                .unwrap()
+                > 0
+        })
+        .await;
     control(&server, second_id, "cancel", "/v0").await;
-    assert_eq!(
-        wait_state(&server, second_id, &["cancelled"]).await["writer_active"],
-        false
-    );
+    server
+        .wait_for(async || {
+            let job = job(&server, second_id).await;
+            job["state"] == "cancelled" && job["writer_active"] == false
+        })
+        .await;
     assert_eq!(
         inventory(&server).await["artifacts"]
             .as_array()

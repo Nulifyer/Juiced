@@ -498,6 +498,7 @@ pub struct Server {
     isolated_loader_environment: bool,
     environment: BTreeMap<OsString, Option<OsString>>,
     working_directory: Option<PathBuf>,
+    user_config: tempfile::TempDir,
 }
 
 /// Published runtime packages are read-only; restore owner write access so `TempDir` cleanup
@@ -589,6 +590,7 @@ impl Server {
             isolated_loader_environment: false,
             environment: BTreeMap::new(),
             working_directory: None,
+            user_config: tempfile::tempdir().expect("isolated user configuration"),
         }
     }
 
@@ -635,6 +637,11 @@ impl Server {
             .env_remove("LEMONADE_ADMIN_API_KEY")
             .env("JUICED_HUGGINGFACE_URL", "http://127.0.0.1:9")
             .env_remove("HF_TOKEN");
+        // Live llama.cpp launches go stale when an entry is published beside their absent
+        // user config, and other programs publish into the developer's ~/.config at any time.
+        if !self.environment.contains_key(OsStr::new("XDG_CONFIG_HOME")) {
+            command.env("XDG_CONFIG_HOME", self.user_config.path());
+        }
         for (name, value) in &self.environment {
             if let Some(value) = value {
                 command.env(name, value);

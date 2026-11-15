@@ -804,7 +804,9 @@ async fn unload_waits_for_a_save_in_flight_instead_of_stranding_it() {
     })
     .await;
     chat(&server, &conversation("meadows"), None).await;
-    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    server
+        .wait_for(async || server.event(MODEL, "slot-save", "started"))
+        .await;
     let (status, _) = server.post("unload", json!({"model":MODEL})).await;
     assert_eq!(status, StatusCode::OK);
     let view = sessions(&server).await;
