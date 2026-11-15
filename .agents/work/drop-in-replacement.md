@@ -121,7 +121,8 @@ Native-adopted (v0.9.2 settings store) models keep native semantics.
 
 Progress:
 - Steps 1-3 (llama.cpp) and step 5 released in rc.28 (rc.27 build failed on a flaky intake test, never deployed; deploying it anyway caused a ~3 min outage, rolled back). Live on rc.28: Coder-Next defaults = recipe `--spec-type ngram-simple` + `--metrics`, sampler from the model file (1.0/40/0.95); Qwen3-4B gets the qwen3 family sampler (0.6/0.85/20) and still passes HA 60/60 (median 1.49 s); automatic checks ran on both (chat and tools pass; Coder-Next 19.8 tok/s during startup, 4B 26.1).
-- Step 4 (Tune) committed for rc.29; not yet run on the homelab.
+- Step 4 (Tune) released in rc.29; rc.31 fixes Tune colliding with automatic checks (rc.30 build failed on a disk-space flake, never deployed). Live on rc.31, Tune on Coder-Next: current 341 prefill / 23.0 chat / 51.6 rewrite tok/s; batch 1024 391 (kept, +15%); batch 2048 385; flash attention 392 (no gain over 1024); speculation off rewrite 23.1 (recipe stays). Saved settings are clean (`--jinja` only); defaults = tuned `--ubatch-size 1024`, recipe `--spec-type ngram-simple`, `--metrics`; the post-Tune check passed.
+- The machine rebooted mid-session and the scratchpad helpers were lost; deploys now use scratchpad set_image.py (Portainer API, image tag only).
 - Not done: vLLM parsers at launch (models added before rc.23 keep old args), check results persist only in memory, host-profile layer.
 
 ## Pending (2026-11-13, after rc.24)
@@ -156,4 +157,4 @@ Known gaps:
 
 ## Next action
 
-User to confirm moving HA's conversation agent from Ornith to Qwen3-4B-Instruct-2507-GGUF. Open from the UX audit: Hot-lane fit preview on policy changes, unified memory precision, Downloads next step, control heights. Then ROCm vs Vulkan for Coder-Next, typed vLLM settings and the engine-management round.
+User to confirm moving HA's conversation agent from Ornith to Qwen3-4B-Instruct-2507-GGUF (still pending). Open from the UX audit: Hot-lane fit preview on policy changes, unified memory precision, Downloads next step, control heights. Then ROCm vs Vulkan for Coder-Next, typed vLLM settings and the engine-management round.
