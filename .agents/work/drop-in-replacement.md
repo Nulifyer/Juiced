@@ -22,6 +22,12 @@ Request source: user, 2026-11-12. The homelab switched stack 83 to `rewrite-prev
 - The agent handles the flaky release-runner tests and the remaining gaps (NPU engines on real hardware, vLLM parsers at launch for old registrations, api-keys in settings backups, split GGUF and separate mmproj import, persisted model checks, the "Engine changed" decision, the UX audit leftovers, Barista how-to grounding).
 - The older release-plan checks in rewrite-release.md (council, full T3 inspection, profiling and flame graphs, R4 network acquisition) are out of the v0.10.0 criteria; see that ledger.
 
+## v0.10.0 gap work (2026-11-15)
+
+- NPU on mage (rc.31, `/dev/accel/accel0`, amdxdna, XDNA2): hybrid ROCm `Mellum2.1-12B-A2.5B-Thinking-GGUF-Q6_K-Hybrid` at a temporary 8192 context loaded in 12.9 s, model check passed chat, tools and the thinking switch, 34.5 tok/s (context 131072 and Disabled restored). FastFlowLM 1.0.12 installed in 10 s; `qwen3:0.6b` pulled in 77 s, loaded in 2.2 s, chat check passed (no tools/thinking declared). With the FLM model loaded, the hybrid model also loaded (15.3 s) and both answered: no NPU exclusivity is needed on this driver. Test FLM registration removed; its weights (695 MB, `/data/flm`) stay because the storage view lists `/data/flm` only under other (no reclaim path yet). FLM engine stays installed.
+- "Engine changed": kept strict (agent decision delegated by the user).
+- Settings backup: the offline capsule covers only the legacy native settings store; api-keys.json lives in /data and a /data backup covers it. Maintenance guide rewritten for this release.
+
 ## Acceptance
 
 - [x] Same compose (image tag change only, optional junk removal) serves on 8080 with the healthcheck passing. (rc.3 onward)
