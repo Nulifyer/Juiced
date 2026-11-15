@@ -40,7 +40,7 @@ The HTTP reverse proxy and HTTP API keys do not protect this TCP listener.
 4. Choose the advertised transcription and speech services in your voice pipeline.
 5. Send a real voice turn and check both recognized text and spoken output.
 
-Use **Service APIs → Wyoming** to inspect listener status and advertised support.
+Use **Connect → Wyoming** to inspect listener status and advertised support.
 A running helper process does not prove a completed voice turn.
 Voice changes can require a listener restart before Home Assistant sees them.
 

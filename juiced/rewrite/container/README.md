@@ -2,7 +2,7 @@
 
 This image runs the Rust `lemond` service and the web console as one appliance. On first boot it writes a default configuration into the data volume. It then reports the host's CPU, GPUs and NPUs at `GET /v1/system-info` and offers the engine builds that fit at `GET /v1/juiced/engines`. Most engines are not in the image. The service downloads them on demand, checks the pinned SHA-256 digest and unpacks them into the data volume.
 
-The image does not include a model. Models you add start Disabled until you enable them.
+The image does not include a model. The console adds a model as On demand unless you choose otherwise; `POST /v1/juiced/models/add` without a `policy` adds it Disabled.
 
 ## Quick start
 

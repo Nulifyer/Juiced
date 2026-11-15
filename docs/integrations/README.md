@@ -5,7 +5,7 @@ First [complete a local test](../guide/testing.md) for the service you need.
 
 ## Choose the protocol
 
-Open **Service APIs** in Juiced. Copy the connection address for your client's
+Open **Connect** in Juiced. Copy the connection address for your client's
 protocol and review the listed limits.
 
 | Client type | Address on the Juiced host | Model selection |

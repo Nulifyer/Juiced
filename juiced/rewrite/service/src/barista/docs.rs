@@ -79,6 +79,21 @@ const GUIDE: &[(&str, &str, &str)] = &[
         "Terminal (lemonade CLI)",
         include_str!("../../../../../docs/guide/cli.md"),
     ),
+    (
+        "guide/storage",
+        "Engines & hardware > Storage",
+        include_str!("../../../../../docs/guide/storage.md"),
+    ),
+    (
+        "guide/install",
+        "Container host",
+        include_str!("../../../../../docs/guide/install/README.md"),
+    ),
+    (
+        "guide/install/compose",
+        "Container host (Compose)",
+        include_str!("../../../../../docs/guide/install/compose.md"),
+    ),
 ];
 
 pub(super) const PAGE_BYTES: usize = 6000;
