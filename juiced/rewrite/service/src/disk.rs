@@ -254,16 +254,18 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let available = volume(directory.path()).unwrap().available_bytes;
         assert!(require(&[(directory.path(), 1)], 0).is_ok());
+        // A 1 GiB margin per need: free space on a shared runner moves between reads.
+        let need = available / 2 + GIB;
         let short = require(
             &[
-                (directory.path(), available / 2 + 1),
-                (&directory.path().join("missing/child"), available / 2 + 1),
+                (directory.path(), need),
+                (&directory.path().join("missing/child"), need),
             ],
             0,
         )
         .unwrap_err();
         assert!(short.shortfall_bytes >= 1);
-        assert_eq!(short.required_bytes, (available / 2 + 1) * 2);
+        assert_eq!(short.required_bytes, need * 2);
         let error = require(&[(directory.path(), 1)], available + GIB)
             .unwrap_err()
             .into_error("download this model");
