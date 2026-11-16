@@ -894,6 +894,7 @@ html, body { height: 100%; overflow: hidden; }
 .check-fail .check-mark, .check-fail > span:nth-child(2) { color: var(--bad); }
 .model-check .section-heading { display: flex; align-items: center; justify-content: space-between; }
 .tune-table .data-head, .tune-table .data-row { grid-template-columns: minmax(0, 1fr) 64px 56px 64px; font-size: .78rem; }
+.tune-wrong { display: block; color: var(--bad); }
 .name-sr { user-select: none; }
 .name-piece { display: inline-block; max-width: 100%; overflow-wrap: anywhere; }
 .model-name:hover .name-piece { text-decoration: underline; text-underline-offset: 3px; }

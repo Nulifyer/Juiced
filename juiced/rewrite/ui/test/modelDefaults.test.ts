@@ -51,5 +51,8 @@ test("a tune view reads running progress and a finished result", () => {
   expect(parseTune({ state: "done", result: { arguments: [], warning: "m stayed loaded after Tune." } }).warning).toBe("m stayed loaded after Tune.");
   expect(done.arguments).toEqual(["--ubatch-size", "1024"]);
   expect(done.candidates).toHaveLength(1);
+  expect(done.candidates[0]!.wrong).toEqual([]);
+  const rejected = parseTune({ state: "done", result: { measurements: { candidates: [{ label: "flash attention on", speed: {}, wrong: ["code rewrite", 3] }] } } });
+  expect(rejected.candidates[0]!.wrong).toEqual(["code rewrite"]);
   expect(parseTune({ state: "weird" }).state).toBe("idle");
 });

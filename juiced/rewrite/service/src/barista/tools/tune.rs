@@ -1,11 +1,12 @@
 //! Tune: measures a llama.cpp model's launch choices on this host through the normal settings
-//! and chat routes and keeps a choice only when it is clearly faster. Each trial is saved as the
-//! model's tuned launch layer, so the operator's own settings are never written; the winners
-//! become that layer.
+//! and chat routes and keeps a choice only when it is clearly faster and answers as well as the
+//! current settings. Each trial is saved as the model's tuned launch layer, so the operator's own
+//! settings are never written; the winners become that layer.
 
 use super::check::{thinking_switch, with_switch};
 use super::{Context, Failure, Result};
 use serde_json::{Value, json};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Reports progress as `{step, candidates}` while Tune runs.
@@ -77,6 +78,114 @@ impl Speed {
     }
 }
 
+/// What the model wrote for each measured request.
+#[derive(Clone, Debug, Default)]
+struct Replies {
+    prompt: String,
+    chat: String,
+    rewrite: String,
+}
+
+/// Which measured requests the model answered correctly.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Correct {
+    prompt: bool,
+    chat: bool,
+    rewrite: bool,
+}
+
+impl Correct {
+    fn of(replies: &Replies, marker: u32) -> Self {
+        Self {
+            prompt: replies.prompt.contains("Rectangle")
+                && replies.prompt.contains(&marker.to_string()),
+            chat: counts_correctly(&replies.chat),
+            rewrite: without_fence(&replies.rewrite)
+                == without_fence(&CODE.replace("perimeter", "circumference")),
+        }
+    }
+
+    /// The answers the current settings got right and this trial got wrong. A model that cannot
+    /// answer one of them at all is not held to it.
+    fn lost(self, baseline: Correct) -> Vec<&'static str> {
+        [
+            (baseline.prompt && !self.prompt, "prompt question"),
+            (baseline.chat && !self.chat, "counting"),
+            (baseline.rewrite && !self.rewrite, "code rewrite"),
+        ]
+        .into_iter()
+        .filter_map(|(lost, name)| lost.then_some(name))
+        .collect()
+    }
+
+    fn json(self) -> Value {
+        json!({"prompt": self.prompt, "chat": self.chat, "rewrite": self.rewrite})
+    }
+}
+
+/// The reply to "the numbers from 1 to 150" is that sequence, possibly cut off by the token
+/// limit.
+fn counts_correctly(text: &str) -> bool {
+    let expected = (1..=150)
+        .map(|number: u32| number.to_string())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let said = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    said.len() >= 40 && expected.starts_with(&said)
+}
+
+fn without_fence(text: &str) -> String {
+    let text = text.trim();
+    let body = match text.strip_prefix("```") {
+        Some(rest) => rest.split_once('\n').map_or("", |(_, code)| code),
+        None => text,
+    };
+    let body = body.trim_end();
+    let body = body.strip_suffix("```").unwrap_or(body);
+    body.lines()
+        .map(str::trim_end)
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim_matches('\n')
+        .to_owned()
+}
+
+/// How much of the same text two runs wrote, from 0 to 1, ignoring order. Settings that only
+/// change arithmetic order should stay close to 1 at temperature 0.
+fn agreement(left: &str, right: &str) -> f64 {
+    let mut counts: HashMap<&str, usize> = HashMap::new();
+    for word in left.split_whitespace() {
+        *counts.entry(word).or_default() += 1;
+    }
+    let total = left.split_whitespace().count() + right.split_whitespace().count();
+    if total == 0 {
+        return 1.0;
+    }
+    let mut shared = 0;
+    for word in right.split_whitespace() {
+        if let Some(count) = counts.get_mut(word)
+            && *count > 0
+        {
+            *count -= 1;
+            shared += 1;
+        }
+    }
+    2.0 * shared as f64 / total as f64
+}
+
+/// Below this, a kept setting is reported as having changed the replies.
+const AGREEMENT_NOTICE: f64 = 0.8;
+
+#[derive(Clone, Debug)]
+struct Trial {
+    speed: Speed,
+    replies: Replies,
+    correct: Correct,
+    /// Answers the current settings got right and this trial got wrong.
+    lost: Vec<&'static str>,
+    agreement: f64,
+}
+
 struct Run<'c, 'a> {
     context: &'c Context<'a>,
     id: String,
@@ -91,6 +200,10 @@ struct Run<'c, 'a> {
     revision: Option<u64>,
     candidates: Vec<Value>,
     progress: Progress,
+    /// A number hidden in the middle of the long prompt; the model must find it.
+    marker: u32,
+    /// The current settings' measurement, which every trial is checked against.
+    baseline: Option<Trial>,
 }
 
 fn tps(reply: &Value, key: &str) -> f64 {
@@ -170,9 +283,12 @@ impl Run<'_, '_> {
         }
     }
 
+    /// Greedy and seeded, so every trial answers the same requests the same way and drafting
+    /// sees the same text.
     async fn chat(&self, content: String, max_tokens: u32) -> Result<Value> {
         let body = with_switch(
             json!({"model": self.id, "max_tokens": max_tokens, "stream": false,
+                   "temperature": 0, "seed": 42,
                    "messages": [{"role": "user", "content": content}]}),
             &self.switch,
             false,
@@ -241,9 +357,9 @@ impl Run<'_, '_> {
         }
     }
 
-    /// Launches with `arguments` as the tuned layer and measures prompt, chat and code-rewrite
-    /// speed.
-    async fn measure(&mut self, label: &str, arguments: &[String]) -> Result<Speed> {
+    /// Launches with `arguments` as the tuned layer, measures prompt, chat and code-rewrite speed,
+    /// and checks the answers against the current settings' (the first measurement).
+    async fn measure(&mut self, label: &str, arguments: &[String]) -> Result<Trial> {
         if tokio::time::Instant::now() >= self.deadline {
             return Err(timed_out());
         }
@@ -259,31 +375,27 @@ impl Run<'_, '_> {
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |time| time.as_nanos());
         let prompt = format!(
-            "[{label} {nonce}]\n{}\nIn one sentence, which class has a diagonal method?",
-            CODE.repeat(8)
+            "[{label} {nonce}]\n{}TUNE_MARKER = {}\n\n{}\nIn one short sentence, which class has a diagonal method, and what is TUNE_MARKER?",
+            CODE.repeat(4),
+            self.marker,
+            CODE.repeat(4)
         );
-        let prefill = tps(&self.chat(prompt, 8).await?, "prompt_per_second");
-        let decode = tps(
-            &self
-                .chat(format!("[{nonce}] Write the numbers from 1 to 150 separated by spaces. Output only the numbers."), 320)
-                .await?,
-            "predicted_per_second",
-        );
-        let rewrite = tps(
-            &self
-                .chat(
-                    format!("[{nonce}] Return this Python file unchanged except rename the method `perimeter` to `circumference` everywhere. Output only the code.\n\n```python\n{CODE}```"),
-                    1200,
-                )
-                .await?,
-            "predicted_per_second",
-        );
+        let prompt = self.chat(prompt, 32).await?;
+        let chat = self
+            .chat(format!("[{nonce}] Write the numbers from 1 to 150 separated by spaces. Output only the numbers."), 320)
+            .await?;
+        let rewrite = self
+            .chat(
+                format!("[{nonce}] Return this Python file unchanged except rename the method `perimeter` to `circumference` everywhere. Output only the code.\n\n```python\n{CODE}```"),
+                1200,
+            )
+            .await?;
         let speed = Speed {
-            prefill,
-            decode,
-            rewrite,
+            prefill: tps(&prompt, "prompt_per_second"),
+            decode: tps(&chat, "predicted_per_second"),
+            rewrite: tps(&rewrite, "predicted_per_second"),
         };
-        if [prefill, decode, rewrite]
+        if [speed.prefill, speed.decode, speed.rewrite]
             .iter()
             .any(|value| !value.is_finite() || *value <= 0.0)
         {
@@ -295,10 +407,48 @@ impl Run<'_, '_> {
                 502,
             ));
         }
-        self.candidates
-            .push(json!({"label": label, "speed": speed.json()}));
+        let text = |reply: &Value| {
+            reply["choices"][0]["message"]["content"]
+                .as_str()
+                .unwrap_or("")
+                .to_owned()
+        };
+        let replies = Replies {
+            prompt: text(&prompt),
+            chat: text(&chat),
+            rewrite: text(&rewrite),
+        };
+        let correct = Correct::of(&replies, self.marker);
+        let (lost, agreement) = match &self.baseline {
+            Some(baseline) => (
+                correct.lost(baseline.correct),
+                agreement(
+                    &format!("{}\n{}", replies.chat, replies.rewrite),
+                    &format!("{}\n{}", baseline.replies.chat, baseline.replies.rewrite),
+                ),
+            ),
+            None => (Vec::new(), 1.0),
+        };
+        let mut candidate = json!({
+            "label": label, "speed": speed.json(), "correct": correct.json(),
+            "agreement": (agreement * 100.0).round() / 100.0,
+        });
+        if !lost.is_empty() {
+            candidate["wrong"] = json!(lost);
+        }
+        self.candidates.push(candidate);
         self.report(&format!("Measured {label}"));
-        Ok(speed)
+        let trial = Trial {
+            speed,
+            replies,
+            correct,
+            lost,
+            agreement,
+        };
+        if self.baseline.is_none() {
+            self.baseline = Some(trial.clone());
+        }
+        Ok(trial)
     }
 }
 
@@ -359,6 +509,8 @@ pub(super) async fn run(context: &Context<'_>, id: &str, progress: Progress) -> 
         revision: options["revision"].as_u64(),
         candidates: Vec::new(),
         progress,
+        marker: (now_ms() % 90_000) as u32 + 10_000,
+        baseline: None,
     };
     let outcome = search(&mut run, &options).await;
     run.report("Saving the result");
@@ -380,7 +532,10 @@ pub(super) async fn run(context: &Context<'_>, id: &str, progress: Progress) -> 
     let failure = match (outcome, saved) {
         (Ok(mut result), Ok(())) => {
             if let Some(warning) = stayed_loaded {
-                result["warning"] = json!(warning);
+                result["warning"] = json!(match result["warning"].as_str() {
+                    Some(first) => format!("{first} {warning}"),
+                    None => warning,
+                });
             }
             return Ok(result);
         }
@@ -444,12 +599,14 @@ fn speculation_kept(speed: Speed, best: Speed) -> bool {
 }
 
 /// Greedy search: physical batch, then flash attention, then speculative decoding, each kept
-/// only with a clear gain and no meaningful loss. Options the operator saved are not tried.
+/// only with a clear gain, no meaningful loss and no answer the current settings got right
+/// turning wrong. Options the operator saved are not tried.
 async fn search(run: &mut Run<'_, '_>, options: &Value) -> Result<Value> {
     let extra: Vec<String> =
         serde_json::from_value(options["extra_args"].clone()).unwrap_or_default();
-    let base = run.measure("current settings", &[]).await?;
+    let base = run.measure("current settings", &[]).await?.speed;
     let mut best = base;
+    let mut kept_agreement = 1.0f64;
     let mut arguments: Vec<String> = Vec::new();
 
     if !saved_flag(
@@ -458,21 +615,25 @@ async fn search(run: &mut Run<'_, '_>, options: &Value) -> Result<Value> {
         &extra,
         &["--ubatch-size", "-ub"],
     ) {
-        let mut winner: Option<(u64, Speed)> = None;
+        let mut winner: Option<(u64, Trial)> = None;
         for size in [1024u64, 2048] {
             let trial = ["--ubatch-size".to_owned(), size.to_string()];
-            let speed = run
+            let measured = run
                 .measure(&format!("physical batch {size}"), &trial)
                 .await?;
-            if batch_kept(speed, best)
-                && winner.is_none_or(|(_, held)| speed.prefill > held.prefill)
+            if measured.lost.is_empty()
+                && batch_kept(measured.speed, best)
+                && winner
+                    .as_ref()
+                    .is_none_or(|(_, held)| measured.speed.prefill > held.speed.prefill)
             {
-                winner = Some((size, speed));
+                winner = Some((size, measured));
             }
         }
-        if let Some((size, speed)) = winner {
+        if let Some((size, measured)) = winner {
             arguments.extend(["--ubatch-size".to_owned(), size.to_string()]);
-            best = speed;
+            best = measured.speed;
+            kept_agreement = kept_agreement.min(measured.agreement);
         }
     }
 
@@ -484,10 +645,11 @@ async fn search(run: &mut Run<'_, '_>, options: &Value) -> Result<Value> {
     ) {
         let mut trial = arguments.clone();
         trial.extend(["--flash-attn".to_owned(), "on".to_owned()]);
-        let speed = run.measure("flash attention on", &trial).await?;
-        if flash_kept(speed, best) {
+        let measured = run.measure("flash attention on", &trial).await?;
+        if measured.lost.is_empty() && flash_kept(measured.speed, best) {
             arguments = trial;
-            best = speed;
+            best = measured.speed;
+            kept_agreement = kept_agreement.min(measured.agreement);
         }
     }
 
@@ -512,18 +674,26 @@ async fn search(run: &mut Run<'_, '_>, options: &Value) -> Result<Value> {
         };
         let mut trial = arguments.clone();
         trial.extend(["--spec-type".to_owned(), alternative.to_owned()]);
-        let speed = run
+        let measured = run
             .measure(&format!("speculative decoding {alternative}"), &trial)
             .await?;
-        if speculation_kept(speed, best) {
+        if measured.lost.is_empty() && speculation_kept(measured.speed, best) {
             arguments = trial;
-            best = speed;
+            best = measured.speed;
+            kept_agreement = kept_agreement.min(measured.agreement);
         }
     }
-    Ok(json!({
+    let mut result = json!({
         "arguments": arguments,
         "measurements": {"baseline": base.json(), "chosen": best.json(), "candidates": run.candidates},
-    }))
+    });
+    if kept_agreement < AGREEMENT_NOTICE {
+        result["warning"] = json!(format!(
+            "The kept settings answered correctly but wrote noticeably different text ({}% the same). Check a few replies.",
+            (kept_agreement * 100.0).round()
+        ));
+    }
+    Ok(result)
 }
 
 #[cfg(test)]
@@ -587,6 +757,68 @@ mod tests {
             &["--flash-attn", "-fa"]
         ));
         assert!(!saved_flag(&options, None, &extra, &["--spec-type"]));
+    }
+
+    fn right_replies(marker: u32) -> Replies {
+        Replies {
+            prompt: format!("The Rectangle class has a diagonal method; TUNE_MARKER is {marker}."),
+            chat: (1..=60)
+                .map(|n| n.to_string())
+                .collect::<Vec<_>>()
+                .join(" ")
+                + " 6",
+            rewrite: format!(
+                "```python\n{}```\n",
+                CODE.replace("perimeter", "circumference")
+            ),
+        }
+    }
+
+    #[test]
+    fn answers_are_checked_including_a_cut_off_count_and_a_fenced_rewrite() {
+        let right = right_replies(48213);
+        assert_eq!(
+            Correct::of(&right, 48213),
+            Correct {
+                prompt: true,
+                chat: true,
+                rewrite: true
+            }
+        );
+        let wrong = Replies {
+            prompt: "The Rectangle class.".into(),
+            chat: "1 2 3 4 5 6 7 8 9 10 11 12 13 15 16 17 18 19 20 21 22".into(),
+            rewrite: CODE
+                .replace("perimeter", "circumference")
+                .replace("pi *", "3.14 *"),
+        };
+        assert_eq!(Correct::of(&wrong, 48213), Correct::default());
+        assert!(!counts_correctly("1 2 3"), "too short to tell");
+    }
+
+    #[test]
+    fn a_trial_is_held_only_to_answers_the_current_settings_got_right() {
+        let all = Correct {
+            prompt: true,
+            chat: true,
+            rewrite: true,
+        };
+        let no_rewrite = Correct {
+            rewrite: false,
+            ..all
+        };
+        assert_eq!(no_rewrite.lost(all), vec!["code rewrite"]);
+        assert!(no_rewrite.lost(no_rewrite).is_empty());
+        assert!(all.lost(Correct::default()).is_empty());
+    }
+
+    #[test]
+    fn agreement_measures_shared_text() {
+        let right = right_replies(1);
+        assert_eq!(agreement(&right.rewrite, &right.rewrite), 1.0);
+        assert_eq!(agreement("alpha beta", "gamma delta"), 0.0);
+        assert_eq!(agreement("a b c d", "a b c e"), 0.75);
+        assert_eq!(agreement("", ""), 1.0);
     }
 
     #[test]

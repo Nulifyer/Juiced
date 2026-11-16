@@ -12,7 +12,7 @@ const record = (value: unknown): Record<string, unknown> => value && typeof valu
 export const sourceLabels: Record<DefaultSource, string> = { juiced: "Juiced", family: "Model family", "model-file": "Model file", recipe: "Tested recipe", tuned: "Measured here" };
 
 export type TuneSpeed = { prefill_tps: number; decode_tps: number; rewrite_tps: number };
-export type TuneView = { state: "idle" | "running" | "done" | "failed"; step?: string; error?: string; candidates: { label: string; speed: TuneSpeed }[]; arguments?: string[]; warning?: string };
+export type TuneView = { state: "idle" | "running" | "done" | "failed"; step?: string; error?: string; candidates: { label: string; speed: TuneSpeed; wrong: string[] }[]; arguments?: string[]; warning?: string };
 
 export function parseTune(value: unknown): TuneView {
   const body = record(value);
@@ -22,7 +22,8 @@ export function parseTune(value: unknown): TuneView {
   const candidates = list.flatMap((item) => {
     const entry = record(item), speed = record(entry.speed);
     const number = (key: string) => typeof speed[key] === "number" ? speed[key] as number : 0;
-    return typeof entry.label === "string" ? [{ label: entry.label, speed: { prefill_tps: number("prefill_tps"), decode_tps: number("decode_tps"), rewrite_tps: number("rewrite_tps") } }] : [];
+    const wrong = Array.isArray(entry.wrong) ? entry.wrong.filter((item): item is string => typeof item === "string") : [];
+    return typeof entry.label === "string" ? [{ label: entry.label, speed: { prefill_tps: number("prefill_tps"), decode_tps: number("decode_tps"), rewrite_tps: number("rewrite_tps") }, wrong }] : [];
   });
   return { state, step: typeof body.step === "string" ? body.step : undefined, error: typeof body.error === "string" ? body.error : undefined, candidates, arguments: Array.isArray(result.arguments) ? result.arguments.filter((item): item is string => typeof item === "string") : undefined, warning: typeof result.warning === "string" ? result.warning : undefined };
 }

@@ -71,7 +71,11 @@ settings; a loaded model restarts.
 
 **Tune for this machine** tries a larger prompt batch, flash attention and
 speculative decoding, measuring prompt, chat and code-rewrite speed, and keeps a
-change only when it is clearly faster. It reloads the model several times and
+change only when it is clearly faster. Tune also checks the answers: it asks the
+same questions at temperature 0 with every setting, and a change that gets one
+wrong that the current settings got right is not kept, however fast it is. The
+results table marks those answers. If a kept change writes noticeably different
+text, Tune says so when it finishes. It reloads the model several times and
 takes a few minutes. It never changes your saved settings, and it skips any
 option you have set yourself. Tune needs Juiced defaults turned on, because its
 results apply through them. Kept changes show as **Measured here**; **Clear tuned**
