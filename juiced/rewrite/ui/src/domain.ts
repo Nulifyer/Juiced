@@ -25,6 +25,10 @@ export type Model = {
   residency?: Residency;
   /** The worker binds a vision projector, so chat messages may include images. */
   vision?: boolean;
+  /** While loading, when the service started the engine process. */
+  loading_started_unix_ms?: number;
+  /** How long the last successful load on this engine took. */
+  last_load_ms?: number;
 };
 export type SessionCache = { path: string; key: string | null; slot: number; restore_ms?: number; saved_previous: boolean };
 export type RequestRecord = {
@@ -67,10 +71,9 @@ export function hotFit(model: Model, models: Model[], resources: Resources | und
 }
 
 export function hotFitNote(model: Model, fit: HotFit): string {
-  if (model.policy === "hot" && model.loaded) return `Holds ${bytes(fit.bytes)} · ${bytes(fit.free)} free`;
-  if (fit.fit === "fits") return `Hot keeps ${bytes(fit.bytes)} loaded · ${bytes(fit.free)} free`;
-  if (fit.fit === "evicts") return `Hot keeps ${bytes(fit.bytes)} loaded. Only ${bytes(fit.free)} is free, so idle On demand models unload first.`;
-  return `Hot needs ${bytes(fit.bytes)}; only ${bytes(fit.free)} is free. It won't load until a Hot or busy model unloads.`;
+  if ((model.policy === "hot" && model.loaded) || fit.fit === "fits") return `Memory ${bytes(fit.bytes)} · ${bytes(fit.free)} free`;
+  if (fit.fit === "evicts") return `Memory ${bytes(fit.bytes)}. Only ${bytes(fit.free)} is free, so Hot unloads idle On demand models first.`;
+  return `Memory ${bytes(fit.bytes)}. Only ${bytes(fit.free)} is free, so Hot won't load until a Hot or busy model unloads.`;
 }
 
 export function hotOption(model: Model, fit: HotFit | null): string {
@@ -89,8 +92,8 @@ export function eligible(model: Model): boolean {
 export function loadReason(model: Model): string | undefined {
   if (model.state === "stopping") return "Wait for the owned worker to confirm exit. Its reservation is retained.";
   if (model.state === "cleanup-pending") return "The previous worker has not confirmed exit. Retry cleanup with Unload.";
-  if (model.policy === "disabled") return "Enable the loading policy first.";
-  if (!model.downloaded) return "The configured weights are unavailable.";
+  if (!model.downloaded) return "The model file is missing on the server.";
+  if (model.policy === "disabled") return "Disabled. Choose On demand or Hot to load it.";
   if (model.loaded) return "This worker is already loaded.";
   if (model.startup_waiting) return "This worker is waiting to start.";
   if (model.state === "loading") return "This worker is starting.";
@@ -107,6 +110,13 @@ export function workerTone(model: Model): "good" | "warning" | "bad" | "quiet" {
 
 export function workerState(model: Model): string {
   return model.startup_waiting ? "Waiting to start" : model.state;
+}
+
+const stateNames: Record<Model["state"], string> = { ready: "Loaded", loading: "Loading", unloaded: "Not loaded", "missing-weights": "Weights missing", failed: "Failed", stopping: "Stopping", "cleanup-pending": "Cleanup pending" };
+
+/** A model's state in the console's words: "Loaded", "Not loaded", "Weights missing". */
+export function stateLabel(model: Model): string {
+  return model.startup_waiting ? "Waiting to start" : stateNames[model.state] ?? model.state;
 }
 
 export function unloadReason(model: Model): string | undefined {

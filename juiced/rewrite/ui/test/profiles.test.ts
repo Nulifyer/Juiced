@@ -13,8 +13,12 @@ describe("typed provider and launch boundary", () => {
   test("empty preserves defaults while GPU zero remains an explicit value", () => {
     expect(launchOptions({ context: "8192", threads: "", gpu: "0" }, 2)).toEqual(launch);
     expect(launchOptions({ context: "", threads: "", gpu: "" }, null)).toEqual({ context_tokens: null, threads: null, gpu_layers: null, parallel_slots: null });
-    expect(launchDraft(launch)).toEqual({ context: "8192", threads: "", gpu: "0" });
-    expect(sameDraft(launchDraft(launch), { context: "8192", threads: "", gpu: "0" })).toBe(true);
+    expect(launchDraft(launch)).toEqual({ context: "8192", threads: "", gpu: "0", slots: "2" });
+    expect(launchOptions({ context: "", threads: "", gpu: "", slots: "4" }, 2).parallel_slots).toBe(4);
+    expect(launchOptions({ context: "", threads: "", gpu: "", slots: "" }, 2).parallel_slots).toBeNull();
+    for (const value of ["0", "1.5", "65537"]) expect(() => launchOptions({ context: "", threads: "", gpu: "", slots: value }, 2)).toThrow("Slots");
+    expect(sameDraft(launchDraft(launch), { context: "8192", threads: "", gpu: "0", slots: "2" })).toBe(true);
+    expect(sameDraft(launchDraft(launch), { context: "8192", threads: "", gpu: "0", slots: "3" })).toBe(false);
   });
   test("invalid zero context, zero threads, overflow and fractional launch values are rejected", () => {
     for (const value of ["0", "-1", "2147483648", "1.5", "8e3"]) expect(() => launchOptions({ context: value, threads: "", gpu: "" }, 2)).toThrow();

@@ -63,5 +63,5 @@ test("the Hot lane shows model memory used and a Hot choice says whether it fits
   const lane = page.getByRole("region", { name: "On demand models" });
   await expect(lane.getByLabel(`Loading policy for ${modelId}`).locator('option[value="hot"]')).toHaveText(/^Hot · \d+\.\d (KiB|MiB|GiB), fits$/);
   await lane.getByRole("button", { name: new RegExp(modelId) }).click();
-  await expect(page.getByRole("complementary", { name: "Model inspector" })).toContainText(/Hot keeps \d+\.\d (KiB|MiB|GiB) loaded · \d+\.\d GiB free/);
+  await expect(page.getByRole("complementary", { name: "Model inspector" })).toContainText(/Memory \d+\.\d (KiB|MiB|GiB) · \d+\.\d GiB free/);
 });

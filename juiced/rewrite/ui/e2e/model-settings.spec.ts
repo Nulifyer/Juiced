@@ -1,4 +1,4 @@
-import { api, expect, hotModel, navigate, open, openModel, sourceOrigin, speechModel, tab, test, toasts, tryModel } from "./support";
+import { api, expect, hotModel, navigate, open, openModel, showAllModels, sourceOrigin, speechModel, tab, test, toasts, tryModel } from "./support";
 
 const project = () => test.info().project.name;
 
@@ -87,6 +87,7 @@ test("selected models change policy together and the list sorts", async ({ page,
   try {
     await open(page);
     await navigate(page, "Models");
+    await showAllModels(page);
     const table = page.getByRole("table", { name: "Registered models" });
     for (const id of ids) await table.getByLabel(`Select ${id}`).check();
     const bar = page.getByRole("toolbar", { name: "Selected models" });
@@ -182,4 +183,35 @@ test("cache limits save a disk budget and how long unused conversations stay", a
   await limits.getByRole("button", { name: "Save" }).click();
   await expect.poll(async () => (await settings()).retention_days).toBeUndefined();
   expect((await settings()).budget_bytes).toBe(8 * 1024 ** 3);
+});
+
+test("Slots changes how many requests a llama.cpp model serves and updates the estimate", async ({ page, request }) => {
+  const service = api(request);
+  const fixture = await service.source();
+  const id = `browser.slots-${project()}`;
+  const path = `/v1/models/${encodeURIComponent(id)}/options`;
+  await service.remove(id);
+  await service.register({ id, model_file: fixture.model_file, provider: "llama-cpp", options: { context_tokens: 1024, threads: null, gpu_layers: 0, parallel_slots: 1 }, command: fixture.command, args: [...fixture.args, "--ctx-size", "1024"] });
+  const asked: string[] = [];
+  page.on("request", (sent) => { if (sent.url().includes(`/models/${encodeURIComponent(id)}/fit`)) asked.push(new URL(sent.url()).searchParams.get("parallel_slots") ?? ""); });
+  try {
+    await open(page);
+    const inspector = await openModel(page, id);
+    await tab(page, "Model sections", "Settings").click();
+    const panel = inspector.getByRole("region", { name: "Context and launch profile" });
+    const slots = panel.getByLabel("Slots", { exact: true });
+    await expect(slots).toHaveValue("1");
+    await slots.fill("0");
+    await panel.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(panel.getByRole("alert")).toContainText("Slots must be between 1 and 65536");
+    await slots.fill("2");
+    await expect.poll(() => asked).toContain("2");
+    await panel.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(toasts(page).getByRole("status")).toContainText(`Saved launch settings for ${id}.`);
+    expect((await service.json<{ saved: { parallel_slots: number }; physical_slots: number }>(path))).toMatchObject({ saved: { parallel_slots: 2 }, physical_slots: 2 });
+    await expect.poll(async () => (await service.model(id) as unknown as { max_inflight: number }).max_inflight).toBe(2);
+    await expect(panel).toContainText("2 slots share it");
+  } finally {
+    await service.remove(id);
+  }
 });

@@ -134,9 +134,20 @@ export async function modelsView(page: Page, view: ModelsView) {
   await expect(modelsTab(page, view)).toHaveAttribute("aria-selected", "true");
 }
 
+/** Turns off the Enabled or Disabled filter so the table lists every model. */
+export async function showAllModels(page: Page) {
+  const pressed = page.getByRole("group", { name: "Policy filter" }).locator('button[aria-pressed="true"]');
+  if (await pressed.count()) await pressed.click();
+  await expect(pressed).toHaveCount(0);
+}
+
 export async function openModel(page: Page, id: string) {
   await navigate(page, "Models");
-  await page.getByRole("table", { name: "Registered models" }).getByRole("button", { name: id, exact: true }).click();
+  const table = page.getByRole("table", { name: "Registered models" });
+  await expect(table).toBeVisible();
+  const button = table.getByRole("button", { name: id, exact: true });
+  if (await button.count() === 0) await showAllModels(page);
+  await button.click();
   const inspector = page.getByRole("complementary", { name: "Model inspector" });
   await expect(inspector.getByRole("heading", { name: id, level: 2 })).toBeVisible();
   return inspector;

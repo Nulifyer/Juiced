@@ -205,7 +205,7 @@ export function App() {
       <span>Active <strong>{resources?.active_requests ?? "—"}</strong></span>
     </footer>
     <div className="toasts" aria-live="polite">
-      {toasts.map((toast) => <div key={toast.id} className={`toast ${toast.tone}`} role={toast.tone === "error" ? "alert" : "status"}><span>{toast.text}</span><Button variant="ghost" aria-label={toast.tone === "error" ? "Dismiss error" : "Dismiss notification"} onClick={() => dismiss(toast.id)}><Icon name="close" size={14} /></Button></div>)}
+      {toasts.map((toast) => <div key={toast.id} className={`toast ${toast.tone}`} role={toast.tone === "error" ? "alert" : "status"}><span>{toast.text}</span>{toast.action && <Button variant="ghost" onClick={() => { dismiss(toast.id); toast.action!.run(); }}>{toast.action.label}</Button>}<Button variant="ghost" aria-label={toast.tone === "error" ? "Dismiss error" : "Dismiss notification"} onClick={() => dismiss(toast.id)}><Icon name="close" size={14} /></Button></div>)}
     </div>
     {barista.settings && <Barista open={baristaOpen} onClose={closeBarista} models={snapshot?.models ?? []} ready={!!snapshot} layout={panel.layout} client={client} online={online} settings={barista.settings} onSettings={barista.setSettings} onChanged={() => { if (!dirty) setEpoch((value) => value + 1); void refresh(); }} />}
     {connectionOpen && <ConnectionDialog base={base} apiKey={key} version={snapshot?.version} onClose={() => setConnectionOpen(false)} onSave={(nextBase, nextKey) => { setBase(nextBase); setKey(nextKey); setEpoch((value) => value + 1); writeLocal("juiced.rewrite.base", nextBase); setConnectionOpen(false); }} />}

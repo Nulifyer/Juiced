@@ -1,7 +1,7 @@
 export type Provider = "external-http" | "llama-cpp" | "whisper-cpp" | "stable-diffusion-cpp" | "kokoros" | "parakeet" | "moonshine" | "asr4all" | "fastflowlm";
 const providers: Provider[] = ["external-http", "llama-cpp", "whisper-cpp", "stable-diffusion-cpp", "kokoros", "parakeet", "moonshine", "asr4all", "fastflowlm"];
 export type LaunchOptions = { context_tokens: number | null; threads: number | null; gpu_layers: number | null; parallel_slots: number | null };
-export type LaunchDraft = { context: string; threads: string; gpu: string };
+export type LaunchDraft = { context: string; threads: string; gpu: string; slots?: string };
 export type ModelOptions = { model: string; revision: number; provider: Provider; saved: LaunchOptions; effective_launch: LaunchOptions | null; physical_slots: number; context_semantics: string; options_authority?: "local-profile" | "native-settings"; editable_fields?: string[]; defaults?: Record<string, unknown>; extra_args?: string[]; image_defaults?: Record<string, unknown>; asr_options?: Record<string, unknown> };
 export type ModelContext = {
   schema_version: number; model: string; revision: number; provider: Provider;
@@ -36,10 +36,10 @@ export function parseModelContext(value: unknown): ModelContext {
   return value as ModelContext;
 }
 export function launchDraft(value: LaunchOptions): LaunchDraft {
-  return { context: value.context_tokens?.toString() ?? "", threads: value.threads?.toString() ?? "", gpu: value.gpu_layers?.toString() ?? "" };
+  return { context: value.context_tokens?.toString() ?? "", threads: value.threads?.toString() ?? "", gpu: value.gpu_layers?.toString() ?? "", slots: value.parallel_slots?.toString() ?? "" };
 }
 export function sameDraft(left: LaunchDraft, right: LaunchDraft): boolean {
-  return left.context === right.context && left.threads === right.threads && left.gpu === right.gpu;
+  return left.context === right.context && left.threads === right.threads && left.gpu === right.gpu && (left.slots ?? "") === (right.slots ?? "");
 }
 function optionalSetting(value: string, name: string, minimum: number, maximum: number): number | null {
   if (!value.trim()) return null;
@@ -48,12 +48,13 @@ function optionalSetting(value: string, name: string, minimum: number, maximum: 
   if (!Number.isSafeInteger(parsed) || parsed < minimum || parsed > maximum) throw new Error(`${name} must be between ${minimum} and ${maximum}.`);
   return parsed;
 }
+/** Without a slots draft the saved slot count is kept as it is. */
 export function launchOptions(draft: LaunchDraft, physicalSlots: number | null): LaunchOptions {
-  return { context_tokens: optionalSetting(draft.context, "Total context budget", 1, 2147483647), threads: optionalSetting(draft.threads, "Threads", 1, 65536), gpu_layers: optionalSetting(draft.gpu, "GPU layers", 0, 2147483647), parallel_slots: physicalSlots };
+  return { context_tokens: optionalSetting(draft.context, "Total context budget", 1, 2147483647), threads: optionalSetting(draft.threads, "Threads", 1, 65536), gpu_layers: optionalSetting(draft.gpu, "GPU layers", 0, 2147483647), parallel_slots: draft.slots === undefined ? physicalSlots : optionalSetting(draft.slots, "Slots", 1, 65536) };
 }
 export function editedLaunchOptions(view: ModelOptions, draft: LaunchDraft): LaunchOptions {
   if (view.options_authority === "native-settings") {
-    if (draft.threads.trim() || draft.gpu.trim()) throw new Error("Backend placement and threads stay with the imported profile.");
+    if (draft.threads.trim() || draft.gpu.trim() || draft.slots?.trim()) throw new Error("Backend placement, threads and slots stay with the imported profile.");
     return launchOptions({ context: draft.context, threads: "", gpu: "" }, null);
   }
   return launchOptions(draft, view.saved.parallel_slots);

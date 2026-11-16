@@ -30,6 +30,15 @@ export function ago(ms: number, now = Date.now()): string {
 
 const marks: Record<CheckStep["status"], string> = { pass: "✓", fail: "✗", skip: "–", info: "" };
 
+const shortSkips: Record<string, string> = { thinking: "none", vision: "no projector" };
+
+/** What a check row shows; a passing chat step shows its time, not the model's reply. */
+export function stepDetail(step: CheckStep): { text: string; title?: string } {
+  if (step.status === "skip" && shortSkips[step.id]) return { text: shortSkips[step.id]!, title: step.detail };
+  if (step.id === "chat" && step.status === "pass" && typeof step.ms === "number") return { text: `${(step.ms / 1000).toFixed(1)} s`, title: step.detail };
+  return { text: step.detail };
+}
+
 /** The last model check and a button to run one. */
 export function ModelCheck({ model, client, online, disabled }: { model: Model; client: Client; online: boolean; disabled: boolean }) {
   const [result, setResult] = useState<CheckResult | null>(null);
@@ -61,7 +70,7 @@ export function ModelCheck({ model, client, online, disabled }: { model: Model; 
     <div className="section-heading"><div className="page-title"><h3>Check</h3><HelpTip label="Model check">A few short real requests: chat, tool calls, the thinking switch and image input where the model declares them, plus decode speed. Juiced runs it after a chat model starts with new settings or a new engine.</HelpTip></div>
       {result && <Badge tone={result.passed ? "good" : "bad"}>{result.passed ? "Passed" : "Failed"}</Badge>}</div>
     {result?.error && <p className="inline-error">{result.error}</p>}
-    {result && result.steps.length > 0 && <ul className="check-steps">{result.steps.map((step) => <li key={step.id} className={`check-${step.status}`}><span className="check-mark" aria-hidden="true">{marks[step.status]}</span><span>{step.label}</span><span className="muted">{step.detail}</span></li>)}</ul>}
+    {result && result.steps.length > 0 && <ul className="check-steps">{result.steps.map((step) => { const detail = stepDetail(step); return <li key={step.id} className={`check-${step.status}`}><span className="check-mark" aria-hidden="true">{marks[step.status]}</span><span>{step.label}</span><span className="muted" title={detail.title}>{detail.text}</span></li>; })}</ul>}
     {result && <p className="field-help">Checked {ago(result.checked_at_ms)}{result.current ? "" : " · from an earlier launch"}</p>}
     {!result && <p className="field-help">Not checked yet.</p>}
     <div className="action-row"><Button disabled={disabled || running || !online || model.policy === "disabled"} onClick={() => void run()}>{running ? "Checking…" : model.loaded ? "Run check" : "Load and check"}</Button></div>
