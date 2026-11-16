@@ -46,6 +46,12 @@ Every report item is either fixed with evidence or listed below as decided other
 - Tune on Coder-Next live (reworked flow, first real run): baseline 340.8/23.1/51.8 (prefill/decode/rewrite tok/s); ubatch 1024 365.0/22.9/49.5; 2048 390.9/23.1/51.2 (kept); flash attention 361.1/23.1/50.9; speculation off 394.5/23.0/22.7. Saved options and extra_args unchanged (revision 169 to 189), tuned layer 1024 -> 2048 without the trial marker, reservation +1.2 GiB, post-Tune check passed.
 - v0.11.3 (c8c2e0e3 fixes; run 43901811182 green; release page https://github.com/Nulifyer/Juiced/releases/tag/v0.11.3) deployed to stack 83: 4 Hot models in about 1 min; untyped Ollama chat and show work; GPU reports null with `amdgpu-sysfs-unverified`; release check current v0.11.3. Production console checked read-only in both themes (0 non-GET requests). Homelab stacks/juiced/compose.yaml pins v0.11.3 (untracked, as before).
 
+## Follow-ups (2026-11-16, after v0.11.3)
+
+- Tune answer checks (85650300): trials run at temperature 0 with a fixed seed; a trial that loses an answer the current settings got right (hidden prompt marker, exact count, exact rewrite) is not kept; a kept change below 80% text agreement warns. Live Coder-Next and Qwen3-4B pass all three checks on current settings. Depth benchmark on Coder-Next (43K/73K tokens): flash attention on equals auto; off exceeds the 80 GiB budget; q8_0 KV is 28-35% slower at decode; settings restored to revision 193 (same saved, extra_args, defaults and tuned layer).
+- helper-fable-quants 2e137512 (fast-forwarded): Discover quant list no longer jumps (scroll re-centering, label-keyed quants, refresh status line, sticky detail); the inspector Overview lists a model's quants with Open/Add/Get. Open: exact repository lookup needs a `repo=` parameter on `/juiced/library/search` (search ranking is relied on today).
+- Not released yet.
+
 ## Next action
 
 None for this audit. Open from earlier ledgers: the later-work list in drop-in-replacement.md.
