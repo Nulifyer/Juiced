@@ -192,7 +192,7 @@ function JuicedDefaults({ model, client, defaults, revision, disabled, mutate }:
       try {
         const view = parseTune(await client.request<unknown>(tunePath));
         if (cancelled) return;
-        setTune((previous) => { if (previous.state === "running" && view.state === "done") notify(view.arguments?.length ? `Tune kept ${view.arguments.join(" ")} for ${model.id}.` : `Tune found nothing faster than ${model.id}'s current settings.`); if (previous.state === "running" && view.state === "failed") notify(view.error ?? "Tune failed.", "error"); return view; });
+        setTune((previous) => { if (previous.state === "running" && view.state === "done") { notify(view.arguments?.length ? `Tune kept ${view.arguments.join(" ")} for ${model.id}.` : `Tune found nothing faster than ${model.id}'s current settings.`); if (view.warning) notify(view.warning, "error"); } if (previous.state === "running" && view.state === "failed") notify(view.error ?? "Tune failed.", "error"); return view; });
         if (view.state === "running") timer = window.setTimeout(() => void poll(), 2000);
       } catch { /* The tune view is optional. */ }
     };

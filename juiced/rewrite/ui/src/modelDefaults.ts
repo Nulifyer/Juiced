@@ -12,7 +12,7 @@ const record = (value: unknown): Record<string, unknown> => value && typeof valu
 export const sourceLabels: Record<DefaultSource, string> = { juiced: "Juiced", family: "Model family", "model-file": "Model file", recipe: "Tested recipe", tuned: "Measured here" };
 
 export type TuneSpeed = { prefill_tps: number; decode_tps: number; rewrite_tps: number };
-export type TuneView = { state: "idle" | "running" | "done" | "failed"; step?: string; error?: string; candidates: { label: string; speed: TuneSpeed }[]; arguments?: string[] };
+export type TuneView = { state: "idle" | "running" | "done" | "failed"; step?: string; error?: string; candidates: { label: string; speed: TuneSpeed }[]; arguments?: string[]; warning?: string };
 
 export function parseTune(value: unknown): TuneView {
   const body = record(value);
@@ -24,7 +24,7 @@ export function parseTune(value: unknown): TuneView {
     const number = (key: string) => typeof speed[key] === "number" ? speed[key] as number : 0;
     return typeof entry.label === "string" ? [{ label: entry.label, speed: { prefill_tps: number("prefill_tps"), decode_tps: number("decode_tps"), rewrite_tps: number("rewrite_tps") } }] : [];
   });
-  return { state, step: typeof body.step === "string" ? body.step : undefined, error: typeof body.error === "string" ? body.error : undefined, candidates, arguments: Array.isArray(result.arguments) ? result.arguments.filter((item): item is string => typeof item === "string") : undefined };
+  return { state, step: typeof body.step === "string" ? body.step : undefined, error: typeof body.error === "string" ? body.error : undefined, candidates, arguments: Array.isArray(result.arguments) ? result.arguments.filter((item): item is string => typeof item === "string") : undefined, warning: typeof result.warning === "string" ? result.warning : undefined };
 }
 
 export function parseModelDefaults(value: unknown): ModelDefaults | null {

@@ -45,6 +45,8 @@ test("a tune view reads running progress and a finished result", () => {
   expect(running.state).toBe("running");
   expect(running.candidates[0]!.speed.prefill_tps).toBe(332.4);
   const done = parseTune({ state: "done", result: { arguments: ["--ubatch-size", "1024"], measurements: { candidates: [{ label: "a", speed: {} }] } } });
+  expect(done.warning).toBeUndefined();
+  expect(parseTune({ state: "done", result: { arguments: [], warning: "m stayed loaded after Tune." } }).warning).toBe("m stayed loaded after Tune.");
   expect(done.arguments).toEqual(["--ubatch-size", "1024"]);
   expect(done.candidates).toHaveLength(1);
   expect(parseTune({ state: "weird" }).state).toBe("idle");

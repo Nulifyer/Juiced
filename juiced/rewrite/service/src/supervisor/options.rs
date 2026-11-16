@@ -647,6 +647,10 @@ impl Manager {
             view["apply"] = serde_json::json!("reload");
             view["restarted"] = serde_json::json!(restart);
         }
+        // The view is read after any restart and can already show a later writer's change. Its
+        // revision stays the one this save published, so a caller saving again on top of it
+        // gets a conflict instead of overwriting that change.
+        view["revision"] = serde_json::json!(replacement.spec.revision);
         Ok(view)
     }
 
@@ -977,10 +981,12 @@ mod tests {
             juiced_defaults: None,
             tuned: Some(Some(trial)),
         };
-        manager
+        let saved = manager
             .apply_llama("one", revision, change, OptionsApply::NextLoad)
             .await
             .unwrap();
+        let committed = manager.options("one").await.unwrap()["revision"].clone();
+        assert_eq!(saved["revision"], committed);
         assert_eq!(manager.interrupted_tunes(), ["one"]);
         manager.recover_interrupted_tunes().await;
         assert!(manager.interrupted_tunes().is_empty());

@@ -182,18 +182,36 @@ impl Run<'_, '_> {
             .unwrap_or_else(|_| Err(timed_out()))
     }
 
-    /// Unloads the model, waiting out requests a client is still sending it.
-    async fn unload(&self) {
-        for _ in 0..40 {
+    /// Unloads the model, waiting out requests a client is still sending it; returns why the
+    /// model stayed loaded, if it did. A Hot model stays loaded by design.
+    async fn unload(&self) -> Option<String> {
+        let mut busy = 0;
+        loop {
             match self
                 .context
                 .post("unload", json!({"model_name": self.id}))
                 .await
             {
-                Err(Failure::Route(error)) if error["error"]["code"] == "worker_busy" => {
+                Ok(_) => return None,
+                Err(Failure::Route(error)) if error["error"]["code"] == "worker_hot" => {
+                    return None;
+                }
+                Err(Failure::Route(error))
+                    if error["error"]["code"] == "worker_busy" && busy < 40 =>
+                {
+                    busy += 1;
                     tokio::time::sleep(std::time::Duration::from_secs(3)).await;
                 }
-                _ => return,
+                Err(failure) => {
+                    let message = failure.error()["message"]
+                        .as_str()
+                        .unwrap_or("the unload failed")
+                        .to_owned();
+                    return Some(format!(
+                        "{} stayed loaded after Tune, although it was not loaded before: {message}",
+                        self.id
+                    ));
+                }
             }
         }
     }
@@ -332,9 +350,7 @@ pub(super) async fn run(context: &Context<'_>, id: &str, progress: Progress) -> 
     };
     let outcome = search(&mut run, &options).await;
     run.report("Saving the result");
-    if !was_loaded {
-        run.unload().await;
-    }
+    let stayed_loaded = if was_loaded { None } else { run.unload().await };
     let saved = match &outcome {
         Ok(result) if !result["arguments"].as_array().is_none_or(Vec::is_empty) => {
             let body = json!({
@@ -350,7 +366,12 @@ pub(super) async fn run(context: &Context<'_>, id: &str, progress: Progress) -> 
         Err(_) => Ok(()),
     };
     let failure = match (outcome, saved) {
-        (Ok(result), Ok(())) => return Ok(result),
+        (Ok(mut result), Ok(())) => {
+            if let Some(warning) = stayed_loaded {
+                result["warning"] = json!(warning);
+            }
+            return Ok(result);
+        }
         (Ok(_), Err(failure)) | (Err(failure), _) => failure,
     };
     // A failed final reload rolls back to the last trial, so cleanup follows either failure.
