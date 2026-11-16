@@ -33,7 +33,8 @@ fingerprint.
   conversation automatically, but it still counts toward the budget. Select the
   pin again to release it.
 - Select **Forget** to delete one conversation, or **Forget all** to delete every
-  saved conversation. The next turn then processes the whole prompt again.
+  saved conversation, kept ones included. **Forget all** asks first and names the
+  count. The next turn then processes the whole prompt again.
 
 **Engine changed** marks a conversation saved by a different engine build or
 launch settings. It cannot be restored and will be replaced. **Incomplete** marks
@@ -60,9 +61,8 @@ when the engine cannot use the chosen mode, for example
 - **Still loaded**: the engine still held this conversation or its opening messages.
 - **Restored from disk**: Juiced first loaded a saved conversation with the same
   opening messages.
-- **Processed in full**: nothing was cached, so the whole prompt was processed.
-- **Not cached**: the client turned caching off for the request with
-  `"cache_prompt": false`.
+- No badge: the whole prompt was processed, because nothing was cached or the
+  client turned caching off with `"cache_prompt": false`.
 
 **Diagnostics → Requests** shows the same detail for every request.
 

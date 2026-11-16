@@ -100,8 +100,10 @@ test("connection settings keep the API key in memory and never in local storage"
 test("success toasts dismiss themselves and the footer shows live usage", async ({ page }) => {
   await open(page);
   const footer = page.getByRole("contentinfo", { name: "Live usage" });
-  await expect(footer).toContainText(/CPU\s*\d+(\.\d)?%/);
-  await expect(footer).toContainText(/RAM\s*\d+(\.\d)? GiB/);
+  if ((page.viewportSize()?.width ?? 1280) > 540) {
+    await expect(footer).toContainText(/CPU\s*\d+(\.\d)?%/);
+    await expect(footer).toContainText(/RAM\s*\d+(\.\d)? GiB/);
+  }
   await serviceMenu(page, "Pause new requests");
   const toast = toasts(page).getByRole("status");
   await expect(toast).toContainText("Paused new requests.");
@@ -150,4 +152,83 @@ test("a saved Library page opens Models", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Models", level: 1, exact: true })).toBeVisible();
   await expect(modelsTab(page, "Installed")).toHaveAttribute("aria-selected", "true");
   await expect(page.getByRole("navigation", { name: "Destinations", includeHidden: true }).getByRole("button", { name: "Library", includeHidden: true })).toHaveCount(0);
+});
+
+test("the topbar has no Preview badge and a newer release shows a quiet sidebar link", async ({ page }) => {
+  await page.route("**/v1/juiced/state", async (route) => {
+    const state = await (await route.fetch()).json();
+    await route.fulfill({ json: { ...state, release: { check: true, current: "0.1.0", latest: "v0.10.1", url: "https://github.com/Nulifyer/Juiced/releases/tag/v0.10.1", checked_at_ms: Date.now(), newer: true } } });
+  });
+  await open(page);
+  await expect(page.locator(".topbar")).not.toContainText("Preview");
+  const menu = page.getByRole("button", { name: "Toggle navigation" });
+  if (await menu.isVisible()) await menu.click();
+  const link = page.getByRole("link", { name: "v0.10.1 available" });
+  await expect(link).toBeVisible();
+  await expect(link).toHaveAttribute("href", "https://github.com/Nulifyer/Juiced/releases/tag/v0.10.1");
+  await expect(page.locator(".sidebar-version")).toHaveText(/^Juiced 0\.1\.0 · \d+ loaded$/);
+});
+
+test("release notices turn off and on from the status menu and persist in the service", async ({ page, request }) => {
+  const service = api(request);
+  const state = async () => (await service.json<{ release: { check: boolean; latest: string | null; newer: boolean } }>("/v1/juiced/state")).release;
+  try {
+    await expect.poll(async () => (await state()).latest).toBe("v0.1.0");
+    expect((await state()).newer).toBe(false);
+    await open(page);
+    await expect(page.getByRole("link", { name: /available$/ })).toHaveCount(0);
+    await page.getByRole("button", { name: "Service status" }).click();
+    const item = page.getByRole("menu").getByRole("menuitemcheckbox", { name: "Release notices" });
+    await expect(item).toHaveAttribute("aria-checked", "true");
+    await item.click();
+    await expect(toasts(page).getByRole("status")).toContainText("Release notices are off.");
+    expect(await state()).toMatchObject({ check: false, latest: null });
+    await page.getByRole("button", { name: "Service status" }).click();
+    await expect(item).toHaveAttribute("aria-checked", "false");
+    await item.click();
+    await expect(toasts(page).getByRole("status")).toContainText("Release notices are on.");
+    expect((await state()).check).toBe(true);
+  } finally {
+    await service.post("/v1/juiced/release", { enabled: true });
+  }
+});
+
+test("an unreachable service says so in plain words and keeps retrying", async ({ page }) => {
+  await open(page);
+  await page.route("**/v1/**", (route) => route.abort("connectionrefused"));
+  const notice = page.locator(".notice.error");
+  await expect(notice).toContainText("Can't reach Juiced. Retrying…");
+  await expect(notice).not.toContainText("Failed to fetch");
+  await page.unroute("**/v1/**");
+  await expect(notice).toHaveCount(0);
+});
+
+test("the theme is a per-browser choice of Auto, Dark or Light", async ({ page }) => {
+  await open(page);
+  const background = () => page.evaluate(() => getComputedStyle(document.documentElement).backgroundColor);
+  const dark = await background();
+  await serviceMenu(page, "Connection settings");
+  const dialog = page.getByRole("dialog", { name: "Connection settings" });
+  const themes = dialog.getByRole("radiogroup", { name: "Theme" });
+  await expect(themes.getByRole("radio", { name: "Auto" })).toHaveAttribute("aria-checked", "true");
+  await themes.getByRole("radio", { name: "Light" }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  expect(await background()).toBe("rgb(245, 246, 248)");
+  expect(await page.evaluate(() => localStorage.getItem("juiced.rewrite.theme"))).toBe("light");
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+  await page.reload();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await noHorizontalOverflow(page, "Light theme");
+  await serviceMenu(page, "Connection settings");
+  await dialog.getByRole("radiogroup", { name: "Theme" }).getByRole("radio", { name: "Auto" }).click();
+  await expect(page.locator("html")).not.toHaveAttribute("data-theme", /.+/);
+  expect(await page.evaluate(() => localStorage.getItem("juiced.rewrite.theme"))).toBeNull();
+  expect(await background()).toBe(dark);
+});
+
+test("the live usage footer is hidden on phones, where the Dashboard shows the same numbers", async ({ page }) => {
+  await open(page);
+  const footer = page.getByRole("contentinfo", { name: "Live usage" });
+  if ((page.viewportSize()?.width ?? 1280) <= 540) await expect(footer).toBeHidden();
+  else await expect(footer).toBeVisible();
 });

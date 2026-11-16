@@ -36,6 +36,20 @@ function summary(value: Record<string, unknown>): StorageSummary {
   };
 }
 
+/** Separate mounts of one pool (bind mounts, ZFS datasets) report identical space; show them once. */
+export function mergeVolumes(volumes: Volume[]): (Volume & { names: string[] })[] {
+  const merged: (Volume & { names: string[] })[] = [];
+  for (const volume of volumes) {
+    const same = merged.find((known) => known.total_bytes > 0 && known.total_bytes === volume.total_bytes && known.available_bytes === volume.available_bytes && known.read_only === volume.read_only);
+    if (!same) { merged.push({ ...volume, names: [volume.path], paths: [...volume.paths], roles: [...volume.roles] }); continue; }
+    same.names.push(volume.path);
+    for (const path of volume.paths) if (!same.paths.includes(path)) same.paths.push(path);
+    for (const role of volume.roles) if (!same.roles.includes(role)) same.roles.push(role);
+    same.low ||= volume.low;
+  }
+  return merged;
+}
+
 export const parseStorageSummary = (value: unknown): StorageSummary => summary(object(value));
 
 export function parseStorage(value: unknown): StorageView {

@@ -35,7 +35,8 @@ Once Barista is on, the **Barista** button opens the chat directly. The setup
 appears again only when you select the settings button, or when the chosen
 model is no longer registered.
 
-The chat lives in the browser tab and clears when you close it. **Clear** starts
+The chat lives in the browser tab and clears when you close it. An empty chat
+offers three suggestions; select one to put it in the message box. **Clear** starts
 over. The panel shows the model, the permission and what Barista is doing.
 Replies render as Markdown. Each tool Barista runs shows as one short line, and
 its reasoning folds into a **Thought for Ns** line that you can expand. When

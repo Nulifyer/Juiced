@@ -1,6 +1,7 @@
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::{
+    collections::BTreeSet,
     io::Read,
     path::{Path, PathBuf},
     process::Stdio,
@@ -285,6 +286,23 @@ pub fn read_amdgpu(root: &Path) -> (Vec<Gpu>, SourceState) {
     (gpus, state)
 }
 
+/// Some integrated AMD GPUs (seen on a Radeon 890M) report `gpu_busy_percent` 100 while idle.
+/// A reading of 100 counts only for a card that has also reported less since the service started.
+pub fn screen_pinned(gpus: &mut [Gpu], varied: &mut BTreeSet<String>) {
+    for gpu in gpus.iter_mut().filter(|gpu| gpu.vendor == "amd") {
+        match gpu.utilization_percent {
+            Some(value) if value < 100.0 => {
+                varied.insert(gpu.id.clone());
+            }
+            Some(_) if !varied.contains(&gpu.id) => {
+                gpu.utilization_percent = None;
+                gpu.utilization_source = Some("amdgpu-sysfs-unverified");
+            }
+            _ => {}
+        }
+    }
+}
+
 pub async fn query_nvidia(program: &Path, timeout: Duration) -> Result<Vec<Gpu>, SourceState> {
     let mut command = tokio::process::Command::new(program);
     command
@@ -415,6 +433,7 @@ struct Shared {
     last_read: Mutex<Instant>,
     closed: AtomicBool,
     stop: tokio::sync::Notify,
+    varied: Mutex<BTreeSet<String>>,
 }
 
 impl Shared {
@@ -447,6 +466,7 @@ impl Sampler {
                 last_read: Mutex::new(Instant::now()),
                 closed: AtomicBool::new(false),
                 stop: tokio::sync::Notify::new(),
+                varied: Mutex::default(),
             }),
         }
     }
@@ -539,10 +559,17 @@ async fn run(shared: Arc<Shared>) {
         return;
     }
     loop {
-        let sample = tokio::select! {
+        let mut sample = tokio::select! {
             _ = shared.stop.notified() => return,
             sample = collector.collect() => sample,
         };
+        screen_pinned(
+            &mut sample.gpus,
+            &mut shared
+                .varied
+                .lock()
+                .unwrap_or_else(|error| error.into_inner()),
+        );
         if shared.closed.load(Ordering::Acquire) {
             return;
         }
@@ -853,6 +880,87 @@ mod tests {
             query_nvidia(&directory.path().join("absent"), Duration::from_secs(1)).await,
             Err(SourceState::Unavailable)
         );
+    }
+
+    #[test]
+    fn a_pinned_amd_busy_reading_is_unknown_until_the_card_reports_less() {
+        let gpu = |id: &str, vendor: &'static str, busy: f64| Gpu {
+            id: id.into(),
+            vendor,
+            name: None,
+            index: None,
+            utilization_percent: Some(busy),
+            memory_used_bytes: None,
+            memory_total_bytes: None,
+            shared_memory_used_bytes: None,
+            shared_memory_total_bytes: None,
+            utilization_source: Some(if vendor == "amd" {
+                "amdgpu-sysfs"
+            } else {
+                "nvidia-smi"
+            }),
+        };
+        let mut varied = BTreeSet::new();
+        let mut pinned = vec![
+            gpu("amdgpu:a", "amd", 100.0),
+            gpu("nvidia:b", "nvidia", 100.0),
+        ];
+        screen_pinned(&mut pinned, &mut varied);
+        assert_eq!(pinned[0].utilization_percent, None);
+        assert_eq!(
+            pinned[0].utilization_source,
+            Some("amdgpu-sysfs-unverified")
+        );
+        assert_eq!(pinned[1].utilization_percent, Some(100.0));
+        let mut idle = vec![gpu("amdgpu:a", "amd", 3.0)];
+        screen_pinned(&mut idle, &mut varied);
+        assert_eq!(idle[0].utilization_percent, Some(3.0));
+        let mut busy = vec![gpu("amdgpu:a", "amd", 100.0), gpu("amdgpu:c", "amd", 100.0)];
+        screen_pinned(&mut busy, &mut varied);
+        assert_eq!(busy[0].utilization_percent, Some(100.0));
+        assert_eq!(busy[0].utilization_source, Some("amdgpu-sysfs"));
+        assert_eq!(busy[1].utilization_percent, None);
+    }
+
+    #[tokio::test]
+    async fn sampler_reports_no_busy_reading_for_a_card_pinned_at_100() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = fixture_config(directory.path());
+        write(
+            directory.path(),
+            "drm/card0/device/gpu_busy_percent",
+            "100\n",
+        );
+        let sampler = Sampler::new(config);
+        let first = sampler.current().await.expect("first sample");
+        assert_eq!(first.gpus[0].utilization_percent, None);
+        let projected = projection(Some(&first), sampler.interval());
+        assert_eq!(projected["gpu_percent"], Value::Null);
+        assert_eq!(
+            projected["gpus"][0]["utilization_source"],
+            "amdgpu-sysfs-unverified"
+        );
+        write(directory.path(), "drm/card0/device/gpu_busy_percent", "4\n");
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while sampler.current().await.unwrap().gpus[0].utilization_percent != Some(4.0) {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("varied sample");
+        write(
+            directory.path(),
+            "drm/card0/device/gpu_busy_percent",
+            "100\n",
+        );
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while sampler.current().await.unwrap().gpus[0].utilization_percent != Some(100.0) {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("trusted full reading");
+        sampler.close();
     }
 
     fn fixture_config(root: &Path) -> Config {

@@ -534,6 +534,11 @@ pub struct Config {
     pub session_cache: crate::sessions::Settings,
     #[serde(default = "default_inhibit_suspend")]
     pub inhibit_suspend: bool,
+    #[serde(
+        default = "default_release_check",
+        skip_serializing_if = "is_default_release_check"
+    )]
+    pub release_check: bool,
     #[serde(default)]
     pub admission: crate::admission::Settings,
     #[serde(default = "default_artifact_policy")]
@@ -653,6 +658,8 @@ struct ConfigWire {
     session_cache: crate::sessions::Settings,
     #[serde(default = "default_inhibit_suspend")]
     inhibit_suspend: bool,
+    #[serde(default = "default_release_check")]
+    release_check: bool,
     #[serde(default)]
     admission: crate::admission::Settings,
     #[serde(default = "default_artifact_policy")]
@@ -742,6 +749,7 @@ impl<'de> Deserialize<'de> for Config {
             cache_enabled: wire.cache_enabled,
             session_cache: wire.session_cache,
             inhibit_suspend: wire.inhibit_suspend,
+            release_check: wire.release_check,
             admission: wire.admission,
             artifact_source_policy: wire.artifact_source_policy,
             resident_budget_bytes: wire.resident_budget_bytes,
@@ -1061,6 +1069,14 @@ fn upload_maximum_is_default(bytes: &u64) -> bool {
 
 fn default_inhibit_suspend() -> bool {
     true
+}
+
+fn default_release_check() -> bool {
+    true
+}
+
+fn is_default_release_check(value: &bool) -> bool {
+    *value
 }
 
 pub const DEFAULT_IDLE_UNLOAD_MS: u64 = 900_000;

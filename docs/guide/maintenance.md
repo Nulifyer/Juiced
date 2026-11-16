@@ -27,6 +27,15 @@ never point two running containers at the same `/data`.
 
 A copy taken while Juiced runs can capture half-written files.
 
+## Know when a release is out
+
+Once a day, Juiced asks GitHub for the latest Juiced release. The request sends
+no data about your installation, and a failed check stays silent. When a newer
+release exists, the sidebar shows a **v0.10.x available** link next to the
+version. To stop the check, open the service status menu in the top bar and turn
+off **Release notices**. The setting is saved as `"release_check": false` in
+`config.json`.
+
 ## Update a Compose deployment
 
 1. Make a consistent backup.

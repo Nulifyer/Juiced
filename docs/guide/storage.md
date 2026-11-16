@@ -19,13 +19,16 @@ much space each store uses, what is safe to delete, and how much room is left.
 
 Logs stay in memory and in the container log; they use no space on `/data`.
 
+The volume list shows mounts that report the same free and total space once, for
+example `/data, /library` when both are datasets of one pool.
+
 ### v0.9.2 leftovers
 
 A volume that ran Juiced v0.9.2 still holds `/data/cache` (native engine builds,
 about 29 GB on a typical install) and `/data/prompt-state`. This release does not
 use them. **Usage** totals them as **v0.9.2 leftovers**, and **Reclaim space**
 lists each one. Juiced never removes them on its own. `/data/config` is listed
-too but kept, because the first start adopts models and settings from it.
+too as **v0.9.2 settings**, kept for settings import.
 
 ## Reclaim space
 

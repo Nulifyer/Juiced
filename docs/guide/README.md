@@ -4,6 +4,10 @@ Use Juiced's browser console to download a chat model and send a test prompt.
 You need a [running Juiced server](install/README.md), disk space for the weights,
 and enough memory for the model and its context.
 
+The console follows your system's light or dark setting. To pick one for this
+browser, open the service status menu, select **Connection settings** and choose
+**Auto**, **Dark** or **Light** under **Theme**.
+
 ## Download a model
 
 1. Open `http://localhost:8080`, or your server's configured address.
@@ -47,7 +51,7 @@ clears chat results. Use a connected client for conversations you want to keep.
 Open **Connect** and choose your client's protocol under **Protocols**. Copy the
 address shown for it. For an OpenAI-compatible client on the same machine, the
 address is `http://localhost:8080/v1`. Under **How to connect**, pick the model
-and select **Copy model ID** to keep its spelling intact. Follow
+and select **Copy ID** to keep its spelling intact. Follow
 [connect an application](../integrations/README.md) for remote addresses, API
 keys, and compatibility limits.
 

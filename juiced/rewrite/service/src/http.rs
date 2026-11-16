@@ -259,6 +259,7 @@ define_routes! {
     (get, "/juiced/endpoints", endpoints, "read"),
     (get, "/juiced/admission", admission, "operator"),
     (post, "/juiced/admission", pause, "operator"),
+    (post, "/juiced/release", release_set, "operator"),
     (get, "/models/{model}", model_detail, "read"),
     (get, "/models/{model}/options", model_options, "read"),
     (post, "/models/{model}/options", model_options_set, "operator"),
@@ -1096,6 +1097,28 @@ async fn pause(
     Ok(Json(state.manager.pause(change.paused)?))
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReleaseChange {
+    enabled: bool,
+}
+async fn release_set(
+    State(state): State<AppState>,
+    ApiJson(change): ApiJson<ReleaseChange>,
+) -> Result<Json<Value>, ApiError> {
+    let manager = state.manager.clone();
+    tokio::spawn(async move { manager.set_release_check(change.enabled).await })
+        .await
+        .map_err(|_| {
+            ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "release_setting_interrupted",
+                "The release check setting was interrupted. Check it and retry.",
+            )
+        })??;
+    Ok(Json(json!({"release": state.manager.release_notice()})))
+}
+
 async fn model_options(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -1460,7 +1483,7 @@ async fn capabilities(State(state): State<AppState>, headers: HeaderMap) -> Resp
 
 async fn service_state(State(state): State<AppState>) -> Json<Value> {
     Json(
-        json!({"schema_version": 1, "version": crate::VERSION, "implementation": "rust-experiment", "resources": state.manager.resources(), "residency": state.manager.residency_settings(), "native_adoption": state.manager.native_adoption_status()}),
+        json!({"schema_version": 1, "version": crate::VERSION, "implementation": "rust-experiment", "resources": state.manager.resources(), "residency": state.manager.residency_settings(), "native_adoption": state.manager.native_adoption_status(), "release": state.manager.release_notice()}),
     )
 }
 
@@ -1648,7 +1671,7 @@ async fn protocols(State(state): State<AppState>) -> Json<Value> {
 
 pub(crate) fn protocol_inventory() -> Value {
     json!([
-        {"id": "openai", "support": "partial", "operations": ["models", "chat/completions", "completions", "responses", "embeddings", "audio/transcriptions", "audio/speech", "images/generations", "images/edits", "images/variations"], "note": "Forwarded only when the configured worker declares support."},
+        {"id": "openai", "support": "partial", "operations": ["models", "chat/completions", "completions", "responses", "embeddings", "audio/transcriptions", "audio/speech", "images/generations", "images/edits", "images/variations"]},
         {"id": "anthropic", "support": "partial", "note":"Selected text/tool Messages codecs and engine-native token counts; native usage required; advanced hosted tools unsupported."}, {"id": "ollama", "support": "partial", "note":"Chat, raw generate, embeddings and discovery; unsupported options are rejected."},
         {"id": "mcp", "support": "partial", "note":"Stateless JSON Streamable HTTP, explicit-model inference tools and credential/session-scoped cancellation."}, {"id": "automatic1111", "support": "partial", "note":"sd-models, options, samplers, schedulers, progress and txt2img (up to 4 images) through sd.cpp workers; img2img and interrupt return 501."},
         {"id": "realtime", "support": "partial", "note": "WebSocket transcription only: pcm16 at 24 kHz with server VAD."}, {"id": "wyoming", "support": "partial", "note": "Speech to text and text to speech for Home Assistant on its own TCP port. No authentication: listen on a trusted network only."}

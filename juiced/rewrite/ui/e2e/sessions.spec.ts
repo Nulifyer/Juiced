@@ -8,7 +8,7 @@ const view = (mode: string, models: Record<string, string> = {}, sessions = 2) =
     { model: "fixture.chat-small-q4", mode: models["fixture.chat-small-q4"] ?? mode, effective: mode, reason: null, sessions, used_bytes: 12 * 1024 ** 2, budget_bytes: 4 * 1024 ** 3, slots: [{ slot: 0, state: "holding", tokens: 3187, units: 1 }, { slot: 1, state: "empty", tokens: null, units: null }] },
     { model: "fixture.speech-tiny", mode, effective: "off", reason: "engine_unsupported", sessions: 0, used_bytes: 0, budget_bytes: 4 * 1024 ** 3, slots: [] },
   ],
-  sessions: Array.from({ length: sessions }, (_, index) => ({ session: digest(String.fromCharCode(97 + index)), kind: index === 0 ? "header" : "prefix", model: "fixture.chat-small-q4", principal: "operator", protocol: "chat", bytes: 6 * 1024 ** 2, last_used_unix_ms: Date.now() - (index + 1) * 90_000, execution_current: index === 0 ? true : index === 1 ? false : null, state: "saved", model_tag: "abc" })),
+  sessions: Array.from({ length: sessions }, (_, index) => ({ session: digest(String.fromCharCode(97 + index)), kind: index === 0 ? "header" : "prefix", model: "fixture.chat-small-q4", principal: "operator", protocol: "chat", bytes: 6 * 1024 ** 2, last_used_unix_ms: Date.now() - (index + 1) * 90_000, execution_current: index === 0 ? true : index === 1 ? false : null, state: "saved", expires_unix_ms: index === 2 ? Date.now() + 6.5 * 86_400_000 : null, model_tag: "abc" })),
   totals: { budget_bytes: 8 * 1024 ** 3, bytes: sessions * 6 * 1024 ** 2, listed: sessions, sessions },
 });
 const turns = { capacity: 128, contains_content: false, data: [
@@ -42,13 +42,13 @@ test("Cache shows how each turn used the cache, changes modes and forgets conver
   await expect(recent.getByRole("listitem")).toHaveCount(3);
   await expect(recent.getByRole("listitem").first()).toContainText("Restored from disk");
   await expect(recent.getByRole("listitem").first()).toContainText("3,202 cached + 1 new tokens · restored in 93 ms · 0.19 s");
-  await expect(recent.getByRole("listitem").nth(1)).toContainText("Processed in full");
+  await expect(recent.getByRole("listitem").nth(1)).not.toContainText("Processed in full");
   await expect(recent.getByRole("listitem").nth(1)).toContainText("3,177 new tokens · 9.90 s");
   await expect(recent.getByRole("listitem").nth(2)).toContainText("Still loaded");
   await expect(recent.getByRole("listitem").nth(2)).toContainText("9 cached + 4 new tokens · 0.90 s");
   const overrides = page.getByRole("region", { name: "Model overrides" });
   await expect(overrides.getByRole("table", { name: "Overrides" })).toHaveCount(0);
-  await expect(overrides).toContainText("None. Every model uses Memory and disk.");
+  await expect(overrides.getByText("None", { exact: true })).toBeVisible();
   await expect(overrides.getByLabel("Model to override").getByRole("option")).toHaveText(["Choose a model…", "fixture.chat-small-q4"]);
 
   await summary.getByRole("radio", { name: "Memory only" }).click();
@@ -78,10 +78,19 @@ test("Cache shows how each turn used the cache, changes modes and forgets conver
   await expect(saved.getByRole("row", { name: "Conversation aaaaaaaa" })).not.toContainText("Engine changed");
   await expect(saved.getByRole("row", { name: "Conversation bbbbbbbb" })).toContainText("Engine changed");
   await expect(saved.getByRole("row", { name: "Conversation cccccccc" })).not.toContainText("Engine changed");
+  await expect(saved.getByRole("row", { name: "Conversation cccccccc" })).toContainText(/\dm ago · expires in 6d/);
   await saved.getByRole("row", { name: "Conversation aaaaaaaa" }).getByRole("button", { name: "Forget" }).click();
   expect(posts.at(-1)).toEqual({ action: "forget", session: digest("a") });
   await expect(conversations).toHaveCount(2);
+  const forgetCount = posts.length;
   await page.getByRole("region", { name: "Saved conversations" }).getByRole("button", { name: "Forget all" }).click();
+  const confirm = page.getByRole("dialog", { name: "Forget 2 saved conversations?" });
+  await confirm.getByRole("button", { name: "Cancel" }).click();
+  await expect(confirm).toHaveCount(0);
+  expect(posts.length).toBe(forgetCount);
+  await expect(conversations).toHaveCount(2);
+  await page.getByRole("region", { name: "Saved conversations" }).getByRole("button", { name: "Forget all" }).click();
+  await page.getByRole("dialog", { name: "Forget 2 saved conversations?" }).getByRole("button", { name: "Forget all" }).click();
   expect(posts.at(-1)).toEqual({ action: "forget" });
   await expect(page.getByRole("region", { name: "Saved conversations" })).toContainText("No saved conversations");
   await noHorizontalOverflow(page, "Cache sessions");

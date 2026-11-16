@@ -7,12 +7,14 @@ test("glance tiles and the running model render from service data", async ({ pag
   await expect(glance.getByRole("article", { name: "Requests" })).toContainText(/\d+ active/);
   await expect(glance.getByRole("article", { name: "Requests" })).toContainText(/of \d+ slots?/);
   await expect(glance.getByRole("article", { name: "Model memory" })).toContainText("/ 6.0 GiB");
-  await expect(glance.getByRole("article", { name: "Model memory" })).toContainText("free for another model");
+  await expect(glance.getByRole("article", { name: "Model memory" })).toContainText(/GiB free$/);
+  await expect(glance.getByRole("article", { name: "Requests" })).not.toContainText("last");
   await expect(glance.getByRole("meter", { name: "Model memory reserved" })).toBeVisible();
   await expect(page.getByRole("img", { name: /over the last two minutes/ }), "resource history lives in Diagnostics").toHaveCount(0);
   const running = page.getByRole("region", { name: "Running models" });
-  await expect(running.getByRole("button", { name: new RegExp(hotModel) })).toContainText("ready · Hot");
-  await expect(running.getByRole("button", { name: new RegExp(hotModel) })).toContainText(/Used .+ago|Used just now|Not used yet/);
+  await expect(running.getByRole("button", { name: new RegExp(hotModel) })).toContainText(/Hot · .*(idle \d+ (min|h|d)|used just now|not used yet)/);
+  await expect(running.getByRole("button", { name: new RegExp(hotModel) })).not.toContainText("ready");
+  await expect(running.getByRole("button", { name: new RegExp(hotModel) })).not.toContainText("busy");
   await expect(running).toContainText(/Hot \d+\/\d+ ready/);
   await expect(page.getByRole("button", { name: /refresh/i })).toHaveCount(0);
   await running.getByRole("button", { name: new RegExp(hotModel) }).click();
@@ -73,9 +75,32 @@ test("the GPU memory tile names the GPU and says when utilization has no reading
   await expect(card).toContainText("0.0% busy · AMD GPU");
   await expect(card.getByRole("meter", { name: "GPU memory used" })).toBeVisible();
   gpu = { ...gpu, name: "AMD Radeon 890M", gpu_percent: null };
-  await expect(card).toContainText("Utilization unavailable · AMD Radeon 890M");
+  await expect(card).toContainText("No busy reading · AMD Radeon 890M");
+  gpu = { ...gpu, gpu_percent: 37, integrated: true, shared_memory_used_bytes: 40 * 1024 ** 3, shared_memory_total_bytes: 72 * 1024 ** 3 };
+  await expect(card).toContainText("37% busy · shared");
+  await card.getByRole("button", { name: "About Shared GPU memory" }).click();
+  await expect(page.getByText("16.0 GiB reserved for the GPU plus up to 72.0 GiB of system memory.", { exact: false })).toBeVisible();
+  await page.keyboard.press("Escape");
   await expect(card).not.toContainText("No GPU detected");
   gpu = null;
   await expect(card).toContainText("No GPU detected");
   await expect(card.getByRole("meter")).toHaveCount(0);
+});
+
+test("an open network needs attention and opens API keys; a clear dashboard hides the panel", async ({ page }) => {
+  await open(page);
+  const attention = page.getByRole("region", { name: "Needs attention" });
+  const open_ = attention.getByRole("button", { name: /No API keys/ });
+  await expect(open_).toContainText("Anyone on this network has full access.");
+  await expect(page.locator("body")).not.toContainText("Everything looks healthy.");
+  await open_.click();
+  await expect(page.getByRole("heading", { name: "Connect", level: 1 })).toBeVisible();
+  await expect(tab(page, "Connect views", "API keys")).toHaveAttribute("aria-selected", "true");
+
+  await page.route("**/v1/juiced/access", (route) => route.fulfill({ json: { schema_version: 1, mode: "keys", store_error: null, keys: [], limits: { keys: 64, name_chars: 64, expiry_days: 3650 } } }));
+  await page.route("**/v1/juiced/requests", (route) => route.fulfill({ json: { data: [], capacity: 128, contains_content: false } }));
+  await page.route("**/v1/juiced/storage?summary=1", (route) => route.fulfill({ json: { schema_version: 1, summary: true, settings: { low_space_bytes: 1, reserve_bytes: 1 }, volumes: [], warnings: [] } }));
+  await navigate(page, "Dashboard");
+  await expect(page.getByRole("region", { name: "Running models" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Needs attention" })).toHaveCount(0);
 });

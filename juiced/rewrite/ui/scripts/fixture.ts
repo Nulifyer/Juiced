@@ -143,6 +143,7 @@ source = Bun.serve({
   fetch(request) {
     const url = new URL(request.url);
     if (url.pathname === "/fixture.json") return Response.json({ model_file: resolve(directory, "fixture.gguf"), source_url: `${url.origin}/weights.gguf`, upload_file: resolve(directory, "Upload-Sample-Q8_0.gguf"), upload_split: ["Upload-Split-00001-of-00002.gguf", "Upload-Split-00002-of-00002.gguf", "mmproj-Upload-F16.gguf"].map((name) => resolve(directory, "upload-split", name)), import_root: resolve(directory, "import"), cache_hub: resolve(directory, "huggingface", "hub"), library_root: resolve(directory, "library"), sha256, bytes: weights.length, command: executable("juiced-test-worker"), args: ["--port", "{port}", "--model", "{model}", "--events", resolve(directory, "managed.events"), "--slot-save-path", "{cache}"] });
+    if (url.pathname === "/repos/Nulifyer/Juiced/releases/latest") return Response.json({ tag_name: "v0.1.0", html_url: "https://github.com/Nulifyer/Juiced/releases/tag/v0.1.0" });
     if (url.pathname === "/speech-fixture.wav") return new Response(Bun.file(resolve(root, "../../test/test_speech_de.wav")));
     const releaseResponse = engineRelease(url);
     if (releaseResponse) return releaseResponse;
@@ -273,7 +274,7 @@ source = Bun.serve({
   }
   const { HF_TOKEN: _token, ...environment } = process.env;
   const child = Bun.spawn([executable("lemond"), "--config", config, "--listen", `127.0.0.1:${process.env.JUICED_PREVIEW_PORT ?? 13306}`, "--ui", resolve(root, "ui/dist")], {
-    cwd: root, stdout: "inherit", stderr: "inherit", env: { ...environment, LEMONADE_API_KEY: "", LEMONADE_ADMIN_API_KEY: "", JUICED_AUTOMATIC_MODEL_CHECKS: "0", JUICED_HUGGINGFACE_URL: `http://127.0.0.1:${source!.port}`, JUICED_TEST_ENGINE_RELEASES: `http://127.0.0.1:${source!.port}`, JUICED_TEST_HARDWARE_ROOT: hardware },
+    cwd: root, stdout: "inherit", stderr: "inherit", env: { ...environment, LEMONADE_API_KEY: "", LEMONADE_ADMIN_API_KEY: "", JUICED_AUTOMATIC_MODEL_CHECKS: "0", JUICED_HUGGINGFACE_URL: `http://127.0.0.1:${source!.port}`, JUICED_TEST_ENGINE_RELEASES: `http://127.0.0.1:${source!.port}`, JUICED_TEST_RELEASES_URL: `http://127.0.0.1:${source!.port}/repos/Nulifyer/Juiced/releases/latest`, JUICED_TEST_HARDWARE_ROOT: hardware },
   });
   const stop = () => child.kill("SIGTERM");
   process.once("SIGINT", stop); process.once("SIGTERM", stop);

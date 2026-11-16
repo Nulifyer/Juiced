@@ -280,6 +280,7 @@ async fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
         None
     };
     manager.start_residency();
+    let release_check = manager.start_release_check().ok();
     manager.recover_acquisitions().await;
     manager.recover_interrupted_tunes().await;
     let adoption = juiced_service::supervisor::native_adoption_from_env()
@@ -315,6 +316,9 @@ async fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
     if let Some(beacon) = beacon {
         beacon.abort();
         let _ = beacon.await;
+    }
+    if let Some(release_check) = release_check {
+        release_check.abort();
     }
     let settled = tokio::time::timeout_at(deadline, manager.shutdown())
         .await

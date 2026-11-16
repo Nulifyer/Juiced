@@ -1,4 +1,5 @@
 import type { Residency } from "./Residency";
+import { parseRelease, type ReleaseNotice } from "./release";
 
 export type Policy = "disabled" | "on-demand" | "hot";
 export const policyNames: Record<Policy, string> = { disabled: "Disabled", "on-demand": "On demand", hot: "Hot" };
@@ -40,7 +41,7 @@ export type RequestRecord = {
 export type CacheControlMemory = { state: "accounted" | "unavailable" | "legacy"; reason: string | null; metadata_bytes: number; scratch_bytes: number; reserved_bytes: number; outstanding_bytes: number; active_operations: number; bounds?: { bootstrap_bytes: number; metadata_bytes: number; scratch_bytes: number; state_scratch_bytes: number; page_scratch_bytes: number; response_bytes: number } };
 export type RuntimeControlMemory = { state: "accounted" | "legacy"; metadata_bytes: number; binding_bytes: number; binding_count: number; scratch_bytes: number; active_operations: number; reserved_bytes: number; outstanding_bytes: number; bounds: { metadata_bytes: number; bootstrap_bytes: number; import_bytes: number; response_work_bytes: number; response_bytes: number; binding_work_bytes: number } };
 export type Resources = { resident_budget_bytes: number | null; reserved_bytes: number; measured_memory_bytes: number | null; reservation_source: string; active_requests: number; paused?: boolean; cache_control_memory?: CacheControlMemory; runtime_control_memory?: RuntimeControlMemory };
-export type Snapshot = { models: Model[]; requests: RequestRecord[]; resources: Resources; version: string };
+export type Snapshot = { models: Model[]; requests: RequestRecord[]; resources: Resources; version: string; release: ReleaseNotice | null };
 
 export function bytes(value: number | null): string {
   if (value === null) return "Unavailable";
@@ -180,7 +181,7 @@ function parseRuntimeControl(value: unknown): RuntimeControlMemory | undefined {
 
 export function parseSnapshot(catalog: unknown, state: unknown, requests: unknown): Snapshot {
   const c = catalog as { schema_version?: unknown; data?: unknown };
-  const s = state as { schema_version?: unknown; implementation?: unknown; version?: unknown; resources?: Resources };
+  const s = state as { schema_version?: unknown; implementation?: unknown; version?: unknown; resources?: Resources; release?: unknown };
   const r = requests as { data?: unknown };
   if (c?.schema_version !== 1 || s?.schema_version !== 1 || s?.implementation !== "rust-experiment" || !Array.isArray(c.data) || !Array.isArray(r?.data) || typeof s.version !== "string" || !s.resources) {
     throw new Error("This console needs the matching Rust experiment. Check the service URL.");
@@ -202,7 +203,7 @@ export function parseSnapshot(catalog: unknown, state: unknown, requests: unknow
   }
   const control = parseCacheControl(s.resources.cache_control_memory);
   const runtime = parseRuntimeControl(s.resources.runtime_control_memory);
-  return { models: c.data, resources: { ...s.resources, ...(control ? { cache_control_memory: control } : {}), ...(runtime ? { runtime_control_memory: runtime } : {}) }, version: s.version, requests: r.data };
+  return { models: c.data, resources: { ...s.resources, ...(control ? { cache_control_memory: control } : {}), ...(runtime ? { runtime_control_memory: runtime } : {}) }, version: s.version, release: parseRelease(s.release), requests: r.data };
 }
 
 export function normalizeBase(value: string): string {

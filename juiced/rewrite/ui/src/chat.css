@@ -14,7 +14,7 @@
 .markdown hr { border: 0; border-top: 1px solid var(--border); margin: 1em 0; }
 .markdown :not(pre) > code { font-size: .88em; padding: 1px 5px; border-radius: 4px; background: var(--secondary); overflow-wrap: anywhere; }
 .markdown strong { font-weight: 600; }
-.md-code { border: 1px solid var(--border); border-radius: 8px; background: #101114; overflow: hidden; }
+.md-code { border: 1px solid var(--border); border-radius: 8px; background: var(--chrome); overflow: hidden; }
 .md-code-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 3px 4px 3px 10px; border-bottom: 1px solid var(--border); color: var(--muted); font-size: .75rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .md-code pre { margin: 0; padding: 10px 12px; overflow-x: auto; font-size: .78rem; line-height: 1.55; white-space: pre; }
 .md-code code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
@@ -44,7 +44,7 @@
 .sent-images img { display: block; height: 140px; width: auto; max-width: 100%; border-radius: 8px; object-fit: cover; }
 
 .composer { flex-direction: column; align-items: stretch; gap: 6px; }
-.composer.dragging { border-color: var(--ring); background: #141a24; }
+.composer.dragging { border-color: var(--ring); background: var(--selected); }
 .composer-row { display: flex; gap: 8px; align-items: flex-end; }
 .composer-row textarea { flex: 1; min-width: 0; }
 .composer .attach { padding: 6px; min-width: 34px; color: var(--muted); }
@@ -52,7 +52,7 @@
 .attachment-strip { display: flex; flex-wrap: wrap; gap: 6px; list-style: none; margin: 0; padding: 2px 4px 0; }
 .attachment-strip li { position: relative; }
 .attachment-strip img { display: block; width: 56px; height: 56px; object-fit: cover; border-radius: 6px; border: 1px solid var(--border); }
-.attachment-strip button { position: absolute; top: -6px; right: -6px; display: grid; place-items: center; width: 20px; height: 20px; min-height: 0; padding: 0; border-radius: 50%; border: 1px solid var(--border); background: #22242a; color: var(--foreground); cursor: pointer; }
+.attachment-strip button { position: absolute; top: -6px; right: -6px; display: grid; place-items: center; width: 20px; height: 20px; min-height: 0; padding: 0; border-radius: 50%; border: 1px solid var(--border); background: var(--secondary); color: var(--foreground); cursor: pointer; }
 @media (pointer: coarse) { .attachment-strip button { width: 26px; height: 26px; top: -9px; right: -9px; } }
 .chat-turn.assistant { max-width: 100%; min-width: 0; width: 100%; }
 .chat-turn.user { max-width: min(85%, 640px); }

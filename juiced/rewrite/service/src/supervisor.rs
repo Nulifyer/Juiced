@@ -68,6 +68,7 @@ pub use native_management::{NativeModel, ReleasedWeights};
 mod physical;
 mod publication;
 mod quant_sync;
+mod releases;
 pub use quant_sync::VariantSync;
 mod residency;
 pub use residency::{KeepAlive, ResidencyChange, ResidencyView, UnloadReason, parse_keep_alive};
@@ -1953,6 +1954,7 @@ pub struct Manager {
     paused: std::sync::atomic::AtomicBool,
     residency: residency::Residency,
     protocol_gate: Arc<crate::protocol_access::Gate>,
+    releases: Arc<crate::releases::Releases>,
     /// The last model check per model, with the launch fingerprint it ran against.
     checks: Mutex<std::collections::HashMap<String, (Arc<str>, serde_json::Value)>>,
     ready_events: tokio::sync::broadcast::Sender<(String, Arc<str>)>,
@@ -2411,6 +2413,7 @@ impl Manager {
             session_saves: Arc::new(tokio::sync::Semaphore::new(2)),
             residency: residency::Residency::new(&config),
             protocol_gate: Arc::new(crate::protocol_access::Gate::new(&config.protocols)),
+            releases: Arc::new(crate::releases::Releases::new(config.release_check)),
             checks: Mutex::new(load_model_checks(config_root.as_ref())),
             ready_events: tokio::sync::broadcast::channel(64).0,
             tunes: Mutex::default(),

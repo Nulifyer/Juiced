@@ -27,11 +27,7 @@ const PACKAGE_STORE: &str = "runtime-packages";
 const LEGACY: &[(&str, &str, bool)] = &[
     ("cache", "v0.9.2 engine builds and caches", true),
     ("prompt-state", "v0.9.2 prompt snapshots", true),
-    (
-        "config",
-        "v0.9.2 settings, kept for rollback and settings import",
-        false,
-    ),
+    ("config", "v0.9.2 settings", false),
 ];
 
 const ENGINE_DIRECTORIES: &[&str] = &[PACKAGE_STORE, "engine-staging", "bundled-engines"];
@@ -132,7 +128,7 @@ fn refusal_message(refusal: &str, references: &[String]) -> String {
                 .into()
         }
         "install_running" => "An engine install is running. Retry when it finishes.".into(),
-        "kept" => "Kept because the first start adopts models and settings from it.".into(),
+        "kept" => "Kept for settings import.".into(),
         _ => "Not found. Refresh the storage view.".into(),
     }
 }

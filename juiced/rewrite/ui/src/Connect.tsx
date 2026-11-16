@@ -66,18 +66,18 @@ export function Protocols({ base, client, models, online, keyed }: { base: strin
       <div className="inspector-body">
         <div className="inspector-title"><h2>{current.title}</h2>{!restricted && <Badge tone={statusTones[current.status] === "quiet" ? "quiet" : statusTones[current.status]}>{statusLabels[current.status]}</Badge>}</div>
         <p className="field-help">{clientHints[current.id]}</p>
-        <div className="copy-row"><input readOnly aria-label={`${current.title} URL`} value={baseUrl(current, origin, location.hostname)} /><Copy value={baseUrl(current, origin, location.hostname)} label={`Copy ${current.title} URL from details`} /></div>
+        <div className="copy-row"><input readOnly aria-label={`${current.title} URL`} value={baseUrl(current, origin, location.hostname)} /><Copy value={baseUrl(current, origin, location.hostname)} label={`Copy ${current.title} URL from details`} text="Copy URL" /></div>
         {!restricted && <dl className="facts">
           <div><dt>Models</dt><dd>{current.models}</dd></div>
-          <div><dt>Self-check</dt><dd>{checkText(current)}</dd></div>
+          <div><dt>Self-check</dt><dd>{checkText(current)}{current.check?.ok && current.check.route && <HelpTip label={`${current.title} self-check`}>{current.check.route} answered {current.check.status ?? "ok"}{current.check.elapsedMs !== null ? ` in ${current.check.elapsedMs} ms` : ""}.</HelpTip>}</dd></div>
           <div><dt>Last request</dt><dd>{lastRequest(current) ?? "None yet"}</dd></div>
         </dl>}
         {current.id === "wyoming" ? <WyomingSettings client={client} models={models} online={online} />
           : example && <div className="connect-example" role="region" aria-label="Example request">
             <div className="panel-head"><h3>How to connect</h3>{examples.length > 1 && <div className="segmented" role="group" aria-label="Example language">{examples.map((item, index) => <button key={item.label} aria-pressed={example === item} onClick={() => setLanguage(index)}>{item.label}</button>)}</div>}</div>
             <pre className="code-block">{example.text}</pre>
-            {exampleModel && example.text.includes(exampleModel.id) && <div className="copy-row"><ModelSelect aria-label="Example model" models={chat} disabledModels="never" value={exampleModel.id} onChange={setPicked} /><Copy value={exampleModel.id} label="Copy model ID" /></div>}
-            <div className="action-row"><Copy value={example.text} label="Copy example" />{keyed && <span className="field-help">Replace YOUR_API_KEY with a key from API keys.</span>}</div>
+            {exampleModel && example.text.includes(exampleModel.id) && <div className="copy-row"><ModelSelect aria-label="Example model" models={chat} disabledModels="never" value={exampleModel.id} onChange={setPicked} /><Copy value={exampleModel.id} label="Copy model ID" text="Copy ID" /></div>}
+            <div className="action-row"><Copy value={example.text} label="Copy example" text="Copy example" />{keyed && <span className="field-help">Replace YOUR_API_KEY with a key from API keys.</span>}</div>
           </div>}
         {(current.note || current.operations.length > 0) && <div className="connect-support">
           <span className="field-label">Support <HelpTip label={`${current.title} support`}>Juiced implements the parts of this protocol listed here. Other features answer with a clear error.</HelpTip></span>

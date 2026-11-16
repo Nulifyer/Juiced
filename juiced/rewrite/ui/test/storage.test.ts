@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { lowSpace, parsePreview, place, parseStorage, parseStorageSummary, reclaimRows } from "../src/storageData";
+import { lowSpace, mergeVolumes, parsePreview, place, parseStorage, parseStorageSummary, reclaimRows } from "../src/storageData";
 
 const row = (id: string, kind: string, bytes: number, reclaimable: boolean, references: string[] = []) => ({ id, kind, title: id, path: `/data/${id}`, bytes, reclaimable, refusal: reclaimable ? null : "in_use", message: reclaimable ? null : "Used by a.", references });
 const view = {
@@ -20,6 +20,13 @@ describe("storage view", () => {
     expect(parsed.volumes[0]!.low).toBe(true);
     expect(parsed.models[0]!.shared_with).toEqual(["b"]);
     expect(reclaimRows(parsed).map((item) => item.id)).toEqual(["legacy:cache", "engine:spare", "file:x", "partial:p", "legacy:config"]);
+  });
+  test("mounts that report the same space show once", () => {
+    const volume = (path: string, available: number, readOnly = false) => ({ path, paths: [path], roles: [path.slice(1)], total_bytes: 100, available_bytes: available, used_bytes: 100 - available, read_only: readOnly, low: false });
+    const merged = mergeVolumes([volume("/data", 40), volume("/library", 40), volume("/scratch", 41), volume("/ro", 40, true)]);
+    expect(merged.map((item) => item.names)).toEqual([["/data", "/library"], ["/scratch"], ["/ro"]]);
+    expect(merged[0]!.roles).toEqual(["data", "library"]);
+    expect(merged[0]!.path).toBe("/data");
   });
   test("engines a model uses are not offered", () => {
     expect(reclaimRows(parseStorage(view)).some((item) => item.id === "engine:used")).toBe(false);

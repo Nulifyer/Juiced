@@ -27,7 +27,13 @@ test("Protocols show health, copyable client URLs and per-client snippets", asyn
 
   const openai = details(page, "OpenAI");
   await expect(openai.getByRole("textbox", { name: "OpenAI URL" })).toHaveValue(`${origin}/v1`);
-  await expect(openai).toContainText("GET /v1/models → 200");
+  await expect(openai.locator("dd").filter({ hasText: /^OK/ })).toBeVisible();
+  await openai.getByRole("button", { name: "About OpenAI self-check" }).click();
+  await expect(page.getByText(/GET \/v1\/models answered 200/)).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(openai.getByRole("button", { name: "Copy OpenAI URL from details" })).toHaveText("Copy URL");
+  await expect(openai.getByRole("button", { name: "Copy model ID" })).toHaveText("Copy ID");
+  await expect(openai.getByRole("button", { name: "Copy example" })).toHaveText("Copy example");
   const example = openai.getByRole("region", { name: "Example request" });
   await expect(example.locator("pre")).toContainText(`curl ${origin}/v1/chat/completions`);
   await example.getByRole("group", { name: "Example language" }).getByRole("button", { name: "Python" }).click();
@@ -77,6 +83,15 @@ test("Endpoints list every registered route with its authority", async ({ page }
   await expect(table.getByRole("row").filter({ hasText: "GET /v1/health" })).toContainText("read");
   await expect(table.getByRole("row").filter({ hasText: /^POST \/v1\/juiced\/access\/keys\s*operator$/ })).toBeVisible();
   await expect(table.getByRole("row").filter({ hasText: "POST /mcp" })).toBeVisible();
+  const all = await table.getByRole("row").count();
+  await page.getByRole("searchbox", { name: "Filter endpoints" }).fill("access operator");
+  await expect(table.getByRole("row").filter({ hasText: /^POST \/v1\/juiced\/access\/keys\s*operator$/ })).toBeVisible();
+  await expect(table.getByRole("row").filter({ hasText: "GET /v1/health" })).toHaveCount(0);
+  expect(await table.getByRole("row").count()).toBeLessThan(all);
+  await page.getByRole("searchbox", { name: "Filter endpoints" }).fill("no-such-route");
+  await expect(page.getByText("No endpoints match.")).toBeVisible();
+  await page.getByRole("searchbox", { name: "Filter endpoints" }).fill("");
+  await expect(table.getByRole("row")).toHaveCount(all);
   await page.getByRole("button", { name: "About Endpoints" }).click();
   await expect(page.getByText("Management routes also answer under /api/v0, /api/v1 and /v0.", { exact: false })).toBeVisible();
 });
@@ -126,8 +141,9 @@ test("API keys are issued once, enforced by scope and revoked back to an open ne
     await open(page);
     await navigate(page, "Connect");
     await tab(page, "Connect views", "API keys").click();
-    await expect(page.getByRole("status").filter({ hasText: "Open to this network." })).toBeVisible();
+    await expect(page.getByRole("status").filter({ hasText: "No keys." })).toBeVisible();
     await expect(page.getByLabel("Scope", { exact: true })).toBeDisabled();
+    await expect(page.getByLabel("Name", { exact: true })).toHaveValue("This console");
     await page.getByLabel("Name", { exact: true }).fill("Console");
     await page.getByRole("button", { name: "Create operator key" }).click();
     const reveal = page.getByRole("dialog", { name: "Copy the new key" });
@@ -144,6 +160,9 @@ test("API keys are issued once, enforced by scope and revoked back to an open ne
     await expect(page.getByRole("heading", { name: "Connect", level: 1 })).toBeVisible();
     await expect(page.locator(".notice.error")).toHaveCount(0);
 
+    await expect(page.getByLabel("Name", { exact: true })).toHaveValue("");
+    await page.getByRole("button", { name: "Create key" }).click();
+    await expect(page.getByRole("alert").filter({ hasText: "Enter a name for the key." })).toBeVisible();
     await page.getByLabel("Name", { exact: true }).fill("Home Assistant");
     await expect(page.getByLabel("Scope", { exact: true })).toBeEnabled();
     await page.getByLabel("Expires", { exact: true }).selectOption({ label: "30 days" });
@@ -170,7 +189,7 @@ test("API keys are issued once, enforced by scope and revoked back to an open ne
     const last = page.getByRole("dialog", { name: "Revoke Console?" });
     await expect(last).toContainText("It's the last key.");
     await last.getByRole("button", { name: "Revoke key" }).click();
-    await expect(page.getByRole("status").filter({ hasText: "Open to this network." })).toBeVisible();
+    await expect(page.getByRole("status").filter({ hasText: "No keys." })).toBeVisible();
     expect((await request.get("/v1/models")).status()).toBe(200);
     await noHorizontalOverflow(page, "Connect API keys");
   } finally {

@@ -333,7 +333,7 @@ export function Barista({ open, onClose, models, ready, client, online, settings
       <Setup key={`${settings.revision}:${settings.enabled}`} settings={settings} models={models} client={client} online={online} onSaved={(next) => { onSettings(next); setShowSettings(false); }} onDisable={stop} onChanged={onChanged} />
     </> : <>
       <div ref={thread} className="barista-thread" aria-live="polite" aria-busy={busy}>
-        {items.length === 0 ? <Empty title="Ask Barista">Try "Set this box up for Home Assistant voice", "Why was my last chat slow?" or "Connect SillyTavern". This chat clears when you close the tab.</Empty> : items.map((item) => {
+        {items.length === 0 ? <div className="barista-start"><h3>Ask Barista</h3><div className="barista-suggestions" role="group" aria-label="Suggestions">{suggestions.map((text) => <button key={text} type="button" className="chip" onClick={() => { setInput(text); field.current?.focus(); }}>{text}</button>)}</div><p className="muted">Not saved.</p></div> : items.map((item) => {
           if (item.kind === "user") return <article key={item.id} className="chat-turn user" aria-label="You"><UserBody text={item.text} images={item.images} /></article>;
           if (item.kind === "assistant") return <article key={item.id} className="chat-turn assistant" aria-label="Barista reply"><AssistantBody text={item.text} reasoning={item.reasoning} streaming={item.streaming} since={item.since} thoughtMs={item.thoughtMs} /></article>;
           if (item.kind === "note") return <p key={item.id} className="barista-note" role="status">{item.text}</p>;
@@ -364,9 +364,11 @@ export function Barista({ open, onClose, models, ready, client, online, settings
   </aside>;
 }
 
+const suggestions = ["Set this box up for Home Assistant voice", "Why was my last chat slow?", "Connect SillyTavern"];
+
 export function BaristaInvite({ onEnable, onDismiss }: { onEnable: () => void; onDismiss: () => void }) {
   return <div className="barista-invite" role="group" aria-label="Barista invitation">
-    <Button variant="primary" onClick={onEnable}><Icon name="chat" size={14} />Enable Barista</Button>
+    <Button variant="ghost" onClick={onEnable}><Icon name="chat" size={14} />Enable Barista</Button>
     <Button variant="ghost" onClick={onDismiss}>Not now</Button>
   </div>;
 }
