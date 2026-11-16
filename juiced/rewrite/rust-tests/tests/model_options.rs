@@ -162,9 +162,6 @@ async fn invalid_unknown_or_unsafe_options_leave_configuration_and_live_intent_u
             "top-level {field}"
         );
     }
-    let (status, error) = update(&server, &before["revision"], json!({"parallel_slots":2})).await;
-    assert_eq!(status, StatusCode::CONFLICT);
-    assert_eq!(error["error"]["code"], "slot_resize_requires_registration");
     assert_eq!(options(&server).await, before);
     assert_eq!(std::fs::read(&server.config_path).unwrap(), disk);
     assert_eq!(server.model("fixture.one").await["loaded"], false);
@@ -404,4 +401,34 @@ async fn reload_applies_options_to_a_loaded_hot_worker_and_rejects_busy_workers(
     server.restart().await;
     assert_eq!(options(&server).await["saved"], requested);
     assert_eq!(server.model("fixture.one").await["policy"], "hot");
+}
+
+#[tokio::test]
+async fn changing_slots_resizes_the_worker_and_survives_restart() {
+    let mut server = server(|_| {}).await;
+    let before = options(&server).await;
+    let (status, saved) = update(&server, &before["revision"], json!({"parallel_slots":2})).await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    assert_eq!(saved["saved"]["parallel_slots"], 2);
+    assert_eq!(saved["physical_slots"], 2);
+    assert_eq!(server.model("fixture.one").await["max_inflight"], 2);
+    assert_eq!(
+        server.post("load", json!({"model":"fixture.one"})).await.0,
+        StatusCode::OK
+    );
+    assert_eq!(server.model("fixture.one").await["max_inflight"], 2);
+    assert_eq!(
+        server
+            .post("unload", json!({"model":"fixture.one"}))
+            .await
+            .0,
+        StatusCode::OK
+    );
+    server.restart().await;
+    assert_eq!(server.model("fixture.one").await["max_inflight"], 2);
+    let current = options(&server).await;
+    let (status, reset) = update(&server, &current["revision"], json!({})).await;
+    assert_eq!(status, StatusCode::OK, "{reset}");
+    assert_eq!(reset["physical_slots"], 1);
+    assert_eq!(server.model("fixture.one").await["max_inflight"], 1);
 }

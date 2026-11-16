@@ -62,6 +62,8 @@ number. Fields not listed here are operator details and may change.
 | `labels` | Native labels derived from the same evidence: `chat`, `embeddings`, `transcription`, `tts`, `image`, `vision`, `reasoning`, `tool-calling` |
 | `capability_contract` | The native contract entry, including `limits.per_request_context_tokens` and `features` (`tools`, `vision`, `reasoning`: `"declared"`, `false` or `null` for unknown) |
 | `resident_bytes` | Memory reserved against the model budget while loaded. An unloaded model shows the reservation its next load takes; it is not the size on disk |
+| `loading_started_unix_ms` | While `state` is `loading`, when the engine process was started; absent otherwise |
+| `last_load_ms` | How long the last successful load of this model on its current engine took, in milliseconds. Kept in memory until the service restarts; absent before the first load |
 
 Context is never a naive division of the launch total: llama-server pads the total
 to 256 tokens, divides it between slots unless the cache is unified, pads again and

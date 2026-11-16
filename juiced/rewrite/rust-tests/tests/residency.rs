@@ -492,3 +492,41 @@ async fn idle_unload_saves_unsaved_session_snapshots_first() {
     assert_eq!(view["totals"]["sessions"], 1, "{view}");
     assert_eq!(view["sessions"][0]["kind"], "header", "{view}");
 }
+
+#[tokio::test]
+async fn a_load_shows_when_it_started_and_records_how_long_it_took() {
+    let server = Server::configured(true, |config| {
+        config["startup_timeout_ms"] = json!(5000);
+        config["models"][0]["args"]
+            .as_array_mut()
+            .unwrap()
+            .extend([json!("--startup-delay-ms"), json!("600")]);
+    })
+    .await;
+    let before = server.model("fixture.one").await;
+    assert_eq!(before["last_load_ms"], Value::Null);
+    assert_eq!(before["loading_started_unix_ms"], Value::Null);
+    let (loaded, loading) = tokio::join!(load(&server, "fixture.one"), async {
+        server
+            .wait_for(async || {
+                server.model("fixture.one").await["loading_started_unix_ms"].is_u64()
+            })
+            .await;
+        server.model("fixture.one").await
+    });
+    assert_eq!(loaded.0, StatusCode::OK);
+    assert_eq!(loading["state"], "loading");
+    assert_eq!(loading["last_load_ms"], Value::Null);
+    let ready = server.model("fixture.one").await;
+    assert_eq!(ready["loading_started_unix_ms"], Value::Null);
+    let took = ready["last_load_ms"].as_u64().unwrap();
+    assert!((600..5000).contains(&took), "{took}");
+    assert_eq!(
+        server
+            .post("unload", json!({"model": "fixture.one"}))
+            .await
+            .0,
+        StatusCode::OK
+    );
+    assert_eq!(server.model("fixture.one").await["last_load_ms"], took);
+}
