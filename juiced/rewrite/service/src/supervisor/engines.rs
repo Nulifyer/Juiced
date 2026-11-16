@@ -1170,7 +1170,7 @@ pub(super) fn format_error(error: models::FormatError) -> ApiError {
         models::FormatError::Unsupported => ApiError::new(
             StatusCode::UNSUPPORTED_MEDIA_TYPE,
             "unsupported_model_format",
-            "Only GGUF (llama.cpp, sd.cpp, parakeet.cpp or FUTO asr4all), whisper.cpp ggml, diffusion safetensors, Kokoro ONNX and Moonshine ORT weights can be added automatically.",
+            "Juiced can't tell which engine runs this file.",
         ),
         models::FormatError::Invalid(code) => ApiError::new(
             StatusCode::UNPROCESSABLE_ENTITY,

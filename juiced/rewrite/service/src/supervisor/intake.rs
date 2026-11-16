@@ -158,7 +158,7 @@ fn split_group(
             return Err(failure(
                 StatusCode::FORBIDDEN,
                 "import_path_outside_roots",
-                "Only files under the configured import_roots can be imported; links that resolve outside them are refused.",
+                "This folder isn't one Juiced may import from.",
             ));
         }
         let (mut file, bytes) = open_regular(&canonical)?;
@@ -294,7 +294,7 @@ fn canonical_within(roots: &[PathBuf], raw: &str) -> Result<PathBuf, ApiError> {
         return Err(failure(
             StatusCode::FORBIDDEN,
             "import_path_outside_roots",
-            "Only files under the configured import_roots can be imported; links that resolve outside them are refused.",
+            "This folder isn't one Juiced may import from.",
         ));
     }
     Ok(canonical)
@@ -687,7 +687,7 @@ impl Manager {
                 failure(
                     StatusCode::BAD_REQUEST,
                     "import_path_not_directory",
-                    "List one readable directory under the configured import_roots.",
+                    "Choose a readable folder Juiced may import from.",
                 )
             })?;
             let mut entries = Vec::new();
