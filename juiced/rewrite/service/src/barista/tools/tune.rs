@@ -381,20 +381,27 @@ pub(super) async fn run(context: &Context<'_>, id: &str, progress: Progress) -> 
         (Ok(_), Err(failure)) | (Err(failure), _) => failure,
     };
     // A failed final reload rolls back to the last trial, so cleanup follows either failure.
-    match run.put_back().await {
-        Ok(()) => Err(failure),
-        Err(_) => {
-            let error = failure.error();
-            Err(Failure::new(
-                error["code"].as_str().unwrap_or("tune_failed"),
-                format!(
-                    "{} The earlier tuned result could not be put back yet; Juiced restores it when the service next starts.",
-                    error["message"].as_str().unwrap_or("Tune failed.")
-                ),
-                error["status"].as_u64().map_or(500, |status| status as u16),
-            ))
-        }
+    let put_back = run.put_back().await;
+    if put_back.is_ok() && stayed_loaded.is_none() {
+        return Err(failure);
     }
+    let error = failure.error();
+    let mut message = error["message"]
+        .as_str()
+        .unwrap_or("Tune failed.")
+        .to_owned();
+    if put_back.is_err() {
+        message.push_str(" The earlier tuned result could not be put back yet; Juiced restores it when the service next starts.");
+    }
+    if let Some(warning) = stayed_loaded {
+        message.push(' ');
+        message.push_str(&warning);
+    }
+    Err(Failure::new(
+        error["code"].as_str().unwrap_or("tune_failed"),
+        message,
+        error["status"].as_u64().map_or(500, |status| status as u16),
+    ))
 }
 
 fn now_ms() -> u64 {

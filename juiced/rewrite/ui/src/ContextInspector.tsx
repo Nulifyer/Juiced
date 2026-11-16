@@ -202,7 +202,7 @@ function JuicedDefaults({ model, client, defaults, revision, disabled, mutate }:
   const startTune = async () => {
     try { setTune(parseTune(await client.request<unknown>(tunePath, {}))); } catch (error) { notify(error instanceof Error ? error.message : "Tune could not start.", "error"); }
   };
-  const tuned = defaults.tunedStale || defaults.entries.some((entry) => entry.source === "tuned");
+  const tuned = defaults.tunedStale || defaults.tunedTrial || defaults.entries.some((entry) => entry.source === "tuned");
   const clearTuned = () => void mutate(`models/${encodeURIComponent(model.id)}/options`, { expected_revision: revision, clear_tuned: true, ...(model.loaded ? { apply: "reload" } : {}) }, `Cleared the tuned settings for ${model.id}.`);
   const shown = defaults.entries.filter((entry) => entry.source !== "juiced" && entry.state !== "shadowed");
   const changed = changedSince(defaults, seen);

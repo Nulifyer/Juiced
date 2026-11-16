@@ -374,14 +374,27 @@ pub(crate) fn start_tune(state: AppState, model: String) -> Result<Value, ApiErr
     Ok(started)
 }
 
-/// The `(model, launch fingerprint)` pairs a check is running for.
-type InFlight = std::collections::HashSet<(String, std::sync::Arc<str>)>;
+/// The `(manager, model, launch fingerprint)` triples a check is running for.
+type InFlight = std::collections::HashSet<(usize, String, std::sync::Arc<str>)>;
 static CHECKING: std::sync::LazyLock<std::sync::Mutex<InFlight>> =
     std::sync::LazyLock::new(Default::default);
 
+/// Removes its key when the check ends, including when its task is cancelled.
+struct Checking((usize, String, std::sync::Arc<str>));
+
+impl Drop for Checking {
+    fn drop(&mut self) {
+        CHECKING
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .remove(&self.0);
+    }
+}
+
 /// Checks `id` for this launch unless it has a result or a check is already running.
 async fn check_once(state: &AppState, id: &str, fingerprint: std::sync::Arc<str>) {
-    let key = (id.to_owned(), fingerprint.clone());
+    let manager = std::sync::Arc::as_ptr(&state.manager) as usize;
+    let key = (manager, id.to_owned(), fingerprint.clone());
     if state.manager.checked(id, &fingerprint)
         || !CHECKING
             .lock()
@@ -390,15 +403,12 @@ async fn check_once(state: &AppState, id: &str, fingerprint: std::sync::Arc<str>
     {
         return;
     }
+    let _running = Checking(key);
     // A request that fails is a failed step in the result; an error here means the check
     // could not run at all, so nothing is stored and the next launch retries.
     if let Ok(result) = model_check(state, id).await {
         state.manager.store_model_check(id, fingerprint, result);
     }
-    CHECKING
-        .lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .remove(&key);
 }
 
 /// Checks each chat model once per launch fingerprint after its worker becomes ready.
