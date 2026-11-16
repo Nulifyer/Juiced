@@ -35,6 +35,10 @@ Request source: user, 2026-11-12. The homelab switched stack 83 to `rewrite-prev
 
 Tag v0.10.0 at b1c96641 (gate: 296 e2e passed; release run 43686536491 green; image `ghcr.io/nulifyer/juiced:v0.10.0` and `latest`). Release page https://github.com/Nulifyer/Juiced/releases/tag/v0.10.0. Deployed to stack 83: version 0.10.0, Hot models Qwen3-Coder-Next, Qwen3-4B-Instruct-2507, kokoro-v1, whisper-large-v3-turbo loaded (59.4 GiB reserved); Coder-Next defaults tuned `--ubatch-size 1024`, recipe `--spec-type ngram-simple`, `--metrics`; persisted model checks current and passed for both chat models; chat 0.4 s and 0.1 s; Barista on Coder-Next. Homelab stacks/juiced/compose.yaml pins v0.10.0 (uncommitted, as before).
 
+## Post-release review (2026-11-15)
+
+User asked for Fable (claude-fable-5-2) and Astra (gpt-6-astra) to review v1.0.0-rc.26..v0.10.0 until both are happy. Four rounds; both HAPPY at round 4 (range 8254c12e..ad1dc0c6), remaining minors fixed in dae656da and the commit after. Main changes, unreleased (not tagged, not deployed): Tune trials go only into the tuned layer with a run marker, never into saved options; startup puts back an interrupted trial before Hot models start; settings POST returns the revision it published; failed reload restores juiced_defaults and tuned; tuned arguments apply only on the measured runtime package; typed tuned values validated; short-flag aliases block defaults; internal checks and Tune bypass Connect protocol gates; automatic and post-Tune checks share a per-manager in-flight set; 63 companions for split models. Not covered: no end-to-end Tune test (fixture worker is not llama.cpp, returns no timings); Tune not re-run on a real model since the rework.
+
 ## Acceptance
 
 - [x] Same compose (image tag change only, optional junk removal) serves on 8080 with the healthcheck passing. (rc.3 onward)
@@ -178,4 +182,4 @@ Known gaps:
 
 ## Next action
 
-Later work, in order: the llama.cpp config-folder stale check (see v0.10.0 gap work), copy-mode split import and attaching projectors later, FastFlowLM weight deletion, typed vLLM settings, the engine-management round, then the deferred release-plan checks in rewrite-release.md if the user wants them.
+Release the post-release review fixes (v0.10.1) after a live Tune run on mage confirms the reworked flow, if the user wants. Later work, in order: the llama.cpp config-folder stale check (see v0.10.0 gap work), copy-mode split import and attaching projectors later, FastFlowLM weight deletion, typed vLLM settings, the engine-management round, then the deferred release-plan checks in rewrite-release.md if the user wants them.

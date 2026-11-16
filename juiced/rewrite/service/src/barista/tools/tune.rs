@@ -193,7 +193,13 @@ impl Run<'_, '_> {
                 .await
             {
                 Ok(_) => return None,
-                Err(Failure::Route(error)) if error["error"]["code"] == "worker_hot" => {
+                // A Hot model stays loaded by design; an evicted one is already unloaded.
+                Err(Failure::Route(error))
+                    if matches!(
+                        error["error"]["code"].as_str(),
+                        Some("worker_hot" | "model_not_loaded")
+                    ) =>
+                {
                     return None;
                 }
                 Err(Failure::Route(error))

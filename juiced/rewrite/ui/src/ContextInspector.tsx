@@ -198,7 +198,7 @@ function JuicedDefaults({ model, client, defaults, revision, disabled, mutate }:
     };
     void poll();
     return () => { cancelled = true; window.clearTimeout(timer); };
-  }, [client, tunePath, model.id, tune.state === "running"]);
+  }, [client, tunePath, model.id, tune.state === "running", defaults.tunedTrial]);
   const startTune = async () => {
     try { setTune(parseTune(await client.request<unknown>(tunePath, {}))); } catch (error) { notify(error instanceof Error ? error.message : "Tune could not start.", "error"); }
   };
