@@ -12,6 +12,7 @@ export type QuantRow =
   | { kind: "current"; key: string; label: string; bytes: number | null }
   | { kind: "added"; key: string; label: string; bytes: number | null; model: string; policy: string | null; shared: boolean }
   | { kind: "file"; key: string; label: string; bytes: number | null; file: string }
+  | { kind: "partial"; key: string; label: string; bytes: number | null; have: number; parts: number; file: string | null }
   | { kind: "remote"; key: string; label: string; bytes: number | null; file: string; progress: number | null };
 
 const baseName = (path: string) => path.split(/[\\/]/).pop() ?? path;
@@ -21,7 +22,11 @@ export function quantRows(model: Pick<Model, "id">, models: Pick<Model, "id" | "
   const rows: QuantRow[] = [];
   for (const quant of group.quants) {
     const others = quant.usedBy.filter((id) => id !== model.id);
-    if (quant.usedBy.includes(model.id)) rows.push({ kind: "current", key: `disk:${quant.file}`, label: quant.label, bytes: quant.bytes });
+    if (!quant.complete && quant.usedBy.length === 0) {
+      // A split download that stopped part way can't be added; Discover fetches the missing parts.
+      const remote = hub?.quants.find((entry) => entry.label === quant.label && entry.pullable);
+      rows.push({ kind: "partial", key: `disk:${quant.file}`, label: quant.label, bytes: remote?.bytes ?? null, have: quant.files.length, parts: quant.parts, file: remote?.file ?? null });
+    } else if (quant.usedBy.includes(model.id)) rows.push({ kind: "current", key: `disk:${quant.file}`, label: quant.label, bytes: quant.bytes });
     else if (others.length === 0) rows.push({ kind: "file", key: `disk:${quant.file}`, label: quant.label, bytes: quant.bytes, file: quant.file });
     else for (const id of others) rows.push({ kind: "added", key: `disk:${quant.file}:${id}`, label: quant.label, bytes: quant.bytes, model: id, policy: models.find((entry) => entry.id === id)?.policy ?? null, shared: others.length > 1 });
   }
@@ -62,10 +67,11 @@ export function ModelQuants({ model, models, inventory, client, online, onOpenMo
     <div className="page-title"><h3>Quants</h3><HelpTip label="Quants">Other sizes of {group.name}. Each added quant is its own model with its own settings and loading policy. Get opens Discover, where you choose the loading policy before the download starts.</HelpTip></div>
     <ul className="model-quant-list" aria-label={`Quants of ${group.name}`}>{rows.map((row) => <li key={row.key} className={row.kind === "current" ? "current" : undefined}>
       <span className="model-quant-name"><strong>{row.label}</strong>{row.kind === "added" && row.shared && <span className="muted break-word">{row.model}</span>}</span>
-      <span className="muted numeric">{bytes(row.bytes)}</span>
-      <span className="model-quant-state muted">{row.kind === "current" ? "This model" : row.kind === "added" ? row.policy && Object.hasOwn(policyNames, row.policy) ? policyNames[row.policy as keyof typeof policyNames] : "Added" : row.kind === "file" ? "Not added" : row.progress !== null ? `Downloading ${Math.round(row.progress)}%` : ""}</span>
+      <span className="muted numeric">{row.bytes === null ? "" : bytes(row.bytes)}</span>
+      <span className="model-quant-state muted">{row.kind === "current" ? "This model" : row.kind === "added" ? row.policy && Object.hasOwn(policyNames, row.policy) ? policyNames[row.policy as keyof typeof policyNames] : "Added" : row.kind === "file" ? "Not added" : row.kind === "partial" ? `${row.have} of ${row.parts} parts` : row.progress !== null ? `Downloading ${Math.round(row.progress)}%` : ""}</span>
       <span className="model-quant-action">
         {row.kind === "added" && <Button className="row-action" aria-label={`Open ${row.model}`} title={row.model} onClick={() => onOpenModel(row.model)}>Open</Button>}
+        {row.kind === "partial" && repo && row.file && <Button className="row-action" aria-label={`Finish ${row.label}`} onClick={() => onDiscover({ repo, file: row.file! })}>Finish</Button>}
         {row.kind === "file" && <Button className="row-action" aria-label={`Add ${row.label}`} onClick={() => onOpenFile(group.id, row.file)}>Add</Button>}
         {row.kind === "remote" && repo && <Button className="row-action" aria-label={row.progress !== null ? `View ${row.label} in Discover` : `Get ${row.label}`} onClick={() => onDiscover({ repo, file: row.file })}>{row.progress !== null ? "View" : "Get"}</Button>}
       </span>

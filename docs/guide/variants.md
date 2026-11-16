@@ -22,7 +22,8 @@ what each candidate contains before you download it.
 
 A model's **Overview** tab lists its **Quants** by size. A quant another model
 uses shows that model's loading policy and **Open**. A file on disk that no
-model uses shows **Not added** and **Add**. **Get** opens a quant you can still
+model uses shows **Not added** and **Add**. A split download that stopped part way shows how many
+parts are on disk and **Finish**, which opens it in Discover to fetch the rest. **Get** opens a quant you can still
 download in Discover, where you choose the loading policy first. **+N more in
 Discover** opens the repository's full list. A model that isn't from Hugging
 Face lists only the quants on this machine.

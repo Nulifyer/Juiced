@@ -38,3 +38,17 @@ test("a model lists files on disk and a few downloads in one list ordered by siz
   expect(more).toBe(2);
   expect(quantRows({ id: "demo-q6" }, [], group, null)).toMatchObject({ more: 0, rows: [{ kind: "added" }, { kind: "added" }, { kind: "current" }, { kind: "file" }] });
 });
+
+test("a split download that stopped part way offers to finish it, not to add it", () => {
+  const group = parseLocal({ groups: [{ id: "hf:unsloth/Demo-GGUF", repo: "unsloth/Demo-GGUF", name: "Demo-GGUF",
+    quants: [
+      { label: "Q4_K_M", file: "f4", bytes: 40, files: ["f4"], used_by: ["demo-q4"] },
+      { label: "UD-Q6_K_XL", file: "p1", parts: 3, complete: false, bytes: 1, files: ["p1"], used_by: [] },
+    ],
+    files: [{ id: "f4", name: "Demo-Q4_K_M.gguf" }, { id: "p1", name: "Demo-UD-Q6_K_XL-00001-of-00003.gguf" }] }] }).groups[0]!;
+  const model = hub([remote("Q4_K_M", "Demo-Q4_K_M.gguf", 40, { local: { present: true } }), remote("UD-Q6_K_XL", "UD-Q6_K_XL/Demo-UD-Q6_K_XL-00001-of-00003.gguf", 66, { parts: 3 })]);
+  const { rows } = quantRows({ id: "demo-q4" }, [], group, model);
+  expect(rows.map((row) => [row.label, row.kind])).toEqual([["Q4_K_M", "current"], ["UD-Q6_K_XL", "partial"]]);
+  expect(rows[1]).toMatchObject({ have: 1, parts: 3, bytes: 66, file: "UD-Q6_K_XL/Demo-UD-Q6_K_XL-00001-of-00003.gguf" });
+  expect(quantRows({ id: "demo-q4" }, [], group, null).rows[1]).toMatchObject({ kind: "partial", file: null });
+});
