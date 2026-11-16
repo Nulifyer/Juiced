@@ -1082,6 +1082,67 @@ async fn a_model_check_sends_real_requests_and_is_kept_for_its_launch() {
 }
 
 #[tokio::test]
+async fn an_automatic_check_runs_with_the_openai_api_turned_off_for_clients() {
+    let mut server = Server::prepare(true, |_| {});
+    server.set_environment("JUICED_AUTOMATIC_MODEL_CHECKS", "1");
+    server.start().await;
+    let (status, body) = server
+        .json(
+            Method::POST,
+            "/v1/juiced/protocols",
+            Some(json!({"protocol": "openai", "enabled": false})),
+            Some(ADMIN_KEY),
+        )
+        .await;
+    assert!(status.is_success(), "{body}");
+    server
+        .wait_for(async || {
+            let (status, _) = server
+                .json(
+                    Method::POST,
+                    "/v1/chat/completions",
+                    Some(json!({"model": "fixture.one", "messages": [{"role": "user", "content": "hi"}]})),
+                    Some(ADMIN_KEY),
+                )
+                .await;
+            status.is_client_error()
+        })
+        .await;
+    let (status, loaded) = server
+        .json(
+            Method::POST,
+            "/v1/load",
+            Some(json!({"model_name": "fixture.one"})),
+            Some(ADMIN_KEY),
+        )
+        .await;
+    assert!(status.is_success(), "{loaded}");
+    let mut checked = Value::Null;
+    for _ in 0..200 {
+        checked = server
+            .json(
+                Method::GET,
+                "/v1/models/fixture.one/check",
+                None,
+                Some(CLIENT_KEY),
+            )
+            .await
+            .1;
+        if checked["checked"] == true {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    let chat = checked["steps"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{checked}"))
+        .iter()
+        .find(|step| step["id"] == "chat")
+        .unwrap();
+    assert_eq!(chat["status"], "pass", "{checked}");
+}
+
+#[tokio::test]
 async fn tune_refuses_engines_it_cannot_measure_and_bad_tuned_arguments() {
     let server = Server::new(true).await;
     let (status, idle) = server

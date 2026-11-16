@@ -216,6 +216,18 @@ impl Run<'_, '_> {
             decode,
             rewrite,
         };
+        if [prefill, decode, rewrite]
+            .iter()
+            .any(|value| !value.is_finite() || *value <= 0.0)
+        {
+            return Err(Failure::new(
+                "tune_no_timings",
+                format!(
+                    "The engine reported no speed for {label}, so Tune cannot compare settings."
+                ),
+                502,
+            ));
+        }
         self.candidates
             .push(json!({"label": label, "speed": speed.json()}));
         self.report(&format!("Measured {label}"));
@@ -282,7 +294,11 @@ pub(super) async fn run(context: &Context<'_>, id: &str, progress: Progress) -> 
         let _ = context.post("unload", json!({"model_name": id})).await;
     }
     // Tune owns only the tuned layer, so it puts that back even after another change stopped it.
-    let restored = run.save(restore, true).await;
+    let mut restored = run.save(restore, true).await;
+    if restored.is_err() {
+        // A failed final reload rolls back to the last trial; put the earlier result back.
+        restored = recover(context, id).await.map(drop);
+    }
     let result = outcome?;
     restored?;
     Ok(result)
@@ -317,6 +333,23 @@ fn saved_flag(options: &Value, field: Option<&str>, extra: &[String], flags: &[&
         })
 }
 
+/// A larger physical batch must speed up the prompt clearly without slowing chat.
+fn batch_kept(speed: Speed, best: Speed) -> bool {
+    speed.prefill >= best.prefill * 1.08 && speed.decode >= best.decode * 0.97
+}
+
+/// Flash attention must clearly help the prompt or chat and hurt neither.
+fn flash_kept(speed: Speed, best: Speed) -> bool {
+    let gain = speed.prefill >= best.prefill * 1.05 || speed.decode >= best.decode * 1.03;
+    let loss = speed.prefill < best.prefill * 0.97 || speed.decode < best.decode * 0.97;
+    gain && !loss
+}
+
+/// Speculation trades chat for rewrite speed, so it must win on both together.
+fn speculation_kept(speed: Speed, best: Speed) -> bool {
+    speed.decode * speed.rewrite >= best.decode * best.rewrite * 1.10
+}
+
 /// Greedy search: physical batch, then flash attention, then speculative decoding, each kept
 /// only with a clear gain and no meaningful loss. Options the operator saved are not tried.
 async fn search(run: &mut Run<'_, '_>, options: &Value) -> Result<Value> {
@@ -338,8 +371,9 @@ async fn search(run: &mut Run<'_, '_>, options: &Value) -> Result<Value> {
             let speed = run
                 .measure(&format!("physical batch {size}"), &trial)
                 .await?;
-            let better = speed.prefill >= best.prefill * 1.08 && speed.decode >= best.decode * 0.97;
-            if better && winner.is_none_or(|(_, held)| speed.prefill > held.prefill) {
+            if batch_kept(speed, best)
+                && winner.is_none_or(|(_, held)| speed.prefill > held.prefill)
+            {
                 winner = Some((size, speed));
             }
         }
@@ -358,9 +392,7 @@ async fn search(run: &mut Run<'_, '_>, options: &Value) -> Result<Value> {
         let mut trial = arguments.clone();
         trial.extend(["--flash-attn".to_owned(), "on".to_owned()]);
         let speed = run.measure("flash attention on", &trial).await?;
-        let gain = speed.prefill >= best.prefill * 1.05 || speed.decode >= best.decode * 1.03;
-        let loss = speed.prefill < best.prefill * 0.97 || speed.decode < best.decode * 0.97;
-        if gain && !loss {
+        if flash_kept(speed, best) {
             arguments = trial;
             best = speed;
         }
@@ -390,7 +422,7 @@ async fn search(run: &mut Run<'_, '_>, options: &Value) -> Result<Value> {
         let speed = run
             .measure(&format!("speculative decoding {alternative}"), &trial)
             .await?;
-        if speed.decode * speed.rewrite >= best.decode * best.rewrite * 1.10 {
+        if speculation_kept(speed, best) {
             arguments = trial;
             best = speed;
         }
@@ -416,6 +448,52 @@ mod tests {
         assert_eq!(restore_body(&settled(&first))["clear_tuned"], true);
         assert!(!is_trial(&previous));
         assert_eq!(settled(&previous), previous);
+    }
+
+    fn speed(prefill: f64, decode: f64, rewrite: f64) -> Speed {
+        Speed {
+            prefill,
+            decode,
+            rewrite,
+        }
+    }
+
+    #[test]
+    fn a_choice_is_kept_only_with_a_clear_gain_and_no_real_loss() {
+        let base = speed(1000.0, 40.0, 40.0);
+        assert!(batch_kept(speed(1100.0, 39.0, 40.0), base));
+        assert!(!batch_kept(speed(1050.0, 40.0, 40.0), base));
+        assert!(!batch_kept(speed(1500.0, 38.0, 40.0), base));
+        assert!(flash_kept(speed(1000.0, 41.5, 40.0), base));
+        assert!(!flash_kept(speed(1100.0, 38.0, 40.0), base));
+        assert!(!flash_kept(speed(1020.0, 40.5, 40.0), base));
+        assert!(speculation_kept(speed(1000.0, 38.0, 48.0), base));
+        assert!(!speculation_kept(speed(1000.0, 30.0, 55.0), base));
+    }
+
+    #[test]
+    fn options_the_operator_saved_are_not_tried() {
+        let options = json!({"saved": {"ubatch_size": 512, "flash_attention": null}});
+        assert!(saved_flag(
+            &options,
+            Some("ubatch_size"),
+            &[],
+            &["--ubatch-size", "-ub"]
+        ));
+        assert!(!saved_flag(
+            &options,
+            Some("flash_attention"),
+            &[],
+            &["--flash-attn", "-fa"]
+        ));
+        let extra = ["-fa=off".to_owned()];
+        assert!(saved_flag(
+            &options,
+            Some("flash_attention"),
+            &extra,
+            &["--flash-attn", "-fa"]
+        ));
+        assert!(!saved_flag(&options, None, &extra, &["--spec-type"]));
     }
 
     #[test]

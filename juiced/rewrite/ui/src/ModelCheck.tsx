@@ -36,10 +36,16 @@ export function ModelCheck({ model, client, online, disabled }: { model: Model; 
   const [running, setRunning] = useState(false);
   const path = `models/${encodeURIComponent(model.id)}/check`;
   useEffect(() => {
-    let cancelled = false;
-    client.request<unknown>(path).then((body) => { if (!cancelled) setResult(parseCheck(body)); }).catch(() => { if (!cancelled) setResult(null); });
-    return () => { cancelled = true; };
-  }, [client, path, model.state, model.revision]);
+    let cancelled = false; let timer = 0; let polls = 0;
+    // The automatic check finishes some time after the model loads; look again until it lands.
+    const load = () => client.request<unknown>(path).then((body) => {
+      if (cancelled) return;
+      const checked = parseCheck(body); setResult(checked);
+      if (model.loaded && !checked?.current && polls++ < 24) timer = window.setTimeout(load, 5000);
+    }).catch(() => { if (!cancelled) setResult(null); });
+    void load();
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [client, path, model.state, model.revision, model.loaded]);
   async function run() {
     setRunning(true);
     try {
@@ -57,7 +63,7 @@ export function ModelCheck({ model, client, online, disabled }: { model: Model; 
     {result?.error && <p className="inline-error">{result.error}</p>}
     {result && result.steps.length > 0 && <ul className="check-steps">{result.steps.map((step) => <li key={step.id} className={`check-${step.status}`}><span className="check-mark" aria-hidden="true">{marks[step.status]}</span><span>{step.label}</span><span className="muted">{step.detail}</span></li>)}</ul>}
     {result && <p className="field-help">Checked {ago(result.checked_at_ms)}{result.current ? "" : " · from an earlier launch"}</p>}
-    {!result && <p className="field-help">Not checked since the service started.</p>}
+    {!result && <p className="field-help">Not checked yet.</p>}
     <div className="action-row"><Button disabled={disabled || running || !online || model.policy === "disabled"} onClick={() => void run()}>{running ? "Checking…" : model.loaded ? "Run check" : "Load and check"}</Button></div>
   </section>;
 }

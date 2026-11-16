@@ -161,9 +161,15 @@ fn validate_tuned(tuned: &crate::config::TunedLaunch) -> Result<(), ApiError> {
     while position < tuned.arguments.len() {
         let flag = &tuned.arguments[position];
         let typed = crate::profiles::option_field(flag)
-            .is_some_and(|field| !crate::profiles::legacy_field(field));
+            .filter(|field| !crate::profiles::legacy_field(*field));
         match crate::runtime_arguments::passthrough(Provider::LlamaCpp, flag) {
-            _ if typed => position += 2,
+            _ if typed.is_some() => {
+                let value = tuned.arguments.get(position + 1).map_or("", String::as_str);
+                if !typed.is_some_and(|field| crate::profiles::typed_value_valid(field, value)) {
+                    return Err(invalid(&format!("{flag} {value} is not a valid value.")));
+                }
+                position += 2;
+            }
             crate::runtime_arguments::Passthrough::Accepted(arity) => {
                 position += 1 + usize::from(arity);
             }
@@ -915,6 +921,23 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(stale.code(), "revision_conflict");
+    }
+
+    #[test]
+    fn tuned_typed_flags_need_a_valid_value() {
+        let tuned = |arguments: &[&str]| crate::config::TunedLaunch {
+            arguments: arguments
+                .iter()
+                .map(|&argument| argument.to_owned())
+                .collect(),
+            runtime_package: None,
+            measured_at_ms: 1,
+            measurements: serde_json::Value::Null,
+        };
+        assert!(validate_tuned(&tuned(&["--ubatch-size", "1024", "--flash-attn", "on"])).is_ok());
+        assert!(validate_tuned(&tuned(&["--ubatch-size", "banana"])).is_err());
+        assert!(validate_tuned(&tuned(&["--flash-attn", "sometimes"])).is_err());
+        assert!(validate_tuned(&tuned(&["--ubatch-size"])).is_err());
     }
 
     #[tokio::test]

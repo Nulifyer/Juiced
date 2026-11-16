@@ -173,6 +173,13 @@ pub(crate) fn option_field(flag: &str) -> Option<usize> {
 }
 /// The fields whose saved value predates typed sampling and batching; native imports map only
 /// these, and pass the others through as literal worker arguments that remain readable here.
+/// Whether `value` is one a typed setting outside the legacy fields accepts.
+pub(crate) fn typed_value_valid(index: usize, value: &str) -> bool {
+    let mut options = LaunchOptions::default();
+    options.set_literal(index, value);
+    options != LaunchOptions::default()
+}
+
 pub(crate) fn legacy_field(index: usize) -> bool {
     index < LEGACY_FIELDS
 }

@@ -73,7 +73,12 @@ async fn authorize(State(state): State<AppState>, mut request: Request, next: Ne
             |endpoint| Authority::from_label(endpoint.authority),
         );
     let admin = authority == Authority::Operator;
-    let protocol = crate::protocol_access::Protocol::classify(raw_path);
+    let internal = request
+        .extensions()
+        .get::<crate::connect::Internal>()
+        .is_some();
+    // Juiced's own checks and Tune are not client traffic: Connect neither counts nor gates them.
+    let protocol = crate::protocol_access::Protocol::classify(raw_path).filter(|_| !internal);
     let observed = protocol.filter(|_| {
         request
             .extensions()
@@ -87,10 +92,6 @@ async fn authorize(State(state): State<AppState>, mut request: Request, next: Ne
         }
         response
     };
-    let internal = request
-        .extensions()
-        .get::<crate::connect::Internal>()
-        .is_some();
     match if internal {
         Ok(state.auth.internal())
     } else {

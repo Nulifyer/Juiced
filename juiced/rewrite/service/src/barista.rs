@@ -338,6 +338,9 @@ pub(crate) async fn model_check(
         })
 }
 
+/// Tune reloads the model about six times and sends a few long requests each time.
+const TUNE_LIMIT: std::time::Duration = std::time::Duration::from_secs(45 * 60);
+
 /// Starts Tune for `model` in the background and returns its first view.
 pub(crate) fn start_tune(state: AppState, model: String) -> Result<Value, ApiError> {
     let app = state.probe.get().cloned().ok_or_else(|| {
@@ -363,13 +366,21 @@ pub(crate) fn start_tune(state: AppState, model: String) -> Result<Value, ApiErr
             view["state"] = json!("running");
             manager.set_tune(&id, view);
         });
-        let finished = match tools::model_tune(&state, app, &model, progress).await {
-            Ok(result) => json!({"state": "done", "result": result}),
-            Err(error) => json!({"state": "failed", "error": error["message"]}),
+        let run = tools::model_tune(&state, app.clone(), &model, progress);
+        let finished = match tokio::time::timeout(TUNE_LIMIT, run).await {
+            Ok(Ok(result)) => json!({"state": "done", "result": result}),
+            Ok(Err(error)) => json!({"state": "failed", "error": error["message"]}),
+            Err(_) => {
+                tools::recover_tunes(&state, app, std::slice::from_ref(&model)).await;
+                json!({"state": "failed", "error": "Tune took longer than 45 minutes and stopped. The earlier tuned result is back."})
+            }
         };
+        let done = finished["state"] == "done";
         state.manager.set_tune(&model, finished);
-        if let Ok(result) = model_check(&state, None, &model).await
+        // A finished run reloaded the model with its result; check what it now serves.
+        if done
             && let Some(fingerprint) = state.manager.running_fingerprint(&model).await
+            && let Ok(result) = model_check(&state, None, &model).await
         {
             state.manager.store_model_check(&model, fingerprint, result);
         }
@@ -392,6 +403,9 @@ pub(crate) fn spawn_tune_recovery(state: AppState) {
     runtime.spawn(async move { tools::recover_tunes(&state, app, &models).await });
 }
 
+/// The `(model, launch fingerprint)` pairs an automatic check is running for.
+type InFlight = std::collections::HashSet<(String, std::sync::Arc<str>)>;
+
 /// Checks each chat model once per launch fingerprint after its worker becomes ready.
 pub(crate) fn spawn_automatic_checks(state: AppState) {
     let Ok(runtime) = tokio::runtime::Handle::try_current() else {
@@ -401,6 +415,7 @@ pub(crate) fn spawn_automatic_checks(state: AppState) {
         return;
     }
     let mut events = state.manager.ready_events();
+    let running: std::sync::Arc<std::sync::Mutex<InFlight>> = std::sync::Arc::default();
     runtime.spawn(async move {
         loop {
             let (id, fingerprint) = match events.recv().await {
@@ -413,16 +428,30 @@ pub(crate) fn spawn_automatic_checks(state: AppState) {
                 .manager
                 .tune_view(&id)
                 .is_some_and(|view| view["state"] == "running");
-            if tuning || !state.manager.serves_chat(&id) || state.manager.checked(&id, &fingerprint) {
+            if tuning || !state.manager.serves_chat(&id) || state.manager.checked(&id, &fingerprint)
+            {
+                continue;
+            }
+            let key = (id.clone(), fingerprint.clone());
+            if !running
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .insert(key.clone())
+            {
                 continue;
             }
             let state = state.clone();
+            let running = running.clone();
             tokio::spawn(async move {
-                let result = match model_check(&state, None, &id).await {
-                    Ok(result) => result,
-                    Err(error) => serde_json::json!({"schema_version": 1, "model": id, "passed": false, "error": error.message, "steps": []}),
-                };
-                state.manager.store_model_check(&id, fingerprint, result);
+                // A request that fails is a failed step in the result; an error here means the
+                // check could not run at all, so nothing is stored and the next launch retries.
+                if let Ok(result) = model_check(&state, None, &id).await {
+                    state.manager.store_model_check(&id, fingerprint, result);
+                }
+                running
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .remove(&key);
             });
         }
     });
