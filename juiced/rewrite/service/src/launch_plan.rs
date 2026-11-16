@@ -347,11 +347,7 @@ fn model_defaults(
         declared.architecture.as_deref(),
         slots,
     )
-    .with_tuned(
-        spec.tuned
-            .as_ref()
-            .map_or(&[], |tuned| tuned.arguments.as_slice()),
-    )
+    .with_tuned(spec.current_tuning())
     .apply(&mut arguments.to_vec())
 }
 

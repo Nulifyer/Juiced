@@ -65,9 +65,13 @@ settings; a loaded model restarts.
 
 **Tune for this machine** tries a larger prompt batch, flash attention and
 speculative decoding, measuring prompt, chat and code-rewrite speed, and keeps a
-change only when it is clearly faster. It reloads the model several times, takes a
-few minutes and then restores your saved settings. Kept changes show as
-**Measured here**; **Clear tuned** removes them.
+change only when it is clearly faster. It reloads the model several times and
+takes a few minutes. It never changes your saved settings, and it skips any
+option you have set yourself. Tune needs Juiced defaults turned on, because its
+results apply through them. Kept changes show as **Measured here**; **Clear tuned**
+removes them. Results apply only to the engine version Tune measured. After an
+engine change, Settings says so and the model starts without them until you
+tune again.
 
 Empty generation fields show the value that applies, such as `1 (model file)`
 for a model whose file names its publisher's temperature.

@@ -1,6 +1,7 @@
 //! Tune: measures a llama.cpp model's launch choices on this host through the normal settings
-//! and chat routes, keeps a choice only when it is clearly faster, and always restores the
-//! operator's saved settings. The winners become the model's tuned launch layer.
+//! and chat routes and keeps a choice only when it is clearly faster. Each trial is saved as the
+//! model's tuned launch layer, so the operator's own settings are never written; the winners
+//! become that layer.
 
 use super::check::{thinking_switch, with_switch};
 use super::{Context, Failure, Result};
@@ -79,9 +80,12 @@ impl Speed {
 struct Run<'c, 'a> {
     context: &'c Context<'a>,
     id: String,
+    path: String,
     switch: Option<(String, Value, Value)>,
-    saved: Value,
-    extra: Vec<String>,
+    runtime_package: Value,
+    previous: Value,
+    /// The settings revision Tune's own last save produced; any other change stops Tune.
+    revision: Option<u64>,
     candidates: Vec<Value>,
     progress: Progress,
 }
@@ -90,16 +94,36 @@ fn tps(reply: &Value, key: &str) -> f64 {
     reply["timings"][key].as_f64().unwrap_or(0.0)
 }
 
+/// A trial is saved as the tuned layer, never as the operator's settings, and carries the
+/// tuned result it replaced so an interrupted run can be put back after a restart.
+fn is_trial(tuned: &Value) -> bool {
+    tuned["measurements"]["trial"] == true
+}
+
+/// The tuned result the operator last had, looking through a trial an interrupted run left.
+fn settled(tuned: &Value) -> Value {
+    if is_trial(tuned) {
+        tuned["measurements"]["previous"].clone()
+    } else {
+        tuned.clone()
+    }
+}
+
+fn restore_body(previous: &Value) -> Value {
+    if previous.is_object() {
+        json!({"tuned": previous, "apply": "reload"})
+    } else {
+        json!({"clear_tuned": true, "apply": "reload"})
+    }
+}
+
 impl Run<'_, '_> {
     fn report(&self, step: &str) {
         (self.progress)(json!({"step": step, "candidates": self.candidates}));
     }
 
-    async fn revision(&self) -> Result<u64> {
-        let options = self
-            .context
-            .get(&format!("models/{}/options", self.id))
-            .await?;
+    async fn current_revision(&self) -> Result<u64> {
+        let options = self.context.get(&self.path).await?;
         options["revision"].as_u64().ok_or_else(|| {
             Failure::new(
                 "tune_options_unreadable",
@@ -109,25 +133,36 @@ impl Run<'_, '_> {
         })
     }
 
-    /// Saves through the settings route, waiting out a worker that is briefly busy with a
-    /// client request.
-    async fn save(&self, body: Value) -> Result<()> {
+    /// Saves through the settings route at Tune's own revision, waiting out a worker that is
+    /// briefly busy with a client request. `fresh` saves at the current revision instead.
+    async fn save(&mut self, body: Value, fresh: bool) -> Result<()> {
+        let expected = match self.revision {
+            Some(revision) if !fresh => revision,
+            _ => self.current_revision().await?,
+        };
         let mut attempt = 0;
         loop {
             let mut body = body.clone();
-            body["expected_revision"] = json!(self.revision().await?);
-            match self
-                .context
-                .post(&format!("models/{}/options", self.id), body)
-                .await
-            {
+            body["expected_revision"] = json!(expected);
+            match self.context.post(&self.path, body).await {
                 Err(Failure::Route(error))
                     if error["error"]["code"] == "worker_busy" && attempt < 40 =>
                 {
                     attempt += 1;
                     tokio::time::sleep(std::time::Duration::from_secs(3)).await;
                 }
-                result => return result.map(|_| ()),
+                Err(Failure::Route(error)) if error["error"]["code"] == "revision_conflict" => {
+                    return Err(Failure::new(
+                        "tune_interrupted",
+                        "The model settings changed while Tune ran, so Tune stopped. Your changes are kept.",
+                        409,
+                    ));
+                }
+                Err(error) => return Err(error),
+                Ok(view) => {
+                    self.revision = view["revision"].as_u64();
+                    return Ok(());
+                }
             }
         }
     }
@@ -142,10 +177,15 @@ impl Run<'_, '_> {
         self.context.post("chat/completions", body).await
     }
 
-    /// Launches with these settings and measures prompt, chat and code-rewrite speed.
-    async fn measure(&mut self, label: &str, options: Value, extra: Vec<String>) -> Result<Speed> {
+    /// Launches with `arguments` as the tuned layer and measures prompt, chat and code-rewrite
+    /// speed.
+    async fn measure(&mut self, label: &str, arguments: &[String]) -> Result<Speed> {
         self.report(&format!("Measuring {label}"));
-        self.save(json!({"options": options, "extra_args": extra, "apply": "reload"}))
+        let trial = json!({
+            "arguments": arguments, "runtime_package": self.runtime_package, "measured_at_ms": now_ms(),
+            "measurements": {"trial": true, "previous": self.previous},
+        });
+        self.save(json!({"tuned": trial, "apply": "reload"}), false)
             .await?;
         self.chat("Reply with OK.".into(), 4).await?;
         let nonce = std::time::SystemTime::now()
@@ -183,20 +223,29 @@ impl Run<'_, '_> {
     }
 }
 
-fn with(options: &Value, key: &str, value: Value) -> Value {
-    let mut options = options.clone();
-    options[key] = value;
-    options
+fn options_path(id: &str) -> String {
+    format!("models/{}/options", super::encode(id))
 }
 
-/// Runs Tune for `id` and returns `{arguments, measurements}`; the caller saves the result.
+/// Runs Tune for `id` and saves its result as the model's tuned layer. Trials change only that
+/// layer, so the operator's settings and extra arguments are never written.
 pub(super) async fn run(context: &Context<'_>, id: &str, progress: Progress) -> Result<Value> {
     let model = context.model(id).await?;
-    let options = context.get(&format!("models/{id}/options")).await?;
+    let path = options_path(id);
+    let options = context.get(&path).await?;
     if options["provider"] != "llama-cpp" || options["model_defaults"]["available"] != true {
         return Err(Failure::new(
             "tune_unsupported",
             "Tune measures llama.cpp models with their own settings; this model's engine or settings store is not supported.",
+            409,
+        ));
+    }
+    if options["model_defaults"]["enabled"] != true {
+        return Err(Failure::new(
+            "tune_needs_defaults",
+            format!(
+                "Tune results apply through Juiced defaults, which are off for {id}. Turn them on to tune it."
+            ),
             409,
         ));
     }
@@ -208,46 +257,48 @@ pub(super) async fn run(context: &Context<'_>, id: &str, progress: Progress) -> 
         ));
     }
     let was_loaded = model["loaded"] == true;
-    let previous_tuned = options["tuned"].clone();
-    let saved = options["saved"].clone();
-    let extra: Vec<String> =
-        serde_json::from_value(options["extra_args"].clone()).unwrap_or_default();
     let mut run = Run {
         context,
         id: id.to_owned(),
+        path,
         switch: thinking_switch(&model),
-        saved: saved.clone(),
-        extra: extra.clone(),
+        runtime_package: model["runtime_package"].clone(),
+        previous: settled(&options["tuned"]),
+        revision: None,
         candidates: Vec::new(),
         progress,
     };
-    if !previous_tuned.is_null() {
-        run.save(json!({"clear_tuned": true})).await?;
-    }
     let outcome = search(&mut run, &options).await;
     let restore = match &outcome {
         Ok(result) if !result["arguments"].as_array().is_none_or(Vec::is_empty) => json!({
-            "options": run.saved, "extra_args": run.extra,
-            "tuned": {"arguments": result["arguments"], "runtime_package": model["runtime_package"], "measured_at_ms": now_ms(), "measurements": result["measurements"]},
+            "tuned": {"arguments": result["arguments"], "runtime_package": run.runtime_package, "measured_at_ms": now_ms(), "measurements": result["measurements"]},
+            "apply": "reload",
         }),
-        Ok(_) => json!({"options": run.saved, "extra_args": run.extra, "clear_tuned": true}),
-        Err(_) if previous_tuned.is_object() => {
-            json!({"options": run.saved, "extra_args": run.extra, "tuned": previous_tuned})
-        }
-        Err(_) => json!({"options": run.saved, "extra_args": run.extra}),
+        Ok(_) => json!({"clear_tuned": true, "apply": "reload"}),
+        Err(_) => restore_body(&run.previous),
     };
-    let mut restore = restore;
-    run.report("Restoring the saved settings");
-    if was_loaded {
-        restore["apply"] = json!("reload");
-    } else {
-        // Settings change only on an unloaded worker unless the save reloads it.
+    run.report("Saving the result");
+    if !was_loaded {
         let _ = context.post("unload", json!({"model_name": id})).await;
     }
-    let restored = run.save(restore).await;
+    // Tune owns only the tuned layer, so it puts that back even after another change stopped it.
+    let restored = run.save(restore, true).await;
     let result = outcome?;
     restored?;
     Ok(result)
+}
+
+/// Puts back the tuned result a run left as a trial when the service stopped during Tune.
+pub(super) async fn recover(context: &Context<'_>, id: &str) -> Result<bool> {
+    let path = options_path(id);
+    let options = context.get(&path).await?;
+    if !is_trial(&options["tuned"]) {
+        return Ok(false);
+    }
+    let mut body = restore_body(&settled(&options["tuned"]));
+    body["expected_revision"] = options["revision"].clone();
+    context.post(&path, body).await?;
+    Ok(true)
 }
 
 fn now_ms() -> u64 {
@@ -256,27 +307,36 @@ fn now_ms() -> u64 {
         .map_or(0, |time| time.as_millis() as u64)
 }
 
+fn saved_flag(options: &Value, field: Option<&str>, extra: &[String], flags: &[&str]) -> bool {
+    field.is_some_and(|field| !options["saved"][field].is_null())
+        || extra.iter().any(|argument| {
+            let name = argument
+                .split_once('=')
+                .map_or(argument.as_str(), |(name, _)| name);
+            flags.contains(&name)
+        })
+}
+
 /// Greedy search: physical batch, then flash attention, then speculative decoding, each kept
-/// only with a clear gain and no meaningful loss.
+/// only with a clear gain and no meaningful loss. Options the operator saved are not tried.
 async fn search(run: &mut Run<'_, '_>, options: &Value) -> Result<Value> {
-    let saved = run.saved.clone();
-    let extra = run.extra.clone();
-    let base = run
-        .measure("current settings", saved.clone(), extra.clone())
-        .await?;
+    let extra: Vec<String> =
+        serde_json::from_value(options["extra_args"].clone()).unwrap_or_default();
+    let base = run.measure("current settings", &[]).await?;
     let mut best = base;
-    let mut chosen = saved.clone();
     let mut arguments: Vec<String> = Vec::new();
 
-    if saved["ubatch_size"].is_null() {
+    if !saved_flag(
+        options,
+        Some("ubatch_size"),
+        &extra,
+        &["--ubatch-size", "-ub"],
+    ) {
         let mut winner: Option<(u64, Speed)> = None;
         for size in [1024u64, 2048] {
+            let trial = ["--ubatch-size".to_owned(), size.to_string()];
             let speed = run
-                .measure(
-                    &format!("physical batch {size}"),
-                    with(&saved, "ubatch_size", json!(size)),
-                    extra.clone(),
-                )
+                .measure(&format!("physical batch {size}"), &trial)
                 .await?;
             let better = speed.prefill >= best.prefill * 1.08 && speed.decode >= best.decode * 0.97;
             if better && winner.is_none_or(|(_, held)| speed.prefill > held.prefill) {
@@ -284,37 +344,38 @@ async fn search(run: &mut Run<'_, '_>, options: &Value) -> Result<Value> {
             }
         }
         if let Some((size, speed)) = winner {
-            chosen = with(&saved, "ubatch_size", json!(size));
             arguments.extend(["--ubatch-size".to_owned(), size.to_string()]);
             best = speed;
         }
     }
 
-    if saved["flash_attention"].is_null() {
-        let speed = run
-            .measure(
-                "flash attention on",
-                with(&chosen, "flash_attention", json!("on")),
-                extra.clone(),
-            )
-            .await?;
+    if !saved_flag(
+        options,
+        Some("flash_attention"),
+        &extra,
+        &["--flash-attn", "-fa"],
+    ) {
+        let mut trial = arguments.clone();
+        trial.extend(["--flash-attn".to_owned(), "on".to_owned()]);
+        let speed = run.measure("flash attention on", &trial).await?;
         let gain = speed.prefill >= best.prefill * 1.05 || speed.decode >= best.decode * 1.03;
         let loss = speed.prefill < best.prefill * 0.97 || speed.decode < best.decode * 0.97;
         if gain && !loss {
-            chosen = with(&chosen, "flash_attention", json!("on"));
-            arguments.extend(["--flash-attn".to_owned(), "on".to_owned()]);
+            arguments = trial;
             best = speed;
         }
     }
 
-    let saved_speculation = extra.iter().any(|argument| argument == "--spec-type");
-    if !saved_speculation {
+    if !saved_flag(options, None, &extra, &["--spec-type"]) {
+        // The speculation a launch without tuning uses: a recipe's, or none.
         let current = options["model_defaults"]["entries"]
             .as_array()
             .and_then(|entries| {
-                entries
-                    .iter()
-                    .find(|entry| entry["flag"] == "--spec-type" && entry["state"] == "applied")
+                entries.iter().find(|entry| {
+                    entry["flag"] == "--spec-type"
+                        && entry["source"] != "tuned"
+                        && (entry["state"] == "applied" || entry["state"] == "shadowed")
+                })
             })
             .and_then(|entry| entry["value"].as_str())
             .unwrap_or("none")
@@ -324,17 +385,13 @@ async fn search(run: &mut Run<'_, '_>, options: &Value) -> Result<Value> {
         } else {
             "none"
         };
-        let mut trial = extra.clone();
+        let mut trial = arguments.clone();
         trial.extend(["--spec-type".to_owned(), alternative.to_owned()]);
         let speed = run
-            .measure(
-                &format!("speculative decoding {alternative}"),
-                chosen.clone(),
-                trial,
-            )
+            .measure(&format!("speculative decoding {alternative}"), &trial)
             .await?;
         if speed.decode * speed.rewrite >= best.decode * best.rewrite * 1.10 {
-            arguments.extend(["--spec-type".to_owned(), alternative.to_owned()]);
+            arguments = trial;
             best = speed;
         }
     }
@@ -342,4 +399,27 @@ async fn search(run: &mut Run<'_, '_>, options: &Value) -> Result<Value> {
         "arguments": arguments,
         "measurements": {"baseline": base.json(), "chosen": best.json(), "candidates": run.candidates},
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_interrupted_trial_restores_the_result_it_replaced() {
+        let previous = json!({"arguments": ["--ubatch-size", "1024"], "measured_at_ms": 1, "measurements": {}});
+        let trial = json!({"arguments": [], "measured_at_ms": 2, "measurements": {"trial": true, "previous": previous}});
+        assert!(is_trial(&trial));
+        assert_eq!(settled(&trial), previous);
+        assert_eq!(restore_body(&settled(&trial))["tuned"], previous);
+        let first = json!({"arguments": [], "measured_at_ms": 2, "measurements": {"trial": true, "previous": null}});
+        assert_eq!(restore_body(&settled(&first))["clear_tuned"], true);
+        assert!(!is_trial(&previous));
+        assert_eq!(settled(&previous), previous);
+    }
+
+    #[test]
+    fn model_ids_with_a_slash_stay_one_path_segment() {
+        assert_eq!(options_path("org/model"), "models/org%2Fmodel/options");
+    }
 }

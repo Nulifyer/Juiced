@@ -472,7 +472,8 @@ fn is_on(value: &bool) -> bool {
     *value
 }
 
-pub const MAXIMUM_COMPANIONS: usize = 8;
+/// Every other part of the largest split model Juiced accepts, plus a vision projector.
+pub const MAXIMUM_COMPANIONS: usize = crate::engines::split::MAXIMUM_PARTS as usize;
 
 /// A companion file registered in place beside an unmanaged model file. Launch checks that it
 /// still exists and binds it to the `{member:NAME}` argument with the same name.
@@ -496,6 +497,16 @@ pub struct NativeAdoption {
 }
 
 impl ModelSpec {
+    /// The tuned arguments, only while the model still runs on the package Tune measured.
+    pub fn current_tuning(&self) -> &[String] {
+        self.tuned
+            .as_ref()
+            .filter(|tuned| {
+                tuned.runtime_package.as_deref() == self.execution_profile.runtime_package()
+            })
+            .map_or(&[], |tuned| tuned.arguments.as_slice())
+    }
+
     pub fn resolved(&self, parent: &Path) -> Self {
         let mut model = self.clone();
         if model.model_file.is_relative() {

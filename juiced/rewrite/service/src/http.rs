@@ -1360,6 +1360,7 @@ pub fn router(manager: Arc<Manager>, auth: Auth, ui: Option<PathBuf>) -> Router 
         .layer(middleware::from_fn_with_state(state.clone(), authorize))
         .merge(crate::llama_routes::public());
     if state.probe.set(app.clone()).is_ok() {
+        crate::barista::spawn_tune_recovery(state.clone());
         crate::barista::spawn_automatic_checks(state.clone());
     }
     if let Some(ui) = ui {

@@ -537,3 +537,12 @@ fn a_recipe_matches_by_basename_and_outranks_the_model_file_and_family() {
     };
     assert!(LlamaDefaults::for_model(&other, None, 1).recipe.is_empty());
 }
+
+#[test]
+fn saved_short_flags_block_the_matching_tuned_defaults() {
+    let defaults = LlamaDefaults::for_model(&ModelShape::default(), None, 1)
+        .with_tuned(&["--flash-attn", "on", "--ubatch-size", "1024"].map(str::to_owned));
+    let mut saved: Vec<String> = ["-fa", "off", "-ub=512"].map(str::to_owned).into();
+    defaults.apply(&mut saved);
+    assert_eq!(saved, ["-fa", "off", "-ub=512", "--metrics"]);
+}

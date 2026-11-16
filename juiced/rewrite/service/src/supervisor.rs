@@ -2047,6 +2047,23 @@ impl Manager {
         true
     }
 
+    /// Models whose saved tuned layer is a trial from a Tune run the service stopped during.
+    pub fn interrupted_tunes(&self) -> Vec<String> {
+        self.workers
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .values()
+            .filter(|worker| {
+                worker
+                    .spec
+                    .tuned
+                    .as_ref()
+                    .is_some_and(|tuned| tuned.measurements["trial"] == true)
+            })
+            .map(|worker| worker.spec.id.clone())
+            .collect()
+    }
+
     pub fn is_registered(&self, id: &str) -> bool {
         self.worker(id).is_ok()
     }

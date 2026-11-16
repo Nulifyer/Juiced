@@ -377,6 +377,21 @@ pub(crate) fn start_tune(state: AppState, model: String) -> Result<Value, ApiErr
     Ok(started)
 }
 
+/// Puts back tuned results that Tune runs stopped by a restart left as trials.
+pub(crate) fn spawn_tune_recovery(state: AppState) {
+    let (Ok(runtime), Some(app)) = (
+        tokio::runtime::Handle::try_current(),
+        state.probe.get().cloned(),
+    ) else {
+        return;
+    };
+    let models = state.manager.interrupted_tunes();
+    if models.is_empty() {
+        return;
+    }
+    runtime.spawn(async move { tools::recover_tunes(&state, app, &models).await });
+}
+
 /// Checks each chat model once per launch fingerprint after its worker becomes ready.
 pub(crate) fn spawn_automatic_checks(state: AppState) {
     let Ok(runtime) = tokio::runtime::Handle::try_current() else {

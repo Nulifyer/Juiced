@@ -18,6 +18,32 @@ pub enum OptionsApply {
     Reload,
 }
 
+/// The launch-affecting parts of a model a failed reload restores.
+pub(super) struct LaunchSnapshot {
+    execution_profile: ExecutionProfile,
+    resident_bytes: u64,
+    juiced_defaults: bool,
+    tuned: Option<crate::config::TunedLaunch>,
+}
+
+impl LaunchSnapshot {
+    fn of(spec: &crate::config::ModelSpec) -> Self {
+        Self {
+            execution_profile: spec.execution_profile.clone(),
+            resident_bytes: spec.resident_bytes,
+            juiced_defaults: spec.juiced_defaults,
+            tuned: spec.tuned.clone(),
+        }
+    }
+
+    fn restore(self, spec: &mut crate::config::ModelSpec) {
+        spec.execution_profile = self.execution_profile;
+        spec.resident_bytes = self.resident_bytes;
+        spec.juiced_defaults = self.juiced_defaults;
+        spec.tuned = self.tuned;
+    }
+}
+
 #[derive(Debug)]
 pub enum OptionsError {
     Api(ApiError),
@@ -562,7 +588,7 @@ impl Manager {
         self: &Arc<Self>,
         id: &str,
         replacement: Arc<Worker>,
-        previous: (ExecutionProfile, u64),
+        previous: LaunchSnapshot,
         restart: bool,
         apply: OptionsApply,
     ) -> Result<serde_json::Value, OptionsError> {
@@ -594,7 +620,7 @@ impl Manager {
     async fn roll_back_options(
         self: &Arc<Self>,
         failed: Arc<Worker>,
-        previous: (ExecutionProfile, u64),
+        previous: LaunchSnapshot,
         error: ApiError,
     ) -> OptionsError {
         let state = failed.state.clone().lock_owned().await;
@@ -604,7 +630,7 @@ impl Manager {
             None
         } else {
             self.replace_local_profile(failed, state, move |spec| {
-                (spec.execution_profile, spec.resident_bytes) = previous;
+                previous.restore(spec);
                 Ok(())
             })
             .await
@@ -630,7 +656,7 @@ impl Manager {
         worker: Arc<Worker>,
         mut state: OwnedMutexGuard<WorkerState>,
         change: impl FnOnce(&mut crate::config::ModelSpec) -> Result<(), ApiError>,
-    ) -> Result<(Arc<Worker>, (ExecutionProfile, u64)), ApiError> {
+    ) -> Result<(Arc<Worker>, LaunchSnapshot), ApiError> {
         let id = worker.spec.id.clone();
         self.ensure_registered(&worker)?;
         let config = self.config.clone().lock_owned().await;
@@ -647,7 +673,7 @@ impl Manager {
             .iter_mut()
             .find(|model| model.id == id)
             .expect("registered model");
-        let previous = (spec.execution_profile.clone(), spec.resident_bytes);
+        let previous = LaunchSnapshot::of(spec);
         change(spec)?;
         spec.revision = next.generation;
         let applied = spec
@@ -889,5 +915,43 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(stale.code(), "revision_conflict");
+    }
+
+    #[tokio::test]
+    async fn failed_hot_reload_restores_the_defaults_switch_and_tuned_result() {
+        let (_directory, manager) = manager();
+        let hot = manager.set_policy("one", Policy::Hot, 1).await.unwrap();
+        let tuned = crate::config::TunedLaunch {
+            arguments: vec!["--ubatch-size".into(), "1024".into()],
+            runtime_package: None,
+            measured_at_ms: 1,
+            measurements: serde_json::Value::Null,
+        };
+        let error = manager
+            .apply_llama(
+                "one",
+                hot.revision,
+                LlamaChange {
+                    options: None,
+                    extra_args: None,
+                    juiced_defaults: Some(false),
+                    tuned: Some(Some(tuned)),
+                },
+                OptionsApply::Reload,
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            OptionsError::ReloadFailed {
+                restored_revision: Some(_),
+                ..
+            }
+        ));
+        let model = &crate::config::Config::read(&manager.config_path)
+            .unwrap()
+            .models[0];
+        assert!(model.juiced_defaults);
+        assert_eq!(model.tuned, None);
     }
 }

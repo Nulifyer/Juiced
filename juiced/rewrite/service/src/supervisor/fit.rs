@@ -72,11 +72,7 @@ pub(super) fn with_model_defaults(
             .and_then(|options| options.parallel_slots)
             .map_or(u64::from(spec.max_inflight), u64::from);
         memory::LlamaDefaults::for_model(&shape.1, shape.0.architecture.as_deref(), slots)
-            .with_tuned(
-                spec.tuned
-                    .as_ref()
-                    .map_or(&[], |tuned| tuned.arguments.as_slice()),
-            )
+            .with_tuned(spec.current_tuning())
             .apply(&mut args);
     }
     args
@@ -743,11 +739,7 @@ fn defaults_view(
         .and_then(|options| options.parallel_slots)
         .map_or(u64::from(spec.max_inflight), u64::from);
     let defaults = memory::LlamaDefaults::for_model(shape, declared.architecture.as_deref(), slots)
-        .with_tuned(
-            spec.tuned
-                .as_ref()
-                .map_or(&[], |tuned| tuned.arguments.as_slice()),
-        );
+        .with_tuned(spec.current_tuning());
     let mut seen: Vec<String> = Vec::new();
     let entries: Vec<Value> = defaults
         .entries()
@@ -788,6 +780,7 @@ fn defaults_view(
     json!({
         "available": !native,
         "enabled": spec.juiced_defaults && !native,
+        "tuned_stale": spec.tuned.is_some() && spec.current_tuning().is_empty(),
         "entries": entries,
         "sampler": {
             "temperature": from(&["--temp", "--temperature"], sampling.temperature.map(Value::from)),

@@ -3,7 +3,7 @@ export type DefaultSource = "juiced" | "family" | "model-file" | "recipe" | "tun
 export type DefaultState = "applied" | "overridden" | "shadowed" | "off";
 export type DefaultEntry = { flag: string; value: string | null; source: DefaultSource; reason: string; state: DefaultState };
 export type SamplerValue = { value: string | number; source: "saved" | "juiced" | "model-file" };
-export type ModelDefaults = { available: boolean; enabled: boolean; entries: DefaultEntry[]; sampler: Record<string, SamplerValue | null> };
+export type ModelDefaults = { available: boolean; enabled: boolean; tunedStale: boolean; entries: DefaultEntry[]; sampler: Record<string, SamplerValue | null> };
 
 const sources: DefaultSource[] = ["juiced", "family", "model-file", "recipe", "tuned"];
 const states: DefaultState[] = ["applied", "overridden", "shadowed", "off"];
@@ -40,7 +40,7 @@ export function parseModelDefaults(value: unknown): ModelDefaults | null {
     const ok = (typeof value.value === "string" || typeof value.value === "number") && ["saved", "juiced", "model-file"].includes(value.source as string);
     return [key, ok ? value as SamplerValue : null];
   }));
-  return { available: body.available, enabled: body.enabled, entries, sampler };
+  return { available: body.available, enabled: body.enabled, tunedStale: body.tuned_stale === true, entries, sampler };
 }
 
 export function argument(entry: Pick<DefaultEntry, "flag" | "value">): string {

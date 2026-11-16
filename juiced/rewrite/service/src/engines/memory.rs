@@ -719,6 +719,16 @@ fn split_arguments(text: &str) -> Vec<String> {
 /// Flag spellings llama-server treats as the same option, so a default never duplicates an
 /// explicit argument written with another alias.
 const ALIASES: &[&[&str]] = &[
+    &["--ctx-size", "-c"],
+    &["--threads", "-t"],
+    &["--gpu-layers", "--n-gpu-layers", "-ngl"],
+    &["--parallel", "-np"],
+    &["--batch-size", "-b"],
+    &["--ubatch-size", "-ub"],
+    &["--threads-batch", "-tb"],
+    &["--flash-attn", "-fa"],
+    &["--cache-type-k", "-ctk"],
+    &["--cache-type-v", "-ctv"],
     &["--temp", "--temperature"],
     &["--top-k"],
     &["--top-p"],

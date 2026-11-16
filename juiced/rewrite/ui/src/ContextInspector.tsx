@@ -202,7 +202,7 @@ function JuicedDefaults({ model, client, defaults, revision, disabled, mutate }:
   const startTune = async () => {
     try { setTune(parseTune(await client.request<unknown>(tunePath, {}))); } catch (error) { notify(error instanceof Error ? error.message : "Tune could not start.", "error"); }
   };
-  const tuned = defaults.entries.some((entry) => entry.source === "tuned");
+  const tuned = defaults.tunedStale || defaults.entries.some((entry) => entry.source === "tuned");
   const clearTuned = () => void mutate(`models/${encodeURIComponent(model.id)}/options`, { expected_revision: revision, clear_tuned: true, ...(model.loaded ? { apply: "reload" } : {}) }, `Cleared the tuned settings for ${model.id}.`);
   const shown = defaults.entries.filter((entry) => entry.source !== "juiced" && entry.state !== "shadowed");
   const changed = changedSince(defaults, seen);
@@ -214,11 +214,12 @@ function JuicedDefaults({ model, client, defaults, revision, disabled, mutate }:
     {changed.length > 0 && <div className="inline-note" role="status"><span>{seen === null ? "Juiced adds" : "Juiced now also adds"} <code>{changed.join(" · ")}</code> at launch.</span><span className="action-row"><Button variant="ghost" onClick={acknowledge}>OK</Button><Button variant="ghost" disabled={disabled} onClick={() => toggle(false)}>Turn off</Button></span></div>}
     {shown.length === 0 ? <p className="field-help">Nothing beyond the engine's own defaults for this model.</p>
       : <ul className="defaults-list">{shown.map((entry) => <li key={`${entry.source}${entry.flag}`} className={entry.state === "applied" ? undefined : "muted"}><code>{argument(entry)}</code><span className="muted">{sourceLabels[entry.source]}{entry.state === "overridden" ? " · your setting wins" : entry.state === "off" ? " · off" : ""}</span><HelpTip label={argument(entry)}>{entry.reason}</HelpTip></li>)}</ul>}
+    {defaults.tunedStale && tune.state !== "running" && <p className="field-help">Tune results came from another engine version and are not used. Tune again to measure this one.</p>}
     {tune.state === "running" && <p className="field-help" role="status">Tuning: {tune.step ?? "starting"}…</p>}
     {tune.state === "failed" && tune.error && <p className="inline-error">{tune.error}</p>}
     {tune.candidates.length > 0 && <div className="data-table tune-table" role="table" aria-label="Tune measurements"><div className="data-head" role="row"><span role="columnheader">Tried</span><span role="columnheader" className="numeric">Prompt</span><span role="columnheader" className="numeric">Chat</span><span role="columnheader" className="numeric">Rewrite</span></div>
       {tune.candidates.map((candidate) => <div className="data-row" role="row" key={candidate.label}><span role="cell">{candidate.label}</span><span role="cell" className="numeric">{Math.round(candidate.speed.prefill_tps)}</span><span role="cell" className="numeric">{candidate.speed.decode_tps.toFixed(1)}</span><span role="cell" className="numeric">{candidate.speed.rewrite_tps.toFixed(1)}</span></div>)}</div>}
-    <div className="action-row"><Button disabled={disabled || tune.state === "running" || model.policy === "disabled"} onClick={() => void startTune()}>{tune.state === "running" ? "Tuning…" : "Tune for this machine"}</Button>{tuned && <Button variant="ghost" disabled={disabled || tune.state === "running"} onClick={clearTuned}>Clear tuned</Button>}<HelpTip label="Tune">Tries a larger prompt batch, flash attention and speculative decoding on this machine, measuring prompt, chat and code-rewrite speed (tokens per second). It keeps a change only when it is clearly faster, then restores your saved settings. Takes a few minutes and reloads the model several times.</HelpTip></div>
+    <div className="action-row"><Button disabled={disabled || tune.state === "running" || model.policy === "disabled" || !defaults.enabled} onClick={() => void startTune()}>{tune.state === "running" ? "Tuning…" : "Tune for this machine"}</Button>{tuned && <Button variant="ghost" disabled={disabled || tune.state === "running"} onClick={clearTuned}>Clear tuned</Button>}<HelpTip label="Tune">Tries a larger prompt batch, flash attention and speculative decoding on this machine, measuring prompt, chat and code-rewrite speed (tokens per second). It keeps a change only when it is clearly faster and never changes your saved settings. Takes a few minutes and reloads the model several times.</HelpTip></div>
   </div>;
 }
 
