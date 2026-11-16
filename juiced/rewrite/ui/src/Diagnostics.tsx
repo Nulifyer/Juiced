@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import type { Client } from "./api";
 import { Sparkline } from "./charts";
 import { bytes, type Model, type RequestRecord, type Snapshot } from "./domain";
 import { memorySize, parseLogPage, percent, rate, type LogLine, type StatsPoint, type SystemStats } from "./live";
-import { count, failed, formatMs, modelPerformance, pathNames, timing } from "./performance";
-import { Badge, Button, Empty, HelpTip, ModelSelect } from "./ui";
+import { clock, count, failed, formatMs, modelPerformance, outcomeText, promptNote, sender, timing } from "./performance";
+import { Badge, Button, Empty, HelpTip, ModelSelect, Switch } from "./ui";
 
 type Tab = "performance" | "requests" | "logs";
 type Props = { client: Client; snapshot: Snapshot; stats: SystemStats | null; history: StatsPoint[]; tab: Tab };
@@ -12,7 +12,7 @@ type Props = { client: Client; snapshot: Snapshot; stats: SystemStats | null; hi
 export function Diagnostics({ client, snapshot, stats, history, tab }: Props) {
   return <>
     {tab === "performance" && <Performance snapshot={snapshot} stats={stats} history={history} />}
-    {tab === "requests" && <Requests snapshot={snapshot} />}
+    {tab === "requests" && <Requests client={client} snapshot={snapshot} />}
     {tab === "logs" && <Logs client={client} models={snapshot.models} />}
   </>;
 }
@@ -49,29 +49,17 @@ function Performance({ snapshot, stats, history }: { snapshot: Snapshot; stats: 
       </div>}
     </section>
     <div className="stat-grid" aria-label="Resource history">{charts.map(([label, value, series]) => <article className="chart-card" key={label} aria-label={label}><div className="stat-head"><span>{label}</span><strong>{value}</strong></div><Sparkline values={[...series]} height={72} label={`${label} over the last two minutes`} /></article>)}</div>
-    <section className="panel" aria-label="Reservations">
-      <header className="panel-head"><h2>Reservations</h2></header>
+    {(cache?.state === "accounted" || runtime?.state === "accounted") && <section className="panel" aria-label="Control memory">
+      <header className="panel-head"><h2>Control memory</h2></header>
       <dl className="fact-grid">
-        <div><dt>Budget</dt><dd>{bytes(resources.resident_budget_bytes ?? null)}</dd></div>
-        <div><dt>Reserved</dt><dd>{bytes(resources.reserved_bytes)}</dd></div>
         {cache?.state === "accounted" && <><div><dt>Cache metadata</dt><dd>{bytes(cache.metadata_bytes)}</dd></div><div><dt>Cache work</dt><dd>{bytes(cache.scratch_bytes)}</dd></div></>}
         {runtime?.state === "accounted" && <><div><dt>Runtime metadata</dt><dd>{bytes(runtime.metadata_bytes)}</dd></div><div><dt>Runtime bindings</dt><dd>{bytes(runtime.binding_bytes)}</dd></div><div><dt>Runtime work</dt><dd>{bytes(runtime.scratch_bytes)}</dd></div></>}
-        <div><dt>Active requests</dt><dd>{resources.active_requests}</dd></div>
       </dl>
-    </section>
+    </section>}
   </div>;
 }
 
 const segments = [["queue", "Queue"], ["prompt", "Prompt"], ["generate", "Generate"], ["other", "Other"]] as const;
-
-function promptNote(request: RequestRecord): string | null {
-  const session = request.session_cache;
-  const cached = request.cached_tokens ? `${count(request.cached_tokens)} cached` : null;
-  if (session?.path === "restored") return [session.restore_ms != null ? `restored in ${formatMs(session.restore_ms)}` : "restored from disk", cached].filter(Boolean).join(" · ");
-  if (session?.path === "slot-hit") return cached ?? pathNames["slot-hit"]!.toLowerCase();
-  if (session) return pathNames[session.path]?.toLowerCase() ?? session.path;
-  return cached;
-}
 
 function TimingBar({ request, longest }: { request: RequestRecord; longest: number }) {
   const parts = timing(request);
@@ -84,29 +72,85 @@ function TimingBar({ request, longest }: { request: RequestRecord; longest: numb
   </span>;
 }
 
-function Requests({ snapshot }: { snapshot: Snapshot }) {
-  if (snapshot.requests.length === 0) return <Empty title="No requests yet">Requests from apps and tests show here. Prompts and replies are never stored.</Empty>;
+type Captured = { request: CapturedPart; response: CapturedPart };
+type CapturedPart = { text: string | null; bytes: number; truncated: boolean; assembled: boolean; content_type?: string };
+
+function CapturePart({ label, part }: { label: string; part: CapturedPart }) {
+  const note = [part.assembled ? "streamed text" : null, part.truncated ? `first 64 KiB of ${bytes(part.bytes)}` : null].filter(Boolean).join(" · ");
+  return <div className="capture-part">
+    <h3>{label}{note && <span className="muted"> · {note}</span>}</h3>
+    {part.text == null ? <p className="muted">{part.content_type ?? "Binary"} body, {bytes(part.bytes)}. Not captured.</p> : <pre>{part.text || "Empty"}</pre>}
+  </div>;
+}
+
+function CaptureView({ client, id }: { client: Client; id: number }) {
+  const [state, setState] = useState<Captured | string | null>(null);
+  useEffect(() => {
+    const controller = new AbortController();
+    client.request(`juiced/requests/${id}/capture`, undefined, controller.signal)
+      .then((value) => setState(value as Captured))
+      .catch((failure) => { if (!controller.signal.aborted) setState(failure instanceof Error ? failure.message : "The capture is unavailable."); });
+    return () => controller.abort();
+  }, [client, id]);
+  if (state == null) return <p className="muted">Loading…</p>;
+  if (typeof state === "string") return <p className="inline-error" role="alert">{state}</p>;
+  return <><CapturePart label="Request" part={state.request} /><CapturePart label="Response" part={state.response} /></>;
+}
+
+function CaptureSwitch({ client }: { client: Client }) {
+  const [enabled, setEnabled] = useState<boolean | null>(null);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    const controller = new AbortController();
+    client.request("juiced/requests/capture", undefined, controller.signal)
+      .then((value) => setEnabled((value as { enabled?: unknown }).enabled === true))
+      .catch(() => { if (!controller.signal.aborted) setEnabled(null); });
+    return () => controller.abort();
+  }, [client]);
+  if (enabled == null) return null;
+  const change = (next: boolean) => {
+    setError("");
+    client.request("juiced/requests/capture", { enabled: next })
+      .then((value) => setEnabled((value as { enabled?: unknown }).enabled === true))
+      .catch((failure) => setError(failure instanceof Error ? failure.message : "Capture could not be changed."));
+  };
+  return <>
+    <Switch checked={enabled} label="Capture bodies" onChange={change}>Capture bodies</Switch>
+    <HelpTip label="Capture bodies">Keeps the request and reply of the last 20 requests, up to 64 KiB each, in memory for operators. Turning it off or restarting Juiced clears them. Never saved to disk or logs.</HelpTip>
+    {enabled && <span className="tone-warning capture-note">Prompts and replies are kept in memory.</span>}
+    {error && <span className="inline-error" role="alert">{error}</span>}
+  </>;
+}
+
+function Requests({ client, snapshot }: { client: Client; snapshot: Snapshot }) {
+  const [open, setOpen] = useState<number | null>(null);
+  const now = Date.now();
   const longest = Math.max(1, ...snapshot.requests.map((request) => request.elapsed_ms));
   return <div className="requests">
     <div className="timing-legend" aria-label="Time breakdown">
       {segments.map(([key, label]) => <span key={key}><span className={`swatch ${key}`} />{label}</span>)}
-      <HelpTip label="Time breakdown">Prompt and Generate come from the engine's own token rates. Other covers restoring a saved conversation, audio work and network time. Prompts and replies are never stored.</HelpTip>
+      <HelpTip label="Time breakdown">Prompt and Generate come from the engine's own token rates. Other covers restoring a saved conversation, audio work and network time.</HelpTip>
+      <span className="capture-controls"><CaptureSwitch client={client} /></span>
     </div>
-    <div className="data-table stacked requests-table" role="table" aria-label="Recent requests">
+    {snapshot.requests.length === 0 ? <Empty title="No requests yet">Requests from apps and tests show here. Prompts and replies are not kept unless capture is on.</Empty> : <div className="data-table stacked requests-table" role="table" aria-label="Recent requests">
       <div role="row" className="data-head"><span role="columnheader">Time</span><span role="columnheader">Model</span><span role="columnheader">Outcome</span><span role="columnheader" className="numeric">Prompt</span><span role="columnheader" className="numeric">Output</span><span role="columnheader" className="numeric">Speed</span><span role="columnheader">Duration</span></div>
       {snapshot.requests.map((request) => {
         const note = promptNote(request);
-        return <div role="row" className="data-row" key={request.id}>
-          <span role="cell" className="muted request-time">{request.completed_at_ms ? new Date(request.completed_at_ms).toLocaleTimeString([], { hour12: false }) : "—"}</span>
-          <span role="cell" className="request-model"><span className="break-word">{request.model}</span><code className="cell-note">{request.operation}</code></span>
-          <span role="cell"><Badge tone={failed(request) ? "bad" : request.outcome === "cancelled" ? "quiet" : "good"}>{request.outcome.replaceAll("_", " ")}{request.status ? ` · ${request.status}` : ""}</Badge></span>
+        const from = sender(request);
+        const expanded = open === request.id;
+        return <Fragment key={request.id}><div role="row" className="data-row">
+          <span role="cell" className="muted request-time">{request.completed_at_ms ? clock(request.completed_at_ms, now) : "—"}</span>
+          <span role="cell" className="request-model"><span className="break-word">{request.model}</span><span className="cell-note"><code>{request.operation}</code>{from && ` · ${from}`}</span>{request.captured && <button type="button" className="link-button" aria-expanded={expanded} onClick={() => setOpen(expanded ? null : request.id)}>{expanded ? "Hide bodies" : "Bodies"}</button>}</span>
+          <span role="cell"><Badge tone={failed(request) ? "bad" : request.outcome === "cancelled" ? "quiet" : "good"}>{outcomeText(request)}</Badge></span>
           <span role="cell" className={`numeric ${request.input_tokens == null ? "no-data" : ""}`} data-label="Prompt">{count(request.input_tokens)}{note && <span className="cell-note">{note}</span>}</span>
           <span role="cell" className={`numeric ${request.output_tokens == null ? "no-data" : ""}`} data-label="Output">{count(request.output_tokens)}</span>
           <span role="cell" className={`numeric ${request.decode_tokens_per_second == null && request.prompt_tokens_per_second == null ? "no-data" : ""}`} data-label="Speed">{rate(request.decode_tokens_per_second)}{request.prompt_tokens_per_second != null && <span className="cell-note">prompt {rate(request.prompt_tokens_per_second)}</span>}</span>
           <span role="cell" className="timing-cell"><TimingBar request={request} longest={longest} /></span>
-        </div>;
+        </div>
+        {expanded && <div role="row" className="capture-row" aria-label={`Captured bodies for request ${request.id}`}><span role="cell"><CaptureView client={client} id={request.id} /></span></div>}
+        </Fragment>;
       })}
-    </div>
+    </div>}
   </div>;
 }
 
@@ -160,6 +204,8 @@ function Logs({ client, models }: { client: Client; models: Model[] }) {
     return lines.filter((line) => (level === "all" || line.level === "error" || (level === "warning" && line.level === "warning")) && (!needle || line.text.toLowerCase().includes(needle)));
   }, [lines, level, query]);
   useEffect(() => { if (follow && view.current) view.current.scrollTop = view.current.scrollHeight; }, [visible, follow]);
+  const now = Date.now();
+  const dated = visible.some((line) => clock(line.timestamp_ms, now).includes(" "));
   return <div className="logs">
     <div className="toolbar">
       <input type="search" aria-label="Search logs" placeholder="Search logs" value={query} onChange={(event) => setQuery(event.target.value)} />
@@ -169,9 +215,9 @@ function Logs({ client, models }: { client: Client; models: Model[] }) {
     </div>
     {error && <p className="inline-error" role="alert">{error}</p>}
     {dropped > 0 && <p className="field-help">Showing the latest lines. Older ones were not kept.</p>}
-    <div ref={view} className="log-view" role="log" aria-live="off" aria-label="Log lines" onWheel={() => { if (view.current && view.current.scrollTop + view.current.clientHeight < view.current.scrollHeight - 8) setFollow(false); }}>
+    <div ref={view} className={`log-view${dated ? " dated" : ""}`} role="log" aria-live="off" aria-label="Log lines" onWheel={() => { if (view.current && view.current.scrollTop + view.current.clientHeight < view.current.scrollHeight - 8) setFollow(false); }}>
       {visible.length === 0 ? <p className="muted log-empty">{lines.length ? "No lines match." : "Waiting for log output…"}</p> : visible.map((line) => <div className={`log-line ${line.level ?? ""}`} key={line.seq}>
-        <time>{new Date(line.timestamp_ms).toLocaleTimeString([], { hour12: false })}</time><span className="log-source" title={line.source}>{tailName(line.source)}</span><span className="log-text">{logText(line.text)}{line.truncated ? " …" : ""}</span>
+        <time>{clock(line.timestamp_ms, now)}</time><span className="log-source" title={line.source}>{tailName(line.source)}</span><span className="log-text">{logText(line.text)}{line.truncated ? " …" : ""}</span>
       </div>)}
     </div>
   </div>;

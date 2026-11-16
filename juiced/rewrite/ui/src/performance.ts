@@ -67,3 +67,33 @@ export function formatMs(ms: number | null): string {
 }
 
 export const count = (value: number | null | undefined) => value == null ? "—" : value.toLocaleString("en-US");
+
+/** "21:43:51" today, "Nov 15 21:43:51" on any other day. */
+export function clock(ms: number, now = Date.now()): string {
+  const at = new Date(ms), today = new Date(now);
+  const time = at.toLocaleTimeString([], { hour12: false });
+  const sameDay = at.getFullYear() === today.getFullYear() && at.getMonth() === today.getMonth() && at.getDate() === today.getDate();
+  return sameDay ? time : `${at.toLocaleDateString("en-US", { month: "short", day: "numeric" })} ${time}`;
+}
+
+export function outcomeText(record: RequestRecord): string {
+  if (record.outcome === "completed" && record.status) return String(record.status);
+  return `${record.outcome.replaceAll("_", " ")}${record.status ? ` · ${record.status}` : ""}`;
+}
+
+/** Only prompts the engine did not read in full get a note. */
+export function promptNote(record: RequestRecord): string | null {
+  const session = record.session_cache;
+  const cached = record.cached_tokens ? `${count(record.cached_tokens)} cached` : null;
+  if (session?.path === "restored") return [session.restore_ms != null ? `restored in ${formatMs(session.restore_ms)}` : "restored", cached].filter(Boolean).join(" · ");
+  if (session?.path === "slot-hit") return cached ?? "cached";
+  return cached;
+}
+
+const protocolNames: Record<string, string> = { openai: "OpenAI", ollama: "Ollama", anthropic: "Anthropic", automatic1111: "AUTOMATIC1111", mcp: "MCP", realtime: "Realtime", wyoming: "Wyoming", console: "Console", internal: "Juiced", native: "Juiced API" };
+
+/** Who sent a request: its protocol and the API key's name. */
+export function sender(record: RequestRecord): string | null {
+  const protocol = record.protocol ? protocolNames[record.protocol] ?? record.protocol : null;
+  return [protocol, record.key_name].filter(Boolean).join(" · ") || null;
+}

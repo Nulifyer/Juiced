@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { RequestRecord } from "../src/domain";
-import { failed, formatMs, modelPerformance, timing } from "../src/performance";
+import { clock, failed, formatMs, modelPerformance, outcomeText, promptNote, sender, timing } from "../src/performance";
 
 const chat = (id: number, fields: Partial<RequestRecord>): RequestRecord => ({ id, model: "Ornith-1.5-35B-A3B-GGUF", operation: "chat/completions", outcome: "completed", status: 200, elapsed_ms: 1000, queue_wait_ms: 0, ...fields });
 const cold = chat(13, { elapsed_ms: 16866, input_tokens: 6477, output_tokens: 110, cached_tokens: 0, prompt_processed_tokens: 6477, prompt_tokens_per_second: 507.50559004439674, decode_tokens_per_second: 27.11526425193215, session_cache: { key: "prefix", path: "cold", slot: 1, saved_previous: false } });
@@ -50,5 +50,30 @@ describe("model performance", () => {
   });
   test("formats durations compactly", () => {
     expect([formatMs(698), formatMs(3047), formatMs(16866), formatMs(null)]).toEqual(["698 ms", "3.05 s", "16.9 s", "—"]);
+  });
+});
+
+describe("request rows", () => {
+  test("rows from another day carry the date", () => {
+    const now = new Date(2026, 10, 16, 2, 2, 26).getTime();
+    expect(clock(new Date(2026, 10, 16, 1, 0, 0).getTime(), now)).toBe("01:00:00");
+    expect(clock(new Date(2026, 10, 15, 21, 43, 51).getTime(), now)).toBe("Nov 15 21:43:51");
+    expect(clock(new Date(2025, 10, 16, 1, 0, 0).getTime(), now)).toBe("Nov 16 01:00:00");
+  });
+  test("a completed request shows only its status", () => {
+    expect(outcomeText(chat(1, {}))).toBe("200");
+    expect(outcomeText(chat(1, { outcome: "upstream_error", status: 502 }))).toBe("upstream error · 502");
+    expect(outcomeText(chat(1, { outcome: "cancelled", status: null }))).toBe("cancelled");
+  });
+  test("only reused prompts get a note", () => {
+    expect(promptNote(cold)).toBeNull();
+    expect(promptNote(hit)).toBe("6,642 cached");
+    expect(promptNote(chat(1, { session_cache: { key: "prefix", path: "restored", slot: 1, saved_previous: false, restore_ms: 250 } }))).toBe("restored in 250 ms");
+    expect(promptNote(chat(1, { session_cache: { key: "prefix", path: "bypass", slot: 1, saved_previous: false } }))).toBeNull();
+  });
+  test("the sender names the protocol and key, never more", () => {
+    expect(sender(chat(1, { protocol: "ollama", key_name: "Home Assistant" }))).toBe("Ollama · Home Assistant");
+    expect(sender(chat(1, { protocol: "console", key_name: null }))).toBe("Console");
+    expect(sender(chat(1, {}))).toBeNull();
   });
 });

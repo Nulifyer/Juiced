@@ -31,6 +31,7 @@ export type RequestRecord = {
   id: number; model: string; alias?: string; operation: string; outcome: string; status: number | null; elapsed_ms: number; queue_wait_ms?: number; completed_at_ms?: number;
   input_tokens?: number | null; output_tokens?: number | null; decode_tokens_per_second?: number | null; prompt_tokens_per_second?: number | null;
   prompt_processed_tokens?: number | null; cached_tokens?: number | null; session_cache?: SessionCache;
+  protocol?: string | null; key_name?: string | null; captured?: boolean;
 };
 export type CacheControlMemory = { state: "accounted" | "unavailable" | "legacy"; reason: string | null; metadata_bytes: number; scratch_bytes: number; reserved_bytes: number; outstanding_bytes: number; active_operations: number; bounds?: { bootstrap_bytes: number; metadata_bytes: number; scratch_bytes: number; state_scratch_bytes: number; page_scratch_bytes: number; response_bytes: number } };
 export type RuntimeControlMemory = { state: "accounted" | "legacy"; metadata_bytes: number; binding_bytes: number; binding_count: number; scratch_bytes: number; active_operations: number; reserved_bytes: number; outstanding_bytes: number; bounds: { metadata_bytes: number; bootstrap_bytes: number; import_bytes: number; response_work_bytes: number; response_bytes: number; binding_work_bytes: number } };

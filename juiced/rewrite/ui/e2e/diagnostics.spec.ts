@@ -1,6 +1,6 @@
 import { api, expect, hotModel, navigate, open, pickModel, tab, test } from "./support";
 
-test("Performance shows per-model timings, resource history and declared reservations", async ({ page, request }) => {
+test("Performance shows per-model timings and resource history without repeating Dashboard numbers", async ({ page, request }) => {
   const response = await request.post("/v1/chat/completions", { data: { model: hotModel, messages: [{ role: "user", content: "Performance fixture prompt" }], stream: false, max_tokens: 4 } });
   expect(response.ok()).toBe(true);
   await open(page);
@@ -16,14 +16,12 @@ test("Performance shows per-model timings, resource history and declared reserva
   await expect(byModel).toContainText("43 tok/s");
   await expect(byModel).toContainText("prompt 700 tok/s");
   await expect(page.getByRole("article", { name: "Memory" })).toContainText(/GiB \/ \d+(\.\d)? GiB/);
-  const reservations = page.getByRole("region", { name: "Reservations" });
-  const panel = (await reservations.boundingBox())!;
+  const panel = (await page.getByRole("region", { name: "Model performance" }).boundingBox())!;
   const cards = await Promise.all(["CPU", "VRAM"].map(async (chart) => (await page.getByRole("article", { name: chart }).boundingBox())!));
-  expect(Math.abs(cards[0]!.x - panel.x), "the cards start with the panel below").toBeLessThan(2);
+  expect(Math.abs(cards[0]!.x - panel.x), "the cards start with the panel above").toBeLessThan(2);
   expect(Math.abs(cards[1]!.x + cards[1]!.width - (panel.x + panel.width)), "the cards fill the row like the Dashboard").toBeLessThan(2);
-  await expect(reservations).toContainText("Budget");
-  await expect(reservations).toContainText("6.0 GiB");
-  await expect(reservations).toContainText("Active requests");
+  await expect(page.getByRole("region", { name: "Reservations" })).toHaveCount(0);
+  await expect(page.locator(".performance")).not.toContainText("Active requests");
   await page.getByRole("tablist", { name: "Diagnostics views" }).getByRole("tab", { name: "Performance" }).press("ArrowRight");
   await expect(tab(page, "Diagnostics views", "Requests")).toHaveAttribute("aria-selected", "true");
   await expect(tab(page, "Diagnostics views", "Requests")).toBeFocused();
@@ -41,8 +39,9 @@ test("Requests break down each request's time but never show prompt text", async
   await expect(legend).toContainText("Generate");
   const table = page.getByRole("table", { name: "Recent requests" });
   await expect(table.getByRole("columnheader", { includeHidden: true })).toHaveText(["Time", "Model", "Outcome", "Prompt", "Output", "Speed", "Duration"]);
-  const row = table.getByRole("row").filter({ hasText: hotModel }).filter({ hasText: "completed · 200" }).first();
-  await expect(row).toContainText("chat/completions");
+  const row = table.getByRole("row").filter({ hasText: hotModel }).filter({ hasText: "chat/completions · OpenAI" }).first();
+  await expect(row.getByRole("cell").nth(2)).toHaveText("200");
+  await expect(row).not.toContainText("processed in full");
   await expect(row.getByRole("cell").first()).toHaveText(/\d{1,2}:\d{2}:\d{2}/);
   await expect(row.getByRole("cell").nth(3)).toContainText("7");
   await expect(row.getByRole("cell").nth(4)).toHaveText("2");
@@ -52,6 +51,49 @@ test("Requests break down each request's time but never show prompt text", async
   await expect(row.getByRole("cell").last()).toContainText(/\d+ ms|\d+\.\d+ s/);
   await expect(page.locator("body")).not.toContainText(prompt);
   await expect(page.locator("body")).not.toContainText("Rust fixture reply");
+});
+
+test("Captured bodies stay in memory, show on request and clear when capture is off", async ({ page, request }) => {
+  const prompt = `Captured diagnostics prompt ${crypto.randomUUID()}`;
+  await open(page);
+  await navigate(page, "Diagnostics");
+  await tab(page, "Diagnostics views", "Requests").click();
+  const capture = page.getByRole("switch", { name: "Capture bodies" });
+  await expect(capture).toHaveAttribute("aria-checked", "false");
+  await capture.click();
+  await expect(capture).toHaveAttribute("aria-checked", "true");
+  await expect(page.getByText("Prompts and replies are kept in memory.")).toBeVisible();
+  try {
+    const response = await request.post("/v1/chat/completions", { data: { model: hotModel, messages: [{ role: "user", content: prompt }], stream: true, max_tokens: 4 } });
+    expect(response.ok()).toBe(true);
+    await response.body();
+    const bodies = page.getByRole("table", { name: "Recent requests" }).getByRole("button", { name: "Bodies", exact: true }).first();
+    await expect(bodies).toBeVisible({ timeout: 10000 });
+    await bodies.click();
+    const captured = page.getByRole("row", { name: /^Captured bodies for request/ });
+    await expect(captured).toContainText(prompt);
+    await expect(captured).toContainText("Response · streamed text");
+    await expect(captured).toContainText('"content"');
+    await page.getByRole("button", { name: "Hide bodies", exact: true }).click();
+    await expect(captured).toHaveCount(0);
+  } finally {
+    await capture.click();
+  }
+  await expect(capture).toHaveAttribute("aria-checked", "false");
+  await expect(page.getByRole("table", { name: "Recent requests" }).getByRole("button", { name: "Bodies", exact: true })).toHaveCount(0, { timeout: 10000 });
+  await expect(page.locator("body")).not.toContainText(prompt);
+  const history = await (await request.get("/v1/juiced/requests")).json();
+  expect(JSON.stringify(history)).not.toContain(prompt);
+});
+
+test("The console's own calls do not count as client traffic", async ({ page, request }) => {
+  const health = async () => ((await (await request.get("/v1/juiced/protocols/health")).json()).protocols as { id: string; last_request: unknown }[]).find((protocol) => protocol.id === "openai")!.last_request;
+  const before = await health();
+  await open(page);
+  await navigate(page, "Connect");
+  await navigate(page, "Models");
+  expect(await page.evaluate(async () => (await fetch("/v1/models")).status)).toBe(200);
+  expect(await health()).toEqual(before);
 });
 
 test("Logs show service and worker lines with search, level, source and follow controls", async ({ page, request }) => {
