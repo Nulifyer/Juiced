@@ -338,9 +338,6 @@ pub(crate) async fn model_check(
         })
 }
 
-/// Tune reloads the model about six times and sends a few long requests each time.
-const TUNE_LIMIT: std::time::Duration = std::time::Duration::from_secs(45 * 60);
-
 /// Starts Tune for `model` in the background and returns its first view.
 pub(crate) fn start_tune(state: AppState, model: String) -> Result<Value, ApiError> {
     let app = state.probe.get().cloned().ok_or_else(|| {
@@ -366,14 +363,9 @@ pub(crate) fn start_tune(state: AppState, model: String) -> Result<Value, ApiErr
             view["state"] = json!("running");
             manager.set_tune(&id, view);
         });
-        let run = tools::model_tune(&state, app.clone(), &model, progress);
-        let finished = match tokio::time::timeout(TUNE_LIMIT, run).await {
-            Ok(Ok(result)) => json!({"state": "done", "result": result}),
-            Ok(Err(error)) => json!({"state": "failed", "error": error["message"]}),
-            Err(_) => {
-                tools::recover_tunes(&state, app, std::slice::from_ref(&model)).await;
-                json!({"state": "failed", "error": "Tune took longer than 45 minutes and stopped. The earlier tuned result is back."})
-            }
+        let finished = match tools::model_tune(&state, app, &model, progress).await {
+            Ok(result) => json!({"state": "done", "result": result}),
+            Err(error) => json!({"state": "failed", "error": error["message"]}),
         };
         let done = finished["state"] == "done";
         state.manager.set_tune(&model, finished);
@@ -386,21 +378,6 @@ pub(crate) fn start_tune(state: AppState, model: String) -> Result<Value, ApiErr
         }
     });
     Ok(started)
-}
-
-/// Puts back tuned results that Tune runs stopped by a restart left as trials.
-pub(crate) fn spawn_tune_recovery(state: AppState) {
-    let (Ok(runtime), Some(app)) = (
-        tokio::runtime::Handle::try_current(),
-        state.probe.get().cloned(),
-    ) else {
-        return;
-    };
-    let models = state.manager.interrupted_tunes();
-    if models.is_empty() {
-        return;
-    }
-    runtime.spawn(async move { tools::recover_tunes(&state, app, &models).await });
 }
 
 /// The `(model, launch fingerprint)` pairs an automatic check is running for.

@@ -84,6 +84,9 @@ struct Run<'c, 'a> {
     switch: Option<(String, Value, Value)>,
     runtime_package: Value,
     previous: Value,
+    /// Marks this run's trials, so cleanup replaces only a trial this run saved.
+    run_id: String,
+    deadline: tokio::time::Instant,
     /// The settings revision Tune's own last save produced; any other change stops Tune.
     revision: Option<u64>,
     candidates: Vec<Value>,
@@ -134,11 +137,11 @@ impl Run<'_, '_> {
     }
 
     /// Saves through the settings route at Tune's own revision, waiting out a worker that is
-    /// briefly busy with a client request. `fresh` saves at the current revision instead.
-    async fn save(&mut self, body: Value, fresh: bool) -> Result<()> {
+    /// briefly busy with a client request.
+    async fn save(&mut self, body: Value) -> Result<()> {
         let expected = match self.revision {
-            Some(revision) if !fresh => revision,
-            _ => self.current_revision().await?,
+            Some(revision) => revision,
+            None => self.current_revision().await?,
         };
         let mut attempt = 0;
         loop {
@@ -174,18 +177,52 @@ impl Run<'_, '_> {
             &self.switch,
             false,
         );
-        self.context.post("chat/completions", body).await
+        tokio::time::timeout_at(self.deadline, self.context.post("chat/completions", body))
+            .await
+            .unwrap_or_else(|_| Err(timed_out()))
+    }
+
+    /// Unloads the model, waiting out requests a client is still sending it.
+    async fn unload(&self) {
+        for _ in 0..40 {
+            match self
+                .context
+                .post("unload", json!({"model_name": self.id}))
+                .await
+            {
+                Err(Failure::Route(error)) if error["error"]["code"] == "worker_busy" => {
+                    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                }
+                _ => return,
+            }
+        }
+    }
+
+    /// Puts back the tuned result this run replaced, unless the saved layer is no longer one
+    /// of this run's trials: an operator's own change to it stays.
+    async fn put_back(&mut self) -> Result<()> {
+        let options = self.context.get(&self.path).await?;
+        let tuned = &options["tuned"];
+        if !is_trial(tuned) || tuned["measurements"]["run"] != self.run_id.as_str() {
+            return Ok(());
+        }
+        self.revision = options["revision"].as_u64();
+        let body = restore_body(&self.previous);
+        self.save(body).await
     }
 
     /// Launches with `arguments` as the tuned layer and measures prompt, chat and code-rewrite
     /// speed.
     async fn measure(&mut self, label: &str, arguments: &[String]) -> Result<Speed> {
+        if tokio::time::Instant::now() >= self.deadline {
+            return Err(timed_out());
+        }
         self.report(&format!("Measuring {label}"));
         let trial = json!({
             "arguments": arguments, "runtime_package": self.runtime_package, "measured_at_ms": now_ms(),
-            "measurements": {"trial": true, "previous": self.previous},
+            "measurements": {"trial": true, "run": self.run_id, "previous": self.previous},
         });
-        self.save(json!({"tuned": trial, "apply": "reload"}), false)
+        self.save(json!({"tuned": trial, "apply": "reload"}))
             .await?;
         self.chat("Reply with OK.".into(), 4).await?;
         let nonce = std::time::SystemTime::now()
@@ -235,6 +272,17 @@ impl Run<'_, '_> {
     }
 }
 
+/// Tune reloads the model about six times and sends a few long requests each time.
+const TUNE_LIMIT: std::time::Duration = std::time::Duration::from_secs(45 * 60);
+
+fn timed_out() -> Failure {
+    Failure::new(
+        "tune_timeout",
+        "Tune took longer than 45 minutes and stopped.",
+        504,
+    )
+}
+
 fn options_path(id: &str) -> String {
     format!("models/{}/options", super::encode(id))
 }
@@ -276,45 +324,50 @@ pub(super) async fn run(context: &Context<'_>, id: &str, progress: Progress) -> 
         switch: thinking_switch(&model),
         runtime_package: model["runtime_package"].clone(),
         previous: settled(&options["tuned"]),
+        run_id: format!("{:x}", now_ms()),
+        deadline: tokio::time::Instant::now() + TUNE_LIMIT,
         revision: None,
         candidates: Vec::new(),
         progress,
     };
     let outcome = search(&mut run, &options).await;
-    let restore = match &outcome {
-        Ok(result) if !result["arguments"].as_array().is_none_or(Vec::is_empty) => json!({
-            "tuned": {"arguments": result["arguments"], "runtime_package": run.runtime_package, "measured_at_ms": now_ms(), "measurements": result["measurements"]},
-            "apply": "reload",
-        }),
-        Ok(_) => json!({"clear_tuned": true, "apply": "reload"}),
-        Err(_) => restore_body(&run.previous),
-    };
     run.report("Saving the result");
     if !was_loaded {
-        let _ = context.post("unload", json!({"model_name": id})).await;
+        run.unload().await;
     }
-    // Tune owns only the tuned layer, so it puts that back even after another change stopped it.
-    let mut restored = run.save(restore, true).await;
-    if restored.is_err() {
-        // A failed final reload rolls back to the last trial; put the earlier result back.
-        restored = recover(context, id).await.map(drop);
+    let saved = match &outcome {
+        Ok(result) if !result["arguments"].as_array().is_none_or(Vec::is_empty) => {
+            let body = json!({
+                "tuned": {"arguments": result["arguments"], "runtime_package": run.runtime_package, "measured_at_ms": now_ms(), "measurements": result["measurements"]},
+                "apply": "reload",
+            });
+            run.save(body).await
+        }
+        Ok(_) => {
+            run.save(json!({"clear_tuned": true, "apply": "reload"}))
+                .await
+        }
+        Err(_) => Ok(()),
+    };
+    let failure = match (outcome, saved) {
+        (Ok(result), Ok(())) => return Ok(result),
+        (Ok(_), Err(failure)) | (Err(failure), _) => failure,
+    };
+    // A failed final reload rolls back to the last trial, so cleanup follows either failure.
+    match run.put_back().await {
+        Ok(()) => Err(failure),
+        Err(_) => {
+            let error = failure.error();
+            Err(Failure::new(
+                error["code"].as_str().unwrap_or("tune_failed"),
+                format!(
+                    "{} The earlier tuned result could not be put back yet; Juiced restores it when the service next starts.",
+                    error["message"].as_str().unwrap_or("Tune failed.")
+                ),
+                error["status"].as_u64().map_or(500, |status| status as u16),
+            ))
+        }
     }
-    let result = outcome?;
-    restored?;
-    Ok(result)
-}
-
-/// Puts back the tuned result a run left as a trial when the service stopped during Tune.
-pub(super) async fn recover(context: &Context<'_>, id: &str) -> Result<bool> {
-    let path = options_path(id);
-    let options = context.get(&path).await?;
-    if !is_trial(&options["tuned"]) {
-        return Ok(false);
-    }
-    let mut body = restore_body(&settled(&options["tuned"]));
-    body["expected_revision"] = options["revision"].clone();
-    context.post(&path, body).await?;
-    Ok(true)
 }
 
 fn now_ms() -> u64 {

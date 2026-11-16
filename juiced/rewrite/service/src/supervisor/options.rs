@@ -236,6 +236,41 @@ impl Manager {
             })
     }
 
+    /// Puts back the tuned result each Tune run the service stopped during had replaced. Runs
+    /// before Hot models start, so the trial never launches and no worker is busy.
+    pub async fn recover_interrupted_tunes(self: &Arc<Self>) {
+        for id in self.interrupted_tunes() {
+            let Ok(worker) = self.worker(&id) else {
+                continue;
+            };
+            let previous = worker.spec.tuned.as_ref().and_then(|tuned| {
+                serde_json::from_value::<crate::config::TunedLaunch>(
+                    tuned.measurements["previous"].clone(),
+                )
+                .ok()
+            });
+            let revision = worker.state.lock().await.revision;
+            let change = LlamaChange {
+                options: None,
+                extra_args: None,
+                juiced_defaults: None,
+                tuned: Some(previous),
+            };
+            if let Err(error) = self
+                .apply_llama(&id, revision, change, OptionsApply::NextLoad)
+                .await
+            {
+                self.logs().service(
+                    crate::logs::Level::Warning,
+                    &format!(
+                        "Tune for {id} was interrupted and its earlier result could not be put back: {}",
+                        error.code()
+                    ),
+                );
+            }
+        }
+    }
+
     pub async fn apply_options(
         self: &Arc<Self>,
         id: &str,
@@ -921,6 +956,41 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(stale.code(), "revision_conflict");
+    }
+
+    #[tokio::test]
+    async fn startup_puts_back_the_result_an_interrupted_tune_replaced() {
+        let (_directory, manager) = manager();
+        let revision = manager.options("one").await.unwrap()["revision"]
+            .as_u64()
+            .unwrap();
+        let previous = serde_json::json!({"arguments": ["--ubatch-size", "1024"], "measured_at_ms": 1, "measurements": {}});
+        let trial = crate::config::TunedLaunch {
+            arguments: vec!["--flash-attn".into(), "on".into()],
+            runtime_package: None,
+            measured_at_ms: 2,
+            measurements: serde_json::json!({"trial": true, "run": "r", "previous": previous}),
+        };
+        let change = LlamaChange {
+            options: None,
+            extra_args: None,
+            juiced_defaults: None,
+            tuned: Some(Some(trial)),
+        };
+        manager
+            .apply_llama("one", revision, change, OptionsApply::NextLoad)
+            .await
+            .unwrap();
+        assert_eq!(manager.interrupted_tunes(), ["one"]);
+        manager.recover_interrupted_tunes().await;
+        assert!(manager.interrupted_tunes().is_empty());
+        let model = &crate::config::Config::read(&manager.config_path)
+            .unwrap()
+            .models[0];
+        assert_eq!(
+            model.tuned.as_ref().unwrap().arguments,
+            ["--ubatch-size", "1024"]
+        );
     }
 
     #[test]

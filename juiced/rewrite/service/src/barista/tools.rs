@@ -690,30 +690,6 @@ pub(super) async fn model_tune(
         .map_err(|failure| failure.error())
 }
 
-/// Puts back each model's tuned result that a Tune run interrupted by a restart left as a trial.
-pub(super) async fn recover_tunes(state: &AppState, app: axum::Router, models: &[String]) {
-    let empty = HeaderMap::new();
-    let context = Context {
-        state,
-        app,
-        headers: &empty,
-        permission: Permission::Full,
-        revision: 0,
-        assistant_model: None,
-        preview: false,
-        sources: Mutex::default(),
-        internal: true,
-    };
-    for id in models {
-        if let Err(failure) = tune::recover(&context, id).await {
-            eprintln!(
-                "Tune for {id} was interrupted and its earlier result could not be restored: {}",
-                failure.error()
-            );
-        }
-    }
-}
-
 async fn run(context: &Context<'_>, tool: &Tool, args: Value) -> Result<Outcome> {
     let name = tool.name;
     let routed = match tool.group {
