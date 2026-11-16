@@ -914,8 +914,8 @@ html, body { height: 100%; overflow: hidden; }
 .chip-filter .scope-filter { padding-left: 8px; border-left: 1px solid var(--border); }
 .scope-note { font-size: .75rem; align-self: center; }
 @media (max-width: 1150px) {
-  .has-inspector .model-table .data-head, .has-inspector .model-table .data-row { grid-template-columns: minmax(0, 1fr) 114px; }
-  .has-inspector .model-table .policy-select { width: 114px; padding-right: 22px; }
+  .has-inspector .model-table .data-head, .has-inspector .model-table .data-row { grid-template-columns: minmax(0, 1fr) 126px; }
+  .has-inspector .model-table .policy-select { width: 126px; padding-right: 22px; }
   .has-inspector .inventory .library-total { display: none; }
   .has-inspector .model-table [role="cell"]:nth-child(5), .has-inspector .model-table [role="columnheader"]:nth-child(5) { display: none; }
 }

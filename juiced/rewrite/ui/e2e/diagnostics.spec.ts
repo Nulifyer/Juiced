@@ -7,17 +7,17 @@ test("Performance shows per-model timings and resource history without repeating
   await navigate(page, "Diagnostics");
   await expect(page.getByRole("tablist", { name: "Diagnostics views" }).getByRole("tab")).toHaveText(["Performance", "Requests", "Logs"]);
   await expect(tab(page, "Diagnostics views", "Performance")).toHaveAttribute("aria-selected", "true");
-  for (const chart of ["CPU", "Memory", "GPU", "VRAM"]) {
-    await expect(page.getByRole("article", { name: chart })).toBeVisible();
-    await expect(page.getByRole("img", { name: `${chart} over the last two minutes` })).toBeVisible();
+  for (const chart of ["CPU", "Memory", "GPU", "GPU memory"]) {
+    await expect(page.getByRole("article", { name: chart, exact: true })).toBeVisible();
+    await expect(page.getByRole("img", { name: `${chart} over the last two minutes`, exact: true })).toBeVisible();
   }
   await expect(page.getByRole("article", { name: "CPU" })).toContainText(/\d+(\.\d)?%/);
   const byModel = page.getByRole("table", { name: "Model performance" }).getByRole("row").filter({ hasText: hotModel });
   await expect(byModel).toContainText("43 tok/s");
   await expect(byModel).toContainText("prompt 700 tok/s");
-  await expect(page.getByRole("article", { name: "Memory" })).toContainText(/GiB \/ \d+(\.\d)? GiB/);
+  await expect(page.getByRole("article", { name: "Memory", exact: true })).toContainText(/GiB \/ \d+(\.\d)? GiB/);
   const panel = (await page.getByRole("region", { name: "Model performance" }).boundingBox())!;
-  const cards = await Promise.all(["CPU", "VRAM"].map(async (chart) => (await page.getByRole("article", { name: chart }).boundingBox())!));
+  const cards = await Promise.all(["CPU", "GPU memory"].map(async (chart) => (await page.getByRole("article", { name: chart, exact: true }).boundingBox())!));
   expect(Math.abs(cards[0]!.x - panel.x), "the cards start with the panel above").toBeLessThan(2);
   expect(Math.abs(cards[1]!.x + cards[1]!.width - (panel.x + panel.width)), "the cards fill the row like the Dashboard").toBeLessThan(2);
   await expect(page.getByRole("region", { name: "Reservations" })).toHaveCount(0);

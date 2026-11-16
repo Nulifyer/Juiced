@@ -25,7 +25,7 @@ function Performance({ snapshot, stats, history }: { snapshot: Snapshot; stats: 
     ["CPU", percent(stats?.cpu_percent), history.map((point) => point.cpu)],
     ["Memory", `${memorySize(stats?.memory?.used_bytes)} / ${memorySize(stats?.memory?.total_bytes)}`, history.map((point) => point.memory)],
     ["GPU", gpu ? percent(gpu.gpu_percent) : "No GPU", history.map((point) => point.gpu)],
-    ["VRAM", gpu ? `${memorySize(gpu.memory_used_bytes)} / ${memorySize(gpu.memory_total_bytes)}` : "No GPU", history.map((point) => point.vram)],
+    ["GPU memory", gpu ? `${memorySize(gpu.memory_used_bytes)} / ${memorySize(gpu.memory_total_bytes)}` : "No GPU", history.map((point) => point.vram)],
   ] as const;
   const cache = resources.cache_control_memory, runtime = resources.runtime_control_memory;
   return <div className="performance">
