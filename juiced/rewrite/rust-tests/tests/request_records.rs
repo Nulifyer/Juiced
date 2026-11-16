@@ -70,6 +70,19 @@ async fn ollama_discovery_carries_details_capabilities_and_context() {
     assert!(capabilities.contains(&json!("embedding")), "{show}");
     assert!(show["model_info"]["general.architecture"].is_string());
     assert!(show["details"].is_object() && show["parameters"].is_string());
+    let mut untyped = server
+        .client
+        .post(format!("{}/api/show", server.base))
+        .body(r#"{"model":"fixture.one:latest"}"#);
+    if let Some(key) = server.read_key() {
+        untyped = untyped.bearer_auth(key);
+    }
+    let untyped = untyped.send().await.unwrap();
+    assert_eq!(
+        untyped.status(),
+        StatusCode::OK,
+        "curl -d sends no JSON type"
+    );
     let (status, _) = server
         .json(
             Method::POST,

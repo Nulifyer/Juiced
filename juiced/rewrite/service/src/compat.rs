@@ -441,19 +441,26 @@ pub(crate) fn rejection(path: &str, error: ApiError) -> Response {
     error.into_response()
 }
 
-fn parse_body(headers: &HeaderMap, body: Result<ApiBytes, ApiError>) -> Result<Value, CodecError> {
+/// Ollama accepts a JSON body under any content type, and its documented `curl -d` examples send
+/// none, so only the other protocols require `application/json`.
+fn parse_body(
+    headers: &HeaderMap,
+    body: Result<ApiBytes, ApiError>,
+    any_content_type: bool,
+) -> Result<Value, CodecError> {
     let ApiBytes(body) = body.map_err(from_api)?;
-    if !headers
-        .get(header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| {
-            value
-                .split(';')
-                .next()
-                .unwrap_or("")
-                .trim()
-                .eq_ignore_ascii_case("application/json")
-        })
+    if !any_content_type
+        && !headers
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| {
+                value
+                    .split(';')
+                    .next()
+                    .unwrap_or("")
+                    .trim()
+                    .eq_ignore_ascii_case("application/json")
+            })
     {
         return Err(codec(415, "invalid_content_type", "Send application/json."));
     }
@@ -552,7 +559,7 @@ async fn anthropic(
     count: bool,
 ) -> Response {
     let result = async {
-        let input = parse_body(&headers, body)?;
+        let input = parse_body(&headers, body, false)?;
         let request = protocols::anthropic_request(input, count)?;
         let response = forward(&state, &headers, &request, &context).await?;
         if request.stream && response.status().is_success() {
@@ -619,7 +626,7 @@ async fn ollama(
     operation: OllamaOperation,
 ) -> Response {
     let result = async {
-        let mut input = parse_body(&headers, body)?;
+        let mut input = parse_body(&headers, body, true)?;
         if let Some(model) = input.get_mut("model")
             && let Some(name) = model.as_str()
         {
@@ -730,7 +737,7 @@ async fn show(
     body: Result<ApiBytes, ApiError>,
 ) -> Response {
     let result = async {
-        let input = parse_body(&headers, body)?;
+        let input = parse_body(&headers, body, true)?;
         let object = input
             .as_object()
             .ok_or_else(|| codec(400, "invalid_request", "Send a model object."))?;

@@ -666,7 +666,7 @@ pub fn name_gpus(stats: &mut Value, detected: &[crate::hardware::Gpu]) {
     let Some(gpus) = stats.get_mut("gpus").and_then(Value::as_array_mut) else {
         return;
     };
-    for gpu in gpus {
+    for gpu in gpus.iter_mut() {
         let Some(slot) = gpu["id"].as_str().and_then(|id| id.strip_prefix("amdgpu:")) else {
             continue;
         };
@@ -684,6 +684,18 @@ pub fn name_gpus(stats: &mut Value, detected: &[crate::hardware::Gpu]) {
         if let Some(integrated) = device.integrated {
             gpu["integrated"] = integrated.into();
         }
+        // On the Radeon 890M the counter reads 100 whenever a ROCm model is loaded, idle or not,
+        // and below 100 before any is, so a reading below 100 does not make 100 trustworthy.
+        if device.integrated == Some(true) && gpu["gpu_percent"].as_f64() >= Some(100.0) {
+            gpu["gpu_percent"] = Value::Null;
+            gpu["utilization_source"] = "amdgpu-sysfs-unverified".into();
+        }
+    }
+    let primary = gpus.first().map(|gpu| gpu["gpu_percent"].clone());
+    if let Some(percent) = primary
+        && stats.get("gpu_percent").is_some()
+    {
+        stats["gpu_percent"] = percent;
     }
 }
 
@@ -1064,5 +1076,33 @@ mod tests {
         assert_eq!(stats["gpus"][1]["name"], Value::Null);
         assert_eq!(stats["gpus"][2]["name"], "Kept");
         assert_eq!(stats["gpus"][3]["name"], Value::Null);
+    }
+
+    #[test]
+    fn an_integrated_amd_gpu_at_100_has_no_busy_reading_even_after_it_read_less() {
+        use crate::hardware::{Gpu as Detected, GpuVendor};
+        let mut radeon = Detected::new(GpuVendor::Amd);
+        radeon.pci_slot = Some("0000:c7:00.0".into());
+        radeon.integrated = Some(true);
+        let mut discrete = Detected::new(GpuVendor::Amd);
+        discrete.pci_slot = Some("0000:03:00.0".into());
+        discrete.integrated = Some(false);
+        let mut stats = json!({"gpu_percent": 100.0, "gpus": [
+            {"id": "amdgpu:0000:c7:00.0", "gpu_percent": 100.0, "utilization_source": "amdgpu-sysfs"},
+            {"id": "amdgpu:0000:03:00.0", "gpu_percent": 100.0, "utilization_source": "amdgpu-sysfs"},
+        ]});
+        name_gpus(&mut stats, &[radeon.clone(), discrete]);
+        assert_eq!(stats["gpu_percent"], Value::Null);
+        assert_eq!(stats["gpus"][0]["gpu_percent"], Value::Null);
+        assert_eq!(
+            stats["gpus"][0]["utilization_source"],
+            "amdgpu-sysfs-unverified"
+        );
+        assert_eq!(stats["gpus"][1]["gpu_percent"], 100.0);
+        let mut working = json!({"gpu_percent": 37.0, "gpus": [
+            {"id": "amdgpu:0000:c7:00.0", "gpu_percent": 37.0, "utilization_source": "amdgpu-sysfs"},
+        ]});
+        name_gpus(&mut working, &[radeon]);
+        assert_eq!(working["gpu_percent"], 37.0);
     }
 }
