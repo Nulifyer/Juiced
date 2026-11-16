@@ -39,7 +39,7 @@ describe("engine groups", () => {
   test("download sizes include the bundled runtime and pick a readable unit", () => {
     expect(engines.installable[1]!.archive_bytes).toBe(287482076 + 1972096149);
     expect(engines.installable[0]!.archive_bytes).toBe(22886629);
-    expect([2727511, 22886629, 132320778, 1069727615, 287482076 + 1972096149, 4000, null].map(downloadSize)).toEqual(["2.6 MiB", "21.8 MiB", "126 MiB", "1.0 GiB", "2.1 GiB", "4 KiB", ""]);
+    expect([2727511, 22886629, 132320778, 1069727615, 287482076 + 1972096149, 4000, null].map(downloadSize)).toEqual(["2.6 MiB", "21.8 MiB", "126.2 MiB", "1.0 GiB", "2.1 GiB", "3.9 KiB", ""]);
   });
   test("installed builds lead, carry model counts and keep the recommended mark", () => {
     expect(llama.chips.map((chip) => [chip.label, chip.state])).toEqual([["ROCm", "installed"], ["Imported", "installed"], ["CPU", "installable"], ["CUDA", "unavailable"], ["HRX", "unavailable"], ["Metal", "unavailable"]]);

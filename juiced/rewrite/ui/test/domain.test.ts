@@ -135,10 +135,14 @@ test("cache controller reservations remain distinct from model claims and unknow
 
 describe("memory figures", () => {
   const GiB = 1024 ** 3, MiB = 1024 ** 2;
-  test("one rule for every size: one decimal in the largest unit that keeps it at least 1", () => {
+  test("one rule for every size: one decimal, and the next unit from 1000 up", () => {
     expect(bytes(51.1 * GiB)).toBe("51.1 GiB");
     expect(bytes(849.4 * MiB)).toBe("849.4 MiB");
+    expect(bytes(999.9 * MiB)).toBe("999.9 MiB");
+    expect(bytes(1007.8 * MiB)).toBe("1.0 GiB");
     expect(bytes(1023.97 * MiB)).toBe("1.0 GiB");
+    expect(bytes(1000 * 1024)).toBe("1.0 MiB");
+    expect(bytes(1200 * GiB)).toBe("1.2 TiB");
     expect(bytesPair(59.4 * GiB, 80 * GiB)).toBe("59.4 / 80.0 GiB");
     expect(bytesPair(849.4 * MiB, 80 * GiB, " of ")).toBe("849.4 MiB of 80.0 GiB");
   });

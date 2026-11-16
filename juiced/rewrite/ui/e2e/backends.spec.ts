@@ -26,7 +26,7 @@ test("one screen shows this machine and the engines it can run, with Show all fo
   await expect(chip(llama, /CPU/).getByLabel("Recommended", { exact: true })).toHaveCount(1);
   await expect(llama.getByLabel("Recommended", { exact: true })).toHaveCount(1);
   await expect(row(page, "whisper.cpp").getByRole("button", { name: /^Install whisper\.cpp CPU, 4\.2 MiB, recommended$/ })).toBeVisible();
-  await expect(row(page, "Moonshine").getByRole("button", { name: /Moonshine CPU, 126 MiB/ })).toBeVisible();
+  await expect(row(page, "Moonshine").getByRole("button", { name: /Moonshine CPU, 126(\.\d)? MiB/ })).toBeVisible();
   await expect(engines(page)).not.toContainText("0.0 GiB");
   await expect(chip(engines(page), /^CUDA/)).toHaveCount(0);
   await expect(row(page, "FastFlowLM")).toHaveCount(0);

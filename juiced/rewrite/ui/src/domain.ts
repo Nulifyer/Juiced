@@ -39,11 +39,12 @@ export type Snapshot = { models: Model[]; requests: RequestRecord[]; resources: 
 
 export function bytes(value: number | null): string {
   if (value === null) return "Unavailable";
-  if (value < 1024) return `${value} B`;
-  // Thresholds sit half a tenth below each unit so 1023.96 MiB reads "1.0 GiB", not "1024.0 MiB".
-  if (value < 1024 ** 2 - 0.05 * 1024) return `${(value / 1024).toFixed(1)} KiB`;
-  if (value < 1024 ** 3 - 0.05 * 1024 ** 2) return `${(value / 1024 ** 2).toFixed(1)} MiB`;
-  return `${(value / 1024 ** 3).toFixed(1)} GiB`;
+  if (value < 1000) return `${Math.round(value)} B`;
+  // The next unit starts at 1000 so a list never shows four-digit "1007.8 MiB" beside "1.0 GiB".
+  if (value < 1000 * 1024) return `${(value / 1024).toFixed(1)} KiB`;
+  if (value < 1000 * 1024 ** 2) return `${(value / 1024 ** 2).toFixed(1)} MiB`;
+  if (value < 1000 * 1024 ** 3) return `${(value / 1024 ** 3).toFixed(1)} GiB`;
+  return `${(value / 1024 ** 4).toFixed(1)} TiB`;
 }
 
 /** Two sizes in one unit read as one figure: "59.4 / 80.0 GiB". */
