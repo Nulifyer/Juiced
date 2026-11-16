@@ -54,6 +54,9 @@ pub struct RequestContext {
     pub principal: &'static str,
     pub role: Role,
     pub credential_epoch: Arc<str>,
+    /// The key's display name for request records; never the secret.
+    #[serde(skip)]
+    pub key_name: Option<Arc<str>>,
 }
 
 impl RequestContext {
@@ -89,7 +92,7 @@ impl Authorization {
     }
 
     pub fn with_keys(auth: Auth, keys: Arc<crate::api_keys::KeyStore>) -> Self {
-        let credential = |token: String, principal, role| {
+        let credential = |token: String, principal, role, name: &'static str| {
             let epoch: Arc<str> = format!(
                 "{:x}",
                 Sha256::digest(format!("juiced-auth-v1\0{principal}\0{token}"))
@@ -101,6 +104,7 @@ impl Authorization {
                     principal,
                     role,
                     credential_epoch: epoch,
+                    key_name: Some(Arc::from(name)),
                 },
             }
         };
@@ -112,19 +116,26 @@ impl Authorization {
         Self {
             regular: auth
                 .api_key
-                .map(|token| credential(token, "configured-api", regular_role)),
-            operator: auth
-                .admin_key
-                .map(|token| credential(token, "configured-admin", Role::Operator)),
+                .map(|token| credential(token, "configured-api", regular_role, "LEMONADE_API_KEY")),
+            operator: auth.admin_key.map(|token| {
+                credential(
+                    token,
+                    "configured-admin",
+                    Role::Operator,
+                    "LEMONADE_ADMIN_API_KEY",
+                )
+            }),
             anonymous: RequestContext {
                 principal: "anonymous-trusted-lan",
                 role: Role::TrustedLan,
                 credential_epoch: "anonymous-trusted-lan-v1".into(),
+                key_name: None,
             },
             open: RequestContext {
                 principal: "anonymous-open",
                 role: Role::Inference,
                 credential_epoch: "anonymous-open-v1".into(),
+                key_name: None,
             },
             keys,
         }
@@ -136,6 +147,7 @@ impl Authorization {
             principal: "juiced-internal",
             role: Role::Operator,
             credential_epoch: "juiced-internal-v1".into(),
+            key_name: None,
         }
     }
 
@@ -315,6 +327,7 @@ impl Authorization {
                     Scope::Operator => Role::Operator,
                 },
                 credential_epoch: found.epoch,
+                key_name: Some(found.name),
             }),
             Lookup::Expired => Err(ApiError::new(
                 StatusCode::UNAUTHORIZED,

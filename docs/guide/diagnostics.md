@@ -9,6 +9,7 @@ settings.
 The Dashboard answers one question: is everything working right now?
 
 - **Protocols** counts the client protocols that are ready and names those in use.
+  Only requests from apps count. The console's own calls and Juiced's checks do not.
 - **Requests** shows active and queued requests against the loaded request slots.
 - **Model memory** shows memory reserved by loaded models against the admission
   budget, and how much is free for another model.
@@ -34,28 +35,53 @@ The footer shows current CPU, RAM, GPU, VRAM, and NPU use on every page.
    - **Speed** shows generated tokens per second, with prompt tokens per second below.
 4. Check the CPU, memory, GPU, and VRAM charts for the last two minutes.
 
-**Reservations** lists the declared limits used to admit work.
-Missing or stale measurements remain unknown. A GPU's shared allocation can
+The Dashboard and the footer show the memory budget, reserved memory and active
+requests. When the service accounts for its own control memory, **Control memory**
+lists it. Missing or stale measurements remain unknown. A GPU's shared allocation can
 overlap host RAM, so adding the two values can double-count memory.
 Aggregate counters do not establish one worker's cache use or available context.
 
 ## Inspect requests
 
 1. Open **Diagnostics → Requests**.
-2. Find the request by its completion time and model.
-3. Read its outcome, prompt and output tokens, and speed.
-4. Use the **Duration** bar to see where the time went: queue, prompt, generate,
+2. Find the request by its completion time and model. Rows from an earlier day
+   show the date.
+3. Read who sent it under the model: the protocol (OpenAI, Ollama, Anthropic,
+   AUTOMATIC1111, MCP, Realtime, Wyoming, Console or Juiced) and the API key's
+   name. The key itself is never shown.
+4. Read its status, prompt and output tokens, and speed.
+5. Use the **Duration** bar to see where the time went: queue, prompt, generate,
    and other work. Bars share one scale, so a slow request stands out.
 
-The prompt column says whether the prompt was still loaded, restored from disk,
-or processed in full, and how many tokens came from the cache. A long prompt
-processed in full usually explains a slow first reply.
+The prompt column notes a prompt that was restored from disk or still loaded,
+and how many tokens came from the cache. A prompt without a note was read in
+full. A long prompt read in full usually explains a slow first reply.
 
 Prompt and generate times come from the engine's token rates. Other covers
 restoring a saved conversation, audio work, and network time. Requests appear
-after completion. The service keeps the latest 128 records. It records
-operational metadata, never prompts or answer content. Missing token usage is
-not inferred from another request.
+after completion. Missing token usage is not inferred from another request.
+
+The service keeps the last 1,000 records, or 7 days, whichever is less, in
+`request-history.json` in the configuration directory. History survives a
+restart. The list shows the latest 128. Records hold metadata only, never
+prompts or replies.
+
+## Capture request bodies
+
+To debug a bad tool call or chat template, turn on **Capture bodies** in
+**Diagnostics → Requests**. Only an operator can turn it on or read captures.
+
+- Juiced keeps the request and reply of the last 20 requests, up to 64 KiB
+  each. Longer bodies are cut and marked.
+- A streamed reply is kept as its text, reasoning and tool-call arguments, not
+  as raw events.
+- Audio and other binary bodies are not captured. The row shows their size.
+- Select **Bodies** on a row to read them.
+
+Captures stay in memory. They are never written to disk, logs or metrics.
+Turning capture off deletes them, and capture is off again after a restart.
+Anyone with an operator key can read captured prompts while it is on, so turn
+it off when you finish.
 
 ## Read logs
 

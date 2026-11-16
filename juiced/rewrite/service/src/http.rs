@@ -79,11 +79,13 @@ async fn authorize(State(state): State<AppState>, mut request: Request, next: Ne
         .is_some();
     // Juiced's own checks and Tune are not client traffic: Connect neither counts nor gates them.
     let protocol = crate::protocol_access::Protocol::classify(raw_path).filter(|_| !internal);
+    let console = crate::request_history::from_console(request.headers());
     let observed = protocol.filter(|_| {
-        request
-            .extensions()
-            .get::<crate::connect::Probe>()
-            .is_none()
+        !console
+            && request
+                .extensions()
+                .get::<crate::connect::Probe>()
+                .is_none()
     });
     let gate = state.manager.protocol_gate().clone();
     let observe = |response: Response| {
@@ -92,13 +94,15 @@ async fn authorize(State(state): State<AppState>, mut request: Request, next: Ne
         }
         response
     };
-    match if internal {
+    let key_name = match if internal {
         Ok(state.auth.internal())
     } else {
         state.auth.authenticate(request.headers(), authority)
     } {
         Ok(context) => {
+            let key_name = context.key_name.clone();
             request.extensions_mut().insert(context);
+            key_name
         }
         Err(error) => {
             let mut response = crate::compat::rejection(raw_path, error);
@@ -107,7 +111,7 @@ async fn authorize(State(state): State<AppState>, mut request: Request, next: Ne
                 .insert(header::WWW_AUTHENTICATE, "Bearer".parse().unwrap());
             return observe(response);
         }
-    }
+    };
     if let Some(Err(error)) = protocol.map(|protocol| gate.check(protocol)) {
         return observe(crate::compat::rejection(raw_path, error));
     }
@@ -133,7 +137,34 @@ async fn authorize(State(state): State<AppState>, mut request: Request, next: Ne
     } else {
         None
     };
-    let response = observe(next.run(request).await);
+    let response = if crate::request_history::Origin::present() {
+        next.run(request).await
+    } else {
+        let captures = state.manager.request_capture().clone();
+        let (request, pending) = if captures.enabled() {
+            let (request, pending) = captures.begin(request);
+            (request, Some(pending))
+        } else {
+            (request, None)
+        };
+        let origin = crate::request_history::Origin {
+            protocol: if internal {
+                "internal"
+            } else if console {
+                "console"
+            } else {
+                protocol.map_or("native", |protocol| protocol.id())
+            },
+            key: key_name,
+            capture: pending.clone(),
+        };
+        let response = origin.scope(next.run(request)).await;
+        match pending {
+            Some(pending) => captures.finish(response, pending),
+            None => response,
+        }
+    };
+    let response = observe(response);
     if state.manager.memory_protected() && _ingress.is_some() {
         let (parts, body) = response.into_parts();
         let tracked = stream::unfold(
@@ -216,6 +247,9 @@ define_routes! {
     (get, "/juiced/catalog", catalog, "read"),
     (get, "/juiced/state", service_state, "read"),
     (get, "/juiced/requests", requests, "operator"),
+    (get, "/juiced/requests/capture", request_capture, "operator"),
+    (post, "/juiced/requests/capture", request_capture_set, "operator"),
+    (get, "/juiced/requests/{id}/capture", request_captured, "operator"),
     (get, "/juiced/protocols", protocols, "read"),
     (get, "/juiced/runtimes", runtime_catalog, "read"),
     (get, "/juiced/runtimes/resolve", runtime_resolve, "read"),
@@ -1413,8 +1447,83 @@ async fn service_state(State(state): State<AppState>) -> Json<Value> {
     )
 }
 
-async fn requests(State(state): State<AppState>) -> Json<Value> {
-    Json(json!({"data": state.manager.records(), "capacity": 128, "contains_content": false}))
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RequestsQuery {
+    limit: Option<usize>,
+}
+
+async fn requests(
+    State(state): State<AppState>,
+    ApiQuery(query): ApiQuery<RequestsQuery>,
+) -> Json<Value> {
+    use crate::request_history::{HISTORY_RECORDS, LISTED_RECORDS};
+    let limit = query
+        .limit
+        .unwrap_or(LISTED_RECORDS)
+        .clamp(1, HISTORY_RECORDS);
+    let captures = state.manager.request_capture();
+    let captured = captures.ids();
+    let mut data = state.manager.request_history(limit);
+    for record in &mut data {
+        if record["id"]
+            .as_u64()
+            .is_some_and(|id| captured.contains(&id))
+        {
+            record["captured"] = json!(true);
+        }
+    }
+    Json(
+        json!({"data": data, "capacity": HISTORY_RECORDS, "contains_content": false,
+        "capture": {"enabled": captures.enabled()}}),
+    )
+}
+
+fn capture_view(state: &AppState) -> Json<Value> {
+    use crate::request_history::{CAPTURE_BYTES, CAPTURES};
+    let captures = state.manager.request_capture();
+    Json(
+        json!({"enabled": captures.enabled(), "captured": captures.ids().len(),
+        "limits": {"requests": CAPTURES, "body_bytes": CAPTURE_BYTES}}),
+    )
+}
+
+async fn request_capture(State(state): State<AppState>) -> Json<Value> {
+    capture_view(&state)
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CaptureChange {
+    enabled: bool,
+}
+
+async fn request_capture_set(
+    State(state): State<AppState>,
+    ApiJson(change): ApiJson<CaptureChange>,
+) -> Json<Value> {
+    state.manager.request_capture().set_enabled(change.enabled);
+    capture_view(&state)
+}
+
+async fn request_captured(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    let missing = || {
+        ApiError::new(
+            StatusCode::NOT_FOUND,
+            "capture_not_found",
+            "No capture is kept for this request.",
+        )
+    };
+    let id = id.parse::<u64>().map_err(|_| missing())?;
+    state
+        .manager
+        .request_capture()
+        .get(id)
+        .map(|capture| Json(json!(capture)))
+        .ok_or_else(missing)
 }
 
 #[derive(Deserialize)]

@@ -1014,31 +1014,109 @@ pub fn ollama_model_name(name: &str) -> &str {
         .unwrap_or(name)
 }
 
+fn ollama_text_model(model: &Value) -> bool {
+    model["operations"].as_array().is_some_and(|operations| {
+        operations.iter().any(|operation| {
+            ["chat/completions", "completions", "embeddings"]
+                .iter()
+                .any(|text| operation == text)
+        })
+    })
+}
+
+/// The last `<number>B` or `<number>M` part of a model name, as native Juiced read it.
+fn parameter_size_from_name(name: &str) -> Option<String> {
+    name.rsplit(['-', '_'])
+        .find(|segment| {
+            segment.len() >= 2
+                && segment.ends_with(['B', 'b', 'M', 'm'])
+                && segment[..segment.len() - 1]
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || byte == b'.')
+                && segment.as_bytes()[0].is_ascii_digit()
+        })
+        .map(str::to_ascii_uppercase)
+}
+
+fn ollama_time(unix_ms: Option<u64>) -> String {
+    crate::compat::utc_timestamp(unix_ms.unwrap_or(0) / 1000)
+}
+
+fn ollama_architecture(model: &Value) -> Option<&str> {
+    model["capability_contract"]["artifact"]["architecture"]
+        .as_str()
+        .filter(|architecture| !architecture.is_empty())
+}
+
+/// The context a request can use: what the worker serves, else what the model was trained on.
+fn ollama_context(model: &Value) -> Option<u64> {
+    model["context_length"]
+        .as_u64()
+        .or_else(|| model["max_context_window"].as_u64())
+        .filter(|tokens| *tokens > 0)
+}
+
+/// Every field is present because some clients (Zed) parse `details` without optional fields.
+fn ollama_details(model: &Value) -> Value {
+    let weights = &model["weights"];
+    let family = ollama_architecture(model)
+        .or_else(|| model["recipe"].as_str())
+        .unwrap_or_default();
+    let name = model["aliased_to"]
+        .as_str()
+        .or_else(|| model["id"].as_str())
+        .unwrap_or_default();
+    json!({
+        "parent_model": "",
+        "format": weights["format"].as_str().unwrap_or_default(),
+        "family": family,
+        "families": if family.is_empty() { json!([]) } else { json!([family]) },
+        "parameter_size": weights["size_label"].as_str().map(str::to_owned)
+            .or_else(|| parameter_size_from_name(name)).unwrap_or_default(),
+        "quantization_level": weights["quantization"].as_str().unwrap_or_default(),
+    })
+}
+
 pub fn ollama_models(models: &[Value], loaded_only: bool) -> Value {
     let entries: Vec<_> = models
         .iter()
         .filter(|model| {
             model["policy"] != "disabled"
                 && model["downloaded"] == true
-                && if loaded_only {
-                    model["loaded"] == true
-                } else {
-                    model["operations"].as_array().is_some_and(|operations| {
-                        operations.iter().any(|operation| {
-                            ["chat/completions", "completions", "embeddings"]
-                                .iter()
-                                .any(|chat| operation == chat)
-                        })
-                    })
-                }
+                && ollama_text_model(model)
+                && (!loaded_only || model["loaded"] == true)
         })
         .map(|model| {
             let name = format!("{}:latest", model["id"].as_str().unwrap_or_default());
-            let mut item = json!({"name":name,"model":name});
-            for key in ["digest", "size", "modified_at", "details", "aliased_to"] {
-                if let Some(value) = model.get(key) {
-                    item[key] = value.clone();
+            let weights = &model["weights"];
+            let file_bytes = weights["bytes"].as_u64().unwrap_or(0);
+            let mut item = json!({
+                "name": name, "model": name,
+                "modified_at": ollama_time(weights["modified_unix_ms"].as_u64()),
+                "size": file_bytes,
+                "digest": weights["digest"].as_str().unwrap_or_default(),
+                "details": ollama_details(model),
+            });
+            if loaded_only {
+                let resident = model["resident_bytes"].as_u64().unwrap_or(file_bytes);
+                item["size"] = json!(resident);
+                item["size_vram"] = json!(if model["device"] == "gpu" {
+                    resident
+                } else {
+                    0
+                });
+                item["expires_at"] = json!(match model["residency"]["idle_unload_at_unix_ms"]
+                    .as_u64()
+                {
+                    Some(at) => ollama_time(Some(at)),
+                    None => "2099-01-01T00:00:00Z".to_owned(),
+                });
+                if let Some(tokens) = ollama_context(model) {
+                    item["context_length"] = json!(tokens);
                 }
+            }
+            if let Some(target) = model.get("aliased_to") {
+                item["aliased_to"] = target.clone();
             }
             item
         })
@@ -1047,7 +1125,7 @@ pub fn ollama_models(models: &[Value], loaded_only: bool) -> Value {
 }
 
 pub fn ollama_show(model: &Value) -> Result<Value, CodecError> {
-    text(model, "id")?;
+    let id = text(model, "id")?;
     if model["policy"] == "disabled" {
         return Err(CodecError {
             status: 404,
@@ -1055,24 +1133,50 @@ pub fn ollama_show(model: &Value) -> Result<Value, CodecError> {
             message: "The requested model is not enabled.".into(),
         });
     }
-    let capabilities: Vec<_> = model
+    let operations: Vec<&str> = model
         .get("operations")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
         .filter_map(Value::as_str)
-        .filter_map(|op| match op {
-            "chat/completions" | "completions" => Some("completion"),
-            "embeddings" => Some("embedding"),
-            _ => None,
-        })
         .collect();
-    let mut capabilities = capabilities;
-    capabilities.sort_unstable();
-    capabilities.dedup();
-    Ok(
-        json!({"model_info":{"juiced.model":model["id"],"juiced.qualification":"unknown"},"capabilities":capabilities}),
-    )
+    let mut capabilities = Vec::new();
+    if operations
+        .iter()
+        .any(|op| *op == "chat/completions" || *op == "completions")
+    {
+        capabilities.push("completion");
+    }
+    if operations.contains(&"embeddings") {
+        capabilities.push("embedding");
+    }
+    if model["tool_calls"]["supported"] == true {
+        capabilities.push("tools");
+    }
+    if model["vision"] == true {
+        capabilities.push("vision");
+    }
+    if model["thinking"]["supported"] == true {
+        capabilities.push("thinking");
+    }
+    let details = ollama_details(model);
+    let architecture = ollama_architecture(model)
+        .or_else(|| model["recipe"].as_str())
+        .unwrap_or("unknown");
+    let context = ollama_context(model);
+    let mut model_info = json!({"general.architecture": architecture, "juiced.model": id});
+    if let Some(tokens) = context {
+        model_info[format!("{architecture}.context_length")] = json!(tokens);
+    }
+    Ok(json!({
+        "modelfile": "",
+        "parameters": context.map(|tokens| format!("num_ctx {tokens}")).unwrap_or_default(),
+        "template": "",
+        "details": details,
+        "model_info": model_info,
+        "capabilities": capabilities,
+        "modified_at": ollama_time(model["weights"]["modified_unix_ms"].as_u64()),
+    }))
 }
 
 pub fn ollama_error(error: &CodecError) -> Value {
@@ -2345,7 +2449,7 @@ mod tests {
         assert_eq!(models["models"].as_array().unwrap().len(), 1);
         assert_eq!(models["models"][0]["name"], "on:latest");
         assert_eq!(models["models"][0]["model"], "on:latest");
-        assert!(models["models"][0].get("digest").is_none());
+        assert_eq!(models["models"][0]["size"], 0);
         let running = ollama_models(
             &[
                 json!({"id":"on","policy":"hot","downloaded":true,"loaded":true,"operations":["chat/completions"]}),
@@ -2353,12 +2457,70 @@ mod tests {
             ],
             true,
         );
-        assert_eq!(running["models"].as_array().unwrap().len(), 2);
+        assert_eq!(running["models"].as_array().unwrap().len(), 1);
+        assert!(running["models"][0].get("context_length").is_none());
         assert_eq!(ollama_model_name("on:latest"), "on");
         assert_eq!(ollama_model_name("on:q4"), "on:q4");
         assert_eq!(ollama_model_name(":latest"), ":latest");
         assert!(ollama_show(&json!({"id":"off","policy":"disabled"})).is_err());
     }
+    #[test]
+    fn ollama_discovery_reports_details_capabilities_and_context() {
+        let model = json!({
+            "id": "Qwen3-8B-GGUF-Q4_K_M", "policy": "hot", "downloaded": true, "loaded": true,
+            "operations": ["chat/completions", "completions"], "vision": true, "device": "gpu",
+            "resident_bytes": 6_000_000_000u64, "recipe": "llamacpp",
+            "context_length": 32768, "max_context_window": 40960,
+            "tool_calls": {"supported": true}, "thinking": {"supported": true},
+            "capability_contract": {"artifact": {"architecture": "qwen3"}},
+            "residency": {"idle_unload_at_unix_ms": 1_709_251_200_000u64},
+            "weights": {"bytes": 5_000_000_000u64, "modified_unix_ms": 1_709_251_199_000u64,
+                "digest": "ab".repeat(32), "format": "gguf", "quantization": "Q4_K_M", "size_label": null},
+        });
+        let tags = ollama_models(std::slice::from_ref(&model), false);
+        let entry = &tags["models"][0];
+        assert_eq!(entry["modified_at"], "2024-02-29T23:59:59Z");
+        assert_eq!(entry["size"], 5_000_000_000u64);
+        assert_eq!(entry["digest"], "ab".repeat(32));
+        assert_eq!(
+            entry["details"],
+            json!({"parent_model": "", "format": "gguf", "family": "qwen3", "families": ["qwen3"],
+                "parameter_size": "8B", "quantization_level": "Q4_K_M"})
+        );
+        assert!(entry.get("expires_at").is_none());
+        let running = ollama_models(std::slice::from_ref(&model), true);
+        let entry = &running["models"][0];
+        assert_eq!(entry["size"], 6_000_000_000u64);
+        assert_eq!(entry["size_vram"], 6_000_000_000u64);
+        assert_eq!(entry["expires_at"], "2024-03-01T00:00:00Z");
+        assert_eq!(entry["context_length"], 32768);
+        let show = ollama_show(&model).unwrap();
+        assert_eq!(
+            show["capabilities"],
+            json!(["completion", "tools", "vision", "thinking"])
+        );
+        assert_eq!(show["model_info"]["general.architecture"], "qwen3");
+        assert_eq!(show["model_info"]["qwen3.context_length"], 32768);
+        assert_eq!(show["parameters"], "num_ctx 32768");
+        assert_eq!(show["details"]["quantization_level"], "Q4_K_M");
+        let bare =
+            ollama_show(&json!({"id": "e", "policy": "on_demand", "operations": ["embeddings"]}))
+                .unwrap();
+        assert_eq!(bare["capabilities"], json!(["embedding"]));
+        assert_eq!(bare["details"]["family"], "");
+        assert_eq!(bare["parameters"], "");
+        assert!(bare["model_info"].get("unknown.context_length").is_none());
+        assert_eq!(
+            parameter_size_from_name("Gemma-3-4b-it-GGUF"),
+            Some("4B".into())
+        );
+        assert_eq!(
+            parameter_size_from_name("Qwen3-0.6B-GGUF"),
+            Some("0.6B".into())
+        );
+        assert_eq!(parameter_size_from_name("kokoro-v1"), None);
+    }
+
     #[test]
     fn ollama_response_rehydrates_tool_arguments() {
         let output=ollama_response(&json!({"choices":[{"message":{"content":null,"tool_calls":[{"function":{"name":"read","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}),OllamaOperation::Chat,"tiny","2026-11-10T00:00:00Z").unwrap();

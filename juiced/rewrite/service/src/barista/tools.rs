@@ -916,6 +916,7 @@ mod tests {
             principal: "test",
             role,
             credential_epoch: "test".into(),
+            key_name: None,
         }
     }
 

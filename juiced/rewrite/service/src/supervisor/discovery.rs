@@ -21,6 +21,7 @@ const FILE_CACHE_ENTRIES: usize = 512;
 #[derive(Clone, Debug, Default)]
 struct FileFacts {
     architecture: Option<String>,
+    size_label: Option<String>,
     trained: Option<u64>,
     template: Option<TemplateFacts>,
 }
@@ -53,6 +54,7 @@ fn read_file_facts(path: &Path) -> Option<Arc<FileFacts>> {
     let summary = crate::profiles::read_gguf_summary(&mut file).ok()?;
     let facts = Arc::new(FileFacts {
         architecture: summary.architecture,
+        size_label: summary.size_label,
         trained: summary.training_context_tokens,
         template: summary
             .chat_template
@@ -289,6 +291,78 @@ impl Manager {
             }
         });
         futures_util::future::join_all(tasks).await
+    }
+
+    /// What Ollama clients show for a model's files: bytes on disk, modification time, a digest
+    /// and the quantization and size labels. The digest is the verified SHA-256 when Juiced
+    /// holds one, else a hash of the file's identity, so it still changes with the file.
+    pub(crate) fn weight_facts(&self, id: &str) -> Value {
+        let Ok(worker) = self.worker(id) else {
+            return json!({});
+        };
+        let spec = &worker.spec;
+        let metadata = std::fs::metadata(&spec.model_file).ok();
+        let modified = metadata
+            .as_ref()
+            .and_then(|metadata| metadata.modified().ok());
+        let companions: u64 = spec
+            .companions
+            .iter()
+            .filter_map(|companion| std::fs::metadata(&companion.path).ok())
+            .map(|metadata| metadata.len())
+            .sum();
+        let bytes = metadata
+            .as_ref()
+            .map(|metadata| metadata.len().saturating_add(companions));
+        let size_label = metadata.as_ref().and_then(|metadata| {
+            file_cache()
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .get(&(spec.model_file.clone(), metadata.len(), modified))
+                .and_then(|facts| facts.size_label.clone())
+        });
+        let file_name = spec
+            .model_file
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default();
+        let stem = file_name
+            .rsplit_once('.')
+            .map_or(file_name, |(stem, _)| stem);
+        let quantization = crate::variants::classify(stem)
+            .quant
+            .or_else(|| crate::variants::classify(&spec.id).quant);
+        let extension = spec
+            .model_file
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .map(str::to_ascii_lowercase);
+        let sha256 = worker
+            ._artifact
+            .as_ref()
+            .map(|artifact| artifact.artifact().sha256.clone())
+            .filter(|digest| digest.len() == 64);
+        let modified_ms = modified
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|elapsed| elapsed.as_millis() as u64);
+        let digest = sha256.clone().unwrap_or_else(|| {
+            let identity = format!(
+                "{}\0{}\0{:?}\0{:?}",
+                spec.id,
+                spec.model_file.display(),
+                bytes,
+                modified_ms
+            );
+            Sha256::digest(identity.as_bytes())
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect()
+        });
+        json!({
+            "bytes": bytes, "modified_unix_ms": modified_ms, "digest": digest,
+            "verified_digest": sha256.is_some(), "format": extension,
+            "quantization": quantization, "size_label": size_label,
+        })
     }
 
     pub(crate) async fn discovered_model(&self, id: &str) -> Option<Discovered> {

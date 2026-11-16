@@ -27,6 +27,7 @@ fn concrete_route(path: &str) -> &str {
         "/juiced/context" => "/juiced/context?model=fixture.one",
         "/juiced/runtimes/resolve" => "/juiced/runtimes/resolve?recipe=llamacpp&backend=cpu",
         "/juiced/artifacts/jobs/{job}" => "/juiced/artifacts/jobs/00000000000000000000000000000000",
+        "/juiced/requests/{id}/capture" => "/juiced/requests/1/capture",
         "/juiced/artifacts/sets/{set}" => {
             "/juiced/artifacts/sets/set-0000000000000000000000000000000000000000000000000000000000000000"
         }
@@ -194,7 +195,8 @@ async fn all_prefixes_enforce_read_inference_and_operator_authority() {
                     .unwrap();
                 let missing = suffix.ends_with("/{job}")
                     || suffix.ends_with("/{set}")
-                    || suffix.ends_with("/{pull}");
+                    || suffix.ends_with("/{pull}")
+                    || suffix.ends_with("/{id}/capture");
                 assert_eq!(
                     response.status(),
                     if missing {
@@ -210,6 +212,8 @@ async fn all_prefixes_enforce_read_inference_and_operator_authority() {
                     let value = response.json::<Value>().await.unwrap();
                     if suffix.ends_with("/{pull}") {
                         assert_eq!(value["error"]["code"], "library_pull_not_found");
+                    } else if suffix.ends_with("/{id}/capture") {
+                        assert_eq!(value["error"]["code"], "capture_not_found");
                     } else if missing {
                         assert_eq!(value["error"]["code"], "artifact_not_found");
                     }
@@ -286,7 +290,7 @@ async fn native_read_contracts_keep_observation_and_intent_distinct() {
             .is_some_and(|entries| !entries.is_empty())
     );
     let history = server.get("juiced/requests").await;
-    assert_eq!(history["capacity"], 128);
+    assert_eq!(history["capacity"], 1000);
     assert_eq!(history["contains_content"], false);
     assert_eq!(history["data"], json!([]));
 }

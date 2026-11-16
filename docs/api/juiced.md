@@ -90,7 +90,9 @@ limits. Unknown or unrecorded qualification is not a successful test.
 | `GET /v1/juiced/transfers` | Acquisition jobs and their state |
 | `GET /v1/juiced/cache` | Cache settings, snapshots, and operational state |
 | `GET /v1/juiced/admission` | Pending work, reservations, allocations, and uncertain termination |
-| `GET /v1/juiced/requests` | Bounded request metadata for diagnostics |
+| `GET /v1/juiced/requests` | Bounded request metadata for diagnostics; `?limit=N` (1 to 1000, default 128) |
+| `GET`/`POST /v1/juiced/requests/capture` | Opt-in body capture state; `POST {"enabled":true}` turns it on (operator) |
+| `GET /v1/juiced/requests/{id}/capture` | The captured request and response bodies of one request (operator) |
 | `GET /v1/health` | Liveness plus `version`, `model_loaded`, `all_models_loaded` (one entry per running worker with `model_name`, `type`, `recipe`, `status`, `pid`, `context_length`), `max_models` and `pinned_models` per model type |
 
 Each `GET /v1/juiced/requests` record carries `id`, `model`, `operation`,
@@ -100,7 +102,22 @@ milliseconds), and the engine-reported `input_tokens`, `output_tokens`,
 `null`. Engines that report prompt reuse add `cached_tokens` and
 `prompt_processed_tokens`, and prompt-cache requests add `session_cache` with its
 `path` (`slot-hit`, `restored`, `cold` or `bypass`), `slot`, and `restore_ms` when
-restored. Records are newest first; the service keeps the latest 128.
+restored. `protocol` names the sender: `openai`, `ollama`, `anthropic`,
+`automatic1111`, `mcp`, `realtime`, `wyoming`, `console` (the Juiced console,
+detected by `Sec-Fetch-Site: same-origin`), `internal` (checks and Tune) or
+`native` (other Juiced routes). `key_name` is the API key's name, or
+`LEMONADE_API_KEY` / `LEMONADE_ADMIN_API_KEY` for environment keys, and `null`
+without a key. Records are newest first. The service keeps the last 1000 records
+or 7 days, whichever is less, in `request-history.json` in the configuration
+directory, so history survives a restart. Request IDs continue after restored
+ones. A record with `"captured": true` has a capture.
+
+Capture is off by default, memory only and operator only. While on, the service
+keeps the last 20 requests' bodies, each capped at 64 KiB. Each capture has
+`request` and `response` parts with `text` (null for binary bodies), `bytes`,
+`truncated` and `assembled` (true when a streamed reply was reassembled into
+`content`, `reasoning` and `tool_calls` text). Turning capture off deletes every
+capture; a restart turns it off. Captures never reach disk, logs or metrics.
 
 Admission observations include `physical_slots` for requests with an observed
 native slot inventory. Each record binds a worker generation to its inventory,

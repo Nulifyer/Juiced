@@ -684,11 +684,40 @@ async fn catalog(state: &Gateway) -> Vec<Value> {
         }))
         .collect()
 }
+/// Catalog entries with the discovery facts (context, tools, thinking, architecture) and the
+/// weight-file facts Ollama clients read.
+async fn ollama_catalog(state: &Gateway) -> Vec<Value> {
+    let models = state.manager.discovered(true).await;
+    let views: Vec<_> = models.iter().map(|model| model.view.clone()).collect();
+    let aliases = state.manager.aliased_views(&views);
+    let entry = |model: &crate::supervisor::Discovered| {
+        let mut entry = model.entry();
+        entry["device"] = json!(model.device);
+        entry["weights"] = state.manager.weight_facts(&model.view.id);
+        entry
+    };
+    let mut entries: Vec<Value> = models.iter().map(entry).collect();
+    for (alias, view) in aliases {
+        if let Some(model) = models.iter().find(|model| model.view.id == view.id) {
+            let mut value = entry(model);
+            value["aliased_to"] = value["id"].take();
+            value["id"] = Value::String(alias);
+            entries.push(value);
+        }
+    }
+    entries
+}
 async fn tags(State(state): State<Gateway>) -> Response {
-    json_response(200, protocols::ollama_models(&catalog(&state).await, false))
+    json_response(
+        200,
+        protocols::ollama_models(&ollama_catalog(&state).await, false),
+    )
 }
 async fn ps(State(state): State<Gateway>) -> Response {
-    json_response(200, protocols::ollama_models(&catalog(&state).await, true))
+    json_response(
+        200,
+        protocols::ollama_models(&ollama_catalog(&state).await, true),
+    )
 }
 /// Ollama clients gate features on this version; native Juiced v0.9.2 reported it.
 const OLLAMA_VERSION: &str = "0.16.1";
@@ -732,7 +761,7 @@ async fn show(
                     "A nonempty model string is required.",
                 )
             })?;
-        let entry = catalog(&state)
+        let entry = ollama_catalog(&state)
             .await
             .into_iter()
             .find(|entry| entry["id"] == model && entry["downloaded"] == true)
@@ -1389,7 +1418,7 @@ fn utc_now() -> String {
             .as_secs(),
     )
 }
-fn utc_timestamp(seconds: u64) -> String {
+pub(crate) fn utc_timestamp(seconds: u64) -> String {
     let days = (seconds / 86400) as i64;
     let z = days + 719468;
     let era = z.div_euclid(146097);
@@ -1516,6 +1545,7 @@ mod tests {
             principal: "api",
             role: crate::auth::Role::Inference,
             credential_epoch: Arc::from("first"),
+            key_name: None,
         };
         let key = cancellation_key(&context, Some("one"), &json!(1)).unwrap();
         assert_ne!(

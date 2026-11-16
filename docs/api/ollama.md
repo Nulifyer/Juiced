@@ -10,8 +10,27 @@ curl --fail-with-body http://localhost:8080/api/tags
 curl --fail-with-body http://localhost:8080/api/ps
 ```
 
-Tags list enabled models. The process list reports loaded workers.
-Use the exact model name returned by discovery.
+Tags list enabled chat, completion and embedding models as `ID:latest`. The
+process list shows the loaded ones. Speech, transcription and image models are
+not listed. Use the exact model name returned by discovery.
+
+Each entry has `modified_at`, `size` (bytes on disk), `digest` and `details`
+with `format`, `family`, `families`, `parameter_size` and `quantization_level`.
+`family` is the GGUF architecture, such as `qwen3`. `parameter_size` comes from
+the GGUF size label or the model name. A value Juiced cannot read is an empty
+string. `digest` is the file's verified SHA-256 when Juiced downloaded it, else a
+hash of the file's path, size and modification time.
+
+`/api/ps` entries add `size` (memory the model holds), `size_vram` (the same on
+a GPU engine, else 0), `expires_at` (when an idle On demand model unloads, or
+`2099-01-01T00:00:00Z` for Hot models) and `context_length`.
+
+`POST /api/show` returns `capabilities` (`completion`, `embedding`, `tools`,
+`vision`, `thinking`), `details`, `model_info` with `general.architecture` and
+`<architecture>.context_length`, and `parameters` as `num_ctx N`. The context is
+what one request can use on the running worker, else the model's trained
+context. `tools` and `thinking` follow the model's chat template, the same
+values `/v1/models` reports.
 
 ## Send a request
 

@@ -1205,6 +1205,8 @@ pub fn read_gguf<R: Read + Seek>(reader: &mut R) -> Result<DeclaredContext, Erro
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct GgufSummary {
     pub architecture: Option<String>,
+    /// `general.size_label`, such as `8B` or `30B-A3B`.
+    pub size_label: Option<String>,
     pub training_context_tokens: Option<u64>,
     pub chat_template: Option<String>,
 }
@@ -1243,6 +1245,8 @@ pub fn read_gguf_summary<R: Read + Seek>(reader: &mut R) -> Result<GgufSummary, 
         let kind = input.u32()?;
         if key == "general.architecture" && kind == 8 {
             summary.architecture = Some(input.string(128)?);
+        } else if key == "general.size_label" && kind == 8 {
+            summary.size_label = Some(input.string(128)?);
         } else if key == "tokenizer.chat_template" && kind == 8 {
             summary.chat_template = Some(input.string(MAX_STRING_BYTES)?);
         } else if key.ends_with(".context_length") && matches!(kind, 0..=5 | 10 | 11) {

@@ -103,6 +103,7 @@ enum Backing {
 
 pub struct Match {
     pub id: String,
+    pub name: Arc<str>,
     pub scope: Scope,
     pub epoch: Arc<str>,
 }
@@ -207,6 +208,7 @@ impl KeyStore {
         self.dirty.store(true, Ordering::Release);
         Lookup::Found(Match {
             id: key.stored.id.clone(),
+            name: Arc::from(key.stored.name.as_str()),
             scope: key.stored.scope,
             epoch: key.epoch.clone(),
         })

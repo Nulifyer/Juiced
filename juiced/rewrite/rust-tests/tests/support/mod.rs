@@ -53,10 +53,12 @@ pub const READ_ROUTES: [&str; 21] = [
 ];
 /// Read routes whose operator view adds process details; `Server::get` reads them as operator.
 pub const OPERATOR_DETAIL_ROUTES: [&str; 1] = ["/juiced/context"];
-pub const OPERATOR_READ_ROUTES: [&str; 28] = [
+pub const OPERATOR_READ_ROUTES: [&str; 30] = [
     "/juiced/cache/inspect",
     "/juiced/cache/sessions",
     "/juiced/requests",
+    "/juiced/requests/capture",
+    "/juiced/requests/{id}/capture",
     "/juiced/suitability",
     "/juiced/admission",
     "/juiced/cache",
@@ -83,7 +85,7 @@ pub const OPERATOR_READ_ROUTES: [&str; 28] = [
     "/juiced/protocols/health",
     "/juiced/barista",
 ];
-pub const WRITE_ROUTES: [&str; 44] = [
+pub const WRITE_ROUTES: [&str; 45] = [
     "/juiced/runtime-packages/import",
     "/juiced/engines/install",
     "/juiced/models/add",
@@ -128,6 +130,7 @@ pub const WRITE_ROUTES: [&str; 44] = [
     "/juiced/barista/handles/{handle}",
     "/models/{model}/check",
     "/models/{model}/tune",
+    "/juiced/requests/capture",
 ];
 pub const INFERENCE_ROUTES: [&str; 4] = [
     "/chat/completions",

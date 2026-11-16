@@ -606,7 +606,12 @@ async fn accept(
         let settings = settings.clone();
         tokio::spawn(async move {
             let _ = stream.set_nodelay(true);
-            connection(slot, stream, settings).await;
+            let origin = crate::request_history::Origin {
+                protocol: "wyoming",
+                key: None,
+                capture: None,
+            };
+            origin.scope(connection(slot, stream, settings)).await;
         });
     }
 }

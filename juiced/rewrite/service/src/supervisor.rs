@@ -1483,6 +1483,10 @@ pub struct RequestRecord {
     pub elapsed_ms: u64,
     pub queue_wait_ms: u64,
     pub completed_at_ms: u64,
+    /// `openai`, `ollama`, `anthropic`, `automatic1111`, `mcp`, `realtime`, `wyoming`,
+    /// `console`, `internal` or `native`.
+    pub protocol: Option<&'static str>,
+    pub key_name: Option<Arc<str>>,
     #[serde(flatten)]
     pub usage: crate::engine_usage::Observation,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1707,6 +1711,9 @@ impl Drop for RequestLease {
             });
         }
         self.manager.metrics.observe(&record.model, &record.usage);
+        if let Ok(value) = serde_json::to_value(&record) {
+            self.manager.history.push(value, record.completed_at_ms);
+        }
         let mut records = self
             .manager
             .records
@@ -1926,6 +1933,8 @@ pub struct Manager {
     startup_wait: Duration,
     pub request_timeout: Duration,
     records: Mutex<VecDeque<RequestRecord>>,
+    history: Arc<crate::request_history::History>,
+    captures: Arc<crate::request_history::Captures>,
     last_inference: Mutex<Option<LastInference>>,
     usage_totals: llama::UsageTotals,
     logs: Arc<crate::logs::LogBuffer>,
@@ -2150,6 +2159,11 @@ impl Manager {
         prepare_native: bool,
     ) -> Result<Arc<Self>, Box<dyn std::error::Error>> {
         config.validate()?;
+        let history = Arc::new(crate::request_history::History::load(
+            config_root.clone(),
+            unix_time_ms(),
+        ));
+        history.spawn_flusher();
         if let Some(root) = &config_root {
             root.verify()?;
             if config_path.parent() != Some(root.root()) {
@@ -2409,6 +2423,9 @@ impl Manager {
             artifacts,
             cache_directory,
             records: Mutex::new(VecDeque::new()),
+            next_request: AtomicU64::new(history.next_id()),
+            history,
+            captures: Arc::default(),
             last_inference: Mutex::new(None),
             usage_totals: Default::default(),
             logs: {
@@ -2429,7 +2446,6 @@ impl Manager {
             cors,
             system_stats: crate::system_stats::Sampler::default(),
             library,
-            next_request: AtomicU64::new(1),
             shutting_down: std::sync::atomic::AtomicBool::new(false),
             paused: std::sync::atomic::AtomicBool::new(false),
         }))
@@ -3712,6 +3728,15 @@ impl Manager {
         }))
     }
 
+    /// Newest first, including records restored from before the last restart.
+    pub fn request_history(&self, limit: usize) -> Vec<serde_json::Value> {
+        self.history.list(limit)
+    }
+
+    pub fn request_capture(&self) -> &Arc<crate::request_history::Captures> {
+        &self.captures
+    }
+
     pub fn records(&self) -> Vec<RequestRecord> {
         self.records
             .lock()
@@ -4808,6 +4833,11 @@ impl Manager {
             });
         drop(state);
         let record_model = worker.record_model.clone();
+        let origin = crate::request_history::Origin::current();
+        let id = self.next_request.fetch_add(1, Ordering::Relaxed);
+        if let Some(pending) = origin.as_ref().and_then(|origin| origin.capture.as_ref()) {
+            pending.attach(id);
+        }
         Ok((
             base,
             RequestLease {
@@ -4824,7 +4854,7 @@ impl Manager {
                 session: None,
                 cache_identity: None,
                 record: Some(RequestRecord {
-                    id: self.next_request.fetch_add(1, Ordering::Relaxed),
+                    id,
                     model: record_model,
                     alias,
                     operation: operation.path(),
@@ -4833,6 +4863,8 @@ impl Manager {
                     elapsed_ms: 0,
                     queue_wait_ms,
                     completed_at_ms: 0,
+                    protocol: origin.as_ref().map(|origin| origin.protocol),
+                    key_name: origin.and_then(|origin| origin.key),
                     usage: Default::default(),
                     session_cache: None,
                 }),
@@ -4951,6 +4983,8 @@ impl Manager {
             self.cache_operations.drain(deadline),
             self.runtime_control.drain(deadline)
         );
+        let history = self.history.clone();
+        let _ = tokio::task::spawn_blocking(move || history.flush()).await;
         ShutdownReport {
             pending_processes,
             pending_preparations,
