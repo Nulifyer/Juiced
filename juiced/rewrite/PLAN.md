@@ -22,7 +22,7 @@ The first operator journey is: connect to the isolated service, inspect the mode
 | HTTP service | Quad-prefix native/OpenAI APIs, authentication, streaming, cancellation | server.cpp, API guides, disconnect invariant |
 | Protocol integrations, later | Anthropic, Ollama, MCP, A1111, realtime and Wyoming | Existing fixed-protocol exceptions and API tests |
 | Artifact store, later | Acquisition, ownership leases, validation, atomic publication, recovery | Existing Store and publication contracts |
-| Telemetry | Bounded metadata, unknown values, no prompts or credentials | RESOURCE-ACCOUNTING.md, UI-DESIGN.md |
+| Telemetry | Bounded metadata, unknown values, no prompts or credentials. Exception: operator-enabled request capture, memory only, bounded, cleared when off | RESOURCE-ACCOUNTING.md, UI-DESIGN.md |
 
 Use ordinary concrete modules. Do not build a generic backend trait until two supported engines require substitution. The initial configurable HTTP worker runs llama-server and a Rust test fixture through the same subprocess owner. Engines remain separate processes. Model-specific lifecycle locks never become global I/O locks. An inference lease keeps its worker busy until the upstream response finishes or is dropped.
 

@@ -85,7 +85,7 @@ pub const OPERATOR_READ_ROUTES: [&str; 30] = [
     "/juiced/protocols/health",
     "/juiced/barista",
 ];
-pub const WRITE_ROUTES: [&str; 45] = [
+pub const WRITE_ROUTES: [&str; 47] = [
     "/juiced/runtime-packages/import",
     "/juiced/engines/install",
     "/juiced/models/add",
