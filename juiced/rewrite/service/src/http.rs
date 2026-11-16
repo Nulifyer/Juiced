@@ -1112,9 +1112,8 @@ async fn model_tune_start(
 async fn model_check_run(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    headers: HeaderMap,
 ) -> Result<Json<Value>, ApiError> {
-    let result = crate::barista::model_check(&state, Some(&headers), &id).await?;
+    let result = crate::barista::model_check(&state, &id).await?;
     if let Some(fingerprint) = state.manager.running_fingerprint(&id).await {
         state
             .manager

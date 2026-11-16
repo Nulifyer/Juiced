@@ -1140,6 +1140,22 @@ async fn an_automatic_check_runs_with_the_openai_api_turned_off_for_clients() {
         .find(|step| step["id"] == "chat")
         .unwrap();
     assert_eq!(chat["status"], "pass", "{checked}");
+    let (status, manual) = server
+        .json(
+            Method::POST,
+            "/v1/models/fixture.one/check",
+            Some(json!({})),
+            Some(ADMIN_KEY),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{manual}");
+    let chat = manual["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|step| step["id"] == "chat")
+        .unwrap();
+    assert_eq!(chat["status"], "pass", "{manual}");
 }
 
 #[tokio::test]

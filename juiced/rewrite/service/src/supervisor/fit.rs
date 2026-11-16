@@ -780,7 +780,7 @@ fn defaults_view(
     json!({
         "available": !native,
         "enabled": spec.juiced_defaults && !native,
-        "tuned_stale": spec.tuned.is_some() && spec.current_tuning().is_empty(),
+        "tuned_stale": spec.tuned.as_ref().is_some_and(|tuned| tuned.runtime_package.as_deref() != spec.execution_profile.runtime_package()),
         "entries": entries,
         "sampler": {
             "temperature": from(&["--temp", "--temperature"], sampling.temperature.map(Value::from)),

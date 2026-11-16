@@ -326,7 +326,7 @@ pub(super) async fn run(context: &Context<'_>, id: &str, progress: Progress) -> 
         previous: settled(&options["tuned"]),
         run_id: format!("{:x}", now_ms()),
         deadline: tokio::time::Instant::now() + TUNE_LIMIT,
-        revision: None,
+        revision: options["revision"].as_u64(),
         candidates: Vec::new(),
         progress,
     };

@@ -641,25 +641,24 @@ pub(super) async fn call(
     envelope(tool, context.preview, sources, result)
 }
 
-/// Runs the model check with the caller's credentials, or with in-process authority when
-/// `headers` is `None` (the automatic check after a worker starts).
+/// Runs the model check with in-process authority; the caller has checked operator access.
+/// The check tests the model, so Connect's client protocol switches do not apply to it.
 pub(super) async fn model_check(
     state: &AppState,
     app: axum::Router,
-    headers: Option<&HeaderMap>,
     model: &str,
 ) -> std::result::Result<Value, Value> {
     let empty = HeaderMap::new();
     let context = Context {
         state,
         app,
-        headers: headers.unwrap_or(&empty),
+        headers: &empty,
         permission: Permission::Full,
         revision: 0,
         assistant_model: None,
         preview: false,
         sources: Mutex::default(),
-        internal: headers.is_none(),
+        internal: true,
     };
     check::run(&context, model)
         .await

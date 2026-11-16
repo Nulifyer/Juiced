@@ -309,13 +309,9 @@ pub(crate) async fn call(
     ))
 }
 
-/// Runs the model check for `model` with the caller's credentials, or with service authority
-/// when `headers` is `None`.
-pub(crate) async fn model_check(
-    state: &AppState,
-    headers: Option<&HeaderMap>,
-    model: &str,
-) -> Result<Value, ApiError> {
+/// Runs the model check for `model` with service authority; the caller has checked operator
+/// access.
+pub(crate) async fn model_check(state: &AppState, model: &str) -> Result<Value, ApiError> {
     let app = state.probe.get().cloned().ok_or_else(|| {
         ApiError::new(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -323,7 +319,7 @@ pub(crate) async fn model_check(
             "The service is still starting. Retry the check.",
         )
     })?;
-    tools::model_check(state, app, headers, model)
+    tools::model_check(state, app, model)
         .await
         .map_err(|error| {
             let status = error["status"]
@@ -367,12 +363,11 @@ pub(crate) fn start_tune(state: AppState, model: String) -> Result<Value, ApiErr
             Ok(result) => json!({"state": "done", "result": result}),
             Err(error) => json!({"state": "failed", "error": error["message"]}),
         };
-        let done = finished["state"] == "done";
         state.manager.set_tune(&model, finished);
-        // A finished run reloaded the model with its result; check what it now serves.
-        if done
-            && let Some(fingerprint) = state.manager.running_fingerprint(&model).await
-            && let Ok(result) = model_check(&state, None, &model).await
+        // Automatic checks wait while Tune reloads the model; check what it serves now.
+        if let Some(fingerprint) = state.manager.running_fingerprint(&model).await
+            && !state.manager.checked(&model, &fingerprint)
+            && let Ok(result) = model_check(&state, &model).await
         {
             state.manager.store_model_check(&model, fingerprint, result);
         }
@@ -422,7 +417,7 @@ pub(crate) fn spawn_automatic_checks(state: AppState) {
             tokio::spawn(async move {
                 // A request that fails is a failed step in the result; an error here means the
                 // check could not run at all, so nothing is stored and the next launch retries.
-                if let Ok(result) = model_check(&state, None, &id).await {
+                if let Ok(result) = model_check(&state, &id).await {
                     state.manager.store_model_check(&id, fingerprint, result);
                 }
                 running
