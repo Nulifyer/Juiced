@@ -17,11 +17,12 @@ installation exposes management operations to any caller that can reach it.
 ## Issue API keys from the console
 
 Without any keys, Juiced is open to every caller that can reach it.
-**Connect → API keys** shows **Open to this network** in that state.
+**Connect → API keys** shows **No keys** in that state, and the Dashboard lists
+**No API keys** under **Needs attention**.
 
 1. Open **Connect → API keys**.
-2. Enter a **Name**. The first key is always an operator key without expiry, so
-   select **Create operator key**. Key checks turn on, and this console switches
+2. Keep the name **This console** or enter another **Name**. The first key is
+   always an operator key without expiry, so select **Create operator key**. Key checks turn on, and this console switches
    to the new key for this tab.
 3. Copy the key from **Copy the new key** and store it. Juiced keeps only a hash
    and cannot show it again.

@@ -102,13 +102,13 @@ export function snippets(id: ProtocolId, base: string, keyed: boolean, model = "
 }
 
 export const clientHints: Record<ProtocolId, string> = {
-  openai: "Open WebUI, SillyTavern, Pi and other OpenAI clients: use this base URL.",
-  anthropic: "Anthropic SDKs and Claude-compatible tools: use this base URL.",
-  ollama: "Ollama clients: use this as the Ollama URL.",
-  mcp: "MCP clients: add a Streamable HTTP server with this URL.",
-  automatic1111: "SillyTavern and other AUTOMATIC1111 clients: use this as the server URL.",
-  realtime: "Open a WebSocket to this URL for live transcription.",
-  wyoming: "Home Assistant: add the Wyoming Protocol integration with this host and port.",
+  openai: "Base URL for OpenAI clients.",
+  anthropic: "Base URL for Anthropic SDKs.",
+  ollama: "Ollama URL for Ollama clients.",
+  mcp: "Streamable HTTP server URL for MCP clients.",
+  automatic1111: "Server URL for AUTOMATIC1111 clients.",
+  realtime: "WebSocket URL for live transcription.",
+  wyoming: "Host and port for the Home Assistant Wyoming integration.",
 };
 
 export function ago(ms: number, now = Date.now()) {
@@ -149,7 +149,7 @@ export function checkText(protocol: ProtocolHealth): string {
   const check = protocol.check;
   if (!check) return protocol.enabled ? "Not available" : "Not run while off";
   if (!check.ok) return check.message ?? `${check.route} ${check.status ? `answered ${check.status}` : "did not answer"}`;
-  return protocol.id === "wyoming" ? "Listening" : `${check.route} → ${check.status ?? "ok"}`;
+  return protocol.id === "wyoming" ? "Listening" : "OK";
 }
 
 export const statusLabels: Record<HealthStatus, string> = { healthy: "Healthy", idle: "Idle", no_models: "No models", disabled: "Off", error: "Error" };

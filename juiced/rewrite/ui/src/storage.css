@@ -1,6 +1,6 @@
 .storage-page { display: grid; gap: 12px; }
 .volume-strip { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 8px; }
-.volume-item { display: grid; gap: 6px; min-width: 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: #121418; font-size: .78rem; }
+.volume-item { display: grid; gap: 6px; min-width: 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); font-size: .78rem; }
 .volume-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
 .volume-head strong { font-weight: 550; min-width: 0; }
 .storage-columns { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); gap: 12px; align-items: start; }
@@ -8,9 +8,11 @@
 .usage-list .row-main, .reclaim-list .row-main, .reclaim-preview .row-main { flex: 1 1 200px; display: grid; gap: 2px; min-width: 0; }
 .usage-list .row-meta, .reclaim-list .row-meta, .reclaim-preview .row-meta { display: grid; justify-items: end; gap: 2px; font-variant-numeric: tabular-nums; }
 .usage-list .meter { flex-basis: 100%; }
-.reclaim-row input[type="checkbox"], .reclaim-spacer { flex: 0 0 16px; width: 16px; height: 16px; margin: 0; accent-color: var(--ring); }
+.reclaim-row input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var(--ring); }
+.reclaim-hit, .reclaim-spacer { flex: 0 0 24px; width: 24px; height: 24px; margin: 0 -4px; display: inline-grid; place-items: center; }
+.reclaim-row .reclaim-hit { margin-bottom: 0; cursor: pointer; }
 .reclaim-row label { cursor: pointer; }
-.reclaim-row.kept { opacity: .72; }
+.reclaim-row.kept strong, .reclaim-row.kept .row-meta { color: var(--muted); }
 .reclaim-row.kept label { cursor: default; }
 .reclaim-list { max-height: 420px; overflow-y: auto; }
 .reclaim-preview { max-height: 320px; overflow-y: auto; margin: 8px 0; }

@@ -15,7 +15,7 @@ describe("protocol health", () => {
     const [openai, ollama, wyoming] = parseHealth(health);
     expect(openai!.operations).toEqual(["chat/completions"]);
     expect(summary(openai!, 1_000_000 + 120_000)).toBe("2 models · Last request 2 min ago");
-    expect(checkText(openai!)).toBe("GET /v1/models → 200");
+    expect(checkText(openai!)).toBe("OK");
     expect(summary(ollama!)).toBe("");
     expect(checkText(ollama!)).toBe("Not run while off");
     expect(summary(wyoming!)).toBe("Self-check failed: Address in use");

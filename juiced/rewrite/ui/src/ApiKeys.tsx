@@ -10,7 +10,7 @@ const expiries = [["", "Never"], ["30", "30 days"], ["90", "90 days"], ["365", "
 
 export function ApiKeys({ client, online, consoleKey, onAdoptKey }: { client: Client; online: boolean; consoleKey: string; onAdoptKey: (key: string) => void }) {
   const access = useResource(client, "juiced/access", parseAccess, 10000, true);
-  const [name, setName] = useState("");
+  const [name, setName] = useState<string | null>(null);
   const [scope, setScope] = useState<Scope>("inference");
   const [expiry, setExpiry] = useState("");
   const [busy, setBusy] = useState(false);
@@ -24,15 +24,17 @@ export function ApiKeys({ client, online, consoleKey, onAdoptKey }: { client: Cl
   const first = !anchored;
   const effectiveScope: Scope = first ? "operator" : scope;
   const effectiveExpiry = first ? "" : expiry;
+  const typed = name ?? (first ? "This console" : "");
   const create = async () => {
+    if (!typed.trim()) return setError("Enter a name for the key.");
     setBusy(true); setError("");
     try {
-      const body: Record<string, unknown> = { name: name.trim(), scope: effectiveScope };
+      const body: Record<string, unknown> = { name: typed.trim(), scope: effectiveScope };
       if (effectiveExpiry) body.expires_in_days = Number(effectiveExpiry);
       const created = parseCreated(await client.request("juiced/access/keys", body));
       const adopted = data.mode === "trusted-lan" && created.access.mode === "keys";
       setRevealed({ key: created.key, secret: created.secret, adopted });
-      setName("");
+      setName(null);
       if (adopted) onAdoptKey(created.secret);
       else await access.reload();
     } catch (failure) { setError(failure instanceof Error ? failure.message : "The key could not be created. Retry."); }
@@ -55,16 +57,16 @@ export function ApiKeys({ client, online, consoleKey, onAdoptKey }: { client: Cl
     <div className={`access-mode ${data.mode}`} role="status">
       <span className={`status-dot ${data.mode === "keys" ? "good" : "warning"}`} />
       {data.mode === "keys" ? <span><strong>Keys required.</strong> Every API route needs a key with the right scope.</span>
-        : <span><strong>Open to this network.</strong> Anyone who can reach Juiced can use every API, including this console.</span>}
+        : <span><strong>No keys.</strong> Anyone on this network has full access.</span>}
     </div>
     <form className="key-create" aria-label="Create key" onSubmit={(event) => { event.preventDefault(); void create(); }}>
-      <div><label htmlFor="key-name">Name</label><input id="key-name" value={name} maxLength={data.limits.nameChars} placeholder={first ? "This console" : "Home Assistant"} disabled={busy || !online} onChange={(event) => setName(event.target.value)} /></div>
+      <div><label htmlFor="key-name">Name</label><input id="key-name" value={typed} maxLength={data.limits.nameChars} placeholder="Home Assistant" disabled={busy || !online} onChange={(event) => setName(event.target.value)} /></div>
       <div><span className="label-row"><label htmlFor="key-scope">Scope</label><HelpTip label="Key scopes">Read only: models and discovery. Inference: also chat, embeddings, speech, images and transcription. Operator: everything, including this console.</HelpTip></span>
         <select id="key-scope" value={effectiveScope} disabled={busy || !online || first} onChange={(event) => setScope(event.target.value as Scope)}>{(["inference", "read", "operator"] as const).map((value) => <option key={value} value={value}>{scopeLabels[value]}</option>)}</select></div>
       <div><label htmlFor="key-expiry">Expires</label><select id="key-expiry" value={effectiveExpiry} disabled={busy || !online || first} onChange={(event) => setExpiry(event.target.value)}>{expiries.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></div>
-      <Button variant="primary" type="submit" disabled={busy || !online || !name.trim() || issued.length >= data.limits.keys}>{first ? "Create operator key" : "Create key"}</Button>
+      <Button variant="primary" type="submit" disabled={busy || !online || issued.length >= data.limits.keys}>{first ? "Create operator key" : "Create key"}</Button>
     </form>
-    {first && <p className="field-help">{data.mode === "keys" ? "Create an operator key without expiry first, so operators keep access." : "The first key is an operator key without expiry. Creating it turns on key checks, and this console switches to it."}</p>}
+    {first && <p className="field-help">{data.mode === "keys" ? "Create an operator key without expiry first, so operators keep access." : "Creating the first key turns on key checks."}</p>}
     {error && <p className="inline-error" role="alert">{error}</p>}
     <div className="data-table key-table" role="table" aria-label="API keys">
       <div className="data-head" role="row"><span role="columnheader">Name</span><span role="columnheader">Scope</span><span role="columnheader">Key</span><span role="columnheader">Last used</span><span role="columnheader">Expires</span><span role="columnheader"><span className="sr-only">Actions</span></span></div>

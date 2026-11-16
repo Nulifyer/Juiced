@@ -17,8 +17,10 @@ import { Aliases } from "./Aliases";
 import { Barista, BaristaInvite, invitationKey, useBarista, useBaristaPanel } from "./Barista";
 import { IdleDefault, MemoryBudget } from "./Residency";
 import { memorySize, percent, rate, useSystemStats } from "./live";
+import { releaseLabel } from "./release";
+import { readTheme, saveTheme, themes, type Theme } from "./theme";
 import { clearToasts, dismiss, notify, useToasts } from "./toast";
-import { Badge, Button, Dialog, Empty, Icon, Menu, Tabs, type IconName } from "./ui";
+import { Button, Dialog, Empty, Icon, Menu, Tabs, type IconName } from "./ui";
 import logo from "../../../ui/public/juiced-icon.svg";
 
 const destinations = [
@@ -84,7 +86,7 @@ export function App() {
       const next = await client.snapshot(controller.signal);
       if (!controller.signal.aborted) { setSnapshot(next); setOnline(true); setConnectionError(""); }
     } catch (error) {
-      if (!controller.signal.aborted) { setOnline(false); setConnectionError(error instanceof Error ? error.message : "The service is unavailable. Check the connection, then retry."); }
+      if (!controller.signal.aborted) { setOnline(false); setConnectionError(error instanceof TypeError || !(error instanceof Error) ? "Can't reach Juiced. Retrying…" : error.message); }
     } finally { if (!controller.signal.aborted) { setRefreshing(false); if (poll.current === controller) poll.current = null; } }
   }, [client]);
   useEffect(() => {
@@ -158,13 +160,14 @@ export function App() {
   return <div className={`app-shell ${hasInspector ? "has-inspector" : ""} ${baristaOpen && panel.docked ? "barista-docked" : ""}`}>
     <a className="skip-link" href="#workspace">Skip to workspace</a>
     <header className="topbar">
-      <div className="brand"><Button variant="ghost" className="mobile-menu" aria-label="Toggle navigation" aria-expanded={mobileOpen} onClick={() => setMobileOpen(!mobileOpen)}><Icon name="menu" /></Button><img src={logo} alt="" width="22" height="22" /><span>Juiced</span><Badge tone="warning">Preview</Badge></div>
+      <div className="brand"><Button variant="ghost" className="mobile-menu" aria-label="Toggle navigation" aria-expanded={mobileOpen} onClick={() => setMobileOpen(!mobileOpen)}><Icon name="menu" /></Button><img src={logo} alt="" width="22" height="22" /><span>Juiced</span></div>
       <div className="topbar-actions">{barista.settings && (barista.settings.enabled || dismissed
         ? <Button variant="ghost" className="barista-toggle" aria-label="Barista" aria-expanded={baristaOpen} onClick={() => { setBaristaOpen(!baristaOpen); if (!baristaOpen) void barista.reload(); }}><Icon name="chat" size={16} /><span className="barista-toggle-label">Barista</span></Button>
         : <BaristaInvite onEnable={() => { setBaristaOpen(true); void barista.reload(); }} onDismiss={() => { writeLocal(inviteKey, "dismissed"); setDismissed(true); }} />)}
       <Menu label="Service status" trigger={<><span className={`status-dot ${status === "Online" ? "good" : status === "Paused" ? "warning" : "bad"}`} /><span>{status}</span><Icon name="chevron" size={14} /></>}>
         <div className="menu-note">{snapshot ? `Juiced ${snapshot.version}` : connectionError || "Not connected"}</div>
         <button role="menuitem" disabled={!online || busy} onClick={togglePause}>{resources?.paused ? "Resume requests" : "Pause new requests"}</button>
+        {snapshot?.release && <button role="menuitemcheckbox" aria-checked={snapshot.release.check} disabled={!online || busy} onClick={() => void mutate("juiced/release", { enabled: !snapshot.release!.check }, snapshot.release!.check ? "Release notices are off." : "Release notices are on.")}>Release notices</button>}
         <button role="menuitem" onClick={() => leave(() => setConnectionOpen(true))}>Connection settings</button>
       </Menu></div>
     </header>
@@ -173,6 +176,7 @@ export function App() {
       <div className="sidebar-footer">
         <p className="sidebar-version" aria-label="Service version" title={snapshot ? `${snapshot.models.filter((model) => model.loaded).length} loaded · ${snapshot.models.filter((model) => model.policy !== "disabled").length} available` : undefined}>{snapshot ? `Juiced ${snapshot.version} · ${snapshot.models.filter((model) => model.loaded).length} loaded` : "Not connected"}</p>
         <a href="https://github.com/Nulifyer/Juiced" target="_blank" rel="noreferrer" aria-label="Source and releases" title="Source and releases"><Icon name="github" size={15} /></a>
+        {snapshot?.release?.newer && snapshot.release.latest && snapshot.release.url && <a className="release-link" href={snapshot.release.url} target="_blank" rel="noreferrer">{releaseLabel(snapshot.release.latest)}</a>}
       </div>
     </aside>
     {mobileOpen && <button className="nav-scrim" aria-label="Close navigation" onClick={() => setMobileOpen(false)} />}
@@ -181,7 +185,7 @@ export function App() {
       {connectionError && <div className="notice error" role="alert"><span>{snapshot ? "Showing the last observation. " : ""}{connectionError}</span><Button onClick={() => leave(() => setConnectionOpen(true))}>Connection settings</Button></div>}
       <div className="page-header"><h1>{title}</h1>{tabs}</div>
       {!snapshot ? <Empty title={refreshing ? "Connecting to Juiced" : "Service unavailable"}>{refreshing ? "Reading models and service state…" : "Check the address and API key in Connection settings."}</Empty> : <>
-        {screen === "dashboard" && <Dashboard client={client} snapshot={snapshot} stats={live.stats} onOpenModel={openModel} onOpenRequests={() => { setDiagnosticsTab("requests"); setScreen("diagnostics"); }} onOpenConnect={() => { setConnectTab("protocols"); setScreen("connect"); }} onOpenStorage={() => { setBackendTab("storage"); setScreen("backend"); }} />}
+        {screen === "dashboard" && <Dashboard client={client} snapshot={snapshot} stats={live.stats} onOpenModel={openModel} onOpenRequests={() => { setDiagnosticsTab("requests"); setScreen("diagnostics"); }} onOpenConnect={() => { setConnectTab("protocols"); setScreen("connect"); }} onOpenKeys={() => { setConnectTab("keys"); setScreen("connect"); }} onOpenStorage={() => { setBackendTab("storage"); setScreen("backend"); }} />}
         {modelScreen && <div className="model-workspace"><ModelList models={snapshot.models} selected={selected} onSelect={(id) => leave(() => { setSelected(id); setSelectedFile(""); })} mode={screen as "models" | "policy"} mutate={mutate} busy={busy} online={online} idleControl={screen === "policy" ? <IdleDefault client={client} online={online} /> : undefined} budgetControl={screen === "policy" ? <MemoryBudget client={client} online={online} /> : undefined} files={installed ? files : undefined} inventory={installed ? local.data : undefined} selectedFile={fileGroup?.id} onSelectFile={(id) => leave(() => { setSelected(""); setSelectedFile(id); setFileQuant(""); })} onDiscover={() => modelsView("discover")} client={client} resources={snapshot.resources} />
           {hasInspector && model && <Inspector key={`${model.id}:${epoch}`} model={model} models={snapshot.models} resources={snapshot.resources} busy={busy} online={online} onClose={() => leave(() => setSelected(""))} onDirty={setDirty} mutate={mutate} client={client} stopLoad={loadingModel === model.id ? stopLoad : undefined} inventory={local.data} onRemoved={() => { const { groups } = modelFiles(model, local.data); setSelected(""); if (installed && groups.length === 1 && groups[0]!.usedBy.every((id) => id === model.id)) setSelectedFile(groups[0]!.id); void local.reload(); }} />}
           {hasInspector && fileGroup && <FileInspector key={`${fileGroup.id}:${fileQuant}:${epoch}`} group={fileGroup} quant={fileQuant} client={client} online={online} onClose={() => setSelectedFile("")} onRegistered={refresh} onOpenModel={openModel} onChanged={local.reload} />}</div>}
@@ -214,12 +218,14 @@ export function App() {
 }
 
 function ConnectionDialog({ base, apiKey, version, onClose, onSave }: { base: string; apiKey: string; version?: string; onClose: () => void; onSave: (base: string, key: string) => void }) {
+  const [theme, setTheme] = useState<Theme>(readTheme);
   const [draftBase, setDraftBase] = useState(base);
   const [draftKey, setDraftKey] = useState(apiKey);
   const [error, setError] = useState("");
   return <Dialog title="Connection settings" onClose={onClose}><form onSubmit={(event) => { event.preventDefault(); try { onSave(normalizeBase(draftBase), draftKey); } catch (error) { setError((error as Error).message); } }}>
     <label htmlFor="service-origin">Service origin</label><input id="service-origin" type="text" inputMode="url" value={draftBase} placeholder="Same origin" onChange={(event) => setDraftBase(event.target.value)} /><p className="field-help">Leave empty to use the service that served this page.</p>
     <label htmlFor="api-key">API key</label><input id="api-key" type="password" autoComplete="off" value={draftKey} onChange={(event) => setDraftKey(event.target.value)} /><p className="field-help">Kept in this tab only. Use an operator key to manage models.</p>
+    <span className="field-label" id="theme-label">Theme</span><div className="segmented" role="radiogroup" aria-labelledby="theme-label">{themes.map(([value, label]) => <button key={value} type="button" role="radio" aria-checked={theme === value} onClick={() => { setTheme(value); saveTheme(value); }}>{label}</button>)}</div><p className="field-help">Kept in this browser.</p>
     {error && <p className="inline-error" role="alert">{error}</p>}<p className="field-help">Connected service: {version ?? "unknown version"}</p><div className="dialog-actions"><Button onClick={onClose}>Cancel</Button><Button variant="primary" type="submit">Connect</Button></div>
   </form></Dialog>;
 }

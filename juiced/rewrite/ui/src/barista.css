@@ -1,6 +1,6 @@
-.barista-panel { position: fixed; top: 50px; right: 0; bottom: 0; z-index: 12; width: min(420px, 100vw); display: flex; flex-direction: column; gap: 10px; padding: 10px 14px 14px; background: #121317; border-left: 1px solid var(--border); box-shadow: -12px 0 32px #0006; }
+.barista-panel { position: fixed; top: 50px; right: 0; bottom: 0; z-index: 12; width: min(420px, 100vw); display: flex; flex-direction: column; gap: 10px; padding: 10px 14px 14px; background: var(--panel); border-left: 1px solid var(--border); box-shadow: -12px 0 32px #0006; }
 .barista-panel[hidden] { display: none; }
-.barista-panel.docked { position: static; grid-row: 2; grid-column: 3; width: auto; min-width: 0; min-height: 0; z-index: auto; box-shadow: none; background: #111215; }
+.barista-panel.docked { position: static; grid-row: 2; grid-column: 3; width: auto; min-width: 0; min-height: 0; z-index: auto; box-shadow: none; background: var(--chrome); }
 .app-shell.barista-docked { --barista-width: 400px; grid-template-columns: 216px minmax(0, 1fr) var(--barista-width); }
 @media (max-width: 1150px) { .app-shell.barista-docked { grid-template-columns: 190px minmax(0, 1fr) 360px; } }
 @media (min-width: 1700px) { .app-shell.barista-docked { --barista-width: 440px; } }
@@ -32,7 +32,7 @@
 @keyframes step-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .step-spinner { animation: none; border-color: var(--warning); } }
 .barista-change { display: grid; gap: 8px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); font-size: .8rem; }
-.barista-change.pending { border-color: #655037; background: #1a1814; }
+.barista-change.pending { border-color: var(--warning-border); background: var(--warning-bg); }
 .barista-question { display: flex; align-items: center; gap: 6px; font-weight: 500; overflow-wrap: anywhere; }
 .barista-result { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; color: var(--muted); font-size: .78rem; }
 .barista-change.failed .barista-result span:last-child { color: var(--bad); }
@@ -68,3 +68,9 @@
 .barista-media { max-width: 100%; border-radius: 6px; }
 img.barista-media { max-height: 180px; width: auto; justify-self: start; border: 1px solid var(--border); }
 audio.barista-media { width: 100%; height: 34px; }
+.barista-start { margin: auto 0; display: grid; gap: 10px; justify-items: start; padding: 4px; }
+.barista-suggestions { display: flex; flex-wrap: wrap; gap: 6px; }
+.barista-suggestions .chip { border: 1px solid var(--border); padding: 4px 10px; border-radius: 999px; font-size: .78rem; text-align: left; min-height: 28px; }
+.barista-suggestions .chip:hover { background: var(--hover); color: var(--foreground); }
+.barista-start .muted { font-size: .75rem; }
+@media (pointer: coarse) { .barista-suggestions .chip { min-height: 44px; } }

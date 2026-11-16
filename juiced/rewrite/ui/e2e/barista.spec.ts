@@ -50,6 +50,7 @@ test.describe("Barista", () => {
     const invite = page.getByRole("group", { name: "Barista invitation" });
     await expect(invite.getByRole("button", { name: "Enable Barista" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Barista", exact: true })).toHaveCount(0);
+    await expect(invite.getByRole("button", { name: "Enable Barista" })).not.toHaveClass(/primary/);
     await shots(page, "invitation", async () => { await expect(invite).toBeVisible(); });
     await noHorizontalOverflow(page, "invitation");
 
@@ -94,6 +95,11 @@ test.describe("Barista", () => {
     expect((await service.model(modelId))?.policy).toBe("on-demand");
     expect((await service.model(modelId))?.loaded).toBe(false);
     await expect(page.getByRole("group", { name: "Barista invitation" })).toHaveCount(0);
+    await expect(panel).toContainText("Not saved.");
+    await panel.getByRole("group", { name: "Suggestions" }).getByRole("button", { name: "Connect SillyTavern" }).click();
+    await expect(panel.getByLabel("Message Barista")).toHaveValue("Connect SillyTavern");
+    await expect(panel.getByLabel("Message Barista")).toBeFocused();
+    await panel.getByLabel("Message Barista").fill("");
 
     await panel.getByRole("button", { name: "Barista settings" }).click();
     const settings = panel.getByRole("form", { name: "Barista settings" });

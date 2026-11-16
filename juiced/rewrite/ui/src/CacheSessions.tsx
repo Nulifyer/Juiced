@@ -3,7 +3,7 @@ import type { Client } from "./api";
 import { Meter } from "./charts";
 import { pathNames } from "./performance";
 import type { Model } from "./domain";
-import { Badge, Button, Empty, HelpTip, Icon, ModelSelect } from "./ui";
+import { Badge, Button, Dialog, Empty, HelpTip, Icon, ModelSelect } from "./ui";
 import { useOperation, useResource } from "./useResource";
 
 export type SessionMode = "off" | "memory" | "persistent";
@@ -109,6 +109,7 @@ export function ConversationCache({ client, models: registered = [], online }: {
   const operation = useOperation(client, async () => { await view.reload(); await turns.reload(); });
   const [adding, setAdding] = useState("");
   const [addMode, setAddMode] = useState<SessionMode | "">("");
+  const [forgetting, setForgetting] = useState(false);
   const data = view.data;
   if (!data) return view.error ? <div className="action-row"><p className="inline-error" role="alert">{view.error}</p><Button onClick={() => void view.reload()}>Retry</Button></div> : <p className="muted">Loading the conversation cache…</p>;
   const blocked = !online || operation.busy;
@@ -143,7 +144,7 @@ export function ConversationCache({ client, models: registered = [], online }: {
     {operation.error && <p className="inline-error" role="alert">{operation.error}</p>}
     {view.error && <p className="inline-warning">Showing the last observation. {view.error}</p>}
     <section aria-label="Model overrides" className="session-overrides">
-      <div className="toolbar"><h2 className="toolbar-title">Model overrides</h2><HelpTip label="Model overrides">Give one model a different mode. Every other model uses the default above.</HelpTip>{overrides.length === 0 && <span className="muted">None. Every model uses {modeNames[fallback]}.</span>}</div>
+      <div className="toolbar"><h2 className="toolbar-title">Model overrides</h2><HelpTip label="Model overrides">Give one model a different mode. Every other model uses the default above.</HelpTip>{overrides.length === 0 && <span className="muted">None</span>}</div>
       {overrides.length > 0 && <div className="data-table override-table" role="table" aria-label="Overrides">
         {overrides.map(([model, value]) => {
           const row = rows.get(model);
@@ -162,23 +163,27 @@ export function ConversationCache({ client, models: registered = [], online }: {
       </div>}
     </section>
     <section aria-label="Recent turns">
-      <div className="toolbar"><h2 className="toolbar-title">Recent turns</h2><HelpTip label="Recent turns"><p><strong>Still loaded:</strong> the engine still held this conversation or its opening messages.</p><p><strong>Restored from disk:</strong> Juiced first loaded a saved conversation with the same opening messages.</p><p><strong>Processed in full:</strong> nothing was cached, so the whole prompt was processed.</p><p><strong>Not cached:</strong> the client turned caching off for the request.</p><p>Cached tokens were reused. New tokens were processed for this turn.</p></HelpTip></div>
+      <div className="toolbar"><h2 className="toolbar-title">Recent turns</h2><HelpTip label="Recent turns"><p><strong>Still loaded:</strong> the engine still held this conversation or its opening messages.</p><p><strong>Restored from disk:</strong> Juiced first loaded a saved conversation with the same opening messages.</p><p>No badge: the whole prompt was processed.</p><p>Cached tokens were reused. New tokens were processed for this turn.</p></HelpTip></div>
       {(turns.data ?? []).length === 0 ? <p className="muted">Send a chat to a llama.cpp model to see how each turn used the cache.</p>
-        : <ul className="turn-list">{turns.data!.map((turn) => <li key={turn.id}><Badge tone={turn.path === "cold" || turn.path === "bypass" ? "quiet" : "good"}>{pathNames[turn.path] ?? turn.path}</Badge><span className="break-word">{turn.model}</span><span className="muted">{turnDetail(turn)}</span></li>)}</ul>}
+        : <ul className="turn-list">{turns.data!.map((turn) => <li key={turn.id}>{turn.path === "cold" || turn.path === "bypass" ? null : <Badge tone="good">{pathNames[turn.path] ?? turn.path}</Badge>}<span className="break-word">{turn.model}</span><span className="muted">{turnDetail(turn)}</span></li>)}</ul>}
     </section>
     <section aria-label="Saved conversations">
-      <div className="toolbar"><h2 className="toolbar-title">Saved conversations</h2><HelpTip label="Saved conversations">Conversations saved to disk, newest first. Each is named by a short fingerprint. Forgetting one only removes the cache; the next turn processes the whole prompt again.</HelpTip>{data.sessions.length > 0 && <><span className="spacer" /><Button variant="ghost" className="quiet-danger" disabled={blocked} onClick={() => forget({}, "Forgot every saved conversation.")}>Forget all</Button></>}</div>
+      <div className="toolbar"><h2 className="toolbar-title">Saved conversations</h2><HelpTip label="Saved conversations">Conversations saved to disk, newest first. Each is named by a short fingerprint. Forgetting one only removes the cache; the next turn processes the whole prompt again.</HelpTip>{data.sessions.length > 0 && <><span className="spacer" /><Button variant="ghost" className="quiet-danger" disabled={blocked} onClick={() => setForgetting(true)}>Forget all</Button></>}</div>
       {data.sessions.length === 0 ? <Empty title="No saved conversations">{fallback === "persistent" ? "Conversations are saved here automatically after each reply." : "Choose Memory and disk to keep conversations across unloads and restarts."}</Empty>
         : <div className="data-table session-table" role="table" aria-label="Saved conversation list">
           <div role="row" className="data-head"><span role="columnheader">Conversation</span><span role="columnheader">Model</span><span role="columnheader">Last used</span><span role="columnheader" className="numeric">Size</span><span role="columnheader"><span className="sr-only">Actions</span></span></div>
           {data.sessions.map((session) => <div role="row" className="data-row" key={`${session.session}-${session.model}-${session.last_used_unix_ms}`} aria-label={`Conversation ${session.session.slice(0, 8)}`}>
             <span role="cell"><code title={session.session}>{session.session.slice(0, 8)}</code> <span className="muted">{apiNames[session.protocol] ?? session.protocol}{session.kind === "header" ? " · client session ID" : ""}</span>{session.execution_current === false && <span title="Saved by a different engine build or launch settings. It can't be restored and will be replaced."><Badge tone="warning">Engine changed</Badge></span>}{session.state !== "saved" && <span title="The save didn't finish. Its space is returned once the engine that wrote it has exited."><Badge tone="warning">Incomplete</Badge></span>}</span>
             <span role="cell" className="break-word">{session.model ?? <span className="muted">Removed model</span>}</span>
-            <span role="cell" className="muted">{ago(session.last_used_unix_ms)}{session.expires_unix_ms ? <span className="field-help">{remaining(session.expires_unix_ms)}</span> : null}</span>
+            <span role="cell" className="muted">{ago(session.last_used_unix_ms)}{session.expires_unix_ms ? ` · ${remaining(session.expires_unix_ms)}` : ""}</span>
             <span role="cell" className="numeric">{size(session.bytes)}</span>
             <span role="cell" className="row-end"><Button variant="ghost" className={session.retained ? "kept" : ""} aria-pressed={session.retained} title={session.retained ? "Kept: never deleted automatically" : "Keep: never delete automatically"} disabled={blocked || session.state !== "saved"} onClick={() => void operation.run("juiced/cache/sessions", { action: "retain", session: session.session, retained: !session.retained }, session.retained ? "Conversation can be deleted automatically again." : "Conversation kept.")}><Icon name="pin" size={14} /><span className="sr-only">{session.retained ? "Kept" : "Keep"}</span></Button><Button variant="ghost" disabled={blocked} onClick={() => forget({ session: session.session }, "Conversation forgotten.")}>Forget</Button></span>
           </div>)}
         </div>}
     </section>
+    {forgetting && <Dialog title={`Forget ${data.sessions.length} saved ${data.sessions.length === 1 ? "conversation" : "conversations"}?`} onClose={() => setForgetting(false)}>
+      <p>Their next turns process the whole prompt again. Kept conversations are forgotten too.</p>
+      <div className="dialog-actions"><Button onClick={() => setForgetting(false)}>Cancel</Button><Button variant="danger" disabled={blocked} onClick={() => { setForgetting(false); forget({}, "Forgot every saved conversation."); }}>Forget all</Button></div>
+    </Dialog>}
   </>;
 }

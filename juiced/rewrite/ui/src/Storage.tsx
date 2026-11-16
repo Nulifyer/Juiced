@@ -2,7 +2,7 @@ import { useState } from "react";
 import type { Client } from "./api";
 import { Meter } from "./charts";
 import { bytes } from "./domain";
-import { kindNames, parsePreview, place, parseStorage, reclaimRows, roleNames, type ReclaimPreview, type Reclaimable, type StorageView, type Volume } from "./storageData";
+import { kindNames, mergeVolumes, parsePreview, place, parseStorage, reclaimRows, roleNames, type ReclaimPreview, type Reclaimable, type StorageView, type Volume } from "./storageData";
 import { notify } from "./toast";
 import { Badge, Button, Dialog, HelpTip } from "./ui";
 import { useResource } from "./useResource";
@@ -35,7 +35,7 @@ export function Storage({ client, online }: { client: Client; online: boolean })
     finally { setBusy(false); await view.reload(); }
   }
   return <div className="page-body storage-page">
-    <section className="volume-strip" aria-label="Volumes">{data.volumes.map((volume) => <VolumeItem key={volume.path} volume={volume} />)}</section>
+    <section className="volume-strip" aria-label="Volumes">{mergeVolumes(data.volumes).map((volume) => <VolumeItem key={volume.path} volume={volume} />)}</section>
     {view.error && <p className="inline-warning">Showing the last measurement. {view.error}</p>}
     {data.warnings.map((warning) => <p key={`${warning.code}:${warning.path ?? ""}`} className="inline-warning" role="status">{warning.message}</p>)}
     <div className="storage-columns">
@@ -53,12 +53,13 @@ export function Storage({ client, online }: { client: Client; online: boolean })
   </div>;
 }
 
-function VolumeItem({ volume }: { volume: Volume }) {
+function VolumeItem({ volume }: { volume: Volume & { names: string[] } }) {
   const used = volume.total_bytes ? volume.used_bytes / volume.total_bytes * 100 : null;
   const roles = volume.roles.map((role) => roleNames[role] ?? role).join(", ");
-  return <div className="volume-item" role="group" aria-label={`Volume ${volume.path}`}>
-    <div className="volume-head"><strong className="break-word" title={volume.paths.join("\n")}>{volume.path}</strong>{volume.read_only ? <Badge>Read-only</Badge> : volume.low ? <Badge tone="warning">Low space</Badge> : null}</div>
-    <Meter value={used} label={`${volume.path} used`} />
+  const name = volume.names.join(", ");
+  return <div className="volume-item" role="group" aria-label={`Volume ${name}`}>
+    <div className="volume-head"><strong className="break-word" title={volume.paths.join("\n")}>{name}</strong>{volume.read_only ? <Badge>Read-only</Badge> : volume.low ? <Badge tone="warning">Low space</Badge> : null}</div>
+    <Meter value={used} label={`${name} used`} />
     <span className="muted">{bytes(volume.available_bytes)} free of {bytes(volume.total_bytes)} · {roles}</span>
   </div>;
 }
@@ -66,7 +67,7 @@ function VolumeItem({ volume }: { volume: Volume }) {
 function Usage({ data }: { data: StorageView }) {
   const cache = data.session_cache;
   const detail: Record<string, string | null> = {
-    session_cache: cache.budget_bytes != null ? `${cache.sessions ?? 0} saved ${cache.sessions === 1 ? "session" : "sessions"} · ${bytes(cache.session_bytes ?? 0)} of ${bytes(cache.budget_bytes)} budget` : null,
+    session_cache: cache.budget_bytes != null ? `${cache.sessions ?? 0} saved ${cache.sessions === 1 ? "conversation" : "conversations"} · ${bytes(cache.session_bytes ?? 0)} of ${bytes(cache.budget_bytes)} budget` : null,
     logs: "Kept in memory",
   };
   const shown = data.categories.filter((category) => category.bytes > 0 || category.id === "models" || category.id === "session_cache");
@@ -75,7 +76,7 @@ function Usage({ data }: { data: StorageView }) {
     <ul className="row-list usage-list" aria-label="Usage by store">{shown.map((category) => <li key={category.id} aria-label={category.title}>
       <span className="row-main"><strong>{category.title}</strong>{detail[category.id] && <span className="muted">{detail[category.id]}</span>}</span>
       <span className="row-meta numeric"><span>{bytes(category.bytes)}</span>{category.reclaimable_bytes > 0 && <span className="muted">{bytes(category.reclaimable_bytes)} reclaimable</span>}</span>
-      {category.id === "session_cache" && cache.budget_bytes ? <Meter value={(cache.session_bytes ?? 0) / cache.budget_bytes * 100} label="Session cache budget used" /> : null}
+      {category.id === "session_cache" && cache.budget_bytes ? <Meter value={(cache.session_bytes ?? 0) / cache.budget_bytes * 100} label="Conversation cache budget used" /> : null}
     </li>)}</ul>
   </section>;
 }
@@ -83,7 +84,7 @@ function Usage({ data }: { data: StorageView }) {
 function ReclaimRow({ row, checked, disabled, onToggle }: { row: Reclaimable; checked: boolean; disabled: boolean; onToggle: () => void }) {
   const id = `reclaim-${row.id}`;
   return <li className={`reclaim-row ${row.reclaimable ? "" : "kept"}`} aria-label={row.title}>
-    {row.reclaimable ? <input id={id} type="checkbox" checked={checked} disabled={disabled} onChange={onToggle} aria-label={`Select ${row.title}`} /> : <span className="reclaim-spacer" aria-hidden="true" />}
+    {row.reclaimable ? <label className="reclaim-hit" htmlFor={id}><input id={id} type="checkbox" checked={checked} disabled={disabled} onChange={onToggle} aria-label={`Select ${row.title}`} /></label> : <span className="reclaim-spacer" aria-hidden="true" />}
     <label htmlFor={row.reclaimable ? id : undefined} className="row-main" title={row.path ?? undefined}><strong className="break-word">{row.title}</strong><span className="muted break-word">{[kindNames[row.kind] ?? row.kind, row.reclaimable ? place(row.path) : row.message].filter(Boolean).join(" · ")}</span></label>
     <span className="row-meta numeric">{bytes(row.bytes)}</span>
   </li>;
@@ -96,7 +97,7 @@ function ModelUsageTable({ data }: { data: StorageView }) {
     <div className="data-table stacked model-usage" role="table" aria-label="Models on disk">
       <div className="data-head" role="row"><span role="columnheader">Model</span><span role="columnheader" className="numeric">Size</span><span role="columnheader" className="numeric">Shared</span><span role="columnheader" className="numeric">Removal frees</span></div>
       {data.models.map((model) => <div className="data-row" role="row" key={model.model} aria-label={model.model}>
-        <span role="rowheader" className="break-word" data-label="Model">{model.model}{model.shared_with.length > 0 && <span className="muted"> · shares files with {model.shared_with.join(", ")}</span>}</span>
+        <span role="rowheader" className="break-word" data-label="Model">{model.model}{model.shared_with.length > 0 && <span className="muted"> · shares files with {model.shared_with.length === 1 ? model.shared_with[0] : <>{model.shared_with.length} models <HelpTip label={`Models sharing files with ${model.model}`}>{model.shared_with.join(", ")}</HelpTip></>}</span>}</span>
         <span role="cell" className="numeric" data-label="Size">{bytes(model.bytes)}</span>
         <span role="cell" className="numeric" data-label="Shared">{model.shared_bytes ? bytes(model.shared_bytes) : "—"}</span>
         <span role="cell" className="numeric" data-label="Removal frees">{model.read_only_bytes === model.bytes && model.bytes > 0 ? "Library" : bytes(model.removal_frees_bytes)}</span>
