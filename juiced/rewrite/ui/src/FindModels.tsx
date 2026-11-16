@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Client } from "./api";
 import { bytes, policyNames, type Policy } from "./domain";
 import { gpuMemory, parseSystemInfo } from "./hardware";
 import { AddModel, type AddTarget } from "./AddModel";
 import { UrlDownload } from "./UrlDownload";
-import { engineNames, parseSearch, progress, searchEngines, tasks, type LibraryModel, type Quant, type SearchResult } from "./libraryData";
+import { engineNames, featured, parseSearch, progress, quantKey, quantNames, searchEngines, tasks, type LibraryModel, type Quant, type SearchResult } from "./libraryData";
 import { Badge, Button, Empty, HelpTip, Icon, Menu } from "./ui";
 import { LocalProgress, ProjectorChoice, ServerFolder, localTarget, useLocalFile } from "./LocalFiles";
 import { splitPart } from "./localFilesData";
@@ -22,11 +22,6 @@ function fit(size: number | null, vram: number | null, ram: number | null, engin
   if (ram !== null && needed <= ram) return [vram ? "Too big for the GPU; runs partly on CPU" : "Runs on the CPU", "warning"];
   return ["Likely too big for this machine", "bad"];
 }
-const common = ["Q4_K_M", "Q5_K_M", "Q6_K", "Q8_0", "F16", "BF16", "MXFP4"];
-function featured(quants: Quant[]): Quant[] {
-  const picked = quants.filter((quant) => quant.recommended || quant.present || quant.jobs.length > 0 || quant.kind === "checkpoint" || common.includes(quant.label.toUpperCase()));
-  return (picked.length ? picked : quants.slice(0, 4)).slice(0, 6).sort((left, right) => (left.bytes ?? 0) - (right.bytes ?? 0));
-}
 const compact = (value: number | null) => value === null ? null : value >= 1e6 ? `${(value / 1e6).toFixed(1)}M` : value >= 1e3 ? `${Math.round(value / 1e3)}k` : String(value);
 
 const taskNames: Record<string, string> = Object.fromEntries(tasks);
@@ -36,25 +31,35 @@ function modelId(file: string): string {
   const name = file.split(/[\\/]/).pop() ?? file;
   return (splitPart(name)?.prefix ?? name.replace(/\.(gguf|bin|safetensors|onnx)$/, "")).trim();
 }
-export function FindModels({ client, online, onRegistered, onOpenModel, onDownloads }: { client: Client; online: boolean; onRegistered: () => Promise<void>; onOpenModel: (id: string) => void; onDownloads: () => void }) {
+/** A repository to open on arrival, with one of its quants when `file` is set. */
+export type DiscoverTarget = { repo: string; file?: string };
+export function FindModels({ client, online, onRegistered, onOpenModel, onDownloads, initial }: { client: Client; online: boolean; onRegistered: () => Promise<void>; onOpenModel: (id: string) => void; onDownloads: () => void; initial?: DiscoverTarget }) {
   const quantList = useRef<HTMLDivElement>(null);
   const [urlOpen, setUrlOpen] = useState(false);
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(initial?.repo ?? "");
   const [task, setTask] = useState<string | null>(null);
   const [engine, setEngine] = useState<string | null>(null);
   const [result, setResult] = useState<SearchResult | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [hubPending, setHubPending] = useState(false);
-  const [selected, setSelected] = useState<{ repo: string; label: string } | null>(null);
+  const [selected, setSelected] = useState<{ repo: string; quant: string } | null>(null);
+  const wanted = useRef(initial);
   const [notice, setNotice] = useState("");
   const local = useLocalFile(client);
   const [folderOpen, setFolderOpen] = useState(false);
   const picker = useRef<HTMLInputElement>(null);
-  useEffect(() => {
+  const listed = useRef("");
+  useLayoutEffect(() => {
     const list = quantList.current, option = list?.querySelector<HTMLElement>('[aria-selected="true"]');
-    if (list && option) list.scrollTop = option.offsetTop - list.offsetTop - list.clientHeight / 2 + option.offsetHeight / 2;
-  }, [selected?.repo, selected?.label]);
+    if (!list || !option) { listed.current = ""; return; }
+    const top = option.offsetTop - list.offsetTop, bottom = top + option.offsetHeight;
+    // A row the operator clicked stays under the pointer; only a newly opened list centers its selection.
+    if (listed.current !== selected?.repo) list.scrollTop = top - list.clientHeight / 2 + option.offsetHeight / 2;
+    else if (top < list.scrollTop) list.scrollTop = top;
+    else if (bottom > list.scrollTop + list.clientHeight) list.scrollTop = bottom - list.clientHeight;
+    listed.current = selected?.repo ?? "";
+  }, [selected?.repo, selected?.quant]);
   const [tick, setTick] = useState(0);
   const info = useResource(client, "system-info", parseSystemInfo, 0);
   const flm = useFlm(client);
@@ -71,7 +76,7 @@ export function FindModels({ client, online, onRegistered, onOpenModel, onDownlo
       request.current?.abort();
       const controller = new AbortController(); request.current = controller;
       const limit = setTimeout(() => controller.abort(), searchTimeout);
-      setLoading(true); setHubPending(true);
+      if (!refreshOnly) { setLoading(true); setHubPending(true); }
       const params = new URLSearchParams({ limit: "12" });
       if (query.trim()) params.set("q", query.trim());
       if (task) params.set("task", task);
@@ -83,7 +88,7 @@ export function FindModels({ client, online, onRegistered, onOpenModel, onDownlo
       try {
         const next = parseSearch(await client.request(`juiced/library/search?${params}`, undefined, controller.signal));
         full = true;
-        if (!controller.signal.aborted) { setResult(next); setError(""); }
+        if (!controller.signal.aborted) { setResult(next); setError(""); open(next); }
       } catch (failure) {
         if (request.current === controller) setError(controller.signal.aborted ? "Hugging Face didn't answer within 45 seconds. Recommended and downloaded models are still shown." : failure instanceof Error ? failure.message : "Search failed.");
       } finally {
@@ -102,11 +107,19 @@ export function FindModels({ client, online, onRegistered, onOpenModel, onDownlo
     const timer = setInterval(() => setTick((value) => value + 1), 2000);
     return () => clearInterval(timer);
   }, [downloading]);
-  const choose = (next: { repo: string; label: string } | null) => { if (next) local.clear(); setSelected(next); };
+  const choose = (next: { repo: string; quant: string } | null) => { if (next) local.clear(); setSelected(next); };
+  const pick = (item: LibraryModel, entry: Quant | undefined) => { if (entry) choose({ repo: item.repo, quant: quantKey(entry) }); };
+  function open(found: SearchResult) {
+    const target = wanted.current;
+    const item = target && found.models.find((entry) => entry.repo.toLowerCase() === target.repo.toLowerCase());
+    if (!target || !item) return;
+    wanted.current = undefined;
+    pick(item, item.quants.find((entry) => entry.file === target.file) ?? item.quants.find((entry) => entry.recommended) ?? featured(item.quants)[0]);
+  }
   const model = local.file || npuOnly ? undefined : result?.models.find((item) => item.repo === selected?.repo);
-  const quant = model?.quants.find((item) => item.label === selected?.label);
+  const quant = model?.quants.find((item) => quantKey(item) === selected?.quant);
   const pulls = useResource(client, "juiced/library/pulls", parsePulls, 2000, true, !!quant);
-  const pull: PullView | undefined = quant && model ? pulls.data?.find((item) => item.then?.kind === "add" && item.repo.toLowerCase() === model.repo.toLowerCase() && item.label === quant.label) : undefined;
+  const pull: PullView | undefined = quant && model ? pulls.data?.find((item) => item.then?.kind === "add" && item.repo.toLowerCase() === model.repo.toLowerCase() && (item.label ?? "Unknown") === quant.label && (!item.files.length || item.files.some((part) => part.file === quant.file))) : undefined;
   const pendingAdd = pull?.then?.state === "pending" ? pull.then : null;
   const seen = useRef(new Set<string>());
   if (pull && pendingAdd) seen.current.add(pull.id);
@@ -131,6 +144,7 @@ export function FindModels({ client, online, onRegistered, onOpenModel, onDownlo
     } catch (failure) { setError(failure instanceof Error ? failure.message : "The download didn't start."); }
   }
   const models = useMemo(() => result?.models ?? [], [result]);
+  const names = useMemo(() => quantNames(model?.quants ?? []), [model]);
   const file = local.file;
   const checkpoint = quant?.kind === "checkpoint";
   const split = !checkpoint && (quant?.parts ?? 1) > 1;
@@ -138,7 +152,7 @@ export function FindModels({ client, online, onRegistered, onOpenModel, onDownlo
   const targetId = file ? file.id.trim() : checkpoint ? model?.name ?? "" : quant?.kind === "bundle" && model?.nativeId ? model.nativeId : quant ? modelId(quant.file) : "";
   const gatedNote = model?.gated && !quant?.present ? result?.authenticated ? "Gated on Hugging Face: accept its license there first. Juiced downloads with the server's HF_TOKEN." : "Gated on Hugging Face. Set HF_TOKEN on the server and accept the license there to download it." : "";
   const ready = file ? !!target && !file.error : !!quant?.present;
-  const resetKey = file ? `file:${file.name}` : `${selected?.repo}:${selected?.label}`;
+  const resetKey = file ? `file:${file.name}` : `${selected?.repo}:${selected?.quant}`;
   return <div className={`find-models ${model || file ? "has-detail" : ""}`}>
     <div className="find-main">
       <div className="toolbar">
@@ -156,8 +170,7 @@ export function FindModels({ client, online, onRegistered, onOpenModel, onDownlo
       {folderOpen && <ServerFolder client={client} onClose={() => setFolderOpen(false)} onPick={(entry, mode) => { setFolderOpen(false); setSelected(null); void local.pick(entry, mode); }} />}
       {error && <div className="action-row"><p className="inline-error" role="alert">{error}</p><Button onClick={() => setTick((value) => value + 1)}>Retry</Button></div>}
       {npuOnly ? <FlmModels client={client} online={online} query={query} flm={flm} onAdded={onRegistered} /> : <>
-      {result && hubPending && <p className="searching muted" role="status">Searching Hugging Face…</p>}
-      {result && !hubPending && result.hub !== "ok" && result.hub !== "skipped" && <p className="field-help">{result.offline ? "Offline mode: showing recommended and downloaded models only." : "Hugging Face is unreachable right now; showing recommended and downloaded models."}</p>}
+      {result && <p className="searching muted" role="status">{hubPending ? "Searching Hugging Face…" : result.hub !== "ok" && result.hub !== "skipped" ? result.offline ? "Offline mode. Showing recommended and downloaded models only." : "Hugging Face is unreachable. Showing recommended and downloaded models." : ""}</p>}
       {!result ? <p className="muted" role="status">{loading ? "Searching…" : ""}</p> : models.length === 0 ? <Empty title="No models found">Try a shorter search or another task.</Empty> : <ul className={`model-results ${loading ? "stale" : ""}`} aria-label="Search results" aria-busy={loading}>
         {models.map((item) => <li key={`${item.source}:${item.repo}`} className={`model-result ${item.repo === selected?.repo ? "selected" : ""}`}>
           <div className="result-head">
@@ -169,12 +182,12 @@ export function FindModels({ client, online, onRegistered, onOpenModel, onDownlo
           <div className="quant-chips" role="group" aria-label={`${item.name} quants`}>
             {item.quants.length === 0 ? <span className="muted">No downloadable files found</span> : featured(item.quants).map((entry) => {
               const percent = progress(entry);
-              return <button key={entry.label} className={`quant-chip ${entry.present ? "present" : ""}`} aria-pressed={item.repo === selected?.repo && entry.label === selected?.label} onClick={() => choose({ repo: item.repo, label: entry.label })} title={entry.kind === "checkpoint" ? `${entry.files.length} files for ${engineNames[entry.engine ?? ""] ?? entry.engine}` : entry.file}>
+              return <button key={quantKey(entry)} className={`quant-chip ${entry.present ? "present" : ""}`} aria-pressed={item.repo === selected?.repo && quantKey(entry) === selected?.quant} onClick={() => pick(item, entry)} title={entry.kind === "checkpoint" ? `${entry.files.length} files for ${engineNames[entry.engine ?? ""] ?? entry.engine}` : entry.file}>
                 {entry.present && <span aria-label="Downloaded">✓ </span>}{entry.label}{entry.kind === "checkpoint" && entry.engine && <span className="quant-engine"> · {engineNames[entry.engine] ?? entry.engine}</span>}<span className="muted"> {bytes(entry.bytes)}</span>{entry.recommended && <span className="quant-star" aria-label="Suggested">★</span>}
                 {percent !== null && <span className="quant-progress" style={{ width: `${percent}%` }} />}
               </button>;
             })}
-            {item.quants.length > featured(item.quants).length && <button className="quant-chip more" onClick={() => choose({ repo: item.repo, label: (item.quants.find((entry) => entry.recommended) ?? featured(item.quants)[0] ?? item.quants[0])!.label })}>+{item.quants.length - featured(item.quants).length} more</button>}
+            {item.quants.length > featured(item.quants).length && <button className="quant-chip more" onClick={() => pick(item, item.quants.find((entry) => entry.recommended) ?? featured(item.quants)[0] ?? item.quants[0])}>+{item.quants.length - featured(item.quants).length} more</button>}
           </div>
         </li>)}
       </ul>}
@@ -204,12 +217,12 @@ export function FindModels({ client, online, onRegistered, onOpenModel, onDownlo
         <p className="field-help">{[model.publisher, model.license, model.gated ? "Gated" : null].filter(Boolean).join(" · ")}</p>
         <div ref={quantList} className="quant-list" role="listbox" aria-label="Quants">{[...model.quants].sort((left, right) => (left.bytes ?? 0) - (right.bytes ?? 0)).map((entry) => {
           const [label, tone] = fit(entry.bytes, gpu, ram, entry.engine);
-          return <button key={entry.label} role="option" aria-selected={entry.label === quant.label} className="quant-option" onClick={() => choose({ repo: model.repo, label: entry.label })}>
-            <span className={`status-dot ${tone}`} title={label} /><strong>{entry.label}</strong>{entry.recommended && <span className="quant-star" aria-label="Suggested">★</span>}{entry.present && <span className="muted">✓ downloaded</span>}<span className="numeric muted">{bytes(entry.bytes)}</span>
+          return <button key={quantKey(entry)} role="option" aria-selected={entry === quant} className="quant-option" title={entry.file} onClick={() => pick(model, entry)}>
+            <span className={`status-dot ${tone}`} title={label} /><strong>{names.get(entry) ?? entry.label}</strong>{entry.recommended && <span className="quant-star" aria-label="Suggested">★</span>}{entry.present && <span className="muted">✓ downloaded</span>}<span className="numeric muted">{bytes(entry.bytes)}</span>
           </button>;
         })}</div>
         <dl className="facts">
-          <div><dt>Selected</dt><dd>{quant.label}{checkpoint ? ` · ${quant.files.length} files` : quant.parts > 1 ? ` · ${quant.parts} files` : ""}</dd></div>
+          <div><dt>Selected</dt><dd className="break-word">{names.get(quant) ?? quant.label}{checkpoint ? ` · ${quant.files.length} files` : quant.parts > 1 ? ` · ${quant.parts} files` : ""}</dd></div>
           {quant.engine && <div><dt>Runs on</dt><dd>{engineNames[quant.engine] ?? quant.engine}</dd></div>}
           <div><dt>This machine</dt><dd><Badge tone={fit(quant.bytes, gpu, ram, quant.engine)[1]}>{fit(quant.bytes, gpu, ram, quant.engine)[0]}</Badge></dd></div>
           {quant.present && <div><dt>Stored</dt><dd>{quant.localPath ? `Hugging Face cache${quant.readOnly ? " · read-only" : ""}` : "Juiced storage"}</dd></div>}

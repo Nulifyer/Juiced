@@ -674,7 +674,10 @@ dialog textarea { margin-bottom: 4px; }
 .needs-engine, .added { margin-top: 12px; display: grid; gap: 8px; }
 .needs-engine progress { width: 100%; }
 .model-results.stale { opacity: .55; transition: opacity .15s; }
-.searching { font-size: .75rem; margin: -4px 0 8px; }
+.searching { font-size: .75rem; margin: -4px 0 6px; min-height: 1.125rem; }
+@media (min-width: 961px) { .find-models > .find-detail { position: sticky; } }
+.quant-option strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.quant-option > :not(strong) { flex: none; }
 @media (prefers-reduced-motion: reduce) { .model-results.stale { transition: none; } }
 .service-tests.wide { max-width: none; }
 .test-panel { display: grid; gap: 10px; max-width: 900px; }

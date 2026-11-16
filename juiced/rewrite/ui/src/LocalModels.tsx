@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { Client } from "./api";
 import { bytes, type Model } from "./domain";
 import { AddModel } from "./AddModel";
+import type { DiscoverTarget } from "./FindModels";
 import { parseLocal, quantRefusal, roleNames, storageNames, type LocalFile, type LocalGroup, type LocalInventory } from "./localLibraryData";
 import { notify } from "./toast";
 import { Badge, Button, Dialog, Icon } from "./ui";
@@ -26,7 +27,7 @@ function UsedBy({ ids, onOpenModel }: { ids: string[]; onOpenModel: (id: string)
   return <span className="used-by">{ids.map((id) => <button key={id} className="link-button" onClick={() => onOpenModel(id)}>{id}</button>)}</span>;
 }
 
-export function FileInspector({ group, quant: initialQuant, client, online, onClose, onRegistered, onOpenModel, onChanged }: { group: LocalGroup; quant?: string; client: Client; online: boolean; onClose: () => void; onRegistered: () => Promise<void>; onOpenModel: (id: string) => void; onChanged: () => Promise<unknown> }) {
+export function FileInspector({ group, quant: initialQuant, client, online, onClose, onRegistered, onOpenModel, onChanged, onDiscover }: { group: LocalGroup; quant?: string; client: Client; online: boolean; onClose: () => void; onRegistered: () => Promise<void>; onOpenModel: (id: string) => void; onChanged: () => Promise<unknown>; onDiscover?: (target: DiscoverTarget) => void }) {
   const [picked, setPicked] = useState(() => (group.quants.find((item) => item.file === initialQuant) ?? unusedQuants(group)[0] ?? group.quants[0])?.file ?? "");
   const [confirming, setConfirming] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -65,6 +66,7 @@ export function FileInspector({ group, quant: initialQuant, client, online, onCl
         {(group.location ?? primary?.location) && <div className="fact-path"><dt>Location</dt><dd><code className="break-word">{group.location ?? primary?.location}</code></dd></div>}
       </dl>
       {companions.length > 0 && <ul className="file-list" aria-label="Other files">{companions.map((file) => <li key={file.id}><span className="break-word">{file.name}</span><span className="muted">{roleNames[file.role] ?? file.role}</span><span className="muted numeric">{bytes(file.bytes)}</span></li>)}</ul>}
+      {group.repo && onDiscover && <button className="link-button more-quants" onClick={() => onDiscover({ repo: group.repo! })}>More quants in Discover</button>}
       {quant && <>
         {quant.add && <div className="add-name"><label htmlFor="file-model-id">Model name</label><input id="file-model-id" value={name} maxLength={128} onChange={(event) => { const value = event.target.value; setNames((old) => ({ ...old, [quant.file]: value })); }} /></div>}
         {!quant.add && <p className="field-help">{quant.parts > 1 && !quant.complete ? "Some parts of this split model are missing." : "This file can't be added on its own."}</p>}
@@ -89,6 +91,16 @@ export function modelFiles(model: Model, inventory: LocalInventory | null): { gr
     if (used.length) { groups.push(group); files.push(...used); }
   }
   return { groups, files };
+}
+
+/** The files of the model's own weights, not of a companion such as a text encoder. */
+export function weightsGroup(model: Pick<Model, "id">, inventory: LocalInventory | null): LocalGroup | null {
+  const { groups } = modelFiles(model as Model, inventory);
+  const id = model.id.toLowerCase();
+  // A GGUF text encoder found by path reads as a model file too, so prefer the repository named like the model.
+  const shared = (group: LocalGroup) => { const name = (group.repo?.split("/").pop() ?? group.name).toLowerCase(); let length = 0; while (length < name.length && name[length] === id[length]) length++; return length; };
+  const weights = groups.filter((group) => group.files.some((file) => (file.role === "model" || file.role === "shard") && file.usedBy.includes(model.id)));
+  return weights.reduce<LocalGroup | null>((best, group) => !best || shared(group) > shared(best) ? group : best, null);
 }
 
 export function removalNote(model: Model, inventory: LocalInventory | null): string {

@@ -3,7 +3,7 @@ import { Client } from "./api";
 import { normalizeBase, type Snapshot } from "./domain";
 import { Inspector, ModelList, type Mutate } from "./Models";
 import { ServiceTest, type TestMode } from "./ServiceTest";
-import { FindModels } from "./FindModels";
+import { FindModels, type DiscoverTarget } from "./FindModels";
 import { Downloading, useActiveDownloads } from "./Downloading";
 import { FileInspector, modelFiles, notAdded, useLocalFiles } from "./LocalModels";
 import { Cache } from "./Cache";
@@ -62,6 +62,7 @@ export function App() {
   const [diagnosticsTab, setDiagnosticsTab] = useState<"performance" | "requests" | "logs">("performance");
   const [connectTab, setConnectTab] = useState<ConnectTab>("protocols");
   const [modelsTab, setModelsTab] = useState<"installed" | "discover" | "downloads" | "aliases">("installed");
+  const [discoverTarget, setDiscoverTarget] = useState<DiscoverTarget | undefined>();
   const [backendTab, setBackendTab] = useState<"engines" | "storage">("engines");
   const client = useMemo(() => new Client(base, key), [base, key]);
   const toasts = useToasts();
@@ -146,7 +147,8 @@ export function App() {
   const title = destinations.find(([id]) => id === screen)![1];
   const togglePause = () => void mutate("juiced/admission", { paused: !resources?.paused }, resources?.paused ? "Resumed new requests." : "Paused new requests.");
   const openModel = (id: string) => leave(() => { setScreen("models"); setModelsTab("installed"); setSelected(id); setSelectedFile(""); });
-  const modelsView = (tab: typeof modelsTab) => leave(() => { setScreen("models"); setModelsTab(tab); setSelected(""); setSelectedFile(""); });
+  const modelsView = (tab: typeof modelsTab) => leave(() => { setDiscoverTarget(undefined); setScreen("models"); setModelsTab(tab); setSelected(""); setSelectedFile(""); });
+  const openDiscover = (target: DiscoverTarget) => leave(() => { setDiscoverTarget(target); setScreen("models"); setModelsTab("discover"); setSelected(""); setSelectedFile(""); });
   const openFile = (group: string, quant: string | null) => leave(() => { setScreen("models"); setModelsTab("installed"); setSelected(""); setSelectedFile(group); setFileQuant(quant ?? ""); });
   const status = !online ? "Offline" : resources?.paused ? "Paused" : "Online";
   const gpu = live.stats?.gpus[0];
@@ -187,9 +189,9 @@ export function App() {
       {!snapshot ? <Empty title={refreshing ? "Connecting to Juiced" : "Service unavailable"}>{refreshing ? "Reading models and service state…" : "Check the address and API key in Connection settings."}</Empty> : <>
         {screen === "dashboard" && <Dashboard client={client} snapshot={snapshot} stats={live.stats} onOpenModel={openModel} onOpenRequests={() => { setDiagnosticsTab("requests"); setScreen("diagnostics"); }} onOpenConnect={() => { setConnectTab("protocols"); setScreen("connect"); }} onOpenKeys={() => { setConnectTab("keys"); setScreen("connect"); }} onOpenStorage={() => { setBackendTab("storage"); setScreen("backend"); }} />}
         {modelScreen && <div className="model-workspace"><ModelList models={snapshot.models} selected={selected} onSelect={(id) => leave(() => { setSelected(id); setSelectedFile(""); })} mode={screen as "models" | "policy"} mutate={mutate} busy={busy} online={online} idleControl={screen === "policy" ? <IdleDefault client={client} online={online} /> : undefined} budgetControl={screen === "policy" ? <MemoryBudget client={client} online={online} /> : undefined} files={installed ? files : undefined} inventory={installed ? local.data : undefined} selectedFile={fileGroup?.id} onSelectFile={(id) => leave(() => { setSelected(""); setSelectedFile(id); setFileQuant(""); })} onDiscover={() => modelsView("discover")} client={client} resources={snapshot.resources} />
-          {hasInspector && model && <Inspector key={`${model.id}:${epoch}`} model={model} models={snapshot.models} resources={snapshot.resources} busy={busy} online={online} onClose={() => leave(() => setSelected(""))} onDirty={setDirty} mutate={mutate} client={client} stopLoad={loadingModel === model.id ? stopLoad : undefined} inventory={local.data} onRemoved={() => { const { groups } = modelFiles(model, local.data); setSelected(""); if (installed && groups.length === 1 && groups[0]!.usedBy.every((id) => id === model.id)) setSelectedFile(groups[0]!.id); void local.reload(); }} />}
-          {hasInspector && fileGroup && <FileInspector key={`${fileGroup.id}:${fileQuant}:${epoch}`} group={fileGroup} quant={fileQuant} client={client} online={online} onClose={() => setSelectedFile("")} onRegistered={refresh} onOpenModel={openModel} onChanged={local.reload} />}</div>}
-        {screen === "models" && modelsTab === "discover" && <FindModels key={epoch} client={client} online={online} onRegistered={refresh} onOpenModel={openModel} onDownloads={() => modelsView("downloads")} />}
+          {hasInspector && model && <Inspector key={`${model.id}:${epoch}`} model={model} models={snapshot.models} resources={snapshot.resources} busy={busy} online={online} onClose={() => leave(() => setSelected(""))} onDirty={setDirty} mutate={mutate} client={client} stopLoad={loadingModel === model.id ? stopLoad : undefined} inventory={local.data} onRemoved={() => { const { groups } = modelFiles(model, local.data); setSelected(""); if (installed && groups.length === 1 && groups[0]!.usedBy.every((id) => id === model.id)) setSelectedFile(groups[0]!.id); void local.reload(); }} onOpenModel={openModel} onOpenFile={openFile} onDiscover={openDiscover} />}
+          {hasInspector && fileGroup && <FileInspector key={`${fileGroup.id}:${fileQuant}:${epoch}`} group={fileGroup} quant={fileQuant} client={client} online={online} onClose={() => setSelectedFile("")} onRegistered={refresh} onOpenModel={openModel} onChanged={local.reload} onDiscover={openDiscover} />}</div>}
+        {screen === "models" && modelsTab === "discover" && <FindModels key={`${epoch}:${discoverTarget?.repo ?? ""}:${discoverTarget?.file ?? ""}`} initial={discoverTarget} client={client} online={online} onRegistered={refresh} onOpenModel={openModel} onDownloads={() => modelsView("downloads")} />}
         {screen === "models" && modelsTab === "downloads" && <Downloading key={epoch} client={client} online={online} onSearch={() => modelsView("discover")} local={local.data} onOpenModel={openModel} onAddFile={openFile} />}
         {screen === "models" && modelsTab === "aliases" && <Aliases key={epoch} client={client} models={snapshot.models} online={online} onOpenModel={openModel} />}
         {screen === "diagnostics" && <Diagnostics client={client} snapshot={snapshot} stats={live.stats} history={live.history} tab={diagnosticsTab} />}

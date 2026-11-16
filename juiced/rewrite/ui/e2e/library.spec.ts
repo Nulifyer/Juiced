@@ -1,4 +1,4 @@
-import type { Page } from "@playwright/test";
+import type { Locator, Page } from "@playwright/test";
 import { existsSync } from "node:fs";
 import { mkdir, symlink, writeFile } from "node:fs/promises";
 import { dirname, relative, resolve } from "node:path";
@@ -74,6 +74,46 @@ test.describe("Discover", () => {
     await (await back.isVisible() ? back : detail.getByRole("button", { name: "Close detail" })).click();
     await expect(detail).toHaveCount(0);
     await expect(qwen).toBeVisible();
+  });
+
+  test("picking a quant keeps its row and the results in place", async ({ page }) => {
+    let full = 0;
+    await page.route("**/v1/juiced/library/search*", async (route) => {
+      const hub = !route.request().url().includes("hub=false");
+      // A slow refresh leaves time to see a status line or dimming that would move the results.
+      if (hub && full > 0) await new Promise((done) => setTimeout(done, 400));
+      const response = await route.fetch();
+      const body = await response.json();
+      if (hub) full++;
+      for (const model of body.data) {
+        if (model.repo !== "unsloth/Qwen3-0.6B-GGUF") continue;
+        const twins = model.quants.map((quant: any) => ({ ...quant, file: `mtp/${quant.file.replace(".gguf", "-MTP.gguf")}`, bytes: quant.bytes + 1, recommended: false, sha256: null, local: { present: false }, jobs: [] }));
+        model.quants = [...model.quants, ...twins];
+        model.quants[0].jobs = [{ id: "e2e-job", state: "downloading", downloaded_bytes: 1, expected_bytes: model.quants[0].bytes }];
+      }
+      await route.fulfill({ response, json: body });
+    });
+    await findModels(page);
+    const qwen = result(page, /^Qwen3 0\.6B$/);
+    const top = async (locator: Locator) => (await locator.boundingBox())!.y;
+    await expect.poll(() => full).toBeGreaterThan(0);
+    await expect(page.getByText("Searching Hugging Face…")).toHaveCount(0);
+    const seen = new Set<number>(), refreshes = full;
+    while (full < refreshes + 2) { seen.add(await top(qwen)); expect(await page.getByText("Searching Hugging Face…").count()).toBe(0); await page.waitForTimeout(50); }
+    expect([...seen]).toHaveLength(1);
+    await qwen.getByRole("button", { name: /more$/ }).click();
+    const quants = page.getByRole("complementary", { name: "Model detail" }).getByRole("listbox", { name: "Quants", exact: true });
+    await expect(quants.getByRole("option")).toHaveCount(22);
+    for (const index of [15, 9, 20, 14]) {
+      const option = quants.getByRole("option").nth(index);
+      await option.scrollIntoViewIfNeeded();
+      const before = await top(option);
+      await option.click();
+      await expect(option).toHaveAttribute("aria-selected", "true");
+      await expect(quants.getByRole("option", { selected: true })).toHaveCount(1);
+      expect(await top(option)).toBe(before);
+    }
+    await expect(quants.getByRole("option", { selected: true })).toContainText(/Qwen3-0\.6B-.+/);
   });
 
   test("download shows progress and then marks the quant as on this machine", async ({ page, request }) => {

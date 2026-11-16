@@ -20,6 +20,16 @@ what each candidate contains before you download it.
 7. Use **Test services** for a quick check, then connect your client through
    **Connect**.
 
+A model's **Overview** tab lists its **Quants** by size. A quant another model
+uses shows that model's loading policy and **Open**. A file on disk that no
+model uses shows **Not added** and **Add**. **Get** opens a quant you can still
+download in Discover, where you choose the loading policy first. **+N more in
+Discover** opens the repository's full list. A model that isn't from Hugging
+Face lists only the quants on this machine.
+
+Two files in one repository can share a quant label. The Discover list then
+shows their file names so you can tell them apart.
+
 To match settings across quants, use **Other quants** on the model's **Settings**
 tab. See [copy settings to other quants](settings.md#copy-settings-to-other-quants).
 

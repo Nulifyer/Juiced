@@ -10,7 +10,9 @@ import { RuntimeInspector } from "./RuntimeInspector";
 import { ModelCheck } from "./ModelCheck";
 import { ModelUpdate } from "./ModelUpdate";
 import { ModelIdle, residencyNote } from "./Residency";
-import { ModelFiles, modelFiles, removalNote, unusedQuants } from "./LocalModels";
+import { ModelFiles, removalNote, unusedQuants, weightsGroup } from "./LocalModels";
+import { ModelQuants } from "./ModelQuants";
+import type { DiscoverTarget } from "./FindModels";
 import { notify } from "./toast";
 import { useResource } from "./useResource";
 import type { LocalGroup, LocalInventory } from "./localLibraryData";
@@ -271,19 +273,11 @@ export function ModelList({ models, selected, onSelect, mode, mutate, busy, onli
   </section>;
 }
 
-/** The repository of the model's own weights, not of a companion such as a text encoder. */
-export function primaryRepo(model: Model, inventory: LocalInventory | null): string | null {
-  const { groups } = modelFiles(model, inventory);
-  const id = model.id.toLowerCase();
-  // A GGUF text encoder found by path reads as a model file too, so prefer the repository named like the model.
-  const shared = (group: LocalGroup) => { const name = (group.repo?.split("/").pop() ?? group.name).toLowerCase(); let length = 0; while (length < name.length && name[length] === id[length]) length++; return length; };
-  const weights = groups.filter((group) => group.files.some((file) => (file.role === "model" || file.role === "shard") && file.usedBy.includes(model.id)));
-  return weights.reduce<LocalGroup | undefined>((best, group) => !best || shared(group) > shared(best) ? group : best, undefined)?.repo ?? null;
-}
+export const primaryRepo = (model: Model, inventory: LocalInventory | null): string | null => weightsGroup(model, inventory)?.repo ?? null;
 
 type InspectorTab = "overview" | "settings" | "manage";
 
-export function Inspector({ model, models = [], resources, busy, online, onClose, onDirty, mutate, client, stopLoad, inventory = null, onRemoved }: { model: Model; models?: Model[]; resources?: Resources; busy: boolean; online: boolean; onClose: () => void; onDirty: (value: boolean) => void; mutate: Mutate; client: Client; stopLoad?: () => void; inventory?: LocalInventory | null; onRemoved?: () => void }) {
+export function Inspector({ model, models = [], resources, busy, online, onClose, onDirty, mutate, client, stopLoad, inventory = null, onRemoved, onOpenModel, onOpenFile, onDiscover }: { model: Model; models?: Model[]; resources?: Resources; busy: boolean; online: boolean; onClose: () => void; onDirty: (value: boolean) => void; mutate: Mutate; client: Client; stopLoad?: () => void; inventory?: LocalInventory | null; onRemoved?: () => void; onOpenModel?: (id: string) => void; onOpenFile?: (group: string, quant: string) => void; onDiscover?: (target: DiscoverTarget) => void }) {
   const [profileDirty, setProfileDirty] = useState(false);
   const [artifactDirty, setArtifactDirty] = useState(false);
   const [runtimeDirty, setRuntimeDirty] = useState(false);
@@ -350,6 +344,7 @@ export function Inspector({ model, models = [], resources, busy, online, onClose
         {dirty && <p className="field-help">Save or cancel your changes first.</p>}
       </section>
       <ModelCheck model={model} client={client} online={online} disabled={busy || dirty} />
+      {onOpenModel && onOpenFile && onDiscover && <ModelQuants model={model} models={models} inventory={inventory} client={client} online={online} onOpenModel={onOpenModel} onOpenFile={onOpenFile} onDiscover={onDiscover} />}
       </div>
       <div role="tabpanel" id="panel-settings" aria-labelledby="tab-settings" hidden={tab !== "settings"}>
       <ContextInspector model={model} client={client} online={online} busy={busy} policyDirty={artifactDirty || runtimeDirty} onDirty={setProfileDirty} mutate={mutate} advanced={advanced} />

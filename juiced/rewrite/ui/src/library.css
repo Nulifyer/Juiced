@@ -40,3 +40,16 @@
 .model-update .action-row { align-items: center; gap: 8px; }
 .model-update .field-help { margin: 4px 0 0; }
 .model-meta .link-button { font-size: inherit; }
+.quant-list { grid-template-columns: minmax(0, 1fr); }
+.model-quant-list { list-style: none; margin: 6px 0 0; padding: 0; font-size: .78rem; display: grid; grid-template-columns: minmax(0, 1fr) auto auto 52px; column-gap: 10px; }
+.model-quant-list li { position: relative; display: grid; grid-template-columns: subgrid; grid-column: 1 / -1; align-items: center; min-height: 36px; padding: 3px 0; border-top: 1px solid var(--border); }
+.model-quant-list .numeric { text-align: right; }
+.model-quant-list li:last-child { border-bottom: 1px solid var(--border); }
+.model-quant-name { display: grid; min-width: 0; }
+.model-quant-name strong { font-weight: 500; overflow-wrap: anywhere; }
+.model-quant-name span, .model-quant-state { font-size: .75rem; }
+.model-quant-list .current strong { font-weight: 600; }
+.model-quant-action { display: flex; justify-content: flex-end; }
+.model-quant-action .row-action { min-width: 52px; }
+.model-quant-more, .more-quants { font-size: .75rem; margin-top: 8px; }
+.model-quants .action-row { margin-top: 8px; align-items: center; }

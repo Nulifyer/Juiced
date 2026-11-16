@@ -50,6 +50,27 @@ export function progress(quant: Quant): number | null {
   return quant.bytes ? Math.min(100, done / quant.bytes * 100) : 0;
 }
 
+const common = ["Q4_K_M", "Q5_K_M", "Q6_K", "Q8_0", "F16", "BF16", "MXFP4"];
+/** The few quants a result card or a model's quant list shows before the rest. */
+export function featured(quants: Quant[]): Quant[] {
+  const picked = quants.filter((quant) => quant.recommended || quant.present || quant.jobs.length > 0 || quant.kind === "checkpoint" || common.includes(quant.label.toUpperCase().replace(/^UD-/, "")));
+  return (picked.length ? picked : quants.slice(0, 4)).slice(0, 6).sort((left, right) => (left.bytes ?? 0) - (right.bytes ?? 0));
+}
+
+/** Repositories publish several files under one quant label, so the file identifies a quant. */
+export const quantKey = (quant: Quant) => `${quant.kind}:${quant.engine ?? ""}:${quant.file || quant.label}`;
+
+/** Names for quants whose label another quant shares: the file name without its folder and extension. */
+export function quantNames(quants: Quant[]): Map<Quant, string> {
+  const counts = new Map<string, number>();
+  for (const quant of quants) counts.set(quant.label, (counts.get(quant.label) ?? 0) + 1);
+  const names = new Map<Quant, string>();
+  for (const quant of quants) {
+    if ((counts.get(quant.label) ?? 0) > 1 && quant.file) names.set(quant, (quant.file.split("/").pop() ?? quant.file).replace(/\.(gguf|bin|safetensors|onnx|ort)$/i, ""));
+  }
+  return names;
+}
+
 export const tasks = [["chat", "Chat"], ["embeddings", "Embeddings"], ["transcription", "Speech to text"], ["tts", "Text to speech"], ["image", "Images"], ["audio-generation", "Audio"], ["3d", "3D"], ["classify", "Classify"]] as const;
 /** Engines Discover can narrow to; the checkpoint engines list original model folders. */
 export const searchEngines = [["llama.cpp", "llama.cpp (GGUF)"], ["vllm", "vLLM"], ["onnxruntime", "ONNX Runtime"], ["thenoise", "TheNoise"]] as const;
