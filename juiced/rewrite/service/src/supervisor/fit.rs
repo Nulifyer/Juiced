@@ -780,6 +780,7 @@ fn defaults_view(
     json!({
         "available": !native,
         "enabled": spec.juiced_defaults && !native,
+        "tuned_trial": spec.tuned.as_ref().is_some_and(|tuned| tuned.measurements["trial"] == true),
         "tuned_stale": spec.tuned.as_ref().is_some_and(|tuned| tuned.runtime_package.as_deref() != spec.execution_profile.runtime_package()),
         "entries": entries,
         "sampler": {

@@ -365,18 +365,41 @@ pub(crate) fn start_tune(state: AppState, model: String) -> Result<Value, ApiErr
         };
         state.manager.set_tune(&model, finished);
         // Automatic checks wait while Tune reloads the model; check what it serves now.
-        if let Some(fingerprint) = state.manager.running_fingerprint(&model).await
-            && !state.manager.checked(&model, &fingerprint)
-            && let Ok(result) = model_check(&state, &model).await
+        if state.manager.serves_chat(&model)
+            && let Some(fingerprint) = state.manager.running_fingerprint(&model).await
         {
-            state.manager.store_model_check(&model, fingerprint, result);
+            check_once(&state, &model, fingerprint).await;
         }
     });
     Ok(started)
 }
 
-/// The `(model, launch fingerprint)` pairs an automatic check is running for.
+/// The `(model, launch fingerprint)` pairs a check is running for.
 type InFlight = std::collections::HashSet<(String, std::sync::Arc<str>)>;
+static CHECKING: std::sync::LazyLock<std::sync::Mutex<InFlight>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// Checks `id` for this launch unless it has a result or a check is already running.
+async fn check_once(state: &AppState, id: &str, fingerprint: std::sync::Arc<str>) {
+    let key = (id.to_owned(), fingerprint.clone());
+    if state.manager.checked(id, &fingerprint)
+        || !CHECKING
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .insert(key.clone())
+    {
+        return;
+    }
+    // A request that fails is a failed step in the result; an error here means the check
+    // could not run at all, so nothing is stored and the next launch retries.
+    if let Ok(result) = model_check(state, id).await {
+        state.manager.store_model_check(id, fingerprint, result);
+    }
+    CHECKING
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .remove(&key);
+}
 
 /// Checks each chat model once per launch fingerprint after its worker becomes ready.
 pub(crate) fn spawn_automatic_checks(state: AppState) {
@@ -387,7 +410,6 @@ pub(crate) fn spawn_automatic_checks(state: AppState) {
         return;
     }
     let mut events = state.manager.ready_events();
-    let running: std::sync::Arc<std::sync::Mutex<InFlight>> = std::sync::Arc::default();
     runtime.spawn(async move {
         loop {
             let (id, fingerprint) = match events.recv().await {
@@ -404,27 +426,8 @@ pub(crate) fn spawn_automatic_checks(state: AppState) {
             {
                 continue;
             }
-            let key = (id.clone(), fingerprint.clone());
-            if !running
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .insert(key.clone())
-            {
-                continue;
-            }
             let state = state.clone();
-            let running = running.clone();
-            tokio::spawn(async move {
-                // A request that fails is a failed step in the result; an error here means the
-                // check could not run at all, so nothing is stored and the next launch retries.
-                if let Ok(result) = model_check(&state, &id).await {
-                    state.manager.store_model_check(&id, fingerprint, result);
-                }
-                running
-                    .lock()
-                    .unwrap_or_else(|error| error.into_inner())
-                    .remove(&key);
-            });
+            tokio::spawn(async move { check_once(&state, &id, fingerprint).await });
         }
     });
 }

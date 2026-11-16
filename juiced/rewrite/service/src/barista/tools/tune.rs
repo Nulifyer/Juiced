@@ -219,14 +219,20 @@ impl Run<'_, '_> {
     /// Puts back the tuned result this run replaced, unless the saved layer is no longer one
     /// of this run's trials: an operator's own change to it stays.
     async fn put_back(&mut self) -> Result<()> {
-        let options = self.context.get(&self.path).await?;
-        let tuned = &options["tuned"];
-        if !is_trial(tuned) || tuned["measurements"]["run"] != self.run_id.as_str() {
-            return Ok(());
+        let mut attempt = 0;
+        loop {
+            let options = self.context.get(&self.path).await?;
+            let tuned = &options["tuned"];
+            if !is_trial(tuned) || tuned["measurements"]["run"] != self.run_id.as_str() {
+                return Ok(());
+            }
+            self.revision = options["revision"].as_u64();
+            match self.save(restore_body(&self.previous)).await {
+                // Another change landed between the read and the save; read again.
+                Err(failure) if failure.code() == "tune_interrupted" && attempt < 3 => attempt += 1,
+                result => return result,
+            }
         }
-        self.revision = options["revision"].as_u64();
-        let body = restore_body(&self.previous);
-        self.save(body).await
     }
 
     /// Launches with `arguments` as the tuned layer and measures prompt, chat and code-rewrite

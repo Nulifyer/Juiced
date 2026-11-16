@@ -243,12 +243,18 @@ impl Manager {
             let Ok(worker) = self.worker(&id) else {
                 continue;
             };
-            let previous = worker.spec.tuned.as_ref().and_then(|tuned| {
-                serde_json::from_value::<crate::config::TunedLaunch>(
-                    tuned.measurements["previous"].clone(),
-                )
-                .ok()
-            });
+            // The trial records the earlier result as plain data, so check it like a new one.
+            let previous = worker
+                .spec
+                .tuned
+                .as_ref()
+                .and_then(|tuned| {
+                    serde_json::from_value::<crate::config::TunedLaunch>(
+                        tuned.measurements["previous"].clone(),
+                    )
+                    .ok()
+                })
+                .filter(|previous| validate_tuned(previous).is_ok());
             let revision = worker.state.lock().await.revision;
             let change = LlamaChange {
                 options: None,
@@ -997,6 +1003,35 @@ mod tests {
             model.tuned.as_ref().unwrap().arguments,
             ["--ubatch-size", "1024"]
         );
+    }
+
+    #[tokio::test]
+    async fn startup_clears_an_interrupted_trial_whose_earlier_result_is_invalid() {
+        let (_directory, manager) = manager();
+        let revision = manager.options("one").await.unwrap()["revision"]
+            .as_u64()
+            .unwrap();
+        let previous = serde_json::json!({"arguments": ["--host", "0.0.0.0"], "measured_at_ms": 1, "measurements": {}});
+        let change = LlamaChange {
+            options: None,
+            extra_args: None,
+            juiced_defaults: None,
+            tuned: Some(Some(crate::config::TunedLaunch {
+                arguments: Vec::new(),
+                runtime_package: None,
+                measured_at_ms: 2,
+                measurements: serde_json::json!({"trial": true, "run": "r", "previous": previous}),
+            })),
+        };
+        manager
+            .apply_llama("one", revision, change, OptionsApply::NextLoad)
+            .await
+            .unwrap();
+        manager.recover_interrupted_tunes().await;
+        let model = &crate::config::Config::read(&manager.config_path)
+            .unwrap()
+            .models[0];
+        assert_eq!(model.tuned, None);
     }
 
     #[test]

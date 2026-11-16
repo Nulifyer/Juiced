@@ -20,6 +20,8 @@ test("defaults parse entries and sampler values and drop malformed ones", () => 
   expect(parseModelDefaults({ enabled: true })).toBeNull();
   expect(defaults.tunedStale).toBe(false);
   expect(parseModelDefaults({ ...view, tuned_stale: true })!.tunedStale).toBe(true);
+  expect(defaults.tunedTrial).toBe(false);
+  expect(parseModelDefaults({ ...view, tuned_trial: true })!.tunedTrial).toBe(true);
 });
 
 test("the change note lists new non-Juiced arguments once per client", () => {
