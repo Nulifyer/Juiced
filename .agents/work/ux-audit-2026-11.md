@@ -1,6 +1,6 @@
 # Gaps and console UX audit (November 2026)
 
-Status: integrated, not released (2026-11-16)
+Status: released as v0.11.3 and deployed (2026-11-16)
 Owner: primary agent (integration, release, this ledger); helpers own their batches below
 Request source: user, 2026-11-16. "Ask fable to do some research ... find if there is anything missing from this, or if the ui/ux needs work", then "Address all it's feedback".
 
@@ -39,6 +39,13 @@ Every report item is either fixed with evidence or listed below as decided other
 - Gate on the integrated branch: clippy -D warnings clean, fmt clean, 1264 Rust tests passed (75 suites), UI type check and 148 unit tests pass, build ok, Playwright 342 passed / 21 skipped / 0 failed (before the last naming and column fixes; diagnostics, dashboard, models, shell and residency specs re-run green after them). Screenshots of Dashboard, Models and inspector in both themes at 1440/900/390 checked by eye.
 - Not checked live: Tune states, a real load failure, engine install progress, a Barista conversation (same limits as the audit). Not released or deployed.
 
+## Release (2026-11-16)
+
+- v0.11.0 (PLAN.md edit broke its approval binding) and v0.11.1 (five new Rust routes not in api-parity/inventory.json) stopped at release checks; no image. PLAN.md was restored; the capture exception lives in this ledger's Decisions. v0.11.2 published (run 43894343974) and deployed.
+- Live on v0.11.2: Hot models back in about 1 min; Ollama tags/show/ps carry details (Coder-Next `tools`, `num_ctx 131072`, arch qwen3next); automatic checks passed on both chat models; request records tag protocol (`openai`, `internal` for checks). Found two bugs: Ollama refused bodies without a JSON content type (`curl -d`), and the 890M busy counter read 100 with models loaded idle after reading 0 at startup, so D's rule still showed 100.
+- Tune on Coder-Next live (reworked flow, first real run): baseline 340.8/23.1/51.8 (prefill/decode/rewrite tok/s); ubatch 1024 365.0/22.9/49.5; 2048 390.9/23.1/51.2 (kept); flash attention 361.1/23.1/50.9; speculation off 394.5/23.0/22.7. Saved options and extra_args unchanged (revision 169 to 189), tuned layer 1024 -> 2048 without the trial marker, reservation +1.2 GiB, post-Tune check passed.
+- v0.11.3 (c8c2e0e3 fixes; run 43901811182 green; release page https://github.com/Nulifyer/Juiced/releases/tag/v0.11.3) deployed to stack 83: 4 Hot models in about 1 min; untyped Ollama chat and show work; GPU reports null with `amdgpu-sysfs-unverified`; release check current v0.11.3. Production console checked read-only in both themes (0 non-GET requests). Homelab stacks/juiced/compose.yaml pins v0.11.3 (untracked, as before).
+
 ## Next action
 
-Release as v0.10.1 (or v0.11.0, given the new features) after the user agrees; deploy only after a green release build. Then re-check production: Ollama `/api/show` capabilities, GPU reading on the 890M, release notice, light theme.
+None for this audit. Open from earlier ledgers: the later-work list in drop-in-replacement.md.
