@@ -704,6 +704,7 @@ async fn bounded_upstream_failures_keep_the_catalog_available() {
                 files: None,
                 revision: None,
                 expected_generation: store.generation(),
+                then: None,
             },
         )
         .await
@@ -723,6 +724,7 @@ async fn bounded_upstream_failures_keep_the_catalog_available() {
                 files: None,
                 revision: Some(REVISION.into()),
                 expected_generation: store.generation(),
+                then: None,
             },
         )
         .await
@@ -750,6 +752,7 @@ async fn offline_policy_serves_catalog_and_local_files_without_network() {
                 files: None,
                 revision: None,
                 expected_generation: store.generation(),
+                then: None,
             },
         )
         .await
@@ -806,6 +809,7 @@ async fn offline_policy_serves_catalog_and_local_files_without_network() {
                 files: None,
                 revision: None,
                 expected_generation: 0,
+                then: None,
             },
         )
         .await
@@ -843,6 +847,7 @@ async fn split_pull_pins_revision_queues_parts_and_publishes_one_set() {
                 files: None,
                 revision: None,
                 expected_generation: store.generation() + 1,
+                then: None,
             },
         )
         .await
@@ -857,6 +862,7 @@ async fn split_pull_pins_revision_queues_parts_and_publishes_one_set() {
                 files: None,
                 revision: None,
                 expected_generation: store.generation(),
+                then: None,
             },
         )
         .await
@@ -890,6 +896,7 @@ async fn split_pull_pins_revision_queues_parts_and_publishes_one_set() {
                 files: Some(vec!["Split-Q4_K_M-00003-of-00003.gguf".into()]),
                 revision: Some(REVISION.into()),
                 expected_generation: 0,
+                then: None,
             },
         )
         .await
@@ -958,6 +965,7 @@ async fn split_pull_pins_revision_queues_parts_and_publishes_one_set() {
                 files: None,
                 revision: None,
                 expected_generation: 0,
+                then: None,
             },
         )
         .await
@@ -1017,6 +1025,7 @@ async fn active_downloads_are_marked_and_reused_by_later_pulls() {
                 files: None,
                 revision: None,
                 expected_generation: 0,
+                then: None,
             },
         )
         .await
@@ -1044,6 +1053,7 @@ async fn pull_rejects_ambiguous_incomplete_unverifiable_and_unknown_files() {
             files: files.map(|files| files.into_iter().map(str::to_owned).collect()),
             revision: revision.map(str::to_owned),
             expected_generation: 0,
+            then: None,
         };
     for (request, status, code) in [
         (
@@ -1250,4 +1260,71 @@ fn speech_catalog_entries_pin_engines_and_complete_their_moonshine_sets() {
     assert!(super::quant::is_listed_file("onnx/tiny/encoder.ort"));
     assert!(super::quant::is_listed_file("onnx/tiny/tokenizer.json"));
     assert!(!super::quant::is_listed_file("config.json"));
+}
+
+#[tokio::test]
+async fn add_intent_is_journaled_with_its_pull_and_holds_it_until_settled() {
+    let fixture = fixture().await;
+    let directory = tempfile::tempdir().unwrap();
+    let store = store(&directory, SourcePolicy::AllowLoopbackHttp);
+    let lease = DirectoryLease::acquire(directory.path().join("state")).unwrap();
+    let scope = crate::storage::LiveRoots::single(lease.clone()).unwrap();
+    let journal = crate::acquisitions::Journal::open(lease, scope);
+    let library = library(&fixture, SourcePolicy::AllowLoopbackHttp, None);
+    library.attach_journal(journal.clone());
+    let request = |id: &str, policy| PullRequest {
+        repo: SINGLE_REPO.into(),
+        file: Some("Tiny-Q4_K_M.gguf".into()),
+        files: None,
+        revision: None,
+        expected_generation: store.generation(),
+        then: Some(AddWhenDone {
+            id: Some(id.into()),
+            policy,
+            engine: None,
+        }),
+    };
+    hold(&fixture, true);
+    let started = library
+        .pull(
+            store.clone(),
+            request("tiny", crate::config::Policy::OnDemand),
+        )
+        .await
+        .unwrap();
+    let id = started["pull"].as_str().unwrap().to_owned();
+    assert_eq!(started["then"]["kind"], "add");
+    assert_eq!(started["then"]["id"], "tiny");
+    assert_eq!(started["then"]["policy"], "on-demand");
+    assert_eq!(started["then"]["state"], "pending");
+    let joined = library
+        .pull(store.clone(), request("other", crate::config::Policy::Hot))
+        .await
+        .unwrap();
+    assert_eq!(joined["pull"], id.as_str());
+    assert_eq!(joined["then"]["id"], "tiny");
+    hold(&fixture, false);
+    assert_eq!(wait_for_pull(&library, &id).await["state"], "complete");
+    assert_eq!(library.pending_follow_ups(), vec![id.clone()]);
+    assert_eq!(
+        library.dismiss_pull(&id).unwrap_err().code,
+        "library_pull_active"
+    );
+    drop(library);
+
+    let restarted = self::library(&fixture, SourcePolicy::AllowLoopbackHttp, None);
+    restarted.attach_journal(journal);
+    restarted.recover(store.clone()).await;
+    assert_eq!(
+        restarted.pull_view(&id).unwrap()["then"]["state"],
+        "pending"
+    );
+    assert!(restarted.claim_follow_up(&id));
+    assert!(!restarted.claim_follow_up(&id));
+    restarted.settle_follow_up(&id, FollowUpOutcome::done("tiny"));
+    let settled = restarted.pull_view(&id).unwrap();
+    assert_eq!(settled["then"]["state"], "done");
+    assert_eq!(settled["then"]["model"], "tiny");
+    assert!(restarted.pending_follow_ups().is_empty());
+    restarted.dismiss_pull(&id).unwrap();
 }

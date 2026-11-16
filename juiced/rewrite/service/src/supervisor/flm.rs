@@ -33,6 +33,8 @@ struct PullStatus {
     error: Option<&'static str>,
     exit_code: Option<i32>,
     finished_at_unix_ms: Option<u64>,
+    added: Option<String>,
+    add_error: Option<String>,
 }
 
 struct PullJob {
@@ -40,6 +42,7 @@ struct PullJob {
     checkpoint: String,
     package: String,
     started_at_unix_ms: u64,
+    then: Option<Policy>,
     status: Mutex<PullStatus>,
 }
 
@@ -63,6 +66,14 @@ impl PullJob {
             "state": status.state, "percent": status.percent, "error": status.error,
             "exit_code": status.exit_code, "started_at_unix_ms": self.started_at_unix_ms,
             "finished_at_unix_ms": status.finished_at_unix_ms,
+            "then": self.then.map(|policy| json!({
+                "kind": "add", "policy": policy, "model": status.added, "message": status.add_error,
+                "state": match (&status.added, &status.add_error, status.state) {
+                    (Some(_), _, _) => "done",
+                    (_, Some(_), _) | (_, _, "failed") => "failed",
+                    _ => "pending",
+                },
+            })),
         })
     }
     fn active(&self) -> bool {
@@ -90,7 +101,12 @@ impl FlmJobs {
             .map(|job| job.view())
             .collect()
     }
-    fn begin(&self, checkpoint: &str, package: &str) -> Result<Arc<PullJob>, ApiError> {
+    fn begin(
+        &self,
+        checkpoint: &str,
+        package: &str,
+        then: Option<Policy>,
+    ) -> Result<Arc<PullJob>, ApiError> {
         let mut jobs = self.jobs.lock().unwrap_or_else(|error| error.into_inner());
         if jobs.iter().any(|job| job.active()) {
             return Err(ApiError::new(
@@ -118,12 +134,15 @@ impl FlmJobs {
             checkpoint: checkpoint.to_owned(),
             package: package.to_owned(),
             started_at_unix_ms: unix_time_ms(),
+            then,
             status: Mutex::new(PullStatus {
                 state: "pulling",
                 percent: None,
                 error: None,
                 exit_code: None,
                 finished_at_unix_ms: None,
+                added: None,
+                add_error: None,
             }),
         });
         if jobs.len() == RETAINED_JOBS {
@@ -140,6 +159,16 @@ pub struct FlmPull {
     pub checkpoint: String,
     #[serde(default)]
     pub force: bool,
+    /// Registers the checkpoint with this policy once the pull succeeds. The intent lives in
+    /// memory with the job, as FLM pulls do not survive a restart.
+    #[serde(default)]
+    pub then: Option<FlmAddWhenDone>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FlmAddWhenDone {
+    pub policy: Policy,
 }
 
 #[derive(Deserialize)]
@@ -391,7 +420,10 @@ impl Manager {
             ));
         }
         let runtime = self.flm_runtime().await?;
-        let job = self.flm_jobs.begin(&request.checkpoint, &runtime.package)?;
+        let then = request.then.as_ref().map(|then| then.policy);
+        let job = self
+            .flm_jobs
+            .begin(&request.checkpoint, &runtime.package, then)?;
         let store = self.flm_store();
         let manager = self.clone();
         let running = job.clone();
@@ -440,6 +472,7 @@ impl Manager {
                     .map_err(|_| ("flm_timed_out", None))?
             }
             .await;
+            let succeeded = result.is_ok();
             running.update(|status| {
                 match result {
                     Ok(()) => {
@@ -454,6 +487,27 @@ impl Manager {
                 }
                 status.finished_at_unix_ms = Some(unix_time_ms());
             });
+            if succeeded && let Some(policy) = then {
+                let added = manager
+                    .flm_add_model(FlmModelAdd {
+                        checkpoint: running.checkpoint.clone(),
+                        id: None,
+                        policy: Some(policy),
+                        context_tokens: None,
+                    })
+                    .await;
+                running.update(|status| match added {
+                    Ok(reply) => {
+                        status.added = Some(
+                            reply["model"]["id"]
+                                .as_str()
+                                .unwrap_or(&running.checkpoint)
+                                .to_owned(),
+                        );
+                    }
+                    Err(error) => status.add_error = Some(error.message),
+                });
+            }
         });
         Ok(json!({"job": job.view()}))
     }

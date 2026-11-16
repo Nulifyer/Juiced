@@ -1,6 +1,6 @@
 export type Storage = "huggingface_cache" | "artifact_store" | "local";
 export type AddSource = { path: string } | { artifact: string } | { artifact_set: string } | { parts: string[] };
-export type LocalFile = { id: string; name: string; path: string; quant: string | null; role: string; bytes: number; location: string; storage: Storage; artifact: string | null; readOnly: boolean; removable: boolean; refusal: string | null; usedBy: string[] };
+export type LocalFile = { id: string; name: string; path: string; quant: string | null; role: string; bytes: number; location: string; storage: Storage; artifact: string | null; readOnly: boolean; removable: boolean; refusal: string | null; usedBy: string[]; unverified: boolean };
 export type LocalQuant = { label: string; file: string; parts: number; complete: boolean; bytes: number; files: string[]; usedBy: string[]; removable: boolean; add: AddSource | null };
 export type LocalGroup = { id: string; repo: string | null; name: string; publisher: string | null; storage: Storage[]; location: string | null; readOnly: boolean; bytes: number; removableBytes: number; usedBy: string[]; quants: LocalQuant[]; files: LocalFile[] };
 export type LocalInventory = { totalBytes: number; removableBytes: number; truncated: boolean; groups: LocalGroup[] };
@@ -34,7 +34,7 @@ export function parseLocal(value: unknown): LocalInventory {
       id: text(group.id) ?? "", repo: text(group.repo), name: text(group.name) ?? "", publisher: text(group.publisher), storage: strings(group.storage, 4).map(storage),
       location: text(group.location), readOnly: group.read_only === true, bytes: number(group.bytes), removableBytes: number(group.removable_bytes), usedBy: strings(group.used_by),
       quants: list(group.quants, 128).map((quant) => ({ label: text(quant.label) ?? "File", file: text(quant.file) ?? "", parts: number(quant.parts) || 1, complete: quant.complete !== false, bytes: number(quant.bytes), files: strings(quant.files, 128), usedBy: strings(quant.used_by), removable: quant.removable === true, add: addSource(quant.add) })),
-      files: list(group.files, 512).map((file) => ({ id: text(file.id) ?? "", name: text(file.name) ?? "", path: text(file.path) ?? "", quant: text(file.quant), role: text(file.role) ?? "model", bytes: number(file.bytes), location: text(file.location) ?? "", storage: storage(file.storage), artifact: text(file.artifact), readOnly: file.read_only === true, removable: file.removable === true, refusal: text(file.refusal), usedBy: strings(file.used_by) })),
+      files: list(group.files, 512).map((file) => ({ id: text(file.id) ?? "", name: text(file.name) ?? "", path: text(file.path) ?? "", quant: text(file.quant), role: text(file.role) ?? "model", bytes: number(file.bytes), location: text(file.location) ?? "", storage: storage(file.storage), artifact: text(file.artifact), readOnly: file.read_only === true, removable: file.removable === true, refusal: text(file.refusal), usedBy: strings(file.used_by), unverified: file.unverified === true })),
     })),
   };
 }
@@ -59,11 +59,23 @@ export function quantRefusal(group: LocalGroup, quant: LocalQuant): string | und
 }
 
 export type PullFile = { file: string; bytes: number; state: string; downloaded: number; job: string | null };
-export type PullView = { id: string; state: string; error: string | null; repo: string; label: string | null; files: PullFile[] };
+/** What the service does once a pull completes: add the files as a model, or move a model to them. */
+export type PullThen = { kind: "add" | "update"; model: string | null; policy: string | null; state: "pending" | "done" | "failed"; message: string | null };
+export type PullView = { id: string; state: string; error: string | null; repo: string; label: string | null; files: PullFile[]; then: PullThen | null };
+
+function pullThen(value: unknown): PullThen | null {
+  if (!value || typeof value !== "object") return null;
+  const item = value as Record<string, unknown>;
+  const kind = item.kind === "update" ? "update" : item.kind === "add" ? "add" : null;
+  if (!kind) return null;
+  const state = item.state === "done" || item.state === "failed" ? item.state : "pending";
+  return { kind, model: text(item.model) ?? text(item.id), policy: text(item.policy), state, message: text(item.message) };
+}
 
 export function parsePulls(value: unknown): PullView[] {
   return list(record(value).data, 64).map((pull) => ({
     id: text(pull.pull) ?? "", state: text(pull.state) ?? "unknown", error: text(pull.error), repo: text(pull.repo) ?? "", label: text(pull.label),
     files: list(pull.files, 64).map((file) => ({ file: text(file.file) ?? "", bytes: number(file.bytes), state: text(file.state) ?? "", downloaded: file.state === "present" ? number(file.bytes) : number(file.downloaded_bytes), job: text(file.job) })),
+    then: pullThen(pull.then),
   }));
 }

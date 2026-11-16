@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import type { AddTarget } from "./AddModel";
+import { AddError, type AddTarget } from "./AddModel";
 import { ApiError, type Client } from "./api";
 import { bytes } from "./domain";
 import { groupEntries, planUpload, splitPart } from "./localFilesData";
 import { Button, Dialog, Empty, Icon } from "./ui";
 
 export type Projector = { name: string; path: string; bytes: number };
-export type LocalFile = { name: string; bytes: number; sent: number | null; partCount: number; artifact?: string; parts?: string[]; path?: string; id: string; job?: string; error?: string; projector?: { name: string; artifact?: string; path?: string } | null; projectors?: Projector[] };
+export type LocalFile = { name: string; bytes: number; sent: number | null; partCount: number; artifact?: string; parts?: string[]; path?: string; id: string; job?: string; error?: string; errorCode?: string; projector?: { name: string; artifact?: string; path?: string } | null; projectors?: Projector[] };
 type Entry = { name: string; path: string; kind: "directory" | "file"; bytes: number | null; split: boolean };
 type Listing = { enabled: boolean; directory: string | null; parent: string | null; entries: Entry[]; truncated: boolean };
 type Job = { state: string; downloaded_bytes: number; expected_bytes: number | null; artifact?: string | null; error?: string | null };
@@ -14,6 +14,7 @@ type Intake = { artifact?: string; bytes: number; file: string; role?: "model" |
 
 const projectorAlone = "This is a vision projector (mmproj). Pick its model file; Juiced attaches the projector to it.";
 const stem = (name: string) => splitPart(name)?.prefix ?? name.replace(/\.(gguf|bin|safetensors|onnx)$/i, "");
+const code = (error: unknown) => error instanceof ApiError ? error.code : undefined;
 const failure = (error: unknown, fallback: string) => error instanceof ApiError && error.code === "split_copy_unsupported" ? "Split models can't be copied. Pick it again with Where it is." : error instanceof Error ? error.message : fallback;
 
 export function useLocalFile(client: Client) {
@@ -60,7 +61,7 @@ export function useLocalFile(client: Client) {
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") return;
       const kept = done > 0 && plan.files.length > 1 ? " Files already uploaded stay in the library; pick the same files again to finish." : "";
-      setFile((value) => value ? { ...value, error: failure(error, "The upload failed.") + kept } : value);
+      setFile((value) => value ? { ...value, error: failure(error, "The upload failed.") + kept, errorCode: code(error) } : value);
     } finally { if (controller.current === current) controller.current = null; }
   }
   async function pick(entry: Entry & { parts?: number }, mode: "link" | "copy") {
@@ -72,7 +73,7 @@ export function useLocalFile(client: Client) {
       const partCount = Math.max(reply.parts?.length ?? 0, 1);
       const projectors = reply.projectors ?? [];
       setFile(mode === "link" ? { name: reply.file, bytes: reply.bytes, sent: null, partCount, path: reply.add?.path ?? entry.path, id, projectors, projector: projectors[0] ? { name: projectors[0].name, path: projectors[0].path } : null } : { name: reply.file, bytes: reply.bytes, sent: 0, partCount, job: reply.job?.id, id });
-    } catch (error) { setFile((value) => value ? { ...value, error: failure(error, "The file couldn't be imported.") } : value); }
+    } catch (error) { setFile((value) => value ? { ...value, error: failure(error, "The file couldn't be imported."), errorCode: code(error) } : value); }
   }
   function clear() { controller.current?.abort(); controller.current = null; setFile(null); }
   function chooseProjector(path: string) {
@@ -133,7 +134,7 @@ export function ProjectorChoice({ file, onChoose }: { file: LocalFile; onChoose:
 }
 
 export function LocalProgress({ file, onCancel }: { file: LocalFile; onCancel: () => void }) {
-  if (file.error) return <p className="inline-error" role="alert">{file.error}</p>;
+  if (file.error) return <AddError error={file.error} code={file.errorCode} />;
   if (file.sent === null || file.artifact || file.parts) return null;
   return <><progress aria-label={file.job ? "Copy progress" : "Upload progress"} max={file.bytes || 1} value={file.sent} />
     <div className="action-row"><span className="muted">{file.job ? "Copying" : "Uploading"}… {bytes(file.sent)} of {bytes(file.bytes)}</span>{!file.job && <Button onClick={onCancel}>Cancel</Button>}</div></>;

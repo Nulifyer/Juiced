@@ -15,7 +15,10 @@ with the loading policy you want.
 4. In the detail panel, compare the quants. Each one shows its size and a fit
    estimate under **This machine**, such as **Fits in GPU memory** or
    **Runs on the CPU**.
-5. Select **Download**. Progress shows in the panel and under **Downloads**.
+5. Choose a **Loading policy**: **Disabled**, **On demand** or **Hot**.
+   **On demand** is the default.
+6. Select **Download**. Progress shows in the panel and under **Downloads**.
+   When the download finishes, Juiced adds the model with that policy.
 
 The fit estimate compares the file size with GPU and system memory. It does not
 include context or engine buffers. **Size unknown** means the publisher did not
@@ -30,17 +33,34 @@ models only.
 
 ## Add the model
 
-When the quant shows **✓ downloaded**, the detail panel offers **Add model**.
+Juiced adds a model you download from Discover by itself. It picks the engine and
+hardware build for this machine and installs that engine first when it is
+missing. The engine install shows under **Downloads** too. Select **Open model**
+when the panel says **Added**.
 
-1. Choose a policy under **Make available as**: **Disabled**, **On demand** or
-   **Hot**. **On demand** is the default.
-2. Select **Add model**.
-3. If the model needs an engine that is not installed, Juiced names it. Select
-   **Install engine and add**.
-4. Select **Open model** to see the new model under **Models → Installed**.
+The pending add is kept with the download on the server. Reloading the page or
+restarting Juiced does not lose it. If the add fails, the panel and the
+**Downloads** row say why, and the file stays on disk.
 
-Juiced picks the engine and hardware build for this machine. See
-[choose loading policies](loading-policy.md) and [runtimes and hardware](runtimes.md).
+To add a quant that is already downloaded, select it, choose a
+**Loading policy** and select **Add model**. If the model needs an engine that is
+not installed, Juiced names it. Select **Install engine and add**.
+
+See [choose loading policies](loading-policy.md) and
+[runtimes and hardware](runtimes.md).
+
+## Add an NPU model
+
+On a machine with an AMD XDNA 2 NPU and FastFlowLM installed, **NPU models**
+lists FastFlowLM's chat models after the search results. Pick **FastFlowLM (NPU)**
+in **Any engine** to see only those.
+
+1. Choose a **Loading policy** at the top of the list.
+2. Select **Download** on a model. Juiced adds it with that policy when the
+   download finishes. A model that is already downloaded offers **Add** instead.
+
+FastFlowLM downloads do not continue after a restart. If Juiced restarts during
+one, download the model again.
 
 ## Download an original checkpoint
 
@@ -58,11 +78,10 @@ Some engines run a model's original folder instead of a GGUF file:
 2. A checkpoint shows as one chip, such as **Checkpoint · vLLM**. Select it to see
    every file, the total size, the license and the engine. READMEs, images and
    other formats are skipped.
-3. Select **Download**. The files download at the repository's current commit and
-   appear as one row under **Downloads**.
-4. When the checkpoint shows **✓ downloaded**, select **Add model**. Juiced names
-   the model after the repository and registers it on the engine shown. If that
-   engine is not installed, select **Install engine and add**.
+3. Choose a **Loading policy** and select **Download**. The files download at the
+   repository's current commit and appear as one row under **Downloads**.
+4. When the download finishes, Juiced names the model after the repository and
+   adds it on the engine shown, installing that engine first if needed.
 
 vLLM and TheNoise need a supported GPU. A checkpoint can still be downloaded on a
 host without one, but adding it reports `no_usable_backend`.
@@ -85,15 +104,29 @@ errors.
 - **Retry** starts a failed or interrupted transfer again.
 - **Cancel** stops a transfer for good. **Dismiss** removes a finished or
   cancelled row.
-- A finished download offers **Add model**, which opens its file details, or
-  **Open model** once a model uses the files.
+- A finished download shows **Adding** while Juiced adds its model, then
+  **Open model**. A download started without a policy offers **Add model**,
+  which opens its file details.
 
 Downloads continue after a restart from the bytes already on disk. Paused ones
-stay paused. Downloading never registers or loads a model by itself.
+stay paused. Only a download started from Discover with a **Loading policy**
+adds a model. No download loads a model by itself.
 
-To download one file from another site, select **Add file → Download from a URL…**.
-Enter the **Download URL** and the **Publisher SHA256**, then select
-**Start download**. Juiced keeps the file only when its size and checksum match.
+## Download from a URL
+
+To download one file from another site, select
+**Add file → Download from a URL…**.
+
+1. Enter the **Download URL**. It must be a direct link to the file, without a
+   password, query or fragment.
+2. Optionally enter the publisher's **SHA256**. Juiced then keeps the file only
+   when it matches.
+3. Select **Start download**.
+
+Juiced reads the file size from the server. If the server does not report it,
+the download may use the free space above the storage reserve, and stops when
+the file is bigger. A file downloaded without a SHA256 shows **unverified** under
+**Downloads** and **Unverified** in its file details. Add it like any local file.
 
 ## Import a local file
 
@@ -106,10 +139,16 @@ Enter the **Download URL** and the **Publisher SHA256**, then select
    **Where it is** uses the file in place, and **Copy to library** copies it into
    Juiced's storage and checks its digest.
 4. Check the **Model name** and, for a vision model, the **Vision projector**.
-5. Choose a policy under **Make available as** and select **Add model**.
+5. Choose a **Loading policy** and select **Add model**.
 
 A file used in place must stay at the same path. Moving or deleting it breaks
 the model.
+
+If Juiced says **This folder isn't one Juiced may import from.**, the file or a
+link it follows is outside `import_roots`. Add the folder to `import_roots` in
+the service config. **Juiced can't tell which engine runs this file.** means the
+file is not a format Juiced adds automatically. The (i) beside the message lists
+the formats it reads.
 
 A split GGUF keeps its parts as files named `Model-00001-of-00003.gguf`,
 `Model-00002-of-00003.gguf` and so on. Keep those names, because llama.cpp finds
@@ -155,9 +194,18 @@ title to sort. The chips above the list filter by service. **Not added** lists
 downloaded files that no model uses yet.
 
 **Check for updates** compares each downloaded Hugging Face model with the
-current upstream file and marks changed ones **update available**. It downloads
-nothing. Scripts use `POST /v1/models/check-updates`. `/v1/models` then reports
-`update_available` per model until the service restarts.
+current upstream file and marks changed ones **update available**. The check
+itself downloads nothing. Scripts use `POST /v1/models/check-updates`.
+`/v1/models` then reports `update_available` per model until the service
+restarts.
+
+Select **Update** beside **update available**, in the list or in the model's
+details. Juiced downloads the new files and moves the model to them. Its
+settings and loading policy stay. A loaded model reloads on the new files.
+Progress shows under **Downloads**. If the update fails, the model keeps its old
+files. The old files then show as unused under **Storage**, where you can delete
+them. **Update** works for models whose files Juiced downloaded from Hugging
+Face. For other models, download the new files from Discover.
 
 When Juiced knows a model's repository, the model's details link to its model
 card and README on Hugging Face.

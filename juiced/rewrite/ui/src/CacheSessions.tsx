@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import type { Client } from "./api";
 import { Meter } from "./charts";
 import { pathNames } from "./performance";
-import type { Model } from "./domain";
+import { bytes, type Model } from "./domain";
 import { Badge, Button, Empty, HelpTip, Icon, ModelSelect } from "./ui";
 import { useOperation, useResource } from "./useResource";
 
@@ -22,11 +22,7 @@ const str = (value: unknown) => typeof value === "string" ? value : null;
 const mode = (value: unknown): SessionMode => modes.includes(value as SessionMode) ? value as SessionMode : "off";
 
 export function size(value: number): string {
-  const units = ["B", "KiB", "MiB", "GiB", "TiB"];
-  let scaled = Math.max(0, value), unit = 0;
-  while (scaled >= 1024 && unit < units.length - 1) { scaled /= 1024; unit += 1; }
-  const text = unit === 0 || scaled >= 100 ? scaled.toFixed(0) : scaled.toFixed(1).replace(/\.0$/, "");
-  return `${text} ${units[unit]}`;
+  return bytes(Math.max(0, value));
 }
 
 export function parseSessions(value: unknown): SessionView {

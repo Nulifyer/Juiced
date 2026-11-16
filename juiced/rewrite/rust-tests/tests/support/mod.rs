@@ -98,6 +98,7 @@ pub const WRITE_ROUTES: [&str; 45] = [
     "/models/{model}/artifacts",
     "/models/{model}/runtime",
     "/models/{model}/variants",
+    "/models/{model}/update",
     "/delete",
     "/juiced/cache",
     "/juiced/cache/save",
@@ -317,6 +318,12 @@ fn diagnostic_route(path: &str) -> &'static str {
                 .is_some_and(|id| !id.is_empty() && !id.contains('/'))
             {
                 return "/models/{model}/tune";
+            }
+            if model
+                .strip_suffix("/update")
+                .is_some_and(|id| !id.is_empty() && !id.contains('/'))
+            {
+                return "/models/{model}/update";
             }
             if !model.is_empty() && !model.contains('/') {
                 return "/models/{model}";

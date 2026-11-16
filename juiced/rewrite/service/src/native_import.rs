@@ -108,7 +108,7 @@ pub fn confine_directory(requested: &Path, roots: &[PathBuf]) -> Result<PathBuf,
         return Err(Refusal::new(
             RefusalKind::Forbidden,
             "import_path_outside_roots",
-            "The import directory is outside the configured import roots.",
+            "This folder isn't one Juiced may import from.",
         ));
     }
     Ok(canonical)

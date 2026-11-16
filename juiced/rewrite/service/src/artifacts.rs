@@ -4,9 +4,11 @@ mod presence;
 #[cfg(test)]
 mod set_tests;
 mod sets;
+mod url;
 pub use intake::{Intake, Published};
 pub use inventory::{InventoryPage, InventoryRequest, Section as InventorySection};
 pub use presence::{Presence, PresenceJob, SourceRecord, StoreListing, StoredFile, StoredSet};
+pub use url::UrlDownload;
 pub mod inventory_bounds {
     pub use super::inventory::{
         DEFAULT_PAGE_SIZE, ERROR_PREVIEW_BYTES, MAXIMUM_PAGE_SIZE, REFERENCE_PREVIEW,
@@ -86,6 +88,12 @@ pub struct DownloadRequest {
     pub expected_sha256: String,
     pub expected_bytes: Option<u64>,
     pub maximum_bytes: u64,
+}
+
+/// Where a job's digest comes from: compared with a published one, or learned from the bytes.
+pub(crate) enum DigestSource {
+    Expected,
+    Learned { source_name: Option<String> },
 }
 
 #[derive(Clone, Debug)]
@@ -720,6 +728,16 @@ impl ArtifactStore {
         request: DownloadRequest,
         expected_generation: u64,
     ) -> Result<JobView, ArtifactError> {
+        self.start_download_with(request, expected_generation, false)
+    }
+
+    /// `computed` keeps the digest the transfer computes instead of comparing it with one.
+    fn start_download_with(
+        self: &Arc<Self>,
+        request: DownloadRequest,
+        expected_generation: u64,
+        computed: bool,
+    ) -> Result<JobView, ArtifactError> {
         if self.policy == SourcePolicy::Offline {
             return Err(ArtifactError::Offline);
         }
@@ -733,12 +751,17 @@ impl ArtifactStore {
         if let Some(bytes) = request.expected_bytes {
             self.require_space(bytes)?;
         }
-        let (view, control) = self.begin(
+        let (view, control) = self.begin_with(
             Some(url.to_string()),
             request.expected_sha256.to_ascii_lowercase(),
             request.expected_bytes,
             request.maximum_bytes,
-            expected_generation,
+            Some(expected_generation),
+            if computed {
+                DigestSource::Learned { source_name: None }
+            } else {
+                DigestSource::Expected
+            },
         )?;
         let store = self.clone();
         let id = view.id.clone();
@@ -798,7 +821,7 @@ impl ArtifactStore {
             expected_bytes,
             maximum_bytes,
             Some(expected_generation),
-            None,
+            DigestSource::Expected,
         )
     }
 
@@ -809,7 +832,7 @@ impl ArtifactStore {
         expected_bytes: Option<u64>,
         maximum_bytes: u64,
         expected_generation: Option<u64>,
-        source_name: Option<String>,
+        digest: DigestSource,
     ) -> Result<(JobView, Arc<Control>), ArtifactError> {
         if self.stopping.load(Ordering::Acquire) {
             return Err(ArtifactError::Stop);
@@ -827,6 +850,10 @@ impl ArtifactStore {
         {
             return Err(ArtifactError::Limit);
         }
+        let (computed_digest, source_name) = match digest {
+            DigestSource::Expected => (false, None),
+            DigestSource::Learned { source_name } => (true, source_name),
+        };
         let job = Job {
             revision: 1,
             state: JobState::Queued,
@@ -839,7 +866,7 @@ impl ArtifactStore {
             artifact: None,
             error: None,
             restart: false,
-            computed_digest: source_name.is_some(),
+            computed_digest,
             source_name,
         };
         let id = self.reserve_intent(&mut runtime, job)?;
@@ -2632,6 +2659,10 @@ mod tests {
         let app = Router::new()
             .route("/file", get(file))
             .route(
+                "/headless",
+                get(file).head(|| async { StatusCode::METHOD_NOT_ALLOWED }),
+            )
+            .route(
                 "/redirect",
                 get(|| async {
                     (
@@ -3618,5 +3649,67 @@ mod tests {
         let complete = settled(&store, &replacement.id).await;
         assert_eq!(complete.state, JobState::Complete);
         assert!(complete.artifact.is_some());
+    }
+
+    #[tokio::test]
+    async fn url_downloads_need_only_the_link_and_list_unverified_without_a_checksum() {
+        let source = fixture().await;
+        let (_directory, store) = store();
+        let expected = format!("{:x}", Sha256::digest(source.source.bytes.as_slice()));
+        let link = || UrlDownload {
+            source_url: format!("{}/file", source.base),
+            expected_sha256: None,
+            expected_bytes: None,
+            maximum_bytes: None,
+        };
+        let job = store.start_url_download(link(), 0).await.unwrap();
+        assert!(job.computed_digest);
+        assert_eq!(job.expected_bytes, Some(source.source.bytes.len() as u64));
+        assert_eq!(job.maximum_bytes, source.source.bytes.len() as u64);
+        let complete = settled(&store, &job.id).await;
+        assert_eq!(complete.state, JobState::Complete);
+        assert_eq!(complete.artifact.as_deref(), Some(expected.as_str()));
+        let listing = store.local_listing(8).unwrap();
+        assert!(listing.files.iter().all(|file| file.unverified));
+        let (_headless, refused) = self::store();
+        let job = refused
+            .start_url_download(
+                UrlDownload {
+                    source_url: format!("{}/headless", source.base),
+                    ..link()
+                },
+                0,
+            )
+            .await
+            .unwrap();
+        assert_eq!(job.expected_bytes, Some(source.source.bytes.len() as u64));
+        assert_eq!(settled(&refused, &job.id).await.state, JobState::Complete);
+
+        let (_other, checked) = self::store();
+        let wrong = UrlDownload {
+            expected_sha256: Some("b".repeat(64)),
+            ..link()
+        };
+        let job = checked.start_url_download(wrong, 0).await.unwrap();
+        assert!(!job.computed_digest);
+        let failed = settled(&checked, &job.id).await;
+        assert_eq!(failed.error.as_deref(), Some("artifact_hash_mismatch"));
+        let verified = UrlDownload {
+            expected_sha256: Some(expected.to_uppercase()),
+            ..link()
+        };
+        let job = checked
+            .start_url_download(verified, checked.generation())
+            .await
+            .unwrap();
+        assert_eq!(settled(&checked, &job.id).await.state, JobState::Complete);
+        assert!(
+            checked
+                .local_listing(8)
+                .unwrap()
+                .files
+                .iter()
+                .all(|file| !file.unverified)
+        );
     }
 }

@@ -5,7 +5,7 @@ import type { LaunchOptions, Provider } from "./profiles";
 export type ArtifactJob = {
   id: string; revision: number; state: string; source_url: string | null; expected_sha256: string;
   expected_bytes: number | null; maximum_bytes: number; downloaded_bytes: number; artifact: string | null;
-  error: string | null; writer_active: boolean;
+  error: string | null; writer_active: boolean; computed_digest?: boolean;
 };
 export type Artifact = { id: string; bytes: number; sha256: string; references: string[]; reference_count: number; active_holds: number; removing: boolean };
 export const inventorySections = ["jobs", "artifacts", "artifact_sets", "quarantined_files"] as const;
@@ -147,15 +147,14 @@ export function positiveBytes(value: string, label: string): number {
   if (!Number.isSafeInteger(bytes) || bytes <= 0) throw new Error(`${label} must be a positive whole number of bytes.`);
   return bytes;
 }
-export function downloadRequest(url: string, sha: string, expected: string, ceiling: string) {
+/** Only the URL is required; without a checksum the service keeps the digest it computes and marks the file unverified. */
+export function downloadRequest(url: string, sha: string) {
   let source: URL;
-  try { source = new URL(url.trim()); } catch { throw new Error("Enter a complete public HTTPS download URL."); }
-  if (!["https:", "http:"].includes(source.protocol) || source.username || source.password || source.search || source.hash) throw new Error("Use a download URL without credentials, query or fragment. The service checks permitted sources.");
-  if (!/^[a-fA-F0-9]{64}$/.test(sha.trim())) throw new Error("Enter the publisher's 64-character SHA256 checksum.");
-  const maximum_bytes = positiveBytes(ceiling, "Storage ceiling");
-  const expected_bytes = expected.trim() ? positiveBytes(expected, "Expected size") : null;
-  if (expected_bytes !== null && expected_bytes > maximum_bytes) throw new Error("Expected size exceeds the storage ceiling.");
-  return { source_url: source.href, expected_sha256: sha.trim().toLowerCase(), expected_bytes, maximum_bytes };
+  try { source = new URL(url.trim()); } catch { throw new Error("Enter a complete download URL."); }
+  if (!["https:", "http:"].includes(source.protocol) || source.username || source.password || source.search || source.hash) throw new Error("Use a link without a password, query or fragment.");
+  const checksum = sha.trim();
+  if (checksum && !/^[a-fA-F0-9]{64}$/.test(checksum)) throw new Error("A SHA256 has 64 hex characters. Leave it empty to skip the check.");
+  return checksum ? { source_url: source.href, expected_sha256: checksum.toLowerCase() } : { source_url: source.href };
 }
 export function jobActions(job: ArtifactJob): ("pause" | "resume" | "retry" | "cancel" | "forget")[] {
   if (job.error === "artifact_publication_uncertain") return [];

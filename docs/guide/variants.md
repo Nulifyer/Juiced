@@ -15,7 +15,7 @@ what each candidate contains before you download it.
 5. Check memory separately from storage. The weights, the context and the
    engine's buffers all use memory. For a mixture-of-experts model, the active
    parameter count does not describe how many weights must fit.
-6. Select **Download**, then add the quant under **Make available as**.
+6. Choose a **Loading policy** and select **Download**. Juiced adds the quant when the download finishes.
    The new quant is a separate model, so the original stays as it is.
 7. Use **Test services** for a quick check, then connect your client through
    **Connect**.

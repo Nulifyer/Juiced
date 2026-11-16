@@ -18,13 +18,13 @@ test.describe("Discover", () => {
     await findModels(page);
     const qwen = result(page, /^Qwen3 0\.6B$/);
     await expect(qwen.getByText("Recommended", { exact: true })).toBeVisible();
-    await expect(qwen).toContainText("unsloth · chat");
+    await expect(qwen).toContainText("unsloth · Chat");
     const chips = qwen.getByRole("group", { name: "Qwen3 0.6B quants" });
     await expect(chips.getByRole("button")).toHaveCount(7);
     await expect(chips.getByRole("button", { name: "+5 more" })).toBeVisible();
     await expect(chips.getByRole("button", { name: /^Q4_0/ }).getByLabel("Suggested")).toBeVisible();
     const tiny = result(page, /^Tiny-Chat-GGUF$/);
-    await expect(tiny).toContainText("fixture-labs · chat · 4k downloads");
+    await expect(tiny).toContainText("fixture-labs · Chat · 4k downloads");
     await expect(tiny.getByText("Recommended", { exact: true })).toHaveCount(0);
     await expect(tiny.getByRole("group", { name: "Tiny-Chat-GGUF quants" }).getByRole("button")).toHaveCount(2);
     await expect(page.getByRole("button", { name: /refresh/i })).toHaveCount(0);
@@ -44,6 +44,7 @@ test.describe("Discover", () => {
     await expect(tiny).toHaveCount(0);
     await task.getByRole("button", { name: "Speech to text" }).click();
     await expect(result(page, /^Whisper Tiny$/)).toBeVisible();
+    await expect(result(page, /^Whisper Tiny$/).locator(".result-meta"), "result lines use the task chip names").toContainText("Speech to text");
     await expect(result(page, /^Nomic Embed Text v1$/)).toHaveCount(0);
     await task.getByRole("button", { name: "All" }).click();
     await expect(result(page, /^Qwen3 0\.6B$/)).toBeVisible();
@@ -216,7 +217,7 @@ test.describe("Installed files", () => {
 });
 
 test.describe("Downloads", () => {
-  test("a URL download shows progress, retries, lands in Installed and can be deleted", async ({ page, request }, info) => {
+  test("a URL download needs only the link, reads its size, retries, lands unverified in Installed and can be deleted", async ({ page, request }, info) => {
     const service = api(request);
     const fixture = await service.source();
     const name = `weights-${info.project.name}`;
@@ -228,18 +229,21 @@ test.describe("Downloads", () => {
     await page.getByRole("button", { name: "Add a model file" }).click();
     await page.getByRole("menuitem", { name: "Download from a URL…" }).click();
     const dialog = page.getByRole("dialog", { name: "Download from a URL" });
+    await expect(dialog.getByRole("textbox")).toHaveCount(2);
+    await expect(dialog.getByRole("button", { name: "Start download" })).toBeDisabled();
     await dialog.getByLabel("Download URL").fill(url.href);
-    await dialog.getByLabel("Publisher SHA256").fill("not-a-checksum");
-    await dialog.getByLabel("Storage ceiling in bytes").fill(String(fixture.bytes));
+    await dialog.getByLabel("SHA256").fill("not-a-checksum");
     await dialog.getByRole("button", { name: "Start download" }).click();
     await expect(dialog.getByRole("alert")).toContainText("SHA256");
-    await dialog.getByLabel("Publisher SHA256").fill(fixture.sha256);
-    await dialog.getByLabel("Expected size in bytes").fill(String(fixture.bytes));
+    await dialog.getByLabel("SHA256").fill("");
+    const started = page.waitForRequest((outgoing) => outgoing.method() === "POST" && new URL(outgoing.url()).pathname === "/v1/juiced/artifacts/pull");
     await dialog.getByRole("button", { name: "Start download" }).click();
+    expect((await started).postDataJSON().download).toEqual({ source_url: url.href });
     await expect(dialog).toHaveCount(0);
     await expect(page.getByRole("status").filter({ hasText: "Download started. Follow it under Downloads." })).toBeVisible();
     await expect(modelsTab(page, "Downloads")).toHaveAttribute("aria-selected", "true");
     const row = page.getByRole("list", { name: "Download list" }).getByRole("listitem", { name: `${name}.gguf` });
+    await expect(row).toContainText("unverified");
     await expect(row.getByRole("button", { name: "Retry" })).toBeVisible({ timeout: 15000 });
     await expect(row.getByRole("progressbar", { name: `${name}.gguf progress` })).toBeVisible();
     await expect(row).toContainText(/of 256\.0 KiB/);
@@ -251,6 +255,7 @@ test.describe("Downloads", () => {
     await modelsTab(page, "Installed").click();
     const detail = await openFile(page, name);
     await expect(detail).toContainText("Juiced storage");
+    await expect(detail).toContainText("Unverified");
     await detail.getByRole("button", { name: /^Delete/ }).click();
     await page.getByRole("dialog").getByRole("button", { name: "Delete", exact: true }).click();
     await expect(fileRow(page, name)).toHaveCount(0);

@@ -47,7 +47,7 @@ async function selectQuant(page: Page) {
   return detail;
 }
 
-test("Add model downloads a quant, installs the engine when needed and serves chat", async ({ page, request }) => {
+test("Download asks for the loading policy first, installs the engine when needed, adds the model and serves chat", async ({ page, request }) => {
   test.setTimeout(120000);
   const fixture = library(request);
   const artifact = await fixture.sha();
@@ -56,37 +56,24 @@ test("Add model downloads a quant, installs the engine when needed and serves ch
   try {
     const detail = await selectQuant(page);
     await expect(result(page).getByText("✓ On this machine", { exact: true })).toHaveCount(0);
+    await expect(detail.getByRole("radiogroup", { name: "Loading policy" }).getByRole("radio", { name: "On demand" })).toHaveAttribute("aria-checked", "true");
+    await expect(detail.getByRole("button", { name: "Add model" })).toHaveCount(0);
+    const pulling = page.waitForRequest((outgoing) => outgoing.method() === "POST" && new URL(outgoing.url()).pathname === "/v1/juiced/library/pull");
     await detail.getByRole("button", { name: "Download" }).click();
-    await expect(page.getByRole("status").filter({ hasText: "Downloading Tiny-Chat-GGUF Q8_0." })).toBeVisible();
-    await expect(detail.getByRole("option", { name: /Q8_0/ })).toContainText("✓ downloaded", { timeout: 20000 });
-    if (await detail.getByRole("button", { name: "Back to results" }).isHidden()) await expect(result(page).getByText("✓ On this machine", { exact: true })).toBeVisible();
-    await expect(detail.getByRole("button", { name: "Download" })).toHaveCount(0);
-
-    await expect(detail.getByRole("radiogroup", { name: "Make available as" }).getByRole("radio", { name: "On demand" })).toHaveAttribute("aria-checked", "true");
-    const adding = page.waitForRequest((outgoing) => outgoing.method() === "POST" && new URL(outgoing.url()).pathname === "/v1/juiced/models/add");
-    await detail.getByRole("button", { name: "Add model" }).click();
-    expect((await adding).postDataJSON()).toEqual({ artifact, id: added, policy: "on-demand" });
-    const done = detail.getByRole("status").filter({ hasText: `Added ${added}. It runs on CPU and loads on its first request.` });
-    if (engineReady) {
-      await expect(done).toBeVisible({ timeout: 15000 });
-      await expect(detail.getByRole("button", { name: "Install engine and add" })).toHaveCount(0);
-    } else {
-      await expect(detail).toContainText(/This model needs the llama\.cpp CPU engine \([^)]+ download\)\. Juiced picked it for this machine\./);
-      await expect(detail.getByRole("alert")).toHaveCount(0);
-      expect(await fixture.service.model(added)).toBeUndefined();
-      const installing = page.waitForRequest((outgoing) => outgoing.method() === "POST" && new URL(outgoing.url()).pathname === "/v1/juiced/engines/install");
-      await detail.getByRole("button", { name: "Install engine and add" }).click();
-      expect((await installing).postDataJSON()).toMatchObject({ engine: "llama.cpp", backend: "cpu" });
-      await expect(detail.getByRole("progressbar", { name: "Engine install progress" })).toBeVisible();
-      await expect(detail).toContainText(/Installing engine… (queued|downloading|extracting|installing|complete)/);
-      await expect(done).toBeVisible({ timeout: 30000 });
-      await expect(detail.getByRole("progressbar", { name: "Engine install progress" })).toHaveCount(0);
-      expect(fixture.cpuEngine(await fixture.engines())).toBeTruthy();
-    }
+    expect((await pulling).postDataJSON()).toMatchObject({ repo, file, then: { policy: "on-demand", id: added } });
+    await expect(page.getByRole("status").filter({ hasText: "Downloading Tiny-Chat-GGUF Q8_0. It's added as On demand when the download finishes." })).toBeVisible();
+    await expect(detail.getByRole("status").filter({ hasText: `Added ${added}.` })).toBeVisible({ timeout: engineReady ? 20000 : 60000 });
+    await expect(detail.getByRole("button", { name: "Add model" })).toHaveCount(0);
+    await expect(detail.getByRole("option", { name: /Q8_0/ })).toContainText("✓ downloaded");
+    if (!engineReady) expect(fixture.cpuEngine(await fixture.engines()), "the service installs the engine it picked").toBeTruthy();
     await expect(detail.getByRole("alert")).toHaveCount(0);
     expect(await fixture.service.model(added)).toMatchObject({ policy: "on-demand", loaded: false });
 
-    await detail.getByRole("button", { name: "Open model" }).click();
+    await page.reload();
+    await modelsView(page, "Downloads");
+    const row = page.getByRole("list", { name: "Download list" }).getByRole("listitem", { name: "Tiny-Chat-GGUF Q8_0" });
+    await expect(row.getByRole("button", { name: "Open model" }), "the finished add survives a reload").toBeVisible();
+    await row.getByRole("button", { name: "Open model" }).click();
     await expect(page.getByRole("heading", { name: "Models", level: 1, exact: true })).toBeVisible();
     const inspector = page.getByRole("complementary", { name: "Model inspector" });
     await expect(inspector.getByRole("heading", { name: added, level: 2 })).toBeVisible();
@@ -123,7 +110,7 @@ test("Add model with a name that is already registered reports it in the detail 
     const existing = await fixture.service.register({ id: added, model_file: source.model_file, command: source.command, args: source.args });
     const detail = await selectQuant(page);
     await expect(detail.getByRole("option", { name: /Q8_0/ })).toContainText("✓ downloaded");
-    await detail.getByRole("radiogroup", { name: "Make available as" }).getByRole("radio", { name: "Disabled" }).click();
+    await detail.getByRole("radiogroup", { name: "Loading policy" }).getByRole("radio", { name: "Disabled" }).click();
     const answered = page.waitForResponse((response) => response.request().method() === "POST" && new URL(response.url()).pathname === "/v1/juiced/models/add");
     await detail.getByRole("button", { name: "Add model" }).click();
     expect((await answered).status()).toBe(409);

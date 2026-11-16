@@ -2,9 +2,9 @@ import { describe, expect, test } from "bun:test";
 import { parseSessions, size, turnDetail } from "../src/CacheSessions";
 
 describe("conversation cache wording", () => {
-  test("sizes drop needless decimals", () => {
-    expect(size(669.6 * 1024 ** 2)).toBe("670 MiB");
-    expect(size(8 * 1024 ** 3)).toBe("8 GiB");
+  test("sizes use the console-wide formatter", () => {
+    expect(size(669.6 * 1024 ** 2)).toBe("669.6 MiB");
+    expect(size(8 * 1024 ** 3)).toBe("8.0 GiB");
     expect(size(6.5 * 1024 ** 2)).toBe("6.5 MiB");
     expect(size(64)).toBe("64 B");
   });

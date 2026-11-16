@@ -34,3 +34,9 @@
 .checkpoint-files ul { list-style: none; margin: 6px 0 0; padding: 0; max-height: 180px; overflow-y: auto; border-top: 1px solid var(--border); }
 .checkpoint-files li { display: flex; justify-content: space-between; gap: 12px; padding: 4px 0; border-bottom: 1px solid var(--border); }
 .checkpoint-files li .numeric { flex: none; }
+.flm-models .panel-head .inline-field { white-space: nowrap; }
+.flm-list .flm-note { grid-column: 1 / -1; margin: 0; }
+.model-update { margin: 2px 0 10px; font-size: .8rem; }
+.model-update .action-row { align-items: center; gap: 8px; }
+.model-update .field-help { margin: 4px 0 0; }
+.model-meta .link-button { font-size: inherit; }

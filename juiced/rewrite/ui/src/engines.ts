@@ -1,3 +1,4 @@
+import { bytes } from "./domain";
 import { ApiError, type Client } from "./api";
 import { backendNames, type BackendRow } from "./hardware";
 
@@ -35,12 +36,7 @@ export function parseEngines(value: unknown): Engines {
 }
 
 export function downloadSize(value: number | null): string {
-  if (value == null) return "";
-  const mib = value / 1024 ** 2;
-  if (mib >= 1000) return `${(mib / 1024).toFixed(1)} GiB`;
-  if (mib >= 100) return `${Math.round(mib)} MiB`;
-  if (mib >= 1) return `${mib.toFixed(1)} MiB`;
-  return `${Math.max(1, Math.round(value / 1024))} KiB`;
+  return value == null ? "" : bytes(value);
 }
 
 export const activeJob = (job: EngineJob) => !["complete", "failed"].includes(job.state);

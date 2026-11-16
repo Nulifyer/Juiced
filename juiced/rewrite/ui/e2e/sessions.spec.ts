@@ -37,7 +37,7 @@ test("Cache shows how each turn used the cache, changes modes and forgets conver
   await expect(page.getByRole("tablist", { name: "Cache views" })).toHaveCount(0);
   const summary = page.getByRole("region", { name: "Conversation cache" });
   await expect(summary.getByRole("radio", { name: "Memory and disk" })).toHaveAttribute("aria-checked", "true");
-  await expect(summary).toContainText("18 MiB of 8 GiB used · 3 conversations");
+  await expect(summary).toContainText("18.0 MiB of 8.0 GiB used · 3 conversations");
   const recent = page.getByRole("region", { name: "Recent turns" });
   await expect(recent.getByRole("listitem")).toHaveCount(3);
   await expect(recent.getByRole("listitem").first()).toContainText("Restored from disk");

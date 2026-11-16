@@ -8,6 +8,7 @@ import { QuantSync } from "./QuantSync";
 import { ArtifactRevisionInspector } from "./ArtifactRevisionInspector";
 import { RuntimeInspector } from "./RuntimeInspector";
 import { ModelCheck } from "./ModelCheck";
+import { ModelUpdate } from "./ModelUpdate";
 import { ModelIdle, residencyNote } from "./Residency";
 import { ModelFiles, modelFiles, removalNote, unusedQuants } from "./LocalModels";
 import { notify } from "./toast";
@@ -171,7 +172,7 @@ export function ModelList({ models, selected, onSelect, mode, mutate, busy, onli
     </div> : <div className="data-table model-table" role="table" aria-label="Registered models">
       <div className="data-head" role="row"><SortHeader label="Model" id="name" sort={sort} onSort={onSort} pick={<label className="pick-hit"><input type="checkbox" className="pick" aria-label="Select all shown models" checked={allChosen} onChange={() => setChosen(allChosen ? new Set() : new Set(visible.map((model) => model.id)))} /></label>} /><SortHeader label="State" id="state" sort={sort} onSort={onSort} /><span role="columnheader">Policy</span><SortHeader label="Memory" id="memory" sort={sort} onSort={onSort} numeric /><span role="columnheader"><span className="sr-only">Action</span></span></div>
       {visible.map((model) => <div className={`data-row model-row ${selected === model.id ? "selected" : ""} ${chosen.has(model.id) ? "chosen" : ""}`} role="row" key={model.id} onClick={() => onSelect(model.id)}>
-        <div role="cell" className="model-identity picked"><label className="pick-hit" onClick={(event) => event.stopPropagation()}><input type="checkbox" className="pick" aria-label={`Select ${model.id}`} checked={chosen.has(model.id)} onChange={() => toggle(model.id)} /></label><div className="identity-text"><button className="model-name" aria-pressed={selected === model.id} onClick={(event) => { event.stopPropagation(); onSelect(model.id); }}>{model.id}</button><span className="model-meta">{taskNames(model).join(" · ")}{updates.has(model.id) && <> · <span className="update-note">update available</span></>}</span></div></div>
+        <div role="cell" className="model-identity picked"><label className="pick-hit" onClick={(event) => event.stopPropagation()}><input type="checkbox" className="pick" aria-label={`Select ${model.id}`} checked={chosen.has(model.id)} onChange={() => toggle(model.id)} /></label><div className="identity-text"><button className="model-name" aria-pressed={selected === model.id} onClick={(event) => { event.stopPropagation(); onSelect(model.id); }}>{model.id}</button><span className="model-meta">{taskNames(model).join(" · ")}{updates.has(model.id) && <> · {client ? <ModelUpdate client={client} model={model} online={online} available compact onDone={() => { setChecked(null); void listed.reload(); }} /> : <span className="update-note">update available</span>}</>}</span></div></div>
         <div role="cell" className="model-state" title={residencyNote(model) ?? undefined}><span className={`status-dot ${workerTone(model)}`} />{workerState(model)}{model.loaded ? <span className="muted"> · {model.active_requests}/{model.max_inflight}</span> : null}</div>
         <div role="cell"><PolicySelect model={model} models={models} resources={resources} mutate={mutate} disabled={locked} /></div>
         <div role="cell" className="numeric muted">{bytes(model.resident_bytes)}</div>
@@ -201,6 +202,7 @@ export function Inspector({ model, models = [], resources, busy, online, onClose
     <div className="inspector-body">
       <div className="inspector-title"><h2>{model.id}</h2><Badge tone={workerTone(model)}>{workerState(model)}</Badge></div>
       {repo && <a className="model-card-link" href={`https://huggingface.co/${repo}`} target="_blank" rel="noreferrer noopener">{repo} <span aria-hidden="true">↗</span><span className="sr-only">: model card and README on Hugging Face</span></a>}
+      <ModelUpdate client={client} model={model} online={online && !dirty} />
       <div className="tab-row"><div className="tabs" role="tablist" aria-label="Model sections">{tabs.map(([id, label, changed]) => <button key={id} role="tab" id={`tab-${id}`} aria-controls={`panel-${id}`} aria-selected={tab === id} onClick={() => setTab(id)}>{label}{changed && <span className="tab-dot" aria-label="unsaved" />}</button>)}</div>
         {tab === "settings" && <Switch checked={advanced} label="Show advanced settings" onChange={(next) => { setAdvanced(next); writeLocal("juiced.rewrite.inspectorAdvanced", next ? "1" : ""); }}>Advanced</Switch>}</div>
       {model.error && <p className={["request_termination_unconfirmed", "state_termination_unconfirmed"].includes(model.error) ? "inline-warning" : "inline-error"} role="alert">{workerFailure(model.error)}</p>}

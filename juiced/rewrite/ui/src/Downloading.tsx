@@ -10,17 +10,18 @@ import { Badge, Button, Empty, HelpTip } from "./ui";
 import { useResource } from "./useResource";
 
 type Action = "pause" | "resume" | "retry" | "cancel" | "forget";
-type Row = { key: string; title: string; detail: string; state: string; done: number; total: number | null; error: string | null; jobs: ArtifactJob[]; pulls: string[]; pull?: PullView; finished: boolean };
+type Row = { key: string; title: string; detail: string; state: string; done: number; total: number | null; error: string | null; note?: string | null; jobs: ArtifactJob[]; pulls: string[]; pull?: PullView; finished: boolean };
 export type NextStep = { kind: "open"; model: string } | { kind: "add"; group: string; quant: string | null };
 
-const stateNames: Record<string, string> = { queued: "Queued", downloading: "Downloading", pausing: "Pausing", paused: "Paused", waiting: "Paused", interrupted: "Interrupted", publishing: "Finishing", installing: "Installing", verifying: "Verifying", complete: "Done", cancelled: "Cancelled", failed: "Failed", quarantined: "Failed" };
-const tone = (state: string) => state === "complete" ? "good" : ["failed", "quarantined"].includes(state) ? "bad" : ["paused", "waiting", "interrupted"].includes(state) ? "warning" : "quiet";
+const stateNames: Record<string, string> = { adding: "Adding", "not-added": "Not added", updating: "Updating", "not-updated": "Not updated", queued: "Queued", downloading: "Downloading", pausing: "Pausing", paused: "Paused", waiting: "Paused", interrupted: "Interrupted", publishing: "Finishing", installing: "Installing", verifying: "Verifying", complete: "Done", cancelled: "Cancelled", failed: "Failed", quarantined: "Failed" };
+const tone = (state: string) => state === "complete" ? "good" : ["failed", "quarantined", "not-added", "not-updated"].includes(state) ? "bad" : ["paused", "waiting", "interrupted"].includes(state) ? "warning" : "quiet";
+const thenStates = { add: { pending: "adding", done: null, failed: "not-added" }, update: { pending: "updating", done: null, failed: "not-updated" } } as const;
 const actionNames: Record<Action, string> = { pause: "Pause", resume: "Resume", retry: "Retry", cancel: "Cancel", forget: "Dismiss" };
 const failures: Record<string, string> = {
   storage_root_unavailable: "A storage folder moved or disappeared. Restore it, then retry.",
   artifact_network: "The download didn't finish. Retry when the source is reachable.",
   artifact_hash_mismatch: "The file didn't match its SHA256.",
-  artifact_size_mismatch: "The file size didn't match or went over the limit.",
+  artifact_size_mismatch: "The file was bigger than its stated size or the free space.",
   artifact_source_changed: "The source file changed. Retry starts over.",
   artifact_source_policy: "This source or redirect isn't allowed.",
   artifact_publication_uncertain: "Saving the file may not have finished. Its space stays reserved.",
@@ -40,11 +41,16 @@ function pullRow(pull: PullView, jobs: Map<string, ArtifactJob>): Row {
   const owned = pull.files.flatMap((file) => file.job ? [jobs.get(file.job)].filter((job): job is ArtifactJob => !!job) : []);
   const total = pull.files.reduce((sum, file) => sum + file.bytes, 0);
   const name = pull.repo.split("/").pop() ?? pull.repo;
-  return { key: `pull:${pull.id}`, pulls: [pull.id], pull, title: [name, pull.label].filter(Boolean).join(" "), detail: [pull.repo.split("/")[0], pull.files.length > 1 ? `${pull.files.length} files` : null, "Hugging Face"].filter(Boolean).join(" · "), state: pull.state, done: pull.files.reduce((sum, file) => sum + Math.min(file.downloaded, file.bytes || file.downloaded), 0), total: total || null, error: pull.error, jobs: owned, finished: ["complete", "failed"].includes(pull.state) };
+  const then = pull.state === "complete" && pull.then ? thenStates[pull.then.kind][pull.then.state] : null;
+  const settling = pull.then?.state === "pending";
+  return { key: `pull:${pull.id}`, pulls: [pull.id], pull, title: [name, pull.label].filter(Boolean).join(" "), detail: [pull.repo.split("/")[0], pull.files.length > 1 ? `${pull.files.length} files` : null, "Hugging Face"].filter(Boolean).join(" · "), state: then ?? pull.state, done: pull.files.reduce((sum, file) => sum + Math.min(file.downloaded, file.bytes || file.downloaded), 0), total: total || null, error: pull.error, note: pull.then?.state === "failed" ? pull.then.message : null, jobs: owned, finished: ["complete", "failed"].includes(pull.state) && !settling };
 }
 
 /** A finished pull leads to the model that uses its files, or to the file details to add one. */
 export function nextStep(pull: PullView | undefined, local: LocalInventory | null | undefined): NextStep | null {
+  if (pull?.state === "complete" && pull.then?.state === "pending") return null;
+  const model = pull?.state === "complete" && pull.then?.state === "done" ? pull.then.model : null;
+  if (model && local?.groups.some((group) => group.usedBy.includes(model) || group.quants.some((quant) => quant.usedBy.includes(model)))) return { kind: "open", model };
   if (!pull || pull.state !== "complete" || !local) return null;
   const group = local.groups.find((item) => item.repo?.toLowerCase() === pull.repo.toLowerCase());
   if (!group) return null;
@@ -91,7 +97,7 @@ export function Downloading({ client, online, onSearch, local, onOpenModel, onAd
   const rows: Row[] = collapseFinished([
     ...(pulls.data ?? []).map((pull) => pullRow(pull, jobs)),
     // Completed jobs carry the source names Downloaded groups by, so they are never forgotten here; the file shows under Downloaded instead.
-    ...(inventory.data?.jobs ?? []).filter((job) => !pulled.has(job.id) && job.state !== "complete").map((job): Row => ({ key: `job:${job.id}`, title: jobName(job), detail: host(job.source_url), state: job.state, done: job.downloaded_bytes, total: job.expected_bytes ?? job.maximum_bytes, error: job.error, jobs: [job], pulls: [], finished: !job.writer_active && ["complete", "cancelled", "failed", "quarantined"].includes(job.state) })),
+    ...(inventory.data?.jobs ?? []).filter((job) => !pulled.has(job.id) && job.state !== "complete").map((job): Row => ({ key: `job:${job.id}`, title: jobName(job), detail: [host(job.source_url), job.source_url && job.computed_digest ? "unverified" : null].filter(Boolean).join(" · "), state: job.state, done: job.downloaded_bytes, total: job.expected_bytes ?? (job.source_url && job.computed_digest ? null : job.maximum_bytes), error: job.error, jobs: [job], pulls: [], finished: !job.writer_active && ["complete", "cancelled", "failed", "quarantined"].includes(job.state) })),
     ...(engines.data?.jobs ?? []).map(engineRow),
   ].sort((left, right) => Number(left.finished) - Number(right.finished)));
   const loaded = pulls.data && inventory.data && engines.data;
@@ -119,10 +125,11 @@ export function Downloading({ client, online, onSearch, local, onOpenModel, onAd
       : rows.length === 0 ? <Empty title="Nothing downloading">Model downloads and engine installs show here. <button className="link-button" onClick={onSearch}>Find a model</button></Empty>
       : <ul className="download-list" aria-label="Download list">{rows.map((row) => { const step = nextStep(row.pull, local); return <li key={row.key} className="download-row" aria-label={row.title}>
         <div className="row-heading"><div className="download-title"><strong className="break-word">{row.title}</strong><span className="muted">{row.detail}</span></div><Badge tone={tone(row.state)}>{stateNames[row.state] ?? row.state}</Badge></div>
-        {!["complete", "cancelled"].includes(row.state) && <progress aria-label={`${row.title} progress`} max={row.total ?? 1} value={row.total ? Math.min(row.done, row.total) : undefined} />}
-        <div className="row-heading"><span className="muted numeric-left">{row.state === "complete" ? bytes(row.total ?? row.done) : `${bytes(row.done)} of ${row.total ? bytes(row.total) : "unknown"}`}</span>
+        {!["complete", "cancelled", "adding", "not-added", "updating", "not-updated"].includes(row.state) && <progress aria-label={`${row.title} progress`} max={row.total ?? 1} value={row.total ? Math.min(row.done, row.total) : undefined} />}
+        <div className="row-heading"><span className="muted numeric-left">{row.pull?.state === "complete" || row.state === "complete" ? bytes(row.total ?? row.done) : `${bytes(row.done)} of ${row.total ? bytes(row.total) : "unknown"}`}</span>
           <div className="action-row">{step && <Button onClick={() => step.kind === "open" ? onOpenModel?.(step.model) : onAddFile?.(step.group, step.quant)}>{step.kind === "open" ? "Open model" : "Add model"}</Button>}{actions(row).map((action) => <Button key={action} variant={action === "cancel" ? "danger" : step ? "ghost" : "outline"} disabled={!online || busy === row.key || (inventory.data?.source_policy === "offline" && ["resume", "retry"].includes(action))} onClick={() => void act(row, action)}>{actionNames[action]}</Button>)}</div></div>
         {row.error && <p className="inline-warning">{failure(row.error)}</p>}
+        {row.note && <p className="inline-warning">{row.note}</p>}
       </li>; })}</ul>}
     {leftovers.length > 0 && <p className="field-help download-leftovers">{leftovers.length} unfinished {leftovers.length === 1 ? "file holds" : "files hold"} {bytes(leftovers.reduce((sum, file) => sum + file.reserved_bytes, 0))}. <HelpTip label="Unfinished files">Partial files left after an interrupted download. Their space stays reserved until Juiced can check them.</HelpTip></p>}
   </section>;
