@@ -31,7 +31,7 @@ A copy taken while Juiced runs can capture half-written files.
 
 Once a day, Juiced asks GitHub for the latest Juiced release. The request sends
 no data about your installation, and a failed check stays silent. When a newer
-release exists, the sidebar shows a **v0.10.x available** link next to the
+release exists, the sidebar shows a **vX.Y.Z available** link next to the
 version. To stop the check, open the service status menu in the top bar and turn
 off **Release notices**. The setting is saved as `"release_check": false` in
 `config.json`.
@@ -59,10 +59,10 @@ that every model, accelerator or voice works.
 
 ## Move from v0.9.2
 
-Juiced v0.10.0 uses the same `/data` volume and port `8080` as v0.9.2.
+Juiced v0.10 and later use the same `/data` volume and port `8080` as v0.9.2.
 
 1. Make a consistent backup of the v0.9.2 volume.
-2. Change the image to `v0.10.0`. Keep the volume, mounts, devices and port.
+2. Change the image to `v0.11.0`. Keep the volume, mounts, devices and port.
 3. Start the container. On its first start, Juiced adopts the models in
    `/data/config` in the background. Each model keeps its ID, loading policy and
    settings. The weights stay where they are, and Juiced only reads the v0.9.2
