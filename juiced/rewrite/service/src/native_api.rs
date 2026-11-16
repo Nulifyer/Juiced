@@ -1219,6 +1219,7 @@ pub(crate) async fn native_registry_search(
                 limit: Some(limit),
                 cursor: None,
                 engine: query.format.is_some().then(|| "llama.cpp".to_owned()),
+                repo: None,
             },
         )
         .await?;

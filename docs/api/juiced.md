@@ -215,6 +215,10 @@ Hugging Face. Query parameters: `q` (at most 128 bytes), `task` (`chat`,
 original checkpoints; later pages follow the GGUF listing. `engine=vllm`,
 `onnxruntime` or `thenoise` lists only checkpoints for that engine; any other engine
 lists GGUF files. An unknown engine returns 400 `invalid_library_query`.
+`repo=owner/name` looks up that one repository instead of searching, with the
+quants on this machine attached. It can't be combined with `q` or `cursor`. A
+repository Hugging Face doesn't have returns no Hugging Face result, and the
+Hugging Face status stays `ok`.
 
 Each result has `repo`, `license`, `gated`, `downloads` and `quants`. A checkpoint
 quant looks like this:

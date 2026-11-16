@@ -39,7 +39,7 @@ export function quantRows(model: Pick<Model, "id">, models: Pick<Model, "id" | "
 export function ModelQuants({ model, models, inventory, client, online, onOpenModel, onOpenFile, onDiscover }: { model: Model; models: Model[]; inventory: LocalInventory | null; client: Client; online: boolean; onOpenModel: (id: string) => void; onOpenFile: (group: string, quant: string) => void; onDiscover: (target: DiscoverTarget) => void }) {
   const group = weightsGroup(model, inventory);
   const repo = group?.repo && group.repo.length <= 128 ? group.repo : null;
-  const path = `juiced/library/search?${new URLSearchParams({ q: repo ?? "", limit: "12" })}`;
+  const path = `juiced/library/search?${new URLSearchParams({ repo: repo ?? "", limit: "1" })}`;
   const [period, setPeriod] = useState(0);
   const search = useResource(client, path, parseSearch, period, true, !!repo && online);
   const hub = useMemo(() => search.data?.models.find((entry) => entry.repo.toLowerCase() === repo?.toLowerCase()) ?? null, [search.data, repo]);
@@ -55,7 +55,7 @@ export function ModelQuants({ model, models, inventory, client, online, onOpenMo
     : !search.data ? search.error ? null : "Checking Hugging Face…"
     : search.data.offline ? "Offline mode. Only quants on this machine are listed."
     : !reachable ? "Hugging Face is unreachable. Only quants on this machine are listed."
-    : !hub ? "Hugging Face search didn't return this repository."
+    : !hub ? `Hugging Face has no repository named ${repo}.`
     : !others ? "No other quants."
     : null;
   return <section className="inspector-section model-quants" aria-label="Quants">

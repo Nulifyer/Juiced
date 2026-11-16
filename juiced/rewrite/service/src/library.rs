@@ -201,6 +201,10 @@ pub struct SearchQuery {
     /// original checkpoints, any other engine searches GGUF files.
     #[serde(default)]
     pub engine: Option<String>,
+    /// Looks up one repository by id instead of searching, so a model's own repository is
+    /// found even when search ranks it low.
+    #[serde(default)]
+    pub repo: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -726,6 +730,16 @@ impl Library {
                 invalid("Use an engine name such as llama.cpp, vllm, onnxruntime or thenoise.")
             })?),
         };
+        let exact = match query.repo.as_deref() {
+            None => None,
+            Some(repo) if repo.len() > QUERY_BYTES || !valid_repo(repo) => {
+                return Err(invalid("Use a repository id such as owner/name."));
+            }
+            Some(_) if !text.is_empty() || query.cursor.is_some() => {
+                return Err(invalid("Search by text or by repository, not both."));
+            }
+            Some(repo) => Some(repo.to_owned()),
+        };
         let wanted_kind = engine.and_then(checkpoint::Kind::for_engine);
         let task = query.task;
         let first_page = query.cursor.is_none();
@@ -738,7 +752,10 @@ impl Library {
             catalog::catalog()
                 .models
                 .iter()
-                .filter(|model| model.matches(&terms, task))
+                .filter(|model| match &exact {
+                    Some(repo) => model.repo.eq_ignore_ascii_case(repo),
+                    None => model.matches(&terms, task),
+                })
                 .filter(|model| match engine {
                     None => true,
                     Some(engine) => model
@@ -757,6 +774,7 @@ impl Library {
         // Without an engine, page one also searches original checkpoints; later pages and the
         // next cursor follow the GGUF listing.
         let streams: Vec<(hub::Stream, usize)> = match wanted_kind {
+            _ if exact.is_some() => Vec::new(),
             Some(kind) => vec![(hub::Stream::Checkpoint(Some(kind.hub_filter())), limit)],
             None if engine.is_some() || !first_page => vec![(hub::Stream::Gguf, limit)],
             None => vec![
@@ -823,6 +841,12 @@ impl Library {
             .map(|repo| (*repo).to_owned())
             .collect();
         wanted.extend(hub_repos.iter().map(|(repo, _)| repo.id.clone()));
+        let direct = exact.as_deref().filter(|repo| {
+            !catalog_repos
+                .iter()
+                .any(|known| known.eq_ignore_ascii_case(repo))
+        });
+        wanted.extend(direct.map(str::to_owned));
         let infos = if skip_hub {
             wanted
                 .into_iter()
@@ -901,6 +925,37 @@ impl Library {
             }
             found.push(entry);
         }
+        if let Some(repo) = direct {
+            match infos.get(repo) {
+                Some(Ok(_)) => {
+                    let mut entry = Entry {
+                        id: repo.to_owned(),
+                        repo: repo.to_owned(),
+                        name: repo
+                            .split_once('/')
+                            .map_or(repo, |(_, name)| name)
+                            .to_owned(),
+                        family: None,
+                        task: None,
+                        source: "huggingface",
+                        catalog: None,
+                        summary: None,
+                        revision: None,
+                        metadata: "unavailable",
+                        metadata_error: None,
+                        files_truncated: None,
+                        variants: None,
+                    };
+                    apply_info(&mut entry, infos.get(repo), |_| true, None);
+                    found.push(entry);
+                }
+                // A repository that doesn't exist is an answer, not a hub failure.
+                Some(Err(error)) if !skip_hub && *error != HubError::NotFound => {
+                    hub_error = hub_error.or(Some(*error));
+                }
+                _ => {}
+            }
+        }
         found.sort_by_key(|entry| {
             std::cmp::Reverse(entry.summary.as_ref().and_then(|summary| summary.downloads))
         });
@@ -929,6 +984,9 @@ impl Library {
                 .map(|store| self.local_files(store))
                 .unwrap_or_default();
             local.extend(self.cache_local_files());
+            if let Some(repo) = &exact {
+                local.retain(|file| file.repo.eq_ignore_ascii_case(repo));
+            }
             attach_local(&mut entries, local, &terms, task, limit);
         }
         let cache = self.cache_presence();

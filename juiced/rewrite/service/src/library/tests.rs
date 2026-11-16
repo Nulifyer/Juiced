@@ -287,6 +287,7 @@ fn query(q: &str) -> SearchQuery {
         limit: None,
         cursor: None,
         engine: None,
+        repo: None,
     }
 }
 
@@ -634,6 +635,47 @@ async fn search_groups_catalog_and_hub_results_and_caches_upstream_reads() {
         .await
         .unwrap();
     assert_eq!(next["page"]["next_cursor"], Value::Null);
+    let exact = library
+        .search(
+            Some(store.clone()),
+            SearchQuery {
+                repo: Some(SINGLE_REPO.into()),
+                ..query("")
+            },
+        )
+        .await
+        .unwrap();
+    let found: Vec<&str> = exact["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| entry["repo"].as_str().unwrap())
+        .collect();
+    assert!(
+        found
+            .iter()
+            .any(|repo| repo.eq_ignore_ascii_case(SINGLE_REPO)),
+        "{exact}"
+    );
+    assert!(
+        found
+            .iter()
+            .all(|repo| repo.eq_ignore_ascii_case(SINGLE_REPO)),
+        "{exact}"
+    );
+    assert_eq!(exact["sources"]["huggingface"]["status"], "ok");
+    let missing = library
+        .search(
+            Some(store.clone()),
+            SearchQuery {
+                repo: Some("fixture/Missing-GGUF".into()),
+                ..query("")
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing["data"], json!([]), "{missing}");
+    assert_eq!(missing["sources"]["huggingface"]["status"], "ok");
     assert_eq!(
         fixture.fake.queries.lock().unwrap().last().unwrap()["cursor"],
         "eyJwYWdlIjoyfQ=="
@@ -661,6 +703,14 @@ async fn search_groups_catalog_and_hub_results_and_caches_upstream_reads() {
         },
         query(&"x".repeat(129)),
         query("bad\u{7}"),
+        SearchQuery {
+            repo: Some("not a repo".into()),
+            ..query("")
+        },
+        SearchQuery {
+            repo: Some(SINGLE_REPO.into()),
+            ..query("x")
+        },
     ] {
         let error = library.search(None, invalid).await.unwrap_err();
         assert_eq!(error.code, "invalid_library_query");
