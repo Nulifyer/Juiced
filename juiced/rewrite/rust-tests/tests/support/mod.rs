@@ -83,7 +83,7 @@ pub const OPERATOR_READ_ROUTES: [&str; 28] = [
     "/juiced/protocols/health",
     "/juiced/barista",
 ];
-pub const WRITE_ROUTES: [&str; 44] = [
+pub const WRITE_ROUTES: [&str; 45] = [
     "/juiced/runtime-packages/import",
     "/juiced/engines/install",
     "/juiced/models/add",
@@ -91,6 +91,7 @@ pub const WRITE_ROUTES: [&str; 44] = [
     "/load",
     "/unload",
     "/juiced/admission",
+    "/juiced/release",
     "/models/register",
     "/models/{model}/options",
     "/models/{model}/artifacts",
@@ -636,6 +637,7 @@ impl Server {
             .env_remove("LEMONADE_API_KEY")
             .env_remove("LEMONADE_ADMIN_API_KEY")
             .env("JUICED_HUGGINGFACE_URL", "http://127.0.0.1:9")
+            .env("JUICED_TEST_RELEASES_URL", "http://127.0.0.1:9/")
             .env_remove("HF_TOKEN");
         // Live llama.cpp launches go stale when an entry is published beside their absent
         // user config, and other programs publish into the developer's ~/.config at any time.

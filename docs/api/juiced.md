@@ -91,6 +91,9 @@ limits. Unknown or unrecorded qualification is not a successful test.
 | `GET /v1/juiced/cache` | Cache settings, snapshots, and operational state |
 | `GET /v1/juiced/admission` | Pending work, reservations, allocations, and uncertain termination |
 | `GET /v1/juiced/requests` | Bounded request metadata for diagnostics |
+| `GET /v1/juiced/state` | Version, resources, residency, v0.9.2 adoption and `release`: `check` (the release check is on), `current`, `latest` (the newest published tag or `null`), `url`, `checked_at_ms` and `newer`. With the check off, `latest` is `null` |
+| `POST /v1/juiced/release` | `{"enabled": false}` turns the daily GitHub release check off and saves `release_check` in `config.json`; `true` turns it on. Returns `{"release": ...}` |
+| `GET /v1/system-stats` | CPU, memory, GPU and NPU use. A GPU's `gpu_percent` is `null` with `utilization_source: "amdgpu-sysfs-unverified"` while an AMD GPU has reported only 100% busy since the service started, because some integrated GPUs report 100% while idle |
 | `GET /v1/health` | Liveness plus `version`, `model_loaded`, `all_models_loaded` (one entry per running worker with `model_name`, `type`, `recipe`, `status`, `pid`, `context_length`), `max_models` and `pinned_models` per model type |
 
 Each `GET /v1/juiced/requests` record carries `id`, `model`, `operation`,

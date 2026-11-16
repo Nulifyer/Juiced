@@ -72,6 +72,7 @@ impl Harness {
             cache_enabled: false,
             session_cache: Default::default(),
             inhibit_suspend: false,
+            release_check: false,
             admission: Default::default(),
             artifact_source_policy: juiced_service::artifacts::SourcePolicy::PublicHttps,
             resident_budget_bytes: 128,

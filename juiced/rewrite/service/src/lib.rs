@@ -48,6 +48,7 @@ pub mod profiling;
 pub mod protocol_access;
 pub mod protocols;
 pub mod realtime;
+pub mod releases;
 pub mod resource_profile;
 pub mod runtime_arguments;
 pub mod runtime_bundle;
