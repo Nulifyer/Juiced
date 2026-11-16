@@ -167,8 +167,8 @@ export function jobActions(job: ArtifactJob): ("pause" | "resume" | "retry" | "c
   return [];
 }
 export function removalReason(model: Model): string | undefined {
-  if (model.policy !== "disabled") return "Set the model to Disabled before removing its registration.";
-  if (model.loaded || model.state === "loading") return "Unload the worker before removing its registration.";
+  if (model.policy !== "disabled") return "Set it to Disabled first.";
+  if (model.loaded || model.state === "loading") return "Unload it first.";
   if (model.active_requests) return "Wait for active requests to finish.";
 }
 export function sessionValue(value: string): string {

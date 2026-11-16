@@ -53,6 +53,7 @@ mod flm;
 pub use flm::{FlmModelAdd, FlmPull};
 mod host;
 mod llama;
+mod load_times;
 pub use llama::Target as LlamaTarget;
 mod native;
 mod native_adoption;
@@ -1470,6 +1471,10 @@ pub struct ModelView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub residency: Option<ResidencyView>,
     pub vision: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub loading_started_unix_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_load_ms: Option<u64>,
 }
 
 #[derive(Clone, Serialize)]
@@ -1953,6 +1958,7 @@ pub struct Manager {
     ready_events: tokio::sync::broadcast::Sender<(String, Arc<str>)>,
     /// The latest Tune job per model: `{state: running|done|failed, ...}`.
     tunes: Mutex<std::collections::HashMap<String, serde_json::Value>>,
+    load_times: load_times::LoadTimes,
 }
 
 const MODEL_CHECKS_FILE: &str = "model-checks.json";
@@ -2408,6 +2414,7 @@ impl Manager {
             checks: Mutex::new(load_model_checks(config_root.as_ref())),
             ready_events: tokio::sync::broadcast::channel(64).0,
             tunes: Mutex::default(),
+            load_times: load_times::LoadTimes::default(),
             config: Arc::new(AsyncMutex::new(config)),
             publications: publication::Publications::new(),
             config_path,
@@ -3297,6 +3304,8 @@ impl Manager {
                 })
                 .flatten(),
             residency: None,
+            loading_started_unix_ms: None,
+            last_load_ms: None,
             // Protected request profiles accept only text parts, so images would be refused.
             vision: worker.spec.execution_profile.binds_projector()
                 && !(worker.protected_memory && worker.spec.resource_profile.is_some()),
@@ -3467,6 +3476,7 @@ impl Manager {
             Self::overlay_process(&worker, &mut view, running);
             view.active_requests = worker.active.load(Ordering::Acquire);
             self.residency_overlay(&mut view);
+            self.load_times.overlay(&worker, &mut view);
             result.push(view);
         }
         result
@@ -4071,6 +4081,7 @@ impl Manager {
                 "The configured model file is unavailable. Check its path on the service host.",
             ));
         }
+        let timing = self.load_times.begin(worker);
         let mut preparing = Self::view(worker, state);
         preparing.state = "loading";
         preparing.pid = None;
@@ -4516,6 +4527,7 @@ impl Manager {
             .lock()
             .unwrap_or_else(|e| e.into_inner()) = None;
         self.residency.touch(&worker.spec.id);
+        timing.ready();
         Self::publish(worker, state);
         if let Some(run) = &state.running {
             let _ = self

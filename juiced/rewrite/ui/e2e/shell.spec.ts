@@ -127,13 +127,13 @@ test("every destination fits at 200 percent text without horizontal scrolling", 
 test("a failed refresh keeps the last observation and disables mutations", async ({ page }) => {
   await open(page);
   const inspector = await openModel(page, modelId);
-  await expect(inspector.getByRole("button", { name: "Load worker" })).toBeEnabled();
+  await expect(inspector.getByRole("button", { name: "Load", exact: true })).toBeEnabled();
   await page.route("**/v1/juiced/catalog", (route) => route.fulfill({ status: 503, json: { error: { code: "offline", message: "Fixture service unavailable. Retry the connection." } } }));
   const banner = page.getByRole("alert").filter({ hasText: "Fixture service unavailable" });
   await expect(banner).toContainText("Showing the last observation.", { timeout: 10000 });
   await expect(page.getByRole("button", { name: "Service status" })).toContainText("Offline");
   await expect(inspector.getByRole("heading", { name: modelId })).toBeVisible();
-  await expect(inspector.getByRole("button", { name: "Load worker" })).toBeDisabled();
+  await expect(inspector.getByRole("button", { name: "Load", exact: true })).toBeDisabled();
   for (const radio of await inspector.getByRole("radio").all()) await expect(radio).toBeDisabled();
   const back = page.getByRole("button", { name: "Back to models" });
   if (await back.isVisible()) await back.click();

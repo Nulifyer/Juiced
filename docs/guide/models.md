@@ -179,7 +179,8 @@ The memory estimate counts every part and the projector.
    **Save** is unavailable while a changed setting would not fit the memory
    budget.
 3. On the **Overview** tab, choose a [loading policy](loading-policy.md) and
-   select **Load worker**.
+   select **Load**. While it loads, the state shows the time so far, and the
+   time left when the model loaded on the same engine before.
 4. Under **Check**, select **Run check**, or **Load and check** for a model that
    is not loaded. Then [complete a service test](testing.md).
 
@@ -190,8 +191,13 @@ model with its own settings and loading policy.
 
 Tick models in **Models → Installed** to **Load**, **Unload** or **Set policy…**
 for all of them at once. Select the **Model**, **State** or **Memory** column
-title to sort. The chips above the list filter by service. **Not added** lists
-downloaded files that no model uses yet.
+title to sort. The chips above the list filter by service. **Enabled** and
+**Disabled** split the list; Juiced shows Enabled models when there are any, and
+a search also lists Disabled models that match. **Not added** lists downloaded
+files that no model uses yet.
+
+With a model open, press Escape to close it. The arrow keys move between its
+tabs.
 
 **Check for updates** compares each downloaded Hugging Face model with the
 current upstream file and marks changed ones **update available**. The check
@@ -214,11 +220,9 @@ card and README on Hugging Face.
 
 1. Open the model and set its loading policy to **Disabled**.
 2. Open the **Manage** tab.
-3. Review the note under **Remove registration**. It says what happens to the
-   model's files.
-4. Select **Remove registration**.
+3. Select **Remove model**, then **Remove model** again to confirm.
 
-Removing the registration keeps the weight files. Files no other model uses then
+Removing a model keeps its weight files. Files no other model uses then
 show under **Not added**. Open them and select the quant's **Delete** button to
 free the space, or use [Reclaim space](storage.md#reclaim-space). Files in a read-only folder are
 never deleted.

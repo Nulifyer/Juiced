@@ -2,7 +2,7 @@ import type { Page } from "@playwright/test";
 import { existsSync } from "node:fs";
 import { mkdir, symlink, writeFile } from "node:fs/promises";
 import { dirname, relative, resolve } from "node:path";
-import { api, closeInspector, expect, largeText, modelsTab, modelsView, noHorizontalOverflow, open, openModel, test } from "./support";
+import { api, closeInspector, expect, largeText, modelsTab, modelsView, noHorizontalOverflow, open, openModel, showAllModels, test } from "./support";
 
 const tinyRepo = "fixture-labs/Tiny-Chat-GGUF";
 const result = (page: Page, name: RegExp) => page.getByRole("list", { name: "Search results" }).getByRole("listitem").filter({ has: page.getByText(name) });
@@ -159,6 +159,7 @@ test.describe("Installed files", () => {
       await expect(table(page).getByRole("button", { name: id, exact: true })).toHaveCount(0);
       await expect(row).toBeVisible();
       await filter.getByRole("button", { name: /^All \d+$/ }).click();
+      await showAllModels(page);
       await expect(table(page).getByRole("button", { name: id, exact: true })).toBeVisible();
 
       const detail = await openFile(page, "Qwen3-4B-Instruct-2507-GGUF");
@@ -199,7 +200,8 @@ test.describe("Installed files", () => {
       const inspector = await openModel(page, id);
       await inspector.getByRole("tab", { name: "Manage" }).click();
       await expect(inspector.getByRole("list", { name: "Model files" })).toContainText("Disposable-Q4_K_M.gguf");
-      await inspector.getByRole("button", { name: "Remove registration" }).click();
+      await inspector.getByRole("button", { name: "Remove model", exact: true }).click();
+      await page.getByRole("dialog").getByRole("button", { name: "Remove model", exact: true }).click();
       const detail = fileDetails(page);
       await expect(detail.getByRole("heading", { name: disposable.name, level: 2 })).toBeVisible();
       await expect(detail.getByRole("button", { name: "Delete Q4_K_M" })).toBeEnabled();

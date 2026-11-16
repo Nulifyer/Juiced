@@ -1,10 +1,11 @@
 import { existsSync } from "node:fs";
 import type { Locator } from "@playwright/test";
-import { api, closeInspector, expect, hotModel, modelId, navigate, open, openModel, rowFor, speechModel, tab, test, toasts } from "./support";
+import { api, closeInspector, expect, hotModel, modelId, navigate, open, openModel, rowFor, showAllModels, speechModel, tab, test, toasts } from "./support";
 
 test("one search and service chips filter the model table", async ({ page }) => {
   await open(page);
   await navigate(page, "Models");
+  await showAllModels(page);
   const table = page.getByRole("table", { name: "Registered models" });
   const names = table.getByRole("button", { name: /^fixture\./ });
   await expect(names).toHaveCount(6);
@@ -31,6 +32,7 @@ test("the inline policy select saves immediately and a stale revision fails with
   const service = api(request);
   await open(page);
   await navigate(page, "Models");
+  await showAllModels(page);
   const select = page.getByLabel(`Loading policy for ${modelId}`);
   await select.selectOption("hot");
   await expect(toasts(page).getByRole("status")).toContainText(`${modelId} is now Hot.`);
@@ -66,7 +68,7 @@ test("row actions load and unload an On demand worker", async ({ page, request }
   await load.click();
   await expect(toasts(page).getByRole("status")).toContainText(`Loaded ${modelId}.`);
   expect((await service.model(modelId))!.loaded).toBe(true);
-  await expect(row).toContainText("ready");
+  await expect(row).toContainText("Loaded");
   await row.getByRole("button", { name: "Unload", exact: true }).click();
   await expect(toasts(page).getByRole("status")).toContainText(`Unloaded ${modelId}.`);
   expect((await service.model(modelId))!.loaded).toBe(false);
@@ -80,11 +82,18 @@ test("the inspector groups Overview, Settings and Manage tabs and loads from Ove
   await expect(sections.getByRole("tab")).toHaveText(["Overview", "Settings", "Manage"]);
   await expect(sections.getByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true");
   await expect(inspector.getByRole("radiogroup", { name: "Loading policy" }).getByRole("radio", { name: "On demand" })).toHaveAttribute("aria-checked", "true");
-  await inspector.getByRole("button", { name: "Load worker" }).click();
+  await inspector.getByRole("button", { name: "Load", exact: true }).click();
   await expect(toasts(page).getByRole("status")).toContainText(`Loaded ${modelId}.`);
   await inspector.getByRole("radio", { name: "Disabled" }).click();
-  await expect(toasts(page).getByRole("status")).toContainText(`Disabled and unloaded ${modelId}.`);
+  const disabled = toasts(page).getByRole("status").filter({ hasText: `Disabled and unloaded ${modelId}.` });
+  await expect(disabled).toBeVisible();
   expect(await service.model(modelId)).toMatchObject({ policy: "disabled", loaded: false });
+  await disabled.getByRole("button", { name: "Undo" }).click();
+  await expect(toasts(page).getByRole("status")).toContainText(`${modelId} is On demand again.`);
+  expect((await service.model(modelId))!.policy).toBe("on-demand");
+  await inspector.getByRole("radio", { name: "Disabled" }).click();
+  await expect(toasts(page).getByRole("status").filter({ hasText: `${modelId} is now Disabled.` })).toBeVisible();
+  await expect(toasts(page).getByRole("button", { name: "Undo" })).toHaveCount(0);
   await inspector.getByRole("radio", { name: "Hot" }).click();
   await expect(toasts(page).getByRole("status")).toContainText(`${modelId} is now Hot.`);
   expect((await service.model(modelId))!.policy).toBe("hot");
@@ -97,8 +106,8 @@ test("the inspector groups Overview, Settings and Manage tabs and loads from Ove
   await expect(inspector.getByRole("region", { name: "Model runtime selection" })).toBeVisible();
   await expect(inspector.getByRole("region", { name: "Context and launch profile" })).toContainText("This engine has no adjustable launch settings.");
   await sections.getByRole("tab", { name: "Manage" }).click();
-  await expect(inspector.getByRole("button", { name: "Remove registration" })).toBeDisabled();
-  await expect(inspector).toContainText("Set the model to Disabled before removing its registration.");
+  await expect(inspector.getByRole("button", { name: "Remove model", exact: true })).toBeDisabled();
+  await expect(inspector).toContainText("Set it to Disabled first.");
   await closeInspector(page);
   await expect(inspector).toHaveCount(0);
 });
@@ -186,7 +195,7 @@ test("the memory estimate follows the context draft and blocks a save that doesn
     await tab(page, "Model sections", "Settings").click();
     const panel = inspector.getByRole("region", { name: "Context and launch profile" });
     const estimate = panel.getByRole("group", { name: "Memory estimate" });
-    await expect(estimate).toContainText("2.1 GiB of 8.0 GiB available");
+    await expect(estimate).toContainText("2.1 of 8.0 GiB");
     const context = panel.getByLabel("Context", { exact: true });
     await panel.getByRole("button", { name: "Max" }).click();
     await expect(context).toHaveValue("131072");
@@ -212,7 +221,14 @@ test("removing a registration keeps its weight file", async ({ page, request }) 
   await open(page);
   const inspector = await openModel(page, id);
   await tab(page, "Model sections", "Manage").click();
-  await inspector.getByRole("button", { name: "Remove registration" }).click();
+  await inspector.getByRole("button", { name: "Remove model", exact: true }).click();
+  const confirm = page.getByRole("dialog", { name: `Remove ${id}?` });
+  await expect(confirm).toContainText("Files stay on disk.");
+  await confirm.getByRole("button", { name: "Cancel" }).click();
+  await expect(confirm).toHaveCount(0);
+  expect(await service.model(id)).toBeTruthy();
+  await inspector.getByRole("button", { name: "Remove model", exact: true }).click();
+  await confirm.getByRole("button", { name: "Remove model", exact: true }).click();
   await expect(toasts(page).getByRole("status")).toContainText(`Removed ${id}. Weight files kept.`);
   await expect(inspector).toHaveCount(0);
   await expect(page.getByRole("table", { name: "Registered models" }).getByRole("button", { name: id, exact: true })).toHaveCount(0);
@@ -333,4 +349,124 @@ test("the engine section switches between installed engines and rolls back", asy
   await expect(toasts(page).getByRole("status")).toContainText(`Changed the engine for ${id}.`);
   await expect(engine.getByRole("definition").first()).toContainText("fixture-runtime-first");
   expect((await service.json<{ current: string }>(path)).current).toBe(original.current);
+});
+
+test("Enabled and Disabled chips split the list, and search still finds disabled models", async ({ page }) => {
+  await open(page);
+  await navigate(page, "Models");
+  const table = page.getByRole("table", { name: "Registered models" });
+  const scope = page.getByRole("group", { name: "Policy filter" });
+  const missing = table.getByRole("button", { name: "fixture.missing-weights", exact: true });
+  const enabled = table.getByRole("button", { name: modelId, exact: true });
+  await expect(scope.getByRole("button", { name: /^Enabled \d+$/ })).toHaveAttribute("aria-pressed", "true");
+  await expect(enabled).toBeVisible();
+  await expect(missing).toHaveCount(0);
+  await page.getByRole("searchbox", { name: "Search models" }).fill("missing");
+  await expect(missing).toBeVisible();
+  await expect(scope).toContainText("1 disabled match");
+  await page.getByRole("searchbox", { name: "Search models" }).fill("");
+  await expect(missing).toHaveCount(0);
+  await page.getByLabel(`Loading policy for ${modelId}`).selectOption("disabled");
+  await expect(toasts(page).getByRole("status")).toContainText(`${modelId} is now Disabled.`);
+  await expect(page.getByLabel(`Loading policy for ${modelId}`)).toHaveValue("disabled");
+  await page.getByLabel(`Loading policy for ${modelId}`).selectOption("on-demand");
+  await expect(toasts(page).getByRole("status")).toContainText(`${modelId} is now On demand.`);
+  await scope.getByRole("button", { name: /^Disabled/ }).click();
+  await expect(missing).toBeVisible();
+  await expect(enabled).toHaveCount(0);
+  await scope.getByRole("button", { name: /^Disabled/ }).click();
+  await expect(missing).toBeVisible();
+  await expect(enabled).toBeVisible();
+});
+
+test("a disabled model with missing weights says the file is missing", async ({ page }) => {
+  await open(page);
+  const inspector = await openModel(page, "fixture.missing-weights");
+  await expect(inspector.locator(".inspector-title")).toContainText("Weights missing");
+  await expect(inspector.getByText("The model file is missing on the server.")).toHaveClass(/inline-error/);
+  await expect(inspector).not.toContainText("Choose On demand or Hot");
+  await expect(inspector.getByRole("button", { name: "Load", exact: true })).toBeDisabled();
+});
+
+test("the keyboard opens a model into its heading, moves between tabs and closes with Escape", async ({ page }) => {
+  await open(page);
+  await navigate(page, "Models");
+  const name = page.getByRole("table", { name: "Registered models" }).getByRole("button", { name: modelId, exact: true });
+  await name.focus();
+  await page.keyboard.press("Enter");
+  const inspector = page.getByRole("complementary", { name: "Model inspector" });
+  await expect(inspector.getByRole("heading", { name: modelId, level: 2 })).toBeFocused();
+  const sections = inspector.getByRole("tablist", { name: "Model sections" });
+  await sections.getByRole("tab", { name: "Overview" }).focus();
+  for (const [key, selected] of [["ArrowRight", "Settings"], ["ArrowRight", "Manage"], ["ArrowRight", "Overview"], ["ArrowLeft", "Manage"], ["Home", "Overview"], ["End", "Manage"]] as const) {
+    await page.keyboard.press(key);
+    await expect(sections.getByRole("tab", { name: selected, exact: true })).toHaveAttribute("aria-selected", "true");
+    await expect(sections.getByRole("tab", { name: selected, exact: true })).toBeFocused();
+  }
+  await expect(sections.getByRole("tab", { name: "Overview" })).toHaveAttribute("tabindex", "-1");
+  await page.keyboard.press("Escape");
+  await expect(inspector).toHaveCount(0);
+  await expect(name).toBeFocused();
+});
+
+test("with the inspector open every row keeps its loaded state and names wrap between parts", async ({ page }) => {
+  test.skip(test.info().project.name !== "desktop", "Narrow layouts show the inspector instead of the list.");
+  await open(page);
+  await openModel(page, modelId);
+  const table = page.getByRole("table", { name: "Registered models" });
+  await expect(rowFor(table, hotModel).locator(".row-state")).toBeVisible();
+  await expect(rowFor(table, hotModel).locator(".row-state")).toHaveText("Loaded");
+  await expect(rowFor(table, modelId).locator(".row-state")).toHaveText("Not loaded");
+  for (const width of [1440, 900]) {
+    await page.setViewportSize({ width, height: 800 });
+    const pieces = await table.getByRole("button", { name: modelId, exact: true }).locator(".name-piece").evaluateAll((items) => items.map((item) => ({ text: item.textContent, height: item.getBoundingClientRect().height, line: parseFloat(getComputedStyle(item).lineHeight) })));
+    expect(pieces.map((piece) => piece.text).join("")).toBe(modelId);
+    for (const piece of pieces) expect(piece.height, `${width}: ${piece.text}`).toBeLessThan(piece.line * 1.5);
+    const body = await page.locator(".inspector-body").evaluate((element) => ({ scroll: element.scrollWidth, client: element.clientWidth }));
+    expect(body.scroll, `${width}: inspector body fits`).toBeLessThanOrEqual(body.client + 1);
+    const inspector = await page.locator(".inspector").boundingBox();
+    expect(inspector!.width).toBeGreaterThanOrEqual(359);
+    const advanced = await page.getByRole("switch", { name: "Show advanced settings" }).boundingBox();
+    expect(advanced!.x + advanced!.width, `${width}: Advanced is not clipped`).toBeLessThanOrEqual(inspector!.x + inspector!.width);
+  }
+});
+
+test("a loading model shows elapsed time, and time left once it has loaded before", async ({ page }) => {
+  let history: number | undefined;
+  const started = Date.now() - 4000;
+  await page.route("**/v1/juiced/catalog", async (route) => {
+    const response = await route.fetch();
+    const body = await response.json();
+    for (const model of body.data) if (model.id === modelId) Object.assign(model, { state: "loading", loaded: false, loading_started_unix_ms: started, ...(history ? { last_load_ms: history } : {}) });
+    await route.fulfill({ response, json: body });
+  });
+  await open(page);
+  await navigate(page, "Models");
+  const row = rowFor(page.getByRole("table", { name: "Registered models" }), modelId);
+  await expect(row.locator(".model-state")).toContainText(/Loading · \d+ s$/);
+  await expect(row).not.toContainText("left");
+  history = 60_000;
+  await expect(row.locator(".model-state")).toContainText(/Loading · \d+ s · about \d+ s left/, { timeout: 10000 });
+  const inspector = await openModel(page, modelId);
+  await expect(inspector.getByRole("status").filter({ hasText: "Loading" })).toContainText(/about \d+ s left/);
+  await expect(inspector.getByRole("progressbar", { name: `Loading ${modelId}` })).toBeVisible();
+});
+
+test("check rows wrap, show chat timing and short skip reasons", async ({ page }) => {
+  await page.route(`**/v1/models/${encodeURIComponent(modelId)}/check`, (route) => route.fulfill({ json: { model: modelId, checked_at_ms: Date.now(), passed: true, current: true, steps: [
+    { id: "chat", label: "Chat", status: "pass", detail: "1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20", ms: 912 },
+    { id: "tools", label: "Tool calls", status: "skip", detail: "The chat template declares no tools." },
+    { id: "thinking", label: "Thinking switch", status: "skip", detail: "The model has no thinking switch." },
+    { id: "vision", label: "Image input", status: "skip", detail: "No vision projector is attached." },
+  ] } }));
+  await open(page);
+  const inspector = await openModel(page, modelId);
+  const steps = inspector.getByRole("region", { name: "Model check" }).getByRole("listitem");
+  await expect(steps.nth(0)).toHaveText(/Chat\s*0\.9 s/);
+  await expect(steps.nth(0).locator(".muted")).toHaveAttribute("title", /^1 2 3/);
+  await expect(steps.nth(1)).toContainText("The chat template declares no tools.");
+  await expect(steps.nth(2)).toHaveText(/Thinking switch\s*none/);
+  await expect(steps.nth(3)).toHaveText(/Image input\s*no projector/);
+  const tools = await steps.nth(1).locator(".muted").evaluate((element) => ({ scroll: element.scrollWidth, client: element.clientWidth }));
+  expect(tools.scroll).toBeLessThanOrEqual(tools.client + 1);
 });

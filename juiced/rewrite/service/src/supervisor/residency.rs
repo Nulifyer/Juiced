@@ -714,6 +714,8 @@ mod tests {
             request_limits: None,
             residency: None,
             vision: false,
+            loading_started_unix_ms: None,
+            last_load_ms: None,
         }
     }
 

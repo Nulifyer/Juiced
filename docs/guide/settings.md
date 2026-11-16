@@ -6,18 +6,22 @@ the values Juiced actually applies.
 ## Edit a model
 
 1. Open the model and select **Settings**.
-2. Change **Context**, **Run on** and the **Generation defaults**. Turn on
-   **Advanced** for threads, GPU layers, prompt threads, batch, physical batch,
-   flash attention, K and V cache precision, and **Extra arguments**. Each field
-   has an (i) with its meaning.
+2. Change **Context**, **Slots**, **Run on** and the **Generation defaults**.
+   Turn on **Advanced** for threads, GPU layers, prompt threads, batch, physical
+   batch, flash attention, K and V cache precision, and **Extra arguments**. The
+   (i) next to a field or group explains it.
 3. Select **Save**. A loaded model shows **Save and reload** and restarts with
    the new settings.
 
 New models start at a 32K context, or the trained size when that is smaller.
 Under **Context**, **Auto** fills in the largest context that fits the memory
-budget and **Max** the size the model was trained for; the line below the field
-shows both numbers. A larger context reserves more memory whether or not a
-request uses it.
+budget and **Max** the size the model was trained for. The line below the field
+shows the maximum, and how much fits when that is less. A larger context reserves
+more memory whether or not a request uses it.
+
+**Slots** is how many requests the model serves at once. The slots share the
+context, so each request gets a smaller part of it, and the memory estimate
+updates as you type. Empty uses the slots in the model's launch arguments.
 
 An empty field shows what applies instead: `0.9 (profile)` is a value the
 profile already passes to the engine, and `Default 0.8` is llama.cpp's default.
@@ -48,7 +52,8 @@ the model saved its own arguments.
 **Check** on a model's Overview sends a few short real requests: a chat reply,
 a tool call, the thinking switch and an image, for the features the model
 declares, and shows its decode speed. Each line passes, fails or is skipped with
-the reason. Juiced runs it by itself after a chat model starts with new settings
+a short reason; hover it for the full text. The chat line shows how long the
+reply took. Juiced runs it by itself after a chat model starts with new settings
 or a new engine; **Run check** runs it again, and **Load and check** loads an On
 demand model first.
 
@@ -58,8 +63,9 @@ demand model first.
 where each argument comes from: a tested recipe for that model, something its file
 declares (such as an MTP head for faster decoding), or native Juiced's default for
 its model family. Juiced works these out at every start, so a newer release
-improves existing models on their next load; the first time something new is
-added, Settings says so once, with **OK** and **Turn off**. Your own settings and
+improves existing models on their next load. When a later release adds an
+argument this browser has not seen for the model, Settings says so once, with
+**OK** and **Turn off**. The first time you open the model nothing is shown. Your own settings and
 extra arguments always win. Turn the switch off to start the model with only your
 settings; a loaded model restarts.
 

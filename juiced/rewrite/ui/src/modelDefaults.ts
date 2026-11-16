@@ -52,9 +52,9 @@ export function appliedKey(defaults: ModelDefaults): string {
   return defaults.entries.filter((entry) => entry.state === "applied").map(argument).join("\n");
 }
 
-/** Arguments added since the operator last acknowledged the defaults on this client. */
+/** Arguments added since this client last recorded the defaults. Nothing is new before a first record. */
 export function changedSince(defaults: ModelDefaults, seen: string | null): string[] {
-  if (!defaults.enabled || seen === appliedKey(defaults)) return [];
+  if (!defaults.enabled || seen === null || seen === appliedKey(defaults)) return [];
   const before = new Set((seen ?? "").split("\n").filter(Boolean));
   return defaults.entries.filter((entry) => entry.state === "applied" && !before.has(argument(entry)) && entry.source !== "juiced").map(argument);
 }

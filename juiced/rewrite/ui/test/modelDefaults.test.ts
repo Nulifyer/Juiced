@@ -26,7 +26,7 @@ test("defaults parse entries and sampler values and drop malformed ones", () => 
 
 test("the change note lists new non-Juiced arguments once per client", () => {
   const defaults = parseModelDefaults(view)!;
-  expect(changedSince(defaults, null)).toEqual(["--spec-type ngram-simple"]);
+  expect(changedSince(defaults, null)).toEqual([]);
   expect(changedSince(defaults, appliedKey(defaults))).toEqual([]);
   expect(changedSince(defaults, "--metrics")).toEqual(["--spec-type ngram-simple"]);
   expect(changedSince({ ...defaults, enabled: false }, null)).toEqual([]);

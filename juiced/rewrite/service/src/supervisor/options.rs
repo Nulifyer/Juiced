@@ -488,6 +488,18 @@ impl Manager {
                 if let Some(tuned) = tuned {
                     spec.tuned = tuned;
                 }
+                // Protected request profiles fix their slot count, so only the plain budget
+                // lets the admission slots follow the launch's --parallel.
+                if budget.is_some()
+                    && let Some(slots) = spec
+                        .execution_profile
+                        .resolved_arguments()
+                        .ok()
+                        .and_then(|(_, applied)| applied)
+                        .and_then(|applied| applied.parallel_slots)
+                {
+                    spec.max_inflight = slots;
+                }
                 if let Some((_, corrected)) = super::fit::formula_reservation(
                     &spec.resolved(&parent),
                     Some(&projector_worker),

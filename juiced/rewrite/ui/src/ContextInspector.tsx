@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { Client } from "./api";
-import { bytes, type Model } from "./domain";
+import { bytes, bytesPair, type Model } from "./domain";
 import type { Mutate } from "./Models";
 import { launchDraft, editedLaunchOptions, parseModelContext, parseModelOptions, sameDraft, servingContext, type LaunchDraft, type ModelOptions } from "./profiles";
 import { asrFields, engineDraft, enginePatch, fallback, imageFields, sameTuned, splitArgs, tunedDraft, tunedFields, tunedOptions, type EngineField, type Field as SettingField, type TunedDraft } from "./modelSettings";
@@ -9,7 +9,7 @@ import { notify } from "./toast";
 import { Button, HelpTip, Switch } from "./ui";
 import { useResource } from "./useResource";
 
-const emptyDraft: LaunchDraft = { context: "", threads: "", gpu: "" };
+const emptyDraft: LaunchDraft = { context: "", threads: "", gpu: "", slots: "" };
 const emptyTuned = tunedDraft({}, []);
 const tokens = (value: number | null | undefined) => value == null ? "—" : value.toLocaleString();
 
@@ -52,7 +52,7 @@ export function MemoryBar({ fit }: { fit: Fit }) {
     <div className="memory-bar" role="img" aria-label={`${bytes(fit.total_bytes)} of ${bytes(fit.available_bytes)} available`}>{parts.filter(([, value]) => value > 0).map(([label, value, tone]) => <span key={label} className={`memory-part ${tone}`} style={{ width: `${Math.min(100, value / room * 100)}%` }} title={`${label} ${bytes(value)}`} />)}</div>
     <div className="memory-legend">
       {parts.filter(([, value]) => value > 0).map(([label, value, tone]) => <span key={label}><i className={`memory-dot ${tone}`} />{label} {bytes(value)}</span>)}
-      <span className={`memory-total ${fit.fits ? "" : "over"}`}>{fit.source === "reservation" ? "Reserved" : "Estimated"} {bytes(fit.total_bytes)} of {bytes(fit.available_bytes)} available{fit.fits ? "" : " · doesn't fit"}</span>
+      <span className={`memory-total ${fit.fits ? "" : "over"}`} title={fit.source === "reservation" ? "Reserved now" : "Estimated"}>{bytesPair(fit.total_bytes, fit.available_bytes, " of ")}{fit.fits ? "" : " · doesn't fit"}</span>
     </div>
   </div>;
 }
@@ -92,12 +92,13 @@ export function ContextInspector({ model, client, online, busy, policyDirty, onD
     const query = new URLSearchParams();
     if (/^\d+$/.test(draft.context.trim())) query.set("context_tokens", draft.context.trim());
     if (/^\d+$/.test(draft.gpu.trim())) query.set("gpu_layers", draft.gpu.trim());
+    if (/^\d+$/.test(draft.slots?.trim() ?? "") && Number(draft.slots) > 0) query.set("parallel_slots", draft.slots!.trim());
     if (tuned.cache_type_k && tuned.cache_type_k === tuned.cache_type_v) query.set("kv_cache_type", tuned.cache_type_k);
     const timer = setTimeout(() => {
       client.request(`models/${encodeURIComponent(model.id)}/fit${query.size ? `?${query}` : ""}`, undefined, controller.signal).then((value) => setFit(parseFit(value))).catch(() => { if (!controller.signal.aborted) setFit(null); });
     }, 250);
     return () => { clearTimeout(timer); controller.abort(); };
-  }, [client, model.id, model.revision, model.loaded, draft.context, draft.gpu, tuned.cache_type_k, tuned.cache_type_v]);
+  }, [client, model.id, model.revision, model.loaded, draft.context, draft.gpu, draft.slots, tuned.cache_type_k, tuned.cache_type_v]);
   async function save() {
     if (!view || revision.current === null) return;
     setValidationError("");
@@ -112,7 +113,12 @@ export function ContextInspector({ model, client, online, busy, policyDirty, onD
     if (fresh) { accept(fresh); setPendingSave(null); setValidationError(""); }
   }
   const trained = fit?.trained_context ?? observation?.declared?.training_context_tokens ?? null;
+  const fitsUpTo = fit?.largest_context_that_fits ?? null;
   const running = observation?.applied?.launch?.context_tokens ?? null;
+  const slotCount = /^\d+$/.test(draft.slots?.trim() ?? "") && Number(draft.slots) > 0 ? Number(draft.slots) : view?.physical_slots ?? 1;
+  const contextBasis = /^\d+$/.test(draft.context.trim()) ? Number(draft.context) : running;
+  const unified = /(^|\s)(--kv-unified|-kvu)(\s|$)/.test(tuned.extra);
+  const perSlot = slotCount > 1 && contextBasis && !unified ? `each request up to ${tokens(Math.floor(contextBasis / slotCount))}` : null;
   const fields = extras.data?.fields ?? null;
   const mtp = fields?.mtp?.effective === true;
   const gpuAll = draft.gpu.trim() === "" || Number(draft.gpu) >= 99;
@@ -135,11 +141,12 @@ export function ContextInspector({ model, client, online, busy, policyDirty, onD
         {fit?.largest_context_that_fits && <Button disabled={blocked} title="Largest context that fits the memory budget" onClick={() => setDraft({ ...draft, context: String(fit.largest_context_that_fits) })}>Auto</Button>}
         {trained && <Button disabled={blocked} title="The context the model was trained for" onClick={() => setDraft({ ...draft, context: String(trained) })}>Max</Button>}
       </div>
-      <p className="field-help">{[trained ? `Trained ${tokens(trained)}` : null, fit?.largest_context_that_fits ? `fits up to ${tokens(fit.largest_context_that_fits)}` : null, running ? `running ${tokens(running)}` : null, view.physical_slots > 1 ? `${view.physical_slots} slots share it` : null].filter(Boolean).join(" · ") || "Empty uses the engine default."}</p>
+      <p className="field-help">{[trained ? `Max ${tokens(trained)}` : null, fitsUpTo && (!trained || fitsUpTo < trained) ? `fits up to ${tokens(fitsUpTo)}` : null, running ? `running ${tokens(running)}` : null, view.physical_slots > 1 ? `${view.physical_slots} slots share it` : null].filter(Boolean).join(" · ") || "Empty uses the engine default."}</p>
+      {!imported && <div className="setting-line slots-line"><label className="field-label" htmlFor="profile-slots">Slots</label><input id="profile-slots" className="slots-input" inputMode="numeric" value={draft.slots ?? ""} disabled={blocked} placeholder={String(view.physical_slots)} onChange={(event) => setDraft({ ...draft, slots: event.target.value })} />{perSlot && <span className="field-help">{perSlot}</span>}<HelpTip label="Slots">Requests the model serves at once. They share the context.</HelpTip></div>}
       {llama && !imported && <div className="setting-line"><span className="field-label" id="gpu-label">Run on</span>
         <div className="segmented" role="radiogroup" aria-labelledby="gpu-label">{([["gpu", "GPU"], ["cpu", "CPU only"]] as const).map(([value, label]) => <button key={value} type="button" role="radio" aria-checked={value === "gpu" ? gpuAll || (Number(draft.gpu) > 0 && Number(draft.gpu) < 99) : draft.gpu.trim() === "0"} disabled={blocked} onClick={() => setDraft({ ...draft, gpu: value === "gpu" ? "" : "0" })}>{label}</button>)}</div></div>}
-      {!advanced && fields?.mtp && <p className="setting-status"><strong>Multi-token prediction</strong> {mtp ? "on" : "off"}{mtp && extras.data?.mtp?.acceptance_rate != null ? ` · ${Math.round(extras.data.mtp.acceptance_rate * 100)}% of drafts accepted` : ""}</p>}
-      {!advanced && fields?.thinking && fields.thinking.effective !== null && fields.thinking.effective !== undefined && <p className="setting-status"><strong>Thinking</strong> {show(fields.thinking.effective)}</p>}
+      {!advanced && mtp && <p className="setting-status"><strong>Multi-token prediction</strong> on{extras.data?.mtp?.acceptance_rate != null ? ` · ${Math.round(extras.data.mtp.acceptance_rate * 100)}% of drafts accepted` : ""}</p>}
+      {!advanced && fields?.thinking && fields.thinking.effective !== null && fields.thinking.effective !== undefined && fields.thinking.effective !== "auto" && <p className="setting-status"><strong>Thinking</strong> {show(fields.thinking.effective)}</p>}
       {llama && !imported && <TunedGrid title="Generation defaults" help="Used when a request doesn't set its own value. Empty keeps the profile's argument, Juiced's or the model file's default, or llama.cpp's default." fields={tunedFields.filter((field) => !field.advanced)} draft={tuned} onChange={setTuned} view={view} sampler={extras.data?.defaults?.sampler} disabled={blocked} />}
       {llama && !imported && extras.data?.defaults?.available && <JuicedDefaults model={model} client={client} defaults={extras.data.defaults} revision={revision.current ?? model.revision} disabled={blocked || dirty} mutate={mutate} />}
       {advanced && !imported && <div className="setting-group"><div className="group-title"><span>Runtime</span><HelpTip label="Runtime">CPU threads, offload and batching. Changes apply when the engine next starts.</HelpTip></div><div className="profile-option-grid"><div><label htmlFor="profile-threads">Threads</label><input id="profile-threads" inputMode="numeric" value={draft.threads} disabled={blocked} placeholder="Engine default" onChange={(event) => setDraft({ ...draft, threads: event.target.value })} /></div><div><label htmlFor="profile-gpu">GPU layers</label><input id="profile-gpu" inputMode="numeric" value={draft.gpu} disabled={blocked} placeholder="All" onChange={(event) => setDraft({ ...draft, gpu: event.target.value })} /></div>
@@ -161,11 +168,11 @@ export function ContextInspector({ model, client, online, busy, policyDirty, onD
   </section>;
 }
 
-function TunedInput({ field, draft, onChange, view, sampler, disabled }: { field: SettingField; draft: TunedDraft; onChange: (draft: TunedDraft) => void; view: ModelOptions; sampler?: ModelDefaults["sampler"]; disabled: boolean }) {
+function TunedInput({ field, draft, onChange, view, sampler, disabled, tip = true }: { field: SettingField; draft: TunedDraft; onChange: (draft: TunedDraft) => void; view: ModelOptions; sampler?: ModelDefaults["sampler"]; disabled: boolean; tip?: boolean }) {
   const id = `profile-${field.key}`;
   const empty = fallback(field.key, view.effective_launch, view.defaults, sampler);
   return <div>
-    <div className="field-head"><label htmlFor={id}>{field.label}</label><HelpTip label={field.label}>{field.help}</HelpTip></div>
+    <div className="field-head"><label htmlFor={id}>{field.label}</label>{tip && <HelpTip label={field.label}>{field.help}</HelpTip>}</div>
     {field.kind === "choice"
       ? <select id={id} value={draft[field.key]} disabled={disabled} onChange={(event) => onChange({ ...draft, [field.key]: event.target.value })}><option value="">{empty}</option>{field.choices!.map((choice) => <option key={choice} value={choice}>{choice}</option>)}</select>
       : <input id={id} inputMode={field.kind === "decimal" ? "decimal" : "numeric"} value={draft[field.key]} disabled={disabled} placeholder={empty} onChange={(event) => onChange({ ...draft, [field.key]: event.target.value })} />}
@@ -173,8 +180,8 @@ function TunedInput({ field, draft, onChange, view, sampler, disabled }: { field
 }
 
 function TunedGrid({ title, help, fields, draft, onChange, view, sampler, disabled }: { title: string; help: string; fields: SettingField[]; draft: TunedDraft; onChange: (draft: TunedDraft) => void; view: ModelOptions; sampler?: ModelDefaults["sampler"]; disabled: boolean }) {
-  return <div className="setting-group"><div className="group-title"><span>{title}</span><HelpTip label={title}>{help}</HelpTip></div>
-    <div className="profile-option-grid">{fields.map((field) => <TunedInput key={field.key} field={field} draft={draft} onChange={onChange} view={view} sampler={sampler} disabled={disabled} />)}</div></div>;
+  return <div className="setting-group"><div className="group-title"><span>{title}</span><HelpTip label={title}><p>{help}</p>{fields.map((field) => <p key={field.key}><strong>{field.label}.</strong> {field.help}</p>)}</HelpTip></div>
+    <div className="profile-option-grid">{fields.map((field) => <TunedInput key={field.key} field={field} draft={draft} onChange={onChange} view={view} sampler={sampler} disabled={disabled} tip={false} />)}</div></div>;
 }
 
 function readSeen(key: string) { try { return localStorage.getItem(key); } catch { return null; } }
@@ -184,6 +191,10 @@ function writeSeen(key: string, value: string) { try { localStorage.setItem(key,
 function JuicedDefaults({ model, client, defaults, revision, disabled, mutate }: { model: Model; client: Client; defaults: ModelDefaults; revision: number; disabled: boolean; mutate: Mutate }) {
   const key = `juiced.defaultsSeen.${model.id}`;
   const [seen, setSeen] = useState(() => readSeen(key));
+  useEffect(() => {
+    if (seen !== null || !defaults.enabled) return;
+    const current = appliedKey(defaults); writeSeen(key, current); setSeen(current);
+  }, [seen, defaults, key]);
   const [tune, setTune] = useState<TuneView>({ state: "idle", candidates: [] });
   const tunePath = `models/${encodeURIComponent(model.id)}/tune`;
   useEffect(() => {
@@ -211,7 +222,7 @@ function JuicedDefaults({ model, client, defaults, revision, disabled, mutate }:
   return <div className="setting-group juiced-defaults">
     <div className="group-title"><span>Juiced defaults</span><HelpTip label="Juiced defaults">Arguments Juiced adds when the model starts: tested recipes for this model, what its file declares (such as an MTP head), and native Juiced's defaults for its family. Your own settings and extra arguments always win. {model.loaded ? "Turning this on or off restarts the model." : "Changes apply when the model next loads."}</HelpTip>
       <Switch checked={defaults.enabled} label="Use Juiced defaults" disabled={disabled} onChange={toggle} /></div>
-    {changed.length > 0 && <div className="inline-note" role="status"><span>{seen === null ? "Juiced adds" : "Juiced now also adds"} <code>{changed.join(" · ")}</code> at launch.</span><span className="action-row"><Button variant="ghost" onClick={acknowledge}>OK</Button><Button variant="ghost" disabled={disabled} onClick={() => toggle(false)}>Turn off</Button></span></div>}
+    {changed.length > 0 && <div className="inline-note" role="status"><span>Juiced now also adds <code>{changed.join(" · ")}</code> at launch.</span><span className="action-row"><Button variant="ghost" onClick={acknowledge}>OK</Button><Button variant="ghost" disabled={disabled} onClick={() => toggle(false)}>Turn off</Button></span></div>}
     {shown.length === 0 ? <p className="field-help">Nothing beyond the engine's own defaults for this model.</p>
       : <ul className="defaults-list">{shown.map((entry) => <li key={`${entry.source}${entry.flag}`} className={entry.state === "applied" ? undefined : "muted"}><code>{argument(entry)}</code><span className="muted">{sourceLabels[entry.source]}{entry.state === "overridden" ? " · your setting wins" : entry.state === "off" ? " · off" : ""}</span><HelpTip label={argument(entry)}>{entry.reason}</HelpTip></li>)}</ul>}
     {defaults.tunedTrial && tune.state !== "running" && <p className="field-help">A Tune trial is still in place because Tune could not put back the earlier result. Juiced restores it at the next service start, or use Clear tuned.</p>}

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { bytes, bytesPair, eligible, hotFit, hotFitNote, hotOption, loadReason, matchingModels, normalizeBase, parseSnapshot, parseSuitability, unloadReason, workerState, workerReady, workerTone, type Model, type Resources, type Suitability } from "../src/domain";
+import { bytes, bytesPair, eligible, hotFit, hotFitNote, hotOption, loadReason, matchingModels, normalizeBase, parseSnapshot, parseSuitability, stateLabel, unloadReason, workerState, workerReady, workerTone, type Model, type Resources, type Suitability } from "../src/domain";
 
 const model: Model = { id: "Publisher/Long-Model-Q4", policy: "on-demand", revision: 0, state: "unloaded", downloaded: true, loaded: false, pid: null, active_requests: 0, max_inflight: 2, resident_bytes: 1024 ** 3, operations: ["chat/completions"], error: null };
 
@@ -28,9 +28,10 @@ describe("model eligibility and lifecycle guards", () => {
   });
   test("load and unload explain disabled, starting, missing, Hot and busy states", () => {
     expect(loadReason(model)).toBeUndefined();
-    expect(loadReason({ ...model, policy: "disabled" })).toContain("policy");
+    expect(loadReason({ ...model, policy: "disabled" })).toBe("Disabled. Choose On demand or Hot to load it.");
+    expect(loadReason({ ...model, policy: "disabled", downloaded: false })).toBe("The model file is missing on the server.");
     expect(loadReason({ ...model, state: "loading" })).toContain("starting");
-    expect(loadReason({ ...model, downloaded: false })).toContain("unavailable");
+    expect(loadReason({ ...model, downloaded: false })).toContain("missing");
     expect(unloadReason({ ...model, loaded: true, policy: "hot" })).toContain("On demand");
     expect(unloadReason({ ...model, loaded: true, active_requests: 1 })).toContain("active");
     expect(unloadReason({ ...model, loaded: true })).toBeUndefined();
@@ -51,6 +52,10 @@ describe("model eligibility and lifecycle guards", () => {
     expect(unloadReason(queued)).toContain("not loaded");
     expect(workerState({ ...queued, startup_waiting: false })).toBe("loading");
     expect(workerState({ ...model, state: "ready", loaded: true })).toBe("ready");
+    expect(stateLabel({ ...model, state: "ready", loaded: true })).toBe("Loaded");
+    expect(stateLabel(model)).toBe("Not loaded");
+    expect(stateLabel({ ...model, state: "missing-weights" })).toBe("Weights missing");
+    expect(stateLabel(queued)).toBe("Waiting to start");
   });
   test("server-authorized cleanup can settle retained Hot work without enabling ordinary busy unload", () => {
     const pending: Model = { ...model, state: "cleanup-pending", policy: "hot", loaded: true, active_requests: 1, cleanup_retry_available: true };
@@ -151,17 +156,17 @@ describe("memory figures", () => {
   test("choosing Hot says whether the reservation fits the free budget", () => {
     const small = { ...model, resident_bytes: 4 * GiB };
     expect(hotFit(small, [small], resources)).toEqual({ bytes: 4 * GiB, free: 21 * GiB, fit: "fits" });
-    expect(hotFitNote(small, hotFit(small, [small], resources)!)).toBe("Hot keeps 4.0 GiB loaded · 21.0 GiB free");
+    expect(hotFitNote(small, hotFit(small, [small], resources)!)).toBe("Memory 4.0 GiB · 21.0 GiB free");
     expect(hotOption(small, hotFit(small, [small], resources))).toBe("Hot · 4.0 GiB, fits");
     const idle = { ...model, id: "idle", loaded: true, resident_bytes: 40 * GiB };
     expect(hotFit(coder, [coder, idle], resources)?.fit).toBe("evicts");
     expect(hotFit(coder, [coder, { ...idle, policy: "hot" }], resources)?.fit).toBe("over");
     expect(hotOption(coder, hotFit(coder, [coder], resources))).toBe("Hot · 51.0 GiB, doesn't fit");
-    expect(hotFitNote(coder, hotFit(coder, [coder], resources)!)).toBe("Hot needs 51.0 GiB; only 21.0 GiB is free. It won't load until a Hot or busy model unloads.");
+    expect(hotFitNote(coder, hotFit(coder, [coder], resources)!)).toBe("Memory 51.0 GiB. Only 21.0 GiB is free, so Hot won't load until a Hot or busy model unloads.");
   });
   test("a loaded model adds nothing, and no budget means no claim", () => {
     const loaded = { ...coder, loaded: true, policy: "hot" as const };
-    expect(hotFitNote(loaded, hotFit(loaded, [loaded], resources)!)).toBe("Holds 51.0 GiB · 21.0 GiB free");
+    expect(hotFitNote(loaded, hotFit(loaded, [loaded], resources)!)).toBe("Memory 51.0 GiB · 21.0 GiB free");
     expect(hotOption(loaded, hotFit(loaded, [loaded], resources))).toBe("Hot");
     expect(hotFit(coder, [coder], { ...resources, resident_budget_bytes: null })).toBeNull();
   });

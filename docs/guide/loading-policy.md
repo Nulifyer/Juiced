@@ -35,12 +35,13 @@ sends Ollama `keep_alive` overrides it until the model's next request.
 
 ## Load or unload a worker
 
-Open the model under **Models**. On the **Overview** tab, select **Load worker**
+Open the model under **Models**. On the **Overview** tab, select **Load**
 or **Unload** under **Worker**. Loading starts the engine process. Unloading
 releases its memory and keeps its weights. **Stop waiting** stops the console
 from waiting for a slow load.
 
-To stop a Hot model, set it to Disabled. That unloads it in one step. A model
+To stop a Hot model, set it to Disabled. That unloads it in one step, and the
+notice offers **Undo** to put the earlier policy back. A model
 with running requests cannot be disabled. Wait for the requests to finish, then
 retry. Do not restart the server repeatedly to force a change.
 
