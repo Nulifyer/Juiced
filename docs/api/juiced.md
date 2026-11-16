@@ -241,6 +241,57 @@ folder of its member names. Without the engine installed the reply is 409
 `engine_not_installed` with the build to install; on a host the engine cannot run
 on it is 409 `no_usable_backend`.
 
+### Add or update when a download finishes
+
+`POST /v1/juiced/library/pull` takes an optional `then` that registers the files
+once the pull completes:
+
+```json
+{"repo": "unsloth/Qwen3-0.6B-GGUF", "file": "Qwen3-0.6B-Q4_K_M.gguf",
+ "expected_generation": 12, "then": {"policy": "on-demand", "id": "Qwen3-0.6B-Q4_K_M"}}
+```
+
+`policy` is required; `id` and `engine` work as in `POST /v1/juiced/models/add`.
+The intent is journaled with the pull, so it survives a page reload and a
+restart. When the engine Juiced picks is not installed, the service installs that
+build first. The pull view carries `then: {kind, id, policy, engine, state,
+model, error, message}`; `state` is `pending`, `done` (with `model`) or `failed`
+(with `error` and `message`, and the files stay on disk). A pull with a pending
+`then` cannot be dismissed (409 `library_pull_active`). Joining a running pull of
+the same files keeps the first `then`.
+
+`POST /v1/models/{id}/update` with `{"expected_revision": 4}` downloads the
+current upstream revision of a stored model's main file and then moves the model
+to it. It returns the pull, whose `then` is `{kind: "update", model,
+from_artifact, state, …}`. The model keeps its settings and policy; a loaded
+worker stops and starts again on the new files, after its running requests
+finish. On failure the model keeps its old files. The old files stay in storage
+without a reference, so Storage lists them as unused. Errors: 409
+`revision_conflict` (stale revision), 409 `update_unsupported` (the model's files
+were not downloaded from Hugging Face by Juiced, or were combined into a set at
+add time), 409 `update_check_offline` (hub unavailable) and, in the pull's `then`,
+`model_files_changed` when the model's files changed during the download.
+
+`POST /v1/juiced/flm/pull` takes `then: {"policy": "hot"}` the same way and adds
+the checkpoint when FastFlowLM finishes. FastFlowLM pulls live in memory, so this
+intent does not survive a restart.
+
+### Download a file from a URL
+
+`POST /v1/juiced/artifacts/pull` takes `{"download": {"source_url": "https://…"},
+"expected_generation": 3}`. Only `source_url` is required.
+
+- `expected_sha256` is optional. Without it the store keeps the SHA-256 it
+  computes, the job reports `computed_digest: true`, and the stored file is
+  listed with `unverified: true` in `GET /v1/juiced/library/local`. With it, a
+  mismatch quarantines the file (`artifact_hash_mismatch`).
+- `expected_bytes` defaults to the length the server reports, from `HEAD` or a
+  one-byte range request. When the server reports neither, the transfer may use
+  the free space above `storage.reserve_bytes` and fails with
+  `artifact_size_mismatch` beyond it. With no free space above the reserve the
+  request returns 507 `insufficient_storage`.
+- `maximum_bytes` defaults to the expected size, or to that free-space ceiling.
+
 ## Workflow jobs and stored conversations
 
 Juiced runs no caller-defined workflows and stores no conversations. These

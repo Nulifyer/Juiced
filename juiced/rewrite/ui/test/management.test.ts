@@ -6,14 +6,14 @@ const hash = "a".repeat(64);
 const job: ArtifactJob = { id: "a".repeat(32), revision: 3, state: "downloading", source_url: "https://example.com/file.gguf", expected_sha256: hash, expected_bytes: 16, maximum_bytes: 32, downloaded_bytes: 8, artifact: null, error: null, writer_active: true };
 
 describe("bounded acquisition and explicit registration", () => {
-  test("unknown size still reserves a positive exact ceiling", () => {
-    expect(downloadRequest("https://example.com/file.gguf", hash.toUpperCase(), "", "32")).toEqual({ source_url: "https://example.com/file.gguf", expected_sha256: hash, expected_bytes: null, maximum_bytes: 32 });
+  test("only the URL is required and a checksum is optional", () => {
+    expect(downloadRequest("https://example.com/file.gguf", hash.toUpperCase())).toEqual({ source_url: "https://example.com/file.gguf", expected_sha256: hash });
+    expect(downloadRequest(" https://example.com/file.gguf ", "  ")).toEqual({ source_url: "https://example.com/file.gguf" });
     for (const value of ["", "0", "-1", "1.2", "2e6", "9007199254740992"]) expect(() => positiveBytes(value, "Ceiling")).toThrow();
-    expect(() => downloadRequest("https://example.com/file", hash, "33", "32")).toThrow("exceeds");
   });
   test("direct credentials, signed queries, fragments and malformed hashes fail before sending", () => {
-    for (const url of ["https://u:p@example.com/file", "https://example.com/file?token=private", "https://example.com/file#secret", "file:///private/weights"]) expect(() => downloadRequest(url, hash, "16", "32")).toThrow();
-    expect(() => downloadRequest("https://example.com/file", "not-a-checksum", "16", "32")).toThrow("SHA256");
+    for (const url of ["https://u:p@example.com/file", "https://example.com/file?token=private", "https://example.com/file#secret", "file:///private/weights"]) expect(() => downloadRequest(url, hash)).toThrow();
+    expect(() => downloadRequest("https://example.com/file", "not-a-checksum")).toThrow("SHA256");
   });
   test("managed registration binds artifact and never starts an engine implicitly", () => {
     const result = registration(hash, " model.one ", "/opt/llama-server", '["--port","{port}","--model","{model}"]', "1024", "1", ["completions"]);

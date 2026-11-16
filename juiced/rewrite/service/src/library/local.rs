@@ -65,6 +65,8 @@ pub struct LocalFile {
     pub removable: bool,
     pub refusal: Option<&'static str>,
     pub used_by: Vec<String>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub unverified: bool,
     #[serde(skip)]
     pub canonical: PathBuf,
     #[serde(skip)]
@@ -382,6 +384,7 @@ fn scan_hub(hub: &Hub, roots: &[PathBuf], drafts: &mut Drafts) {
                     removable: false,
                     refusal: None,
                     used_by: Vec::new(),
+                    unverified: false,
                     digest: blob_digest(&canonical),
                     canonical,
                     repo_directory: Some(directory.clone()),
@@ -457,6 +460,7 @@ fn scan_store(store: &StoreListing, read_only: bool, parse: &ResolveUrl<'_>, dra
             removable: false,
             refusal: None,
             used_by: Vec::new(),
+            unverified: file.unverified,
             canonical,
             digest: Some(file.id.clone()),
             repo_directory: None,
@@ -538,6 +542,7 @@ fn scan_registrations(registrations: &[Registered], drafts: &mut Drafts) {
                 removable: false,
                 refusal: None,
                 used_by: Vec::new(),
+                unverified: false,
                 canonical,
                 digest: None,
                 repo_directory: None,

@@ -2,7 +2,8 @@ use super::*;
 
 /// Placeholder for jobs whose digest is learned from the bytes they receive; it is replaced
 /// before publication and never names a stored artifact.
-const UNLEARNED_DIGEST: &str = "0000000000000000000000000000000000000000000000000000000000000000";
+pub(super) const UNLEARNED_DIGEST: &str =
+    "0000000000000000000000000000000000000000000000000000000000000000";
 const CHECKPOINT_BYTES: u64 = 16 * 1024 * 1024;
 
 #[derive(Clone, Debug, Serialize)]
@@ -40,7 +41,9 @@ impl ArtifactStore {
             Some(declared),
             declared,
             None,
-            Some(source_name),
+            super::DigestSource::Learned {
+                source_name: Some(source_name),
+            },
         )?;
         let mut intake = Intake {
             store: self.clone(),
@@ -83,7 +86,9 @@ impl ArtifactStore {
             Some(bytes),
             bytes,
             None,
-            Some(source_name),
+            super::DigestSource::Learned {
+                source_name: Some(source_name),
+            },
         )?;
         let store = self.clone();
         let id = view.id.clone();

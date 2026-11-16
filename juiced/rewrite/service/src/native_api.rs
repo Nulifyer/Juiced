@@ -577,6 +577,7 @@ async fn start_pull(manager: &Manager, selection: &Selection) -> Result<String, 
             files: (selection.files.len() > 1).then(|| selection.files.clone()),
             revision: None,
             expected_generation: store.generation(),
+            then: None,
         };
         match manager.library().pull(store.clone(), request).await {
             Ok(view) => {
@@ -615,7 +616,7 @@ fn add_failure(failure: AddModelError) -> (String, String) {
 /// Registers downloaded weights on the recommended backend, or else on any installed one: a
 /// native pull never installs engines, so an installed CPU build must not lose to an
 /// uninstalled recommendation.
-async fn register_download(
+pub(crate) async fn register_download(
     manager: &Arc<Manager>,
     request: ModelAdd,
 ) -> Result<Value, AddModelError> {

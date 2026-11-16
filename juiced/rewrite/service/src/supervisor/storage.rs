@@ -509,6 +509,7 @@ impl Manager {
             self.library.recover(store).await;
         }
         crate::native_api::recover(self.clone()).await;
+        self.recover_follow_ups();
     }
 
     fn storage_root(&self) -> Option<PathBuf> {

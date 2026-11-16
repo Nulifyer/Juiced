@@ -28,10 +28,13 @@ pub struct Observed {
     pub authorization: Option<String>,
 }
 
+type Replaced = Arc<Mutex<BTreeMap<(String, String), Vec<u8>>>>;
+
 pub struct Hub {
     pub base: String,
     pub repos: Arc<BTreeMap<String, Vec<HubFile>>>,
     observed: Arc<Mutex<Vec<Observed>>>,
+    replaced: Replaced,
     task: JoinHandle<()>,
 }
 
@@ -57,9 +60,24 @@ async fn respond(socket: &mut TcpStream, status: &str, headers: &str, body: &[u8
     }
 }
 
-fn info(repo: &str, files: &[HubFile]) -> Value {
+/// A file's current bytes: the published ones unless a test replaced them upstream.
+fn current(repo: &str, file: &HubFile, replaced: &Replaced) -> HubFile {
+    let bytes = replaced
+        .lock()
+        .unwrap()
+        .get(&(repo.to_owned(), file.path.clone()))
+        .cloned()
+        .unwrap_or_else(|| file.bytes.clone());
+    HubFile {
+        path: file.path.clone(),
+        bytes,
+    }
+}
+
+fn info(repo: &str, files: &[HubFile], replaced: &Replaced) -> Value {
     let siblings: Vec<Value> = files
         .iter()
+        .map(|file| current(repo, file, replaced))
         .map(|file| json!({"rfilename": file.path, "size": file.bytes.len(), "lfs": {"sha256": file.sha256(), "size": file.bytes.len(), "pointerSize": 134}}))
         .chain([json!({"rfilename": ".gitattributes", "size": 1519})])
         .collect();
@@ -70,6 +88,7 @@ async fn serve(
     mut socket: TcpStream,
     repos: Arc<BTreeMap<String, Vec<HubFile>>>,
     observed: Arc<Mutex<Vec<Observed>>>,
+    replaced: Replaced,
 ) {
     let mut request = Vec::new();
     while request.len() < 16384 && !request.ends_with(b"\r\n\r\n") {
@@ -119,7 +138,7 @@ async fn serve(
             let repo = format!("{owner}/{name}");
             match repos.get(&repo) {
                 Some(files) => {
-                    let body = serde_json::to_vec(&info(&repo, files)).unwrap();
+                    let body = serde_json::to_vec(&info(&repo, files, &replaced)).unwrap();
                     respond(
                         &mut socket,
                         "200 OK",
@@ -136,6 +155,7 @@ async fn serve(
             match repos
                 .get(&repo)
                 .and_then(|files| files.iter().find(|known| known.path == *file))
+                .map(|found| current(&repo, found, &replaced))
             {
                 Some(found) => {
                     let headers = format!("ETag: \"{}\"\r\n", found.sha256());
@@ -180,15 +200,17 @@ impl Hub {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
         let observed = Arc::new(Mutex::new(Vec::new()));
+        let replaced: Replaced = Arc::new(Mutex::new(BTreeMap::new()));
         let served = repos.clone();
         let recorded = observed.clone();
+        let swapped = replaced.clone();
         let task = tokio::spawn(async move {
             let mut clients = JoinSet::new();
             loop {
                 tokio::select! {
                     accepted = listener.accept() => {
                         let (socket, _) = accepted.unwrap();
-                        clients.spawn(serve(socket, served.clone(), recorded.clone()));
+                        clients.spawn(serve(socket, served.clone(), recorded.clone(), swapped.clone()));
                     }
                     _ = clients.join_next(), if !clients.is_empty() => {}
                 }
@@ -198,8 +220,17 @@ impl Hub {
             base,
             repos,
             observed,
+            replaced,
             task,
         }
+    }
+
+    /// Publishes new bytes for a file at the same revision, as an upstream re-upload does.
+    pub fn replace(&self, repo: &str, path: &str, bytes: Vec<u8>) {
+        self.replaced
+            .lock()
+            .unwrap()
+            .insert((repo.to_owned(), path.to_owned()), bytes);
     }
 
     pub fn file(&self, repo: &str, path: &str) -> &HubFile {

@@ -40,6 +40,7 @@ pub(crate) use discovery::{Discovered, loaded_entry, model_type, revision as cat
 mod engines;
 mod environments;
 pub use engines::{AddModelError, EngineInstall, ModelAdd};
+pub use model_updates::ModelUpdate;
 mod intake;
 pub use intake::{ImportListQuery, ImportPathRequest, UploadQuery};
 mod local_library;

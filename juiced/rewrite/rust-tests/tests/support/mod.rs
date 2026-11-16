@@ -83,7 +83,7 @@ pub const OPERATOR_READ_ROUTES: [&str; 28] = [
     "/juiced/protocols/health",
     "/juiced/barista",
 ];
-pub const WRITE_ROUTES: [&str; 44] = [
+pub const WRITE_ROUTES: [&str; 45] = [
     "/juiced/runtime-packages/import",
     "/juiced/engines/install",
     "/juiced/models/add",
@@ -96,6 +96,7 @@ pub const WRITE_ROUTES: [&str; 44] = [
     "/models/{model}/artifacts",
     "/models/{model}/runtime",
     "/models/{model}/variants",
+    "/models/{model}/update",
     "/delete",
     "/juiced/cache",
     "/juiced/cache/save",
@@ -314,6 +315,12 @@ fn diagnostic_route(path: &str) -> &'static str {
                 .is_some_and(|id| !id.is_empty() && !id.contains('/'))
             {
                 return "/models/{model}/tune";
+            }
+            if model
+                .strip_suffix("/update")
+                .is_some_and(|id| !id.is_empty() && !id.contains('/'))
+            {
+                return "/models/{model}/update";
             }
             if !model.is_empty() && !model.contains('/') {
                 return "/models/{model}";

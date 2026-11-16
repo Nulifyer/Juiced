@@ -124,12 +124,18 @@ impl ArtifactStore {
 
     pub fn local_listing(&self, limit: usize) -> Result<StoreListing, ArtifactError> {
         let runtime = self.runtime.lock().map_err(|_| ArtifactError::Corrupt)?;
-        let mut sources: BTreeMap<&str, (Option<&str>, Option<&str>)> = BTreeMap::new();
+        let mut sources: BTreeMap<&str, (Option<&str>, Option<&str>, bool)> = BTreeMap::new();
         for job in runtime.manifest.jobs.values() {
             if let Some(artifact) = job.artifact.as_deref() {
+                let previous = sources.get(artifact).is_some_and(|source| !source.2);
+                let unverified = job.source_url.is_some() && job.computed_digest && !previous;
                 sources.insert(
                     artifact,
-                    (job.source_url.as_deref(), job.source_name.as_deref()),
+                    (
+                        job.source_url.as_deref(),
+                        job.source_name.as_deref(),
+                        unverified,
+                    ),
                 );
             }
         }
@@ -139,7 +145,7 @@ impl ArtifactStore {
             .iter()
             .take(limit)
             .map(|(id, artifact)| {
-                let (url, name) = sources.get(id.as_str()).copied().unwrap_or_default();
+                let (url, name, unverified) = sources.get(id.as_str()).copied().unwrap_or_default();
                 StoredFile {
                     id: id.clone(),
                     bytes: artifact.bytes,
@@ -149,6 +155,7 @@ impl ArtifactStore {
                     active_holds: artifact.active_holds(),
                     source_url: url.map(str::to_owned),
                     source_name: name.map(str::to_owned),
+                    unverified,
                 }
             })
             .collect();
@@ -184,6 +191,8 @@ pub struct StoredFile {
     pub active_holds: usize,
     pub source_url: Option<String>,
     pub source_name: Option<String>,
+    /// Fetched from a URL without a publisher checksum to compare against.
+    pub unverified: bool,
 }
 
 #[derive(Clone, Debug)]

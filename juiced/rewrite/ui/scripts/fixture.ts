@@ -149,7 +149,8 @@ source = Bun.serve({
     const hubResponse = hub(url);
     if (hubResponse) return hubResponse;
     if (!url.pathname.endsWith(".gguf")) return new Response("Not found", { status: 404 });
-    if (url.pathname.startsWith("/unstable/") && !failed.has(url.pathname)) { failed.add(url.pathname); return new Response("Fixture transient failure", { status: 503 }); }
+    if (request.method === "HEAD") return new Response(null, { headers: { "Content-Length": String(weights.length), ETag: '"fixture-v1"' } });
+    if (url.pathname.startsWith("/unstable/") && request.method === "GET" && !failed.has(url.pathname)) { failed.add(url.pathname); return new Response("Fixture transient failure", { status: 503 }); }
     const range = request.headers.get("Range");
     let position = range && request.headers.get("If-Range") === '"fixture-v1"' ? Number(/^bytes=(\d+)-$/.exec(range)?.[1] ?? 0) : 0;
     if (!Number.isSafeInteger(position) || position < 0 || position >= weights.length) return new Response(null, { status: 416 });

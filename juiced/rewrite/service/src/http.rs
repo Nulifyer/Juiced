@@ -246,6 +246,7 @@ define_routes! {
     (post, "/models/{model}/artifacts", model_artifacts_set, "operator"),
     (post, "/models/register", register, "operator"),
     (post, "/models/check-updates", model_check_updates, "operator"),
+    (post, "/models/{model}/update", model_update, "operator"),
     (post, "/delete", unregister, "operator"),
     (post, "/pull", native_pull, "operator"),
     (get, "/pull/variants", native_pull_variants, "operator"),
@@ -605,7 +606,13 @@ async fn library_pull(
     ApiJson(request): ApiJson<crate::library::PullRequest>,
 ) -> Result<Json<Value>, ApiError> {
     let store = state.manager.artifacts()?;
-    state.manager.library().pull(store, request).await.map(Json)
+    let view = state.manager.library().pull(store, request).await?;
+    if view["then"]["state"] == "pending"
+        && let Some(pull) = view["pull"].as_str()
+    {
+        state.manager.follow_pull(pull.to_owned());
+    }
+    Ok(Json(view))
 }
 async fn library_pull_status(
     State(state): State<AppState>,
@@ -794,14 +801,17 @@ async fn artifact_inventory(
 #[serde(deny_unknown_fields)]
 struct ArtifactPull {
     expected_generation: u64,
-    download: crate::artifacts::DownloadRequest,
+    download: crate::artifacts::UrlDownload,
 }
 async fn artifact_pull(
     State(state): State<AppState>,
     ApiJson(request): ApiJson<ArtifactPull>,
 ) -> Result<Json<Value>, ApiError> {
     let store = state.manager.artifacts()?;
-    artifact_task(move || store.start_download(request.download, request.expected_generation)).await
+    let job = store
+        .start_url_download(request.download, request.expected_generation)
+        .await?;
+    Ok(Json(serde_json::to_value(job).unwrap_or(Value::Null)))
 }
 async fn artifact_job(
     State(state): State<AppState>,
@@ -1306,6 +1316,13 @@ async fn model_detail(
     Ok(Json(entry))
 }
 
+async fn model_update(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    ApiJson(request): ApiJson<crate::supervisor::ModelUpdate>,
+) -> Result<Json<Value>, ApiError> {
+    state.manager.update_model(&id, request).await.map(Json)
+}
 async fn model_check_updates(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
     state.manager.check_model_updates().await.map(Json)
 }

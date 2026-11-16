@@ -11,23 +11,24 @@ and enough memory for the model and its context.
 3. Search for a model, for example `qwen3`, and select the **Chat** task.
 4. Select a quant chip, such as **Q4_K_M**, on a small GGUF model. The detail
    panel lists every quant with its size and whether it fits this machine.
-5. Select **Download**. The quant shows **✓ downloaded** when the files are on disk.
-   The **Downloads** tab shows progress, errors, **Pause** and **Retry**.
+5. Choose a **Loading policy**. **On demand** is selected by default and loads
+   the model on its first request.
+6. Select **Download**. The **Downloads** tab shows progress, errors, **Pause**
+   and **Retry**.
 
 Download size describes the weights on disk. Runtime memory also includes
 context, engine buffers, and any companion files.
 
 ## Add the model
 
-1. In the same detail panel, choose a policy under **Make available as**.
-   **On demand** is selected by default and loads the model on its first request.
-2. Select **Add model**. If the model needs an engine that is not installed,
-   Juiced names the engine and its download size. Select **Install engine and add**.
-3. Select **Open model** to see it in **Models → Installed**.
+When the download finishes, Juiced adds the model with the policy you chose. If
+the model needs an engine that is not installed, Juiced installs the build it
+picked for this machine first. Select **Open model** when the panel says
+**Added** to see it in **Models → Installed**.
 
-Juiced picks the engine build for this machine. To run on the CPU instead of a
-GPU, open the model's **Settings** tab and select **CPU only** under **Run on**.
-See [runtimes and hardware](runtimes.md) to install another engine build.
+To run on the CPU instead of a GPU, open the model's **Settings** tab and select
+**CPU only** under **Run on**. See [runtimes and hardware](runtimes.md) to install
+another engine build.
 
 ## Test it
 

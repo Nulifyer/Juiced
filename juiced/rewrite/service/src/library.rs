@@ -1,6 +1,7 @@
 mod catalog;
 pub(crate) mod checkpoint;
 mod durable;
+mod follow_up;
 mod hub;
 mod local;
 pub(crate) mod native;
@@ -8,6 +9,9 @@ mod quant;
 #[cfg(test)]
 mod tests;
 
+pub use follow_up::{
+    AddWhenDone, FollowUp, Outcome as FollowUpOutcome, OutcomeState as FollowUpState,
+};
 pub use hub::{HubLimits, Token};
 pub use local::{
     Hub as LocalHub, LocalFile as LocalInventoryFile, LocalInventory, Registered, ScanInputs,
@@ -207,6 +211,8 @@ pub struct PullRequest {
     pub files: Option<Vec<String>>,
     pub revision: Option<String>,
     pub expected_generation: u64,
+    #[serde(default)]
+    pub then: Option<AddWhenDone>,
 }
 
 struct Entry {
@@ -278,6 +284,7 @@ struct PullRecord {
     parts: Vec<Part>,
     set: Option<PlannedSet>,
     checkpoint: Option<checkpoint::Kind>,
+    follow_up: Option<follow_up::Saved>,
 }
 
 impl PullRecord {
@@ -394,6 +401,7 @@ impl PullRecord {
             "suggested_id": self.suggested_id(),
             "set": self.set.as_ref().map(|set| set.id.as_str()),
             "set_state": set_state, "set_error": set_error,
+            "then": follow_up::view(self.follow_up.as_ref()),
         })
     }
 }
@@ -407,6 +415,7 @@ pub struct Library {
     local: Mutex<Option<CachedLocal>>,
     journal: std::sync::OnceLock<Arc<crate::acquisitions::Journal>>,
     updates: Mutex<(u64, BTreeMap<String, bool>)>,
+    following: Mutex<BTreeSet<String>>,
 }
 
 impl Library {
@@ -441,6 +450,7 @@ impl Library {
             local: Mutex::new(None),
             journal: std::sync::OnceLock::new(),
             updates: Mutex::new((0, BTreeMap::new())),
+            following: Mutex::new(BTreeSet::new()),
         }
     }
 
@@ -622,11 +632,13 @@ impl Library {
                     "No library acquisition with this identifier is retained.",
                 )
             })?;
-        if !pulls[index]
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .terminal()
-        {
+        let dismissible = {
+            let record = pulls[index]
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            record.terminal() && !record.follow_up_pending()
+        };
+        if !dismissible {
             return Err(library_error(
                 StatusCode::CONFLICT,
                 "library_pull_active",
@@ -995,10 +1007,8 @@ impl Library {
             return Ok(());
         }
         if let Some(index) = pulls.iter().position(|record| {
-            record
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .terminal()
+            let record = record.lock().unwrap_or_else(|error| error.into_inner());
+            record.terminal() && !record.follow_up_pending()
         }) {
             let removed = pulls.remove(index);
             drop(pulls);
@@ -1038,7 +1048,18 @@ impl Library {
     pub async fn pull(
         self: &Arc<Self>,
         store: Arc<ArtifactStore>,
+        mut request: PullRequest,
+    ) -> Result<Value, ApiError> {
+        let then = request.then.take().map(FollowUp::from);
+        self.pull_with(store, request, then).await
+    }
+
+    /// Starts or joins a pull; a follow-up attaches to a joined pull that has none yet.
+    pub(crate) async fn pull_with(
+        self: &Arc<Self>,
+        store: Arc<ArtifactStore>,
         request: PullRequest,
+        then: Option<FollowUp>,
     ) -> Result<Value, ApiError> {
         let invalid =
             |message: &str| library_error(StatusCode::BAD_REQUEST, "invalid_library_pull", message);
@@ -1144,10 +1165,17 @@ impl Library {
         let variant = &variant;
         let key = format!("{}@{revision}:{}", request.repo, variant.primary);
         if let Some(existing) = self.find_pull(&key) {
-            let mut view = existing
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .view();
+            let mut record = existing.lock().unwrap_or_else(|error| error.into_inner());
+            if record.follow_up.is_none()
+                && let Some(then) = then
+            {
+                record.follow_up = Some(follow_up::Saved {
+                    then,
+                    outcome: FollowUpOutcome::default(),
+                });
+                self.persist(&record);
+            }
+            let mut view = record.view();
             view["reused_pull"] = json!(true);
             return Ok(view);
         }
@@ -1234,6 +1262,10 @@ impl Library {
             parts,
             set,
             checkpoint: variant.checkpoint,
+            follow_up: then.map(|then| follow_up::Saved {
+                then,
+                outcome: FollowUpOutcome::default(),
+            }),
         }));
         let view = {
             let record = record.lock().unwrap_or_else(|error| error.into_inner());

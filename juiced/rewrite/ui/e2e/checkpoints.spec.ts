@@ -29,7 +29,7 @@ async function select(page: Page) {
   return detail;
 }
 
-test("Discover downloads an ONNX checkpoint folder and adds it on ONNX Runtime", async ({ page, request }) => {
+test("Discover downloads an ONNX checkpoint folder and adds it on ONNX Runtime when the download ends", async ({ page, request }) => {
   test.setTimeout(120000);
   await cleanup(request);
   try {
@@ -41,22 +41,13 @@ test("Discover downloads an ONNX checkpoint folder and adds it on ONNX Runtime",
     await expect(files.first()).toContainText("model.onnx");
     await expect(detail.getByText("README.md")).toHaveCount(0);
 
+    await expect(detail.getByRole("radiogroup", { name: "Loading policy" }).getByRole("radio", { name: "On demand" })).toHaveAttribute("aria-checked", "true");
     const pulling = page.waitForRequest((outgoing) => outgoing.method() === "POST" && new URL(outgoing.url()).pathname === "/v1/juiced/library/pull");
     await detail.getByRole("button", { name: "Download" }).click();
-    expect((await pulling).postDataJSON()).toMatchObject({ repo, file: "model.onnx" });
-    await expect(detail.getByRole("option", { name: /ONNX/ })).toContainText("✓ downloaded", { timeout: 30000 });
-
-    const adding = page.waitForRequest((outgoing) => outgoing.method() === "POST" && new URL(outgoing.url()).pathname === "/v1/juiced/models/add");
-    const engineReady = (await api(request).json<any>("/v1/juiced/engines")).installed.some((row: any) => row.engine === "onnxruntime");
-    await detail.getByRole("button", { name: "Add model" }).click();
-    const body = (await adding).postDataJSON();
-    expect(body).toMatchObject({ id: added, policy: "on-demand" });
-    expect(body.artifact_set).toMatch(/^set-[0-9a-f]{64}$/);
-    if (!engineReady) {
-      await expect(detail).toContainText(/This model needs the onnxruntime CPU engine/);
-      await detail.getByRole("button", { name: "Install engine and add" }).click();
-    }
-    await expect(detail.getByRole("status").filter({ hasText: `Added ${added}. It runs on CPU and loads on its first request.` })).toBeVisible({ timeout: 45000 });
+    expect((await pulling).postDataJSON()).toMatchObject({ repo, file: "model.onnx", then: { policy: "on-demand", id: added } });
+    await expect(detail.getByRole("status").filter({ hasText: `Added ${added}.` })).toBeVisible({ timeout: 60000 });
+    await expect(detail.getByRole("option", { name: /ONNX/ })).toContainText("✓ downloaded");
+    expect((await api(request).json<any>("/v1/juiced/engines")).installed.some((row: any) => row.engine === "onnxruntime"), "the service installs the engine it picked").toBe(true);
     const model = await api(request).model(added);
     expect(model?.policy).toBe("on-demand");
   } finally {

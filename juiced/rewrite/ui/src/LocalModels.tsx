@@ -57,7 +57,7 @@ export function FileInspector({ group, quant: initialQuant, client, online, onCl
       <div className="inspector-title"><h2 className="break-word">{group.name}</h2>{!added && <Badge>Not added</Badge>}</div>
       <p className="field-help">{[group.publisher, ...group.storage.map((value) => storageNames[value]), group.readOnly ? "Read-only" : null].filter(Boolean).join(" · ")}</p>
       {group.quants.length > 0 && <div className="quant-list" role="listbox" aria-label="Quants on disk">{group.quants.map((entry) => <button key={entry.file} role="option" aria-selected={entry.file === quant?.file} className="quant-option" onClick={() => { setPicked(entry.file); setDeleteError(""); }}>
-        <span className={`status-dot ${entry.usedBy.length ? "good" : "quiet"}`} title={entry.usedBy.length ? "In use" : "Not used"} /><strong>{entry.label}</strong>{entry.parts > 1 && <span className="muted">{entry.parts} parts</span>}<span className="numeric muted">{bytes(entry.bytes)}</span>
+        <span className={`status-dot ${entry.usedBy.length ? "good" : "quiet"}`} title={entry.usedBy.length ? "In use" : "Not used"} /><strong>{entry.label}</strong>{entry.parts > 1 && <span className="muted">{entry.parts} parts</span>}{group.files.some((file) => file.unverified && entry.files.includes(file.id)) && <Badge tone="warning">Unverified</Badge>}<span className="numeric muted">{bytes(entry.bytes)}</span>
       </button>)}</div>}
       <dl className="facts">
         {quant && <div><dt>Used by</dt><dd><UsedBy ids={quant.usedBy} onOpenModel={onOpenModel} /></dd></div>}
@@ -105,7 +105,7 @@ export function ModelFiles({ model, inventory }: { model: Model; inventory: Loca
   const others = [...new Set(files.flatMap((file) => file.usedBy))].filter((id) => id !== model.id);
   const location = groups.length === 1 ? groups[0]!.location ?? files[0]!.location : null;
   return <section className="inspector-section"><h3>Files</h3>
-    <ul className="file-list" aria-label="Model files">{files.map((file) => <li key={file.id}><span className="break-word">{file.name}</span><span className="muted">{file.quant ?? roleNames[file.role] ?? file.role}</span><span className="muted numeric">{bytes(file.bytes)}</span></li>)}</ul>
+    <ul className="file-list" aria-label="Model files">{files.map((file) => <li key={file.id}><span className="break-word">{file.name}</span><span className="muted">{file.quant ?? roleNames[file.role] ?? file.role}{file.unverified ? " · unverified" : ""}</span><span className="muted numeric">{bytes(file.bytes)}</span></li>)}</ul>
     <dl className="facts"><div><dt>On disk</dt><dd>{bytes(files.reduce((sum, file) => sum + file.bytes, 0))}{files.some((file) => file.readOnly) ? " · read-only" : ""}</dd></div>
       {location && <div className="fact-path"><dt>Location</dt><dd><code className="break-word">{location}</code></dd></div>}</dl>
     {others.length > 0 && <p className="field-help">Also used by {others.join(", ")}.</p>}
