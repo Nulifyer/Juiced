@@ -1,6 +1,6 @@
 # Gaps and console UX audit (November 2026)
 
-Status: released as v0.11.3 and deployed (2026-11-16)
+Status: v0.11.4 released and deployed (2026-11-16); 1af14d5e unreleased
 Owner: primary agent (integration, release, this ledger); helpers own their batches below
 Request source: user, 2026-11-16. "Ask fable to do some research ... find if there is anything missing from this, or if the ui/ux needs work", then "Address all it's feedback".
 
@@ -50,7 +50,9 @@ Every report item is either fixed with evidence or listed below as decided other
 
 - Tune answer checks (85650300): trials run at temperature 0 with a fixed seed; a trial that loses an answer the current settings got right (hidden prompt marker, exact count, exact rewrite) is not kept; a kept change below 80% text agreement warns. Live Coder-Next and Qwen3-4B pass all three checks on current settings. Depth benchmark on Coder-Next (43K/73K tokens): flash attention on equals auto; off exceeds the 80 GiB budget; q8_0 KV is 28-35% slower at decode; settings restored to revision 193 (same saved, extra_args, defaults and tuned layer).
 - helper-fable-quants 2e137512 (fast-forwarded): Discover quant list no longer jumps (scroll re-centering, label-keyed quants, refresh status line, sticky detail); the inspector Overview lists a model's quants with Open/Add/Get. Open: exact repository lookup needs a `repo=` parameter on `/juiced/library/search` (search ranking is relied on today).
-- Not released yet.
+- Exact repository lookup (ada4ab63): `GET /juiced/library/search?repo=owner/name`; a missing repository is not a hub failure; the inspector quant list uses it.
+- v0.11.4 (a15226b0; run 43965732856 green; https://github.com/Nulifyer/Juiced/releases/tag/v0.11.4) deployed to stack 83: 4 Hot models loaded; Coder-Next still revision 193 with the same layers; repo lookup 0.1 s live (Coder-Next 38 quants, 1 on disk; Qwen3.6-35B-A3B 24, 4 on disk; a missing repo returns none with status ok); the Quants section renders on production (read-only, 0 non-GET requests).
+- Found live: part 1 of 3 of a UD-Q6_K_XL download showed as a 5.7 MiB file with Add. Fixed after the release in 1af14d5e (shows parts on disk and Finish); not released.
 
 ## Next action
 
