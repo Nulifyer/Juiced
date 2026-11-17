@@ -8,7 +8,7 @@ override. Run these commands from a checkout of the repository:
 cd deploy/compose
 ```
 
-The examples pin the Linux x86-64 release image `v0.11.8`. They publish the console
+The examples pin the Linux x86-64 release image `v0.11.9`. They publish the console
 and API at `http://localhost:8080`. They do not download model weights or engines.
 Juiced installs an engine when you add a model that needs it, or when you
 install one under **Engines & hardware**.
@@ -100,7 +100,7 @@ Set these variables in your shell or in `deploy/compose/.env`:
 
 ```bash
 export JUICED_PORT=8081
-export JUICED_IMAGE=ghcr.io/nulifyer/juiced:v0.11.8
+export JUICED_IMAGE=ghcr.io/nulifyer/juiced:v0.11.9
 ```
 
 `JUICED_BIND_ADDRESS` defaults to `127.0.0.1`. Follow
