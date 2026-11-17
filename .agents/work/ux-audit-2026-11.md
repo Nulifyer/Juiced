@@ -91,6 +91,14 @@ Every report item is either fixed with evidence or listed below as decided other
 - Gate: 910 service tests, clippy, fmt; 172 UI unit tests, tsc; library, add-model and model-quants specs 51 passed (3 projects). v0.11.12 (run 44180838599 green) deployed to stack 83: 3 Hot models loaded (the user set Coder-Next Q4_K_M to On demand, revision 196, saved options unchanged); production render (0 non-GET) shows the notice and both rows. Add model not pressed (GET-only).
 - Open: add reads the set twice (inspect, then register) and startup rehashes stored models, about a minute per 68 GiB by estimate, unmeasured on production. A complete pull whose add failed has no retry action of its own; File details' Add model covers it.
 
+## Follow-ups (2026-11-17, v0.11.13 and v0.11.14)
+
+- User: "not sure if we should have such a time limit on the model files to add". v0.11.13: holds, companion set publish and the library's post-download publish use `SetOperation::unbounded` (cancellation and shutdown still stop them); `verify_budget` and the 3600 s `PUBLISH_DEADLINE` removed; the set publish API keeps its request-bound limit. 910 service tests, clippy, fmt.
+- The user added `Qwen3-Coder-Next-UD-Q6_K_XL` on v0.11.12 (On demand, 32768 context, revision 198); the add fix worked on production. Its Downloads row still read Not added with the old failure beside Open model; v0.11.14 settles a failed add once a model uses the files (`addedSince`).
+- v0.11.13 (run 44185858059 green) not deployed. v0.11.14 (run 44187406224 green) deployed to stack 83: service unavailable for 60 s with the 68 GiB set registered, about the same as before it; 3 Hot models loaded; both Coder-Next models unchanged; production render (0 non-GET): the Q6 row reads Done, Open model, Dismiss.
+- Memory: Q6 reservation 70.5 GiB plus 7.7 GiB of Hot models against the 80 GiB budget. Not loaded by the primary agent; offered to the user.
+- Open: add reads a set twice and a load rehashes the model's main file; caching digests by file stamp (as `identity::file_digest` does) is proposed, waiting on the user.
+
 ## Next action
 
 None for this audit. Open from earlier ledgers: the later-work list in drop-in-replacement.md.
