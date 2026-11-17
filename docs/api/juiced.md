@@ -257,6 +257,10 @@ reply and `GET /v1/juiced/library/pulls/ID` return the pull with `state`
 `set`, `suggested_id` and, for checkpoints, `format` and `engine`. Pause, resume or
 cancel a pull through its `jobs` with `POST /v1/juiced/artifacts/jobs/ID`.
 
+When the connection to the hub drops, the pull shows `waiting` and resumes the file
+where it stopped, up to six times over about nine minutes, before it fails. A new
+pull of the same files picks up the bytes of a download that failed this way.
+
 Register a finished checkpoint with `POST /v1/juiced/models/add`:
 
 ```json

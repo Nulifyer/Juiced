@@ -10,6 +10,8 @@ pub struct PresenceJob {
     pub downloaded_bytes: u64,
     pub expected_bytes: Option<u64>,
     pub writer_active: bool,
+    #[serde(skip_serializing)]
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -63,6 +65,7 @@ impl ArtifactStore {
                 downloaded_bytes: view.downloaded_bytes,
                 expected_bytes: view.expected_bytes,
                 writer_active: view.writer_active,
+                error: view.error,
             });
         }
         for (id, record) in &runtime.manifest.artifact_sets {

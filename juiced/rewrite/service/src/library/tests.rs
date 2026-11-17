@@ -39,6 +39,7 @@ const NORMAL: u8 = 0;
 const SLOW: u8 = 1;
 const MALFORMED: u8 = 2;
 const OVERSIZED: u8 = 3;
+const DROP_ONCE: u8 = 4;
 
 struct Fixture {
     fake: Arc<Fake>,
@@ -184,11 +185,33 @@ async fn resolve(
     else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    (
-        [(header::ETAG, format!("\"{}\"", digest(&found.bytes)))],
-        found.bytes.clone(),
-    )
-        .into_response()
+    let etag = format!("\"{}\"", digest(&found.bytes));
+    if fake
+        .mode
+        .compare_exchange(DROP_ONCE, NORMAL, Ordering::AcqRel, Ordering::Acquire)
+        .is_ok()
+    {
+        let half = found.bytes[..found.bytes.len() / 2].to_vec();
+        let body = futures_util::stream::iter([
+            Ok(axum::body::Bytes::from(half)),
+            Err(std::io::Error::other("connection dropped")),
+        ])
+        .then(|chunk| async move {
+            if chunk.is_err() {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            chunk
+        });
+        return (
+            [
+                (header::ETAG, etag),
+                (header::CONTENT_LENGTH, found.bytes.len().to_string()),
+            ],
+            axum::body::Body::from_stream(body),
+        )
+            .into_response();
+    }
+    ([(header::ETAG, etag)], found.bytes.clone()).into_response()
 }
 
 fn repos() -> BTreeMap<&'static str, Vec<FakeFile>> {
@@ -1088,6 +1111,68 @@ async fn active_downloads_are_marked_and_reused_by_later_pulls() {
     assert_eq!(finished["state"], "complete");
     assert_eq!(finished["files"][0]["state"], "present");
     assert_eq!(fixture.fake.download_requests.load(Ordering::Acquire), 1);
+}
+
+fn tiny_pull() -> PullRequest {
+    PullRequest {
+        repo: SINGLE_REPO.into(),
+        file: Some("Tiny-Q4_K_M.gguf".into()),
+        files: None,
+        revision: None,
+        expected_generation: 0,
+        then: None,
+    }
+}
+
+#[tokio::test]
+async fn a_dropped_connection_resumes_instead_of_failing_the_pull() {
+    let fixture = fixture().await;
+    let library = library(&fixture, SourcePolicy::AllowLoopbackHttp, None);
+    let directory = tempfile::tempdir().unwrap();
+    let store = store(&directory, SourcePolicy::AllowLoopbackHttp);
+    fixture.fake.mode.store(DROP_ONCE, Ordering::Release);
+    let started = library.pull(store.clone(), tiny_pull()).await.unwrap();
+    let job = started["files"][0]["job"].as_str().unwrap().to_owned();
+    let finished = wait_for_pull(&library, started["pull"].as_str().unwrap()).await;
+    assert_eq!(finished["state"], "complete", "{finished}");
+    assert_eq!(finished["files"][0]["job"], job);
+    assert_eq!(fixture.fake.download_requests.load(Ordering::Acquire), 2);
+}
+
+#[tokio::test]
+async fn a_new_pull_picks_up_the_bytes_of_a_download_whose_connection_dropped() {
+    let fixture = fixture().await;
+    let library = library(&fixture, SourcePolicy::AllowLoopbackHttp, None);
+    let directory = tempfile::tempdir().unwrap();
+    let store = store(&directory, SourcePolicy::AllowLoopbackHttp);
+    fixture.fake.mode.store(DROP_ONCE, Ordering::Release);
+    let dropped = store
+        .start_download(
+            DownloadRequest {
+                source_url: format!(
+                    "{}{SINGLE_REPO}/resolve/{REVISION}/Tiny-Q4_K_M.gguf",
+                    fixture.base
+                ),
+                expected_sha256: digest(&content(8, 50_000)),
+                expected_bytes: Some(50_000),
+                maximum_bytes: 50_000,
+            },
+            store.generation(),
+        )
+        .unwrap();
+    let failed = tokio::time::timeout(Duration::from_secs(5), store.wait(&dropped.id))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(failed.state, JobState::Failed);
+    assert_eq!(failed.error.as_deref(), Some("artifact_network"));
+    assert!(failed.downloaded_bytes > 0);
+    let pulled = library.pull(store.clone(), tiny_pull()).await.unwrap();
+    assert_eq!(pulled["files"][0]["job"], dropped.id);
+    assert_eq!(pulled["files"][0]["reused_job"], true);
+    let finished = wait_for_pull(&library, pulled["pull"].as_str().unwrap()).await;
+    assert_eq!(finished["state"], "complete", "{finished}");
+    assert_eq!(fixture.fake.download_requests.load(Ordering::Acquire), 2);
 }
 
 #[tokio::test]

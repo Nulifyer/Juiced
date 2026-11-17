@@ -47,6 +47,17 @@ const IMPORTER_ID: &str = "huggingface";
 const IMPORTER_VERSION: &str = "juiced-library-1";
 const PUBLISH_DEADLINE: Duration = Duration::from_secs(3600);
 const LOCAL_TTL: Duration = Duration::from_secs(30);
+/// The wait before each automatic resume of a part whose connection dropped. Large files
+/// from the hub lose a connection now and then; the pull fails only after the last one.
+const NETWORK_RESUMES: [Duration; 6] = [
+    Duration::ZERO,
+    Duration::from_secs(10),
+    Duration::from_secs(30),
+    Duration::from_secs(60),
+    Duration::from_secs(120),
+    Duration::from_secs(300),
+];
+const NETWORK_ERROR: &str = "artifact_network";
 
 struct CachedLocal {
     key: u64,
@@ -332,7 +343,7 @@ impl PullRecord {
             matches!(
                 part.status,
                 PartStatus::Job {
-                    state: JobState::Paused | JobState::Interrupted,
+                    state: JobState::Paused | JobState::Interrupted | JobState::Failed,
                     ..
                 }
             )
@@ -1340,6 +1351,7 @@ impl Library {
     }
 
     async fn drive(self: Arc<Self>, store: Arc<ArtifactStore>, record: Arc<Mutex<PullRecord>>) {
+        let mut resumes = BTreeMap::new();
         loop {
             if store.stopping() {
                 return;
@@ -1365,7 +1377,14 @@ impl Library {
                         Err(error) => Some(PartStatus::Failed(error.code())),
                     },
                     PartStatus::Job { id, reused, .. } => {
-                        observe(&store, &id, reused, &download.expected_sha256)
+                        match observe(&store, &id, reused, &download.expected_sha256) {
+                            Some(PartStatus::Failed(code)) => Some(
+                                resume_dropped(&store, &id, reused, &mut resumes)
+                                    .await
+                                    .unwrap_or(PartStatus::Failed(code)),
+                            ),
+                            other => other,
+                        }
                     }
                     _ => None,
                 };
@@ -1560,15 +1579,25 @@ fn existing_status(presence: &Presence, digest: &str) -> PartStatus {
         .jobs
         .get(digest)
         .and_then(|jobs| {
-            jobs.iter().find(|job| {
-                !matches!(
-                    job.state,
-                    JobState::Complete
-                        | JobState::Failed
-                        | JobState::Cancelled
-                        | JobState::Quarantined
-                )
-            })
+            jobs.iter()
+                .find(|job| {
+                    !matches!(
+                        job.state,
+                        JobState::Complete
+                            | JobState::Failed
+                            | JobState::Cancelled
+                            | JobState::Quarantined
+                    )
+                })
+                .or_else(|| {
+                    jobs.iter()
+                        .filter(|job| {
+                            job.state == JobState::Failed
+                                && job.error.as_deref() == Some(NETWORK_ERROR)
+                                && job.downloaded_bytes > 0
+                        })
+                        .max_by_key(|job| job.downloaded_bytes)
+                })
         })
         .map_or(PartStatus::Queued, |job| PartStatus::Job {
             id: job.id.clone(),
@@ -1576,6 +1605,52 @@ fn existing_status(presence: &Presence, digest: &str) -> PartStatus {
             downloaded_bytes: job.downloaded_bytes,
             reused: true,
         })
+}
+
+/// Resumes a part whose connection dropped, keeping its bytes. `None` means the job failed
+/// for another reason or used up its resumes, so the pull fails.
+async fn resume_dropped(
+    store: &Arc<ArtifactStore>,
+    id: &str,
+    reused: bool,
+    resumes: &mut BTreeMap<String, (usize, Instant)>,
+) -> Option<PartStatus> {
+    let job = store.job(id).ok()?;
+    if job.state != JobState::Failed || job.error.as_deref() != Some(NETWORK_ERROR) {
+        return None;
+    }
+    let (count, since) = resumes.entry(id.to_owned()).or_insert((0, Instant::now()));
+    let wait = *NETWORK_RESUMES.get(*count)?;
+    let waiting = PartStatus::Job {
+        id: id.to_owned(),
+        state: JobState::Failed,
+        downloaded_bytes: job.downloaded_bytes,
+        reused,
+    };
+    if since.elapsed() < wait {
+        return Some(waiting);
+    }
+    let resumed = {
+        let store = store.clone();
+        let id = id.to_owned();
+        tokio::task::spawn_blocking(move || store.resume(&id, job.revision))
+            .await
+            .unwrap_or(Err(ArtifactError::Stop))
+    };
+    match resumed {
+        Ok(view) => {
+            *count += 1;
+            *since = Instant::now();
+            Some(PartStatus::Job {
+                id: id.to_owned(),
+                state: view.state,
+                downloaded_bytes: view.downloaded_bytes,
+                reused,
+            })
+        }
+        Err(ArtifactError::Limit | ArtifactError::Busy | ArtifactError::Conflict) => Some(waiting),
+        Err(_) => None,
+    }
 }
 
 async fn start(
