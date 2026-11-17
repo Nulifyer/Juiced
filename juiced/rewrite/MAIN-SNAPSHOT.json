@@ -74,7 +74,7 @@
     },
     {
       "path": "docs/guide/maintenance.md",
-      "sha256": "13115e448fb0f583e34c55c78fd2db311f55fec63bf1d60e78e6bf8ee5223b12",
+      "sha256": "c691b80cd408b874142ef2f65040b312c1ddd93c9b9ba2bdb13c1f784a2e4e31",
       "source_state": "committed",
       "updated_in_rewrite": true
     }
