@@ -61,10 +61,11 @@ test("Download asks for the loading policy first, installs the engine when neede
     const pulling = page.waitForRequest((outgoing) => outgoing.method() === "POST" && new URL(outgoing.url()).pathname === "/v1/juiced/library/pull");
     await detail.getByRole("button", { name: "Download" }).click();
     expect((await pulling).postDataJSON()).toMatchObject({ repo, file, then: { policy: "on-demand", id: added } });
-    await expect(page.getByRole("status").filter({ hasText: "Downloading Tiny-Chat-GGUF Q8_0. It's added as On demand when the download finishes." })).toBeVisible();
+    await expect(page.getByRole("status").filter({ hasText: "Downloading Tiny-Chat-GGUF Q8_0. It's added as On demand when done." })).toBeVisible();
     await expect(detail.getByRole("status").filter({ hasText: `Added ${added}.` })).toBeVisible({ timeout: engineReady ? 20000 : 60000 });
     await expect(detail.getByRole("button", { name: "Add model" })).toHaveCount(0);
-    await expect(detail.getByRole("option", { name: /Q8_0/ })).toContainText("✓ downloaded");
+    await expect(detail.getByRole("option", { name: /Q8_0/ })).toHaveText(/^Q8_0On demand.*KiB$/);
+    await expect(detail.getByRole("button", { name: added, exact: true }), "Used by links the model").toBeVisible();
     if (!engineReady) expect(fixture.cpuEngine(await fixture.engines()), "the service installs the engine it picked").toBeTruthy();
     await expect(detail.getByRole("alert")).toHaveCount(0);
     expect(await fixture.service.model(added)).toMatchObject({ policy: "on-demand", loaded: false });
@@ -109,13 +110,13 @@ test("Add model with a name that is already registered reports it in the detail 
   try {
     const existing = await fixture.service.register({ id: added, model_file: source.model_file, command: source.command, args: source.args });
     const detail = await selectQuant(page);
-    await expect(detail.getByRole("option", { name: /Q8_0/ })).toContainText("✓ downloaded");
+    await expect(detail.getByRole("option", { name: /Q8_0/ })).toContainText("Not added");
     await detail.getByRole("radiogroup", { name: "Loading policy" }).getByRole("radio", { name: "Disabled" }).click();
     const answered = page.waitForResponse((response) => response.request().method() === "POST" && new URL(response.url()).pathname === "/v1/juiced/models/add");
     await detail.getByRole("button", { name: "Add model" }).click();
     expect((await answered).status()).toBe(409);
     expect((await answered).request().postDataJSON()).toMatchObject({ policy: "disabled" });
-    await expect(detail.getByRole("alert")).toHaveText("A model with this name is already added. Rename or remove it under Models first.");
+    await expect(detail.getByRole("alert")).toHaveText("A model already has this name. Choose another name.");
     await expect(detail.getByRole("button", { name: "Add model" })).toBeEnabled();
     await expect(detail.getByRole("button", { name: "Open model" })).toHaveCount(0);
     await expect(toasts(page).getByRole("alert")).toHaveCount(0);

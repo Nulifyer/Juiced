@@ -58,7 +58,7 @@ export function quantRefusal(group: LocalGroup, quant: LocalQuant): string | und
   return blocked ? refusalText(blocked) : "This quant can't be deleted.";
 }
 
-export type PullFile = { file: string; bytes: number; state: string; downloaded: number; job: string | null };
+export type PullFile = { file: string; bytes: number; state: string; downloaded: number; job: string | null; source: string | null };
 /** What the service does once a pull completes: add the files as a model, or move a model to them. */
 export type PullThen = { kind: "add" | "update"; model: string | null; policy: string | null; state: "pending" | "done" | "failed"; message: string | null };
 export type PullView = { id: string; state: string; error: string | null; repo: string; label: string | null; files: PullFile[]; then: PullThen | null };
@@ -75,7 +75,7 @@ function pullThen(value: unknown): PullThen | null {
 export function parsePulls(value: unknown): PullView[] {
   return list(record(value).data, 64).map((pull) => ({
     id: text(pull.pull) ?? "", state: text(pull.state) ?? "unknown", error: text(pull.error), repo: text(pull.repo) ?? "", label: text(pull.label),
-    files: list(pull.files, 64).map((file) => ({ file: text(file.file) ?? "", bytes: number(file.bytes), state: text(file.state) ?? "", downloaded: file.state === "present" ? number(file.bytes) : number(file.downloaded_bytes), job: text(file.job) })),
+    files: list(pull.files, 64).map((file) => ({ file: text(file.file) ?? "", bytes: number(file.bytes), state: text(file.state) ?? "", downloaded: file.state === "present" ? number(file.bytes) : number(file.downloaded_bytes), job: text(file.job), source: text(file.source_url) })),
     then: pullThen(pull.then),
   }));
 }

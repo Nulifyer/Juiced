@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Client } from "./api";
-import { bytes, policyNames, type Model } from "./domain";
+import type { Model } from "./domain";
 import type { DiscoverTarget } from "./FindModels";
 import { engineNames, featured, parseSearch, progress, type LibraryModel } from "./libraryData";
 import type { LocalGroup, LocalInventory } from "./localLibraryData";
 import { weightsGroup } from "./LocalModels";
+import { QuantList, policyWord, quantWords, type QuantItem } from "./QuantList";
 import { Button, HelpTip } from "./ui";
 import { useResource } from "./useResource";
 
@@ -64,19 +65,18 @@ export function ModelQuants({ model, models, inventory, client, online, onOpenMo
     : !others ? "No other quants."
     : null;
   return <section className="inspector-section model-quants" aria-label="Quants">
-    <div className="page-title"><h3>Quants</h3><HelpTip label="Quants">Other sizes of {group.name}. Each added quant is its own model with its own settings and loading policy. Get opens Discover, where you choose the loading policy before the download starts.</HelpTip></div>
-    <ul className="model-quant-list" aria-label={`Quants of ${group.name}`}>{rows.map((row) => <li key={row.key} className={row.kind === "current" ? "current" : undefined}>
-      <span className="model-quant-name"><strong>{row.label}</strong>{row.kind === "added" && row.shared && <span className="muted break-word">{row.model}</span>}</span>
-      <span className="muted numeric">{row.bytes === null ? "" : bytes(row.bytes)}</span>
-      <span className="model-quant-state muted">{row.kind === "current" ? "This model" : row.kind === "added" ? row.policy && Object.hasOwn(policyNames, row.policy) ? policyNames[row.policy as keyof typeof policyNames] : "Added" : row.kind === "file" ? "Not added" : row.kind === "partial" ? `${row.have} of ${row.parts} parts` : row.progress !== null ? `Downloading ${Math.round(row.progress)}%` : ""}</span>
-      <span className="model-quant-action">
-        {row.kind === "added" && <Button className="row-action" aria-label={`Open ${row.model}`} title={row.model} onClick={() => onOpenModel(row.model)}>Open</Button>}
-        {row.kind === "partial" && repo && row.file && <Button className="row-action" aria-label={`Finish ${row.label}`} onClick={() => onDiscover({ repo, file: row.file! })}>Finish</Button>}
-        {row.kind === "file" && <Button className="row-action" aria-label={`Add ${row.label}`} onClick={() => onOpenFile(group.id, row.file)}>Add</Button>}
-        {row.kind === "remote" && repo && <Button className="row-action" aria-label={row.progress !== null ? `View ${row.label} in Discover` : `Get ${row.label}`} onClick={() => onDiscover({ repo, file: row.file })}>{row.progress !== null ? "View" : "Get"}</Button>}
-      </span>
-      {row.kind === "remote" && row.progress !== null && <span className="quant-progress" style={{ width: `${row.progress}%` }} />}
-    </li>)}</ul>
+    <div className="page-title"><h3>Quants</h3><HelpTip label="Quants">Other sizes of {group.name}. Each added quant is its own model with its own settings. Get opens Discover, where you choose the loading policy.</HelpTip></div>
+    <QuantList label={`Quants of ${group.name}`} items={rows.map((row): QuantItem => ({
+      key: row.key, label: row.label, bytes: row.bytes, current: row.kind === "current",
+      note: row.kind === "added" && row.shared ? row.model : null,
+      progress: row.kind === "remote" ? row.progress : null,
+      state: row.kind === "current" ? quantWords.current : row.kind === "added" ? policyWord(row.policy) : row.kind === "file" ? quantWords.unadded : row.kind === "partial" ? quantWords.parts(row.have, row.parts) : row.progress !== null ? quantWords.downloading(row.progress) : "",
+      action: row.kind === "added" ? { label: "Open", name: `Open ${row.model}`, run: () => onOpenModel(row.model) }
+        : row.kind === "partial" ? repo && row.file ? { label: "Finish", name: `Finish ${row.label}`, run: () => onDiscover({ repo, file: row.file! }) } : undefined
+        : row.kind === "file" ? { label: "Add", name: `Add ${row.label}`, run: () => onOpenFile(group.id, row.file) }
+        : row.kind === "remote" && repo ? { label: row.progress !== null ? "View" : "Get", name: row.progress !== null ? `View ${row.label} in Discover` : `Get ${row.label}`, run: () => onDiscover({ repo, file: row.file }) }
+        : undefined,
+    }))} />
     {repo && more > 0 && <button className="link-button model-quant-more" onClick={() => onDiscover({ repo })}>+{more} more in Discover</button>}
     {note && <p className="field-help" role="status">{note}</p>}
     {repo && online && (search.error || (search.data && !search.data.offline && !reachable)) && <div className="action-row">{search.error && <p className="inline-error" role="alert">Couldn't check Hugging Face. {search.error}</p>}<Button disabled={search.loading} onClick={() => void search.reload()}>Retry</Button></div>}

@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ApiError, type Client } from "./api";
-import { bytes, policyNames, type Policy } from "./domain";
+import { bytes, policyNames, type Model, type Policy } from "./domain";
 import { gpuMemory, parseSystemInfo } from "./hardware";
 import { AddModel, type AddTarget } from "./AddModel";
 import { UrlDownload } from "./UrlDownload";
@@ -10,7 +10,9 @@ import { Badge, Button, Empty, HelpTip, Icon, Menu } from "./ui";
 import { LocalProgress, ProjectorChoice, ServerFolder, localTarget, useLocalFile } from "./LocalFiles";
 import { splitPart } from "./localFilesData";
 import { FlmModels, useFlm } from "./FlmModels";
-import { parsePulls, type PullView } from "./localLibraryData";
+import { parsePulls, type LocalInventory, type PullView } from "./localLibraryData";
+import { plainError } from "./modelErrors";
+import { QuantList, policyWord, quantWords, type QuantItem } from "./QuantList";
 import { notify } from "./toast";
 import { useResource } from "./useResource";
 
@@ -32,9 +34,30 @@ function modelId(file: string): string {
   const name = file.split(/[\\/]/).pop() ?? file;
   return (splitPart(name)?.prefix ?? name.replace(/\.(gguf|bin|safetensors|onnx)$/, "")).trim();
 }
-/** A repository to open on arrival, with one of its quants when `file` is set. */
-export type DiscoverTarget = { repo: string; file?: string };
-export function FindModels({ client, online, onRegistered, onOpenModel, onDownloads, initial }: { client: Client; online: boolean; onRegistered: () => Promise<void>; onOpenModel: (id: string) => void; onDownloads: () => void; initial?: DiscoverTarget }) {
+/** A repository to open on arrival, with one of its quants when `file` or `label` is set. */
+export type DiscoverTarget = { repo: string; file?: string; label?: string };
+
+const baseName = (path: string) => path.split(/[\\/]/).pop() ?? path;
+/** The models that run a hub quant's files, so Discover can say what already uses it. */
+export function quantUsers(local: LocalInventory | null | undefined, repo: string, quant: Pick<Quant, "file" | "kind" | "present">): string[] {
+  const group = local?.groups.find((item) => item.repo?.toLowerCase() === repo.toLowerCase());
+  if (!group) return [];
+  if (quant.kind === "checkpoint") return quant.present ? group.usedBy : [];
+  const name = baseName(quant.file);
+  return group.quants.find((item) => item.files.some((id) => group.files.find((file) => file.id === id)?.name === name))?.usedBy ?? [];
+}
+
+/** The state word a hub quant shows, matching the lists under Installed. */
+export function hubQuantState(quant: Quant, users: string[], models: Pick<Model, "id" | "policy">[]): string {
+  const percent = progress(quant);
+  if (percent !== null) return quantWords.downloading(percent);
+  if (users.length) return policyWord(models.find((model) => model.id === users[0])?.policy, users.length);
+  if (quant.present) return quantWords.unadded;
+  if (quant.parts > 1 && quant.presentFiles > 0) return quantWords.parts(quant.presentFiles, quant.parts);
+  return "";
+}
+
+export function FindModels({ client, online, onRegistered, onOpenModel, onDownloads, initial, local: inventory, models: registered = [] }: { client: Client; online: boolean; onRegistered: () => Promise<void>; onOpenModel: (id: string) => void; onDownloads: () => void; initial?: DiscoverTarget; local?: LocalInventory | null; models?: Pick<Model, "id" | "policy">[] }) {
   const quantList = useRef<HTMLDivElement>(null);
   const [urlOpen, setUrlOpen] = useState(false);
   const [query, setQuery] = useState(initial?.repo ?? "");
@@ -91,7 +114,7 @@ export function FindModels({ client, online, onRegistered, onOpenModel, onDownlo
         full = true;
         if (!controller.signal.aborted) { setResult(next); setError(""); open(next); }
       } catch (failure) {
-        if (request.current === controller) setError(controller.signal.aborted ? "Hugging Face didn't answer within 45 seconds. Recommended and downloaded models are still shown." : failure instanceof Error ? failure.message : "Search failed.");
+        if (request.current === controller) setError(controller.signal.aborted ? "Hugging Face didn't answer in 45 seconds. Recommended and downloaded models are still listed." : plainError(failure, "Search failed."));
       } finally {
         clearTimeout(limit);
         await fast;
@@ -115,7 +138,7 @@ export function FindModels({ client, online, onRegistered, onOpenModel, onDownlo
     const item = target && found.models.find((entry) => entry.repo.toLowerCase() === target.repo.toLowerCase());
     if (!target || !item) return;
     wanted.current = undefined;
-    pick(item, item.quants.find((entry) => entry.file === target.file) ?? item.quants.find((entry) => entry.recommended) ?? featured(item.quants)[0]);
+    pick(item, item.quants.find((entry) => entry.file === target.file) ?? (target.label ? item.quants.find((entry) => entry.label === target.label) : undefined) ?? item.quants.find((entry) => entry.recommended) ?? featured(item.quants)[0]);
   }
   const model = local.file || npuOnly ? undefined : result?.models.find((item) => item.repo === selected?.repo);
   const quant = model?.quants.find((item) => quantKey(item) === selected?.quant);
@@ -144,10 +167,10 @@ export function FindModels({ client, online, onRegistered, onOpenModel, onDownlo
         return pull(parseArtifactInventory(await client.request("juiced/artifacts?section=jobs&limit=1")).generation);
       });
       if (started.pull) seen.current.add(started.pull);
-      notify(`Downloading ${target.name} ${item.label}. It's added as ${policyNames[policy]} when the download finishes.`);
+      notify(`Downloading ${target.name} ${item.label}. It's added as ${policyNames[policy]} when done.`);
       setTick((value) => value + 1);
       await pulls.reload();
-    } catch (failure) { setError(failure instanceof Error ? failure.message : "The download didn't start."); }
+    } catch (failure) { setError(plainError(failure, "The download didn't start.")); }
   }
   const models = useMemo(() => result?.models ?? [], [result]);
   const names = useMemo(() => quantNames(model?.quants ?? []), [model]);
@@ -156,7 +179,9 @@ export function FindModels({ client, online, onRegistered, onOpenModel, onDownlo
   const split = !checkpoint && (quant?.parts ?? 1) > 1;
   const target: AddTarget | null = file ? localTarget(file) : checkpoint || split ? quant?.set ? { artifact_set: quant.set } : split && quant?.localPath ? { path: quant.localPath } : null : quant?.localPath ? { path: quant.localPath } : quant?.sha256 ? { artifact: quant.sha256 } : null;
   const targetId = file ? file.id.trim() : checkpoint ? model?.name ?? "" : quant?.kind === "bundle" && model?.nativeId ? model.nativeId : quant ? modelId(quant.file) : "";
-  const gatedNote = model?.gated && !quant?.present ? result?.authenticated ? "Gated on Hugging Face: accept its license there first. Juiced downloads with the server's HF_TOKEN." : "Gated on Hugging Face. Set HF_TOKEN on the server and accept the license there to download it." : "";
+  const gatedNote = model?.gated && !quant?.present ? result?.authenticated ? "Gated. Accept its license on Hugging Face first." : "Gated. Set HF_TOKEN on the server and accept its license on Hugging Face." : "";
+  const users = model && quant ? quantUsers(inventory, model.repo, quant) : [];
+  const partial = !!quant && !quant.present && quant.parts > 1 && quant.presentFiles > 0;
   const ready = file ? !!target && !file.error : !!quant?.present;
   const resetKey = file ? `file:${file.name}` : `${selected?.repo}:${selected?.quant}`;
   return <div className={`find-models ${model || file ? "has-detail" : ""}`}>
@@ -176,7 +201,7 @@ export function FindModels({ client, online, onRegistered, onOpenModel, onDownlo
       {folderOpen && <ServerFolder client={client} onClose={() => setFolderOpen(false)} onPick={(entry, mode) => { setFolderOpen(false); setSelected(null); void local.pick(entry, mode); }} />}
       {error && <div className="action-row"><p className="inline-error" role="alert">{error}</p><Button onClick={() => setTick((value) => value + 1)}>Retry</Button></div>}
       {npuOnly ? <FlmModels client={client} online={online} query={query} flm={flm} onAdded={onRegistered} /> : <>
-      {result && <p className="searching muted" role="status">{hubPending ? "Searching Hugging Face…" : result.hub !== "ok" && result.hub !== "skipped" ? result.offline ? "Offline mode. Showing recommended and downloaded models only." : "Hugging Face is unreachable. Showing recommended and downloaded models." : ""}</p>}
+      {result && <p className="searching muted" role="status">{hubPending ? "Searching Hugging Face…" : result.hub !== "ok" && result.hub !== "skipped" ? result.offline ? "Offline mode. Only recommended and downloaded models are listed." : "Hugging Face is unreachable. Only recommended and downloaded models are listed." : ""}</p>}
       {!result ? <p className="muted" role="status">{loading ? "Searching…" : ""}</p> : models.length === 0 ? <Empty title="No models found">Try a shorter search or another task.</Empty> : <ul className={`model-results ${loading ? "stale" : ""}`} aria-label="Search results" aria-busy={loading}>
         {models.map((item) => <li key={`${item.source}:${item.repo}`} className={`model-result ${item.repo === selected?.repo ? "selected" : ""}`}>
           <div className="result-head">
@@ -221,25 +246,24 @@ export function FindModels({ client, online, onRegistered, onOpenModel, onDownlo
       <div className="inspector-body">
         <div className="inspector-title"><h2 className="break-word">{model.name}</h2></div>
         <p className="field-help">{[model.publisher, model.license, model.gated ? "Gated" : null].filter(Boolean).join(" · ")}</p>
-        <div ref={quantList} className="quant-list" role="listbox" aria-label="Quants">{[...model.quants].sort((left, right) => (left.bytes ?? 0) - (right.bytes ?? 0)).map((entry) => {
+        <QuantList listRef={quantList} label="Quants" selected={quantKey(quant)} onSelect={(key) => pick(model, model.quants.find((entry) => quantKey(entry) === key))} items={[...model.quants].sort((left, right) => (left.bytes ?? 0) - (right.bytes ?? 0)).map((entry): QuantItem => {
           const [label, tone] = fit(entry.bytes, gpu, ram, entry.engine);
-          return <button key={quantKey(entry)} role="option" aria-selected={entry === quant} className="quant-option" title={entry.file} onClick={() => pick(model, entry)}>
-            <span className={`status-dot ${tone}`} title={label} /><strong>{names.get(entry) ?? entry.label}</strong>{entry.recommended && <span className="quant-star" aria-label="Suggested">★</span>}{entry.present && <span className="muted">✓ downloaded</span>}<span className="numeric muted">{bytes(entry.bytes)}</span>
-          </button>;
-        })}</div>
+          return { key: quantKey(entry), label: names.get(entry) ?? entry.label, bytes: entry.bytes, title: entry.file, suggested: entry.recommended, fit: { tone, label }, progress: progress(entry), state: hubQuantState(entry, quantUsers(inventory, model.repo, entry), registered) };
+        })} />
         <dl className="facts">
-          <div><dt>Selected</dt><dd className="break-word">{names.get(quant) ?? quant.label}{checkpoint ? ` · ${quant.files.length} files` : quant.parts > 1 ? ` · ${quant.parts} files` : ""}</dd></div>
-          {quant.engine && <div><dt>Runs on</dt><dd>{engineNames[quant.engine] ?? quant.engine}</dd></div>}
           <div><dt>This machine</dt><dd><Badge tone={fit(quant.bytes, gpu, ram, quant.engine)[1]}>{fit(quant.bytes, gpu, ram, quant.engine)[0]}</Badge></dd></div>
+          {quant.engine && <div><dt>Runs on</dt><dd>{engineNames[quant.engine] ?? quant.engine}</dd></div>}
+          {(checkpoint || quant.parts > 1) && <div><dt>Files</dt><dd>{checkpoint ? quant.files.length : partial ? `${quantWords.parts(quant.presentFiles, quant.parts)} on disk` : `${quant.parts} parts`}</dd></div>}
           {quant.present && <div><dt>Stored</dt><dd>{quant.localPath ? `Hugging Face cache${quant.readOnly ? " · read-only" : ""}` : "Juiced storage"}</dd></div>}
+          {users.length > 0 && <div><dt>Used by</dt><dd><span className="used-by">{users.map((id) => <button key={id} className="link-button" onClick={() => onOpenModel(id)}>{id}</button>)}</span></dd></div>}
         </dl>
         {checkpoint && <div className="checkpoint-files"><span className="field-label">Files <HelpTip label="Checkpoint files">The weights, config and tokenizer files the engine reads as one folder. READMEs, images and other formats are skipped.</HelpTip></span><ul aria-label="Checkpoint files">{quant.files.map((part) => <li key={part.file}><span className="break-word">{part.member ?? part.file}</span><span className="numeric muted">{bytes(part.bytes)}</span></li>)}</ul></div>}
-        {progress(quant) !== null && <><progress aria-label="Download progress" max={100} value={progress(quant)!} /><p className="field-help">Downloading… {Math.round(progress(quant)!)}%{pendingAdd?.policy ? ` · then added as ${policyNames[pendingAdd.policy as Policy] ?? pendingAdd.policy}` : ""}</p></>}
+        {progress(quant) !== null && <><progress aria-label="Download progress" max={100} value={progress(quant)!} /><p className="field-help">{quantWords.downloading(progress(quant)!)}{pendingAdd?.policy ? ` · then added as ${policyNames[pendingAdd.policy as Policy] ?? pendingAdd.policy}` : ""}</p></>}
         {pendingAdd && progress(quant) === null && <p className="muted" role="status">Adding the model…</p>}
         {added ? <div className="added"><p className="inline-success" role="status">Added {added}.</p><div className="action-row"><Button variant="primary" onClick={() => onOpenModel(added)}>Open model</Button></div></div>
           : !pendingAdd && <>
             {pull && seen.current.has(pull.id) && pull.then?.state === "failed" && <p className="inline-warning">{pull.then.message ?? "The model wasn't added."} Add it here.</p>}
-            <AddModel client={client} online={online} target={target} id={targetId} engine={quant.engine === "thenoise" ? "thenoise" : undefined} ready={ready} resetKey={resetKey} blocked={split && !target ? "Every part must finish downloading first" : undefined} onRegistered={onRegistered} onOpenModel={onOpenModel} download={progress(quant) === null && !ready ? { disabled: !quant.pullable || (model.gated && !result?.authenticated), start: (policy) => download(model, quant, policy, { id: targetId, engine: quant.engine === "thenoise" ? "thenoise" : undefined }) } : undefined} />
+            <AddModel client={client} online={online} target={target} id={targetId} engine={quant.engine === "thenoise" ? "thenoise" : undefined} ready={ready} resetKey={resetKey} blocked={split && !target ? "Every part must finish downloading first" : undefined} downloadLabel={partial ? "Finish download" : undefined} onRegistered={onRegistered} onOpenModel={onOpenModel} download={progress(quant) === null && !ready ? { disabled: !quant.pullable || (model.gated && !result?.authenticated), start: (policy) => download(model, quant, policy, { id: targetId, engine: quant.engine === "thenoise" ? "thenoise" : undefined }) } : undefined} />
           </>}
         {gatedNote && <p className="field-help">{gatedNote}</p>}
       </div>

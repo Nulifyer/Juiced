@@ -229,7 +229,7 @@ test("removing a registration keeps its weight file", async ({ page, request }) 
   expect(await service.model(id)).toBeTruthy();
   await inspector.getByRole("button", { name: "Remove model", exact: true }).click();
   await confirm.getByRole("button", { name: "Remove model", exact: true }).click();
-  await expect(toasts(page).getByRole("status")).toContainText(`Removed ${id}. Weight files kept.`);
+  await expect(toasts(page).getByRole("status")).toContainText(`Removed ${id}. Its files stay on disk.`);
   await expect(inspector).toHaveCount(0);
   await expect(page.getByRole("table", { name: "Registered models" }).getByRole("button", { name: id, exact: true })).toHaveCount(0);
   expect(await service.model(id)).toBeUndefined();
@@ -355,7 +355,7 @@ test("Enabled and Disabled chips split the list, and search still finds disabled
   await open(page);
   await navigate(page, "Models");
   const table = page.getByRole("table", { name: "Registered models" });
-  const scope = page.getByRole("group", { name: "Policy filter" });
+  const scope = page.getByRole("group", { name: "Status filter" });
   const missing = table.getByRole("button", { name: "fixture.missing-weights", exact: true });
   const enabled = table.getByRole("button", { name: modelId, exact: true });
   await expect(scope.getByRole("button", { name: /^Enabled \d+$/ })).toHaveAttribute("aria-pressed", "true");

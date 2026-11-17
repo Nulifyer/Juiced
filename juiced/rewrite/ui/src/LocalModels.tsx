@@ -3,7 +3,9 @@ import type { Client } from "./api";
 import { bytes, type Model } from "./domain";
 import { AddModel } from "./AddModel";
 import type { DiscoverTarget } from "./FindModels";
-import { parseLocal, quantRefusal, roleNames, storageNames, type LocalFile, type LocalGroup, type LocalInventory } from "./localLibraryData";
+import { parseLocal, quantRefusal, roleNames, storageNames, type LocalFile, type LocalGroup, type LocalInventory, type LocalQuant } from "./localLibraryData";
+import { plainError } from "./modelErrors";
+import { QuantList, policyWord, quantWords } from "./QuantList";
 import { notify } from "./toast";
 import { Badge, Button, Dialog, Icon } from "./ui";
 import { useResource } from "./useResource";
@@ -27,7 +29,7 @@ function UsedBy({ ids, onOpenModel }: { ids: string[]; onOpenModel: (id: string)
   return <span className="used-by">{ids.map((id) => <button key={id} className="link-button" onClick={() => onOpenModel(id)}>{id}</button>)}</span>;
 }
 
-export function FileInspector({ group, quant: initialQuant, client, online, onClose, onRegistered, onOpenModel, onChanged, onDiscover }: { group: LocalGroup; quant?: string; client: Client; online: boolean; onClose: () => void; onRegistered: () => Promise<void>; onOpenModel: (id: string) => void; onChanged: () => Promise<unknown>; onDiscover?: (target: DiscoverTarget) => void }) {
+export function FileInspector({ group, quant: initialQuant, models = [], client, online, onClose, onRegistered, onOpenModel, onChanged, onDiscover }: { group: LocalGroup; quant?: string; models?: Pick<Model, "id" | "policy">[]; client: Client; online: boolean; onClose: () => void; onRegistered: () => Promise<void>; onOpenModel: (id: string) => void; onChanged: () => Promise<unknown>; onDiscover?: (target: DiscoverTarget) => void }) {
   const [picked, setPicked] = useState(() => (group.quants.find((item) => item.file === initialQuant) ?? unusedQuants(group)[0] ?? group.quants[0])?.file ?? "");
   const [confirming, setConfirming] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -39,6 +41,7 @@ export function FileInspector({ group, quant: initialQuant, client, online, onCl
   const companions = group.files.filter((file) => file.role !== "model" && file.role !== "shard");
   const refusal = quant ? quantRefusal(group, quant) : undefined;
   const added = group.quants.length ? unusedQuants(group).length === 0 : group.usedBy.length > 0;
+  const partial = !!quant && quant.parts > 1 && !quant.complete;
   async function remove() {
     if (!quant) return;
     setDeleting(true); setDeleteError("");
@@ -49,7 +52,7 @@ export function FileInspector({ group, quant: initialQuant, client, online, onCl
       const rest = group.quants.filter((item) => item.file !== quant.file);
       if (rest.length) setPicked((rest.find((item) => item.usedBy.length === 0) ?? rest[0]!).file); else onClose();
       await onChanged();
-    } catch (failure) { setDeleteError(failure instanceof Error ? failure.message : "The files couldn't be deleted."); }
+    } catch (failure) { setDeleteError(plainError(failure, "The files couldn't be deleted.")); }
     finally { setDeleting(false); }
   }
   return <aside className="inspector" aria-label="File details">
@@ -57,30 +60,38 @@ export function FileInspector({ group, quant: initialQuant, client, online, onCl
     <div className="inspector-body">
       <div className="inspector-title"><h2 className="break-word">{group.name}</h2>{!added && <Badge>Not added</Badge>}</div>
       <p className="field-help">{[group.publisher, ...group.storage.map((value) => storageNames[value]), group.readOnly ? "Read-only" : null].filter(Boolean).join(" · ")}</p>
-      {group.quants.length > 0 && <div className="quant-list" role="listbox" aria-label="Quants on disk">{group.quants.map((entry) => <button key={entry.file} role="option" aria-selected={entry.file === quant?.file} className="quant-option" onClick={() => { setPicked(entry.file); setDeleteError(""); }}>
-        <span className={`status-dot ${entry.usedBy.length ? "good" : "quiet"}`} title={entry.usedBy.length ? "In use" : "Not used"} /><strong>{entry.label}</strong>{entry.parts > 1 && <span className="muted">{entry.parts} parts</span>}{group.files.some((file) => file.unverified && entry.files.includes(file.id)) && <Badge tone="warning">Unverified</Badge>}<span className="numeric muted">{bytes(entry.bytes)}</span>
-      </button>)}</div>}
+      {group.quants.length > 0 && <QuantList label="Quants on disk" selected={quant?.file} onSelect={(file) => { setPicked(file); setDeleteError(""); }} items={group.quants.map((entry) => ({
+        key: entry.file, label: entry.label, bytes: entry.bytes,
+        state: [localQuantState(entry, models), group.files.some((file) => file.unverified && entry.files.includes(file.id)) ? "Unverified" : null].filter(Boolean).join(" · "),
+      }))} />}
       <dl className="facts">
         {quant && <div><dt>Used by</dt><dd><UsedBy ids={quant.usedBy} onOpenModel={onOpenModel} /></dd></div>}
-        <div><dt>Total</dt><dd>{bytes(group.bytes)}</dd></div>
+        {group.quants.length > 1 && <div><dt>All quants</dt><dd>{bytes(group.bytes)}</dd></div>}
         {(group.location ?? primary?.location) && <div className="fact-path"><dt>Location</dt><dd><code className="break-word">{group.location ?? primary?.location}</code></dd></div>}
       </dl>
       {companions.length > 0 && <ul className="file-list" aria-label="Other files">{companions.map((file) => <li key={file.id}><span className="break-word">{file.name}</span><span className="muted">{roleNames[file.role] ?? file.role}</span><span className="muted numeric">{bytes(file.bytes)}</span></li>)}</ul>}
-      {group.repo && onDiscover && <button className="link-button more-quants" onClick={() => onDiscover({ repo: group.repo! })}>More quants in Discover</button>}
       {quant && <>
         {quant.add && <div className="add-name"><label htmlFor="file-model-id">Model name</label><input id="file-model-id" value={name} maxLength={128} onChange={(event) => { const value = event.target.value; setNames((old) => ({ ...old, [quant.file]: value })); }} /></div>}
-        {!quant.add && <p className="field-help">{quant.parts > 1 && !quant.complete ? "Some parts of this split model are missing." : "This file can't be added on its own."}</p>}
-        <AddModel client={client} online={online} target={quant.add} id={name.trim()} ready={!!quant.add} resetKey={`${group.id}:${quant.file}`} onRegistered={async () => { await onRegistered(); await onChanged(); }} onOpenModel={onOpenModel} />
-        <div className="action-row wrap delete-row"><Button variant="danger" disabled={!online || !quant.removable || deleting} title={refusal} onClick={() => { setDeleteError(""); setConfirming(true); }}>Delete {quant.label}</Button></div>
+        {!quant.add && <p className="field-help">{partial ? `${quantWords.parts(quant.files.length, quant.parts)} on disk. Download the rest to add it.` : "This file can't be added on its own."}</p>}
+        <AddModel client={client} online={online} target={quant.add} id={name.trim()} ready={!!quant.add} resetKey={`${group.id}:${quant.file}`} onRegistered={async () => { await onRegistered(); await onChanged(); }} onOpenModel={onOpenModel}
+          fallback={partial && group.repo && onDiscover ? <Button variant="primary" onClick={() => onDiscover({ repo: group.repo!, label: quant.label })}>Finish download</Button> : undefined} />
+        <div className="action-row wrap delete-row"><Button variant="danger" disabled={!online || !quant.removable || deleting} title={refusal} onClick={() => { setDeleteError(""); setConfirming(true); }}>Delete {quant.label}</Button>{group.repo && onDiscover && <button className="link-button more-quants" onClick={() => onDiscover({ repo: group.repo! })}>More quants in Discover</button>}</div>
         {refusal && <p className="field-help">{refusal}</p>}
       </>}
     </div>
     {confirming && quant && <Dialog title={`Delete ${group.name} ${quant.label}?`} onClose={() => setConfirming(false)}>
-      <p>This removes {plural(quant.files.length, "file")} ({bytes(quant.bytes)}) from disk. Download it again from Discover if you need it later.</p>
+      <p>Removes {plural(quant.files.length, "file")} ({bytes(quant.bytes)}) from disk.</p>
       {deleteError && <p className="inline-error" role="alert">{deleteError}</p>}
       <div className="dialog-actions"><Button onClick={() => setConfirming(false)}>Cancel</Button><Button variant="danger" disabled={deleting} onClick={() => void remove()}>{deleting ? "Deleting…" : "Delete"}</Button></div>
     </Dialog>}
   </aside>;
+}
+
+/** How a quant on disk reads in every list: its model's loading policy, its missing parts, or Not added. */
+export function localQuantState(quant: LocalQuant, models: Pick<Model, "id" | "policy">[]): string {
+  if (quant.usedBy.length) return policyWord(models.find((model) => model.id === quant.usedBy[0])?.policy, quant.usedBy.length);
+  if (quant.parts > 1 && !quant.complete) return quantWords.parts(quant.files.length, quant.parts);
+  return quantWords.unadded;
 }
 
 export function modelFiles(model: Model, inventory: LocalInventory | null): { groups: LocalGroup[]; files: LocalFile[] } {

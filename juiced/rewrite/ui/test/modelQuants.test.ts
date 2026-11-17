@@ -6,11 +6,13 @@ import { quantRows } from "../src/ModelQuants";
 const hub = (quants: Record<string, unknown>[]) => parseSearch({ sources: { huggingface: { status: "ok" } }, data: [{ repo: "unsloth/Demo-GGUF", name: "Demo-GGUF", quants }] }).models[0]!;
 const remote = (label: string, file: string, bytes: number, extra: Record<string, unknown> = {}) => ({ label, file, bytes, pullable: true, ...extra });
 
-test("quants that share a label stay separate and take their file name", () => {
+test("quants that share a label stay separate and take the part of the file name that differs", () => {
   const model = hub([remote("UD-IQ4_NL", "Demo-UD-IQ4_NL.gguf", 10), remote("UD-IQ4_NL", "Demo-UD-IQ4_NL_XL.gguf", 12), remote("Q8_0", "mtp/Demo-MTP-Q8_0.gguf", 20)]);
   expect(new Set(model.quants.map(quantKey)).size).toBe(3);
   const names = quantNames(model.quants);
   expect(model.quants.map((quant) => names.get(quant) ?? quant.label)).toEqual(["Demo-UD-IQ4_NL", "Demo-UD-IQ4_NL_XL", "Q8_0"]);
+  const patches = hub([0, 1, 2].map((index) => remote("File", `patch/Huihui-Qwen3.6-35B-A3B-abliterated-patch-all-${index}.gguf`, 10 + index)));
+  expect(patches.quants.map((quant) => quantNames(patches.quants).get(quant))).toEqual(["patch-all-0", "patch-all-1", "patch-all-2"]);
 });
 
 test("featured quants include the common sizes under a UD- prefix", () => {

@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { collapseFinished, nextStep } from "../src/Downloading";
 import type { LocalGroup, LocalInventory, PullView } from "../src/localLibraryData";
 
-const pull = (id: string, state = "complete"): PullView => ({ id, state, error: null, repo: "unsloth/Qwen3-0.6B-GGUF", label: "Q4_K_M", files: [{ file: "Qwen3-0.6B-Q4_K_M.gguf", bytes: 10, state: "present", downloaded: 10, job: null }], then: null });
+const pull = (id: string, state = "complete"): PullView => ({ id, state, error: null, repo: "unsloth/Qwen3-0.6B-GGUF", label: "Q4_K_M", files: [{ file: "Qwen3-0.6B-Q4_K_M.gguf", bytes: 10, state: "present", downloaded: 10, job: null, source: null }], then: null });
 const group = (usedBy: string[]): LocalGroup => ({
   id: "hf:unsloth/qwen3-0.6b-gguf", repo: "unsloth/Qwen3-0.6B-GGUF", name: "Qwen3-0.6B-GGUF", publisher: "unsloth", storage: ["huggingface_cache"], location: null, readOnly: false, bytes: 20, removableBytes: 0, usedBy,
   quants: [

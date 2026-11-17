@@ -7,8 +7,8 @@ what each candidate contains before you download it.
 1. Open **Models → Discover** and search for the model family or publisher.
 2. Select a quant chip to open the detail panel. Check the publisher and license.
    Similar model names do not prove a common origin, license or behavior.
-3. Compare the quants in the list. Each shows its size and a fit estimate under
-   **This machine**. Pick one that an installed engine can run, or check that
+3. Compare the quants in the list. Each shows a fit dot, its state on this
+   machine and its size. **This machine** spells out the fit for the selected one. Pick one that an installed engine can run, or check that
    engine's requirements in [runtimes and hardware](runtimes.md).
 4. A GGUF vision model needs its projector (`mmproj`) file to read images. To add
    a model with its projector, see [import a local file](models.md#import-a-local-file).
@@ -28,8 +28,11 @@ download in Discover, where you choose the loading policy first. **+N more in
 Discover** opens the repository's full list. A model that isn't from Hugging
 Face lists only the quants on this machine.
 
+Quant lists read the same in a model's **Overview**, in a file's details and in
+Discover: the quant, its state, its size and one action.
+
 Two files in one repository can share a quant label. The Discover list then
-shows their file names so you can tell them apart.
+shows the part of each file name that differs.
 
 To match settings across quants, use **Other quants** on the model's **Settings**
 tab. See [copy settings to other quants](settings.md#copy-settings-to-other-quants).

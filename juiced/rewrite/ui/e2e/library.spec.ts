@@ -139,8 +139,8 @@ test.describe("Discover", () => {
       expect(pulls).toHaveLength(2);
       await expect(page.getByText("The artifact state changed")).toHaveCount(0);
       await expect(detail.getByRole("progressbar", { name: "Download progress" })).toBeVisible();
-      await expect(detail).toContainText(/Downloading… \d+%/);
-      await expect(detail.getByRole("option", { name: /Q4_K_M/ })).toContainText("✓ downloaded", { timeout: 20000 });
+      await expect(detail).toContainText(/Downloading \d+%/);
+      await expect(detail.getByRole("option", { name: /Q4_K_M/ })).toContainText(/Not added|On demand/, { timeout: 20000 });
       await expect(detail.getByRole("progressbar")).toHaveCount(0);
       if (await detail.getByRole("button", { name: "Back to results" }).isVisible()) await detail.getByRole("button", { name: "Back to results" }).click();
       await expect(tiny.getByText("✓ On this machine", { exact: true })).toBeVisible();
@@ -163,6 +163,8 @@ const table = (page: Page) => page.getByRole("table", { name: "Registered models
 const fileRow = (page: Page, name: string) => table(page).getByRole("row").filter({ has: page.getByRole("button", { name, exact: true }) });
 const fileDetails = (page: Page) => page.getByRole("complementary", { name: "File details" });
 async function openFile(page: Page, name: string) {
+  const unused = page.getByRole("group", { name: "Status filter" }).getByRole("button", { name: /^Not added \d+$/ });
+  if (await fileRow(page, name).count() === 0 && await unused.count()) await unused.click();
   await fileRow(page, name).getByRole("button", { name: `Add ${name}` }).click();
   await expect(fileDetails(page).getByRole("heading", { name, level: 2 })).toBeVisible();
   return fileDetails(page);
@@ -197,18 +199,18 @@ test.describe("Installed files", () => {
       await view(page, "Installed");
       await expect(page.getByText(/ GiB on disk/)).toBeVisible();
       const row = fileRow(page, "Qwen3-4B-Instruct-2507-GGUF");
-      await expect(row).toContainText("Not added");
+      await expect(row, "unused files stay out of the Enabled list").toHaveCount(0);
+      await page.getByRole("button", { name: / GiB unused$/ }).click();
+      const status = page.getByRole("group", { name: "Status filter" });
+      await expect(status.getByRole("button", { name: /^Not added \d+$/ })).toHaveAttribute("aria-pressed", "true");
+      await expect(table(page).getByRole("button", { name: id, exact: true })).toHaveCount(0);
       await expect(row).toContainText("unsloth · Q4_K_M · 2.3 GiB");
       await expect(row).not.toContainText("Q8_0");
       await expect(fileRow(page, "Skyfall-31B-v4.2-GGUF")).toContainText("read-only");
-
-      const filter = page.getByRole("group", { name: "Service filter" });
-      await filter.getByRole("button", { name: /^Not added \d+$/ }).click();
-      await expect(table(page).getByRole("button", { name: id, exact: true })).toHaveCount(0);
-      await expect(row).toBeVisible();
-      await filter.getByRole("button", { name: /^All \d+$/ }).click();
+      await page.getByRole("group", { name: "Service filter" }).getByRole("button", { name: /^All \d+$/ }).click();
       await showAllModels(page);
       await expect(table(page).getByRole("button", { name: id, exact: true })).toBeVisible();
+      await expect(row).toContainText("Not added");
 
       const detail = await openFile(page, "Qwen3-4B-Instruct-2507-GGUF");
       const quants = detail.getByRole("listbox", { name: "Quants on disk" });
@@ -255,7 +257,7 @@ test.describe("Installed files", () => {
       await expect(detail.getByRole("button", { name: "Delete Q4_K_M" })).toBeEnabled();
       await detail.getByRole("button", { name: "Delete Q4_K_M" }).click();
       const dialog = page.getByRole("dialog", { name: `Delete ${disposable.name} Q4_K_M?` });
-      await expect(dialog).toContainText("This removes 1 file (4.0 KiB) from disk.");
+      await expect(dialog).toContainText("Removes 1 file (4.0 KiB) from disk.");
       await dialog.getByRole("button", { name: "Delete", exact: true }).click();
       await expect(page.getByRole("status").filter({ hasText: `Deleted ${disposable.name} Q4_K_M. Freed 4.0 KiB.` })).toBeVisible();
       await expect(detail).toHaveCount(0);
