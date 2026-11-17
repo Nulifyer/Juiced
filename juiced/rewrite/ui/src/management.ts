@@ -147,6 +147,15 @@ export function positiveBytes(value: string, label: string): number {
   if (!Number.isSafeInteger(bytes) || bytes <= 0) throw new Error(`${label} must be a positive whole number of bytes.`);
   return bytes;
 }
+const sizeUnits: Record<string, number> = { "": 1, b: 1, k: 1024, kb: 1024, kib: 1024, m: 1024 ** 2, mb: 1024 ** 2, mib: 1024 ** 2, g: 1024 ** 3, gb: 1024 ** 3, gib: 1024 ** 3 };
+/** A size typed as bytes or with a unit, such as "512 MiB" or "2g". Units are binary, as the console shows them. */
+export function sizeBytes(value: string, label: string): number {
+  const match = /^\s*(\d+(?:\.\d+)?)\s*([a-z]*)\s*$/i.exec(value);
+  const unit = match ? sizeUnits[match[2]!.toLowerCase()] : undefined;
+  const bytes = match && unit !== undefined ? Math.round(Number(match[1]) * unit) : NaN;
+  if (!Number.isSafeInteger(bytes) || bytes <= 0) throw new Error(`${label} must be a size such as 512 MiB or 2 GiB.`);
+  return bytes;
+}
 /** Only the URL is required; without a checksum the service keeps the digest it computes and marks the file unverified. */
 export function downloadRequest(url: string, sha: string) {
   let source: URL;

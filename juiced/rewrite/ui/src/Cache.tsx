@@ -2,12 +2,18 @@ import { useState } from "react";
 import { chatTestTokenLimit, type Client } from "./api";
 import { ConversationCache, size } from "./CacheSessions";
 import { operationEligible, type Model } from "./domain";
-import { parseCacheView, parseCacheInspection, positiveBytes, sessionValue, type CacheInspection } from "./management";
+import { parseCacheView, parseCacheInspection, sessionValue, sizeBytes, type CacheInspection } from "./management";
 import { Badge, Button, Dialog, Empty, HelpTip, Switch } from "./ui";
 import { ModelSelect } from "./ModelSelect";
 import { useOperation, useResource } from "./useResource";
 
 type Cursor = { after?: string; expected_generation?: number; expected_view?: string };
+/** A plain number is bytes, so say what it comes to; a size with a unit already reads as one. */
+function ceilingNote(value: string): string {
+  try { const bytes = sizeBytes(value, "Size limit"); return /[a-z]/i.test(value) ? "" : size(bytes); }
+  catch { return "Use a size such as 512 MiB"; }
+}
+
 function pagePath(base: string, cursor: Cursor) {
   const params = new URLSearchParams({ limit:"128" });
   if (cursor.after !== undefined) params.set("after", cursor.after);
@@ -29,7 +35,7 @@ function ManualSnapshots({ client, models, online }: { client: Client; models: M
   async function refreshFirstPage() { if (pages.length > 1) setPages([{}]); else return inventory.reload(); }
   const operation = useOperation(client, refreshFirstPage);
   const [model, setModel] = useState(""); const [session, setSession] = useState("");
-  const [prompt, setPrompt] = useState(""); const [ceiling, setCeiling] = useState("1048576");
+  const [prompt, setPrompt] = useState(""); const [ceiling, setCeiling] = useState("1 MiB");
   const [contextReady, setContextReady] = useState(false); const [response, setResponse] = useState("");
   const [inspection, setInspection] = useState<CacheInspection | null>(null);
   const [inspectionPages, setInspectionPages] = useState<Cursor[]>([{}]);
@@ -52,7 +58,7 @@ function ManualSnapshots({ client, models, online }: { client: Client; models: M
   async function save() {
     if (!data) return;
     try {
-      const saved = await operation.run("juiced/cache/save", { model, slot: 0, session: sessionValue(session), expected_generation: data.generation, maximum_bytes: positiveBytes(ceiling, "Size limit") }, "Snapshot saved.");
+      const saved = await operation.run("juiced/cache/save", { model, slot: 0, session: sessionValue(session), expected_generation: data.generation, maximum_bytes: sizeBytes(ceiling, "Size limit") }, "Snapshot saved.");
       if (saved !== undefined) setSaving(false);
     } catch (error) { operation.fail((error as Error).message); }
   }
@@ -133,7 +139,7 @@ function ManualSnapshots({ client, models, online }: { client: Client; models: M
       <label htmlFor="cache-prompt">Prompt</label><textarea id="cache-prompt" rows={4} value={prompt} disabled={operation.busy} onChange={(event) => setPrompt(event.target.value)} />
       <div className="action-row wrap"><Button disabled={contextBlocked || !prompt.trim()} onClick={() => void complete()}>Process prompt</Button>{contextReady && <span className="inline-success">Prompt processed.</span>}</div>
       {response && <pre className="code-block temporary-completion">{response}</pre>}
-      <label htmlFor="snapshot-ceiling">Size limit in bytes</label><input id="snapshot-ceiling" value={ceiling} inputMode="numeric" disabled={operation.busy} onChange={(event) => setCeiling(event.target.value)} />
+      <label htmlFor="snapshot-ceiling">Size limit</label><div className="setting-line"><input id="snapshot-ceiling" value={ceiling} disabled={operation.busy} aria-describedby="snapshot-ceiling-help" onChange={(event) => setCeiling(event.target.value)} /><span id="snapshot-ceiling-help" className="muted">{ceilingNote(ceiling)}</span></div>
       {operation.error && <p role="alert" className="inline-error">{operation.error}</p>}
       <div className="dialog-actions"><Button onClick={() => setSaving(false)}>Cancel</Button><Button variant="primary" disabled={contextBlocked || !contextReady} onClick={() => void save()}>Save snapshot</Button></div>
     </Dialog>}

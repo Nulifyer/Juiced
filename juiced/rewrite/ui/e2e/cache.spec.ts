@@ -66,7 +66,11 @@ test("manual snapshots save, restore by session, check files, forget and free a 
   await dialog.getByLabel("Prompt").fill("Temporary browser pipeline context");
   await dialog.getByRole("button", { name: "Process prompt" }).click();
   await expect(dialog.getByText("Prompt processed.", { exact: true })).toBeVisible({ timeout: 15000 });
-  await dialog.getByLabel("Size limit in bytes").fill("1");
+  const limit = dialog.getByLabel("Size limit");
+  await expect(limit).toHaveValue("1 MiB");
+  await limit.fill("1048576");
+  await expect(limit).toHaveAccessibleDescription("1.0 MiB");
+  await limit.fill("1");
   await dialog.getByRole("button", { name: "Save snapshot" }).click();
   await expect(dialog.getByRole("alert")).toBeVisible();
   await dialog.getByRole("button", { name: "Cancel", exact: true }).click();

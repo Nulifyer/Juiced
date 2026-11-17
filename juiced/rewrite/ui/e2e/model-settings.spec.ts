@@ -16,7 +16,7 @@ test("typed generation, runtime and extra arguments save to the model profile", 
     const panel = inspector.getByRole("region", { name: "Context and launch profile" });
     const temperature = panel.getByLabel("Temperature", { exact: true });
     await expect(temperature).toHaveAttribute("placeholder", "0.9 (profile)");
-    await expect(panel.getByLabel("Top K", { exact: true })).toHaveAttribute("placeholder", "Default 40");
+    await expect(panel.getByLabel("Top K", { exact: true })).toHaveAttribute("placeholder", "40 (engine default)");
     await expect(panel.getByLabel("Extra arguments", { exact: true })).toHaveCount(0);
     await temperature.fill("0.6");
     await panel.getByLabel("Top K", { exact: true }).fill("20");

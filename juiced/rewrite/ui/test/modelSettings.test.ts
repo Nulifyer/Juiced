@@ -27,8 +27,13 @@ describe("typed model settings", () => {
   });
   test("empty fields describe what applies instead", () => {
     expect(fallback("temperature", { temperature: 0.9 }, { temperature: 0.8 })).toBe("0.9 (profile)");
-    expect(fallback("temperature", {}, { temperature: 0.8 })).toBe("Default 0.8");
+    expect(fallback("temperature", {}, { temperature: 0.8 })).toBe("0.8 (engine default)");
     expect(fallback("batch_threads", null, { batch_threads: null })).toBe("Engine default");
+    const applied = [{ flag: "--ubatch-size", value: "2048", state: "applied", source: "tuned" }, { flag: "-fa", value: "on", state: "applied", source: "recipe" }, { flag: "--batch-size", value: "4096", state: "overridden", source: "juiced" }];
+    expect(fallback("ubatch_size", {}, { ubatch_size: 512 }, undefined, applied)).toBe("2048 (measured here)");
+    expect(fallback("flash_attention", {}, { flash_attention: "auto" }, undefined, applied)).toBe("on (tested recipe)");
+    expect(fallback("batch_size", {}, { batch_size: 2048 }, undefined, applied), "an overridden default is not in effect").toBe("2048 (engine default)");
+    expect(fallback("ubatch_size", { ubatch_size: 1024 }, { ubatch_size: 512 }, undefined, applied), "the profile wins").toBe("1024 (profile)");
   });
   test("image defaults send only changed keys and null to clear", () => {
     const saved = engineDraft(imageFields, { steps: 8, width: 1024, height: 1024, sampling_method: "euler", seed: null });

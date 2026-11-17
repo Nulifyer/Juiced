@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { downloadRequest, firstInventoryPages, inventoryPath, jobActions, nextInventoryPage, parseArtifactInventory, previousInventoryPage, parseCacheView, parseCacheInspection, parseEndpoints, parseProtocols, positiveBytes, registration, removalReason, sessionValue, type ArtifactJob } from "../src/management";
+import { sizeBytes, downloadRequest, firstInventoryPages, inventoryPath, jobActions, nextInventoryPage, parseArtifactInventory, previousInventoryPage, parseCacheView, parseCacheInspection, parseEndpoints, parseProtocols, positiveBytes, registration, removalReason, sessionValue, type ArtifactJob } from "../src/management";
 import type { Model } from "../src/domain";
 
 const hash = "a".repeat(64);
@@ -10,6 +10,8 @@ describe("bounded acquisition and explicit registration", () => {
     expect(downloadRequest("https://example.com/file.gguf", hash.toUpperCase())).toEqual({ source_url: "https://example.com/file.gguf", expected_sha256: hash });
     expect(downloadRequest(" https://example.com/file.gguf ", "  ")).toEqual({ source_url: "https://example.com/file.gguf" });
     for (const value of ["", "0", "-1", "1.2", "2e6", "9007199254740992"]) expect(() => positiveBytes(value, "Ceiling")).toThrow();
+    expect(["1", "1048576", "1 MiB", "1m", "0.5 GiB", "2 gb", " 512 KiB "].map((value) => sizeBytes(value, "Limit"))).toEqual([1, 1048576, 1048576, 1048576, 536870912, 2147483648, 524288]);
+    for (const value of ["", "0", "-1", "1 TB", "MiB", "2e6"]) expect(() => sizeBytes(value, "Limit")).toThrow("Limit must be a size such as 512 MiB or 2 GiB.");
   });
   test("direct credentials, signed queries, fragments and malformed hashes fail before sending", () => {
     for (const url of ["https://u:p@example.com/file", "https://example.com/file?token=private", "https://example.com/file#secret", "file:///private/weights"]) expect(() => downloadRequest(url, hash)).toThrow();

@@ -36,7 +36,7 @@ test("an empty generation field names the model file or Juiced default before ll
   const sampler = parseModelDefaults(view)!.sampler;
   expect(fallback("temperature", {}, { temperature: 0.8 }, sampler)).toBe("1 (model file)");
   expect(fallback("top_k", {}, { top_k: 40 }, sampler)).toBe("20 (Juiced)");
-  expect(fallback("min_p", {}, { min_p: 0.05 }, sampler)).toBe("Default 0.05");
+  expect(fallback("min_p", {}, { min_p: 0.05 }, sampler)).toBe("0.05 (engine default)");
   expect(fallback("temperature", { temperature: 0.9 }, {}, sampler)).toBe("0.9 (profile)");
 });
 

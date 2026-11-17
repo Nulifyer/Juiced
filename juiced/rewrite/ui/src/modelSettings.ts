@@ -50,12 +50,23 @@ export function tunedOptions(draft: TunedDraft): TunedOptions {
 
 /** What an empty field falls back to: the value the profile already passes, then Juiced's or the
  * model file's default, else the engine default. */
-export function fallback(key: TunedKey, effective: unknown, defaults: unknown, model?: Record<string, { value: string | number; source: string } | null>): string {
+/** The llama.cpp flags each setting writes; Juiced's launch defaults name the flag they set. */
+const flags: Record<TunedKey, string[]> = {
+  temperature: ["--temp", "--temperature"], top_p: ["--top-p"], top_k: ["--top-k"], min_p: ["--min-p"], repeat_penalty: ["--repeat-penalty"], reasoning_budget: ["--reasoning-budget"],
+  batch_threads: ["--threads-batch", "-tb"], batch_size: ["--batch-size", "-b"], ubatch_size: ["--ubatch-size", "-ub"], flash_attention: ["--flash-attn", "-fa"], cache_type_k: ["--cache-type-k", "-ctk"], cache_type_v: ["--cache-type-v", "-ctv"],
+};
+type Applied = { flag: string; value: string | null; state: string; source: string };
+const appliedNames: Record<string, string> = { juiced: "Juiced", family: "model family", "model-file": "model file", recipe: "tested recipe", tuned: "measured here" };
+
+/** The value an empty setting runs with and where it comes from: the profile, Juiced's applied defaults, the model file, then the engine. */
+export function fallback(key: TunedKey, effective: unknown, defaults: unknown, model?: Record<string, { value: string | number; source: string } | null>, applied: readonly Applied[] = []): string {
   const current = record(effective)[key], engine = record(defaults)[key];
   if (current !== undefined && current !== null) return `${text(current)} (profile)`;
+  const juiced = applied.find((entry) => entry.state === "applied" && entry.value !== null && flags[key].includes(entry.flag));
+  if (juiced) return `${juiced.value} (${appliedNames[juiced.source] ?? "Juiced"})`;
   const chosen = model?.[key];
   if (chosen && chosen.source !== "saved") return `${text(chosen.value)} (${chosen.source === "model-file" ? "model file" : "Juiced"})`;
-  if (engine !== undefined && engine !== null) return `Default ${text(engine)}`;
+  if (engine !== undefined && engine !== null) return `${text(engine)} (engine default)`;
   return "Engine default";
 }
 

@@ -147,10 +147,10 @@ export function ContextInspector({ model, client, online, busy, policyDirty, onD
         <div className="segmented" role="radiogroup" aria-labelledby="gpu-label">{([["gpu", "GPU"], ["cpu", "CPU only"]] as const).map(([value, label]) => <button key={value} type="button" role="radio" aria-checked={value === "gpu" ? gpuAll || (Number(draft.gpu) > 0 && Number(draft.gpu) < 99) : draft.gpu.trim() === "0"} disabled={blocked} onClick={() => setDraft({ ...draft, gpu: value === "gpu" ? "" : "0" })}>{label}</button>)}</div></div>}
       {!advanced && mtp && <p className="setting-status"><strong>Multi-token prediction</strong> on{extras.data?.mtp?.acceptance_rate != null ? ` · ${Math.round(extras.data.mtp.acceptance_rate * 100)}% of drafts accepted` : ""}</p>}
       {!advanced && fields?.thinking && fields.thinking.effective !== null && fields.thinking.effective !== undefined && fields.thinking.effective !== "auto" && <p className="setting-status"><strong>Thinking</strong> {show(fields.thinking.effective)}</p>}
-      {llama && !imported && <TunedGrid title="Generation defaults" help="Used when a request doesn't set its own value. Empty keeps the profile's argument, Juiced's or the model file's default, or llama.cpp's default." fields={tunedFields.filter((field) => !field.advanced)} draft={tuned} onChange={setTuned} view={view} sampler={extras.data?.defaults?.sampler} disabled={blocked} />}
+      {llama && !imported && <TunedGrid title="Generation defaults" help="Used when a request doesn't set its own value. Empty keeps the profile's argument, Juiced's or the model file's default, or llama.cpp's default." fields={tunedFields.filter((field) => !field.advanced)} draft={tuned} onChange={setTuned} view={view} juiced={extras.data?.defaults} disabled={blocked} />}
       {llama && !imported && extras.data?.defaults?.available && <JuicedDefaults model={model} client={client} defaults={extras.data.defaults} revision={revision.current ?? model.revision} disabled={blocked || dirty} mutate={mutate} />}
       {advanced && !imported && <div className="setting-group"><div className="group-title"><span>Runtime</span><HelpTip label="Runtime">CPU threads, offload and batching. Changes apply when the engine next starts.</HelpTip></div><div className="profile-option-grid"><div><label htmlFor="profile-threads">Threads</label><input id="profile-threads" inputMode="numeric" value={draft.threads} disabled={blocked} placeholder="Engine default" onChange={(event) => setDraft({ ...draft, threads: event.target.value })} /></div><div><label htmlFor="profile-gpu">GPU layers</label><input id="profile-gpu" inputMode="numeric" value={draft.gpu} disabled={blocked} placeholder="All" onChange={(event) => setDraft({ ...draft, gpu: event.target.value })} /></div>
-        {tunedFields.filter((field) => field.advanced).map((field) => <TunedInput key={field.key} field={field} draft={tuned} onChange={setTuned} view={view} disabled={blocked} />)}</div></div>}
+        {tunedFields.filter((field) => field.advanced).map((field) => <TunedInput key={field.key} field={field} draft={tuned} onChange={setTuned} view={view} juiced={extras.data?.defaults} disabled={blocked} />)}</div></div>}
       {advanced && !imported && llama && <div className="setting-group"><div className="field-head"><label htmlFor="profile-extra">Extra arguments</label><HelpTip label="Extra arguments">Passed to llama-server after Juiced's own arguments, for example --spec-type draft-mtp. Quote values that contain spaces. Settings above have their own fields; the host, port, model and cache paths stay with Juiced.</HelpTip></div>
         <textarea id="profile-extra" className="code-input" rows={Math.min(6, Math.max(2, Math.ceil(tuned.extra.length / 36) + 1))} spellCheck={false} value={tuned.extra} disabled={blocked} placeholder="None" onChange={(event) => setTuned({ ...tuned, extra: event.target.value })} /></div>}
       {restart && !dirty && <p className="inline-warning">Saved settings differ from the running engine. Reload the model to apply them.</p>}
@@ -168,9 +168,9 @@ export function ContextInspector({ model, client, online, busy, policyDirty, onD
   </section>;
 }
 
-function TunedInput({ field, draft, onChange, view, sampler, disabled, tip = true }: { field: SettingField; draft: TunedDraft; onChange: (draft: TunedDraft) => void; view: ModelOptions; sampler?: ModelDefaults["sampler"]; disabled: boolean; tip?: boolean }) {
+function TunedInput({ field, draft, onChange, view, juiced, disabled, tip = true }: { field: SettingField; draft: TunedDraft; onChange: (draft: TunedDraft) => void; view: ModelOptions; juiced?: ModelDefaults | null; disabled: boolean; tip?: boolean }) {
   const id = `profile-${field.key}`;
-  const empty = fallback(field.key, view.effective_launch, view.defaults, sampler);
+  const empty = fallback(field.key, view.effective_launch, view.defaults, juiced?.sampler, juiced?.enabled ? juiced.entries : []);
   return <div>
     <div className="field-head"><label htmlFor={id}>{field.label}</label>{tip && <HelpTip label={field.label}>{field.help}</HelpTip>}</div>
     {field.kind === "choice"
@@ -179,9 +179,9 @@ function TunedInput({ field, draft, onChange, view, sampler, disabled, tip = tru
   </div>;
 }
 
-function TunedGrid({ title, help, fields, draft, onChange, view, sampler, disabled }: { title: string; help: string; fields: SettingField[]; draft: TunedDraft; onChange: (draft: TunedDraft) => void; view: ModelOptions; sampler?: ModelDefaults["sampler"]; disabled: boolean }) {
+function TunedGrid({ title, help, fields, draft, onChange, view, juiced, disabled }: { title: string; help: string; fields: SettingField[]; draft: TunedDraft; onChange: (draft: TunedDraft) => void; view: ModelOptions; juiced?: ModelDefaults | null; disabled: boolean }) {
   return <div className="setting-group"><div className="group-title"><span>{title}</span><HelpTip label={title}><p>{help}</p>{fields.map((field) => <p key={field.key}><strong>{field.label}.</strong> {field.help}</p>)}</HelpTip></div>
-    <div className="profile-option-grid">{fields.map((field) => <TunedInput key={field.key} field={field} draft={draft} onChange={onChange} view={view} sampler={sampler} disabled={disabled} tip={false} />)}</div></div>;
+    <div className="profile-option-grid">{fields.map((field) => <TunedInput key={field.key} field={field} draft={draft} onChange={onChange} view={view} juiced={juiced} disabled={disabled} tip={false} />)}</div></div>;
 }
 
 function readSeen(key: string) { try { return localStorage.getItem(key); } catch { return null; } }
