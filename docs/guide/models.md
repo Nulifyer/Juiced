@@ -12,13 +12,19 @@ with the loading policy you want.
 3. Select a quant chip on a result. **Recommended** marks a model from Juiced's
    catalog, ★ marks the suggested quant, and **✓ On this machine** means a quant
    is already downloaded. **+N more** opens the full quant list.
-4. In the detail panel, compare the quants. Each one shows its size and a fit
-   estimate under **This machine**, such as **Fits in GPU memory** or
-   **Runs on the CPU**.
+4. In the detail panel, compare the quants. Each row shows a fit dot, the quant,
+   its state on this machine and its size. The state reads the same as under
+   **Installed**: a loading policy when a model uses the quant, **Not added**
+   for a file no model uses, and the parts on disk for an unfinished split
+   download. **This machine** spells out the fit, such as
+   **Fits in GPU memory** or **Runs on the CPU**. **Used by** links the models
+   that already run the selected quant.
 5. Choose a **Loading policy**: **Disabled**, **On demand** or **Hot**.
    **On demand** is the default.
 6. Select **Download**. Progress shows in the panel and under **Downloads**.
-   When the download finishes, Juiced adds the model with that policy.
+   When the download finishes, Juiced adds the model with that policy. For a
+   split download that stopped part way, the button reads **Finish download**
+   and fetches only the missing parts.
 
 The fit estimate compares the file size with GPU and system memory. It does not
 include context or engine buffers. **Size unknown** means the publisher did not
@@ -102,8 +108,11 @@ errors.
 - **Pause** stops a running transfer. **Resume** continues a paused or
   interrupted one.
 - **Retry** starts a failed or interrupted transfer again.
-- **Cancel** stops a transfer for good. **Dismiss** removes a finished or
-  cancelled row.
+- **Cancel** stops a transfer for good and deletes its partial files.
+  **Dismiss** removes a finished or cancelled row. A failed download keeps its
+  partial files, so it offers **Retry** and **Cancel**, then **Dismiss** once
+  cancelled.
+- A split download is one row. It shows how many parts are on disk.
 - A finished download shows **Adding** while Juiced adds its model, then
   **Open model**. A download started without a policy offers **Add model**,
   which opens its file details.
@@ -191,10 +200,12 @@ model with its own settings and loading policy.
 
 Tick models in **Models → Installed** to **Load**, **Unload** or **Set policy…**
 for all of them at once. Select the **Model**, **State** or **Memory** column
-title to sort. The chips above the list filter by service. **Enabled** and
-**Disabled** split the list; Juiced shows Enabled models when there are any, and
-a search also lists Disabled models that match. **Not added** lists downloaded
-files that no model uses yet.
+title to sort. The first chips filter by service. **Enabled**, **Disabled** and
+**Not added** choose what the list shows; Juiced shows Enabled models when there
+are any, and a search also lists Disabled models and unused files that match.
+**Not added** lists downloaded files that no model uses yet. The disk total
+beside the search box links to it when some files are unused. A model whose
+name does not say which quant it runs shows the quant beside its service.
 
 With a model open, press Escape to close it. The arrow keys move between its
 tabs.

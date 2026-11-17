@@ -60,13 +60,20 @@ export function featured(quants: Quant[]): Quant[] {
 /** Repositories publish several files under one quant label, so the file identifies a quant. */
 export const quantKey = (quant: Quant) => `${quant.kind}:${quant.engine ?? ""}:${quant.file || quant.label}`;
 
-/** Names for quants whose label another quant shares: the file name without its folder and extension. */
+/** Names for quants whose label another quant shares: the part of the file name that tells them apart. */
 export function quantNames(quants: Quant[]): Map<Quant, string> {
-  const counts = new Map<string, number>();
-  for (const quant of quants) counts.set(quant.label, (counts.get(quant.label) ?? 0) + 1);
+  const groups = new Map<string, Quant[]>();
+  for (const quant of quants) if (quant.file) groups.set(quant.label, [...(groups.get(quant.label) ?? []), quant]);
   const names = new Map<Quant, string>();
-  for (const quant of quants) {
-    if ((counts.get(quant.label) ?? 0) > 1 && quant.file) names.set(quant, (quant.file.split("/").pop() ?? quant.file).replace(/\.(gguf|bin|safetensors|onnx|ort)$/i, ""));
+  for (const group of groups.values()) {
+    if (group.length < 2) continue;
+    const full = group.map((quant) => (quant.file.split("/").pop() ?? quant.file).replace(/\.(gguf|bin|safetensors|onnx|ort)$/i, ""));
+    let shared = 0;
+    while (shared < full[0]!.length && full.every((name) => name[shared] === full[0]![shared])) shared++;
+    // Only a long shared start is cut, at a separator, keeping enough of each name to read as a quant.
+    let cut = 0;
+    for (let index = 0; shared >= 16 && index < shared; index++) if ("-_.".includes(full[0]![index]!) && full.every((name) => name.length - index - 1 >= 8)) cut = index + 1;
+    group.forEach((quant, index) => names.set(quant, full[index]!.slice(cut)));
   }
   return names;
 }

@@ -662,22 +662,12 @@ dialog textarea { margin-bottom: 4px; }
 .find-detail progress { width: 100%; height: 6px; accent-color: var(--ring); margin-top: 10px; }
 @media (max-width: 960px) { .find-models.has-detail { grid-template-columns: minmax(0, 1fr); } .find-models.has-detail .find-main { display: none; } .find-detail { position: static; max-height: none; } .find-detail .inspector-top { justify-content: flex-start; } .find-detail .back-button { display: inline-flex; } .find-detail .close-inspector { display: none; } }
 .quant-chip.more { color: var(--muted); }
-.quant-list { display: grid; margin: 10px 0; max-height: 300px; overflow-y: auto; border: 1px solid var(--border); border-radius: 6px; }
-.quant-option { display: flex; align-items: center; gap: 8px; border: 0; background: transparent; padding: 6px 10px; text-align: left; font-size: .78rem; }
-.quant-option + .quant-option { border-top: 1px solid var(--divider); }
-.quant-option:hover { background: var(--hover); }
-.quant-option[aria-selected="true"] { background: var(--selected); }
-.quant-option strong { font-weight: 500; }
-.quant-option .numeric { margin-left: auto; }
-.quant-option .muted { font-size: .75rem; }
 .needs-engine progress { width: 120px; height: 6px; accent-color: var(--ring); }
 .needs-engine, .added { margin-top: 12px; display: grid; gap: 8px; }
 .needs-engine progress { width: 100%; }
 .model-results.stale { opacity: .55; transition: opacity .15s; }
 .searching { font-size: .75rem; margin: -4px 0 6px; min-height: 1.125rem; }
 @media (min-width: 961px) { .find-models > .find-detail { position: sticky; } }
-.quant-option strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.quant-option > :not(strong) { flex: none; }
 @media (prefers-reduced-motion: reduce) { .model-results.stale { transition: none; } }
 .service-tests.wide { max-width: none; }
 .test-panel { display: grid; gap: 10px; max-width: 900px; }

@@ -50,12 +50,12 @@ export function Aliases({ client, models, online, onOpenModel }: { client: Clien
       <input aria-label="Alias name" placeholder="Alias, e.g. default-chat" value={name} disabled={blocked} onChange={(event) => setName(event.target.value)} />
       <ModelSelect aria-label="Alias target" models={models} value={target} disabled={blocked} placeholder="Choose a model…" onChange={setTarget} />
       <Button type="submit" variant="primary" disabled={blocked || !name.trim() || !target || nameTaken || data.aliases.length >= data.maximum}>Add alias</Button>
-      <HelpTip label="Aliases">Clients send the alias as the model name. Swap the target here and new requests go to the new model; requests already running finish on the old one.</HelpTip>
+      <HelpTip label="Aliases">Clients send the alias as the model name. After you change its model, new requests go to the new one and running requests finish on the old one.</HelpTip>
     </form>
     {nameTaken && <p className="field-help">That name is already a model or an alias.</p>}
     {operation.error && <p className="inline-error" role="alert">{operation.error}</p>}
     {view.error && <p className="inline-warning">Showing the last list. {view.error}</p>}
-    {data.aliases.length === 0 ? <Empty title="No aliases yet">Create one so clients can keep a stable model name while you swap the model behind it.</Empty>
+    {data.aliases.length === 0 ? <Empty title="No aliases yet">A stable name for clients. Swap the model behind it any time.</Empty>
       : <div className="data-table alias-table" role="table" aria-label="Alias list">
         <div role="row" className="data-head"><span role="columnheader">Alias</span><span role="columnheader">Points to</span><span role="columnheader">Status</span><span role="columnheader"><span className="sr-only">Actions</span></span></div>
         {data.aliases.map((alias) => <div role="row" className="data-row" key={alias.alias} aria-label={alias.alias}>

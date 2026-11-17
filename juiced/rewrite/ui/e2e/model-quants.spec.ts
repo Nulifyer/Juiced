@@ -12,10 +12,11 @@ test.describe("Model quants", () => {
       await open(page);
       const inspector = await openModel(page, id);
       const quants = inspector.getByRole("region", { name: "Quants", exact: true }).getByRole("list", { name: "Quants of Qwen3-4B-Instruct-2507-GGUF" });
-      await expect(quants.getByRole("listitem")).toHaveText([/^Q4_K_M.*GiB.*Not added.*Add$/, /^Q8_0.*GiB.*This model$/]);
+      await expect(quants.getByRole("listitem")).toHaveText([/^Q4_K_MNot added.*GiBAdd$/, /^Q8_0This model.*GiB$/]);
       await noHorizontalOverflow(page, "Model quants");
       await quants.getByRole("button", { name: "Add Q4_K_M" }).click();
       const file = page.getByRole("complementary", { name: "File details" });
+      await expect(file.getByRole("listbox", { name: "Quants on disk" }).getByRole("option")).toHaveText([/^Q4_K_MNot added.*GiB$/, /^Q8_0Disabled.*GiB$/]);
       await expect(file.getByRole("listbox", { name: "Quants on disk" }).getByRole("option", { selected: true })).toContainText("Q4_K_M");
       await file.getByRole("button", { name: "More quants in Discover" }).click();
       await expect(page.getByRole("searchbox", { name: "Search models" })).toHaveValue("unsloth/Qwen3-4B-Instruct-2507-GGUF");
@@ -42,6 +43,7 @@ test.describe("Model quants", () => {
       await quants.getByRole("button", { name: "Get Q4_K_M" }).click();
       const detail = page.getByRole("complementary", { name: "Model detail" });
       await expect(detail.getByRole("listbox", { name: "Quants", exact: true }).getByRole("option", { selected: true })).toContainText("Q4_K_M");
+      await expect(detail.getByRole("listbox", { name: "Quants", exact: true }).getByRole("option", { name: /Q8_0/ }), "Discover names the policy of the model that runs a quant").toContainText("Disabled");
       await expect(detail.getByRole("radiogroup", { name: "Loading policy" })).toBeVisible();
       await expect(detail.getByRole("button", { name: "Download" })).toBeEnabled();
     } finally { await service.remove(id); }
