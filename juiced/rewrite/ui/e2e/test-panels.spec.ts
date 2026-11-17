@@ -1,4 +1,4 @@
-import { api, expect, hotModel, modelId, navigate, noHorizontalOverflow, open, storedText, tab, test, tryModel } from "./support";
+import { api, expect, hotModel, modelId, navigate, noHorizontalOverflow, open, pickModel, pickerPopup, storedText, tab, test, tryModel } from "./support";
 
 const embedModel = "fixture.embed-tiny";
 
@@ -9,11 +9,11 @@ test("Compare streams one prompt to two models with timings and Stop cancels bot
   await tab(page, "Test mode", "Compare").click();
   const panel = page.getByRole("region", { name: "Compare models" });
   const compare = panel.getByRole("button", { name: "Compare" });
-  await panel.getByLabel("Model 1").selectOption(hotModel);
-  await panel.getByLabel("Model 2").selectOption(hotModel);
+  await pickModel(panel.getByLabel("Model 1"), hotModel);
+  await pickModel(panel.getByLabel("Model 2"), hotModel);
   await panel.getByLabel("Prompt").fill("Private compare prompt");
   await expect(compare).toBeDisabled();
-  await panel.getByLabel("Model 2").selectOption(modelId);
+  await pickModel(panel.getByLabel("Model 2"), modelId);
   await expect(compare).toBeEnabled();
 
   const sent: any[] = [];
@@ -62,8 +62,8 @@ test("Compare Stop with the prompt still filled does not start another compariso
   await navigate(page, "Test services");
   await tab(page, "Test mode", "Compare").click();
   const panel = page.getByRole("region", { name: "Compare models" });
-  await panel.getByLabel("Model 1").selectOption(hotModel);
-  await panel.getByLabel("Model 2").selectOption(modelId);
+  await pickModel(panel.getByLabel("Model 1"), hotModel);
+  await pickModel(panel.getByLabel("Model 2"), modelId);
   await panel.getByLabel("Prompt").fill("Stop once");
   await panel.getByRole("button", { name: "Compare" }).click();
   const columns = panel.getByRole("article");
@@ -84,7 +84,9 @@ test("Embeddings embeds each line and shows dimensions, a cosine grid and vector
     await open(page);
     await navigate(page, "Test services");
     const picker = page.getByRole("region", { name: "Try a model" }).getByLabel("Model");
-    await expect(picker.locator('optgroup[label="Embeddings"] option', { hasText: hotModel })).toHaveCount(0);
+    await picker.click();
+    await expect(pickerPopup(picker).locator(`[role="option"][data-value="${hotModel}"] .model-option-type`)).toHaveText("Chat");
+    await page.keyboard.press("Escape");
     await tryModel(page, embedModel);
     const panel = page.getByRole("region", { name: "Embeddings test" });
     const embed = panel.getByRole("button", { name: "Embed" });

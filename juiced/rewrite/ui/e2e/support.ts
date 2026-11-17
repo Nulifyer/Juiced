@@ -178,10 +178,39 @@ export async function storedText(page: Page) {
   return page.evaluate(() => { try { return Object.entries(localStorage).map(([key, value]) => `${key}=${value}`).join("\n"); } catch { return ""; } });
 }
 
-/** Picks a model in a ModelSelect, opening its Disabled group first when the model is hidden there. */
+/** The popup a ModelSelect button opens. */
+export function pickerPopup(select: Locator) {
+  return select.page().locator("[popover]:popover-open");
+}
+
+/** Picks a model in a ModelSelect by searching for its ID, which also finds Disabled models. */
 export async function pickModel(select: Locator, id: string) {
-  if (await select.locator(`option[value="${id}"]`).count() === 0) await select.selectOption(" show-disabled");
-  await select.selectOption(id);
+  await select.click();
+  const popup = pickerPopup(select);
+  await popup.getByRole("combobox", { name: "Search" }).fill(id);
+  await popup.locator(`[role="option"][data-value="${id}"]`).click();
+  await expect(popup).toHaveCount(0);
+  await expect(select).toHaveText(id);
+}
+
+/** Picks a ModelSelect choice that is not a model, such as "All sources", by its label. */
+export async function pickChoice(select: Locator, label: string) {
+  await select.click();
+  await pickerPopup(select).getByRole("option", { name: label, exact: true }).click();
+  await expect(select).toHaveText(label);
+}
+
+/** Every value a ModelSelect offers, Disabled models included. */
+export async function pickerValues(select: Locator) {
+  await select.click();
+  const popup = pickerPopup(select);
+  await expect(popup.getByRole("listbox")).toBeVisible();
+  const more = popup.locator('[role="option"][data-more]');
+  if (await more.count()) await more.click();
+  const values = await popup.locator('[role="option"][data-value]').evaluateAll((options) => options.map((option) => option.getAttribute("data-value")!));
+  await select.page().keyboard.press("Escape");
+  await expect(popup).toHaveCount(0);
+  return values;
 }
 
 export function rowFor(table: Locator, id: string) {
@@ -189,7 +218,7 @@ export function rowFor(table: Locator, id: string) {
 }
 
 export async function tryModel(page: Page, id: string) {
-  await page.getByRole("region", { name: "Try a model" }).getByLabel("Model").selectOption(id);
+  await pickModel(page.getByRole("region", { name: "Try a model" }).getByLabel("Model"), id);
 }
 
 /** Reports the model as accepting images, as a llama.cpp worker with a vision projector does. */

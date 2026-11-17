@@ -4,6 +4,7 @@ import { ConversationCache, size } from "./CacheSessions";
 import { operationEligible, type Model } from "./domain";
 import { parseCacheView, parseCacheInspection, positiveBytes, sessionValue, type CacheInspection } from "./management";
 import { Badge, Button, Dialog, Empty, HelpTip, Switch } from "./ui";
+import { ModelSelect } from "./ModelSelect";
 import { useOperation, useResource } from "./useResource";
 
 type Cursor = { after?: string; expected_generation?: number; expected_view?: string };
@@ -101,7 +102,7 @@ function ManualSnapshots({ client, models, online }: { client: Client; models: M
     {inventory.error && <div className="action-row"><p role="alert" className="inline-error">{data ? "Showing the last observation. " : ""}{inventory.error}</p><Button disabled={operation.busy || inventory.loading} onClick={() => void refreshFirstPage()}>{pages.length > 1 ? "Restart snapshot pages" : "Refresh snapshots"}</Button></div>}
     {operation.error && <p role="alert" className="inline-error">{operation.error}</p>}
     {shown && <div className="toolbar" role="group" aria-label="Snapshot session">
-      <select aria-label="Snapshot model" value={model} disabled={operation.busy} onChange={(event) => { setModel(event.target.value); setContextReady(false); setResponse(""); }}><option value="">Choose a model…</option>{candidates.map((item) => <option key={item.id} value={item.id}>{item.id}</option>)}</select>
+      <ModelSelect aria-label="Snapshot model" models={candidates} value={model} disabled={operation.busy} onChange={(id) => { setModel(id); setContextReady(false); setResponse(""); }} />
       <input aria-label="Session ID" placeholder="Session ID" value={session} autoComplete="off" spellCheck={false} disabled={operation.busy} title="Use the same ID to restore or forget. This tab never stores it." onChange={(event) => { setSession(event.target.value); setContextReady(false); setResponse(""); }} />
       <Button disabled={operation.busy} onClick={() => { setSession(crypto.randomUUID()); setContextReady(false); setResponse(""); }}>New ID</Button>
       <Button disabled={contextBlocked} onClick={() => setSaving(true)}>Save a snapshot</Button>

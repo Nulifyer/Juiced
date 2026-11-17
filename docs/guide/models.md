@@ -211,6 +211,13 @@ name does not say which quant it runs shows the quant beside its service.
 With a model open, press Escape to close it. The arrow keys move between its
 tabs.
 
+Every model picker in the console works the same way. Open it and type part of
+a name, a type such as `chat`, `image` or `speech`, or a state such as `loaded`.
+Models are listed as **Loaded**, **Enabled** and **Disabled**, with type and
+memory beside each. In a long list, Disabled models wait behind **Show N
+disabled**; a search lists them without asking. Use the arrow keys and Enter to
+choose, or Escape to keep the current choice.
+
 **Check for updates** compares each downloaded Hugging Face model with the
 current upstream file and marks changed ones **update available**. The check
 itself downloads nothing. Scripts use `POST /v1/models/check-updates`.

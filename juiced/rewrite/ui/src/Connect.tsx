@@ -5,7 +5,8 @@ import { baseUrl, checkText, clientHints, lastRequest, parseHealth, snippets, st
 import { eligible, type Model } from "./domain";
 import { parseProtocols } from "./management";
 import { notify } from "./toast";
-import { Badge, Button, HelpTip, ModelSelect, Switch } from "./ui";
+import { Badge, Button, HelpTip, Switch } from "./ui";
+import { ModelSelect } from "./ModelSelect";
 import { useResource } from "./useResource";
 import { WyomingSettings } from "./Wyoming";
 

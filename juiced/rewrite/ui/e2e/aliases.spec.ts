@@ -44,7 +44,7 @@ test("an alias is created, serves requests, swaps to another model and is remove
 
     const before = await service.json<AliasList>("/v1/juiced/aliases");
     await service.post("/v1/juiced/aliases", { alias, target: hotModel, expected_revision: before.revision });
-    await expect(row.getByLabel(`Target for ${alias}`)).toHaveValue(hotModel, { timeout: 10000 });
+    await expect(row.getByLabel(`Target for ${alias}`)).toHaveText(hotModel, { timeout: 10000 });
 
     await row.getByRole("button", { name: "Open model" }).click();
     await expect(page.getByRole("complementary", { name: "Model inspector" }).getByRole("heading", { name: hotModel, level: 2 })).toBeVisible();

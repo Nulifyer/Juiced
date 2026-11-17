@@ -5,7 +5,8 @@ import { withImages, withoutImages } from "./chatImages";
 import { AssistantBody, Composer, UserBody, thinkingClock, useAttachments } from "./ChatParts";
 import { Copy } from "./Connect";
 import type { Model } from "./domain";
-import { Badge, Button, Empty, HelpTip, Icon, ModelSelect } from "./ui";
+import { Badge, Button, Empty, HelpTip, Icon } from "./ui";
+import { ModelSelect } from "./ModelSelect";
 import "./barista.css";
 
 type Step = "running" | "pending" | "done" | "failed" | "skipped";

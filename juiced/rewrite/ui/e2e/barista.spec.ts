@@ -76,7 +76,7 @@ test.describe("Barista", () => {
     const panel = page.getByRole("complementary", { name: "Barista" });
     await expect(panel.getByRole("heading", { name: "Barista", level: 2 })).toBeVisible();
     const setup = panel.getByRole("form", { name: "Set up Barista" });
-    await expect(setup.getByLabel("Model", { exact: true })).toHaveValue(hotModel);
+    await expect(setup.getByLabel("Model", { exact: true })).toHaveText(hotModel);
     await expect(setup).toContainText("Hot, so Juiced keeps it loaded.");
     await pickModel(setup.getByLabel("Model", { exact: true }), modelId);
     await expect(setup).toContainText(`${modelId} is Disabled. Turning Barista on sets it to On demand.`);
@@ -337,7 +337,7 @@ test.describe("Barista", () => {
     await expect(settings).toBeVisible();
     await expect(panel.getByRole("status").filter({ hasText: `${hotModel} is no longer registered. Pick another model.` })).toBeVisible();
     await expect(panel.getByRole("button", { name: "Barista settings" })).toHaveCount(0);
-    await settings.getByLabel("Model", { exact: true }).selectOption(modelId);
+    await pickModel(settings.getByLabel("Model", { exact: true }), modelId);
     await settings.getByRole("button", { name: "Save" }).click();
     await expect(panel.getByLabel("Barista status")).toContainText(modelId);
     await expect(panel.getByLabel("Message Barista")).toBeVisible();
