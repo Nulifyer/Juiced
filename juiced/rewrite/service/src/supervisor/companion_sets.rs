@@ -252,7 +252,7 @@ fn publish(
     };
     let mut attempts = 0;
     loop {
-        let operation = store.set_operation(Arc::new(AtomicBool::new(false)));
+        let operation = crate::artifacts::SetOperation::unbounded(Arc::new(AtomicBool::new(false)));
         match store.publish_set(specification.clone(), store.generation(), &operation) {
             Ok(view) => return Ok(view.id),
             // Another store write moved the generation between the read and the publish.

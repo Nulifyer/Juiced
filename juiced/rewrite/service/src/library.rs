@@ -45,7 +45,6 @@ const MAXIMUM_PARTS: usize = 64;
 const LOCAL_SOURCES: usize = 1024;
 const IMPORTER_ID: &str = "huggingface";
 const IMPORTER_VERSION: &str = "juiced-library-1";
-const PUBLISH_DEADLINE: Duration = Duration::from_secs(3600);
 const LOCAL_TTL: Duration = Duration::from_secs(30);
 /// The wait before each automatic resume of a part whose connection dropped. Large files
 /// from the hub lose a connection now and then; the pull fails only after the last one.
@@ -1795,10 +1794,7 @@ fn observe(store: &ArtifactStore, id: &str, reused: bool, digest: &str) -> Optio
 async fn publish_set(store: &Arc<ArtifactStore>, specification: ArtifactSetSpec) -> SetState {
     let store = store.clone();
     tokio::task::spawn_blocking(move || {
-        let operation = SetOperation::new(
-            Instant::now() + PUBLISH_DEADLINE,
-            Arc::new(AtomicBool::new(false)),
-        );
+        let operation = SetOperation::unbounded(Arc::new(AtomicBool::new(false)));
         let mut last = ArtifactError::Conflict;
         for _ in 0..64 {
             match store.publish_set(specification.clone(), store.generation(), &operation) {

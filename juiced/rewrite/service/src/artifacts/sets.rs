@@ -2,14 +2,6 @@ use super::*;
 use crate::identity::VerifiedFile;
 
 const MAX_MEMBERS: usize = 64;
-const VERIFY_BASE: Duration = Duration::from_secs(30);
-/// A slow disk still reads this fast; a set gets this long per byte on top of `VERIFY_BASE`.
-const VERIFY_FLOOR_BYTES_PER_SECOND: u64 = 32 * 1024 * 1024;
-
-/// How long hashing `bytes` of set members may take before the hold gives up.
-pub(crate) fn verify_budget(bytes: u64) -> Duration {
-    VERIFY_BASE + Duration::from_secs(bytes / VERIFY_FLOOR_BYTES_PER_SECOND)
-}
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -208,13 +200,21 @@ pub(super) fn validate_id(value: &str) -> Result<(), ArtifactError> {
 
 #[derive(Clone)]
 pub struct SetOperation {
-    deadline: Instant,
+    deadline: Option<Instant>,
     cancelled: Arc<AtomicBool>,
 }
 impl SetOperation {
     pub fn new(deadline: Instant, cancelled: Arc<AtomicBool>) -> Self {
         Self {
-            deadline,
+            deadline: Some(deadline),
+            cancelled,
+        }
+    }
+    /// For work the service starts on its own files, such as adding a model: hashing takes as
+    /// long as the files are big, so only cancellation or shutdown stops it.
+    pub fn unbounded(cancelled: Arc<AtomicBool>) -> Self {
+        Self {
+            deadline: None,
             cancelled,
         }
     }
@@ -222,7 +222,10 @@ impl SetOperation {
         if self.cancelled.load(Ordering::Acquire) {
             return Err(ArtifactError::Stop);
         }
-        if Instant::now() >= self.deadline {
+        if self
+            .deadline
+            .is_some_and(|deadline| Instant::now() >= deadline)
+        {
             return Err(ArtifactError::Deadline);
         }
         Ok(())
@@ -520,16 +523,8 @@ impl ArtifactStore {
                 ArtifactError::SetUnsupported
             });
         }
-        // Holding a set rehashes every member, so a fixed limit would refuse any large model.
-        let bytes = view
-            .specification
-            .members
-            .iter()
-            .fold(0u64, |total, member| total.saturating_add(member.bytes));
-        let operation = SetOperation::new(
-            Instant::now() + verify_budget(bytes),
-            Arc::new(AtomicBool::new(false)),
-        );
+        // Holding a set rehashes every member, so a time limit would refuse any large model.
+        let operation = SetOperation::unbounded(Arc::new(AtomicBool::new(false)));
         let held = Arc::new(self.hold_set(id, &operation)?);
         let primary = held.primary();
         Ok(ArtifactLease {

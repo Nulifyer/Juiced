@@ -39,13 +39,13 @@ impl VerifiedFile {
             options.custom_flags(0x0020_0000);
         }
         let file = options.open(&path)?;
-        Self::from_file_checked(&path, file, deadline, check)
+        Self::from_file_checked(&path, file, Some(deadline), check)
     }
 
     pub(crate) fn from_file_checked(
         path: &Path,
         mut file: File,
-        deadline: Instant,
+        deadline: Option<Instant>,
         mut check: impl FnMut() -> io::Result<()>,
     ) -> io::Result<Self> {
         check()?;
@@ -57,7 +57,7 @@ impl VerifiedFile {
         let mut buffer = [0u8; 65536];
         let mut bytes = 0u64;
         loop {
-            if Instant::now() > deadline {
+            if deadline.is_some_and(|deadline| Instant::now() > deadline) {
                 return Err(io::Error::new(
                     io::ErrorKind::TimedOut,
                     "Identity hashing exceeded its deadline",
