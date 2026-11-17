@@ -1176,6 +1176,69 @@ async fn a_new_pull_picks_up_the_bytes_of_a_download_whose_connection_dropped() 
 }
 
 #[tokio::test]
+async fn resuming_a_failed_pull_continues_its_dropped_part_and_its_follow_up() {
+    let fixture = fixture().await;
+    let library = library(&fixture, SourcePolicy::AllowLoopbackHttp, None);
+    let directory = tempfile::tempdir().unwrap();
+    let store = store(&directory, SourcePolicy::AllowLoopbackHttp);
+    fixture.fake.mode.store(DROP_ONCE, Ordering::Release);
+    let request = DownloadRequest {
+        source_url: format!(
+            "{}{SINGLE_REPO}/resolve/{REVISION}/Tiny-Q4_K_M.gguf",
+            fixture.base
+        ),
+        expected_sha256: digest(&content(8, 50_000)),
+        expected_bytes: Some(50_000),
+        maximum_bytes: 50_000,
+    };
+    let dropped = store
+        .start_download(request.clone(), store.generation())
+        .unwrap();
+    let failed = tokio::time::timeout(Duration::from_secs(5), store.wait(&dropped.id))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(failed.error.as_deref(), Some("artifact_network"));
+    // The record a pull leaves after its resumes ran out.
+    library
+        .pulls
+        .lock()
+        .unwrap()
+        .push(Arc::new(Mutex::new(PullRecord {
+            id: "failedpull".into(),
+            key: format!("{SINGLE_REPO}@{REVISION}:Tiny-Q4_K_M.gguf"),
+            repo: SINGLE_REPO.into(),
+            revision: REVISION.into(),
+            label: Some("Q4_K_M".into()),
+            parts: vec![Part {
+                file: "Tiny-Q4_K_M.gguf".into(),
+                name: None,
+                request,
+                status: PartStatus::Failed("artifact_network"),
+            }],
+            set: None,
+            checkpoint: None,
+            follow_up: Some(follow_up::Saved {
+                then: FollowUp::Add {
+                    id: None,
+                    policy: crate::config::Policy::OnDemand,
+                    engine: None,
+                },
+                outcome: FollowUpOutcome::failed("download_failed", "The download didn't finish."),
+            }),
+        })));
+    assert_eq!(library.pull_view("failedpull").unwrap()["state"], "failed");
+    let resumed = library.resume_pull(store.clone(), "failedpull").unwrap();
+    assert_eq!(resumed["files"][0]["job"], dropped.id);
+    assert_eq!(resumed["then"]["state"], "pending");
+    let finished = wait_for_pull(&library, "failedpull").await;
+    assert_eq!(finished["state"], "complete", "{finished}");
+    assert_eq!(fixture.fake.download_requests.load(Ordering::Acquire), 2);
+    let again = library.resume_pull(store, "failedpull").unwrap_err();
+    assert_eq!(again.status, StatusCode::CONFLICT);
+}
+
+#[tokio::test]
 async fn pull_rejects_ambiguous_incomplete_unverifiable_and_unknown_files() {
     let fixture = fixture().await;
     let library = library(&fixture, SourcePolicy::AllowLoopbackHttp, None);

@@ -163,6 +163,8 @@ export function jobActions(job: ArtifactJob): ("pause" | "resume" | "retry" | "c
   if (job.writer_active && job.state === "pausing") return ["cancel"];
   if (!job.writer_active && job.state === "paused") return ["resume", "cancel"];
   if (!job.writer_active && job.state === "interrupted") return ["resume", "retry", "cancel"];
+  // A dropped connection leaves good bytes; Resume continues from them. Other failures restart.
+  if (!job.writer_active && job.state === "failed" && job.error === "artifact_network" && job.downloaded_bytes > 0) return ["resume", "retry", "cancel"];
   if (!job.writer_active && ["failed", "quarantined"].includes(job.state)) return ["retry", "cancel"];
   return [];
 }

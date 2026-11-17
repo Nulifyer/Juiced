@@ -666,6 +666,71 @@ impl Library {
         Ok(json!({"pull": id, "dismissed": true}))
     }
 
+    /// Starts a failed pull's failed parts again. A part whose connection dropped continues
+    /// from its bytes; the follow-up the download failed waits again.
+    pub fn resume_pull(
+        self: &Arc<Self>,
+        store: Arc<ArtifactStore>,
+        id: &str,
+    ) -> Result<Value, ApiError> {
+        let record = self
+            .pulls
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .iter()
+            .find(|record| record.lock().unwrap_or_else(|error| error.into_inner()).id == id)
+            .cloned()
+            .ok_or_else(|| {
+                library_error(
+                    StatusCode::NOT_FOUND,
+                    "library_pull_not_found",
+                    "No library acquisition with this identifier is retained.",
+                )
+            })?;
+        let key = {
+            let record = record.lock().unwrap_or_else(|error| error.into_inner());
+            if record.state().0 != "failed" || record.follow_up_pending() {
+                return Err(library_error(
+                    StatusCode::CONFLICT,
+                    "library_pull_not_failed",
+                    "Only a failed download can be resumed.",
+                ));
+            }
+            record.key.clone()
+        };
+        if self.find_pull(&key).is_some() {
+            return Err(library_error(
+                StatusCode::CONFLICT,
+                "library_pull_active",
+                "This model is already downloading again.",
+            ));
+        }
+        let view = {
+            let mut record = record.lock().unwrap_or_else(|error| error.into_inner());
+            let digests: BTreeSet<String> = record
+                .parts
+                .iter()
+                .map(|part| part.request.expected_sha256.clone())
+                .collect();
+            let presence = store.presence(&digests).map_err(ApiError::from)?;
+            for part in &mut record.parts {
+                if matches!(part.status, PartStatus::Failed(_)) {
+                    part.status = existing_status(&presence, &part.request.expected_sha256);
+                }
+            }
+            if let Some(saved) = &mut record.follow_up
+                && saved.outcome.state == FollowUpState::Failed
+            {
+                saved.outcome = FollowUpOutcome::default();
+            }
+            self.persist(&record);
+            record.view()
+        };
+        let library = self.clone();
+        tokio::spawn(async move { library.drive(store, record).await });
+        Ok(view)
+    }
+
     async fn infos(&self, repos: Vec<String>) -> BTreeMap<String, Result<Arc<RepoInfo>, HubError>> {
         let deadline = tokio::time::Instant::now() + self.hub.limits.search_deadline;
         let mut fetches = futures_util::stream::iter(repos.clone())

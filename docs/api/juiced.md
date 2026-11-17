@@ -260,6 +260,11 @@ cancel a pull through its `jobs` with `POST /v1/juiced/artifacts/jobs/ID`.
 When the connection to the hub drops, the pull shows `waiting` and resumes the file
 where it stopped, up to six times over about nine minutes, before it fails. A new
 pull of the same files picks up the bytes of a download that failed this way.
+`POST /v1/juiced/library/pulls/{id}` with `{"action": "resume"}` starts a failed
+pull again in place: a part whose connection dropped continues from its bytes,
+other failed parts start over, and a `then` that failed with the download waits
+again. Only a failed pull resumes (409 `library_pull_not_failed`); when another
+pull of the same files already runs, the reply is 409 `library_pull_active`.
 
 Register a finished checkpoint with `POST /v1/juiced/models/add`:
 

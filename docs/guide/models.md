@@ -106,8 +106,9 @@ Model downloads and engine installs both appear here, with file progress and
 errors.
 
 - **Pause** stops a running transfer. **Resume** continues a paused or
-  interrupted one.
-- **Retry** starts a failed or interrupted transfer again.
+  interrupted one, or a download that failed because the connection dropped,
+  from the bytes already on disk. It still adds the model when done.
+- **Retry** starts a failed or interrupted transfer again from the beginning.
 - **Cancel** stops a transfer for good and deletes its partial files.
   **Dismiss** removes a finished or cancelled row. A failed download keeps its
   partial files, so it offers **Retry** and **Cancel**, then **Dismiss** once

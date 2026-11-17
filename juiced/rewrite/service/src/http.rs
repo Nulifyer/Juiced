@@ -323,7 +323,7 @@ define_routes! {
     (get, "/juiced/library/search", library_search, "operator"),
     (post, "/juiced/library/pull", library_pull, "operator"),
     (get, "/juiced/library/pulls/{pull}", library_pull_status, "operator"),
-    (post, "/juiced/library/pulls/{pull}", library_pull_dismiss, "operator"),
+    (post, "/juiced/library/pulls/{pull}", library_pull_action, "operator"),
     (get, "/juiced/library/pulls", library_pulls, "operator"),
     (get, "/juiced/library/local", library_local, "operator"),
     (post, "/juiced/library/local/delete", library_local_delete, "operator"),
@@ -661,19 +661,27 @@ async fn library_pull_status(
 struct PullAction {
     action: String,
 }
-async fn library_pull_dismiss(
+async fn library_pull_action(
     State(state): State<AppState>,
     Path(id): Path<String>,
     ApiJson(request): ApiJson<PullAction>,
 ) -> Result<Json<Value>, ApiError> {
-    if request.action != "dismiss" {
-        return Err(ApiError::new(
+    match request.action.as_str() {
+        "dismiss" => state.manager.library().dismiss_pull(&id).map(Json),
+        "resume" => {
+            let store = state.manager.artifacts()?;
+            let view = state.manager.library().resume_pull(store, &id)?;
+            if view["then"]["state"] == "pending" {
+                state.manager.follow_pull(id);
+            }
+            Ok(Json(view))
+        }
+        _ => Err(ApiError::new(
             StatusCode::BAD_REQUEST,
             "invalid_library_pull_action",
-            "The only library acquisition action is dismiss.",
-        ));
+            "A library acquisition action is dismiss or resume.",
+        )),
     }
-    state.manager.library().dismiss_pull(&id).map(Json)
 }
 async fn library_pulls(State(state): State<AppState>) -> impl IntoResponse {
     (

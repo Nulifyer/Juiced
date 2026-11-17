@@ -111,7 +111,10 @@ export function Downloading({ client, online, onSearch, local, onOpenModel, onAd
   async function act(row: Row, action: Action) {
     setBusy(row.key);
     try {
-      for (const job of row.jobs.filter((item) => jobActions(item).includes(action) && !(action === "forget" && item.state === "complete"))) await client.request(`juiced/artifacts/jobs/${encodeURIComponent(job.id)}`, { action, expected_revision: job.revision });
+      // Resuming the pull itself keeps what it was to do when done, such as adding the model.
+      const revive = row.pull?.state === "failed" && (action === "resume" || action === "retry");
+      if (!(revive && action === "resume")) for (const job of row.jobs.filter((item) => jobActions(item).includes(action) && !(action === "forget" && item.state === "complete"))) await client.request(`juiced/artifacts/jobs/${encodeURIComponent(job.id)}`, { action, expected_revision: job.revision });
+      if (revive) await client.request(`juiced/library/pulls/${encodeURIComponent(row.pull!.id)}`, { action: "resume" });
       if (action === "forget") for (const pull of row.pulls) await client.request(`juiced/library/pulls/${encodeURIComponent(pull)}`, { action: "dismiss" });
       notify(action === "forget" ? `Dismissed ${row.title}.` : `${actionNames[action]} requested for ${row.title}.`);
       await Promise.all([pulls.reload(), inventory.reload()]);
@@ -123,6 +126,7 @@ export function Downloading({ client, online, onSearch, local, onOpenModel, onAd
     // Partial files stay on disk until the jobs are cancelled, so a failed pull offers Retry and Cancel first.
     if (row.pulls.length && row.finished && !["retry", "resume", "cancel"].some((action) => available.has(action as Action))) available.add("forget");
     if (row.pulls.length && !row.finished) available.delete("forget");
+    if (row.pull?.state === "failed" && row.pull.error === "artifact_network") available.add("resume");
     return (["pause", "resume", "retry", "cancel", "forget"] as Action[]).filter((action) => available.has(action));
   };
   const leftovers = inventory.data?.quarantined_files ?? [];

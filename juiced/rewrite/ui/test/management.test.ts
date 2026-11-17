@@ -48,6 +48,9 @@ describe("settled writer and ownership guards", () => {
     expect(jobActions({ ...job, state: "quarantined", writer_active: false })).toEqual(["retry", "cancel"]);
     expect(jobActions({ ...job, state: "interrupted", writer_active: false })).toEqual(["resume", "retry", "cancel"]);
     expect(jobActions({ ...job, state: "failed", writer_active: false })).toEqual(["retry", "cancel"]);
+    expect(jobActions({ ...job, state: "failed", error: "artifact_network", downloaded_bytes: 4096, writer_active: false })).toEqual(["resume", "retry", "cancel"]);
+    expect(jobActions({ ...job, state: "failed", error: "artifact_network", downloaded_bytes: 0, writer_active: false })).toEqual(["retry", "cancel"]);
+    expect(jobActions({ ...job, state: "failed", error: "artifact_digest_mismatch", downloaded_bytes: 4096, writer_active: false })).toEqual(["retry", "cancel"]);
     expect(jobActions({ ...job, state: "interrupted", error: "artifact_publication_uncertain", writer_active: false })).toEqual([]);
   });
   test("registration removal requires Disabled and unloaded with no active requests", () => {

@@ -314,6 +314,20 @@ test.describe("Downloads", () => {
     await expect.poll(async () => (await service.artifacts()).artifacts.some((item: any) => item.id === fixture.sha256), { timeout: 10000 }).toBe(false);
   });
 
+  test("a download whose connection dropped resumes as the same download", async ({ page }) => {
+    const pull = { pull: "dropped1", state: "failed", error: "artifact_network", repo: "unsloth/Big-GGUF", label: "Q6_K", revision: "main",
+      files: [{ file: "Big-Q6_K.gguf", bytes: 1048576, state: "failed", job: null, downloaded_bytes: 0, source_url: "https://huggingface.co/unsloth/Big-GGUF/resolve/main/Big-Q6_K.gguf", error: "artifact_network" }],
+      then: { kind: "add", policy: "on_demand", state: "failed", error: "download_failed", message: "The download didn't finish." } };
+    await page.route("**/v1/juiced/library/pulls", (route) => route.fulfill({ json: { schema_version: 1, data: [pull] } }));
+    const posts: unknown[] = [];
+    await page.route("**/v1/juiced/library/pulls/dropped1", (route) => { posts.push(route.request().postDataJSON()); return route.fulfill({ json: { ...pull, state: "downloading" } }); });
+    await view(page, "Downloads");
+    const row = page.getByRole("list", { name: "Download list" }).getByRole("listitem").filter({ hasText: "Big-GGUF" });
+    await expect(row.getByRole("button", { name: "Resume" })).toBeVisible();
+    await row.getByRole("button", { name: "Resume" }).click();
+    await expect.poll(() => posts).toEqual([{ action: "resume" }]);
+  });
+
   test("unfinished files are summarised without actions", async ({ page }) => {
     await view(page, "Downloads");
     await expect(page.getByText(/1 unfinished file holds/)).toBeVisible();
