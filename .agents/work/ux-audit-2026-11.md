@@ -84,6 +84,13 @@ Every report item is either fixed with evidence or listed below as decided other
 - Gate: 172 UI unit tests, tsc, build, Playwright 366 passed / 21 skipped / 0 failed (3 projects). v0.11.11 (run 44171188188 green) deployed to stack 83: 4 Hot models loaded, Coder-Next revision 193; production render (0 non-GET): Physical batch "2048 (measured here)", Batch "2048 (engine default)", Temperature "1 (model file)".
 - Open: GitHub release pages exist only up to v0.11.4 (later tags published images only), so the release notice reports latest v0.11.4. Threads and Prompt threads still read "Engine default" (the service reports no number for them).
 
+## Follow-ups (2026-11-17, v0.11.12)
+
+- User report: after Resume, UD-Q6_K_XL (3 parts, 68.1 GiB) showed Not added with Add model and no reason. Production (GET): pull complete, `then` add failed `artifact_deadline`. Cause: `hold_binding_with` rehashes every set member under `set_operation`'s flat 30 s; `hold` for a single artifact has no limit. Fix: `verify_budget(bytes)` = 30 s + bytes / 32 MiB/s for set holds (68 GiB: about 37 min).
+- Console: File details shows the failed add ("The download finished, but adding it failed. Checking the files took too long. Add the model again."), a large add says it is checking the files, the heading drops "Not added" when any quant is in use, the empty "Used by" row is gone; Downloads words the failed step through `thenFailure`.
+- Gate: 910 service tests, clippy, fmt; 172 UI unit tests, tsc; library, add-model and model-quants specs 51 passed (3 projects). v0.11.12 (run 44180838599 green) deployed to stack 83: 3 Hot models loaded (the user set Coder-Next Q4_K_M to On demand, revision 196, saved options unchanged); production render (0 non-GET) shows the notice and both rows. Add model not pressed (GET-only).
+- Open: add reads the set twice (inspect, then register) and startup rehashes stored models, about a minute per 68 GiB by estimate, unmeasured on production. A complete pull whose add failed has no retry action of its own; File details' Add model covers it.
+
 ## Next action
 
 None for this audit. Open from earlier ledgers: the later-work list in drop-in-replacement.md.
