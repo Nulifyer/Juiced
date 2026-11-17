@@ -35,15 +35,6 @@ settings for models no longer in the current inventory. Add override selects a
 model and mode; Use default removes its entry. Inherited models stay out of the
 list. These edits use the existing Save changes/Cancel draft flow.
 
-Every model choice uses the shared `ModelSelect` picker (`rewrite/ui/src/ModelSelect.tsx`):
-a button that opens a searchable list grouped Loaded, Enabled, Disabled, ordered
-by type and then ID, with type and memory as aligned facts. Search covers ID,
-type words, labels, engine and state. Disabled models stay behind one
-"Show N disabled" row in lists longer than eight; a search, the current
-selection and a list with nothing enabled show them. Type chips appear only when
-a list mixes types. Choices that are not models, such as "All sources", go in
-`leading`. Do not add a native `<select>` of models.
-
 The inspected [LM Studio model table](https://lmstudio.ai/docs/app/advanced/per-model)
 informs row density, explicit quant/size columns and contextual actions. The
 [Docker Desktop workflow](https://docs.docker.com/desktop/use-desktop/container/)

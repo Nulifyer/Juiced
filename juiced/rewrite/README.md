@@ -8,6 +8,8 @@ The [plan](PLAN.md) and [feature crosswalk](FEATURE-COVERAGE.json) retain all 21
 
 The console has eight pages: Dashboard, Models (Installed, Discover, Downloads, Aliases), Loading policy, Engines & hardware, Cache, Test services, Diagnostics and Connect. Each page has at most one tab strip and one side inspector. Data refreshes live, so there are no refresh buttons except Retry after a failure.
 
+Every model choice uses the shared `ModelSelect` picker (`ui/src/ModelSelect.tsx`): a button that opens a searchable list grouped Loaded, Enabled, Disabled, ordered by type and then ID, with type and memory as aligned facts. Search covers ID, type words, labels, engine and state. Disabled models stay behind one "Show N disabled" row in lists longer than eight; a search, the current selection and a list with nothing enabled show them. Type chips appear only when a list mixes types. Choices that are not models, such as "All sources", go in `leading`. Do not add a native `<select>` of models.
+
 ## Run an isolated preview
 
 From `juiced/rewrite/`:
