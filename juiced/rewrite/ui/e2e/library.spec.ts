@@ -121,6 +121,12 @@ test.describe("Discover", () => {
     const search = await service.json<any>(`/v1/juiced/library/search?q=tiny-chat&limit=12`);
     const sha: string = search.data[0].quants.find((quant: any) => quant.label === "Q4_K_M").sha256;
     await service.removeArtifact(sha);
+    const pulls: number[] = [];
+    await page.route("**/v1/juiced/library/pull", async (route) => {
+      pulls.push(route.request().postDataJSON().expected_generation);
+      if (pulls.length > 1) return route.continue();
+      await route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ error: { code: "artifact_revision_conflict", message: "The artifact state changed. Refresh the current revision before retrying." } }) });
+    });
     try {
       await findModels(page);
       const tiny = result(page, /^Tiny-Chat-GGUF$/);
@@ -130,6 +136,8 @@ test.describe("Discover", () => {
       await expect(detail.getByRole("heading", { name: "Tiny-Chat-GGUF" })).toBeVisible();
       await detail.getByRole("button", { name: "Download" }).click();
       await expect(page.getByRole("status").filter({ hasText: "Downloading Tiny-Chat-GGUF Q4_K_M." })).toBeVisible();
+      expect(pulls).toHaveLength(2);
+      await expect(page.getByText("The artifact state changed")).toHaveCount(0);
       await expect(detail.getByRole("progressbar", { name: "Download progress" })).toBeVisible();
       await expect(detail).toContainText(/Downloading… \d+%/);
       await expect(detail.getByRole("option", { name: /Q4_K_M/ })).toContainText("✓ downloaded", { timeout: 20000 });

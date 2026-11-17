@@ -244,6 +244,10 @@ has an `HF_TOKEN` for gated repositories.
 {"repo": "Qwen/Qwen3-0.6B", "file": "config.json", "expected_generation": 12}
 ```
 
+`expected_generation` is the store generation from `GET /v1/juiced/artifacts` or
+the search reply's `artifact_generation`; a stale one returns 409
+`artifact_revision_conflict`. Download progress does not change the generation.
+
 `file` names any file of the variant, or `files` lists several from one variant;
 Juiced downloads the whole variant at the repository's current commit, or at
 `revision`. Small files without a published SHA-256 are fetched first and checked

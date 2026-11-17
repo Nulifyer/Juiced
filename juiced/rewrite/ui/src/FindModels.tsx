@@ -1,9 +1,10 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { Client } from "./api";
+import { ApiError, type Client } from "./api";
 import { bytes, policyNames, type Policy } from "./domain";
 import { gpuMemory, parseSystemInfo } from "./hardware";
 import { AddModel, type AddTarget } from "./AddModel";
 import { UrlDownload } from "./UrlDownload";
+import { parseArtifactInventory } from "./management";
 import { engineNames, featured, parseSearch, progress, quantKey, quantNames, searchEngines, tasks, type LibraryModel, type Quant, type SearchResult } from "./libraryData";
 import { Badge, Button, Empty, HelpTip, Icon, Menu } from "./ui";
 import { LocalProgress, ProjectorChoice, ServerFolder, localTarget, useLocalFile } from "./LocalFiles";
@@ -136,7 +137,12 @@ export function FindModels({ client, online, onRegistered, onOpenModel, onDownlo
     if (!result) return;
     setError(""); setNotice("");
     try {
-      const started = await client.request<{ pull?: string }>("juiced/library/pull", { repo: target.repo, file: item.file, expected_generation: result.generation, then: { policy, ...(then.id ? { id: then.id } : {}), ...(then.engine ? { engine: then.engine } : {}) } });
+      const pull = (generation: number) => client.request<{ pull?: string }>("juiced/library/pull", { repo: target.repo, file: item.file, expected_generation: generation, then: { policy, ...(then.id ? { id: then.id } : {}), ...(then.engine ? { engine: then.engine } : {}) } });
+      // Another download finishing a part moves the generation; starting this one doesn't depend on that, and a repeated pull joins the first.
+      const started = await pull(result.generation).catch(async (failure) => {
+        if (!(failure instanceof ApiError) || failure.code !== "artifact_revision_conflict") throw failure;
+        return pull(parseArtifactInventory(await client.request("juiced/artifacts?section=jobs&limit=1")).generation);
+      });
       if (started.pull) seen.current.add(started.pull);
       notify(`Downloading ${target.name} ${item.label}. It's added as ${policyNames[policy]} when the download finishes.`);
       setTick((value) => value + 1);

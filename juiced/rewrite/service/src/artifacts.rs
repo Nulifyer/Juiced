@@ -1909,7 +1909,7 @@ impl ArtifactStore {
         let job = next.jobs.get_mut(id).ok_or(ArtifactError::NotFound)?;
         job.downloaded_bytes = bytes;
         job.validator = validator;
-        self.commit(&mut runtime, next)
+        self.write(&mut runtime, next)
     }
 
     fn set_state(
@@ -2092,6 +2092,12 @@ impl ArtifactStore {
             .generation
             .checked_add(1)
             .ok_or(ArtifactError::Limit)?;
+        self.write(runtime, next)
+    }
+
+    /// Writes without a new generation. Byte progress changes nothing a caller's
+    /// expected generation guards, and a running download checkpoints every second.
+    fn write(&self, runtime: &mut Runtime, next: Manifest) -> Result<(), ArtifactError> {
         manifest_within_limit(&next, self.limits.maximum_manifest_bytes)?;
         let result = self.scope.write_json(&self.lease, MANIFEST, &next);
         if result
@@ -3303,6 +3309,27 @@ mod tests {
             "artifact_revision_conflict"
         );
         assert!(fs::read(&target).is_ok());
+    }
+
+    #[tokio::test]
+    async fn byte_progress_keeps_the_generation_so_another_download_can_start() {
+        let source = fixture().await;
+        source.source.mode.store(5, Ordering::Release);
+        let (_directory, store) = store();
+        let running = store.start_download(request(&source), 0).unwrap();
+        let partial = progress(&store, &running.id).await;
+        until(|| source.source.waiting.load(Ordering::Acquire)).await;
+        let seen = store.generation();
+        store
+            .checkpoint(&running.id, partial.downloaded_bytes, None)
+            .unwrap();
+        assert_eq!(store.generation(), seen);
+        let other = fixture().await;
+        let next = store.start_download(request(&other), seen).unwrap();
+        assert_eq!(settled(&store, &next.id).await.state, JobState::Complete);
+        source.source.released.store(true, Ordering::Release);
+        source.source.release.notify_waiters();
+        assert_eq!(settled(&store, &running.id).await.state, JobState::Complete);
     }
 
     #[tokio::test]
