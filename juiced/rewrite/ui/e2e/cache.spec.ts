@@ -1,4 +1,4 @@
-import { api, expect, largeText, modelId, navigate, noHorizontalOverflow, open, storedText, test } from "./support";
+import { api, expect, largeText, modelId, navigate, noHorizontalOverflow, open, pickModel, storedText, test } from "./support";
 
 test.afterEach(async ({ request }) => {
   const service = api(request);
@@ -23,7 +23,7 @@ test("manual snapshots save, restore by session, check files, forget and free a 
   const session = summary.getByRole("group", { name: "Snapshot session" });
   const saveButton = session.getByRole("button", { name: "Save a snapshot" });
   await expect(saveButton).toBeDisabled();
-  await session.getByLabel("Snapshot model").selectOption(modelId);
+  await pickModel(session.getByLabel("Snapshot model"), modelId);
   await session.getByLabel("Session ID").fill("browser-private-context");
   await expect(saveButton).toBeEnabled();
   await saveButton.click();

@@ -1,4 +1,4 @@
-import { expect, navigate, noHorizontalOverflow, open, test, toasts } from "./support";
+import { expect, navigate, noHorizontalOverflow, open, pickModel, pickerValues, test, toasts } from "./support";
 
 const digest = (seed: string) => seed.repeat(64).slice(0, 64);
 const view = (mode: string, models: Record<string, string> = {}, sessions = 2) => ({
@@ -49,14 +49,15 @@ test("Cache shows how each turn used the cache, changes modes and forgets conver
   const overrides = page.getByRole("region", { name: "Model overrides" });
   await expect(overrides.getByRole("table", { name: "Overrides" })).toHaveCount(0);
   await expect(overrides.getByText("None", { exact: true })).toBeVisible();
-  await expect(overrides.getByLabel("Model to override").getByRole("option")).toHaveText(["Choose a model…", "fixture.chat-small-q4"]);
+  await expect(overrides.getByLabel("Model to override")).toHaveText("Choose a model…");
+  expect(await pickerValues(overrides.getByLabel("Model to override"))).toEqual(["fixture.chat-small-q4"]);
 
   await summary.getByRole("radio", { name: "Memory only" }).click();
   await expect(toasts(page).getByRole("status")).toContainText("Conversation cache: Memory only.");
   expect(posts.at(-1)).toMatchObject({ action: "configure", expected_generation: 7, settings: { mode: "memory" } });
   await expect(summary.getByRole("radio", { name: "Memory only" })).toHaveAttribute("aria-checked", "true");
 
-  await overrides.getByLabel("Model to override").selectOption("fixture.chat-small-q4");
+  await pickModel(overrides.getByLabel("Model to override"), "fixture.chat-small-q4");
   await overrides.getByLabel("Override mode").selectOption("off");
   await overrides.getByRole("button", { name: "Add override" }).click();
   await expect(toasts(page).getByRole("status")).toContainText("fixture.chat-small-q4 uses Off.");
@@ -103,8 +104,7 @@ test("Cache on the real fixture shows the default once and keeps manual snapshot
   const overrides = page.getByRole("region", { name: "Model overrides" });
   await expect(overrides.getByRole("table", { name: "Overrides" })).toHaveCount(0);
   const addable = overrides.getByLabel("Model to override");
-  if (await addable.locator('option[value=" show-disabled"]').count()) await addable.selectOption(" show-disabled");
-  await expect(addable.getByRole("option").filter({ hasText: /^fixture\./ })).toHaveText(["fixture.managed-runtime"]);
+  expect((await pickerValues(addable)).filter((id) => id.startsWith("fixture."))).toEqual(["fixture.managed-runtime"]);
   const manual = page.getByRole("region", { name: "Manual snapshots" });
   await expect(manual.getByRole("switch", { name: "Allow manual save and restore" })).toHaveAttribute("aria-checked", "false");
   await expect(manual).toContainText("0 saved");

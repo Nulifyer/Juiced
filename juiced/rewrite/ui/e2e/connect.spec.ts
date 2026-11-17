@@ -1,5 +1,5 @@
 import type { APIRequestContext, Page } from "@playwright/test";
-import { api, expect, navigate, noHorizontalOverflow, open, tab, test, toasts } from "./support";
+import { api, expect, navigate, noHorizontalOverflow, open, pickModel, tab, test, toasts } from "./support";
 
 const protocols = (page: Page) => page.getByRole("list", { name: "Client protocols" });
 const row = (page: Page, name: string) => protocols(page).getByRole("listitem", { name, exact: true });
@@ -105,7 +105,7 @@ test("the Wyoming server is configured in its details and switched from the list
     await row(page, "Wyoming").getByRole("button", { name: "Wyoming", exact: true }).click();
     const panel = details(page, "Wyoming");
     await panel.getByLabel("Listen on").fill("127.0.0.1:0");
-    await panel.getByLabel("Speech to text").selectOption("fixture.speech-tiny");
+    await pickModel(panel.getByLabel("Speech to text"), "fixture.speech-tiny");
     await panel.getByRole("button", { name: "Save" }).click();
     await expect(toasts(page).getByRole("status")).toContainText("Wyoming settings saved.");
     const power = row(page, "Wyoming").getByRole("switch", { name: "Wyoming enabled" });

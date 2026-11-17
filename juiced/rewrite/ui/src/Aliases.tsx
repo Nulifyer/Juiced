@@ -1,7 +1,8 @@
 import { useState } from "react";
 import type { Client } from "./api";
 import { policyNames, type Model } from "./domain";
-import { Badge, Button, Empty, HelpTip, Icon, ModelSelect } from "./ui";
+import { Badge, Button, Empty, HelpTip, Icon } from "./ui";
+import { ModelSelect } from "./ModelSelect";
 import { useOperation, useResource } from "./useResource";
 
 export type Alias = { alias: string; target: string; target_state: string | null; target_policy: string | null; available: boolean };
@@ -48,7 +49,7 @@ export function Aliases({ client, models, online, onOpenModel }: { client: Clien
   return <section className="page-body aliases" aria-label="Aliases">
     <form className="alias-create toolbar" aria-label="New alias" onSubmit={(event) => { event.preventDefault(); void create(); }}>
       <input aria-label="Alias name" placeholder="Alias, e.g. default-chat" value={name} disabled={blocked} onChange={(event) => setName(event.target.value)} />
-      <ModelSelect aria-label="Alias target" models={models} value={target} disabled={blocked} placeholder="Choose a model…" onChange={setTarget} />
+      <ModelSelect aria-label="Alias target" models={models} value={target} disabled={blocked} onChange={setTarget} />
       <Button type="submit" variant="primary" disabled={blocked || !name.trim() || !target || nameTaken || data.aliases.length >= data.maximum}>Add alias</Button>
       <HelpTip label="Aliases">Clients send the alias as the model name. After you change its model, new requests go to the new one and running requests finish on the old one.</HelpTip>
     </form>

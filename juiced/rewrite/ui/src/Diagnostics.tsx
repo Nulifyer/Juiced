@@ -4,7 +4,8 @@ import { Sparkline } from "./charts";
 import { bytes, type Model, type RequestRecord, type Snapshot } from "./domain";
 import { memorySize, parseLogPage, percent, rate, type LogLine, type StatsPoint, type SystemStats } from "./live";
 import { clock, count, failed, formatMs, modelPerformance, outcomeText, promptNote, sender, timing } from "./performance";
-import { Badge, Button, Empty, HelpTip, ModelSelect, Switch } from "./ui";
+import { Badge, Button, Empty, HelpTip, Switch } from "./ui";
+import { ModelSelect } from "./ModelSelect";
 
 type Tab = "performance" | "requests" | "logs";
 type Props = { client: Client; snapshot: Snapshot; stats: SystemStats | null; history: StatsPoint[]; tab: Tab };
@@ -209,7 +210,7 @@ function Logs({ client, models }: { client: Client; models: Model[] }) {
   return <div className="logs">
     <div className="toolbar">
       <input type="search" aria-label="Search logs" placeholder="Search logs" value={query} onChange={(event) => setQuery(event.target.value)} />
-      <ModelSelect aria-label="Log source" models={models} value={source} placeholder="All sources" leading={[["service", "Service"]]} onChange={setSource} />
+      <ModelSelect aria-label="Log source" models={models} value={source} leading={[["", "All sources"], ["service", "Service"]]} onChange={setSource} />
       <div className="segmented" role="group" aria-label="Log level">{(["all", "warning", "error"] as const).map((value) => <button key={value} aria-pressed={level === value} onClick={() => setLevel(value)}>{value === "all" ? "All" : value === "warning" ? "Warnings" : "Errors"}</button>)}</div>
       <Button variant={follow ? "outline" : "primary"} onClick={() => setFollow(!follow)}>{follow ? "Pause" : "Follow"}</Button>
     </div>

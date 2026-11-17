@@ -3,7 +3,8 @@ import type { Client } from "./api";
 import { Meter } from "./charts";
 import { pathNames } from "./performance";
 import { bytes, type Model } from "./domain";
-import { Badge, Button, Dialog, Empty, HelpTip, Icon, ModelSelect } from "./ui";
+import { Badge, Button, Dialog, Empty, HelpTip, Icon } from "./ui";
+import { ModelSelect } from "./ModelSelect";
 import { useOperation, useResource } from "./useResource";
 
 export type SessionMode = "off" | "memory" | "persistent";
@@ -153,7 +154,7 @@ export function ConversationCache({ client, models: registered = [], online }: {
         })}
       </div>}
       {addable.length > 0 && <div className="toolbar override-add" aria-label="Add an override">
-        <ModelSelect aria-label="Model to override" models={addable.map((id) => registered.find((model) => model.id === id) ?? ({ id, policy: "on-demand", loaded: false } as Model))} value={adding} disabled={blocked} placeholder="Choose a model…" onChange={setAdding} />
+        <ModelSelect aria-label="Model to override" models={addable.map((id) => registered.find((model) => model.id === id) ?? ({ id, policy: "on-demand", loaded: false } as Model))} value={adding} disabled={blocked} onChange={setAdding} />
         <select aria-label="Override mode" value={chosenMode} disabled={blocked} onChange={(event) => setAddMode(event.target.value as SessionMode)}>{otherModes.map((item) => <option key={item} value={item}>{modeNames[item]}</option>)}</select>
         <Button disabled={blocked || !adding} onClick={async () => { if (await setModelMode(adding, chosenMode) !== undefined) setAdding(""); }}>Add override</Button>
       </div>}

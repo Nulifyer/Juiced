@@ -1,4 +1,4 @@
-import { api, expect, hotModel, navigate, open, pickModel, tab, test } from "./support";
+import { api, expect, hotModel, navigate, open, pickChoice, pickModel, tab, test } from "./support";
 
 test("Performance shows per-model timings and resource history without repeating Dashboard numbers", async ({ page, request }) => {
   const response = await request.post("/v1/chat/completions", { data: { model: hotModel, messages: [{ role: "user", content: "Performance fixture prompt" }], stream: false, max_tokens: 4 } });
@@ -144,10 +144,10 @@ test("Logs show service and worker lines with search, level, source and follow c
     await pickModel(page.getByLabel("Log source"), chatty);
     await expect(log).toContainText(`fixture stdout ${marker}`);
     await expect(log).not.toContainText(`Worker ${failing}`);
-    await page.getByLabel("Log source").selectOption("service");
+    await pickChoice(page.getByLabel("Log source"), "Service");
     await expect(log).toContainText(`Worker ${failing} generation`);
     await expect(log).not.toContainText(`fixture stdout ${marker}`);
-    await page.getByLabel("Log source").selectOption("");
+    await pickChoice(page.getByLabel("Log source"), "All sources");
 
     const pause = page.getByRole("button", { name: "Pause", exact: true });
     await pause.click();

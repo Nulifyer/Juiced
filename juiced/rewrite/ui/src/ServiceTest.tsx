@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { chatTestTokenLimit, chatTokenCeiling, type Client } from "./api";
-import { bytes, eligible, operationEligible, type Model } from "./domain";
+import { eligible, operationEligible, type Model } from "./domain";
 import { speechModels } from "./speech";
 import { Badge, Button, Empty, HelpTip, Switch } from "./ui";
+import { ModelSelect } from "./ModelSelect";
 import { AssistantBody, Composer, UserBody, thinkingClock, useAttachments } from "./ChatParts";
 import { withImages } from "./chatImages";
 import { TranscriptionTest } from "./TranscriptionTest";
@@ -41,9 +42,7 @@ function TryModel({ models, client, online }: { models: Model[]; client: Client;
   const props = { model: current.model, client, online };
   return <section className="service-tests" aria-label="Try a model">
     <div className="toolbar test-toolbar">
-      <select aria-label="Model" value={current.model.id} onChange={(event) => { setId(event.target.value); writeLocal("juiced.rewrite.testModel", event.target.value); }}>
-        {groups.map((group) => <optgroup key={group.kind} label={group.label}>{group.list.map((model) => <option key={model.id} value={model.id}>{model.loaded ? model.id : `${model.id} · not loaded${model.resident_bytes ? `, ${bytes(model.resident_bytes)}` : ""}`}</option>)}</optgroup>)}
-      </select>
+      <ModelSelect aria-label="Model" models={choices.map((choice) => choice.model)} value={current.model.id} onChange={(next) => { setId(next); writeLocal("juiced.rewrite.testModel", next); }} />
       <Badge>{current.label}</Badge>
       <span className="muted">{current.model.loaded ? "Loaded" : "Loads on first use"}{current.kind === "chat" && current.model.vision ? " · accepts images" : ""}</span>
       {current.kind === "chat" && <span className="chat-options">
