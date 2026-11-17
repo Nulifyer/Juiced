@@ -62,7 +62,7 @@ that every model, accelerator or voice works.
 Juiced v0.10 and later use the same `/data` volume and port `8080` as v0.9.2.
 
 1. Make a consistent backup of the v0.9.2 volume.
-2. Change the image to `v0.11.12`. Keep the volume, mounts, devices and port.
+2. Change the image to `v0.11.13`. Keep the volume, mounts, devices and port.
 3. Start the container. On its first start, Juiced adopts the models in
    `/data/config` in the background. Each model keeps its ID, loading policy and
    settings. The weights stay where they are, and Juiced only reads the v0.9.2
