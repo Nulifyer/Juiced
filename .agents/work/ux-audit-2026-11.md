@@ -77,6 +77,13 @@ Every report item is either fixed with evidence or listed below as decided other
 - Gate: 172 UI unit tests, tsc, build; Playwright 363 passed / 21 skipped before the last two fixes, then media, model-picker, models and connect specs 73 passed on all three projects.
 - v0.11.10 (run 44157609192 green) deployed to stack 83: 4 Hot models loaded, Coder-Next revision 193; production render (0 non-GET): kokoro-v1 voice picker 54 of 54 in nine language groups, "british male" gives 4 of 54 (bm_daniel, bm_fable, bm_george, bm_lewis), Escape keeps af_alloy.
 
+## Follow-ups (2026-11-17, v0.11.11)
+
+- Skill: Fable and Astra agreed (4 rounds, log in scratchpad `skill-collab/log.md`) on a generic "Choices and fields" rule for frontend-design plus `references/choices-and-fields.md`; uncommitted in `~/.agents` for the user's review.
+- e7 batch (commit before af096a5b): an empty setting's hint names the value in effect and its source, including Juiced's applied defaults (Physical batch read "Default 512" while a measured `--ubatch-size 2048` ran); engine defaults read "N (engine default)". The snapshot size limit takes sizes ("1 MiB", "2 GiB") and shows what a byte count comes to.
+- Gate: 172 UI unit tests, tsc, build, Playwright 366 passed / 21 skipped / 0 failed (3 projects). v0.11.11 (run 44171188188 green) deployed to stack 83: 4 Hot models loaded, Coder-Next revision 193; production render (0 non-GET): Physical batch "2048 (measured here)", Batch "2048 (engine default)", Temperature "1 (model file)".
+- Open: GitHub release pages exist only up to v0.11.4 (later tags published images only), so the release notice reports latest v0.11.4. Threads and Prompt threads still read "Engine default" (the service reports no number for them).
+
 ## Next action
 
 None for this audit. Open from earlier ledgers: the later-work list in drop-in-replacement.md.
