@@ -56,7 +56,7 @@ docker run -d --name juiced \
   -p 127.0.0.1:8080:8080 \
   -v juiced-data:/data \
   --restart unless-stopped \
-  ghcr.io/nulifyer/juiced:v0.11.6
+  ghcr.io/nulifyer/juiced:v0.11.7
 ```
 
 Open **http://localhost:8080**. Find a small chat model under **Models →
