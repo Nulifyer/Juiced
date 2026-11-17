@@ -23,8 +23,11 @@ export const policyLabel = "Loading policy";
 /** Starts a download that the service adds with `policy` once it finishes. */
 export type DownloadThenAdd = { disabled: boolean; start: (policy: Policy) => Promise<void> };
 
+/** Adds a source the service registers through its own route, such as a FastFlowLM checkpoint. */
+export type Register = (policy: Policy) => Promise<{ model: string | { id?: string }; backend: string }>;
+
 /** Policy choice, engine install and the Add model action for one ready source, or the download that adds it. */
-export function AddModel({ client, online, target, id, engine, ready, blocked, fallback, download, downloadLabel = "Download", onRegistered, onOpenModel, resetKey }: { client: Client; online: boolean; target: AddTarget | null; id: string; engine?: string; ready: boolean; blocked?: string; fallback?: ReactNode; download?: DownloadThenAdd; downloadLabel?: string; onRegistered: () => Promise<void>; onOpenModel: (id: string) => void; resetKey: string }) {
+export function AddModel({ client, online, target, id, engine, ready, blocked, fallback, download, downloadLabel = "Download", register, onRegistered, onOpenModel, resetKey }: { client: Client; online: boolean; target: AddTarget | null; id: string; engine?: string; ready: boolean; blocked?: string; fallback?: ReactNode; download?: DownloadThenAdd; downloadLabel?: string; register?: Register; onRegistered: () => Promise<void>; onOpenModel: (id: string) => void; resetKey: string }) {
   const [needs, setNeeds] = useState<Install | null>(null);
   const [installing, setInstalling] = useState<EngineJob | null>(null);
   const [added, setAdded] = useState<{ model: string; backend: string; policy: Policy } | null>(null);
@@ -35,12 +38,12 @@ export function AddModel({ client, online, target, id, engine, ready, blocked, f
   const label = useId();
   useEffect(() => { setNeeds(null); setAdded(null); setError(""); setCode(undefined); }, [resetKey]);
   async function add(install?: Install) {
-    if (!target) return;
+    if (!target && !register) return;
     setAdding(true); setError("");
     try {
       if (install) await installEngine(client, install.engine, install.backend, setInstalling);
       setInstalling(null);
-      const response = await client.request<{ model: string | { id?: string }; backend: string }>("juiced/models/add", { ...target, id, policy, ...(engine ? { engine } : {}) });
+      const response = register ? await register(policy) : await client.request<{ model: string | { id?: string }; backend: string }>("juiced/models/add", { ...target, id, policy, ...(engine ? { engine } : {}) });
       const created = typeof response.model === "string" ? response.model : response.model?.id ?? "the model";
       setNeeds(null); setAdded({ model: created, backend: response.backend, policy });
       await onRegistered();
@@ -63,7 +66,7 @@ export function AddModel({ client, online, target, id, engine, ready, blocked, f
     {(ready || download) && <div className="add-policy"><span className="field-label" id={label}>{policyLabel}</span><div className="segmented" role="radiogroup" aria-labelledby={label}>{(["disabled", "on-demand", "hot"] as Policy[]).map((value) => <button key={value} role="radio" aria-checked={policy === value} disabled={adding} onClick={() => setPolicy(value)}>{policyNames[value]}</button>)}</div></div>}
     {needs ? <div className="needs-engine"><p className="field-help">Needs the {needs.engine} {backendNames[needs.backend] ?? needs.backend} engine{needs.size ? ` (${bytes(needs.size)})` : ""}.</p>
       {installing ? <><progress aria-label="Engine install progress" max={installing.total_bytes ?? 1} value={installing.total_bytes ? installing.downloaded_bytes : undefined} /><p className="field-help">Installing engine… {installing.state}</p></> : <Button variant="primary" disabled={!online || adding || !target} onClick={() => void add(needs)}>Install engine and add</Button>}</div>
-      : <div className="action-row wrap">{ready ? <Button variant="primary" disabled={!online || adding || !target || !id || !!blocked} title={blocked} onClick={() => void add()}>{adding ? "Adding…" : "Add model"}</Button> : download ? <Button variant="primary" disabled={!online || adding || download.disabled} onClick={() => { setAdding(true); void download.start(policy).finally(() => setAdding(false)); }}>{downloadLabel}</Button> : fallback}</div>}
+      : <div className="action-row wrap">{ready ? <Button variant="primary" disabled={!online || adding || (!register && (!target || !id)) || !!blocked} title={blocked} onClick={() => void add()}>{adding ? "Adding…" : "Add model"}</Button> : download ? <Button variant="primary" disabled={!online || adding || download.disabled} onClick={() => { setAdding(true); void download.start(policy).finally(() => setAdding(false)); }}>{downloadLabel}</Button> : fallback}</div>}
     <AddError error={error} code={code} />
   </>;
 }

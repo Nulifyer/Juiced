@@ -7,8 +7,18 @@ with the loading policy you want.
 
 1. Open **Models → Discover**.
 2. Search by name, for example `qwen3`, `llama` or `whisper`. Narrow the results
-   with a task chip such as **Chat** or **Speech to text**, or pick an engine in
-   **Any engine**.
+   with the filters beside the search box. They combine, and **Clear filters**
+   resets them.
+
+   | Filter | Choices |
+   |---|---|
+   | **Any type** | What the model does, such as **Chat** or **Speech to text** |
+   | **Any engine** | The engine that runs it, such as llama.cpp, vLLM or FastFlowLM |
+   | **Any hardware** | **Fits GPU**, **Fits memory** (GPU or system memory) or **NPU** |
+   | **Any size** | The size of a quant, from **Under 2 GiB** to **Over 24 GiB** |
+   | **Best match** | The order: **Most downloads** or **Smallest first** |
+
+   With a hardware or size filter, each result lists only the quants that match.
 3. Select a quant chip on a result. **Recommended** marks a model from Juiced's
    catalog, ★ marks the suggested quant, and **✓ On this machine** means a quant
    is already downloaded. **+N more** opens the full quant list.
@@ -57,13 +67,16 @@ See [choose loading policies](loading-policy.md) and
 
 ## Add an NPU model
 
-On a machine with an AMD XDNA 2 NPU and FastFlowLM installed, **NPU models**
-lists FastFlowLM's chat models after the search results. Pick **FastFlowLM (NPU)**
-in **Any engine** to see only those.
+On a machine with an AMD XDNA 2 NPU and FastFlowLM installed, Discover lists
+FastFlowLM's chat models as results, marked **FastFlowLM · Chat · NPU**. Each
+result is a model family and each chip is one of its sizes, such as `1b` or `4b`.
+Pick **NPU** in **Any hardware** or **FastFlowLM (NPU)** in **Any engine** to see
+only those.
 
-1. Choose a **Loading policy** at the top of the list.
-2. Select **Download** on a model. Juiced adds it with that policy when the
-   download finishes. A model that is already downloaded offers **Add** instead.
+1. Select a size chip on a result.
+2. In the detail panel, choose a **Loading policy**.
+3. Select **Download**. Juiced adds the model with that policy when the download
+   finishes. A size that is already downloaded offers **Add model** instead.
 
 FastFlowLM downloads do not continue after a restart. If Juiced restarts during
 one, download the model again.
@@ -79,7 +92,7 @@ Some engines run a model's original folder instead of a GGUF file:
 | Split diffusion files (`diffusion_models/`, `vae/`, `text_encoders/`) | TheNoise | One diffusion model with its VAE and text encoder |
 
 1. Open **Models → Discover** and search, for example `Qwen3-0.6B`. Pick an engine
-   in **Any engine** to see only what it runs. The **Classify** task lists text
+   in **Any engine** to see only what it runs. The **Classify** type lists text
    classifiers.
 2. A checkpoint shows as one chip, such as **Checkpoint · vLLM**. Select it to see
    every file, the total size, the license and the engine. READMEs, images and
@@ -204,8 +217,9 @@ for all of them at once. Select the **Model**, **State** or **Memory** column
 title to sort. The first chips filter by service. **Enabled**, **Disabled** and
 **Not added** choose what the list shows; Juiced shows Enabled models when there
 are any, and a search also lists Disabled models and unused files that match.
-**Not added** lists downloaded files that no model uses yet. The disk total
-beside the search box links to it when some files are unused. A model whose
+**Not added** lists model files on disk that no model uses. Add one to run it,
+or delete it to free space. The disk total beside the search box links to it
+when some files are not added. A model whose
 name does not say which quant it runs shows the quant beside its service.
 
 With a model open, press Escape to close it. The arrow keys move between its
