@@ -60,7 +60,7 @@ export function quantRefusal(group: LocalGroup, quant: LocalQuant): string | und
 
 export type PullFile = { file: string; bytes: number; state: string; downloaded: number; job: string | null; source: string | null };
 /** What the service does once a pull completes: add the files as a model, or move a model to them. */
-export type PullThen = { kind: "add" | "update"; model: string | null; policy: string | null; state: "pending" | "done" | "failed"; message: string | null };
+export type PullThen = { kind: "add" | "update"; model: string | null; policy: string | null; state: "pending" | "done" | "failed"; error: string | null; message: string | null };
 export type PullView = { id: string; state: string; error: string | null; repo: string; label: string | null; files: PullFile[]; then: PullThen | null };
 
 function pullThen(value: unknown): PullThen | null {
@@ -69,7 +69,7 @@ function pullThen(value: unknown): PullThen | null {
   const kind = item.kind === "update" ? "update" : item.kind === "add" ? "add" : null;
   if (!kind) return null;
   const state = item.state === "done" || item.state === "failed" ? item.state : "pending";
-  return { kind, model: text(item.model) ?? text(item.id), policy: text(item.policy), state, message: text(item.message) };
+  return { kind, model: text(item.model) ?? text(item.id), policy: text(item.policy), state, error: text(item.error), message: text(item.message) };
 }
 
 export function parsePulls(value: unknown): PullView[] {

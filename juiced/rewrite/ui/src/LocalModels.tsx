@@ -3,8 +3,8 @@ import type { Client } from "./api";
 import { bytes, type Model } from "./domain";
 import { AddModel } from "./AddModel";
 import type { DiscoverTarget } from "./FindModels";
-import { parseLocal, quantRefusal, roleNames, storageNames, type LocalFile, type LocalGroup, type LocalInventory, type LocalQuant } from "./localLibraryData";
-import { plainError } from "./modelErrors";
+import { parseLocal, parsePulls, quantRefusal, roleNames, storageNames, type LocalFile, type LocalGroup, type LocalInventory, type LocalQuant } from "./localLibraryData";
+import { plainError, thenFailure } from "./modelErrors";
 import { QuantList, policyWord, quantWords } from "./QuantList";
 import { notify } from "./toast";
 import { Badge, Button, Dialog, Icon } from "./ui";
@@ -41,6 +41,11 @@ export function FileInspector({ group, quant: initialQuant, models = [], client,
   const companions = group.files.filter((file) => file.role !== "model" && file.role !== "shard");
   const refusal = quant ? quantRefusal(group, quant) : undefined;
   const added = group.quants.length ? unusedQuants(group).length === 0 : group.usedBy.length > 0;
+  // With several quants each row says its own state, so the heading only speaks when no model uses any of them.
+  const unused = group.usedBy.length === 0 && group.quants.every((item) => item.usedBy.length === 0);
+  const waiting = !!quant?.add && quant.usedBy.length === 0 && !!group.repo;
+  const pulls = useResource(client, "juiced/library/pulls", parsePulls, 5000, true, waiting);
+  const failedAdd = waiting ? pulls.data?.find((pull) => pull.repo === group.repo && pull.label === quant!.label && pull.state === "complete" && pull.then?.kind === "add" && pull.then.state === "failed")?.then : undefined;
   const partial = !!quant && quant.parts > 1 && !quant.complete;
   async function remove() {
     if (!quant) return;
@@ -58,22 +63,23 @@ export function FileInspector({ group, quant: initialQuant, models = [], client,
   return <aside className="inspector" aria-label="File details">
     <div className="inspector-top"><Button variant="ghost" className="back-button" onClick={onClose}><Icon name="back" /> Back to models</Button><Button variant="ghost" className="close-inspector" aria-label="Close file details" onClick={onClose}><Icon name="close" /></Button></div>
     <div className="inspector-body">
-      <div className="inspector-title"><h2 className="break-word">{group.name}</h2>{!added && <Badge>Not added</Badge>}</div>
-      <p className="field-help">{[group.publisher, ...group.storage.map((value) => storageNames[value]), group.readOnly ? "Read-only" : null, added ? null : "No model uses these files"].filter(Boolean).join(" · ")}</p>
+      <div className="inspector-title"><h2 className="break-word">{group.name}</h2>{unused && <Badge>Not added</Badge>}</div>
+      <p className="field-help">{[group.publisher, ...group.storage.map((value) => storageNames[value]), group.readOnly ? "Read-only" : null, unused ? "No model uses these files" : null].filter(Boolean).join(" · ")}</p>
       {group.quants.length > 0 && <QuantList label="Quants on disk" selected={quant?.file} onSelect={(file) => { setPicked(file); setDeleteError(""); }} items={group.quants.map((entry) => ({
         key: entry.file, label: entry.label, bytes: entry.bytes,
         state: [localQuantState(entry, models), group.files.some((file) => file.unverified && entry.files.includes(file.id)) ? "Unverified" : null].filter(Boolean).join(" · "),
       }))} />}
       <dl className="facts">
-        {quant && <div><dt>Used by</dt><dd><UsedBy ids={quant.usedBy} onOpenModel={onOpenModel} /></dd></div>}
+        {quant && quant.usedBy.length > 0 && <div><dt>{group.quants.length > 1 ? `${quant.label} used by` : "Used by"}</dt><dd><UsedBy ids={quant.usedBy} onOpenModel={onOpenModel} /></dd></div>}
         {group.quants.length > 1 && <div><dt>All quants</dt><dd>{bytes(group.bytes)}</dd></div>}
         {(group.location ?? primary?.location) && <div className="fact-path"><dt>Location</dt><dd><code className="break-word">{group.location ?? primary?.location}</code></dd></div>}
       </dl>
       {companions.length > 0 && <ul className="file-list" aria-label="Other files">{companions.map((file) => <li key={file.id}><span className="break-word">{file.name}</span><span className="muted">{roleNames[file.role] ?? file.role}</span><span className="muted numeric">{bytes(file.bytes)}</span></li>)}</ul>}
       {quant && <>
         {quant.add && <div className="add-name"><label htmlFor="file-model-id">Model name</label><input id="file-model-id" value={name} maxLength={128} onChange={(event) => { const value = event.target.value; setNames((old) => ({ ...old, [quant.file]: value })); }} /></div>}
+        {failedAdd && <p className="inline-warning" role="status">The download finished, but adding it failed. {thenFailure(failedAdd)}</p>}
         {!quant.add && <p className="field-help">{partial ? `${quantWords.parts(quant.files.length, quant.parts)} on disk. Download the rest to add it.` : "This file can't be added on its own."}</p>}
-        <AddModel client={client} online={online} target={quant.add} id={name.trim()} ready={!!quant.add} resetKey={`${group.id}:${quant.file}`} onRegistered={async () => { await onRegistered(); await onChanged(); }} onOpenModel={onOpenModel}
+        <AddModel client={client} online={online} target={quant.add} size={quant.bytes} id={name.trim()} ready={!!quant.add} resetKey={`${group.id}:${quant.file}`} onRegistered={async () => { await onRegistered(); await onChanged(); }} onOpenModel={onOpenModel}
           fallback={partial && group.repo && onDiscover ? <Button variant="primary" onClick={() => onDiscover({ repo: group.repo!, label: quant.label })}>Finish download</Button> : undefined} />
         <div className="action-row wrap delete-row"><Button variant="danger" disabled={!online || !quant.removable || deleting} title={refusal} onClick={() => { setDeleteError(""); setConfirming(true); }}>Delete {quant.label}</Button>{group.repo && onDiscover && <button className="link-button more-quants" onClick={() => onDiscover({ repo: group.repo! })}>More quants in Discover</button>}</div>
         {refusal && <p className="field-help">{refusal}</p>}

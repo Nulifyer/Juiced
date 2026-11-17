@@ -19,6 +19,8 @@ export function AddError({ error, code }: { error: string; code?: string }) {
 }
 
 export const policyLabel = "Loading policy";
+/** The service rehashes stored files when it adds them; past this size the wait is long enough to explain. */
+const LARGE = 16 * 1024 ** 3;
 
 /** Starts a download that the service adds with `policy` once it finishes. */
 export type DownloadThenAdd = { disabled: boolean; start: (policy: Policy) => Promise<void> };
@@ -27,7 +29,7 @@ export type DownloadThenAdd = { disabled: boolean; start: (policy: Policy) => Pr
 export type Register = (policy: Policy) => Promise<{ model: string | { id?: string }; backend: string }>;
 
 /** Policy choice, engine install and the Add model action for one ready source, or the download that adds it. */
-export function AddModel({ client, online, target, id, engine, ready, blocked, fallback, download, downloadLabel = "Download", register, onRegistered, onOpenModel, resetKey }: { client: Client; online: boolean; target: AddTarget | null; id: string; engine?: string; ready: boolean; blocked?: string; fallback?: ReactNode; download?: DownloadThenAdd; downloadLabel?: string; register?: Register; onRegistered: () => Promise<void>; onOpenModel: (id: string) => void; resetKey: string }) {
+export function AddModel({ client, online, target, size, id, engine, ready, blocked, fallback, download, downloadLabel = "Download", register, onRegistered, onOpenModel, resetKey }: { client: Client; online: boolean; target: AddTarget | null; size?: number; id: string; engine?: string; ready: boolean; blocked?: string; fallback?: ReactNode; download?: DownloadThenAdd; downloadLabel?: string; register?: Register; onRegistered: () => Promise<void>; onOpenModel: (id: string) => void; resetKey: string }) {
   const [needs, setNeeds] = useState<Install | null>(null);
   const [installing, setInstalling] = useState<EngineJob | null>(null);
   const [added, setAdded] = useState<{ model: string; backend: string; policy: Policy } | null>(null);
@@ -67,6 +69,7 @@ export function AddModel({ client, online, target, id, engine, ready, blocked, f
     {needs ? <div className="needs-engine"><p className="field-help">Needs the {needs.engine} {backendNames[needs.backend] ?? needs.backend} engine{needs.size ? ` (${bytes(needs.size)})` : ""}.</p>
       {installing ? <><progress aria-label="Engine install progress" max={installing.total_bytes ?? 1} value={installing.total_bytes ? installing.downloaded_bytes : undefined} /><p className="field-help">Installing engine… {installing.state}</p></> : <Button variant="primary" disabled={!online || adding || !target} onClick={() => void add(needs)}>Install engine and add</Button>}</div>
       : <div className="action-row wrap">{ready ? <Button variant="primary" disabled={!online || adding || (!register && (!target || !id)) || !!blocked} title={blocked} onClick={() => void add()}>{adding ? "Adding…" : "Add model"}</Button> : download ? <Button variant="primary" disabled={!online || adding || download.disabled} onClick={() => { setAdding(true); void download.start(policy).finally(() => setAdding(false)); }}>{downloadLabel}</Button> : fallback}</div>}
+    {adding && !installing && size !== undefined && size >= LARGE && <p className="field-help" role="status">Checking {bytes(size)} before adding. This takes a few minutes.</p>}
     <AddError error={error} code={code} />
   </>;
 }

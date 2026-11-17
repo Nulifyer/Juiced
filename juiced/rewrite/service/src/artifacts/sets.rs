@@ -2,6 +2,14 @@ use super::*;
 use crate::identity::VerifiedFile;
 
 const MAX_MEMBERS: usize = 64;
+const VERIFY_BASE: Duration = Duration::from_secs(30);
+/// A slow disk still reads this fast; a set gets this long per byte on top of `VERIFY_BASE`.
+const VERIFY_FLOOR_BYTES_PER_SECOND: u64 = 32 * 1024 * 1024;
+
+/// How long hashing `bytes` of set members may take before the hold gives up.
+pub(crate) fn verify_budget(bytes: u64) -> Duration {
+    VERIFY_BASE + Duration::from_secs(bytes / VERIFY_FLOOR_BYTES_PER_SECOND)
+}
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -512,8 +520,17 @@ impl ArtifactStore {
                 ArtifactError::SetUnsupported
             });
         }
-        let held =
-            Arc::new(self.hold_set(id, &self.set_operation(Arc::new(AtomicBool::new(false))))?);
+        // Holding a set rehashes every member, so a fixed limit would refuse any large model.
+        let bytes = view
+            .specification
+            .members
+            .iter()
+            .fold(0u64, |total, member| total.saturating_add(member.bytes));
+        let operation = SetOperation::new(
+            Instant::now() + verify_budget(bytes),
+            Arc::new(AtomicBool::new(false)),
+        );
+        let held = Arc::new(self.hold_set(id, &operation)?);
         let primary = held.primary();
         Ok(ArtifactLease {
             _store: self.clone(),

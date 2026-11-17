@@ -5,7 +5,7 @@ import { parseEngines, type EngineJob } from "./engines";
 import { backendNames } from "./hardware";
 import { parsePulls, type LocalInventory, type LocalQuant, type PullView } from "./localLibraryData";
 import { jobActions, parseArtifactInventory, type ArtifactJob } from "./management";
-import { codeMessage, plainError } from "./modelErrors";
+import { codeMessage, plainError, thenFailure } from "./modelErrors";
 import { notify } from "./toast";
 import { Badge, Button, Empty, HelpTip } from "./ui";
 import { useResource } from "./useResource";
@@ -58,7 +58,7 @@ function pullRow(pull: PullView, jobs: ArtifactJob[]): Row {
   const present = pull.files.filter((file) => file.state === "present").length;
   const parts = pull.files.length > 1 ? pull.state === "complete" ? `${pull.files.length} parts` : `${present} of ${pull.files.length} parts` : null;
   const cause = owned.find((job) => job.error)?.error ?? pull.error;
-  return { key: `pull:${pull.id}`, pulls: [pull.id], pull, title: [name, pull.label].filter(Boolean).join(" "), detail: [pull.repo.split("/")[0], parts].filter(Boolean).join(" · "), state: then ?? pull.state, done: pullBytes(pull, jobs), total: total || null, error: pull.error ? cause : null, note: pull.then?.state === "failed" && !pull.error ? pull.then.message : null, jobs: owned, finished: ["complete", "failed"].includes(pull.state) && !settling };
+  return { key: `pull:${pull.id}`, pulls: [pull.id], pull, title: [name, pull.label].filter(Boolean).join(" "), detail: [pull.repo.split("/")[0], parts].filter(Boolean).join(" · "), state: then ?? pull.state, done: pullBytes(pull, jobs), total: total || null, error: pull.error ? cause : null, note: pull.then?.state === "failed" && !pull.error ? thenFailure(pull.then) : null, jobs: owned, finished: ["complete", "failed"].includes(pull.state) && !settling };
 }
 
 /** A finished pull leads to the model that uses its files, or to the file details to add one. */

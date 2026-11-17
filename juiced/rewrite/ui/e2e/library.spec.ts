@@ -243,6 +243,8 @@ test.describe("Installed files", () => {
     const qwen = `${fixture.cache_hub}/models--unsloth--Qwen3-4B-Instruct-2507-GGUF/snapshots/a6f3b0d5c1e2a4b7c9d8e0f1a2b3c4d5e6f70812/Qwen3-4B-Instruct-2507-Q8_0.gguf`;
     const id = `e2e.cache-q8-${info.project.name}`;
     await service.register({ id, model_file: qwen, command: fixture.command, args: fixture.args });
+    await page.route("**/v1/juiced/library/pulls", (route) => route.fulfill({ json: { schema_version: 1, data: [{ pull: "finished", state: "complete", error: null, repo: "unsloth/Qwen3-4B-Instruct-2507-GGUF", label: "Q4_K_M", files: [],
+      then: { kind: "add", id: "Qwen3-4B-Instruct-2507-Q4_K_M", policy: "on-demand", state: "failed", error: "artifact_deadline", message: "Artifact verification exceeded its deadline. Preserved files remain available for inspection." } }] } }));
     try {
       await view(page, "Installed");
       await expect(page.getByText(/ GiB on disk/)).toBeVisible();
@@ -265,7 +267,13 @@ test.describe("Installed files", () => {
       await expect(quants.getByRole("option", { selected: true })).toContainText("Q4_K_M");
       await expect(detail.getByRole("button", { name: "Delete Q4_K_M" })).toBeEnabled();
       await expect(detail.getByLabel("Model name")).toHaveValue("Qwen3-4B-Instruct-2507-Q4_K_M");
+      await expect(detail.locator(".inspector-title"), "one quant is in use, so the heading doesn't call the repository Not added").not.toContainText("Not added");
+      await expect(quants.getByRole("option", { selected: true })).toContainText("Not added");
+      await expect(detail.getByText("No model", { exact: true })).toHaveCount(0);
+      await expect(detail.getByRole("status").filter({ hasText: "adding it failed" })).toHaveText("The download finished, but adding it failed. Checking the files took too long. Add the model again.");
       await quants.getByRole("option", { name: /Q8_0/ }).click();
+      await expect(detail.getByRole("status").filter({ hasText: "adding it failed" })).toHaveCount(0);
+      await expect(detail.getByText("Q8_0 used by", { exact: true })).toBeVisible();
       await expect(detail.getByRole("button", { name: "Delete Q8_0" })).toBeDisabled();
       await expect(detail).toContainText(`Used by ${id}. Remove the model first.`);
       await largeText(page);

@@ -1,3 +1,4 @@
+use super::sets::verify_budget;
 use super::tests::{settled, store};
 use super::*;
 use serde_json::{Value, json};
@@ -779,4 +780,17 @@ async fn executable_primary_bindings_share_whole_set_ownership_and_publish_both_
             .contains(&"model:bound-primary".into())
     );
     store.remove_set(&published.id, store.generation()).unwrap();
+}
+
+#[test]
+fn a_set_hold_gets_time_in_proportion_to_the_bytes_it_rehashes() {
+    assert_eq!(verify_budget(0), Duration::from_secs(30));
+    assert_eq!(
+        verify_budget(4 * 1024 * 1024 * 1024),
+        Duration::from_secs(30 + 128)
+    );
+    // A three-part 68 GiB model: hashing it at 500 MiB/s takes 140 s, which a flat 30 s refused.
+    let split = 5_936_288 + 49_957_125_920 + 23_155_707_296u64;
+    assert!(verify_budget(split) > Duration::from_secs(split / (500 * 1024 * 1024)));
+    assert_eq!(verify_budget(split), Duration::from_secs(30 + 2179));
 }

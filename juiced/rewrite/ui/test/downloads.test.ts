@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { collapseFinished, nextStep, pullBytes } from "../src/Downloading";
 import type { ArtifactJob } from "../src/management";
 import type { LocalGroup, LocalInventory, PullView } from "../src/localLibraryData";
+import { thenFailure } from "../src/modelErrors";
 
 const pull = (id: string, state = "complete"): PullView => ({ id, state, error: null, repo: "unsloth/Qwen3-0.6B-GGUF", label: "Q4_K_M", files: [{ file: "Qwen3-0.6B-Q4_K_M.gguf", bytes: 10, state: "present", downloaded: 10, job: null, source: null }], then: null });
 const group = (usedBy: string[]): LocalGroup => ({
@@ -32,13 +33,15 @@ test("repeated finished pulls of one quant collapse into a row that dismisses th
 });
 
 test("a pull with a pending add offers nothing until the service settles it", () => {
-  const adding = { ...pull("a"), then: { kind: "add" as const, model: "Qwen3-0.6B-Q4_K_M", policy: "on-demand", state: "pending" as const, message: null } };
+  const adding = { ...pull("a"), then: { kind: "add" as const, model: "Qwen3-0.6B-Q4_K_M", policy: "on-demand", state: "pending" as const, error: null, message: null } };
   expect(nextStep(adding, inventory([]))).toBeNull();
   const added = { ...adding, then: { ...adding.then, state: "done" as const, model: "Custom-Name" } };
   expect(nextStep(added, { ...inventory([]), groups: [{ ...group([]), usedBy: ["Custom-Name"] }] })).toEqual({ kind: "open", model: "Custom-Name" });
   expect(nextStep(added, inventory([])), "a removed model falls back to adding the files").toEqual({ kind: "add", group: "hf:unsloth/qwen3-0.6b-gguf", quant: "f1" });
   const failed = { ...adding, then: { ...adding.then, state: "failed" as const, message: "No engine." } };
   expect(nextStep(failed, inventory([]))).toEqual({ kind: "add", group: "hf:unsloth/qwen3-0.6b-gguf", quant: "f1" });
+  expect(thenFailure(failed.then), "an unknown failure keeps the service's words").toBe("No engine.");
+  expect(thenFailure({ error: "artifact_deadline", message: "Artifact verification exceeded its deadline." })).toBe("Checking the files took too long. Add the model again.");
 });
 
 test("a failed split pull counts the bytes its failed parts' jobs kept", () => {

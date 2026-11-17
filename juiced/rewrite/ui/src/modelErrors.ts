@@ -16,12 +16,16 @@ const messages: Record<string, string> = {
   artifact_size_mismatch: "The file was bigger than its stated size or the free space.",
   artifact_publication_uncertain: "Saving the file may not have finished. Its space stays reserved.",
   artifact_corrupt: "The file failed its check on the server.",
+  artifact_deadline: "Checking the files took too long. Add the model again.",
   artifact_io: "Storage failed on the server. Check its disk, then retry.",
   artifact_persistence: "Storage failed on the server. Check its disk, then retry.",
   storage_root_unavailable: "A storage folder moved or disappeared. Restore it, then retry.",
 };
 
 export const codeMessage = (code: string): string | undefined => messages[code];
+
+/** Why the step after a download failed, in plain words. */
+export const thenFailure = (then: { error: string | null; message: string | null }): string | null => (then.error ? messages[then.error] : undefined) ?? then.message;
 
 export function plainError(failure: unknown, fallback: string): string {
   if (failure instanceof ApiError && messages[failure.code]) return messages[failure.code]!;
