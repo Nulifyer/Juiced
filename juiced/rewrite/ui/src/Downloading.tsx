@@ -49,7 +49,13 @@ function host(url: string | null) {
   try { return url ? new URL(url).host || "Local copy" : "Local copy"; } catch { return "Download"; }
 }
 
-function pullRow(pull: PullView, jobs: ArtifactJob[]): Row {
+/** A model added by hand after the automatic add failed settles the download: the old failure no longer describes it. */
+export function addedSince(pull: PullView, local: LocalInventory | null | undefined): boolean {
+  return pull.state === "complete" && pull.then?.kind === "add" && pull.then.state === "failed" && nextStep(pull, local)?.kind === "open";
+}
+
+function pullRow(pull: PullView, jobs: ArtifactJob[], local?: LocalInventory | null): Row {
+  if (addedSince(pull, local)) return pullRow({ ...pull, then: null }, jobs);
   const owned = pullJobs(pull, jobs);
   const total = pull.files.reduce((sum, file) => sum + file.bytes, 0);
   const name = pull.repo.split("/").pop() ?? pull.repo;
@@ -110,7 +116,7 @@ export function Downloading({ client, online, onSearch, local, onOpenModel, onAd
   const jobs = inventory.data?.jobs ?? [];
   const pulled = new Set((pulls.data ?? []).flatMap((pull) => pullJobs(pull, jobs).map((job) => job.id)));
   const rows: Row[] = collapseFinished([
-    ...(pulls.data ?? []).map((pull) => pullRow(pull, jobs)),
+    ...(pulls.data ?? []).map((pull) => pullRow(pull, jobs, local)),
     // Completed jobs carry the source names Downloaded groups by, so they are never forgotten here; the file shows under Downloaded instead.
     ...(inventory.data?.jobs ?? []).filter((job) => !pulled.has(job.id) && job.state !== "complete").map((job): Row => ({ key: `job:${job.id}`, title: jobName(job), detail: [host(job.source_url), job.source_url && job.computed_digest ? "unverified" : null].filter(Boolean).join(" · "), state: job.state, done: job.downloaded_bytes, total: job.expected_bytes ?? (job.source_url && job.computed_digest ? null : job.maximum_bytes), error: job.error, jobs: [job], pulls: [], finished: !job.writer_active && ["complete", "cancelled", "failed", "quarantined"].includes(job.state) })),
     ...(engines.data?.jobs ?? []).map(engineRow),

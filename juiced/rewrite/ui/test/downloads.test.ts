@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { collapseFinished, nextStep, pullBytes } from "../src/Downloading";
+import { addedSince, collapseFinished, nextStep, pullBytes } from "../src/Downloading";
 import type { ArtifactJob } from "../src/management";
 import type { LocalGroup, LocalInventory, PullView } from "../src/localLibraryData";
 import { thenFailure } from "../src/modelErrors";
@@ -40,6 +40,9 @@ test("a pull with a pending add offers nothing until the service settles it", ()
   expect(nextStep(added, inventory([])), "a removed model falls back to adding the files").toEqual({ kind: "add", group: "hf:unsloth/qwen3-0.6b-gguf", quant: "f1" });
   const failed = { ...adding, then: { ...adding.then, state: "failed" as const, message: "No engine." } };
   expect(nextStep(failed, inventory([]))).toEqual({ kind: "add", group: "hf:unsloth/qwen3-0.6b-gguf", quant: "f1" });
+  expect(addedSince(failed, inventory([])), "still not added").toBe(false);
+  expect(addedSince(failed, inventory(["Added-By-Hand"])), "a model added by hand settles the failed add").toBe(true);
+  expect(addedSince({ ...failed, then: { ...failed.then, state: "done" as const } }, inventory(["Added-By-Hand"]))).toBe(false);
   expect(thenFailure(failed.then), "an unknown failure keeps the service's words").toBe("No engine.");
   expect(thenFailure({ error: "artifact_deadline", message: "Artifact verification exceeded its deadline." })).toBe("Checking the files took too long. Add the model again.");
 });
