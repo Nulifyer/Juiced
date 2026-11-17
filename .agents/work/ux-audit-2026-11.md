@@ -70,6 +70,13 @@ Every report item is either fixed with evidence or listed below as decided other
 - v0.11.8 (run 44121549419, cancelled) failed the plan check: the picker merge edited juiced/UI-DESIGN.md, a hashed native source (`updated_in_rewrite: false`). Restored it; the picker convention lives in juiced/rewrite/README.md "Console". The release chain now stops on any failed check. v0.11.9 (run 44121705950 green) deployed to stack 83: 4 Hot models loaded, Coder-Next revision 193; production render (0 non-GET): five Discover filters, Fits GPU 78 -> 39 results; the Aliases picker finds 3 of 53 for "coder".
 - Open: Discover filters apply to the fetched page only (service returns up to 12 per source; `next_cursor` unused); Storage still says "unused" for Not added files; FastFlowLM non-chat checkpoints stay hidden (`flm_model_unsupported`); picker search has no publisher/repo field.
 
+## Follow-ups (2026-11-17, v0.11.10)
+
+- User asked where else the searchable picker fits and wanted the rule in frontend-design. The primary agent's skill draft was rejected as project-specific and reverted (diff kept in scratchpad `rejected-inputs-context.diff`); Fable and Astra returned independent generic proposals (picker vs select vs radios/segments vs typed entry vs jump search; NN/g 5-15 heuristic). Not applied; waiting on the user.
+- 7ccc28ff, 1d8e9dcc: generic `Picker` (Picker.tsx) under ModelSelect, VoiceSelect (Kokoro voices by language with gender, OpenAI alias search), the weights switch (file, quant, size; model's repository first) and the engine switch (compute path, size). One matcher `wordsMatch` (search.ts) for Installed, pickers, NPU results and the endpoint filter; it matches from word starts ("male" no longer finds "Female"; mid-word queries such as "wen" no longer match). Home/End edit the search once text is typed. Group ids no longer break on keys with spaces.
+- Gate: 172 UI unit tests, tsc, build; Playwright 363 passed / 21 skipped before the last two fixes, then media, model-picker, models and connect specs 73 passed on all three projects.
+- v0.11.10 (run 44157609192 green) deployed to stack 83: 4 Hot models loaded, Coder-Next revision 193; production render (0 non-GET): kokoro-v1 voice picker 54 of 54 in nine language groups, "british male" gives 4 of 54 (bm_daniel, bm_fable, bm_george, bm_lewis), Escape keeps af_alloy.
+
 ## Next action
 
 None for this audit. Open from earlier ledgers: the later-work list in drop-in-replacement.md.
