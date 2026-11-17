@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { bytes, bytesPair, eligible, hotFit, hotFitNote, hotOption, loadReason, matchingModels, normalizeBase, parseSnapshot, parseSuitability, stateLabel, unloadReason, workerState, workerReady, workerTone, type Model, type Resources, type Suitability } from "../src/domain";
+import { bytes, bytesPair, eligible, hotFit, hotFitNote, hotOption, loadReason, normalizeBase, parseSnapshot, parseSuitability, stateLabel, unloadReason, workerState, workerReady, workerTone, type Model, type Resources, type Suitability } from "../src/domain";
 
 const model: Model = { id: "Publisher/Long-Model-Q4", policy: "on-demand", revision: 0, state: "unloaded", downloaded: true, loaded: false, pid: null, active_requests: 0, max_inflight: 2, resident_bytes: 1024 ** 3, operations: ["chat/completions"], error: null };
 
@@ -70,11 +70,6 @@ describe("model eligibility and lifecycle guards", () => {
     expect(unloadReason({ ...pending, state: "ready" })).toContain("active");
     expect(unloadReason({ ...pending, state: "stopping" })).toContain("progress");
     expect(unloadReason({ ...pending, state: "ready", active_requests: 0 })).toContain("On demand");
-  });
-  test("search matches model identity, policy and operation without mutating inventory", () => {
-    expect(matchingModels([model], " long-model ")).toEqual([model]);
-    expect(matchingModels([model], "CHAT/COMPLETIONS")).toEqual([model]);
-    expect(matchingModels([model], "hot")).toEqual([]);
   });
 });
 

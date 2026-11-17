@@ -42,7 +42,7 @@ function searchText(model: Model): string {
   const type = types.find(([id]) => id === modelType(model));
   const extra = model as Model & { labels?: unknown; recipe?: unknown };
   const labels = Array.isArray(extra.labels) ? extra.labels.filter((label) => typeof label === "string") : [];
-  return [model.id, type?.[1], type?.[3], ...labels, typeof extra.recipe === "string" ? extra.recipe : "", policyNames[model.policy], stateLabels[modelState(model)], model.vision ? "vision" : ""].join(" ").toLowerCase();
+  return [model.id, type?.[1], type?.[3], ...labels, typeof extra.recipe === "string" ? extra.recipe : "", policyNames[model.policy], stateLabels[modelState(model)], ...(model.operations ?? []), model.vision ? "vision" : ""].join(" ").toLowerCase();
 }
 
 /** Every word of the query must appear in the model's ID, type, labels, engine or state. */
@@ -51,6 +51,10 @@ export function matchesQuery(model: Model, query: string): boolean {
   if (words.length === 0) return true;
   const text = searchText(model);
   return words.every((word) => text.includes(word));
+}
+
+export function matchingModels(models: Model[], query: string): Model[] {
+  return models.filter((model) => matchesQuery(model, query));
 }
 
 /**

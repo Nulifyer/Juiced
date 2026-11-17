@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { bytes, bytesPair, hotFit, hotFitNote, hotOption, loadReason, matchingModels, offers, policyNames, services, stateLabel, taskNames, unloadReason, workerTone, type Model, type Policy, type Resources, type Service } from "./domain";
+import { matchingModels } from "./modelPicker";
+import { bytes, bytesPair, hotFit, hotFitNote, hotOption, loadReason, offers, policyNames, services, stateLabel, taskNames, unloadReason, workerTone, type Model, type Policy, type Resources, type Service } from "./domain";
 import { Badge, Button, Dialog, Empty, HelpTip, Icon, Switch } from "./ui";
 import { Client } from "./api";
 import { removalReason } from "./management";

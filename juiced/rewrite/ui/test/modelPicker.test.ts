@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import type { Model } from "../src/domain";
-import { matchesQuery, modelType, pickerView } from "../src/modelPicker";
+import { matchesQuery, matchingModels, modelType, pickerView } from "../src/modelPicker";
 
 const model = (id: string, policy: Model["policy"], loaded = false, operations = ["chat/completions", "completions"], more: Record<string, unknown> = {}) => ({ id, policy, loaded, operations, ...more } as Model);
 const models = [
@@ -58,6 +58,13 @@ test("search matches every word against ID, type words, labels, engine and state
   expect(find("embed loaded")).toEqual(["embed-small"]);
   expect(find("on demand")).toEqual(["c-demand", "whisper-tiny"]);
   expect(find("nothing-like-this")).toEqual([]);
+});
+
+test("the model list search matches the same way as the picker", () => {
+  const ids = (query: string) => matchingModels(models, query).map((item) => item.id);
+  expect(ids("qwen vision")).toEqual(["qwen-vl-q4"]);
+  expect(ids("  AUDIO/SPEECH ")).toEqual(["kokoro"]);
+  expect(ids("loaded")).toEqual(models.filter((item) => item.loaded).map((item) => item.id));
 });
 
 test("the type filter narrows the list and type counts cover every offered model", () => {

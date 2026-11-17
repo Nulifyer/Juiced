@@ -142,11 +142,6 @@ export function offers(model: Model, service: Service): boolean {
   return model.operations.some((operation) => serviceOperations[service].includes(operation));
 }
 
-export function matchingModels(models: Model[], query: string): Model[] {
-  const needle = query.trim().toLowerCase();
-  return models.filter((model) => `${model.id} ${model.policy} ${model.state} ${model.operations.join(" ")}`.toLowerCase().includes(needle));
-}
-
 function parseCacheControl(value: unknown): CacheControlMemory | undefined {
   if (value === undefined) return undefined;
   const invalid = () => new Error("The service returned invalid cache memory reservations. Refresh or check the service version.");
