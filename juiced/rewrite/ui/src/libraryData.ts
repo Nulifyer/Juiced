@@ -1,3 +1,4 @@
+import { wordsMatch } from "./search";
 export type QuantJob = { id: string; state: string; downloaded_bytes: number; expected_bytes: number | null };
 export type QuantFile = { file: string; bytes: number | null; member: string | null };
 export type Quant = { label: string; kind: "quant" | "bundle" | "checkpoint"; engine: string | null; file: string; parts: number; bytes: number | null; recommended: boolean; pullable: boolean; present: boolean; presentFiles: number; set: string | null; localPath: string | null; readOnly: boolean; sha256: string | null; files: QuantFile[]; jobs: QuantJob[]; users: string[] | null; traits: string[] };
@@ -117,13 +118,11 @@ export const flmJob = (flm: Flm, checkpoint: string) => [...flm.jobs].reverse().
  */
 export function flmResults(flm: Flm | null, query: string, task: string | null): LibraryModel[] {
   if (!flm?.available || (task !== null && task !== "chat")) return [];
-  const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
   const families = new Map<string, Quant[]>();
   for (const item of flm.models) {
     if (item.kind !== "chat") continue;
     const cut = item.checkpoint.indexOf(":"), family = cut > 0 ? item.checkpoint.slice(0, cut) : item.checkpoint;
-    const haystack = `${item.checkpoint} ${item.labels.join(" ")} fastflowlm flm npu`.toLowerCase();
-    if (!terms.every((term) => haystack.includes(term))) continue;
+    if (!wordsMatch(`${item.checkpoint} ${item.labels.join(" ")} fastflowlm flm npu`, query)) continue;
     // FastFlowLM reports the footprint in GiB, the unit the service reserves for it.
     const bytes = item.footprint_gb === null ? null : Math.round(item.footprint_gb * 1024 ** 3);
     const job = flmJob(flm, item.checkpoint);

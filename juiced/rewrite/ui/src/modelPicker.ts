@@ -1,4 +1,5 @@
 import { policyNames, type Model } from "./domain";
+import { wordsMatch } from "./search";
 
 export type ModelType = "chat" | "embeddings" | "transcription" | "speech" | "images" | "audio" | "3d";
 export type ModelState = "loaded" | "enabled" | "disabled";
@@ -47,10 +48,7 @@ function searchText(model: Model): string {
 
 /** Every word of the query must appear in the model's ID, type, labels, engine or state. */
 export function matchesQuery(model: Model, query: string): boolean {
-  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
-  if (words.length === 0) return true;
-  const text = searchText(model);
-  return words.every((word) => text.includes(word));
+  return wordsMatch(searchText(model), query);
 }
 
 export function matchingModels(models: Model[], query: string): Model[] {

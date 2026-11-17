@@ -193,10 +193,11 @@ export async function pickModel(select: Locator, id: string) {
   await expect(select).toHaveText(id);
 }
 
-/** Picks a ModelSelect choice that is not a model, such as "All sources", by its label. */
+/** Picks a picker choice by its label, such as "All sources" or an engine. */
 export async function pickChoice(select: Locator, label: string) {
   await select.click();
-  await pickerPopup(select).getByRole("option", { name: label, exact: true }).click();
+  // An option's name also carries its facts, such as a size, so match the label itself.
+  await pickerPopup(select).getByRole("option").filter({ has: select.page().getByText(label, { exact: true }) }).click();
   await expect(select).toHaveText(label);
 }
 

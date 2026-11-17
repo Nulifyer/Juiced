@@ -77,7 +77,7 @@ test("the type filter narrows the list and type counts cover every offered model
 });
 
 test("disabledModels never drops disabled models except the selected one", () => {
-  const view = pickerView(models, { disabledModels: "never", selected: "kokoro", query: "o" });
+  const view = pickerView(models, { disabledModels: "never", selected: "kokoro", query: "k" });
   expect(view.total).toBe(5);
   expect(ids(view).at(-1)).toEqual(["Disabled", "kokoro"]);
 });

@@ -1,3 +1,4 @@
+import { useCallback } from "react";
 import type { Client } from "./api";
 import { bytes, type Model } from "./domain";
 import type { Mutate } from "./Models";
@@ -5,6 +6,7 @@ import { packageLabel, parseRuntimeInventory, parseRuntimeSelection, runtimeCand
 import { useResource } from "./useResource";
 import { useRevisionSelection } from "./useRevisionSelection";
 import { Button, HelpTip } from "./ui";
+import { Picker, wordsMatch, type PickQuery, type PickView } from "./Picker";
 
 export function RuntimeInspector({ model, client, busy, online, otherDirty, onDirty, mutate }: { model: Model; client: Client; busy: boolean; online: boolean; otherDirty: boolean; onDirty: (dirty: boolean) => void; mutate: Mutate }) {
   const path = `models/${encodeURIComponent(model.id)}/runtime`;
@@ -17,6 +19,10 @@ export function RuntimeInspector({ model, client, busy, online, otherDirty, onDi
   const label = (id: string) => { const item = packages.find((entry) => entry.id === id); return item ? packageLabel(item) : id; };
   const candidates = packages.filter((item) => runtimeCandidate(item, view));
   const eligibleTarget = !!target && runtimeCandidate(target, view);
+  const engines = useCallback(({ query }: PickQuery): PickView => {
+    const items = candidates.map((item) => ({ item, kind: item.declared_target.compute_paths.join(", ").toUpperCase() })).filter(({ item, kind }) => wordsMatch(`${packageLabel(item)} ${kind} ${item.provenance.build_revision}`, query));
+    return { groups: [{ key: "engines", label: "", items: items.map(({ item, kind }) => ({ value: item.id, label: packageLabel(item), kind, fact: bytes(item.reserved_bytes) })) }], shown: items.length, total: candidates.length, hidden: 0, columns: true };
+  }, [candidates]);
   const stale = !!draft.selected && draft.draftRevision !== view?.revision;
   const blocked = !online || busy || otherDirty || !!revision.error || !!inventory.error || !inventory.data || revision.loading || inventory.loading || !view?.supported || view.worker_in_use || model.loaded || model.state === "loading" || model.active_requests > 0 || view.revision !== model.revision || stale;
   async function refresh() {
@@ -39,11 +45,7 @@ export function RuntimeInspector({ model, client, busy, online, otherDirty, onDi
       : view.worker_in_use || model.loaded || model.state === "loading" || model.active_requests > 0 ? <p className="field-help">Unload the model to switch engines.</p>
       : candidates.length === 0 && !view.previous && !draft.selected ? <p className="field-help">No other installed engine fits this model. Install one from Backends &amp; hardware.</p>
       : <>
-        {(candidates.length > 0 || draft.selected) && <><label htmlFor="runtime-package">Switch to</label><select id="runtime-package" value={draft.selected} disabled={busy || !online || otherDirty || revision.loading || inventory.loading} onChange={(event) => draft.select(event.target.value, view.revision)}>
-          <option value="">Choose an installed engine</option>
-          {!!draft.selected && !eligibleTarget && <option value={draft.selected}>Selected engine needs review</option>}
-          {candidates.map((item) => <option value={item.id} key={item.id}>{packageLabel(item)}</option>)}
-        </select></>}
+        {(candidates.length > 0 || draft.selected) && <><label htmlFor="runtime-package">Switch to</label><Picker id="runtime-package" value={draft.selected} view={engines} noun={["engine", "engines"]} placeholder="Choose an installed engine" display={(id) => { const item = candidates.find((entry) => entry.id === id); return item ? packageLabel(item) : "Selected engine needs review"; }} disabled={busy || !online || otherDirty || revision.loading || inventory.loading} onChange={(id) => draft.select(id, view.revision)} /></>}
         {target && <dl className="facts"><div><dt>Build</dt><dd>{target.provenance.build_revision}</dd></div><div><dt>Target</dt><dd>{target.declared_target.operating_system} / {target.declared_target.architecture}</dd></div><div><dt>Size</dt><dd>{bytes(target.reserved_bytes)}</dd></div></dl>}
         {(stale || view.revision !== model.revision) && <div className="action-row wrap"><p className="inline-warning">The model changed. Your selection is kept.</p><Button onClick={() => void refresh()}>Use latest</Button></div>}
         {draft.selected && !eligibleTarget && <p className="inline-warning">That engine can't be used for this model. Pick another or cancel.</p>}

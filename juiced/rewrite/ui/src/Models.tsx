@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { matchingModels } from "./modelPicker";
+import { wordsMatch } from "./search";
 import { bytes, bytesPair, hotFit, hotFitNote, hotOption, loadReason, offers, policyNames, services, stateLabel, taskNames, unloadReason, workerTone, type Model, type Policy, type Resources, type Service } from "./domain";
 import { Badge, Button, Dialog, Empty, HelpTip, Icon, Switch } from "./ui";
 import { Client } from "./api";
@@ -166,9 +167,7 @@ function RowAction({ model, mutate, disabled }: { model: Model; mutate: Mutate; 
 }
 
 function fileMatches(group: LocalGroup, query: string) {
-  const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
-  const text = `${group.name} ${group.publisher ?? ""} ${group.quants.map((quant) => quant.label).join(" ")}`.toLowerCase();
-  return terms.every((term) => text.includes(term));
+  return wordsMatch(`${group.name} ${group.publisher ?? ""} ${group.quants.map((quant) => quant.label).join(" ")}`, query);
 }
 
 export const notAddedHelp = "Model files on disk that no model uses.";
@@ -365,7 +364,7 @@ export function Inspector({ model, models = [], resources, busy, online, onClose
       <div role="tabpanel" id="panel-settings" aria-labelledby="tab-settings" hidden={tab !== "settings"}>
       <ContextInspector model={model} client={client} online={online} busy={busy} policyDirty={artifactDirty || runtimeDirty} onDirty={setProfileDirty} mutate={mutate} advanced={advanced} />
       <QuantSync model={model} client={client} online={online} busy={busy} blocked={dirty} />
-      {(advanced || artifactDirty) && model.artifact_set && <ArtifactRevisionInspector model={model} client={client} busy={busy} online={online} otherDirty={profileDirty || runtimeDirty} onDirty={setArtifactDirty} mutate={mutate} />}
+      {(advanced || artifactDirty) && model.artifact_set && <ArtifactRevisionInspector model={model} local={inventory} client={client} busy={busy} online={online} otherDirty={profileDirty || runtimeDirty} onDirty={setArtifactDirty} mutate={mutate} />}
       {(advanced || runtimeDirty) && <RuntimeInspector model={model} client={client} busy={busy} online={online} otherDirty={profileDirty || artifactDirty} onDirty={setRuntimeDirty} mutate={mutate} />}
       </div>
       <div role="tabpanel" id="panel-manage" aria-labelledby="tab-manage" hidden={tab !== "manage"}>

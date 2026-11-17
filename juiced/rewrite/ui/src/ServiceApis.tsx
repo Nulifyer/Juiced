@@ -6,6 +6,7 @@ import type { Model } from "./domain";
 import { parseEndpoints } from "./management";
 import { Badge, Button, HelpTip } from "./ui";
 import { useResource } from "./useResource";
+import { wordsMatch } from "./search";
 
 export type ConnectTab = "protocols" | "keys" | "endpoints";
 
@@ -14,7 +15,7 @@ function Endpoints({ client }: { client: Client }) {
   const [filter, setFilter] = useState("");
   const rows = (endpoints.data ?? []).map((endpoint) => ({ ...endpoint, route: `${endpoint.method} ${endpoint.prefixes.includes("/v1") ? "/v1" : endpoint.prefixes[0] ?? ""}${endpoint.path}` }));
   const words = filter.trim().toLowerCase().split(/\s+/).filter(Boolean);
-  const shown = rows.filter((row) => words.every((word) => `${row.route} ${row.authority}`.toLowerCase().includes(word)));
+  const shown = rows.filter((row) => wordsMatch(`${row.route} ${row.authority}`, filter));
   return <section className="page-body" aria-label="All endpoints">
     {endpoints.error && <div className="action-row"><p role="alert" className="inline-error">{endpoints.error}</p><Button onClick={() => void endpoints.reload()}>Retry</Button></div>}
     <div className="toolbar"><div className="page-title"><h2>Endpoints</h2><HelpTip label="Endpoints">Management routes also answer under /api/v0, /api/v1 and /v0. Routes of turned-off protocols are hidden. The API guide in the docs describes each one.</HelpTip></div>

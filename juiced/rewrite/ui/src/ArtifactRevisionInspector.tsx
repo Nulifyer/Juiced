@@ -1,14 +1,38 @@
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import type { Client } from "./api";
-import type { Model } from "./domain";
+import { bytes, type Model } from "./domain";
+import type { LocalInventory } from "./localLibraryData";
+import { weightsGroup } from "./LocalModels";
+import { Picker, wordsMatch, type PickGroup, type PickQuery, type PickView } from "./Picker";
 import type { Mutate } from "./Models";
-import { parseArtifactRevision } from "./artifactSetData";
+import { parseArtifactRevision, type ArtifactSet } from "./artifactSetData";
 import { firstInventoryPages, inventoryPath, nextInventoryPage, parseArtifactInventory, previousInventoryPage } from "./management";
 import { Button, HelpTip } from "./ui";
 import { useResource } from "./useResource";
 import { useRevisionSelection } from "./useRevisionSelection";
 
-export function ArtifactRevisionInspector({ model, client, busy, online, otherDirty, onDirty, mutate }: { model: Model; client: Client; busy: boolean; online: boolean; otherDirty: boolean; onDirty: (dirty: boolean) => void; mutate: Mutate }) {
+/** Names a single-file weight set by the file on disk when the library knows it. */
+export function describeSet(set: ArtifactSet, local: LocalInventory | null) {
+  const member = set.specification.members[0]!;
+  const group = local?.groups.find((entry) => entry.files.some((file) => file.artifact === member.artifact));
+  const file = group?.files.find((entry) => entry.artifact === member.artifact);
+  return { value: set.id, label: file?.name ?? `${set.specification.origin.source_revision} · ${set.id.slice(4, 16)}`, kind: file?.quant ?? undefined, fact: bytes(member.bytes), group: group?.name ?? "", groupId: group?.id ?? null };
+}
+
+/** Lists weight sets by repository, the model's own first, matching every word against file, quant and repository. */
+export function weightView(sets: ArtifactSet[], local: LocalInventory | null, own: string | null, query: string): PickView {
+  const items = sets.map((set) => describeSet(set, local)).filter((item) => wordsMatch(`${item.label} ${item.kind ?? ""} ${item.group}`, query))
+    .sort((left, right) => Number(right.groupId === own && own !== null) - Number(left.groupId === own && own !== null) || Number(!left.group) - Number(!right.group) || left.group.localeCompare(right.group) || left.label.localeCompare(right.label, undefined, { numeric: true }));
+  const groups: PickGroup[] = [];
+  for (const item of items) {
+    const key = item.groupId ?? "other";
+    const group = groups.find((entry) => entry.key === key) ?? groups[groups.push({ key, label: item.group || "Other files", items: [] }) - 1]!;
+    group.items.push(item);
+  }
+  return { groups, shown: items.length, total: sets.length, hidden: 0, columns: items.some((item) => item.kind) };
+}
+
+export function ArtifactRevisionInspector({ model, client, busy, online, otherDirty, onDirty, mutate, local = null }: { local?: LocalInventory | null; model: Model; client: Client; busy: boolean; online: boolean; otherDirty: boolean; onDirty: (dirty: boolean) => void; mutate: Mutate }) {
   const path = `models/${encodeURIComponent(model.id)}/artifacts`;
   const revision = useResource(client, path, parseArtifactRevision, 5000);
   const draft = useRevisionSelection(client, model, onDirty, revision.reload);
@@ -23,6 +47,8 @@ export function ArtifactRevisionInspector({ model, client, busy, online, otherDi
   const setPage = inventory.data?.pages.artifact_sets;
   const setDepth = cursors.stacks.artifact_sets.length;
   const choices = sets.filter((set) => set.specification.members.length === 1 && set.members_present && set.id !== view?.current?.artifact_set);
+  const own = weightsGroup(model, local)?.id ?? null;
+  const setView = useCallback(({ query }: PickQuery) => weightView(choices, local, own, query), [choices, local, own]);
   const staleDraft = !!selected && draftRevision !== view?.revision;
   const blocked = !online || busy || otherDirty || !!revision.error || !view || !view.supported || view.worker_in_use || model.loaded || model.state === "loading" || model.active_requests > 0 || view.revision !== model.revision || staleDraft;
   async function change(rollback: boolean) {
@@ -45,12 +71,7 @@ export function ArtifactRevisionInspector({ model, client, busy, online, otherDi
       : !view.supported ? <p className="field-help">This model's weights are set by its registration.</p>
       : view.worker_in_use || model.loaded || model.state === "loading" || model.active_requests > 0 ? <p className="field-help">Unload the model to switch weights.</p>
       : <>
-        {(choices.length > 0 || selected || (setPage && (setDepth > 0 || setPage.next_after))) && <><label htmlFor="revision-set">Switch to</label><select id="revision-set" value={selected} disabled={busy || otherDirty || revision.loading || inventory.loading} onChange={(event) => { draft.select(event.target.value, view.revision); }}>
-          <option value="">Choose a weight set</option>
-          {!!selected && !target && <option value={selected}>{removed ? "Selected set is no longer recorded" : "Selected set"}</option>}
-          {!!target && !choices.includes(target) && <option value={target.id}>{target.specification.origin.source_revision} · {target.id.slice(4, 16)}</option>}
-          {choices.map((set) => <option value={set.id} key={set.id}>{set.specification.origin.source_revision} · {set.id.slice(4, 16)}</option>)}
-        </select></>}
+        {(choices.length > 0 || selected || (setPage && (setDepth > 0 || setPage.next_after))) && <><label htmlFor="revision-set">Switch to</label><Picker id="revision-set" value={selected} view={setView} noun={["weight file", "weight files"]} searchHint="Search by file or quant" placeholder="Choose weights" display={(id) => target?.id === id ? describeSet(target, local).label : removed ? "Selected set is no longer recorded" : "Selected set"} disabled={busy || otherDirty || revision.loading || inventory.loading} onChange={(id) => draft.select(id, view.revision)} /></>}
         {setPage && (setDepth > 0 || setPage.next_after) && <div className="action-row wrap cache-pagination" aria-label="Replacement set pages"><Button disabled={inventory.loading || setDepth === 0} onClick={() => setCursors(previousInventoryPage(cursors, "artifact_sets"))}>Previous sets</Button><span className="muted">Page {setDepth + 1} · {setPage.total} sets</span><Button disabled={inventory.loading || !setPage.next_after} onClick={() => inventory.data && setCursors(nextInventoryPage(cursors, inventory.data, "artifact_sets"))}>More sets</Button></div>}
         {inventory.data && choices.length === 0 && !selected && !view.previous && <p className="field-help">No other weight set is recorded for this model.</p>}
         {removed && <p className="inline-warning">The selected set was removed. Pick another or cancel.</p>}

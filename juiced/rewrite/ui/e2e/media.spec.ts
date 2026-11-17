@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test";
-import { expect, navigate, noHorizontalOverflow, open, tab, test, tryModel } from "./support";
+import { expect, navigate, noHorizontalOverflow, open, pickerPopup, tab, test, tryModel } from "./support";
 
 const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
 const wav = () => {
@@ -25,14 +25,24 @@ test("Speak lists voices, sends the chosen voice, speed and format, and plays th
   await mediaModels(page, [[id, "audio/speech"]]);
   {
     const sent: any[] = [];
-    await page.route("**/v1/juiced/voices?*", (route) => route.fulfill({ json: { schema_version: 1, data: [{ model: id, voices: ["af_heart", "am_michael", "bf_emma"], error: null }], aliases: {} } }));
+    await page.route("**/v1/juiced/voices?*", (route) => route.fulfill({ json: { schema_version: 1, data: [{ model: id, voices: ["af_heart", "am_michael", "bf_emma"], error: null }], aliases: { ballad: "am_michael" } } }));
     await page.route("**/v1/audio/speech", async (route) => { sent.push(route.request().postDataJSON()); await new Promise((done) => setTimeout(done, 300)); await route.fulfill({ body: wav(), contentType: "audio/wav" }); });
     await open(page);
     await navigate(page, "Test services");
     await tryModel(page, id);
     const panel = page.getByRole("region", { name: "Speech test" });
-    await expect(panel.getByLabel("Voice").locator("option")).toHaveCount(3);
-    await panel.getByLabel("Voice").selectOption("am_michael");
+    const voice = panel.getByLabel("Voice");
+    await expect(voice).toHaveText("af_heart");
+    await voice.click();
+    const popup = pickerPopup(voice);
+    await expect(popup.getByRole("group", { name: /^American English/ }).getByRole("option")).toHaveText(["af_heartFemale", "am_michaelMale"]);
+    const search = popup.getByRole("combobox", { name: "Search" });
+    await search.fill("british");
+    await expect(popup.getByRole("option")).toHaveText(["bf_emmaFemale"]);
+    await expect(popup.getByRole("status")).toHaveText("1 of 3");
+    await search.fill("ballad");
+    await popup.getByRole("option", { name: /am_michael/ }).click();
+    await expect(voice).toHaveText("am_michael");
     await panel.getByLabel("Speed").fill("1.5");
     await panel.getByRole("radio", { name: "WAV" }).click();
     await expect(panel.getByRole("button", { name: "Speak" })).toBeDisabled();

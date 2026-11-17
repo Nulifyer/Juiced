@@ -5,6 +5,7 @@ import { parseVoices } from "./MediaTests";
 import { wyomingHost } from "./connectData";
 import { Button } from "./ui";
 import { ModelSelect } from "./ModelSelect";
+import { VoiceSelect } from "./VoiceSelect";
 import { useOperation, useResource } from "./useResource";
 
 type Settings = { enabled: boolean; listen: string; stt_model: string | null; tts_model: string | null; tts_voice: string | null };
@@ -56,7 +57,7 @@ export function WyomingSettings({ client, models, online }: { client: Client; mo
       <div><label htmlFor="wyoming-listen">Listen on</label><input id="wyoming-listen" value={current.listen} disabled={blocked} spellCheck={false} onChange={(event) => edit({ listen: event.target.value })} /></div>
       <div><label htmlFor="wyoming-stt">Speech to text</label><ModelSelect id="wyoming-stt" models={speech} disabledModels="never" value={current.stt_model ?? ""} disabled={blocked} leading={[["", "Every enabled speech model"]]} onChange={(id) => edit({ stt_model: id || null })} /></div>
       <div><label htmlFor="wyoming-tts">Text to speech</label><ModelSelect id="wyoming-tts" models={tts} disabledModels="never" value={current.tts_model ?? ""} disabled={blocked} leading={[["", "First enabled voice model"]]} onChange={(id) => edit({ tts_model: id || null, tts_voice: null })} /></div>
-      <div><label htmlFor="wyoming-voice">Voice</label><select id="wyoming-voice" value={current.tts_voice ?? ""} disabled={blocked || voiceList.length === 0} onChange={(event) => edit({ tts_voice: event.target.value || null })}><option value="">{voiceList[0] ? `Default (${voiceList[0]})` : "Default"}</option>{voiceList.map((voice) => <option key={voice} value={voice}>{voice}</option>)}</select></div>
+      <div><label htmlFor="wyoming-voice">Voice</label><VoiceSelect id="wyoming-voice" voices={voiceList} value={current.tts_voice ?? ""} disabled={blocked || voiceList.length === 0} leading={[["", voiceList[0] ? `Default (${voiceList[0]})` : "Default"]]} placeholder="Default" onChange={(voice) => edit({ tts_voice: voice || null })} /></div>
     </div>
     {dirty && <div className="action-row"><Button variant="primary" disabled={blocked} onClick={() => save(current, "Wyoming settings saved.")}>Save</Button><Button disabled={operation.busy} onClick={() => setDraft(null)}>Cancel</Button></div>}
     {operation.error && <p className="inline-error" role="alert">{operation.error}</p>}

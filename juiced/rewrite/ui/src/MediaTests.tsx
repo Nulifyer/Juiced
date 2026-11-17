@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { Client } from "./api";
 import type { Model } from "./domain";
 import { Button } from "./ui";
+import { VoiceSelect, voiceAliases } from "./VoiceSelect";
 
 type Props = { model: Model; client: Client; online: boolean };
 const failure = (error: unknown, fallback: string) => error instanceof Error ? error.message : fallback;
@@ -33,7 +34,7 @@ function useRequest(client: Client) {
 
 export function SpeakTest({ model, client, online }: Props) {
   const choice = { selected: model };
-  const [voices, setVoices] = useState<{ model: string; list: string[]; error: string } | null>(null);
+  const [voices, setVoices] = useState<{ model: string; list: string[]; aliases: Record<string, string[]>; error: string } | null>(null);
   const [voice, setVoice] = useState("");
   const [speed, setSpeed] = useState(1);
   const [format, setFormat] = useState<"mp3" | "wav">("mp3");
@@ -51,8 +52,8 @@ export function SpeakTest({ model, client, online }: Props) {
     if (!model) return;
     const controller = new AbortController();
     client.request(`juiced/voices?model=${encodeURIComponent(model)}`, undefined, controller.signal)
-      .then((value) => setVoices({ model, list: parseVoices(value), error: "" }))
-      .catch((caught) => { if (!controller.signal.aborted) setVoices({ model, list: [], error: failure(caught, "Voices unavailable.") }); });
+      .then((value) => setVoices({ model, list: parseVoices(value), aliases: voiceAliases(value), error: "" }))
+      .catch((caught) => { if (!controller.signal.aborted) setVoices({ model, list: [], aliases: {}, error: failure(caught, "Voices unavailable.") }); });
     return () => controller.abort();
   }, [client, choice.selected?.id]);
   async function speak() {
@@ -66,7 +67,7 @@ export function SpeakTest({ model, client, online }: Props) {
   }
   return <section className="test-panel" aria-label="Speech test">
     <div className="toolbar media-options">
-      <select aria-label="Voice" value={chosenVoice} disabled={request.busy || list.length === 0} onChange={(event) => setVoice(event.target.value)}>{list.length === 0 ? <option value="">{choice.selected ? current?.error ? "Voices unavailable" : current ? "Default voice" : "Loading voices…" : "Choose a model first"}</option> : list.map((item) => <option key={item} value={item}>{item}</option>)}</select>
+      <VoiceSelect aria-label="Voice" voices={list} aliases={current?.aliases} value={chosenVoice} disabled={request.busy || list.length === 0} onChange={setVoice} placeholder={choice.selected ? current?.error ? "Voices unavailable" : current ? "Default voice" : "Loading voices…" : "Choose a model first"} />
       <label className="inline-field">Speed <input type="range" aria-label="Speed" min={0.5} max={2} step={0.05} value={speed} onChange={(event) => setSpeed(Number(event.target.value))} /><span className="numeric">{speed.toFixed(2)}×</span></label>
       <div className="segmented" role="radiogroup" aria-label="Audio format">{(["mp3", "wav"] as const).map((item) => <button key={item} role="radio" aria-checked={format === item} onClick={() => setFormat(item)}>{item.toUpperCase()}</button>)}</div>
     </div>

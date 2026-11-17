@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import type { Locator } from "@playwright/test";
-import { api, closeInspector, expect, hotModel, modelId, navigate, open, openModel, rowFor, showAllModels, speechModel, tab, test, toasts } from "./support";
+import { api, closeInspector, expect, hotModel, modelId, navigate, open, openModel, pickChoice, rowFor, showAllModels, speechModel, tab, test, toasts } from "./support";
 
 test("one search and service chips filter the model table", async ({ page }) => {
   await open(page);
@@ -334,11 +334,11 @@ test("the engine section switches between installed engines and rolls back", asy
   const engine = managed.getByRole("region", { name: "Model runtime selection" });
   await expect(engine).toContainText("llama-cpp · fixture-runtime-first");
   await expect(engine.getByRole("button", { name: "Switch engine" })).toHaveCount(0);
-  await engine.getByLabel("Switch to").selectOption({ label: "llama-cpp · fixture-runtime-second" });
+  await pickChoice(engine.getByLabel("Switch to"), "llama-cpp · fixture-runtime-second");
   await expect(managed.getByRole("tab", { name: /^Settings/ }).getByLabel("unsaved")).toBeVisible();
   await engine.getByRole("button", { name: "Cancel" }).click();
-  await expect(engine.getByLabel("Switch to")).toHaveValue("");
-  await engine.getByLabel("Switch to").selectOption({ label: "llama-cpp · fixture-runtime-second" });
+  await expect(engine.getByLabel("Switch to")).toHaveText("Choose an installed engine");
+  await pickChoice(engine.getByLabel("Switch to"), "llama-cpp · fixture-runtime-second");
   await engine.getByRole("button", { name: "Switch engine" }).click();
   await expect(toasts(page).getByRole("status")).toContainText(`Changed the engine for ${id}.`);
   await expect(engine.getByRole("definition").first()).toContainText("fixture-runtime-second");

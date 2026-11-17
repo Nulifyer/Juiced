@@ -42,6 +42,7 @@ test("the model picker filters, groups, selects by keyboard and restores on Esca
     await page.keyboard.press("ArrowDown");
     await expect(search).toHaveAttribute("aria-activedescendant", await options.nth(2).getAttribute("id") as string);
     await page.keyboard.press("Home");
+    await expect(search, "with text typed, Home moves the caret, not the list").toHaveAttribute("aria-activedescendant", await options.nth(2).getAttribute("id") as string);
     await page.keyboard.press("PageDown");
     await expect(search).toHaveAttribute("aria-activedescendant", await options.nth(3).getAttribute("id") as string);
     await page.keyboard.press("ArrowUp");
