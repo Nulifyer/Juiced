@@ -9,7 +9,7 @@ const messages: Record<string, string> = {
   artifact_offline: "Offline mode is on, so nothing can be downloaded.",
   artifact_source_policy: "This source isn't allowed. Use a public HTTPS link.",
   artifact_source_changed: "The source file changed. Retry starts over.",
-  artifact_network: "The download didn't finish. Retry when the source is reachable.",
+  artifact_network: "The connection dropped. Resume continues from the downloaded part.",
   artifact_job_failed: "The download didn't finish.",
   artifact_interrupted: "The download was interrupted. Resume it.",
   artifact_hash_mismatch: "The file didn't match its SHA256.",

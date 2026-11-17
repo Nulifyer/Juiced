@@ -22,13 +22,22 @@ const failure = (code: string) => codeMessage(code) ?? `The download failed (${c
 
 /** The jobs behind a pull: the ones it names, and a failed part's job found by its source. */
 export function pullJobs(pull: PullView, jobs: ArtifactJob[]): ArtifactJob[] {
-  const byId = new Map(jobs.map((job) => [job.id, job]));
   const owned = new Map<string, ArtifactJob>();
   for (const file of pull.files) {
-    const job = file.job ? byId.get(file.job) : file.source && file.state !== "present" ? jobs.find((item) => item.source_url === file.source && item.state !== "complete") : undefined;
+    const job = fileJob(file, jobs);
     if (job) owned.set(job.id, job);
   }
   return [...owned.values()];
+}
+
+function fileJob(file: PullView["files"][number], jobs: ArtifactJob[]): ArtifactJob | undefined {
+  if (file.job) return jobs.find((job) => job.id === file.job);
+  return file.source && file.state !== "present" ? jobs.find((item) => item.source_url === file.source && item.state !== "complete") : undefined;
+}
+
+/** Bytes on disk for a pull; a failed part no longer names its job, but the job keeps its bytes. */
+export function pullBytes(pull: PullView, jobs: ArtifactJob[]): number {
+  return pull.files.reduce((sum, file) => sum + Math.min(Math.max(file.downloaded, fileJob(file, jobs)?.downloaded_bytes ?? 0), file.bytes || Infinity), 0);
 }
 
 function jobName(job: ArtifactJob & { source_name?: string | null }) {
@@ -49,7 +58,7 @@ function pullRow(pull: PullView, jobs: ArtifactJob[]): Row {
   const present = pull.files.filter((file) => file.state === "present").length;
   const parts = pull.files.length > 1 ? pull.state === "complete" ? `${pull.files.length} parts` : `${present} of ${pull.files.length} parts` : null;
   const cause = owned.find((job) => job.error)?.error ?? pull.error;
-  return { key: `pull:${pull.id}`, pulls: [pull.id], pull, title: [name, pull.label].filter(Boolean).join(" "), detail: [pull.repo.split("/")[0], parts].filter(Boolean).join(" · "), state: then ?? pull.state, done: pull.files.reduce((sum, file) => sum + Math.min(file.downloaded, file.bytes || file.downloaded), 0), total: total || null, error: pull.error ? cause : null, note: pull.then?.state === "failed" && !pull.error ? pull.then.message : null, jobs: owned, finished: ["complete", "failed"].includes(pull.state) && !settling };
+  return { key: `pull:${pull.id}`, pulls: [pull.id], pull, title: [name, pull.label].filter(Boolean).join(" "), detail: [pull.repo.split("/")[0], parts].filter(Boolean).join(" · "), state: then ?? pull.state, done: pullBytes(pull, jobs), total: total || null, error: pull.error ? cause : null, note: pull.then?.state === "failed" && !pull.error ? pull.then.message : null, jobs: owned, finished: ["complete", "failed"].includes(pull.state) && !settling };
 }
 
 /** A finished pull leads to the model that uses its files, or to the file details to add one. */

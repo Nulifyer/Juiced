@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
-import { collapseFinished, nextStep } from "../src/Downloading";
+import { collapseFinished, nextStep, pullBytes } from "../src/Downloading";
+import type { ArtifactJob } from "../src/management";
 import type { LocalGroup, LocalInventory, PullView } from "../src/localLibraryData";
 
 const pull = (id: string, state = "complete"): PullView => ({ id, state, error: null, repo: "unsloth/Qwen3-0.6B-GGUF", label: "Q4_K_M", files: [{ file: "Qwen3-0.6B-Q4_K_M.gguf", bytes: 10, state: "present", downloaded: 10, job: null, source: null }], then: null });
@@ -38,4 +39,16 @@ test("a pull with a pending add offers nothing until the service settles it", ()
   expect(nextStep(added, inventory([])), "a removed model falls back to adding the files").toEqual({ kind: "add", group: "hf:unsloth/qwen3-0.6b-gguf", quant: "f1" });
   const failed = { ...adding, then: { ...adding.then, state: "failed" as const, message: "No engine." } };
   expect(nextStep(failed, inventory([]))).toEqual({ kind: "add", group: "hf:unsloth/qwen3-0.6b-gguf", quant: "f1" });
+});
+
+test("a failed split pull counts the bytes its failed parts' jobs kept", () => {
+  const source = (part: number) => `https://huggingface.co/u/R/resolve/main/R-0000${part}-of-00003.gguf`;
+  const failed: PullView = { id: "p", state: "failed", error: "artifact_job_failed", repo: "u/R", label: "Q6_K", then: null, files: [
+    { file: "R-00001-of-00003.gguf", bytes: 6, state: "present", downloaded: 6, job: null, source: source(1) },
+    { file: "R-00002-of-00003.gguf", bytes: 500, state: "failed", downloaded: 0, job: null, source: source(2) },
+    { file: "R-00003-of-00003.gguf", bytes: 200, state: "failed", downloaded: 0, job: null, source: source(3) },
+  ] };
+  const job = (id: string, part: number, bytes: number) => ({ id, state: "failed", error: "artifact_network", source_url: source(part), downloaded_bytes: bytes, writer_active: false }) as ArtifactJob;
+  expect(pullBytes(failed, [job("a", 2, 190), job("b", 3, 130)])).toBe(326);
+  expect(pullBytes(failed, [])).toBe(6);
 });
