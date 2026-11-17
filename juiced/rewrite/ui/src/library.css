@@ -45,7 +45,8 @@ ul.quant-rows .quant-row:last-child { border-bottom: 1px solid var(--border); }
 .quant-name { display: grid; min-width: 0; }
 .quant-name strong { font-weight: 500; overflow-wrap: anywhere; }
 .quant-name .status-dot { margin-right: 8px; vertical-align: 2px; }
-.quant-row.current .quant-name strong, .quant-row[aria-selected="true"] .quant-name strong { font-weight: 600; }
+/* Selection keeps the weight: a bolder name can wrap and change the row height under the pointer. */
+.quant-row.current .quant-name strong { font-weight: 600; }
 .quant-name span.muted, .quant-state { font-size: .75rem; }
 .quant-state { white-space: nowrap; }
 .quant-row .numeric { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }

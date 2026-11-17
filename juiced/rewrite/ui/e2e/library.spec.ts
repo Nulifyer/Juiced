@@ -107,11 +107,13 @@ test.describe("Discover", () => {
     for (const index of [15, 9, 20, 14]) {
       const option = quants.getByRole("option").nth(index);
       await option.scrollIntoViewIfNeeded();
-      const before = await top(option);
+      const before = await top(option), height = await quants.evaluate((list) => list.scrollHeight);
       await option.click();
       await expect(option).toHaveAttribute("aria-selected", "true");
       await expect(quants.getByRole("option", { selected: true })).toHaveCount(1);
       expect(await top(option)).toBe(before);
+      // Selecting changes no row's height, whatever the font's widths.
+      expect(await quants.evaluate((list) => list.scrollHeight)).toBe(height);
     }
     await expect(quants.getByRole("option", { selected: true })).toContainText(/Qwen3-0\.6B-.+/);
   });

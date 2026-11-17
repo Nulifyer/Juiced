@@ -52,7 +52,14 @@ Every report item is either fixed with evidence or listed below as decided other
 - helper-fable-quants 2e137512 (fast-forwarded): Discover quant list no longer jumps (scroll re-centering, label-keyed quants, refresh status line, sticky detail); the inspector Overview lists a model's quants with Open/Add/Get. Open: exact repository lookup needs a `repo=` parameter on `/juiced/library/search` (search ranking is relied on today).
 - Exact repository lookup (ada4ab63): `GET /juiced/library/search?repo=owner/name`; a missing repository is not a hub failure; the inspector quant list uses it.
 - v0.11.4 (a15226b0; run 43965732856 green; https://github.com/Nulifyer/Juiced/releases/tag/v0.11.4) deployed to stack 83: 4 Hot models loaded; Coder-Next still revision 193 with the same layers; repo lookup 0.1 s live (Coder-Next 38 quants, 1 on disk; Qwen3.6-35B-A3B 24, 4 on disk; a missing repo returns none with status ok); the Quants section renders on production (read-only, 0 non-GET requests).
-- Found live: part 1 of 3 of a UD-Q6_K_XL download showed as a 5.7 MiB file with Add. Fixed after the release in 1af14d5e (shows parts on disk and Finish); not released.
+- Found live: part 1 of 3 of a UD-Q6_K_XL download showed as a 5.7 MiB file with Add. Fixed after the release in 1af14d5e (shows parts on disk and Finish).
+
+## Follow-ups (2026-11-17, v0.11.5)
+
+- 597a6623: byte-progress checkpoints no longer bump the artifact generation, so a second Discover download no longer fails with `artifact_revision_conflict` while one runs; the console retries a stale generation once.
+- Live failed pull (unsloth/Qwen3-Coder-Next-GGUF UD-Q6_K_XL): parts 2 and 3 failed `artifact_network` at 19.6 GB/50.0 GB and 13.5 GB/23.2 GB. e965313b: a dropped connection resumes up to 6 times over about 9 min; a new pull adopts a network-failed job with bytes. e65fd435: `POST /juiced/library/pulls/{id} {"action":"resume"}` restarts a failed pull in place and re-arms its failed `then`; Downloads shows Resume for it (Retry still starts over).
+- helper-fable-models 4b3e2f08 merged (6f8bc9f6): one quant row (QuantList.tsx) across Discover, inspector and file details; Installed rows 37 px, "All" counts models, unused files under Not added; one row per split pull; plain error text (modelErrors.ts). Open from Fable: inspector Overview unchanged apart from Quants; `pull.error` is generic.
+- Gate on 40177e10: 895 service tests and pull-route rust-tests pass, clippy and fmt clean, 156 UI unit tests, tsc, build, Playwright 360 passed / 21 skipped / 0 failed (desktop, tablet, phone). v0.11.5 (run 44092841204) stopped at console-checks: on CI fonts the selected quant's bolder name wrapped (Qwen3-0.6B-BF16 beside "Downloading 0%"), the list lost 4 px and the clicked row moved. Fixed: selection keeps the font weight; the test also asserts the list height is unchanged (negative check: wider selected name fails 872 vs 891). Released as v0.11.6.
 
 ## Next action
 
