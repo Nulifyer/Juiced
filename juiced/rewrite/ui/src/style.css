@@ -703,7 +703,6 @@ dialog textarea { margin-bottom: 4px; }
 .lane-model .policy-select { margin-left: auto; }
 .alias-create { flex-wrap: wrap; }
 .alias-create input { flex: 1 1 200px; max-width: 320px; }
-.alias-create select { flex: 1 1 220px; max-width: 360px; }
 .alias-table .data-head, .alias-table .data-row { grid-template-columns: minmax(140px, 1fr) minmax(180px, 420px) minmax(140px, 1fr) auto; }
 .alias-table select { width: 100%; }
 .alias-status { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
@@ -916,5 +915,4 @@ html, body { height: 100%; overflow: hidden; }
 .menu-popup button[role="menuitemcheckbox"][aria-checked="true"]::after { content: "On"; color: var(--good); }
 .endpoint-filter { width: min(260px, 100%); }
 .compare-pickers { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); }
-.compare-pickers select { width: 100%; }
 @media (max-width: 540px) { .app-shell .global-footer { display: none; } .tile .stat-detail { white-space: normal; overflow-wrap: anywhere; } }
