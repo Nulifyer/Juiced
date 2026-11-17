@@ -25,8 +25,6 @@
 .checkpoint-files ul { list-style: none; margin: 6px 0 0; padding: 0; max-height: 180px; overflow-y: auto; border-top: 1px solid var(--border); }
 .checkpoint-files li { display: flex; justify-content: space-between; gap: 12px; padding: 4px 0; border-bottom: 1px solid var(--border); }
 .checkpoint-files li .numeric { flex: none; }
-.flm-models .panel-head .inline-field { white-space: nowrap; }
-.flm-list .flm-note { grid-column: 1 / -1; margin: 0; }
 .model-update { margin: 2px 0 10px; font-size: .8rem; }
 .model-update .action-row { align-items: center; gap: 8px; }
 .model-update .field-help { margin: 4px 0 0; }
@@ -97,4 +95,15 @@ ul.quant-rows .quant-row:last-child { border-bottom: 1px solid var(--border); }
   .model-table .file-row [role="cell"]:nth-child(2):empty, .model-table .file-row [role="cell"]:nth-child(3) { display: none; }
   .model-table .file-row [role="cell"]:nth-child(5) { grid-row: 1; grid-column: 2; align-self: center; }
   .model-table .file-row .pick-space { display: none; }
+}
+.find-filters select { flex: 0 1 auto; min-width: 0; padding-right: 26px; font-size: .8rem; }
+.find-filters select[data-active="true"] { border-color: var(--ring); color: var(--foreground); background: var(--selected); }
+.result-line { display: flex; align-items: baseline; gap: 10px; min-height: 1.125rem; margin: -4px 0 6px; font-size: .75rem; }
+.result-line .searching { margin: 0; min-height: 0; }
+.toolbar .scope-filter .help-trigger { margin-left: -4px; align-self: center; border: 0; padding: 0; border-radius: 4px; min-height: 24px; }
+@media (max-width: 700px) {
+  .find-filters { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+  .find-filters input[type="search"] { grid-column: 1 / -1; }
+  .find-filters select { width: 100%; padding-left: 8px; padding-right: 20px; font-size: .75rem; text-overflow: ellipsis; }
+  .find-filters .menu-trigger { justify-content: center; min-height: var(--control); }
 }

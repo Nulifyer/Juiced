@@ -59,7 +59,7 @@ export function FileInspector({ group, quant: initialQuant, models = [], client,
     <div className="inspector-top"><Button variant="ghost" className="back-button" onClick={onClose}><Icon name="back" /> Back to models</Button><Button variant="ghost" className="close-inspector" aria-label="Close file details" onClick={onClose}><Icon name="close" /></Button></div>
     <div className="inspector-body">
       <div className="inspector-title"><h2 className="break-word">{group.name}</h2>{!added && <Badge>Not added</Badge>}</div>
-      <p className="field-help">{[group.publisher, ...group.storage.map((value) => storageNames[value]), group.readOnly ? "Read-only" : null].filter(Boolean).join(" · ")}</p>
+      <p className="field-help">{[group.publisher, ...group.storage.map((value) => storageNames[value]), group.readOnly ? "Read-only" : null, added ? null : "No model uses these files"].filter(Boolean).join(" · ")}</p>
       {group.quants.length > 0 && <QuantList label="Quants on disk" selected={quant?.file} onSelect={(file) => { setPicked(file); setDeleteError(""); }} items={group.quants.map((entry) => ({
         key: entry.file, label: entry.label, bytes: entry.bytes,
         state: [localQuantState(entry, models), group.files.some((file) => file.unverified && entry.files.includes(file.id)) ? "Unverified" : null].filter(Boolean).join(" · "),

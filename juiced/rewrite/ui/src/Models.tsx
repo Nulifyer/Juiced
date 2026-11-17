@@ -170,6 +170,8 @@ function fileMatches(group: LocalGroup, query: string) {
   return terms.every((term) => text.includes(term));
 }
 
+export const notAddedHelp = "Model files on disk that no model uses.";
+
 const genericLabels = new Set(["gguf", "bin", "onnx", "ort", "safetensors", "file"]);
 /** The quant a model runs, when its name doesn't already say so. */
 export function quantLabel(model: Pick<Model, "id">, inventory: LocalInventory | null | undefined): string | null {
@@ -184,7 +186,7 @@ function FileRow({ group, models, selected, listed, onSelect }: { group: LocalGr
   const quants = unused.map((quant) => quant.parts > 1 && !quant.complete ? `${quant.label} (${localQuantState(quant, models)})` : quant.label).join(", ");
   return <div className={`data-row model-row file-row ${selected ? "selected" : ""}`} role="row" onClick={onSelect}>
     <div role="cell" className="model-identity picked"><span className="pick pick-space" aria-hidden="true" /><div className="identity-text"><button className="model-name" aria-pressed={selected} onClick={(event) => { event.stopPropagation(); onSelect(); }}><ModelName name={group.name} /></button><span className="model-meta">{[group.publisher, quants || null, bytes(size), group.readOnly ? "read-only" : null].filter(Boolean).join(" · ")}</span></div></div>
-    <div role="cell" className="model-state">{!listed && <Badge>Not added</Badge>}</div>
+    <div role="cell" className="model-state">{!listed && <span title={notAddedHelp}><Badge>Not added</Badge></span>}</div>
     <div role="cell" />
     <div role="cell" />
     <div role="cell" className="row-end"><Button className="row-action" aria-label={`${partial ? "Finish" : "Add"} ${group.name}`} onClick={(event) => { event.stopPropagation(); onSelect(); }}>{partial ? "Finish" : "Add"}</Button></div>
@@ -231,7 +233,8 @@ export function ModelList({ models, selected, onSelect, mode, mutate, busy, onli
   const scopeChips = mode === "models" && [enabledCount, disabledCount, files.length].filter((count) => count > 0).length > 1 ? <div className="chip-filter scope-filter" role="group" aria-label="Status filter">
     {enabledCount > 0 && <button aria-pressed={scoped === "enabled"} onClick={() => setScope(scoped === "enabled" ? null : "enabled")}>Enabled <span>{enabledCount}</span></button>}
     {disabledCount > 0 && <button aria-pressed={scoped === "disabled"} onClick={() => setScope(scoped === "disabled" ? null : "disabled")}>Disabled <span>{disabledCount}</span></button>}
-    {files.length > 0 && <button aria-pressed={scoped === "files"} onClick={() => setScope(scoped === "files" ? null : "files")}>Not added <span>{files.length}</span></button>}
+    {files.length > 0 && <button aria-pressed={scoped === "files"} title={notAddedHelp} onClick={() => setScope(scoped === "files" ? null : "files")}>Not added <span>{files.length}</span></button>}
+    {files.length > 0 && <HelpTip label="Not added">{notAddedHelp} Add one to run it, or delete it to free space.</HelpTip>}
     {revealed > 0 && <span className="muted scope-note">{revealed} disabled match</span>}
   </div> : null;
   const onSort = (key: SortKey) => setSort((current) => current?.key === key ? (current.descending ? null : { key, descending: true }) : { key, descending: false });
@@ -247,7 +250,7 @@ export function ModelList({ models, selected, onSelect, mode, mutate, busy, onli
   const draggedModel = models.find((model) => model.id === dragging);
   const dragFit = draggedModel && draggedModel.policy !== "hot" ? hotFit(draggedModel, models, resources) : null;
   const updateAction = client && mode === "models" && models.length > 0 ? <span className="update-action"><Button variant="ghost" disabled={!online || checking} onClick={() => void checkUpdates()}>{checking ? "Checking…" : "Check for updates"}</Button><HelpTip label="Check for updates">Compares each Hugging Face model with its upstream files. Nothing is downloaded.</HelpTip></span> : null;
-  const disk = inventory && <span className="muted library-total">{bytes(inventory.totalBytes)} on disk{inventory.removableBytes > 0 && files.length > 0 && <> · <button className="link-button" onClick={() => setScope("files")}>{bytes(inventory.removableBytes)} unused</button></>}{inventory.truncated && <HelpTip label="disk use">Large folders are counted up to a limit.</HelpTip>}</span>;
+  const disk = inventory && <span className="muted library-total">{bytes(inventory.totalBytes)} on disk{inventory.removableBytes > 0 && files.length > 0 && <> · <button className="link-button" onClick={() => setScope("files")}>{bytes(inventory.removableBytes)} not added</button></>}{inventory.truncated && <HelpTip label="disk use">Large folders are counted up to a limit.</HelpTip>}</span>;
   const filesOnly = scoped === "files";
   return <section className="inventory" aria-label="Model inventory">
     <div className="toolbar models-toolbar">
@@ -272,7 +275,7 @@ export function ModelList({ models, selected, onSelect, mode, mutate, busy, onli
         </div>)}
       </section>)}
     </div> : <div className="data-table model-table" role="table" aria-label="Registered models">
-      <div className="data-head" role="row"><SortHeader label={filesOnly ? "Files" : "Model"} id="name" sort={sort} onSort={onSort} pick={filesOnly ? <span className="pick pick-space" aria-hidden="true" /> : <label className="pick-hit"><input type="checkbox" className="pick" aria-label="Select all shown models" checked={allChosen} onChange={() => setChosen(allChosen ? new Set() : new Set(visible.map((model) => model.id)))} /></label>} />{filesOnly ? <><span role="columnheader" /><span role="columnheader" /><span role="columnheader" /></> : <><SortHeader label="State" id="state" sort={sort} onSort={onSort} /><span role="columnheader">Policy</span><SortHeader label="Memory" id="memory" sort={sort} onSort={onSort} numeric /></>}<span role="columnheader"><span className="sr-only">Action</span></span></div>
+      <div className="data-head" role="row"><SortHeader label={filesOnly ? "Files no model uses" : "Model"} id="name" sort={sort} onSort={onSort} pick={filesOnly ? <span className="pick pick-space" aria-hidden="true" /> : <label className="pick-hit"><input type="checkbox" className="pick" aria-label="Select all shown models" checked={allChosen} onChange={() => setChosen(allChosen ? new Set() : new Set(visible.map((model) => model.id)))} /></label>} />{filesOnly ? <><span role="columnheader" /><span role="columnheader" /><span role="columnheader" /></> : <><SortHeader label="State" id="state" sort={sort} onSort={onSort} /><span role="columnheader">Policy</span><SortHeader label="Memory" id="memory" sort={sort} onSort={onSort} numeric /></>}<span role="columnheader"><span className="sr-only">Action</span></span></div>
       {visible.map((model) => <div className={`data-row model-row ${selected === model.id ? "selected" : ""} ${chosen.has(model.id) ? "chosen" : ""}`} role="row" key={model.id} onClick={() => onSelect(model.id)}>
         <div role="cell" className="model-identity picked"><label className="pick-hit" onClick={(event) => event.stopPropagation()}><input type="checkbox" className="pick" aria-label={`Select ${model.id}`} checked={chosen.has(model.id)} onChange={() => toggle(model.id)} /></label><div className="identity-text"><button className="model-name" data-model={model.id} aria-pressed={selected === model.id} onClick={(event) => { event.stopPropagation(); onSelect(model.id); }}><ModelName name={model.id} /></button><span className="model-meta"><span className="row-state"><span className={`status-dot ${workerTone(model)}`} />{stateLabel(model)}</span>{[...taskNames(model), quants.get(model.id)].filter(Boolean).join(" · ")}{updates.has(model.id) && <> · {client ? <ModelUpdate client={client} model={model} online={online} available compact onDone={() => { setChecked(null); void listed.reload(); }} /> : <span className="update-note">update available</span>}</>}</span></div></div>
         <div role="cell" className={`model-state ${model.error || !model.downloaded ? "tone-bad" : ""}`} title={residencyNote(model) ?? undefined}><span className={`status-dot ${workerTone(model)}`} />{stateLabel(model)}{model.loaded && model.active_requests > 0 ? <span className="muted"> · {model.active_requests}/{model.max_inflight} busy</span> : null}<LoadingNote model={model} /></div>

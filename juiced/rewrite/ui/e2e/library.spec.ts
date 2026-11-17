@@ -14,7 +14,7 @@ async function findModels(page: Page) {
 }
 
 test.describe("Discover", () => {
-  test("search, task chips and recommended catalog entries", async ({ page }) => {
+  test("search, type and recommended catalog entries", async ({ page }) => {
     await findModels(page);
     const qwen = result(page, /^Qwen3 0\.6B$/);
     await expect(qwen.getByText("Recommended", { exact: true })).toBeVisible();
@@ -36,18 +36,64 @@ test.describe("Discover", () => {
     await expect(page.getByRole("heading", { name: "No models found" })).toBeVisible();
     await page.getByRole("searchbox", { name: "Search models" }).fill("");
 
-    const task = page.getByRole("group", { name: "Task" });
-    await task.getByRole("button", { name: "Embeddings" }).click();
-    await expect(task.getByRole("button", { name: "Embeddings" })).toHaveAttribute("aria-pressed", "true");
+    const type = page.getByRole("combobox", { name: "Type" });
+    await type.selectOption({ label: "Embeddings" });
+    await expect(type).toHaveAttribute("data-active", "true");
     await expect(result(page, /^Nomic Embed Text v1$/)).toBeVisible();
     await expect(result(page, /^Qwen3 0\.6B$/)).toHaveCount(0);
     await expect(tiny).toHaveCount(0);
-    await task.getByRole("button", { name: "Speech to text" }).click();
+    await type.selectOption({ label: "Speech to text" });
     await expect(result(page, /^Whisper Tiny$/)).toBeVisible();
-    await expect(result(page, /^Whisper Tiny$/).locator(".result-meta"), "result lines use the task chip names").toContainText("Speech to text");
+    await expect(result(page, /^Whisper Tiny$/).locator(".result-meta"), "result lines use the type names").toContainText("Speech to text");
     await expect(result(page, /^Nomic Embed Text v1$/)).toHaveCount(0);
-    await task.getByRole("button", { name: "All" }).click();
+    await page.getByRole("button", { name: "Clear filters" }).click();
+    await expect(type).toHaveValue("");
     await expect(result(page, /^Qwen3 0\.6B$/)).toBeVisible();
+  });
+
+  test("hardware, size and sort narrow the same results and clear in one step", async ({ page }) => {
+    await findModels(page);
+    const results = page.getByRole("list", { name: "Search results" }).getByRole("listitem");
+    const qwen = result(page, /^Qwen3 0\.6B$/), chips = qwen.getByRole("group", { name: "Qwen3 0.6B quants" });
+    const count = page.locator(".result-line").getByRole("status");
+    const clear = page.getByRole("button", { name: "Clear filters" });
+    const all = await results.count();
+    await expect(count).toHaveText(new RegExp(`^${all} models`));
+    await expect(clear, "nothing to clear without a filter").toHaveCount(0);
+    const top = (await qwen.boundingBox())!.y;
+
+    const size = page.getByRole("combobox", { name: "Size" }), hardware = page.getByRole("combobox", { name: "Hardware" });
+    await expect(hardware.getByRole("option", { name: "NPU" }), "no NPU choice without FastFlowLM").toHaveCount(0);
+    await size.selectOption({ label: "Over 24 GiB" });
+    await expect(result(page, /^Tiny-Chat-GGUF$/), "a model with no quant that large is dropped").toHaveCount(0);
+    await expect(chips.getByRole("button", { name: /^BF16/ })).toBeVisible();
+    await expect(chips.getByRole("button", { name: /^Q4_0/ }), "the card lists the quants that match").toHaveCount(0);
+    await expect(count).toHaveText(new RegExp(`^${await results.count()} models?\\b`));
+    expect((await qwen.boundingBox())!.y, "a filter moves no result down").toBe(top);
+    await hardware.selectOption({ label: "Fits memory" });
+    await expect(qwen, "filters combine: its only large quant does not fit").toHaveCount(0);
+    await expect(size).toHaveAttribute("data-active", "true");
+    await expect(hardware).toHaveAttribute("data-active", "true");
+    await page.getByRole("combobox", { name: "Type" }).selectOption({ label: "Classify" });
+    await expect(page.getByRole("heading", { name: "No models found" })).toBeVisible();
+    await expect(page.getByText("No model matches every filter.")).toBeVisible();
+    await page.getByRole("combobox", { name: "Type" }).selectOption("");
+    await size.selectOption({ label: "Under 2 GiB" });
+    await expect(chips.getByRole("button", { name: /^Q4_0/ })).toBeVisible();
+    await expect(chips.getByRole("button", { name: /^BF16/ })).toHaveCount(0);
+    await noHorizontalOverflow(page, "Discover with filters");
+    expect((await page.locator(".find-filters").boundingBox())!.height, "the filter bar stays short").toBeLessThan(160);
+
+    await clear.click();
+    await expect(size).toHaveValue("");
+    await expect(hardware).toHaveValue("");
+    await expect(results).toHaveCount(all);
+    await expect(clear).toHaveCount(0);
+
+    await page.getByRole("combobox", { name: "Sort" }).selectOption({ label: "Most downloads" });
+    await expect(results.first()).toContainText("Qwen3-0.6B");
+    await expect(results.first()).toContainText("9.8M downloads");
+    await expect(clear, "sorting is not a filter").toHaveCount(0);
   });
 
   test("the detail panel lists every quant with a fit badge", async ({ page }) => {
@@ -202,7 +248,7 @@ test.describe("Installed files", () => {
       await expect(page.getByText(/ GiB on disk/)).toBeVisible();
       const row = fileRow(page, "Qwen3-4B-Instruct-2507-GGUF");
       await expect(row, "unused files stay out of the Enabled list").toHaveCount(0);
-      await page.getByRole("button", { name: / GiB unused$/ }).click();
+      await page.getByRole("button", { name: / GiB not added$/ }).click();
       const status = page.getByRole("group", { name: "Status filter" });
       await expect(status.getByRole("button", { name: /^Not added \d+$/ })).toHaveAttribute("aria-pressed", "true");
       await expect(table(page).getByRole("button", { name: id, exact: true })).toHaveCount(0);

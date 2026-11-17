@@ -5,30 +5,20 @@ import { gpuMemory, parseSystemInfo } from "./hardware";
 import { AddModel, type AddTarget } from "./AddModel";
 import { UrlDownload } from "./UrlDownload";
 import { parseArtifactInventory } from "./management";
-import { engineNames, featured, parseSearch, progress, quantKey, quantNames, searchEngines, tasks, type LibraryModel, type Quant, type SearchResult } from "./libraryData";
+import { engineNames, featured, filterResults, fitLabel, flmJob, flmResults, npuEngine as npu, parseFlm, parseSearch, progress, quantFit, quantKey, quantNames, searchEngines, sizeBuckets, sorts, tasks, type FitFilter, type LibraryModel, type Machine, type Quant, type SearchResult, type SizeBucket, type Sort } from "./libraryData";
 import { Badge, Button, Empty, HelpTip, Icon, Menu } from "./ui";
 import { LocalProgress, ProjectorChoice, ServerFolder, localTarget, useLocalFile } from "./LocalFiles";
 import { splitPart } from "./localFilesData";
-import { FlmModels, useFlm } from "./FlmModels";
 import { parsePulls, type LocalInventory, type PullView } from "./localLibraryData";
 import { plainError } from "./modelErrors";
 import { QuantList, policyWord, quantWords, type QuantItem } from "./QuantList";
 import { notify } from "./toast";
 import { useResource } from "./useResource";
 
-const gpuOnly = new Set(["vllm", "thenoise"]);
-function fit(size: number | null, vram: number | null, ram: number | null, engine?: string | null): [string, "good" | "warning" | "bad" | "quiet"] {
-  if (size === null) return ["Size unknown", "quiet"];
-  const needed = size * 1.15;
-  if (vram !== null && needed <= vram) return ["Fits in GPU memory", "good"];
-  if (engine && gpuOnly.has(engine)) return [vram ? "Too big for the GPU" : "Needs a supported GPU", "bad"];
-  if (ram !== null && needed <= ram) return [vram ? "Too big for the GPU; runs partly on CPU" : "Runs on the CPU", "warning"];
-  return ["Likely too big for this machine", "bad"];
-}
+const fit = (size: number | null, machine: Machine, engine?: string | null) => fitLabel(quantFit(size, engine, machine), engine, machine);
 const compact = (value: number | null) => value === null ? null : value >= 1e6 ? `${(value / 1e6).toFixed(1)}M` : value >= 1e3 ? `${Math.round(value / 1e3)}k` : String(value);
 
 const taskNames: Record<string, string> = Object.fromEntries(tasks);
-const npu = "flm";
 const searchTimeout = 45000;
 function modelId(file: string): string {
   const name = file.split(/[\\/]/).pop() ?? file;
@@ -39,7 +29,8 @@ export type DiscoverTarget = { repo: string; file?: string; label?: string };
 
 const baseName = (path: string) => path.split(/[\\/]/).pop() ?? path;
 /** The models that run a hub quant's files, so Discover can say what already uses it. */
-export function quantUsers(local: LocalInventory | null | undefined, repo: string, quant: Pick<Quant, "file" | "kind" | "present">): string[] {
+export function quantUsers(local: LocalInventory | null | undefined, repo: string, quant: Pick<Quant, "file" | "kind" | "present"> & { users?: string[] | null }): string[] {
+  if (quant.users) return quant.users;
   const group = local?.groups.find((item) => item.repo?.toLowerCase() === repo.toLowerCase());
   if (!group) return [];
   if (quant.kind === "checkpoint") return quant.present ? group.usedBy : [];
@@ -63,6 +54,9 @@ export function FindModels({ client, online, onRegistered, onOpenModel, onDownlo
   const [query, setQuery] = useState(initial?.repo ?? "");
   const [task, setTask] = useState<string | null>(null);
   const [engine, setEngine] = useState<string | null>(null);
+  const [fitFilter, setFitFilter] = useState<FitFilter | null>(null);
+  const [size, setSize] = useState<SizeBucket | null>(null);
+  const [sort, setSort] = useState<Sort>("match");
   const [result, setResult] = useState<SearchResult | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -86,15 +80,26 @@ export function FindModels({ client, online, onRegistered, onOpenModel, onDownlo
   }, [selected?.repo, selected?.quant]);
   const [tick, setTick] = useState(0);
   const info = useResource(client, "system-info", parseSystemInfo, 0);
-  const flm = useFlm(client);
-  const npuOnly = engine === npu;
+  const [npuBusy, setNpuBusy] = useState(false);
+  const flm = useResource(client, "juiced/flm", parseFlm, npuBusy ? 2000 : 10000, true);
+  const npuWorking = flm.data?.jobs.some((job) => job.state === "pulling" || (job.state === "complete" && job.then?.state === "pending")) ?? false;
+  useEffect(() => setNpuBusy(npuWorking), [npuWorking]);
+  const npuAdded = flm.data?.jobs.filter((job) => job.then?.state === "done" && job.then.model).map((job) => job.then!.model).join("\u0000") ?? "";
+  const npuSeen = useRef<string | null>(null);
+  useEffect(() => {
+    if (!flm.data) return;
+    if (npuSeen.current !== null && npuSeen.current !== npuAdded) void onRegistered();
+    npuSeen.current = npuAdded;
+  }, [flm.data, npuAdded, onRegistered]);
+  const addedHere = useRef(new Set<string>());
+  const npuOnly = engine === npu || fitFilter === "npu";
   const request = useRef<AbortController | null>(null);
   const lastKey = useRef("");
   useEffect(() => {
-    const key = `${query.trim()}\u0000${task ?? ""}\u0000${engine ?? ""}`;
+    const key = `${query.trim()}\u0000${task ?? ""}\u0000${engine ?? ""}\u0000${npuOnly}`;
     const refreshOnly = key === lastKey.current;
     lastKey.current = key;
-    if (engine === npu) { request.current?.abort(); request.current = null; setLoading(false); setHubPending(false); return; }
+    if (npuOnly) { request.current?.abort(); request.current = null; setLoading(false); setHubPending(false); return; }
     if (refreshOnly && request.current) return;
     const timer = setTimeout(async () => {
       request.current?.abort();
@@ -122,7 +127,7 @@ export function FindModels({ client, online, onRegistered, onOpenModel, onDownlo
       }
     }, refreshOnly ? 0 : 300);
     return () => clearTimeout(timer);
-  }, [client, query, task, engine, tick]);
+  }, [client, query, task, engine, npuOnly, tick]);
   useEffect(() => () => request.current?.abort(), []);
   useEffect(() => { if (!notice) return; const timer = setTimeout(() => setNotice(""), 4000); return () => clearTimeout(timer); }, [notice]);
   const downloading = result?.models.some((model) => model.quants.some((quant) => progress(quant) !== null)) ?? false;
@@ -140,9 +145,19 @@ export function FindModels({ client, online, onRegistered, onOpenModel, onDownlo
     wanted.current = undefined;
     pick(item, item.quants.find((entry) => entry.file === target.file) ?? (target.label ? item.quants.find((entry) => entry.label === target.label) : undefined) ?? item.quants.find((entry) => entry.recommended) ?? featured(item.quants)[0]);
   }
-  const model = local.file || npuOnly ? undefined : result?.models.find((item) => item.repo === selected?.repo);
+  const gpu = info.data?.gpus.reduce((best, item) => Math.max(best, gpuMemory(item) ?? 0), 0) || null;
+  const ram = info.data?.memory?.total_bytes ?? null;
+  const machine = useMemo<Machine>(() => ({ gpu, ram }), [gpu, ram]);
+  const npuModels = useMemo(() => engine === null || engine === npu ? flmResults(flm.data, query, task) : [], [flm.data, query, task, engine]);
+  const found = useMemo(() => [...(npuOnly ? [] : result?.models ?? []), ...npuModels], [npuOnly, result, npuModels]);
+  const views = useMemo(() => filterResults(found, { fit: fitFilter, size, sort }, machine), [found, fitFilter, size, sort, machine]);
+  const filtering = task !== null || engine !== null || fitFilter !== null || size !== null;
+  const clear = () => { setTask(null); setEngine(null); setFitFilter(null); setSize(null); };
+  const model = local.file ? undefined : found.find((item) => item.repo === selected?.repo);
   const quant = model?.quants.find((item) => quantKey(item) === selected?.quant);
-  const pulls = useResource(client, "juiced/library/pulls", parsePulls, 2000, true, !!quant);
+  const onNpu = model?.source === "flm";
+  const job = onNpu && quant && flm.data ? flmJob(flm.data, quant.file) : undefined;
+  const pulls = useResource(client, "juiced/library/pulls", parsePulls, 2000, true, !!quant && !onNpu);
   const pull: PullView | undefined = quant && model ? pulls.data?.find((item) => item.then?.kind === "add" && item.repo.toLowerCase() === model.repo.toLowerCase() && (item.label ?? "Unknown") === quant.label && (!item.files.length || item.files.some((part) => part.file === quant.file))) : undefined;
   const pendingAdd = pull?.then?.state === "pending" ? pull.then : null;
   const seen = useRef(new Set<string>());
@@ -154,8 +169,14 @@ export function FindModels({ client, online, onRegistered, onOpenModel, onDownlo
     settled.current.add(pull.id);
     void onRegistered();
   }, [pull, added, onRegistered]);
-  const gpu = info.data?.gpus.reduce((best, item) => Math.max(best, gpuMemory(item) ?? 0), 0) || null;
-  const ram = info.data?.memory?.total_bytes ?? null;
+  async function pullNpu(item: Quant, policy: Policy) {
+    setError("");
+    try {
+      await client.request("juiced/flm/pull", { checkpoint: item.file, then: { policy } });
+      notify(`Downloading ${item.file}. It's added as ${policyNames[policy]} when done.`);
+      await flm.reload();
+    } catch (failure) { setError(plainError(failure, "The download didn't start.")); }
+  }
   async function download(target: LibraryModel, item: Quant, policy: Policy, then: { id: string; engine?: string }) {
     if (!result) return;
     setError(""); setNotice("");
@@ -172,7 +193,6 @@ export function FindModels({ client, online, onRegistered, onOpenModel, onDownlo
       await pulls.reload();
     } catch (failure) { setError(plainError(failure, "The download didn't start.")); }
   }
-  const models = useMemo(() => result?.models ?? [], [result]);
   const names = useMemo(() => quantNames(model?.quants ?? []), [model]);
   const file = local.file;
   const checkpoint = quant?.kind === "checkpoint";
@@ -184,12 +204,20 @@ export function FindModels({ client, online, onRegistered, onOpenModel, onDownlo
   const partial = !!quant && !quant.present && quant.parts > 1 && quant.presentFiles > 0;
   const ready = file ? !!target && !file.error : !!quant?.present;
   const resetKey = file ? `file:${file.name}` : `${selected?.repo}:${selected?.quant}`;
+  const thenPolicy = pendingAdd?.policy ?? (job?.state === "pulling" ? job.then?.policy : undefined);
+  const settling = (!!pendingAdd && !!quant && progress(quant) === null) || (job?.state === "complete" && job.then?.state === "pending");
+  const npuDone = job?.then?.state === "done" && job.then.model && users.includes(job.then.model) ? job.then.model : null;
+  const addedModel = added ?? npuDone;
+  const status = [result || npuOnly ? `${views.length} model${views.length === 1 ? "" : "s"}` : null, npuOnly || !result ? null : hubPending ? "Searching Hugging Face…" : result.hub !== "ok" && result.hub !== "skipped" ? result.offline ? "Offline mode. Only recommended and downloaded models are listed." : "Hugging Face is unreachable. Only recommended and downloaded models are listed." : null].filter(Boolean).join(" · ");
   return <div className={`find-models ${model || file ? "has-detail" : ""}`}>
     <div className="find-main">
-      <div className="toolbar">
+      <div className="toolbar find-filters">
         <input type="search" aria-label="Search models" placeholder="Search models, e.g. qwen3, llama, whisper" value={query} onChange={(event) => setQuery(event.target.value)} />
-        <select aria-label="Engine" value={engine ?? ""} onChange={(event) => { setEngine(event.target.value || null); setSelected(null); }}><option value="">Any engine</option>{searchEngines.map(([id, label]) => <option key={id} value={id}>{label}</option>)}{flm.data?.available && <option value={npu}>FastFlowLM (NPU)</option>}</select>
-        <div className="chip-filter" role="group" aria-label="Task"><button aria-pressed={task === null} onClick={() => setTask(null)}>All</button>{tasks.map(([id, label]) => <button key={id} aria-pressed={task === id} onClick={() => setTask(task === id ? null : id)}>{label}</button>)}</div>
+        <select aria-label="Type" data-active={task !== null} value={task ?? ""} onChange={(event) => setTask(event.target.value || null)}><option value="">Any type</option>{tasks.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select>
+        <select aria-label="Engine" data-active={engine !== null} value={engine ?? ""} onChange={(event) => { setEngine(event.target.value || null); setSelected(null); }}><option value="">Any engine</option>{searchEngines.map(([id, label]) => <option key={id} value={id}>{label}</option>)}{flm.data?.available && <option value={npu}>FastFlowLM (NPU)</option>}</select>
+        <select aria-label="Hardware" data-active={fitFilter !== null} value={fitFilter ?? ""} onChange={(event) => setFitFilter((event.target.value || null) as FitFilter | null)}><option value="">Any hardware</option>{gpu !== null && <option value="gpu">Fits GPU</option>}<option value="memory">Fits memory</option>{flm.data?.available && <option value="npu">NPU</option>}</select>
+        <select aria-label="Size" data-active={size !== null} value={size ?? ""} onChange={(event) => setSize((event.target.value || null) as SizeBucket | null)}><option value="">Any size</option>{sizeBuckets.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select>
+        <select aria-label="Sort" data-active={sort !== "match"} value={sort} onChange={(event) => setSort(event.target.value as Sort)}>{sorts.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select>
         <Menu label="Add a model file" trigger={<><Icon name="upload" size={14} /> Add file</>}>
           <button role="menuitem" disabled={!online} onClick={() => picker.current?.click()}>Upload from this computer…</button>
           <button role="menuitem" disabled={!online} onClick={() => setFolderOpen(true)}>Pick from the server…</button>
@@ -200,30 +228,29 @@ export function FindModels({ client, online, onRegistered, onOpenModel, onDownlo
       {urlOpen && <UrlDownload client={client} onClose={() => setUrlOpen(false)} onStarted={() => { setUrlOpen(false); notify("Download started. Follow it under Downloads."); onDownloads(); }} />}
       {folderOpen && <ServerFolder client={client} onClose={() => setFolderOpen(false)} onPick={(entry, mode) => { setFolderOpen(false); setSelected(null); void local.pick(entry, mode); }} />}
       {error && <div className="action-row"><p className="inline-error" role="alert">{error}</p><Button onClick={() => setTick((value) => value + 1)}>Retry</Button></div>}
-      {npuOnly ? <FlmModels client={client} online={online} query={query} flm={flm} onAdded={onRegistered} /> : <>
-      {result && <p className="searching muted" role="status">{hubPending ? "Searching Hugging Face…" : result.hub !== "ok" && result.hub !== "skipped" ? result.offline ? "Offline mode. Only recommended and downloaded models are listed." : "Hugging Face is unreachable. Only recommended and downloaded models are listed." : ""}</p>}
-      {!result ? <p className="muted" role="status">{loading ? "Searching…" : ""}</p> : models.length === 0 ? <Empty title="No models found">Try a shorter search or another task.</Empty> : <ul className={`model-results ${loading ? "stale" : ""}`} aria-label="Search results" aria-busy={loading}>
-        {models.map((item) => <li key={`${item.source}:${item.repo}`} className={`model-result ${item.repo === selected?.repo ? "selected" : ""}`}>
+      {flm.data?.available && flm.data.listError && (engine === null || engine === npu) && <p className="inline-error" role="alert">FastFlowLM couldn't list its models.</p>}
+      {npuOnly && flm.data?.problems.map((problem) => <p className="inline-warning" key={problem}>{problem}</p>)}
+      <div className="result-line"><p className="searching muted" role="status">{status}</p>{filtering && <button className="link-button" onClick={clear}>Clear filters</button>}</div>
+      {!npuOnly && !result ? <p className="muted" role="status">{loading ? "Searching…" : ""}</p> : views.length === 0 ? <Empty title="No models found">{filtering ? "No model matches every filter." : "Try a shorter search."}</Empty> : <ul className={`model-results ${loading ? "stale" : ""}`} aria-label="Search results" aria-busy={loading}>
+        {views.map(({ model: item, quants }) => { const shown = featured(quants); return <li key={`${item.source}:${item.repo}`} className={`model-result ${item.repo === selected?.repo ? "selected" : ""}`}>
           <div className="result-head">
             <strong className="break-word">{item.name}</strong>
             {item.source === "catalog" && <Badge tone="good">Recommended</Badge>}
             {item.quants.some((entry) => entry.present) && <Badge tone="good">✓ On this machine</Badge>}
-            <span className="muted result-meta">{[item.publisher, item.task && (taskNames[item.task] ?? item.task), compact(item.downloads) && `${compact(item.downloads)} downloads`].filter(Boolean).join(" · ")}</span>
+            <span className="muted result-meta">{[item.publisher, item.task && (taskNames[item.task] ?? item.task), compact(item.downloads) && `${compact(item.downloads)} downloads`, item.source === "flm" ? "NPU" : null].filter(Boolean).join(" · ")}</span>
           </div>
           <div className="quant-chips" role="group" aria-label={`${item.name} quants`}>
-            {item.quants.length === 0 ? <span className="muted">No downloadable files found</span> : featured(item.quants).map((entry) => {
+            {item.quants.length === 0 ? <span className="muted">No downloadable files found</span> : shown.map((entry) => {
               const percent = progress(entry);
               return <button key={quantKey(entry)} className={`quant-chip ${entry.present ? "present" : ""}`} aria-pressed={item.repo === selected?.repo && quantKey(entry) === selected?.quant} onClick={() => pick(item, entry)} title={entry.kind === "checkpoint" ? `${entry.files.length} files for ${engineNames[entry.engine ?? ""] ?? entry.engine}` : entry.file}>
                 {entry.present && <span aria-label="Downloaded">✓ </span>}{entry.label}{entry.kind === "checkpoint" && entry.engine && <span className="quant-engine"> · {engineNames[entry.engine] ?? entry.engine}</span>}<span className="muted"> {bytes(entry.bytes)}</span>{entry.recommended && <span className="quant-star" aria-label="Suggested">★</span>}
                 {percent !== null && <span className="quant-progress" style={{ width: `${percent}%` }} />}
               </button>;
             })}
-            {item.quants.length > featured(item.quants).length && <button className="quant-chip more" onClick={() => pick(item, item.quants.find((entry) => entry.recommended) ?? featured(item.quants)[0] ?? item.quants[0])}>+{item.quants.length - featured(item.quants).length} more</button>}
+            {item.quants.length > shown.length && <button className="quant-chip more" onClick={() => pick(item, quants.find((entry) => entry.recommended) ?? shown[0] ?? item.quants[0])}>+{item.quants.length - shown.length} more</button>}
           </div>
-        </li>)}
+        </li>; })}
       </ul>}
-      {(task === null || task === "chat") && engine === null && <FlmModels client={client} online={online} query={query} flm={flm} onAdded={onRegistered} />}
-      </>}
     </div>
     {file && <aside className="inspector find-detail" aria-label="Model detail">
       <div className="inspector-top"><Button variant="ghost" className="back-button" onClick={local.clear}><Icon name="back" /> Back to results</Button><Button variant="ghost" className="close-inspector" aria-label="Close detail" onClick={local.clear}><Icon name="close" /></Button></div>
@@ -233,7 +260,7 @@ export function FindModels({ client, online, onRegistered, onOpenModel, onDownlo
           <div><dt>Size</dt><dd>{bytes(file.bytes)}{file.partCount > 1 ? ` · ${file.partCount} parts` : ""}</dd></div>
           <div><dt>Stored</dt><dd>{file.path ? "Used where it is" : file.job ? "Copied to library" : "Uploaded to library"}</dd></div>
           {!file.projectors?.length && file.projector && <div><dt>Vision projector</dt><dd className="break-word">{file.projector.name}</dd></div>}
-          <div><dt>This machine</dt><dd><Badge tone={fit(file.bytes, gpu, ram)[1]}>{fit(file.bytes, gpu, ram)[0]}</Badge></dd></div>
+          <div><dt>This machine</dt><dd><Badge tone={fit(file.bytes, machine)[1]}>{fit(file.bytes, machine)[0]}</Badge></dd></div>
         </dl>
         <LocalProgress file={file} onCancel={local.clear} />
         {ready && <div className="add-name"><label htmlFor="local-model-id">Model name</label><input id="local-model-id" value={file.id} maxLength={128} onChange={(event) => local.rename(event.target.value)} /></div>}
@@ -246,21 +273,32 @@ export function FindModels({ client, online, onRegistered, onOpenModel, onDownlo
       <div className="inspector-body">
         <div className="inspector-title"><h2 className="break-word">{model.name}</h2></div>
         <p className="field-help">{[model.publisher, model.license, model.gated ? "Gated" : null].filter(Boolean).join(" · ")}</p>
-        <QuantList listRef={quantList} label="Quants" selected={quantKey(quant)} onSelect={(key) => pick(model, model.quants.find((entry) => quantKey(entry) === key))} items={[...model.quants].sort((left, right) => (left.bytes ?? 0) - (right.bytes ?? 0)).map((entry): QuantItem => {
-          const [label, tone] = fit(entry.bytes, gpu, ram, entry.engine);
+        <QuantList listRef={quantList} label={onNpu ? "Sizes" : "Quants"} selected={quantKey(quant)} onSelect={(key) => pick(model, model.quants.find((entry) => quantKey(entry) === key))} items={[...model.quants].sort((left, right) => (left.bytes ?? 0) - (right.bytes ?? 0)).map((entry): QuantItem => {
+          const [label, tone] = fit(entry.bytes, machine, entry.engine);
           return { key: quantKey(entry), label: names.get(entry) ?? entry.label, bytes: entry.bytes, title: entry.file, suggested: entry.recommended, fit: { tone, label }, progress: progress(entry), state: hubQuantState(entry, quantUsers(inventory, model.repo, entry), registered) };
         })} />
         <dl className="facts">
-          <div><dt>This machine</dt><dd><Badge tone={fit(quant.bytes, gpu, ram, quant.engine)[1]}>{fit(quant.bytes, gpu, ram, quant.engine)[0]}</Badge></dd></div>
+          <div><dt>This machine</dt><dd><Badge tone={fit(quant.bytes, machine, quant.engine)[1]}>{fit(quant.bytes, machine, quant.engine)[0]}</Badge></dd></div>
           {quant.engine && <div><dt>Runs on</dt><dd>{engineNames[quant.engine] ?? quant.engine}</dd></div>}
+          {quant.traits.length > 0 && <div><dt>Features</dt><dd>{quant.traits.join(", ")}</dd></div>}
           {(checkpoint || quant.parts > 1) && <div><dt>Files</dt><dd>{checkpoint ? quant.files.length : partial ? `${quantWords.parts(quant.presentFiles, quant.parts)} on disk` : `${quant.parts} parts`}</dd></div>}
           {quant.present && <div><dt>Stored</dt><dd>{quant.localPath ? `Hugging Face cache${quant.readOnly ? " · read-only" : ""}` : "Juiced storage"}</dd></div>}
           {users.length > 0 && <div><dt>Used by</dt><dd><span className="used-by">{users.map((id) => <button key={id} className="link-button" onClick={() => onOpenModel(id)}>{id}</button>)}</span></dd></div>}
         </dl>
         {checkpoint && <div className="checkpoint-files"><span className="field-label">Files <HelpTip label="Checkpoint files">The weights, config and tokenizer files the engine reads as one folder. READMEs, images and other formats are skipped.</HelpTip></span><ul aria-label="Checkpoint files">{quant.files.map((part) => <li key={part.file}><span className="break-word">{part.member ?? part.file}</span><span className="numeric muted">{bytes(part.bytes)}</span></li>)}</ul></div>}
-        {progress(quant) !== null && <><progress aria-label="Download progress" max={100} value={progress(quant)!} /><p className="field-help">{quantWords.downloading(progress(quant)!)}{pendingAdd?.policy ? ` · then added as ${policyNames[pendingAdd.policy as Policy] ?? pendingAdd.policy}` : ""}</p></>}
-        {pendingAdd && progress(quant) === null && <p className="muted" role="status">Adding the model…</p>}
-        {added ? <div className="added"><p className="inline-success" role="status">Added {added}.</p><div className="action-row"><Button variant="primary" onClick={() => onOpenModel(added)}>Open model</Button></div></div>
+        {onNpu && flm.data?.problems.map((problem) => <p className="inline-warning" key={problem}>{problem}</p>)}
+        {progress(quant) !== null && <><progress aria-label="Download progress" max={100} value={progress(quant)!} /><p className="field-help">{quantWords.downloading(progress(quant)!)}{thenPolicy ? ` · then added as ${policyNames[thenPolicy as Policy] ?? thenPolicy}` : ""}</p></>}
+        {settling && <p className="muted" role="status">Adding the model…</p>}
+        {addedModel ? <div className="added"><p className="inline-success" role="status">Added {addedModel}.</p><div className="action-row"><Button variant="primary" onClick={() => onOpenModel(addedModel)}>Open model</Button></div></div>
+          : onNpu ? !settling && progress(quant) === null && <>
+            {job?.state === "failed" && !ready && <p className="inline-error" role="alert">The download failed.{job.error ? ` ${job.error}` : ""}</p>}
+            {job?.then?.state === "failed" && users.length === 0 && <p className="inline-warning">{job.then.message ?? "The model wasn't added."} Add it here.</p>}
+            {users.length > 0 && !addedHere.current.has(quant.file) ? <div className="action-row"><Button onClick={() => onOpenModel(users[0]!)}>Open model</Button></div>
+              : <AddModel client={client} online={online} target={null} id="" ready={ready} resetKey={resetKey} onOpenModel={onOpenModel}
+                register={(policy) => client.request("juiced/flm/models/add", { checkpoint: quant.file, policy })}
+                onRegistered={async () => { addedHere.current.add(quant.file); await flm.reload(); await onRegistered(); }}
+                download={ready ? undefined : { disabled: false, start: (policy) => pullNpu(quant, policy) }} />}
+          </>
           : !pendingAdd && <>
             {pull && seen.current.has(pull.id) && pull.then?.state === "failed" && <p className="inline-warning">{pull.then.message ?? "The model wasn't added."} Add it here.</p>}
             <AddModel client={client} online={online} target={target} id={targetId} engine={quant.engine === "thenoise" ? "thenoise" : undefined} ready={ready} resetKey={resetKey} blocked={split && !target ? "Every part must finish downloading first" : undefined} downloadLabel={partial ? "Finish download" : undefined} onRegistered={onRegistered} onOpenModel={onOpenModel} download={progress(quant) === null && !ready ? { disabled: !quant.pullable || (model.gated && !result?.authenticated), start: (policy) => download(model, quant, policy, { id: targetId, engine: quant.engine === "thenoise" ? "thenoise" : undefined }) } : undefined} />
