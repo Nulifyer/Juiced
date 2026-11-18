@@ -17,6 +17,13 @@ use std::{
 use tokio::sync::Mutex as AsyncMutex;
 
 const SWEEP_INTERVAL: Duration = Duration::from_millis(100);
+/// Saved sessions past their retention are otherwise deleted only when another session is
+/// saved, so a quiet server would keep them indefinitely.
+const SESSION_EXPIRY_INTERVAL: Duration = Duration::from_secs(3600);
+
+fn session_expiry_due(last: Option<Instant>, now: Instant) -> bool {
+    last.is_none_or(|last| now.duration_since(last) >= SESSION_EXPIRY_INTERVAL)
+}
 const HOLDERS_SHOWN: usize = 8;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -323,6 +330,7 @@ impl Manager {
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(SWEEP_INTERVAL);
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            let mut expired: Option<Instant> = None;
             loop {
                 interval.tick().await;
                 let Some(manager) = manager.upgrade() else {
@@ -332,6 +340,11 @@ impl Manager {
                     return;
                 }
                 manager.idle_sweep().await;
+                let now = Instant::now();
+                if session_expiry_due(expired, now) {
+                    expired = Some(now);
+                    manager.expire_sessions().await;
+                }
             }
         });
     }
@@ -656,6 +669,20 @@ impl Manager {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn saved_sessions_expire_on_a_clock_not_only_when_another_is_saved() {
+        let start = Instant::now();
+        assert!(session_expiry_due(None, start), "once at startup");
+        assert!(!session_expiry_due(
+            Some(start),
+            start + Duration::from_secs(3599)
+        ));
+        assert!(session_expiry_due(
+            Some(start),
+            start + Duration::from_secs(3600)
+        ));
+    }
     use serde_json::json;
 
     #[test]
