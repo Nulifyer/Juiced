@@ -22,7 +22,8 @@ the conversation history.
 
 When the disk budget is full, Juiced deletes the least recently used
 conversations first. With a number of days, it also deletes conversations unused
-for that long. With the field empty, conversations stay until space is needed.
+for that long; it checks at startup and then once an hour. With the field empty,
+conversations stay until space is needed.
 
 ## What Juiced saves and deletes
 
