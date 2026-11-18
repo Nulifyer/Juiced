@@ -289,7 +289,7 @@ export function FindModels({ client, online, onRegistered, onOpenModel, onDownlo
         <input ref={picker} type="file" multiple hidden accept=".gguf,.bin,.safetensors,.onnx" aria-label="Model file" onChange={(event) => { const picked = Array.from(event.target.files ?? []); event.target.value = ""; if (picked.length) { setSelected(null); void local.upload(picked); } }} />
       </div>
       <div className="result-line">
-        {suggesting && !hubNote ? <><h2 className="suggested-title">Suggested for this machine</h2><HelpTip label="How suggestions are chosen">For each type, the largest recommended model that fits. The first chat model may use half of the GPU memory. A second chat model and one each for embeddings, speech and images may use an eighth, up to 4 GiB. Without a GPU, system memory counts. Models already on disk are left out.</HelpTip></> : <p className="searching muted" role="status">{status}</p>}
+        {suggesting && !hubNote ? <><h2 className="suggested-title">Suggested for this machine</h2><HelpTip label="How suggestions are chosen">For each type, the largest recommended model that fits. The first chat model may use half of the GPU memory, at the largest quant that fits it. A second chat model and one each for embeddings, speech and images may use an eighth, up to 4 GiB. Without a GPU, system memory counts. Models already on disk are left out.</HelpTip></> : <p className="searching muted" role="status">{status}</p>}
         {filtering && <button className="link-button" onClick={clear}>Clear filters</button>}
       </div>
       {urlOpen && <UrlDownload client={client} onClose={() => setUrlOpen(false)} onStarted={() => { setUrlOpen(false); notify("Download started. Follow it under Downloads."); onDownloads(); }} />}

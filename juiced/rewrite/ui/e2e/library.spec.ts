@@ -95,6 +95,13 @@ test.describe("Discover", () => {
     const sha = async () => (await service.json<any>("/v1/juiced/library/search?source=catalog&task=chat&limit=20")).data.find((model: any) => model.id === "qwen3-1.7b").quants.find((quant: any) => quant.label === "Q4_0").sha256 as string;
     const cleanup = () => removeDownloaded(service, added, sha);
     await cleanup();
+    // The first chat suggestion takes the largest quant that fits; on a small machine that is the one the fixture serves.
+    await page.route("**/v1/system-info", async (route) => {
+      const response = await route.fetch(), body = await response.json();
+      body.devices.gpus = [];
+      body.devices.memory = { ...body.devices.memory, total_bytes: 3 * 1024 ** 3, available_bytes: 3 * 1024 ** 3 };
+      await route.fulfill({ response, json: body });
+    });
     try {
       await discover(page);
       const row = suggestions(page).getByRole("listitem").filter({ has: page.getByText("Qwen3 1.7B", { exact: true }) });

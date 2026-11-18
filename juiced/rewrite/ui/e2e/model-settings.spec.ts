@@ -164,17 +164,22 @@ test("transcription converts other audio to 16 kHz mono WAV before upload", asyn
   await expect(panel.locator("[aria-live=polite]")).toContainText("Fixture speech", { timeout: 20000 });
 });
 
-test("cache limits save a disk budget and how long unused conversations stay", async ({ page, request }) => {
+test("cache limits save a disk budget, a per-model budget and how long unused conversations stay", async ({ page, request }) => {
   const service = api(request);
   await open(page);
   await navigate(page, "Cache");
   const limits = page.getByRole("form", { name: "Cache limits" });
   await limits.getByLabel("Days to keep unused conversations").fill("30");
   await limits.getByLabel("Disk budget in GiB").fill("6");
+  await limits.getByLabel("Disk budget per model in GiB").fill("5");
   await limits.getByRole("button", { name: "Save" }).click();
   await expect(toasts(page).getByRole("status")).toContainText("Saved the conversation cache limits.");
   const settings = async () => (await service.json<{ settings: Record<string, unknown> }>("/v1/juiced/cache/sessions")).settings;
-  expect(await settings()).toMatchObject({ retention_days: 30, budget_bytes: 6 * 1024 ** 3 });
+  expect(await settings()).toMatchObject({ retention_days: 30, budget_bytes: 6 * 1024 ** 3, model_budget_bytes: 5 * 1024 ** 3 });
+  await limits.getByLabel("Disk budget per model in GiB").fill("7");
+  await limits.getByRole("button", { name: "Save" }).click();
+  await expect(limits.getByRole("alert")).toHaveText("Per model must be 0.0625 GiB up to the disk budget (6 GiB).");
+  await limits.getByLabel("Disk budget per model in GiB").fill("4");
   await limits.getByLabel("Days to keep unused conversations").fill("0");
   await limits.getByRole("button", { name: "Save" }).click();
   await expect(limits.getByRole("alert")).toContainText("1 to 365 days");
@@ -182,7 +187,7 @@ test("cache limits save a disk budget and how long unused conversations stay", a
   await limits.getByLabel("Disk budget in GiB").fill("8");
   await limits.getByRole("button", { name: "Save" }).click();
   await expect.poll(async () => (await settings()).retention_days).toBeUndefined();
-  expect((await settings()).budget_bytes).toBe(8 * 1024 ** 3);
+  expect(await settings()).toMatchObject({ budget_bytes: 8 * 1024 ** 3, model_budget_bytes: 4 * 1024 ** 3 });
 });
 
 test("Slots changes how many requests a llama.cpp model serves and updates the estimate", async ({ page, request }) => {

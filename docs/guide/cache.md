@@ -17,8 +17,12 @@ the conversation history.
 1. Open **Cache**.
 2. Under **Conversation cache**, select the default mode. The change applies at once.
 3. Set **Disk budget** in GiB, from `0.0625` to `128`.
-4. Set **Keep unused for** a number of days from 1 to 365, or leave it empty.
-5. Select **Save**.
+4. Set **Per model** in GiB, from `0.0625` up to the disk budget. It caps what one
+   model's conversations may use. A long conversation can take several GiB, and
+   two stay saved only when both fit: two 43,000-token conversations on a large
+   model need about 5.2 GiB. The default is 4 GiB.
+5. Set **Keep unused for** a number of days from 1 to 365, or leave it empty.
+6. Select **Save**.
 
 When the disk budget is full, Juiced deletes the least recently used
 conversations first. With a number of days, it also deletes conversations unused

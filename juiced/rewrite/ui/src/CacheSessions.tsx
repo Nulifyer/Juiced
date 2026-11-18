@@ -70,26 +70,29 @@ const gib = 1024 ** 3;
 
 function StorageLimits({ settings, blocked, configure }: { settings: Settings; blocked: boolean; configure: (settings: Settings, success: string) => Promise<unknown> }) {
   const [budget, setBudget] = useState(String(Math.round(settings.budget_bytes / gib * 10) / 10));
+  const [each, setEach] = useState(String(Math.round(settings.model_budget_bytes / gib * 10) / 10));
   const [days, setDays] = useState(settings.retention_days ? String(settings.retention_days) : "");
   const [error, setError] = useState("");
-  useEffect(() => { setBudget(String(Math.round(settings.budget_bytes / gib * 10) / 10)); setDays(settings.retention_days ? String(settings.retention_days) : ""); }, [settings.budget_bytes, settings.retention_days]);
-  const savedBudget = String(Math.round(settings.budget_bytes / gib * 10) / 10), savedDays = settings.retention_days ? String(settings.retention_days) : "";
-  const dirty = budget.trim() !== savedBudget || days.trim() !== savedDays;
+  useEffect(() => { setBudget(String(Math.round(settings.budget_bytes / gib * 10) / 10)); setEach(String(Math.round(settings.model_budget_bytes / gib * 10) / 10)); setDays(settings.retention_days ? String(settings.retention_days) : ""); }, [settings.budget_bytes, settings.model_budget_bytes, settings.retention_days]);
+  const savedBudget = String(Math.round(settings.budget_bytes / gib * 10) / 10), savedEach = String(Math.round(settings.model_budget_bytes / gib * 10) / 10), savedDays = settings.retention_days ? String(settings.retention_days) : "";
+  const dirty = budget.trim() !== savedBudget || each.trim() !== savedEach || days.trim() !== savedDays;
   function save() {
-    const size = Number(budget), keep = days.trim() ? Number(days) : null;
+    const size = Number(budget), model = Number(each), keep = days.trim() ? Number(days) : null;
     if (!Number.isFinite(size) || size < 0.0625 || size > 128) return setError("Disk budget must be 0.0625 to 128 GiB.");
+    if (!Number.isFinite(model) || model < 0.0625 || model > size) return setError(`Per model must be 0.0625 GiB up to the disk budget (${size} GiB).`);
     if (keep !== null && (!Number.isSafeInteger(keep) || keep < 1 || keep > 365)) return setError("Keep conversations for 1 to 365 days, or leave it empty to keep them until space is needed.");
     setError("");
     const total = Math.round(size * gib);
-    const next: Settings = { ...settings, budget_bytes: total, model_budget_bytes: Math.min(settings.model_budget_bytes, total) };
+    const next: Settings = { ...settings, budget_bytes: total, model_budget_bytes: Math.min(Math.round(model * gib), total) };
     if (keep === null) delete next.retention_days; else next.retention_days = keep;
     void configure(next, "Saved the conversation cache limits.");
   }
   return <form className="storage-limits" aria-label="Cache limits" onSubmit={(event) => { event.preventDefault(); save(); }}>
     <label className="inline-field">Disk budget <input className="short-input" inputMode="decimal" aria-label="Disk budget in GiB" value={budget} disabled={blocked} onChange={(event) => setBudget(event.target.value)} /> GiB</label>
+    <label className="inline-field">Per model <input className="short-input" inputMode="decimal" aria-label="Disk budget per model in GiB" value={each} disabled={blocked} onChange={(event) => setEach(event.target.value)} /> GiB</label>
     <label className="inline-field">Keep unused for <input className="short-input" inputMode="numeric" aria-label="Days to keep unused conversations" value={days} placeholder="—" disabled={blocked} onChange={(event) => setDays(event.target.value)} /> days{days.trim() === "" && <span className="muted"> (until full)</span>}</label>
-    <HelpTip label="Cache limits">When the disk budget is full, the least recently used conversations are deleted first. With a number of days, conversations unused for that long are also deleted. Conversations saved under other engine settings are deleted when their model starts. Kept conversations are never deleted automatically.</HelpTip>
-    {dirty && <><Button type="submit" variant="primary" disabled={blocked}>Save</Button><Button variant="ghost" onClick={() => { setBudget(savedBudget); setDays(savedDays); setError(""); }}>Cancel</Button></>}
+    <HelpTip label="Cache limits">Per model caps what one model's conversations may use. A long conversation can take several GiB, and two stay saved only when both fit. When the disk budget is full, the least recently used conversations are deleted first. With a number of days, conversations unused for that long are also deleted. Conversations saved under other engine settings are deleted when their model starts. Kept conversations are never deleted automatically.</HelpTip>
+    {dirty && <><Button type="submit" variant="primary" disabled={blocked}>Save</Button><Button variant="ghost" onClick={() => { setBudget(savedBudget); setEach(savedEach); setDays(savedDays); setError(""); }}>Cancel</Button></>}
     {error && <p className="inline-error" role="alert">{error}</p>}
   </form>;
 }

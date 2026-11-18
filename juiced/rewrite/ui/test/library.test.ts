@@ -122,6 +122,19 @@ test("suggestions take the largest recommended quant of each type that fits a sh
   expect(suggest(models, { gpu: 24 * GiB, ram: 64 * GiB }).map((entry) => entry.model.task), "chat first, then the Type filter's order; audio and 3D are not suggested").toEqual(["chat", "chat", ...suggestedTasks.slice(1)]);
 });
 
+test("the first chat suggestion takes the largest quant up to 8 bits that fits its half of the machine", () => {
+  const quant = (label: string, gib: number, extra: Record<string, unknown> = {}) => ({ label, file: `coder-${label}.gguf`, bytes: gib * GiB, pullable: true, ...extra });
+  const coder = parseSearch({ data: [{ id: "coder", repo: "catalog/coder", name: "coder", task: "chat", source: "catalog", quants: [
+    quant("Q4_K_M", 17.3, { recommended: true }), quant("Q6_K", 23.4), quant("Q8_0", 30.3), quant("UD-Q8_K_XL", 33.5), quant("BF16", 56.9), quant("Q5_K_M", 20.2, { pullable: false }),
+  ] }] }).models[0]!;
+  const small = catalogModel("chat-2.5", "chat", 2.5);
+  expect(picks([coder, small], { gpu: 88 * GiB, ram: 107 * GiB }), "44 GiB share: the 8-bit quant fits, the unquantized export is never taken").toEqual(["coder UD-Q8_K_XL", "chat-2.5 Q4_K_M"]);
+  expect(picks([coder, small], { gpu: 64 * GiB, ram: 64 * GiB }), "32 GiB share: 8 bits is too big, 6 bits fits").toEqual(["coder Q6_K", "chat-2.5 Q4_K_M"]);
+  expect(picks([coder, small], { gpu: 48 * GiB, ram: 64 * GiB }), "24 GiB share: only the recommended quant fits").toEqual(["coder Q4_K_M", "chat-2.5 Q4_K_M"]);
+  expect(picks([coder, small], { gpu: null, ram: null }), "an unknown machine keeps the recommended quant").toEqual(["chat-2.5 Q4_K_M"]);
+  expect(picks([coder], { gpu: 88 * GiB, ram: 107 * GiB }), "a model is suggested once, not again at its smaller quant").toEqual(["coder UD-Q8_K_XL"]);
+});
+
 test("suggestions leave out what is on disk, downloading, gated, of unknown size or not from the catalog", () => {
   const machine = { gpu: 24 * GiB, ram: 64 * GiB };
   const downloading = catalogModel("chat-8", "chat", 8);

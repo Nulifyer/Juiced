@@ -218,7 +218,8 @@ export type Suggestion = { model: LibraryModel; quant: Quant };
 /**
  * A short list of recommended models for this machine, from the catalog: for each type, the largest
  * recommended quant that fits a share of GPU memory (RAM without a GPU). Chat gets two, one within
- * half of that memory and one within an eighth; every other type gets one within an eighth. The
+ * half of that memory, at the largest quant up to 8 bits that fits that half, and one within an
+ * eighth; every other type gets one within an eighth. The
  * eighth is capped at 4 GiB so those stay quick downloads. Models with a quant on disk or
  * downloading, gated models and quants of unknown size are left out.
  */
@@ -233,10 +234,20 @@ export function suggest(models: LibraryModel[], machine: Machine): Suggestion[] 
   }).sort((left, right) => right.quant.bytes! - left.quant.bytes!);
   const picked: Suggestion[] = [];
   for (const task of suggestedTasks) for (const budget of task === "chat" ? [main, side] : [side]) {
-    const pick = candidates.find((entry) => entry.model.task === task && entry.quant.bytes! * headroom <= budget && !picked.includes(entry));
-    if (pick) picked.push(pick);
+    const pick = candidates.find((entry) => entry.model.task === task && entry.quant.bytes! * headroom <= budget && !picked.some((taken) => taken.model.id === entry.model.id));
+    if (pick) picked.push(budget === main && known ? { model: pick.model, quant: sharpest(pick, budget, machine) } : pick);
   }
   return picked.slice(0, suggestionLimit);
+}
+
+/** Past 8 bits a quant only grows; these are the unquantized exports. */
+const unquantized = /(^|[^a-z0-9])(b?f16|f32)($|[^a-z0-9])/i;
+/**
+ * The recommended quant is sized for a modest machine. Where the first chat model's share has
+ * room, the suggestion takes the largest quant of that model that still fits it.
+ */
+function sharpest(pick: Suggestion, budget: number, machine: Machine): Quant {
+  return pick.model.quants.reduce((best, quant) => quant.label && !unquantized.test(quant.label) && quant.bytes !== null && quant.pullable && quant.bytes > best.bytes! && quant.bytes * headroom <= budget && fits(quant, machine) ? quant : best, pick.quant);
 }
 
 export type Search = { query: string; task: string | null; engine: string | null; fit: FitFilter | null; size: SizeBucket | null };

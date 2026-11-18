@@ -69,7 +69,7 @@ GPU memory, or of system memory when there is no GPU:
 
 | Suggestion | Share of memory |
 |---|---|
-| First chat model | Half |
+| First chat model | Half, at the largest quant up to 8 bits that fits it |
 | Second chat model, embeddings, speech to text, text to speech, images | An eighth, at most 4 GiB |
 
 A quant fits when its file size plus 15% is within the share. Models with a quant
