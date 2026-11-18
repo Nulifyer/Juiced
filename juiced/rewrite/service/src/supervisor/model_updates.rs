@@ -228,6 +228,20 @@ impl Manager {
 }
 
 const FOLLOW_POLL: Duration = Duration::from_millis(500);
+/// Registration failures that clear on their own, and the waits before each retry.
+const ADD_TRANSIENT: &[&str] = &[
+    "artifact_busy",
+    "artifact_revision_conflict",
+    "artifact_operation_interrupted",
+    "artifact_inspection_interrupted",
+    "hardware_detection_unavailable",
+    "hardware_detection_deadline",
+];
+const ADD_RETRIES: [Duration; 3] = [
+    Duration::from_secs(2),
+    Duration::from_secs(15),
+    Duration::from_secs(60),
+];
 const BUSY_RETRY: Duration = Duration::from_secs(2);
 const BUSY_ATTEMPTS: u32 = 300;
 
@@ -338,6 +352,10 @@ impl Manager {
 
     /// Resumes follow-ups of journaled pulls; call after the library recovered them.
     pub(crate) fn recover_follow_ups(self: &Arc<Self>) {
+        // A shutdown during an engine install fails the follow-up; the restart picks it up.
+        for pull in self.library().engine_blocked_follow_ups(true) {
+            let _ = self.library().retry_follow_up(&pull);
+        }
         for pull in self.library().pending_follow_ups() {
             self.follow_pull(pull);
         }
@@ -353,6 +371,7 @@ impl Manager {
                 Some(outcome) => manager.library().settle_follow_up(&pull, outcome),
                 None => manager.library().release_follow_up(&pull),
             }
+            manager.register_local_models();
         });
     }
 
@@ -393,6 +412,7 @@ impl Manager {
                 if outcome.state == crate::library::FollowUpState::Done {
                     self.library()
                         .record_updates(BTreeMap::from([(model, false)]));
+                    self.delete_superseded(&from_artifact).await;
                 }
                 outcome
             }
@@ -416,8 +436,18 @@ impl Manager {
             ..ModelAdd::default()
         };
         let mut installed = false;
+        let mut waits = ADD_RETRIES.iter();
         loop {
             match crate::native_api::register_download(self, request()).await {
+                Err(AddModelError::Api(error)) if ADD_TRANSIENT.contains(&error.code) => {
+                    let Some(wait) = waits.next() else {
+                        return failed(error);
+                    };
+                    if self.shutting_down.load(Ordering::Acquire) {
+                        return failed(error);
+                    }
+                    tokio::time::sleep(*wait).await;
+                }
                 Ok(reply) => {
                     return FollowUpOutcome::done(
                         reply["model"]["id"].as_str().unwrap_or_default(),
@@ -456,25 +486,45 @@ impl Manager {
             if self.shutting_down.load(Ordering::Acquire) {
                 return Err(FollowUpOutcome::failed(
                     "engine_install_interrupted",
-                    "The engine install stopped. Add the model again.",
+                    "The engine install stopped. Retry.",
                 ));
             }
             let view = self.engine_job(job).ok_or_else(|| {
                 FollowUpOutcome::failed(
                     "engine_install_interrupted",
-                    "The engine install stopped. Add the model again.",
+                    "The engine install stopped. Retry.",
                 )
             })?;
             match view["state"].as_str() {
                 Some("complete") => return Ok(()),
                 Some("failed") => {
                     return Err(FollowUpOutcome::failed(
-                        view["error"].as_str().unwrap_or("engine_install_failed"),
-                        "The engine didn't install. Add the model again.",
+                        "engine_install_failed",
+                        "The engine didn't install. Retry.",
                     ));
                 }
                 _ => tokio::time::sleep(FOLLOW_POLL).await,
             }
+        }
+    }
+
+    /// Deletes the files an update replaced, unless a model still uses them; otherwise they
+    /// would come back as a second model.
+    async fn delete_superseded(self: &Arc<Self>, artifact: &str) {
+        let Ok(inventory) = self.local_library(true).await else {
+            return;
+        };
+        let id = format!("artifact:{artifact}");
+        let files: Vec<String> = inventory
+            .groups
+            .iter()
+            .flat_map(|group| &group.quants)
+            .find(|quant| quant.files.contains(&id))
+            .filter(|quant| quant.used_by.is_empty())
+            .map(|quant| quant.files.clone())
+            .unwrap_or_default();
+        if !files.is_empty() {
+            let _ = self.delete_unused(&files).await;
         }
     }
 

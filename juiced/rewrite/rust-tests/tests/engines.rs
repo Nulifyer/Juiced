@@ -4,10 +4,11 @@ mod support;
 use reqwest::{Method, StatusCode};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+use std::os::unix::fs::PermissionsExt as _;
 use std::{
     collections::BTreeMap,
     io::Write,
-    path::Path,
+    path::{Path, PathBuf},
     sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -1220,4 +1221,434 @@ async fn linked_split_models_find_their_parts_and_projector_in_place() {
         .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
     assert_eq!(refused["error"]["code"], "split_part_missing");
+}
+
+/// Writes `models--owner--name` with content-addressed blobs behind snapshot links, the
+/// layout `huggingface_hub` leaves behind.
+fn cache_repo(hub: &Path, repo: &str, files: &[(&str, Vec<u8>)]) -> PathBuf {
+    let directory = hub.join(format!("models--{}", repo.replace('/', "--")));
+    let snapshot = directory
+        .join("snapshots")
+        .join("0123456789abcdef0123456789abcdef01234567");
+    std::fs::create_dir_all(directory.join("blobs")).unwrap();
+    std::fs::create_dir_all(&snapshot).unwrap();
+    for (name, bytes) in files {
+        let blob = directory.join("blobs").join(digest(bytes));
+        std::fs::write(&blob, bytes).unwrap();
+        std::os::unix::fs::symlink(
+            format!("../../blobs/{}", digest(bytes)),
+            snapshot.join(name),
+        )
+        .unwrap();
+    }
+    snapshot
+}
+
+async fn model(server: &Server, id: &str) -> Option<Value> {
+    server.get("juiced/catalog").await["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|model| model["id"] == id)
+        .cloned()
+}
+
+async fn wait_for_model(server: &Server, id: &str) -> Value {
+    for _ in 0..200 {
+        if let Some(model) = model(server, id).await {
+            return model;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("{id} was not registered");
+}
+
+fn local_quant<'a>(inventory: &'a Value, group: &str, label: &str) -> &'a Value {
+    inventory["groups"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["name"] == group)
+        .and_then(|entry| {
+            entry["quants"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|quant| quant["label"] == label)
+        })
+        .unwrap_or_else(|| panic!("{group} {label} missing from {inventory}"))
+}
+
+fn t5_encoder() -> Vec<u8> {
+    use support::gguf::Entry::*;
+    support::gguf::build(&[("general.architecture", Text("t5encoder"))])
+}
+
+#[tokio::test]
+async fn model_files_on_disk_become_disabled_models_once_and_bad_files_stay_files() {
+    let mut server = engine_server().await;
+    let hub = server.directory.path().join("huggingface/hub");
+    let snapshot = cache_repo(
+        &hub,
+        "acme/Tiny-GGUF",
+        &[
+            ("Tiny-Q4_K_M.gguf", metadata_gguf(2048)),
+            ("Tiny-Q8_0.gguf", metadata_gguf(4096)),
+            ("mmproj-Tiny-F16.gguf", projector_gguf()),
+            ("Tiny-Q2_K.gguf", b"not a model file".to_vec()),
+            ("Tiny-Q6_K-00001-of-00002.gguf", split_part(1, 2)),
+        ],
+    );
+    cache_repo(
+        &hub,
+        "acme/Encoder-GGUF",
+        &[("flan-encoder-Q8_0.gguf", t5_encoder())],
+    );
+    cache_repo(
+        &hub,
+        "other/Tiny-Copy-GGUF",
+        &[("Tiny-Q8_0.gguf", metadata_gguf(1024))],
+    );
+    server.server.restart().await;
+
+    // Without an engine nothing registers, and the listing says why.
+    let mut waiting = Value::Null;
+    for _ in 0..200 {
+        waiting = server.get("juiced/library/local?fresh=true").await;
+        if local_quant(&waiting, "Tiny-GGUF", "Q8_0")["install"]["state"] == "failed" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let install = &local_quant(&waiting, "Tiny-GGUF", "Q8_0")["install"];
+    assert_eq!(install["error"], "engine_not_installed", "{waiting}");
+    assert!(model(&server, "Tiny-Q8_0").await.is_none());
+
+    // A model that already uses one of the files, with a policy of its own.
+    let worker = binary("juiced-test-worker", "JUICED_TEST_WORKER");
+    let (status, kept) = server
+        .post(
+            "models/register",
+            json!({
+                "id":"kept","model_file":snapshot.join("Tiny-Q4_K_M.gguf"),"command":worker,
+                "args":["--port","{port}","--model","{model}"],"resident_bytes":64,
+                "max_inflight":1,"operations":["chat/completions"],"policy":"disabled","revision":0,
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{kept}");
+    let (status, kept) = server
+        .post(
+            "juiced/policy",
+            json!({"model":"kept","policy":"on-demand","expected_revision":kept["revision"]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{kept}");
+
+    // Installing the engine retries on its own; each unused quant registers once, Disabled.
+    install_llama(&server).await;
+    let q8 = wait_for_model(&server, "Tiny-Q8_0").await;
+    assert_eq!(q8["policy"], "disabled");
+    assert_eq!(q8["loaded"], false);
+    let ids = |catalog: &Value| -> Vec<String> {
+        let mut ids: Vec<String> = catalog["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|model| model["id"].as_str().unwrap().to_owned())
+            .collect();
+        ids.sort();
+        ids
+    };
+    // Two files propose the same name; the second gets a suffix.
+    let expected = ["Tiny-Q8_0", "Tiny-Q8_0-2", "kept"];
+    let mut registered = Vec::new();
+    for _ in 0..200 {
+        registered = ids(&server.get("juiced/catalog").await);
+        if registered.len() == expected.len() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(registered, expected);
+    let existing = model(&server, "kept").await.unwrap();
+    assert_eq!(
+        existing["policy"], "on-demand",
+        "an existing model keeps its policy"
+    );
+    assert_eq!(
+        existing["revision"], kept["revision"],
+        "and is not rewritten"
+    );
+
+    let listed = server.get("juiced/library/local?fresh=true").await;
+    assert_eq!(
+        local_quant(&listed, "Tiny-Copy-GGUF", "Q8_0")["used_by"],
+        json!(["Tiny-Q8_0"])
+    );
+    assert_eq!(
+        local_quant(&listed, "Tiny-GGUF", "Q8_0")["used_by"],
+        json!(["Tiny-Q8_0-2"])
+    );
+    assert_eq!(
+        local_quant(&listed, "Tiny-GGUF", "Q4_K_M")["used_by"],
+        json!(["kept"])
+    );
+    assert!(local_quant(&listed, "Tiny-GGUF", "Q8_0")["install"].is_null());
+    let broken = &local_quant(&listed, "Tiny-GGUF", "Q2_K")["install"];
+    assert_eq!(broken["state"], "unusable", "{listed}");
+    let partial = local_quant(&listed, "Tiny-GGUF", "Q6_K");
+    assert_eq!(partial["complete"], false);
+    assert!(
+        partial["install"].is_null(),
+        "a partial quant is never registered"
+    );
+    let encoder = &local_quant(&listed, "Encoder-GGUF", "Q8_0")["install"];
+    assert_eq!(encoder["error"], "companion_file", "{listed}");
+    let storage = server.get("juiced/storage").await;
+    let noted = storage["unreferenced"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["title"] == "flan-encoder-Q8_0.gguf")
+        .unwrap_or_else(|| panic!("{storage}"));
+    assert!(
+        noted["note"].as_str().unwrap().contains("not a model"),
+        "{noted}"
+    );
+
+    // Another start and more scans change nothing.
+    server.server.restart().await;
+    for _ in 0..3 {
+        server.get("juiced/library/local?fresh=true").await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(ids(&server.get("juiced/catalog").await), expected);
+    assert_eq!(
+        wait_for_model(&server, "Tiny-Q8_0").await["policy"],
+        "disabled"
+    );
+    assert_eq!(wait_for_model(&server, "kept").await["policy"], "on-demand");
+    assert!(snapshot.join("Tiny-Q8_0.gguf").exists());
+}
+
+#[tokio::test]
+async fn remove_deletes_only_this_models_files_and_refuses_with_a_reason() {
+    let library = tempfile::tempdir().unwrap();
+    let shared = tempfile::tempdir().unwrap();
+    let roots = json!([library.path(), shared.path()]);
+    let mut server = engine_server_with(|config| config["import_roots"] = roots).await;
+    install_llama(&server).await;
+    let owned = cache_repo(
+        &server.directory.path().join("huggingface/hub"),
+        "acme/Tiny-GGUF",
+        &[
+            ("Tiny-Q4_K_M.gguf", metadata_gguf(2048)),
+            ("Tiny-Q8_0.gguf", metadata_gguf(4096)),
+        ],
+    );
+    let mounted = library.path().join("huggingface/hub");
+    let locked = cache_repo(
+        &mounted,
+        "acme/Locked-GGUF",
+        &[("Locked-Q4_0.gguf", metadata_gguf(1024))],
+    );
+    let foreign = cache_repo(
+        &shared.path().join("huggingface/hub"),
+        "acme/Foreign-GGUF",
+        &[("Foreign-Q4_0.gguf", metadata_gguf(512))],
+    );
+    std::fs::write(shared.path().join("Linked-Q5_0.gguf"), metadata_gguf(8192)).unwrap();
+    let mut mode = std::fs::metadata(&mounted).unwrap().permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut mode, 0o555);
+    std::fs::set_permissions(&mounted, mode.clone()).unwrap();
+    let probe = mounted.join(".probe");
+    let read_only_enforced = std::fs::write(&probe, b"").is_err();
+    let _ = std::fs::remove_file(probe);
+    server.server.restart().await;
+    for id in ["Tiny-Q4_K_M", "Tiny-Q8_0", "Locked-Q4_0", "Foreign-Q4_0"] {
+        assert_eq!(wait_for_model(&server, id).await["policy"], "disabled");
+    }
+    let plan = |id: &'static str| {
+        let server = &server;
+        async move {
+            server
+                .get(&format!("juiced/models/removal?model={id}"))
+                .await
+        }
+    };
+    let remove = |id: &'static str, revision: u64| {
+        let server = &server;
+        async move {
+            server
+                .post(
+                    "juiced/models/remove",
+                    json!({"model": id, "expected_revision": revision}),
+                )
+                .await
+        }
+    };
+    let revision = |model: &Value| model["revision"].as_u64().unwrap();
+
+    for prefix in PREFIXES {
+        for key in [None, Some(CLIENT_KEY)] {
+            let (status, _) = server
+                .json(
+                    Method::GET,
+                    &format!("{prefix}/juiced/models/removal?model=Tiny-Q8_0"),
+                    None,
+                    key,
+                )
+                .await;
+            assert_eq!(status, StatusCode::UNAUTHORIZED, "{prefix}");
+            let (status, _) = server
+                .json(
+                    Method::POST,
+                    &format!("{prefix}/juiced/models/remove"),
+                    Some(json!({"model":"Tiny-Q8_0","expected_revision":0})),
+                    key,
+                )
+                .await;
+            assert_eq!(status, StatusCode::UNAUTHORIZED, "{prefix}");
+        }
+    }
+
+    // A read-only folder: nothing is removed, and the reason names the file and folder.
+    if read_only_enforced {
+        let refused = plan("Locked-Q4_0").await;
+        assert_eq!(refused["removable"], false, "{refused}");
+        assert_eq!(refused["refusal"]["code"], "model_files_read_only");
+        let current = model(&server, "Locked-Q4_0").await.unwrap();
+        let (status, error) = remove("Locked-Q4_0", revision(&current)).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{error}");
+        assert_eq!(error["error"]["code"], "model_files_read_only");
+        assert!(
+            error["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("Locked-Q4_0.gguf")
+        );
+        assert!(model(&server, "Locked-Q4_0").await.is_some());
+        assert!(locked.join("Locked-Q4_0.gguf").exists());
+    }
+
+    // A cache Juiced doesn't own: same refusal, another reason.
+    let refused = plan("Foreign-Q4_0").await;
+    assert_eq!(
+        refused["refusal"]["code"], "model_files_not_owned",
+        "{refused}"
+    );
+    let current = model(&server, "Foreign-Q4_0").await.unwrap();
+    let (status, error) = remove("Foreign-Q4_0", revision(&current)).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{error}");
+    assert_eq!(error["error"]["code"], "model_files_not_owned");
+    assert!(foreign.join("Foreign-Q4_0.gguf").exists());
+
+    // A loaded model.
+    let current = model(&server, "Tiny-Q4_K_M").await.unwrap();
+    let (status, enabled) = server
+        .post(
+            "juiced/policy",
+            json!({"model":"Tiny-Q4_K_M","policy":"on-demand","expected_revision":revision(&current)}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{enabled}");
+    let (status, loaded) = server.post("load", json!({"model":"Tiny-Q4_K_M"})).await;
+    assert_eq!(status, StatusCode::OK, "{loaded}");
+    let busy = plan("Tiny-Q4_K_M").await;
+    assert_eq!(busy["refusal"]["code"], "model_in_use", "{busy}");
+    assert_eq!(busy["refusal"]["message"], "Unload the model first.");
+    let (status, error) = remove("Tiny-Q4_K_M", busy["revision"].as_u64().unwrap()).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{error}");
+    assert_eq!(error["error"]["code"], "model_in_use");
+    let (status, _) = server.post("unload", json!({"model":"Tiny-Q4_K_M"})).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // A stale revision.
+    let ready = plan("Tiny-Q4_K_M").await;
+    assert_eq!(ready["removable"], true, "{ready}");
+    let size = metadata_gguf(2048).len() as u64;
+    assert_eq!(ready["freed_bytes"], size);
+    assert_eq!(ready["deletes"][0]["name"], "Tiny-Q4_K_M.gguf");
+    let (status, error) = remove("Tiny-Q4_K_M", 0).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{error}");
+    assert_eq!(error["error"]["code"], "revision_conflict");
+
+    // Enabled but idle: one call disables, removes and deletes, and the model stays gone.
+    let (status, removed) = remove("Tiny-Q4_K_M", ready["revision"].as_u64().unwrap()).await;
+    assert_eq!(status, StatusCode::OK, "{removed}");
+    assert_eq!(removed["freed_bytes"], size);
+    assert_eq!(removed["deleted"], json!(["Tiny-Q4_K_M.gguf"]));
+    assert!(!owned.join("Tiny-Q4_K_M.gguf").exists());
+    assert!(owned.join("Tiny-Q8_0.gguf").exists());
+    server.get("juiced/library/local?fresh=true").await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(model(&server, "Tiny-Q4_K_M").await.is_none());
+
+    // A file another model uses stays, and says so.
+    let worker = binary("juiced-test-worker", "JUICED_TEST_WORKER");
+    let (status, twin) = server
+        .post(
+            "models/register",
+            json!({
+                "id":"twin","model_file":owned.join("Tiny-Q8_0.gguf"),"command":worker,
+                "args":["--port","{port}","--model","{model}"],"resident_bytes":64,
+                "max_inflight":1,"operations":["chat/completions"],"policy":"disabled","revision":0,
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{twin}");
+    let shared_plan = plan("Tiny-Q8_0").await;
+    assert_eq!(shared_plan["removable"], true, "{shared_plan}");
+    assert_eq!(shared_plan["freed_bytes"], 0);
+    assert_eq!(shared_plan["keeps"][0]["reason"], "shared");
+    assert_eq!(shared_plan["keeps"][0]["used_by"], json!(["twin"]));
+    let (status, removed) = remove("Tiny-Q8_0", shared_plan["revision"].as_u64().unwrap()).await;
+    assert_eq!(status, StatusCode::OK, "{removed}");
+    assert_eq!(removed["freed_bytes"], 0);
+    assert_eq!(removed["kept"][0]["reason"], "shared");
+    assert!(owned.join("Tiny-Q8_0.gguf").exists());
+    assert!(model(&server, "twin").await.is_some());
+    server.get("juiced/library/local?fresh=true").await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(
+        model(&server, "Tiny-Q8_0").await.is_none(),
+        "the file still has a model, so it is not registered again"
+    );
+    let last = plan("twin").await;
+    assert_eq!(
+        last["freed_bytes"],
+        metadata_gguf(4096).len() as u64,
+        "{last}"
+    );
+    let (status, removed) = remove("twin", last["revision"].as_u64().unwrap()).await;
+    assert_eq!(status, StatusCode::OK, "{removed}");
+    assert!(!owned.join("Tiny-Q8_0.gguf").exists());
+
+    // A linked file is unlinked and stays where it is.
+    let linked = shared.path().join("Linked-Q5_0.gguf");
+    let (status, added) = server
+        .post("juiced/models/add", json!({"path": linked, "id": "linked"}))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{added}");
+    let unlink = plan("linked").await;
+    assert_eq!(unlink["removable"], true, "{unlink}");
+    assert_eq!(unlink["keeps"][0]["reason"], "linked");
+    let (status, removed) = remove("linked", unlink["revision"].as_u64().unwrap()).await;
+    assert_eq!(status, StatusCode::OK, "{removed}");
+    assert_eq!(removed["kept"][0]["reason"], "linked");
+    assert!(linked.exists());
+    assert!(model(&server, "linked").await.is_none());
+
+    let (status, missing) = server
+        .json(
+            Method::GET,
+            "/v1/juiced/models/removal?model=absent",
+            None,
+            Some(ADMIN_KEY),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{missing}");
+    mode.set_mode(0o755);
+    std::fs::set_permissions(&mounted, mode).unwrap();
 }

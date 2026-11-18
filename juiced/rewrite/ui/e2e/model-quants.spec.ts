@@ -3,22 +3,28 @@ import { api, expect, noHorizontalOverflow, open, openModel, test } from "./supp
 const snapshots = { "Qwen3-4B-Instruct-2507": "a6f3b0d5c1e2a4b7c9d8e0f1a2b3c4d5e6f70812" };
 
 test.describe("Model quants", () => {
-  test("a model lists its other quants on disk and opens the one that isn't added", async ({ page, request }, info) => {
+  test("a model lists its other quants on disk as models and opens them", async ({ page, request }, info) => {
     const service = api(request);
     const fixture = await service.source() as any;
     const id = `e2e.quants-4b-${info.project.name}`;
+    const other = "Qwen3-4B-Instruct-2507-Q4_K_M";
+    await service.installEngine();
+    await service.json("/v1/juiced/library/local?fresh=true");
+    await expect.poll(async () => (await service.model(other))?.policy, { timeout: 30000 }).toBe("disabled");
     await service.register({ id, model_file: `${fixture.cache_hub}/models--unsloth--Qwen3-4B-Instruct-2507-GGUF/snapshots/${snapshots["Qwen3-4B-Instruct-2507"]}/Qwen3-4B-Instruct-2507-Q8_0.gguf`, command: fixture.command, args: fixture.args });
     try {
       await open(page);
       const inspector = await openModel(page, id);
-      const quants = inspector.getByRole("region", { name: "Quants", exact: true }).getByRole("list", { name: "Quants of Qwen3-4B-Instruct-2507-GGUF" });
-      await expect(quants.getByRole("listitem")).toHaveText([/^Q4_K_MNot added.*GiBAdd$/, /^Q8_0This model.*GiB$/]);
+      const section = inspector.getByRole("region", { name: "Quants", exact: true });
+      const quants = section.getByRole("list", { name: "Quants of Qwen3-4B-Instruct-2507-GGUF" });
+      await expect(quants.getByRole("listitem").filter({ hasText: "Q4_K_M" })).toHaveText(/^Q4_K_MDisabled.*GiBOpen$/);
+      await expect(quants.getByRole("listitem").filter({ hasText: "This model" })).toHaveText(/^Q8_0This model.*GiB$/);
+      await expect(quants.getByRole("button", { name: /^Add/ }), "a quant on disk needs no add step").toHaveCount(0);
       await noHorizontalOverflow(page, "Model quants");
-      await quants.getByRole("button", { name: "Add Q4_K_M" }).click();
-      const file = page.getByRole("complementary", { name: "File details" });
-      await expect(file.getByRole("listbox", { name: "Quants on disk" }).getByRole("option")).toHaveText([/^Q4_K_MNot added.*GiB$/, /^Q8_0Disabled.*GiB$/]);
-      await expect(file.getByRole("listbox", { name: "Quants on disk" }).getByRole("option", { selected: true })).toContainText("Q4_K_M");
-      await file.getByRole("button", { name: "More quants in Discover" }).click();
+      await quants.getByRole("button", { name: `Open ${other}` }).click();
+      const opened = page.getByRole("complementary", { name: "Model inspector" });
+      await expect(opened.getByRole("heading", { name: other, level: 2 })).toBeVisible();
+      await opened.getByRole("region", { name: "Quants", exact: true }).getByRole("button", { name: "More quants in Discover" }).click();
       await expect(page.getByRole("searchbox", { name: "Search models" })).toHaveValue("unsloth/Qwen3-4B-Instruct-2507-GGUF");
     } finally { await service.remove(id); }
   });

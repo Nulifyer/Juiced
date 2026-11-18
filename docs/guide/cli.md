@@ -75,7 +75,8 @@ belong in the model's extra arguments. `--pin` sets the model to **Hot**.
 
 `delete` frees only files Juiced downloaded and no other model uses. Files you
 linked from your own folders stay on disk. `delete MODEL --revision N` removes
-the registration only and keeps every file.
+the registration only and keeps every file. Files it leaves in Juiced's storage
+or a Hugging Face cache are then listed again as a **Disabled** model.
 
 ## Logs and other commands
 

@@ -277,6 +277,8 @@ define_routes! {
     (get, "/juiced/engines", engines, "operator"),
     (post, "/juiced/engines/install", engine_install, "operator"),
     (post, "/juiced/models/add", model_add, "operator"),
+    (get, "/juiced/models/removal", model_removal_plan, "operator"),
+    (post, "/juiced/models/remove", model_remove, "operator"),
     (get, "/models/{model}/artifacts", model_artifacts, "operator"),
     (post, "/models/{model}/artifacts", model_artifacts_set, "operator"),
     (post, "/models/register", register, "operator"),
@@ -676,10 +678,29 @@ async fn library_pull_action(
             }
             Ok(Json(view))
         }
+        "retry" => {
+            let view = state.manager.library().retry_follow_up(&id)?;
+            state.manager.follow_pull(id);
+            Ok(Json(view))
+        }
+        "remove" => {
+            let store = state.manager.artifacts()?;
+            // A client disconnect must not leave a download half removed.
+            tokio::spawn(async move { state.manager.library().remove_pull(store, &id).await })
+                .await
+                .map_err(|_| {
+                    ApiError::new(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "library_pull_interrupted",
+                        "Removing the download was interrupted. Retry.",
+                    )
+                })?
+                .map(Json)
+        }
         _ => Err(ApiError::new(
             StatusCode::BAD_REQUEST,
             "invalid_library_pull_action",
-            "A library acquisition action is dismiss or resume.",
+            "A library acquisition action is resume, retry, remove or dismiss.",
         )),
     }
 }
@@ -700,9 +721,36 @@ async fn library_local(
 ) -> Result<impl IntoResponse, ApiError> {
     let inventory = state
         .manager
-        .local_library(query.fresh.unwrap_or(false))
+        .local_view(query.fresh.unwrap_or(false))
         .await?;
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(inventory)))
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RemovalQuery {
+    model: String,
+}
+async fn model_removal_plan(
+    State(state): State<AppState>,
+    ApiQuery(query): ApiQuery<RemovalQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    let plan = state.manager.removal_plan(&query.model).await?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(plan)))
+}
+async fn model_remove(
+    State(state): State<AppState>,
+    ApiJson(request): ApiJson<crate::supervisor::ModelRemoval>,
+) -> Result<Json<Value>, ApiError> {
+    // A client disconnect must not interrupt a removal between its check and its effect.
+    tokio::spawn(async move { state.manager.remove_model(request).await.map(Json) })
+        .await
+        .map_err(|_| {
+            ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "removal_interrupted",
+                "Removing the model was interrupted. Refresh the list before retrying.",
+            )
+        })?
 }
 async fn library_local_delete(
     State(state): State<AppState>,
@@ -1467,6 +1515,7 @@ async fn well_known(State(state): State<AppState>, headers: HeaderMap) -> Respon
 }
 
 async fn catalog(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    state.manager.refresh_local_models();
     crate::discovery_http::catalog(&state.manager, &headers).await
 }
 

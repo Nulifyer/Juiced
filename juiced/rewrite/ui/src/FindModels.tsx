@@ -9,8 +9,9 @@ import { engineNames, featured, filterResults, fitLabel, flmJob, flmResults, isS
 import { Badge, Button, Empty, HelpTip, Icon, Menu } from "./ui";
 import { LocalProgress, ProjectorChoice, ServerFolder, localTarget, useLocalFile } from "./LocalFiles";
 import { splitPart } from "./localFilesData";
-import { parsePulls, type LocalInventory, type PullView } from "./localLibraryData";
-import { plainError } from "./modelErrors";
+import { parsePulls, type LocalInventory, type LocalQuant, type PullView } from "./localLibraryData";
+import { plainError, thenFailure } from "./modelErrors";
+import { RemoveModel } from "./RemoveModel";
 import { QuantList, policyWord, quantWords, type QuantItem } from "./QuantList";
 import { notify } from "./toast";
 import { useResource } from "./useResource";
@@ -31,22 +32,28 @@ type Row = { model: LibraryModel; quants: Quant[]; quant: Quant | undefined };
 export type DiscoverTarget = { repo: string; file?: string; label?: string };
 
 const baseName = (path: string) => path.split(/[\\/]/).pop() ?? path;
+/** The quant on disk that holds a hub quant's files. */
+export function diskQuant(local: LocalInventory | null | undefined, repo: string, quant: Pick<Quant, "file">): LocalQuant | undefined {
+  const group = local?.groups.find((item) => item.repo?.toLowerCase() === repo.toLowerCase());
+  const name = baseName(quant.file);
+  return group?.quants.find((item) => item.files.some((id) => group.files.find((file) => file.id === id)?.name === name));
+}
+
 /** The models that run a hub quant's files, so Discover can say what already uses it. */
 export function quantUsers(local: LocalInventory | null | undefined, repo: string, quant: Pick<Quant, "file" | "kind" | "present"> & { users?: string[] | null }): string[] {
   if (quant.users) return quant.users;
   const group = local?.groups.find((item) => item.repo?.toLowerCase() === repo.toLowerCase());
   if (!group) return [];
   if (quant.kind === "checkpoint") return quant.present ? group.usedBy : [];
-  const name = baseName(quant.file);
-  return group.quants.find((item) => item.files.some((id) => group.files.find((file) => file.id === id)?.name === name))?.usedBy ?? [];
+  return diskQuant(local, repo, quant)?.usedBy ?? [];
 }
 
 /** The state word a hub quant shows, matching the lists under Installed. */
-export function hubQuantState(quant: Quant, users: string[], models: Pick<Model, "id" | "policy">[]): string {
+export function hubQuantState(quant: Quant, users: string[], models: Pick<Model, "id" | "policy">[], onDisk?: LocalQuant): string {
   const percent = progress(quant);
   if (percent !== null) return quantWords.downloading(percent);
   if (users.length) return policyWord(models.find((model) => model.id === users[0])?.policy, users.length);
-  if (quant.present) return quantWords.unadded;
+  if (quant.present) return onDisk?.install && onDisk.install.state !== "pending" ? quantWords.failed : quantWords.installing;
   if (quant.parts > 1 && quant.presentFiles > 0) return quantWords.parts(quant.presentFiles, quant.parts);
   return "";
 }
@@ -99,6 +106,7 @@ export function FindModels({ client, online, onRegistered, onOpenModel, onDownlo
     npuSeen.current = npuAdded;
   }, [flm.data, npuAdded, onRegistered]);
   const addedHere = useRef(new Set<string>());
+  const installedHere = useRef(new Set<string>());
   const npuOnly = engine === npu || fitFilter === "npu";
   const active = isSearch({ query, task, engine, fit: fitFilter, size });
   const result = active ? searched : catalog;
@@ -200,20 +208,24 @@ export function FindModels({ client, online, onRegistered, onOpenModel, onDownlo
   const pulls = useResource(client, "juiced/library/pulls", parsePulls, 2000, true, !!quant && !onNpu);
   const pull: PullView | undefined = quant && model ? pulls.data?.find((item) => item.then?.kind === "add" && item.repo.toLowerCase() === model.repo.toLowerCase() && (item.label ?? "Unknown") === quant.label && (!item.files.length || item.files.some((part) => part.file === quant.file))) : undefined;
   const pendingAdd = pull?.then?.state === "pending" ? pull.then : null;
-  const seen = useRef(new Set<string>());
-  if (pull && pendingAdd) seen.current.add(pull.id);
-  const added = pull && seen.current.has(pull.id) && pull.state === "complete" && pull.then?.state === "done" ? pull.then.model : null;
-  const settled = useRef(new Set<string>());
+  const failedAdd = pull?.state === "complete" && pull.then?.state === "failed" ? pull : null;
+  // A finished download leaves the list once its model exists, so the model list is read again then.
+  const following = useRef(false);
+  const waiting = !!pendingAdd;
   useEffect(() => {
-    if (!pull || !added || settled.current.has(pull.id)) return;
-    settled.current.add(pull.id);
-    void onRegistered();
-  }, [pull, added, onRegistered]);
+    if (waiting) following.current = true;
+    else if (following.current) { following.current = false; void onRegistered(); }
+  }, [waiting, onRegistered]);
+  async function retryInstall(id: string) {
+    setError("");
+    try { await client.request(`juiced/library/pulls/${encodeURIComponent(id)}`, { action: "retry" }); await pulls.reload(); }
+    catch (failure) { setError(plainError(failure, "The retry didn't start.")); }
+  }
   async function pullNpu(item: Quant, policy: Policy) {
     setError("");
     try {
       await client.request("juiced/flm/pull", { checkpoint: item.file, then: { policy } });
-      notify(`Downloading ${item.file}. It's added as ${policyNames[policy]} when done.`);
+      notify(`Downloading ${item.file}. It's installed as ${policyNames[policy]} when done.`);
       await flm.reload();
     } catch (failure) { setError(plainError(failure, "The download didn't start.")); }
   }
@@ -221,14 +233,13 @@ export function FindModels({ client, online, onRegistered, onOpenModel, onDownlo
     if (!result) return;
     setError(""); setNotice("");
     try {
-      const pull = (generation: number) => client.request<{ pull?: string }>("juiced/library/pull", { repo: target.repo, file: item.file, expected_generation: generation, then: { policy, ...(then.id ? { id: then.id } : {}), ...(then.engine ? { engine: then.engine } : {}) } });
+      const pull = (generation: number) => client.request("juiced/library/pull", { repo: target.repo, file: item.file, expected_generation: generation, then: { policy, ...(then.id ? { id: then.id } : {}), ...(then.engine ? { engine: then.engine } : {}) } });
       // Another download finishing a part moves the generation; starting this one doesn't depend on that, and a repeated pull joins the first.
-      const started = await pull(result.generation).catch(async (failure) => {
+      await pull(result.generation).catch(async (failure) => {
         if (!(failure instanceof ApiError) || failure.code !== "artifact_revision_conflict") throw failure;
         return pull(parseArtifactInventory(await client.request("juiced/artifacts?section=jobs&limit=1")).generation);
       });
-      if (started.pull) seen.current.add(started.pull);
-      notify(`Downloading ${target.name} ${item.label}. It's added as ${policyNames[policy]} when done.`);
+      notify(`Downloading ${target.name} ${item.label}. It's installed as ${policyNames[policy]} when done.`);
       setTick((value) => value + 1);
       await pulls.reload();
     } catch (failure) { setError(plainError(failure, "The download didn't start.")); }
@@ -237,7 +248,7 @@ export function FindModels({ client, online, onRegistered, onOpenModel, onDownlo
   const file = local.file;
   const checkpoint = quant?.kind === "checkpoint";
   const split = !checkpoint && (quant?.parts ?? 1) > 1;
-  const target: AddTarget | null = file ? localTarget(file) : checkpoint || split ? quant?.set ? { artifact_set: quant.set } : split && quant?.localPath ? { path: quant.localPath } : null : quant?.localPath ? { path: quant.localPath } : quant?.sha256 ? { artifact: quant.sha256 } : null;
+  const target: AddTarget | null = file ? localTarget(file) : null;
   const targetId = file ? file.id.trim() : checkpoint ? model?.name ?? "" : quant?.kind === "bundle" && model?.nativeId ? model.nativeId : quant ? modelId(quant.file) : "";
   const gatedNote = model?.gated && !quant?.present ? result?.authenticated ? "Gated. Accept its license on Hugging Face first." : "Gated. Set HF_TOKEN on the server and accept its license on Hugging Face." : "";
   const users = model && quant ? quantUsers(inventory, model.repo, quant) : [];
@@ -247,7 +258,8 @@ export function FindModels({ client, online, onRegistered, onOpenModel, onDownlo
   const thenPolicy = pendingAdd?.policy ?? (job?.state === "pulling" ? job.then?.policy : undefined);
   const settling = (!!pendingAdd && !!quant && progress(quant) === null) || (job?.state === "complete" && job.then?.state === "pending");
   const npuDone = job?.then?.state === "done" && job.then.model && users.includes(job.then.model) ? job.then.model : null;
-  const addedModel = added ?? npuDone;
+  const onDisk = model && quant && !onNpu ? diskQuant(inventory, model.repo, quant) : undefined;
+  const fileUsers = file?.artifact ? inventory?.groups.flatMap((group) => group.files).find((item) => item.artifact === file.artifact)?.usedBy ?? [] : [];
   const [starting, setStarting] = useState("");
   async function start(item: LibraryModel, entry: Quant) {
     setStarting(`${item.id}:${quantKey(entry)}`);
@@ -342,7 +354,8 @@ export function FindModels({ client, online, onRegistered, onOpenModel, onDownlo
         <LocalProgress file={file} onCancel={local.clear} />
         {ready && <div className="add-name"><label htmlFor="local-model-id">Model name</label><input id="local-model-id" value={file.id} maxLength={128} onChange={(event) => local.rename(event.target.value)} /></div>}
         {ready && <ProjectorChoice file={file} onChoose={local.chooseProjector} />}
-        <AddModel client={client} online={online} target={target} id={targetId} ready={ready} resetKey={resetKey} onRegistered={onRegistered} onOpenModel={onOpenModel} />
+        {fileUsers.length > 0 && !installedHere.current.has(resetKey) ? <div className="added"><p className="inline-success" role="status">Installed as {fileUsers[0]}.</p><div className="action-row"><Button variant="primary" onClick={() => onOpenModel(fileUsers[0]!)}>Open model</Button></div></div>
+          : <AddModel client={client} online={online} target={target} id={targetId} ready={ready} resetKey={resetKey} onRegistered={async () => { installedHere.current.add(resetKey); await onRegistered(); }} onOpenModel={onOpenModel} />}
       </div>
     </aside>}
     {model && quant && <aside className="inspector find-detail" aria-label="Model detail">
@@ -352,7 +365,7 @@ export function FindModels({ client, online, onRegistered, onOpenModel, onDownlo
         <p className="field-help">{[model.publisher, model.license, model.gated ? "Gated" : null].filter(Boolean).join(" · ")}</p>
         <QuantList listRef={quantList} label={onNpu ? "Sizes" : "Quants"} selected={quantKey(quant)} onSelect={(key) => pick(model, model.quants.find((entry) => quantKey(entry) === key))} items={[...model.quants].sort((left, right) => (left.bytes ?? 0) - (right.bytes ?? 0)).map((entry): QuantItem => {
           const [label, tone] = fit(entry.bytes, machine, entry.engine);
-          return { key: quantKey(entry), label: names.get(entry) ?? entry.label, bytes: entry.bytes, title: entry.file, suggested: entry.recommended, fit: { tone, label }, progress: progress(entry), state: hubQuantState(entry, quantUsers(inventory, model.repo, entry), registered) };
+          return { key: quantKey(entry), label: names.get(entry) ?? entry.label, bytes: entry.bytes, title: entry.file, suggested: entry.recommended, fit: { tone, label }, progress: progress(entry), state: hubQuantState(entry, quantUsers(inventory, model.repo, entry), registered, diskQuant(inventory, model.repo, entry)) };
         })} />
         <dl className="facts">
           <div><dt>This machine</dt><dd><Badge tone={fit(quant.bytes, machine, quant.engine)[1]}>{fit(quant.bytes, machine, quant.engine)[0]}</Badge></dd></div>
@@ -364,22 +377,23 @@ export function FindModels({ client, online, onRegistered, onOpenModel, onDownlo
         </dl>
         {checkpoint && <div className="checkpoint-files"><span className="field-label">Files <HelpTip label="Checkpoint files">The weights, config and tokenizer files the engine reads as one folder. READMEs, images and other formats are skipped.</HelpTip></span><ul aria-label="Checkpoint files">{quant.files.map((part) => <li key={part.file}><span className="break-word">{part.member ?? part.file}</span><span className="numeric muted">{bytes(part.bytes)}</span></li>)}</ul></div>}
         {onNpu && flm.data?.problems.map((problem) => <p className="inline-warning" key={problem}>{problem}</p>)}
-        {progress(quant) !== null && <><progress aria-label="Download progress" max={100} value={progress(quant)!} /><p className="field-help">{quantWords.downloading(progress(quant)!)}{thenPolicy ? ` · then added as ${policyNames[thenPolicy as Policy] ?? thenPolicy}` : ""}</p></>}
-        {settling && <p className="muted" role="status">Adding the model…</p>}
-        {addedModel ? <div className="added"><p className="inline-success" role="status">Added {addedModel}.</p><div className="action-row"><Button variant="primary" onClick={() => onOpenModel(addedModel)}>Open model</Button></div></div>
-          : onNpu ? !settling && progress(quant) === null && <>
+        {progress(quant) !== null && <><progress aria-label="Download progress" max={100} value={progress(quant)!} /><p className="field-help">{quantWords.downloading(progress(quant)!)}{thenPolicy ? ` · then installed as ${policyNames[thenPolicy as Policy] ?? thenPolicy}` : ""}</p></>}
+        {settling && <p className="muted" role="status">Installing…</p>}
+        {onNpu ? npuDone ? <div className="added"><p className="inline-success" role="status">Installed {npuDone}.</p><div className="action-row"><Button variant="primary" onClick={() => onOpenModel(npuDone)}>Open model</Button></div></div>
+          : !settling && progress(quant) === null && <>
             {job?.state === "failed" && !ready && <p className="inline-error" role="alert">The download failed.{job.error ? ` ${job.error}` : ""}</p>}
-            {job?.then?.state === "failed" && users.length === 0 && <p className="inline-warning">{job.then.message ?? "The model wasn't added."} Add it here.</p>}
+            {job?.then?.state === "failed" && users.length === 0 && <p className="inline-warning">{job.then.message ?? "The model wasn't installed."}</p>}
             {users.length > 0 && !addedHere.current.has(quant.file) ? <div className="action-row"><Button onClick={() => onOpenModel(users[0]!)}>Open model</Button></div>
               : <AddModel client={client} online={online} target={null} id="" ready={ready} resetKey={resetKey} onOpenModel={onOpenModel}
                 register={(policy) => client.request("juiced/flm/models/add", { checkpoint: quant.file, policy })}
                 onRegistered={async () => { addedHere.current.add(quant.file); await flm.reload(); await onRegistered(); }}
                 download={ready ? undefined : { disabled: false, start: (policy) => pullNpu(quant, policy) }} />}
           </>
-          : !pendingAdd && <>
-            {pull && seen.current.has(pull.id) && pull.then?.state === "failed" && <p className="inline-warning">{pull.then.message ?? "The model wasn't added."} Add it here.</p>}
-            <AddModel client={client} online={online} target={target} id={targetId} engine={quant.engine === "thenoise" ? "thenoise" : undefined} ready={ready} resetKey={resetKey} blocked={split && !target ? "Every part must finish downloading first" : undefined} downloadLabel={partial ? "Finish download" : undefined} onRegistered={onRegistered} onOpenModel={onOpenModel} download={progress(quant) === null && !ready ? { disabled: !quant.pullable || (model.gated && !result?.authenticated), start: (policy) => download(model, quant, policy, { id: targetId, engine: quant.engine === "thenoise" ? "thenoise" : undefined }) } : undefined} />
-          </>}
+          : !pendingAdd && (users.length > 0 ? <div className="action-row wrap on-disk-actions"><Button variant="primary" onClick={() => onOpenModel(users[0]!)}>Open model</Button>{users.length === 1 && <RemoveModel client={client} model={users[0]!} online={online} label="Remove" onRemoved={onRegistered} />}</div>
+            : quant.present ? failedAdd ? <div className="action-row wrap"><p className="inline-warning">{thenFailure(failedAdd.then!) ?? "The model wasn't installed."}</p><Button variant="primary" disabled={!online} onClick={() => void retryInstall(failedAdd.id)}>Retry</Button></div>
+              : onDisk?.install && onDisk.install.state !== "pending" ? <p className="inline-warning">On disk, but not a model yet. {onDisk.install.message}</p>
+              : <p className="muted" role="status">Installing…</p>
+            : <AddModel client={client} online={online} target={null} id={targetId} ready={false} resetKey={resetKey} downloadLabel={partial ? "Finish download" : undefined} onRegistered={onRegistered} onOpenModel={onOpenModel} download={progress(quant) === null ? { disabled: !quant.pullable || (model.gated && !result?.authenticated), start: (policy) => download(model, quant, policy, { id: targetId, engine: quant.engine === "thenoise" ? "thenoise" : undefined }) } : undefined} />)}
         {gatedNote && <p className="field-help">{gatedNote}</p>}
       </div>
     </aside>}

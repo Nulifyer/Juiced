@@ -26,7 +26,7 @@ context, engine buffers, and any companion files.
 
 ## Add the model
 
-When the download finishes, Juiced adds the model with the policy you chose. If
+When the download finishes, the model is installed with the policy you chose. If
 the model needs an engine that is not installed, Juiced installs the build it
 picked for this machine first. Select **Open model** when the panel says
 **Added** to see it in **Models → Installed**.

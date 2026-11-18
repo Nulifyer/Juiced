@@ -106,8 +106,7 @@ test("the inspector groups Overview, Settings and Manage tabs and loads from Ove
   await expect(inspector.getByRole("region", { name: "Model runtime selection" })).toBeVisible();
   await expect(inspector.getByRole("region", { name: "Context and launch profile" })).toContainText("This engine has no adjustable launch settings.");
   await sections.getByRole("tab", { name: "Manage" }).click();
-  await expect(inspector.getByRole("button", { name: "Remove model", exact: true })).toBeDisabled();
-  await expect(inspector).toContainText("Set it to Disabled first.");
+  await expect(inspector.getByRole("button", { name: "Remove model", exact: true }), "an enabled model that is not loaded can be removed").toBeEnabled();
   await closeInspector(page);
   await expect(inspector).toHaveCount(0);
 });
@@ -212,7 +211,7 @@ test("the memory estimate follows the context draft and blocks a save that doesn
   }
 });
 
-test("removing a registration keeps its weight file", async ({ page, request }) => {
+test("removing a linked model keeps the linked file and says so", async ({ page, request }) => {
   const service = api(request);
   const fixture = await service.source();
   const id = `browser.remove-${test.info().project.name}`;
@@ -223,13 +222,14 @@ test("removing a registration keeps its weight file", async ({ page, request }) 
   await tab(page, "Model sections", "Manage").click();
   await inspector.getByRole("button", { name: "Remove model", exact: true }).click();
   const confirm = page.getByRole("dialog", { name: `Remove ${id}?` });
-  await expect(confirm).toContainText("Files stay on disk.");
+  await expect(confirm).toContainText("Deletes no files. Its settings go too.");
+  await expect(confirm).toContainText("fixture.gguf stays");
   await confirm.getByRole("button", { name: "Cancel" }).click();
   await expect(confirm).toHaveCount(0);
   expect(await service.model(id)).toBeTruthy();
   await inspector.getByRole("button", { name: "Remove model", exact: true }).click();
   await confirm.getByRole("button", { name: "Remove model", exact: true }).click();
-  await expect(toasts(page).getByRole("status")).toContainText(`Removed ${id}. Its files stay on disk.`);
+  await expect(toasts(page).getByRole("status")).toContainText(`Removed ${id}. Freed 0 B.`);
   await expect(inspector).toHaveCount(0);
   await expect(page.getByRole("table", { name: "Registered models" }).getByRole("button", { name: id, exact: true })).toHaveCount(0);
   expect(await service.model(id)).toBeUndefined();
@@ -237,7 +237,8 @@ test("removing a registration keeps its weight file", async ({ page, request }) 
 });
 
 async function drag(source: Locator, target: Locator) {
-  if (!test.info().project.use.hasTouch) return source.dragTo(target);
+  // Aiming at the lane's heading keeps the page from scrolling under the pointer when lanes stack and one is long.
+  if (!test.info().project.use.hasTouch) return source.dragTo(target, { targetPosition: { x: 40, y: 14 } });
   const transfer = await source.page().evaluateHandle(() => new DataTransfer());
   const card = await source.elementHandle();
   await card!.dispatchEvent("dragstart", { dataTransfer: transfer });

@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { sizeBytes, downloadRequest, firstInventoryPages, inventoryPath, jobActions, nextInventoryPage, parseArtifactInventory, previousInventoryPage, parseCacheView, parseCacheInspection, parseEndpoints, parseProtocols, positiveBytes, registration, removalReason, sessionValue, type ArtifactJob } from "../src/management";
-import type { Model } from "../src/domain";
+import { sizeBytes, downloadRequest, firstInventoryPages, inventoryPath, jobActions, nextInventoryPage, parseArtifactInventory, previousInventoryPage, parseCacheView, parseCacheInspection, parseEndpoints, parseProtocols, positiveBytes, registration, sessionValue, type ArtifactJob } from "../src/management";
 
 const hash = "a".repeat(64);
 const job: ArtifactJob = { id: "a".repeat(32), revision: 3, state: "downloading", source_url: "https://example.com/file.gguf", expected_sha256: hash, expected_bytes: 16, maximum_bytes: 32, downloaded_bytes: 8, artifact: null, error: null, writer_active: true };
@@ -54,13 +53,6 @@ describe("settled writer and ownership guards", () => {
     expect(jobActions({ ...job, state: "failed", error: "artifact_network", downloaded_bytes: 0, writer_active: false })).toEqual(["retry", "cancel"]);
     expect(jobActions({ ...job, state: "failed", error: "artifact_digest_mismatch", downloaded_bytes: 4096, writer_active: false })).toEqual(["retry", "cancel"]);
     expect(jobActions({ ...job, state: "interrupted", error: "artifact_publication_uncertain", writer_active: false })).toEqual([]);
-  });
-  test("registration removal requires Disabled and unloaded with no active requests", () => {
-    const model = { policy: "disabled", loaded: false, state: "unloaded", active_requests: 0 } as Model;
-    expect(removalReason(model)).toBeUndefined();
-    expect(removalReason({ ...model, policy: "on-demand" })).toContain("Disabled");
-    expect(removalReason({ ...model, loaded: true })).toContain("Unload");
-    expect(removalReason({ ...model, active_requests: 1 })).toContain("active");
   });
   test("session identifiers are bounded by UTF-8 bytes and reject header control characters", () => {
     expect(sessionValue("opaque-session" )).toBe("opaque-session");

@@ -15,21 +15,21 @@ what each candidate contains before you download it.
 5. Check memory separately from storage. The weights, the context and the
    engine's buffers all use memory. For a mixture-of-experts model, the active
    parameter count does not describe how many weights must fit.
-6. Choose a **Loading policy** and select **Download**. Juiced adds the quant when the download finishes.
+6. Choose a **Loading policy** and select **Download**. The quant is installed when the download finishes.
    The new quant is a separate model, so the original stays as it is.
 7. Use **Test services** for a quick check, then connect your client through
    **Connect**.
 
 A model's **Overview** tab lists its **Quants** by size. A quant another model
-uses shows that model's loading policy and **Open**. A file on disk that no
-model uses shows **Not added** and **Add**. A split download that stopped part way shows how many
+uses shows that model's loading policy and **Open**. Every complete quant on
+disk is a model. A split download that stopped part way shows how many
 parts are on disk and **Finish**, which opens it in Discover to fetch the rest. **Get** opens a quant you can still
-download in Discover, where you choose the loading policy first. **+N more in
-Discover** opens the repository's full list. A model that isn't from Hugging
+download in Discover, where you choose the loading policy first. **More quants
+in Discover** opens the repository's full list. A model that isn't from Hugging
 Face lists only the quants on this machine.
 
-Quant lists read the same in a model's **Overview**, in a file's details and in
-Discover: the quant, its state, its size and one action.
+Quant lists read the same in a model's **Overview** and in Discover: the quant,
+its state, its size and one action.
 
 Two files in one repository can share a quant label. The Discover list then
 shows the part of each file name that differs.

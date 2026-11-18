@@ -34,11 +34,11 @@ test("a model lists files on disk and a few downloads in one list ordered by siz
     remote("BF16", "Demo-BF16.gguf", 160), remote("IQ2_M", "Demo-IQ2_M.gguf", 20), remote("Q3_K_S", "Demo-Q3_K_S.gguf", 30, { pullable: false }),
   ]);
   const { rows, more } = quantRows({ id: "demo-q6" }, [{ id: "demo-q4", policy: "hot" }, { id: "demo-q4-hybrid", policy: "disabled" }], group, model);
-  expect(rows.map((row) => [row.label, row.kind])).toEqual([["Q4_K_M", "added"], ["Q4_K_M", "added"], ["Q5_K_M", "remote"], ["Q6_K", "current"], ["Q8_0", "file"], ["BF16", "remote"]]);
+  expect(rows.map((row) => [row.label, row.kind])).toEqual([["Q4_K_M", "added"], ["Q4_K_M", "added"], ["Q5_K_M", "remote"], ["Q6_K", "current"], ["Q8_0", "pending"], ["BF16", "remote"]]);
   expect(rows.filter((row) => row.kind === "added").map((row) => [row.model, row.policy, row.shared])).toEqual([["demo-q4", "hot", true], ["demo-q4-hybrid", "disabled", true]]);
   expect(rows.find((row) => row.label === "Q5_K_M")).toMatchObject({ progress: 50, file: "Demo-Q5_K_M.gguf" });
   expect(more).toBe(2);
-  expect(quantRows({ id: "demo-q6" }, [], group, null)).toMatchObject({ more: 0, rows: [{ kind: "added" }, { kind: "added" }, { kind: "current" }, { kind: "file" }] });
+  expect(quantRows({ id: "demo-q6" }, [], group, null)).toMatchObject({ more: 0, rows: [{ kind: "added" }, { kind: "added" }, { kind: "current" }, { kind: "pending" }] });
 });
 
 test("a split download that stopped part way offers to finish it, not to add it", () => {

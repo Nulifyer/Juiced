@@ -40,6 +40,28 @@ export function api(request: APIRequestContext) {
     const disabled = await policy(id, "disabled");
     await post("/v1/delete", { model: id, expected_revision: disabled.revision });
   }
+  /** Removes a model the way the console does: its own files go with it. */
+  async function removeModel(id: string) {
+    const current = await model(id);
+    if (!current) return;
+    await unload(id);
+    const idle = await model(id);
+    const reply = await request.post("/v1/juiced/models/remove", { data: { model: id, expected_revision: idle!.revision } });
+    if (!reply.ok()) await remove(id);
+  }
+  /** Removes every download of `repo`, with its partial and unused files. */
+  async function removePulls(repo: string) {
+    const pulls = await json<{ data: { pull: string; repo: string }[] }>("/v1/juiced/library/pulls");
+    for (const pull of pulls.data.filter((item) => item.repo === repo)) await request.post(`/v1/juiced/library/pulls/${pull.pull}`, { data: { action: "remove" } });
+  }
+  /** Installs the llama.cpp CPU engine, after which the service registers the GGUF files on disk. */
+  async function installEngine() {
+    const document = await json<any>("/v1/juiced/engines");
+    if (document.installed.some((item: any) => item.engine === "llama.cpp" && item.release?.backend === "cpu")) return;
+    const started = await post<any>("/v1/juiced/engines/install", { engine: "llama.cpp", backend: "cpu", expected_generation: document.generation });
+    if (started.already_installed) return;
+    await expect.poll(async () => (await json<any>("/v1/juiced/engines")).jobs.find((job: any) => job.id === started.job.id)?.state, { timeout: 30000 }).toBe("complete");
+  }
   async function register(spec: Record<string, unknown>) {
     return post<CatalogModel>("/v1/models/register", { resident_bytes: 1048576, max_inflight: 1, operations: ["chat/completions", "completions"], policy: "disabled", revision: 0, ...spec });
   }
@@ -84,7 +106,7 @@ export function api(request: APIRequestContext) {
     if (current.enabled === enabled && (!enabled || (current.model === model && current.permission === permission))) return current;
     return post<Awaited<ReturnType<typeof barista>>>("/v1/juiced/barista", { expected_revision: current.revision, enabled, model: model ?? current.model, permission });
   }
-  return { acquire, json, post, catalog, model, policy, unload, remove, register, source, artifacts, removeArtifact, forgetCompleteJobs, createSet, removeSet, paused, barista, setBarista };
+  return { acquire, json, post, catalog, model, policy, unload, remove, removeModel, removePulls, installEngine, register, source, artifacts, removeArtifact, forgetCompleteJobs, createSet, removeSet, paused, barista, setBarista };
 }
 
 export const test = base.extend<{ baseline: void }>({
@@ -134,7 +156,7 @@ export async function modelsView(page: Page, view: ModelsView) {
   await expect(modelsTab(page, view)).toHaveAttribute("aria-selected", "true");
 }
 
-/** Turns off the Enabled, Disabled or Not added filter so the table lists every model. */
+/** Turns off the Enabled or Disabled filter so the table lists every model. */
 export async function showAllModels(page: Page) {
   const pressed = page.getByRole("group", { name: "Status filter" }).locator('button[aria-pressed="true"]');
   if (await pressed.count()) await pressed.click();

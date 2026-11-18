@@ -53,7 +53,7 @@ pub const READ_ROUTES: [&str; 21] = [
 ];
 /// Read routes whose operator view adds process details; `Server::get` reads them as operator.
 pub const OPERATOR_DETAIL_ROUTES: [&str; 1] = ["/juiced/context"];
-pub const OPERATOR_READ_ROUTES: [&str; 30] = [
+pub const OPERATOR_READ_ROUTES: [&str; 31] = [
     "/juiced/cache/inspect",
     "/juiced/cache/sessions",
     "/juiced/requests",
@@ -76,6 +76,7 @@ pub const OPERATOR_READ_ROUTES: [&str; 30] = [
     "/juiced/library/pulls/{pull}",
     "/juiced/library/pulls",
     "/juiced/library/local",
+    "/juiced/models/removal",
     "/juiced/aliases",
     "/juiced/residency",
     "/juiced/library/import-path",
@@ -85,10 +86,11 @@ pub const OPERATOR_READ_ROUTES: [&str; 30] = [
     "/juiced/protocols/health",
     "/juiced/barista",
 ];
-pub const WRITE_ROUTES: [&str; 47] = [
+pub const WRITE_ROUTES: [&str; 48] = [
     "/juiced/runtime-packages/import",
     "/juiced/engines/install",
     "/juiced/models/add",
+    "/juiced/models/remove",
     "/juiced/policy",
     "/load",
     "/unload",

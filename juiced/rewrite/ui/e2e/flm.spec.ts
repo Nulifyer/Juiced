@@ -75,12 +75,12 @@ test("NPU models are results like any other: same row, detail, loading policy an
   await policy.getByRole("radio", { name: "Hot" }).click();
   await detail.getByRole("button", { name: "Download" }).click();
   expect(posts.at(-1)).toEqual({ path: "/v1/juiced/flm/pull", body: { checkpoint: "gemma3:1b", then: { policy: "hot" } } });
-  await expect(toasts(page).getByRole("status")).toContainText("Downloading gemma3:1b. It's added as Hot when done.");
-  await expect(detail).toContainText("Downloading 40% · then added as Hot");
+  await expect(toasts(page).getByRole("status")).toContainText("Downloading gemma3:1b. It's installed as Hot when done.");
+  await expect(detail).toContainText("Downloading 40% · then installed as Hot");
   await expect(sizes.getByRole("option", { name: /1b/ })).toContainText("Downloading 40%");
   await expect(detail.getByRole("button", { name: "Download" })).toHaveCount(0);
   state = { ...state, pulled: true, registered: ["gemma3-1b-FLM"] };
-  await expect(detail.getByRole("status").filter({ hasText: "Added gemma3-1b-FLM." })).toBeVisible({ timeout: 15000 });
+  await expect(detail.getByRole("status").filter({ hasText: "Installed gemma3-1b-FLM." })).toBeVisible({ timeout: 15000 });
   await expect(detail.getByRole("button", { name: "Open model" })).toBeVisible();
   expect(posts.filter((post) => post.path.endsWith("/flm/models/add")), "the service adds it, not the console").toHaveLength(0);
   await noHorizontalOverflow(page, "NPU model detail");
@@ -90,9 +90,9 @@ test("NPU models are results like any other: same row, detail, loading policy an
   await card("qwen3").getByRole("button", { name: "qwen3", exact: true }).click();
   await expect(detail.getByRole("definition").filter({ hasText: "reasoning" })).toBeVisible();
   await detail.getByRole("radiogroup", { name: "Loading policy" }).getByRole("radio", { name: "Disabled" }).click();
-  await detail.getByRole("button", { name: "Add model" }).click();
+  await detail.getByRole("button", { name: "Install", exact: true }).click();
   expect(posts.at(-1)).toEqual({ path: "/v1/juiced/flm/models/add", body: { checkpoint: "qwen3:8b", policy: "disabled" } });
-  await expect(detail.getByRole("status")).toContainText("Added qwen3-8b-FLM. Disabled on NPU.");
+  await expect(detail.getByRole("status")).toContainText("Installed qwen3-8b-FLM. Disabled on NPU.");
 });
 
 test("without FastFlowLM there are no NPU results or NPU choices", async ({ page }) => {

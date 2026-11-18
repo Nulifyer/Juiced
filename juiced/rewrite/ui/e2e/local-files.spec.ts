@@ -4,11 +4,11 @@ import { api, expect, modelsView, open, test } from "./support";
 async function addFrom(detail: Locator, id: string) {
   await detail.getByLabel("Model name").fill(id);
   await expect(detail.getByRole("radio", { name: "On demand" })).toHaveAttribute("aria-checked", "true");
-  await detail.getByRole("button", { name: /^(Add model|Install engine and add)$/ }).click();
-  const install = detail.getByRole("button", { name: "Install engine and add" });
+  await detail.getByRole("button", { name: /^(Install|Install engine and model)$/ }).click();
+  const install = detail.getByRole("button", { name: "Install engine and model" });
   await expect(detail.getByRole("status").or(install)).toBeVisible({ timeout: 15000 });
   if (await install.isVisible()) await install.click();
-  await expect(detail.getByRole("status")).toContainText(`Added ${id}.`, { timeout: 30000 });
+  await expect(detail.getByRole("status")).toContainText(`Installed ${id}.`, { timeout: 30000 });
 }
 
 async function openMenu(page: Page) {
@@ -17,11 +17,13 @@ async function openMenu(page: Page) {
   await page.getByRole("button", { name: "Add a model file" }).click();
 }
 
-test("a model file uploaded from this computer is added with the same add step", async ({ page, request }) => {
+test("a model file uploaded from this computer is installed from its panel", async ({ page, request }) => {
   const service = api(request);
   const id = `browser-upload-${test.info().project.name}`;
   const fixture = await service.source();
-  await service.remove(id);
+  await service.removeModel(id);
+  // An upload left without a model is installed by the service under its file name.
+  await service.removeModel("Upload-Sample-Q8_0");
   try {
     await openMenu(page);
     const chooser = page.waitForEvent("filechooser");
@@ -37,14 +39,14 @@ test("a model file uploaded from this computer is added with the same add step",
     await detail.getByRole("button", { name: /^(Back to results|Close detail)$/ }).filter({ visible: true }).first().click();
     await expect(detail).toBeHidden();
   } finally {
-    await service.remove(id);
+    await service.removeModel(id);
   }
 });
 
 test("a file in the server import folder is added in place", async ({ page, request }) => {
   const service = api(request);
   const id = `browser-import-${test.info().project.name}`;
-  await service.remove(id);
+  await service.removeModel(id);
   try {
     await openMenu(page);
     await page.getByRole("menuitem", { name: "Pick from the server…" }).click();
@@ -62,14 +64,14 @@ test("a file in the server import folder is added in place", async ({ page, requ
     const model = (await service.json<{ data: { id: string; policy: string }[] }>("/v1/juiced/catalog")).data.find((entry) => entry.id === id);
     expect(model?.policy).toBe("on-demand");
   } finally {
-    await service.remove(id);
+    await service.removeModel(id);
   }
 });
 
 test("a split vision model in the server folder is added with its projector", async ({ page, request }) => {
   const service = api(request);
   const id = `browser-split-${test.info().project.name}`;
-  await service.remove(id);
+  await service.removeModel(id);
   try {
     await openMenu(page);
     await page.getByRole("menuitem", { name: "Pick from the server…" }).click();
@@ -87,7 +89,7 @@ test("a split vision model in the server folder is added with its projector", as
     const model = (await service.json<{ data: { id: string; vision: boolean }[] }>("/v1/juiced/catalog")).data.find((entry) => entry.id === id);
     expect(model?.vision).toBe(true);
   } finally {
-    await service.remove(id);
+    await service.removeModel(id);
   }
 });
 
@@ -95,7 +97,7 @@ test("every part of a split model and its projector upload as one model", async 
   const service = api(request);
   const id = `browser-split-upload-${test.info().project.name}`;
   const fixture = await service.source();
-  await service.remove(id);
+  await service.removeModel(id);
   try {
     await openMenu(page);
     const chooser = page.waitForEvent("filechooser");
@@ -109,7 +111,7 @@ test("every part of a split model and its projector upload as one model", async 
     const model = (await service.json<{ data: { id: string; vision: boolean }[] }>("/v1/juiced/catalog")).data.find((entry) => entry.id === id);
     expect(model?.vision).toBe(true);
   } finally {
-    await service.remove(id);
+    await service.removeModel(id);
   }
 });
 
@@ -121,5 +123,5 @@ test("a partial pick of split parts is refused before anything uploads", async (
   await (await chooser).setFiles(fixture.upload_split.slice(1, 2));
   const detail = page.getByRole("complementary", { name: "Model detail" });
   await expect(detail.getByRole("alert")).toHaveText("Pick all 2 parts of Upload-Split. Missing part 1.");
-  await expect(detail.getByRole("button", { name: "Add model" })).toHaveCount(0);
+  await expect(detail.getByRole("button", { name: "Install", exact: true })).toHaveCount(0);
 });

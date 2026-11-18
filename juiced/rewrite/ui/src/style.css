@@ -649,6 +649,10 @@ dialog textarea { margin-bottom: 4px; }
 @media (max-width: 960px) { .find-detail { position: static; max-height: none; } .find-detail .inspector-top { justify-content: flex-start; } .find-detail .back-button { display: inline-flex; } .find-detail .close-inspector { display: none; } }
 .needs-engine progress { width: 120px; height: 6px; accent-color: var(--ring); }
 .needs-engine, .added { margin-top: 12px; display: grid; gap: 8px; }
+.remove-reason { flex-basis: 100%; margin: 0; }
+.remove-section .remove-reason { margin-top: 8px; }
+.install-failures { margin: 0 0 10px; }
+.on-disk-actions { margin-top: 12px; }
 .needs-engine progress { width: 100%; }
 @media (min-width: 961px) { .find-models > .find-detail { position: sticky; } }
 .service-tests.wide { max-width: none; }

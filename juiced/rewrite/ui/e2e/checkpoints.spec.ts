@@ -46,7 +46,7 @@ test("Discover downloads an ONNX checkpoint folder and adds it on ONNX Runtime w
     const pulling = page.waitForRequest((outgoing) => outgoing.method() === "POST" && new URL(outgoing.url()).pathname === "/v1/juiced/library/pull");
     await detail.getByRole("button", { name: "Download" }).click();
     expect((await pulling).postDataJSON()).toMatchObject({ repo, file: "model.onnx", then: { policy: "on-demand", id: added } });
-    await expect(detail.getByRole("status").filter({ hasText: `Added ${added}.` })).toBeVisible({ timeout: 60000 });
+    await expect(detail.getByRole("button", { name: "Open model" })).toBeVisible({ timeout: 60000 });
     await expect(detail.getByRole("option", { name: /ONNX/ })).toContainText("On demand");
     expect((await api(request).json<any>("/v1/juiced/engines")).installed.some((row: any) => row.engine === "onnxruntime"), "the service installs the engine it picked").toBe(true);
     const model = await api(request).model(added);

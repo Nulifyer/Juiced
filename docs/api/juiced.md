@@ -259,8 +259,8 @@ Juiced downloads the whole variant at the repository's current commit, or at
 against their git blob id (`library_file_mismatch`, 502, when they differ). The
 reply and `GET /v1/juiced/library/pulls/ID` return the pull with `state`
 (`downloading`, `waiting`, `publishing`, `complete` or `failed`), `files`, `jobs`,
-`set`, `suggested_id` and, for checkpoints, `format` and `engine`. Pause, resume or
-cancel a pull through its `jobs` with `POST /v1/juiced/artifacts/jobs/ID`.
+`set`, `suggested_id` and, for checkpoints, `format` and `engine`. Pause or
+resume a pull through its `jobs` with `POST /v1/juiced/artifacts/jobs/ID`.
 
 When the connection to the hub drops, the pull shows `waiting` and resumes the file
 where it stopped, up to six times over about nine minutes, before it fails. A new
@@ -271,53 +271,119 @@ other failed parts start over, and a `then` that failed with the download waits
 again. Only a failed pull resumes (409 `library_pull_not_failed`); when another
 pull of the same files already runs, the reply is 409 `library_pull_active`.
 
-Register a finished checkpoint with `POST /v1/juiced/models/add`:
+### A download becomes a model
 
-```json
-{"artifact_set": "set-…", "policy": "on-demand"}
-```
-
-The id defaults to the repository name for a checkpoint and to the catalog name
-(`TRELLIS-3D-Q4`, `kokoro-v1`) for a catalog bundle; the pull reports it as
-`suggested_id`. Pass `"engine": "thenoise"` for split
-diffusion checkpoints that sd.cpp could also read. The engine reads the set as a
-folder of its member names. Without the engine installed the reply is 409
-`engine_not_installed` with the build to install; on a host the engine cannot run
-on it is 409 `no_usable_backend`.
-
-### Add or update when a download finishes
-
-`POST /v1/juiced/library/pull` takes an optional `then` that registers the files
-once the pull completes:
+Every pull ends as a model. `then` chooses its loading policy and name:
 
 ```json
 {"repo": "unsloth/Qwen3-0.6B-GGUF", "file": "Qwen3-0.6B-Q4_K_M.gguf",
  "expected_generation": 12, "then": {"policy": "on-demand", "id": "Qwen3-0.6B-Q4_K_M"}}
 ```
 
-`policy` is required; `id` and `engine` work as in `POST /v1/juiced/models/add`.
-The intent is journaled with the pull, so it survives a page reload and a
+`policy` is required in `then`; `id` and `engine` are optional. The default name
+is the file name without its extension, the repository name for a checkpoint, or
+the catalog name (`TRELLIS-3D-Q4`, `kokoro-v1`) for a catalog bundle. Pass
+`"engine": "thenoise"` for split diffusion checkpoints that sd.cpp could also
+read. The intent is journaled with the pull, so it survives a page reload and a
 restart. When the engine Juiced picks is not installed, the service installs that
-build first. The pull view carries `then: {kind, id, policy, engine, state,
-model, error, message}`; `state` is `pending`, `done` (with `model`) or `failed`
-(with `error` and `message`, and the files stay on disk). A pull with a pending
-`then` cannot be dismissed (409 `library_pull_active`). Joining a running pull of
-the same files keeps the first `then`.
+build first, and it retries a registration that failed for a passing reason.
+
+Without `then` the pull only downloads. Its files are then registered like any
+other file on disk (see below): as Disabled, once they have been unchanged for
+30 seconds and an installed engine can run them. No engine is installed for
+them. A client that registers the files itself has that long to call
+`POST /v1/juiced/models/add`.
+
+The pull view carries `then: {kind, id, policy, engine, state, model, error,
+message}`; `state` is `pending`, `done` (with `model`) or `failed` (with `error`
+and `message`). Joining a running pull of the same files keeps the first `then`.
+
+`GET /v1/juiced/library/pulls` lists only downloads in progress or failed. A pull
+whose model exists leaves the list, and so does a finished pull without `then`;
+`GET /v1/juiced/library/pulls/ID` still answers for it until the service
+restarts or needs its slot.
+`POST /v1/juiced/library/pulls/{id}` takes these actions:
+
+| Action | Effect |
+| --- | --- |
+| `resume` | Starts a failed download again, as above. |
+| `retry` | Runs a failed `then` again on a finished download (409 `library_pull_not_failed` otherwise). |
+| `remove` | Cancels the transfers, deletes the partial files and the finished files nothing else uses, and forgets the pull. Returns `{pull, removed, freed_bytes}`. 409 `library_pull_active` while a finished pull is still registering its model. |
+| `dismiss` | Forgets a finished or failed pull and keeps its files. Kept for existing clients; the console no longer uses it. |
+
+`POST /v1/juiced/models/add` registers files by hand, for example a linked file
+or an upload: `{"artifact_set": "set-…", "policy": "on-demand"}`, or `artifact`,
+`parts` or `path`. Without the engine installed the reply is 409
+`engine_not_installed` with the build to install; on a host the engine cannot run
+on it is 409 `no_usable_backend`. A model that needs more memory than
+`resident_budget_bytes` returns 409 `model_exceeds_memory_budget`.
+
+### Files on disk are models
+
+Juiced registers every complete model file on disk that no model uses, as
+Disabled, under its default name (`-2` to `-9` is appended when the name is
+taken). It looks in its own storage, in each Hugging Face cache it can read and
+in files already linked. It never changes an existing model, and it skips
+partial split models, projectors and text encoders. The scan runs in the
+background at startup, after a download or an engine install, and at most every
+30 seconds while a client lists `GET /v1/juiced/catalog`. A file that appears
+while the service runs is registered once it has been unchanged for 30 seconds.
+The scan waits for first-boot adoption of a Juiced 0.9 volume to finish, and it
+leaves the files of a Juiced 0.9 volume mounted outside Juiced's data folder to
+that volume's settings import (`install.error` is `native_volume`).
+
+`GET /v1/juiced/library/local` reports each complete quant no model uses with
+`install: {state, error, message}`. `state` is `pending` (not reached yet),
+`failed` (retried every five minutes and at once after an engine install, for
+example `engine_not_installed` or `model_exceeds_memory_budget`) or `unusable`
+(the file cannot be a model as it is, for example `unsupported_model_format` or
+`companion_file`). Failures are also written to the service log, and
+`GET /v1/juiced/storage` adds the message as `note` on the file's row.
+
+### Remove a model
+
+`GET /v1/juiced/models/removal?model=ID` previews a removal:
+
+```json
+{"model": "Qwen3-0.6B-Q4_K_M", "revision": 9, "removable": true, "refusal": null,
+ "freed_bytes": 484220320,
+ "deletes": [{"name": "Qwen3-0.6B-Q4_K_M.gguf", "bytes": 484220320, "location": "/data/…"}],
+ "keeps": [{"name": "mmproj-F16.gguf", "bytes": 811000000, "reason": "shared",
+            "used_by": ["Qwen3-0.6B-vision"], "location": "/data/…"}]}
+```
+
+`POST /v1/juiced/models/remove` with `{"model": "ID", "expected_revision": 9}`
+sets the model to Disabled if needed, removes it and deletes the files only it
+uses. It returns `{model, removed, freed_bytes, deleted, kept, sessions_forgotten}`.
+
+- A file another model uses stays (`reason: "shared"`).
+- A file linked from a folder outside Juiced's storage and Hugging Face caches
+  stays where it is (`reason: "linked"`).
+- Nothing changes, and the reply is 409 with the reason, when the model is loaded
+  or has running requests (`model_in_use`), an alias targets it (`alias_target`),
+  a file is in a read-only folder (`model_files_read_only`), a file is in a
+  Hugging Face cache outside Juiced's data folder (`model_files_not_owned`), or
+  the revision is stale (`revision_conflict`). Juiced would find those files
+  again and bring the model back, so set the model to Disabled instead.
+
+`POST /v1/delete` with `expected_revision` still removes only the registration.
+The files it leaves in Juiced's storage or a Hugging Face cache are registered
+again as a Disabled model.
 
 `POST /v1/models/{id}/update` with `{"expected_revision": 4}` downloads the
 current upstream revision of a stored model's main file and then moves the model
 to it. It returns the pull, whose `then` is `{kind: "update", model,
 from_artifact, state, …}`. The model keeps its settings and policy; a loaded
 worker stops and starts again on the new files, after its running requests
-finish. On failure the model keeps its old files. The old files stay in storage
-without a reference, so Storage lists them as unused. Errors: 409
+finish. On failure the model keeps its old files. After a successful update the
+old files are deleted unless another model uses them. Errors: 409
 `revision_conflict` (stale revision), 409 `update_unsupported` (the model's files
 were not downloaded from Hugging Face by Juiced, or were combined into a set at
 add time), 409 `update_check_offline` (hub unavailable) and, in the pull's `then`,
 `model_files_changed` when the model's files changed during the download.
 
-`POST /v1/juiced/flm/pull` takes `then: {"policy": "hot"}` the same way and adds
-the checkpoint when FastFlowLM finishes. FastFlowLM pulls live in memory, so this
+`POST /v1/juiced/flm/pull` takes `then: {"policy": "hot"}` the same way and
+registers the checkpoint when FastFlowLM finishes. FastFlowLM pulls live in memory, so this
 intent does not survive a restart.
 
 ### Download a file from a URL
@@ -327,7 +393,9 @@ intent does not survive a restart.
 
 - `expected_sha256` is optional. Without it the store keeps the SHA-256 it
   computes, the job reports `computed_digest: true`, and the stored file is
-  listed with `unverified: true` in `GET /v1/juiced/library/local`. With it, a
+  listed with `unverified: true` in `GET /v1/juiced/library/local`. Like any
+  model file in Juiced's storage, it is then registered as a Disabled model. With
+  it, a
   mismatch quarantines the file (`artifact_hash_mismatch`).
 - `expected_bytes` defaults to the length the server reports, from `HEAD` or a
   one-byte range request. When the server reports neither, the transfer may use

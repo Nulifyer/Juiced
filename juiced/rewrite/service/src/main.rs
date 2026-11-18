@@ -285,6 +285,7 @@ async fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
     manager.recover_interrupted_tunes().await;
     let adoption = juiced_service::supervisor::native_adoption_from_env()
         .map(|(source, roots)| manager.start_native_adoption(source, roots));
+    manager.watch_local_models();
     let startup_manager = manager.clone();
     let startup = tokio::spawn(async move { startup_manager.start_hot().await });
     let shutdown_manager = manager.clone();

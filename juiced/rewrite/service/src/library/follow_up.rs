@@ -104,6 +104,16 @@ pub(super) fn view(follow_up: Option<&Saved>) -> Value {
 }
 
 impl PullRecord {
+    /// Finished with nothing left to do, so it no longer shows as a download.
+    pub(super) fn settled(&self) -> bool {
+        self.state().0 == "complete"
+            && (self.released
+                || self
+                    .follow_up
+                    .as_ref()
+                    .is_some_and(|saved| saved.outcome.state == OutcomeState::Done))
+    }
+
     pub(super) fn follow_up_pending(&self) -> bool {
         self.follow_up
             .as_ref()
@@ -121,6 +131,62 @@ impl Library {
             .filter_map(|record| {
                 let record = record.lock().unwrap_or_else(|error| error.into_inner());
                 record.follow_up_pending().then(|| record.id.clone())
+            })
+            .collect()
+    }
+
+    /// Why finished downloads have no model yet, keyed by the digest of each of their files.
+    pub(crate) fn failed_follow_ups(&self) -> std::collections::BTreeMap<String, (String, String)> {
+        let mut failed = std::collections::BTreeMap::new();
+        for record in self
+            .pulls
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .iter()
+        {
+            let record = record.lock().unwrap_or_else(|error| error.into_inner());
+            let Some(saved) = record
+                .follow_up
+                .as_ref()
+                .filter(|saved| saved.outcome.state == OutcomeState::Failed)
+            else {
+                continue;
+            };
+            if record.state().0 != "complete" {
+                continue;
+            }
+            let reason = (
+                saved.outcome.error.clone().unwrap_or_default(),
+                saved.outcome.message.clone().unwrap_or_default(),
+            );
+            for part in &record.parts {
+                failed.insert(part.request.expected_sha256.clone(), reason.clone());
+            }
+        }
+        failed
+    }
+
+    /// Finished downloads whose model was not made because its engine was missing or did not
+    /// install; an engine installed since may let them through. With `interrupted`, only the
+    /// ones whose engine install a shutdown cut short.
+    pub(crate) fn engine_blocked_follow_ups(&self, interrupted: bool) -> Vec<String> {
+        self.pulls
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .iter()
+            .filter_map(|record| {
+                let record = record.lock().unwrap_or_else(|error| error.into_inner());
+                let blocked =
+                    record.follow_up.as_ref().is_some_and(|saved| {
+                        saved.outcome.state == OutcomeState::Failed
+                            && saved.outcome.error.as_deref().is_some_and(
+                                |code| match interrupted {
+                                    true => code == "engine_install_interrupted",
+                                    false => code.starts_with("engine_"),
+                                },
+                            )
+                    });
+                (blocked && record.state().0 == "complete").then(|| record.id.clone())
             })
             .collect()
     }
@@ -158,7 +224,11 @@ impl Library {
         });
     }
 
-    fn with_pull<T>(&self, pull: &str, action: impl FnOnce(&mut PullRecord) -> T) -> Option<T> {
+    pub(super) fn with_pull<T>(
+        &self,
+        pull: &str,
+        action: impl FnOnce(&mut PullRecord) -> T,
+    ) -> Option<T> {
         let record = self
             .pulls
             .lock()

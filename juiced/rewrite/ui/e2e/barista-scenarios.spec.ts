@@ -269,7 +269,8 @@ test.describe("Barista jobs", () => {
     expect(stopped.error.code).toBe("assistant_settings_changed");
     const later = await b.raw("juiced_set_policy", { model: modelId, policy: "hot" });
     expect(later.status()).toBe(409);
-    await expect.poll(async () => (await b.service.json<{ data: any[] }>("/v1/juiced/library/pulls")).data.find((pull) => `pull:${pull.pull}` === started.job.id)?.state, { timeout: 20000 }).toBe("complete");
+    // A finished download leaves the list; it stays readable by its id.
+    await expect.poll(async () => (await b.service.json<{ state: string }>(`/v1/juiced/library/pulls/${String(started.job.id).replace(/^pull:/, "")}`)).state, { timeout: 20000 }).toBe("complete");
     for (const pull of (await b.service.json<{ data: any[] }>("/v1/juiced/library/pulls")).data) await request.post(`/v1/juiced/library/pulls/${pull.pull}`, { data: { action: "dismiss" } });
     await b.service.removeArtifact(tiny);
   });

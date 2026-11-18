@@ -177,11 +177,6 @@ export function jobActions(job: ArtifactJob): ("pause" | "resume" | "retry" | "c
   if (!job.writer_active && ["failed", "quarantined"].includes(job.state)) return ["retry", "cancel"];
   return [];
 }
-export function removalReason(model: Model): string | undefined {
-  if (model.policy !== "disabled") return "Set it to Disabled first.";
-  if (model.loaded || model.state === "loading") return "Unload it first.";
-  if (model.active_requests) return "Wait for active requests to finish.";
-}
 export function sessionValue(value: string): string {
   if (!value || new TextEncoder().encode(value).length > 512 || /[\x00-\x1f\x7f]/.test(value)) throw new Error("Provide an opaque session identifier of at most 512 bytes, without control characters.");
   return value;

@@ -67,7 +67,7 @@ Mount the existing weight directory read-only at `/library`, for example
 2. Select **Add file**, then **Pick from the server…**.
 3. Open `/library` and pick the model file.
 4. Under **Keep the file**, choose **Where it is** to use the file in place.
-5. Select **Add model**.
+5. Select **Install**.
 
 The files must be readable by UID `10001`. Keep the mount available for as long
 as a model uses those files. See [import a local file](../models.md#import-a-local-file).

@@ -186,6 +186,7 @@ fn restored(saved: SavedPull, store: &ArtifactStore) -> PullRecord {
             .checkpoint
             .and_then(|kind| serde_json::from_value(serde_json::Value::String(kind)).ok()),
         follow_up: saved.follow_up,
+        released: false,
     }
 }
 
@@ -252,6 +253,12 @@ impl Library {
             .unwrap_or_default()
         };
         for record in records {
+            // A download that finished before the restart needs nothing more; the files it
+            // left without a model are registered like any other file on disk.
+            if record.settled() || (record.state().0 == "complete" && record.follow_up.is_none()) {
+                self.forget_saved(&record.id);
+                continue;
+            }
             let terminal = record.terminal();
             self.persist(&record);
             let record = Arc::new(Mutex::new(record));
