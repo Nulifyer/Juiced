@@ -129,6 +129,13 @@ Every report item is either fixed with evidence or listed below as decided other
 - Gate on the merge: 950 service tests, clippy, fmt; rust-tests session_cache, engines, library_pipeline, api_end_to_end 58 passed (helper: full set 348 passed, 37 ignored); 178 UI unit tests; Playwright sessions, cache, diagnostics 27 passed. v0.11.18 (run 44244445957 green) deployed to stack 83: 3 Hot models loaded (the user had changed Coder-Next UD-Q4_K_XL from Hot before the deploy); 71 models, 83 files and all policies unchanged; cache 29 states, 5.78 GiB before and after.
 - Open, waiting on the user: per-model session budget (4 GiB cannot hold two 43K-token conversations at 2.25 GiB each; 5.2 GiB can; options A 8 GiB, B equal to total, C scaled to context, D two slots). Not fixed: a request that never completed saves nothing; a full budget of kept states only logs; each turn re-saves the whole state; hybrid models unmeasured.
 
+## Follow-ups (2026-11-18, v0.11.19)
+
+- User decisions: the per-model session budget is a UI setting; the frontend-design skill change is out of this thread; remembering checksums approved ("checksums is fine"); Discover suggestion sizes left to review.
+- 67efb62b: Cache page gains Per model (GiB, 0.0625 up to the disk budget) beside Disk budget. Discover's first chat suggestion takes the largest quant up to 8 bits that fits its half of the machine (`sharpest` in libraryData.ts); a model is suggested once. The one-step download test now patches `system-info` to a small machine.
+- Gate: 179 UI unit tests, tsc, build; Playwright model-settings, sessions, library 72 passed (3 projects); release CI green. v0.11.19 (run 44250175155) deployed to stack 83: 3 Hot models loaded; 71 models, 83 files, 29 cache states and all policies unchanged; cache settings unchanged (16 GiB total, 4 GiB per model, 7 days). Production render (0 non-GET): first suggestion "Qwen3 Coder 30B A3B Instruct UD-Q8_K_XL 33.5 GiB" (was Q4_K_M 17.3 GiB); Cache limits show Disk budget 16 and Per model 4.
+- helper-fable-digest stopped at a Claude API rate limit with no changes; restarted as helper-fable-digest2 (remember file digests by stamp so add, startup and load stop re-reading model files).
+
 ## Next action
 
 None for this audit. Open from earlier ledgers: the later-work list in drop-in-replacement.md.
