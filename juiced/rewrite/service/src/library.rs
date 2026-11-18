@@ -215,6 +215,16 @@ pub struct SearchQuery {
     /// found even when search ranks it low.
     #[serde(default)]
     pub repo: Option<String>,
+    /// Lists one source only. The catalog needs no hub listing, so it answers from the
+    /// repository details alone.
+    #[serde(default)]
+    pub source: Option<SearchSource>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum SearchSource {
+    Catalog,
 }
 
 #[derive(Debug, Deserialize)]
@@ -815,6 +825,12 @@ impl Library {
             }
             Some(repo) => Some(repo.to_owned()),
         };
+        let catalog_only = query.source == Some(SearchSource::Catalog);
+        if catalog_only && (exact.is_some() || query.cursor.is_some()) {
+            return Err(invalid(
+                "The catalog is one page. Use source=catalog without repo or cursor.",
+            ));
+        }
         let wanted_kind = engine.and_then(checkpoint::Kind::for_engine);
         let task = query.task;
         let first_page = query.cursor.is_none();
@@ -849,7 +865,7 @@ impl Library {
         // Without an engine, page one also searches original checkpoints; later pages and the
         // next cursor follow the GGUF listing.
         let streams: Vec<(hub::Stream, usize)> = match wanted_kind {
-            _ if exact.is_some() => Vec::new(),
+            _ if exact.is_some() || catalog_only => Vec::new(),
             Some(kind) => vec![(hub::Stream::Checkpoint(Some(kind.hub_filter())), limit)],
             None if engine.is_some() || !first_page => vec![(hub::Stream::Gguf, limit)],
             None => vec![
@@ -1062,7 +1078,8 @@ impl Library {
             if let Some(repo) = &exact {
                 local.retain(|file| file.repo.eq_ignore_ascii_case(repo));
             }
-            attach_local(&mut entries, local, &terms, task, limit);
+            let leftovers = if catalog_only { 0 } else { limit };
+            attach_local(&mut entries, local, &terms, task, leftovers);
         }
         let cache = self.cache_presence();
         let digests: BTreeSet<String> = entries

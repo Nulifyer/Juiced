@@ -311,6 +311,7 @@ fn query(q: &str) -> SearchQuery {
         cursor: None,
         engine: None,
         repo: None,
+        source: None,
     }
 }
 
@@ -1373,6 +1374,76 @@ async fn hub_skipped_search_reads_only_the_cache() {
         ),
         requests
     );
+}
+
+#[tokio::test]
+async fn catalog_source_lists_only_the_catalog_without_a_hub_listing() {
+    let fixture = fixture().await;
+    let library = library(&fixture, SourcePolicy::AllowLoopbackHttp, None);
+    let directory = tempfile::tempdir().unwrap();
+    let store = store(&directory, SourcePolicy::AllowLoopbackHttp);
+    let catalog = |task: Task, limit: Option<usize>| SearchQuery {
+        source: Some(SearchSource::Catalog),
+        task: Some(task),
+        limit,
+        ..query("")
+    };
+    let embeddings = library
+        .search(Some(store.clone()), catalog(Task::Embeddings, None))
+        .await
+        .unwrap();
+    let expected: Vec<&str> = super::catalog::catalog()
+        .models
+        .iter()
+        .filter(|model| model.task == Task::Embeddings)
+        .map(|model| model.id.as_str())
+        .collect();
+    let listed: Vec<&str> = embeddings["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| entry["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(listed, expected);
+    assert!(
+        embeddings["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|entry| entry["source"] == "catalog")
+    );
+    assert_eq!(embeddings["sources"]["catalog"]["count"], expected.len());
+    assert_eq!(embeddings["sources"]["huggingface"]["status"], "ok");
+    assert_eq!(embeddings["page"]["next_cursor"], Value::Null);
+    assert_eq!(
+        fixture.fake.search_requests.load(Ordering::Acquire),
+        0,
+        "the catalog needs no hub listing"
+    );
+    assert_eq!(
+        fixture.fake.info_requests.load(Ordering::Acquire),
+        expected.len(),
+        "each catalog repository's files are still read"
+    );
+    let chat = library
+        .search(Some(store.clone()), catalog(Task::Chat, Some(2)))
+        .await
+        .unwrap();
+    assert_eq!(chat["data"].as_array().unwrap().len(), 2);
+    assert_eq!(fixture.fake.search_requests.load(Ordering::Acquire), 0);
+    for invalid in [
+        SearchQuery {
+            cursor: Some("eyJwYWdlIjoyfQ==".into()),
+            ..catalog(Task::Chat, None)
+        },
+        SearchQuery {
+            repo: Some(SINGLE_REPO.into()),
+            ..catalog(Task::Chat, None)
+        },
+    ] {
+        let error = library.search(None, invalid).await.unwrap_err();
+        assert_eq!(error.code, "invalid_library_query");
+    }
 }
 
 #[test]

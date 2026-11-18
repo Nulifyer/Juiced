@@ -219,6 +219,11 @@ lists GGUF files. An unknown engine returns 400 `invalid_library_query`.
 quants on this machine attached. It can't be combined with `q` or `cursor`. A
 repository Hugging Face doesn't have returns no Hugging Face result, and the
 Hugging Face status stays `ok`.
+`source=catalog` lists only Juiced's recommended catalog, in catalog order: no
+Hugging Face listing and no other files on this machine. Each entry's quants and
+sizes are still read from its Hugging Face repository. Combine it with `task` and
+`limit`; it can't be combined with `repo` or `cursor`. The console builds its
+suggested models from it.
 
 Each result has `repo`, `license`, `gated`, `downloads` and `quants`. A checkpoint
 quant looks like this:

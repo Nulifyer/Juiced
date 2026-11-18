@@ -87,6 +87,23 @@ async fn search_pull_and_verified_artifacts_work_under_every_prefix() {
         "Process-IQ4_NL.gguf",
         "Process-MXFP4.gguf",
     ];
+    let listed = hub.observed().len();
+    for prefix in PREFIXES {
+        let catalog = search(&server, prefix, "source=catalog&task=tts&limit=20").await;
+        let data = catalog["data"].as_array().unwrap();
+        assert!(!data.is_empty());
+        assert!(
+            data.iter()
+                .all(|entry| entry["source"] == "catalog" && entry["task"] == "tts")
+        );
+        assert_eq!(catalog["page"]["next_cursor"], Value::Null);
+    }
+    assert!(
+        hub.observed()[listed..]
+            .iter()
+            .all(|request| request.path.starts_with("/api/models/")),
+        "the catalog source reads repository details without a hub listing"
+    );
     for (prefix, file) in PREFIXES.iter().zip(files) {
         for key in [None, Some(CLIENT_KEY), Some("invalid-key")] {
             let (status, _) = server
@@ -261,6 +278,9 @@ async fn offline_and_blocked_policies_serve_catalog_and_local_results_only() {
         "cursor=%20",
         "task=vision",
         "unexpected=1",
+        "source=huggingface",
+        "source=catalog&repo=owner/name",
+        "source=catalog&cursor=eyJwYWdlIjoyfQ%3D%3D",
     ] {
         let (status, _) = public
             .json(
