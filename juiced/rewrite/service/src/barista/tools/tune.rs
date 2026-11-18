@@ -293,9 +293,12 @@ impl Run<'_, '_> {
             &self.switch,
             false,
         );
-        tokio::time::timeout_at(self.deadline, self.context.post("chat/completions", body))
-            .await
-            .unwrap_or_else(|_| Err(timed_out()))
+        tokio::time::timeout_at(
+            self.deadline,
+            self.context.post_once("chat/completions", body),
+        )
+        .await
+        .unwrap_or_else(|_| Err(timed_out()))
     }
 
     /// Unloads the model, waiting out requests a client is still sending it; returns why the

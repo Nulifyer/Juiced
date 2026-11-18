@@ -196,7 +196,7 @@ async fn new_conversations_restore_a_saved_state_that_shares_their_system_prompt
     assert_eq!(record["session_cache"]["path"], "restored", "{record}");
     assert!(cached(&returning) > system_words, "{returning}");
     assert!(processed(&returning) <= 6, "{returning}");
-    settled(&server, 3).await;
+    settled(&server, 2).await;
 
     server.restart().await;
     let after_restart = chat(
@@ -208,17 +208,324 @@ async fn new_conversations_restore_a_saved_state_that_shares_their_system_prompt
     let record = last_record(&server).await;
     assert_eq!(record["session_cache"]["path"], "restored", "{record}");
     assert!(cached(&after_restart) > system_words, "{after_restart}");
-    settled(&server, 4).await;
+    settled(&server, 2).await;
 
     let brief = "Be brief.";
     chat(&server, &new_conversation(brief, "One?"), None).await;
-    settled(&server, 5).await;
+    settled(&server, 3).await;
     chat(&server, &new_conversation(&pirate, "Another tale?"), None).await;
-    settled(&server, 6).await;
+    settled(&server, 3).await;
     let short = chat(&server, &new_conversation(brief, "Two?"), None).await;
     let record = last_record(&server).await;
     assert_eq!(record["session_cache"]["path"], "cold", "{record}");
     assert!(cached(&short) <= 1, "{short}");
+}
+
+fn devices() -> String {
+    "Household assistant with these exposed devices: ".to_owned()
+        + &"porch light, hallway sensor, garage door, ".repeat(60)
+}
+
+fn pirate() -> String {
+    "Pirate storyteller who answers in rhyme. ".repeat(60)
+}
+
+async fn retain(server: &Server, session: &Value) {
+    let (status, retained) = server
+        .post(
+            "juiced/cache/sessions",
+            json!({"action":"retain","session":session,"retained":true}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{retained}");
+}
+
+#[tokio::test]
+async fn one_off_requests_that_share_a_long_opening_leave_one_state() {
+    let server = session_server(1, fast()).await;
+    let system = devices();
+    let questions = [
+        "Turn on the porch.",
+        "Is the garage open?",
+        "Lock the hallway.",
+        "Dim the porch light.",
+        "Any motion in the hallway?",
+        "Close the garage.",
+    ];
+    let mut sizes = Vec::new();
+    for question in questions {
+        chat(&server, &new_conversation(&system, question), None).await;
+        let view = settled(&server, 1).await;
+        sizes.push(view["totals"]["bytes"].as_u64().unwrap());
+    }
+    assert!(sizes[questions.len() - 1] < 2 * sizes[0], "{sizes:?}");
+
+    chat(&server, &new_conversation(&pirate(), "A tale?"), None).await;
+    settled(&server, 2).await;
+    let system_words = system.split_whitespace().count() as u64;
+    let mut latest = new_conversation(&system, "Is the porch on now?");
+    let sibling = chat(&server, &latest, None).await;
+    let record = last_record(&server).await;
+    assert_eq!(record["session_cache"]["path"], "restored", "{record}");
+    assert!(cached(&sibling) > system_words, "{sibling}");
+    assert!(processed(&sibling) <= 8, "{sibling}");
+    latest.push(json!({"role":"assistant","content":sibling["choices"][0]["message"]["content"]}));
+    settled(&server, 2).await;
+
+    chat(&server, &new_conversation(&pirate(), "Another tale?"), None).await;
+    settled(&server, 2).await;
+    let continued = turn(&server, &mut latest, "And the garage?").await;
+    let record = last_record(&server).await;
+    assert_eq!(record["session_cache"]["path"], "restored", "{record}");
+    assert!(cached(&continued) > system_words, "{continued}");
+    assert!(processed(&continued) <= 6, "{continued}");
+    settled(&server, 2).await;
+}
+
+#[tokio::test]
+async fn continued_conversations_and_small_shared_openings_are_each_kept() {
+    let mut server = session_server(1, fast()).await;
+    let system = devices();
+    let mut first = new_conversation(&system, "Turn on the porch.");
+    let reply = chat(&server, &first, None).await;
+    first.push(json!({"role":"assistant","content":reply["choices"][0]["message"]["content"]}));
+    turn(&server, &mut first, "Thanks. And the hallway?").await;
+    settled(&server, 1).await;
+    let mut second = new_conversation(&system, "Is the garage open?");
+    let reply = chat(&server, &second, None).await;
+    second.push(json!({"role":"assistant","content":reply["choices"][0]["message"]["content"]}));
+    settled(&server, 2).await;
+    turn(&server, &mut second, "Close it.").await;
+    settled(&server, 2).await;
+
+    chat(&server, &new_conversation(&system, "Any motion?"), None).await;
+    settled(&server, 3).await;
+    chat(&server, &new_conversation(&system, "Dim the porch."), None).await;
+    settled(&server, 3).await;
+
+    server.restart().await;
+    chat(
+        &server,
+        &new_conversation(&system, "Lock the hallway."),
+        None,
+    )
+    .await;
+    settled(&server, 3).await;
+    chat(&server, &new_conversation(&pirate(), "A tale?"), None).await;
+    settled(&server, 4).await;
+    let returning = turn(&server, &mut first, "Still on?").await;
+    let record = last_record(&server).await;
+    assert_eq!(record["session_cache"]["path"], "restored", "{record}");
+    assert!(processed(&returning) <= 6, "{returning}");
+    settled(&server, 4).await;
+
+    let brief = "Answer in one short sentence. ".repeat(40);
+    assert!(brief.len() < 2048);
+    for (count, question) in ["One?", "Two?", "Three?"].into_iter().enumerate() {
+        chat(&server, &new_conversation(&brief, question), None).await;
+        settled(&server, 5 + count).await;
+    }
+
+    let rules = "Reviewer rules: be exact, cite lines. ".repeat(60);
+    for (count, topic) in ["rivers", "glaciers"].into_iter().enumerate() {
+        let draft =
+            format!("Review this draft about {topic}: ") + &format!("{topic} matter. ").repeat(30);
+        chat(&server, &new_conversation(&rules, &draft), None).await;
+        settled(&server, 8 + count).await;
+    }
+}
+
+#[tokio::test]
+async fn a_request_that_already_holds_a_reply_is_a_conversation_and_is_kept() {
+    let server = session_server(1, fast()).await;
+    let system = devices();
+    let mut history = new_conversation(&system, "Turn on the porch.");
+    history.push(json!({"role":"assistant","content":"The porch is on."}));
+    turn(&server, &mut history, "And the hallway?").await;
+    settled(&server, 1).await;
+    chat(&server, &new_conversation(&system, "Any motion?"), None).await;
+    settled(&server, 2).await;
+    chat(&server, &new_conversation(&system, "Dim the porch."), None).await;
+    settled(&server, 2).await;
+    chat(&server, &new_conversation(&pirate(), "A tale?"), None).await;
+    settled(&server, 3).await;
+    let reply = turn(&server, &mut history, "Thanks.").await;
+    let record = last_record(&server).await;
+    assert_eq!(record["session_cache"]["path"], "restored", "{record}");
+    assert!(processed(&reply) <= 4, "{reply}");
+    // The conversation still opens with the same messages for nine tenths of its text, so its
+    // new turn replaces the one-off request's state.
+    settled(&server, 2).await;
+}
+
+#[tokio::test]
+async fn a_kept_state_is_not_replaced_by_a_sibling_or_by_its_own_next_turn() {
+    let server = session_server(1, fast()).await;
+    let system = devices();
+    let mut pinned = new_conversation(&system, "Turn on the porch.");
+    let reply = chat(&server, &pinned, None).await;
+    pinned.push(json!({"role":"assistant","content":reply["choices"][0]["message"]["content"]}));
+    let view = settled(&server, 1).await;
+    let kept = view["sessions"][0]["session"].clone();
+    retain(&server, &kept).await;
+
+    chat(
+        &server,
+        &new_conversation(&system, "Is the garage open?"),
+        None,
+    )
+    .await;
+    settled(&server, 2).await;
+    chat(&server, &new_conversation(&system, "Any motion?"), None).await;
+    let view = settled(&server, 2).await;
+    assert!(
+        view["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row["session"] == kept && row["retained"] == true),
+        "{view}"
+    );
+
+    turn(&server, &mut pinned, "And the hallway?").await;
+    let view = settled(&server, 2).await;
+    let rows = view["sessions"].as_array().unwrap();
+    let pinned_bytes = rows
+        .iter()
+        .find(|row| row["session"] == kept && row["retained"] == true)
+        .unwrap_or_else(|| panic!("{view}"))["bytes"]
+        .as_u64();
+    assert!(
+        rows.iter()
+            .any(|row| row["retained"] == false && row["bytes"].as_u64() > pinned_bytes),
+        "{view}"
+    );
+}
+
+#[tokio::test]
+async fn model_checks_save_no_state_and_leave_client_conversations_restorable() {
+    let server = session_server(1, fast()).await;
+    let mut a = conversation("orchards");
+    let first = chat(&server, &a, None).await;
+    a.push(json!({"role":"assistant","content":first["choices"][0]["message"]["content"]}));
+    settled(&server, 1).await;
+
+    // Tune refuses this engine at once and then runs the automatic check with service authority.
+    let (status, started) = server
+        .post(&format!("models/{MODEL}/tune"), json!({}))
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{started}");
+    let mut automatic = Value::Null;
+    server
+        .wait_for(async || {
+            automatic = server.get("juiced/requests").await["data"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|record| record["protocol"] == "internal")
+                .cloned()
+                .unwrap_or(Value::Null);
+            !automatic.is_null()
+        })
+        .await;
+    assert_eq!(
+        automatic["session_cache"]["key"],
+        Value::Null,
+        "{automatic}"
+    );
+
+    let (status, checked) = server
+        .post(&format!("models/{MODEL}/check"), json!({}))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{checked}");
+    let records = server.get("juiced/requests").await;
+    let checks = records["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|record| record["id"] != 1)
+        .collect::<Vec<_>>();
+    assert!(checks.len() >= 2, "{records}");
+    for record in checks {
+        assert_eq!(record["session_cache"]["key"], Value::Null, "{record}");
+    }
+    let view = settled(&server, 1).await;
+    assert_ne!(
+        view["sessions"][0]["principal"], "juiced-internal",
+        "{view}"
+    );
+    assert_eq!(model_row(&view)["slots"][0]["state"], "empty", "{view}");
+
+    let reply = turn(&server, &mut a, "After the check?").await;
+    let record = last_record(&server).await;
+    assert_eq!(record["session_cache"]["path"], "restored", "{record}");
+    assert!(processed(&reply) <= 4, "{reply}");
+}
+
+async fn set_context(server: &Server, tokens: u32) {
+    let before = server.get(&format!("models/{MODEL}/options")).await;
+    let (status, saved) = server
+        .post(
+            &format!("models/{MODEL}/options"),
+            json!({"expected_revision":before["revision"],"options":{"parallel_slots":1,"context_tokens":tokens}}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+}
+
+#[tokio::test]
+async fn states_made_under_other_engine_settings_go_when_the_model_starts_and_kept_ones_stay() {
+    let server = session_server(1, fast()).await;
+    chat(&server, &conversation("volcanoes"), None).await;
+    settled(&server, 1).await;
+    let mut kept = conversation("glaciers");
+    let first = chat(&server, &kept, None).await;
+    kept.push(json!({"role":"assistant","content":first["choices"][0]["message"]["content"]}));
+    let view = settled(&server, 2).await;
+    let pinned = view["sessions"][0]["session"].clone();
+    retain(&server, &pinned).await;
+
+    let (status, _) = server.post("unload", json!({"model":MODEL})).await;
+    assert_eq!(status, StatusCode::OK);
+    set_context(&server, 1024).await;
+    let view = sessions(&server).await;
+    assert_eq!(view["totals"]["sessions"], 2, "{view}");
+    for row in view["sessions"].as_array().unwrap() {
+        assert_eq!(row["execution_current"], Value::Null, "{view}");
+    }
+
+    let (status, loaded) = server.post("load", json!({"model":MODEL})).await;
+    assert_eq!(status, StatusCode::OK, "{loaded}");
+    let view = sessions(&server).await;
+    assert_eq!(view["totals"]["sessions"], 1, "{view}");
+    assert_eq!(view["sessions"][0]["session"], pinned, "{view}");
+    assert_eq!(view["sessions"][0]["retained"], true, "{view}");
+    assert_eq!(view["sessions"][0]["execution_current"], false, "{view}");
+
+    let cold = chat(&server, &kept, None).await;
+    assert_eq!(last_record(&server).await["session_cache"]["path"], "cold");
+    assert!(cached(&cold) <= 1, "{cold}");
+    let view = settled(&server, 2).await;
+    assert!(
+        view["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row["session"] == pinned && row["execution_current"] == false),
+        "{view}"
+    );
+
+    let (status, _) = server.post("unload", json!({"model":MODEL})).await;
+    assert_eq!(status, StatusCode::OK);
+    set_context(&server, 512).await;
+    let reply = turn(&server, &mut kept, "Restored again?").await;
+    let record = last_record(&server).await;
+    assert_eq!(record["session_cache"]["path"], "restored", "{record}");
+    assert!(processed(&reply) <= 4, "{reply}");
+    let view = settled(&server, 2).await;
+    for row in view["sessions"].as_array().unwrap() {
+        assert_eq!(row["execution_current"], true, "{view}");
+    }
 }
 
 #[tokio::test]

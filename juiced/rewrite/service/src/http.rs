@@ -1768,6 +1768,7 @@ async fn policy(
 async fn chat(
     State(state): State<AppState>,
     Extension(context): Extension<RequestContext>,
+    one_shot: Option<Extension<crate::sessions::OneShot>>,
     headers: HeaderMap,
     ApiBytes(body): ApiBytes,
 ) -> Result<Response, ApiError> {
@@ -1778,7 +1779,9 @@ async fn chat(
         body,
         Operation::Chat,
         request_priority(&context, &headers)?,
-        Some((&context, session, "openai.chat")),
+        one_shot
+            .is_none()
+            .then_some((&context, session, "openai.chat")),
         automatic,
     )
     .await
@@ -1786,6 +1789,7 @@ async fn chat(
 async fn completion(
     State(state): State<AppState>,
     Extension(context): Extension<RequestContext>,
+    one_shot: Option<Extension<crate::sessions::OneShot>>,
     headers: HeaderMap,
     ApiBytes(body): ApiBytes,
 ) -> Result<Response, ApiError> {
@@ -1796,7 +1800,9 @@ async fn completion(
         body,
         Operation::Completion,
         request_priority(&context, &headers)?,
-        Some((&context, session, "openai.completions")),
+        one_shot
+            .is_none()
+            .then_some((&context, session, "openai.completions")),
         automatic,
     )
     .await
@@ -1804,6 +1810,7 @@ async fn completion(
 async fn responses(
     State(state): State<AppState>,
     Extension(context): Extension<RequestContext>,
+    one_shot: Option<Extension<crate::sessions::OneShot>>,
     headers: HeaderMap,
     ApiBytes(body): ApiBytes,
 ) -> Result<Response, ApiError> {
@@ -1814,7 +1821,9 @@ async fn responses(
         body,
         Operation::Responses,
         request_priority(&context, &headers)?,
-        Some((&context, session, "openai.responses")),
+        one_shot
+            .is_none()
+            .then_some((&context, session, "openai.responses")),
         automatic,
     )
     .await

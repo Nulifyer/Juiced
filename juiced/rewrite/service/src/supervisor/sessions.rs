@@ -14,8 +14,14 @@ const LINEAGE_STALE: usize = 64;
 /// system prompt cannot find the state that already holds it. The file is advisory: identity
 /// and execution checks still gate every restore, and the engine reuses only matching tokens.
 pub(super) struct Lineages {
-    sessions: Mutex<std::collections::HashMap<String, Arc<Key>>>,
+    sessions: Mutex<std::collections::HashMap<String, Lineage>>,
     root: Option<crate::storage::DirectoryLease>,
+}
+
+#[derive(Clone)]
+struct Lineage {
+    key: Arc<Key>,
+    single: bool,
 }
 
 #[derive(Default, Deserialize, Serialize)]
@@ -35,7 +41,13 @@ impl Lineages {
                 file.sessions
                     .iter()
                     .filter_map(|(id, record)| {
-                        Some((id.clone(), Arc::new(Key::from_record(record)?)))
+                        Some((
+                            id.clone(),
+                            Lineage {
+                                key: Arc::new(Key::from_record(record)?),
+                                single: record.single,
+                            },
+                        ))
                     })
                     .collect()
             })
@@ -55,10 +67,32 @@ impl Lineages {
             .unwrap_or_else(|error| error.into_inner())
             .iter()
             .filter_map(|(id, saved)| {
-                let (units, bytes) = key.shared(saved);
+                let (units, bytes) = key.shared(&saved.key);
                 (units > 0 && bytes >= crate::sessions::MINIMUM_SHARED_BYTES)
                     .then(|| (id.clone(), units))
             })
+            .collect()
+    }
+
+    fn single(&self, id: &str) -> bool {
+        self.sessions
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .get(id)
+            .is_some_and(|saved| saved.single)
+    }
+
+    /// Saved single-request states that a state saved for `key` replaces.
+    fn siblings(&self, key: &Key) -> std::collections::HashSet<String> {
+        if key.kind != KeyKind::Prefix {
+            return std::collections::HashSet::new();
+        }
+        self.sessions
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .iter()
+            .filter(|(_, saved)| saved.single && key.replaces_sibling(&saved.key))
+            .map(|(id, _)| id.clone())
             .collect()
     }
 
@@ -66,6 +100,7 @@ impl Lineages {
         &self,
         id: &str,
         key: &Key,
+        single: bool,
         discarded: &std::collections::HashSet<String>,
         listed: &std::collections::HashSet<String>,
     ) {
@@ -82,14 +117,20 @@ impl Lineages {
             sessions.retain(|known, _| listed.contains(known));
         }
         if key.kind == KeyKind::Prefix {
-            sessions.insert(id.to_owned(), Arc::new(key.lineage()));
+            sessions.insert(
+                id.to_owned(),
+                Lineage {
+                    key: Arc::new(key.lineage()),
+                    single,
+                },
+            );
         }
         if let Some(root) = &self.root {
             let file = LineageFile {
                 schema_version: 1,
                 sessions: sessions
                     .iter()
-                    .map(|(id, key)| (id.clone(), key.to_record()))
+                    .map(|(id, saved)| (id.clone(), saved.key.to_record(saved.single)))
                     .collect(),
             };
             let _ = root.write_json(LINEAGE_FILE, &file);
@@ -155,6 +196,9 @@ struct Holder {
     scope: Scope,
     key: Key,
     tokens: Option<u64>,
+    /// The request extended an earlier one from the same client, so this is a conversation
+    /// and no sibling's state may replace it.
+    continued: bool,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -210,6 +254,9 @@ struct Found {
     id: String,
     identity: SnapshotIdentity,
     units: usize,
+    /// The saved state is this conversation at an earlier or the same turn, not a sibling
+    /// that only opens with the same messages.
+    exact: bool,
 }
 
 #[derive(Serialize)]
@@ -261,6 +308,35 @@ fn claims_unavailable() -> ApiError {
         "state_transport_uncertain",
         "A session state transfer did not reach completion. Its generation retains physical and file ownership until acknowledged cleanup.",
     )
+}
+
+fn other_settings(identity: &SnapshotIdentity, model_tag: &str, fingerprint: &str) -> bool {
+    identity.execution_fingerprint != fingerprint
+        && crate::sessions::parse_protocol(&identity.protocol)
+            .is_some_and(|protocol| protocol.model_tag == model_tag)
+}
+
+/// Deletes the saved session states `gone` selects, except kept, busy and unsettled ones, and
+/// returns how many went.
+fn forget_sessions(
+    cache: &CacheStore,
+    settings: &Settings,
+    gone: impl Fn(&SnapshotIdentity) -> bool,
+) -> usize {
+    let Ok(rows) = cache.session_rows(
+        crate::sessions::PROTOCOL_PREFIX,
+        |identity| gone(identity) && !settings.retained.contains(&identity.session_digest),
+        false,
+    ) else {
+        return 0;
+    };
+    rows.iter()
+        .filter(|row| {
+            !row.busy
+                && row.state == crate::cache::SnapshotState::Saved
+                && cache.forget(&row.id, &row.identity, row.revision).is_ok()
+        })
+        .count()
 }
 
 impl Manager {
@@ -405,16 +481,26 @@ impl Manager {
             record.saved_previous = matches!(saved, Ok(Ok(())));
             entry.dirty = None;
         }
-        let held_units = entry
+        let (held_units, extends_held) = entry
             .holder
             .as_ref()
             .zip(request)
             .filter(|(held, (scope, _))| held.scope == **scope)
-            .map_or(0, |(held, (_, key))| held.key.common_units(key));
+            .map_or((0, false), |(held, (_, key))| {
+                (
+                    held.key.common_units(key),
+                    key.extends(&held.key) && (held.continued || key.units() > held.key.units()),
+                )
+            });
+        let mut continued = extends_held || key.as_ref().is_some_and(Key::carries_reply);
         if persistent && let Some((scope, key)) = request {
             let found = self
                 .find_session(scope, key, lease.fingerprint.clone())
                 .await;
+            continued |= found.as_ref().is_some_and(|found| {
+                found.exact
+                    && (found.units < key.units() || !self.session_lineage.single(&found.id))
+            });
             if let Some(found) = found.filter(|found| found.units > held_units) {
                 entry.holder = None;
                 entry.dirty = None;
@@ -453,6 +539,7 @@ impl Manager {
                 scope,
                 key,
                 tokens: None,
+                continued,
             }),
             persistent,
             record,
@@ -466,6 +553,7 @@ impl Manager {
     async fn find_session(&self, scope: &Scope, key: &Key, fingerprint: Arc<str>) -> Option<Found> {
         let cache = self.cache.clone()?;
         let scope = scope.clone();
+        let settings = self.session_settings();
         let candidates = key
             .candidates()
             .map(|(units, digest)| (digest, units))
@@ -493,7 +581,7 @@ impl Manager {
                     continue;
                 }
                 if row.identity.execution_fingerprint != *fingerprint {
-                    if !row.busy {
+                    if !row.busy && !settings.retained.contains(&row.identity.session_digest) {
                         let _ = cache.forget(&row.id, &row.identity, row.revision);
                     }
                     continue;
@@ -509,6 +597,7 @@ impl Manager {
                             id: row.id,
                             identity: row.identity,
                             units,
+                            exact: exact.is_some(),
                         },
                         row.charged,
                     ));
@@ -742,15 +831,40 @@ impl Manager {
         let saved = metadata.id;
         let rows = self.all_session_rows(&cache).await?;
         let mut stored = self.stored_rows(&rows, &identity, &model_tag, &superseded, Some(&saved));
+        let same_client = |row: &crate::cache::SessionRow| {
+            row.id != saved
+                && row.identity.principal == identity.principal
+                && row.identity.credential_epoch == identity.credential_epoch
+                && row.identity.protocol == identity.protocol
+        };
+        let earlier_turn = |row: &crate::cache::SessionRow| {
+            same_client(row) && superseded.contains(&row.identity.session_digest)
+        };
+        let single = !holder.continued
+            && !rows.iter().any(|row| {
+                earlier_turn(row) && row.identity.session_digest != identity.session_digest
+            });
+        let siblings = self.session_lineage.siblings(&holder.key);
+        let saved_at = (self.session_used(&saved, None), saved.as_str());
+        // A sibling saved after this one is left for its own save to judge, so two saves that
+        // finish together cannot delete each other.
+        let replaced_sibling = |row: &crate::cache::SessionRow| {
+            same_client(row)
+                && siblings.contains(&row.id)
+                && row.identity.execution_fingerprint == identity.execution_fingerprint
+                && row.state == crate::cache::SnapshotState::Saved
+                && !row.busy
+                && (self.session_used(&row.id, row.modified_ms), row.id.as_str()) < saved_at
+        };
         let mut discard = rows
             .iter()
             .enumerate()
             .filter(|(_, row)| {
-                row.id != saved
-                    && row.identity.principal == identity.principal
-                    && row.identity.credential_epoch == identity.credential_epoch
-                    && row.identity.protocol == identity.protocol
-                    && superseded.contains(&row.identity.session_digest)
+                // A kept state stays as it was pinned; only a repeat of the same request,
+                // which carries the pin, replaces it.
+                (earlier_turn(row) || replaced_sibling(row))
+                    && (row.identity.session_digest == identity.session_digest
+                        || !settings.retained.contains(&row.identity.session_digest))
             })
             .map(|(index, _)| index)
             .collect::<Vec<_>>();
@@ -791,7 +905,7 @@ impl Manager {
             for (id, identity, revision) in targets {
                 let _ = cache.forget(&id, &identity, revision);
             }
-            lineage.record(&saved, &key, &discarded, &listed);
+            lineage.record(&saved, &key, single, &discarded, &listed);
         })
         .await;
         Ok(())
@@ -1134,6 +1248,68 @@ impl Manager {
         Ok(generation)
     }
 
+    /// Deletes a model's saved states that the worker now running cannot restore because they
+    /// were made under other engine settings. Kept, busy and unsettled states stay.
+    pub(super) async fn drop_stale_sessions(&self, model: &str, fingerprint: &Arc<str>) -> usize {
+        let Some(cache) = self.cache.clone() else {
+            return 0;
+        };
+        let settings = self.session_settings();
+        let tag = crate::sessions::model_tag(model);
+        let current = fingerprint.clone();
+        let dropped = tokio::task::spawn_blocking(move || {
+            forget_sessions(&cache, &settings, |identity| {
+                other_settings(identity, &tag, &current)
+            })
+        })
+        .await
+        .unwrap_or(0);
+        if dropped > 0 {
+            self.logs.service(
+                crate::logs::Level::Info,
+                &format!(
+                    "Deleted {dropped} saved conversation states of {model}: its engine settings changed, so they cannot be restored."
+                ),
+            );
+        }
+        dropped
+    }
+
+    /// The service's own requests are never saved, so a state under its principal is left from
+    /// an earlier build and nothing can continue it.
+    pub(super) async fn drop_service_sessions(&self) {
+        let Some(cache) = self.cache.clone() else {
+            return;
+        };
+        let settings = self.session_settings();
+        let dropped = tokio::task::spawn_blocking(move || {
+            forget_sessions(&cache, &settings, |identity| {
+                identity.principal == crate::auth::INTERNAL_PRINCIPAL
+            })
+        })
+        .await
+        .unwrap_or(0);
+        if dropped > 0 {
+            self.logs.service(
+                crate::logs::Level::Info,
+                &format!(
+                    "Deleted {dropped} saved states of Juiced's own model checks and Tune trials, which nothing continues."
+                ),
+            );
+        }
+    }
+
+    /// Runs the sweep that a worker's start skips while Tune is trying settings.
+    pub async fn drop_stale_sessions_after_tune(&self, model: &str) {
+        let Ok(worker) = self.worker(model) else {
+            return;
+        };
+        let state = worker.state.lock().await;
+        if let Some(run) = &state.running {
+            self.drop_stale_sessions(model, &run.fingerprint).await;
+        }
+    }
+
     /// Deletes saved sessions unused for longer than the retention period, except retained,
     /// busy and unsettled ones.
     pub(super) async fn expire_sessions(&self) -> usize {
@@ -1255,5 +1431,79 @@ impl Manager {
                 Ok(serde_json::json!({"forgotten":forgotten,"retained_busy":busy}))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn saved(
+        store: &Arc<CacheStore>,
+        principal: &str,
+        model: &str,
+        fingerprint: char,
+        session: char,
+    ) -> String {
+        let identity = SnapshotIdentity {
+            execution_fingerprint: fingerprint.to_string().repeat(64),
+            principal: principal.into(),
+            credential_epoch: "e".repeat(64),
+            protocol: crate::sessions::protocol(Operation::Chat, KeyKind::Prefix, model).unwrap(),
+            session_digest: session.to_string().repeat(64),
+        };
+        let pending = store.begin(identity, store.generation(), 1024).unwrap();
+        std::fs::write(pending.path(), b"state").unwrap();
+        store.publish(&pending, pending.revision()).unwrap();
+        session.to_string().repeat(64)
+    }
+
+    fn left(store: &CacheStore) -> Vec<String> {
+        let mut sessions = store
+            .session_rows(crate::sessions::PROTOCOL_PREFIX, |_| true, false)
+            .unwrap()
+            .into_iter()
+            .map(|row| row.identity.session_digest[..1].to_owned())
+            .collect::<Vec<_>>();
+        sessions.sort();
+        sessions
+    }
+
+    #[test]
+    fn cleanup_deletes_only_unrestorable_or_service_owned_states_and_never_kept_ones() {
+        let directory = tempfile::tempdir().unwrap();
+        let lease =
+            crate::storage::DirectoryLease::acquire(directory.path().join("cache")).unwrap();
+        let store = CacheStore::open(lease).unwrap();
+        saved(&store, "configured-api", "chat", 'a', '1');
+        saved(&store, "configured-api", "chat", 'b', '2');
+        let kept = saved(&store, "configured-api", "chat", 'b', '3');
+        saved(&store, "configured-api", "other", 'b', '4');
+        saved(&store, crate::auth::INTERNAL_PRINCIPAL, "chat", 'a', '5');
+        let kept_check = saved(&store, crate::auth::INTERNAL_PRINCIPAL, "other", 'b', '6');
+        let settings = Settings {
+            retained: [kept, kept_check].into(),
+            ..Settings::default()
+        };
+        let tag = crate::sessions::model_tag("chat");
+
+        let service = forget_sessions(&store, &settings, |identity| {
+            identity.principal == crate::auth::INTERNAL_PRINCIPAL
+        });
+        assert_eq!(service, 1);
+        assert_eq!(left(&store), ["1", "2", "3", "4", "6"]);
+
+        let current = "a".repeat(64);
+        let stale = forget_sessions(&store, &settings, |identity| {
+            other_settings(identity, &tag, &current)
+        });
+        assert_eq!(stale, 1);
+        assert_eq!(left(&store), ["1", "3", "4", "6"]);
+        assert_eq!(
+            forget_sessions(&store, &settings, |identity| {
+                other_settings(identity, &tag, &current)
+            }),
+            0
+        );
     }
 }

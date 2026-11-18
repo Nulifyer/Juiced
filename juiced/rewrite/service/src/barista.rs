@@ -364,6 +364,7 @@ pub(crate) fn start_tune(state: AppState, model: String) -> Result<Value, ApiErr
             Err(error) => json!({"state": "failed", "error": error["message"]}),
         };
         state.manager.set_tune(&model, finished);
+        state.manager.drop_stale_sessions_after_tune(&model).await;
         // Automatic checks wait while Tune reloads the model; check what it serves now.
         if state.manager.serves_chat(&model)
             && let Some(fingerprint) = state.manager.running_fingerprint(&model).await
@@ -428,11 +429,9 @@ pub(crate) fn spawn_automatic_checks(state: AppState) {
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
             };
             // Tune reloads the model several times; checks then would skew its measurements.
-            let tuning = state
-                .manager
-                .tune_view(&id)
-                .is_some_and(|view| view["state"] == "running");
-            if tuning || !state.manager.serves_chat(&id) || state.manager.checked(&id, &fingerprint)
+            if state.manager.tuning(&id)
+                || !state.manager.serves_chat(&id)
+                || state.manager.checked(&id, &fingerprint)
             {
                 continue;
             }

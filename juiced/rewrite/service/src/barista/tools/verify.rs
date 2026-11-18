@@ -158,7 +158,7 @@ pub(super) async fn chat(
 ) -> Result<(Value, u64)> {
     let started = Instant::now();
     let reply = context
-        .post(
+        .post_once(
             "chat/completions",
             json!({"model":model,"messages":[{"role":"user","content":prompt}],"max_tokens":max_tokens,"stream":false}),
         )

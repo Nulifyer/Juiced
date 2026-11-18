@@ -49,6 +49,8 @@ impl Authority {
     }
 }
 
+pub const INTERNAL_PRINCIPAL: &str = "juiced-internal";
+
 #[derive(Clone, Debug, Serialize)]
 pub struct RequestContext {
     pub principal: &'static str,
@@ -144,7 +146,7 @@ impl Authorization {
     /// The identity of a request the service sends itself (see `connect::Internal`).
     pub fn internal(&self) -> RequestContext {
         RequestContext {
-            principal: "juiced-internal",
+            principal: INTERNAL_PRINCIPAL,
             role: Role::Operator,
             credential_epoch: "juiced-internal-v1".into(),
             key_name: None,

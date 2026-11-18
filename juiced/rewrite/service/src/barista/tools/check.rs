@@ -83,7 +83,7 @@ async fn chat_checks(context: &Context<'_>, model: &Value, id: &str) -> Vec<Valu
         false,
     );
     let mut decode = Value::Null;
-    match context.post("chat/completions", body).await {
+    match context.post_once("chat/completions", body).await {
         Ok(reply) => {
             let content = reply["choices"][0]["message"]["content"]
                 .as_str()
@@ -113,7 +113,7 @@ async fn chat_checks(context: &Context<'_>, model: &Value, id: &str) -> Vec<Valu
             &switch,
             false,
         );
-        match context.post("chat/completions", body).await {
+        match context.post_once("chat/completions", body).await {
             Ok(reply) => {
                 let call = &reply["choices"][0]["message"]["tool_calls"][0]["function"];
                 let arguments = call["arguments"]
@@ -156,8 +156,8 @@ async fn chat_checks(context: &Context<'_>, model: &Value, id: &str) -> Vec<Valu
                 .is_some_and(|text| !text.trim().is_empty())
         };
         match (
-            context.post("chat/completions", ask(true)).await,
-            context.post("chat/completions", ask(false)).await,
+            context.post_once("chat/completions", ask(true)).await,
+            context.post_once("chat/completions", ask(false)).await,
         ) {
             (Ok(on), Ok(off)) => {
                 let (thinks, quiet) = (reasoning(&on), !reasoning(&off));
@@ -196,7 +196,7 @@ async fn chat_checks(context: &Context<'_>, model: &Value, id: &str) -> Vec<Valu
             &switch,
             false,
         );
-        match context.post("chat/completions", body).await {
+        match context.post_once("chat/completions", body).await {
             Ok(reply) => {
                 let content = reply["choices"][0]["message"]["content"]
                     .as_str()
