@@ -1926,6 +1926,7 @@ pub struct Manager {
     config_path: PathBuf,
     config_root: Option<crate::storage::DirectoryLease>,
     live_roots: Option<Arc<crate::storage::LiveRoots>>,
+    checksums: Option<Arc<crate::identity::FileChecksums>>,
     native_settings: Option<NativeSettingsState>,
     native_import_only: bool,
     host_memory: host::HostMemory,
@@ -2206,6 +2207,10 @@ impl Manager {
             |root| root.root(),
         ));
         let mut cache_notice = None;
+        let checksums = config_root
+            .as_ref()
+            .filter(|_| !std::env::var("JUICED_REMEMBER_CHECKSUMS").is_ok_and(|value| value == "0"))
+            .map(|root| Arc::new(crate::identity::FileChecksums::open(root.clone())));
         let (live_roots, cache, artifacts, native_settings) = if let Some(root) = &config_root {
             root.verify()?;
             let artifact_root = root.claim(root.root().join("artifacts"))?;
@@ -2272,6 +2277,9 @@ impl Manager {
                 config.artifact_source_policy,
                 scope.clone(),
             )?;
+            if let Some(checksums) = &checksums {
+                artifacts.remember_checksums(checksums.clone());
+            }
             (Some(scope), cache, Some(artifacts), native_settings)
         } else {
             (None, None, None, None)
@@ -2434,6 +2442,7 @@ impl Manager {
             config_path,
             config_root,
             live_roots,
+            checksums,
             native_settings,
             native_import_only: prepare_native,
             host_memory,
@@ -4133,6 +4142,7 @@ impl Manager {
         let artifact = worker._artifact.clone();
         let config_root = self.config_root.clone();
         let live_roots = self.live_roots.clone();
+        let checksums = self.checksums.clone();
         let cache_directory = self.cache_directory.clone();
         let (plan, preparation) = blocking_preparation(
             preparation,
@@ -4147,8 +4157,12 @@ impl Manager {
                     .transpose()
                     .map_err(preparation_identity_error)?
                     .map(Arc::new);
-                let model = crate::identity::VerifiedFile::open(&spec.model_file, deadline)
-                    .map_err(preparation_identity_error)?;
+                let model = crate::identity::VerifiedFile::open_remembered(
+                    &spec.model_file,
+                    deadline,
+                    checksums.as_deref(),
+                )
+                .map_err(preparation_identity_error)?;
                 let executable_path = crate::identity::executable_path(&profile.command)
                     .map_err(preparation_identity_error)?;
                 let executable = crate::identity::VerifiedFile::open(&executable_path, deadline)

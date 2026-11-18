@@ -339,6 +339,7 @@ pub struct ArtifactStore {
     /// A bearer token and the origin prefix it is sent to (the model hub), never to redirects
     /// elsewhere.
     credential: std::sync::OnceLock<(String, String)>,
+    checksums: std::sync::OnceLock<Arc<crate::identity::FileChecksums>>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -684,6 +685,7 @@ impl ArtifactStore {
             stopping: AtomicBool::new(false),
             free_reserve: std::sync::atomic::AtomicU64::new(0),
             credential: std::sync::OnceLock::new(),
+            checksums: std::sync::OnceLock::new(),
         }))
     }
 
@@ -699,6 +701,15 @@ impl ArtifactStore {
 
     pub fn set_free_reserve(&self, bytes: u64) {
         self.free_reserve.store(bytes, Ordering::Release);
+    }
+
+    /// Stored files verified from now on reuse and record their digests in `checksums`.
+    pub fn remember_checksums(&self, checksums: Arc<crate::identity::FileChecksums>) {
+        let _ = self.checksums.set(checksums);
+    }
+
+    fn checksums(&self) -> Option<&crate::identity::FileChecksums> {
+        self.checksums.get().map(Arc::as_ref)
     }
 
     pub fn require_space(&self, bytes: u64) -> Result<(), ArtifactError> {
@@ -1304,12 +1315,37 @@ impl ArtifactStore {
 
     pub fn hold(self: &Arc<Self>, id: &str) -> Result<ArtifactLease, ArtifactError> {
         let held = self.reserve_lease(id)?;
-        let (bytes, digest) = hash(&held.path, self.limits.maximum_artifact_bytes)?;
+        let (bytes, digest) = self.stored_digest(&held.path)?;
         if bytes != held.artifact.bytes || digest != held.artifact.sha256 {
             return Err(ArtifactError::Corrupt);
         }
         self.lease.verify()?;
         Ok(held)
+    }
+
+    /// The size and digest of a stored file, read in full unless its digest is remembered
+    /// for its current stamp.
+    fn stored_digest(&self, path: &Path) -> Result<(u64, String), ArtifactError> {
+        let maximum = self.limits.maximum_artifact_bytes;
+        let metadata = regular(path)?.metadata()?;
+        if metadata.len() > maximum {
+            return Err(ArtifactError::Limit);
+        }
+        if let Some(digest) = crate::identity::remembered_digest(path, &metadata, self.checksums())
+        {
+            return Ok((metadata.len(), digest));
+        }
+        let began = crate::identity::begin_read(&metadata);
+        let (file, before, bytes, digest) = hash_checked(path, maximum, || Ok(()))?;
+        crate::identity::remember_read(
+            path,
+            &before,
+            &file.metadata()?,
+            began,
+            &digest,
+            self.checksums(),
+        );
+        Ok((bytes, digest))
     }
 
     /// Holds a stored artifact without rehashing it; set publication verifies it later.
@@ -2484,11 +2520,6 @@ fn regular(path: &Path) -> Result<File, ArtifactError> {
     Ok(file)
 }
 
-fn hash(path: &Path, maximum: u64) -> Result<(u64, String), ArtifactError> {
-    let (_, _, bytes, digest) = hash_checked(path, maximum, || Ok(()))?;
-    Ok((bytes, digest))
-}
-
 fn hash_checked(
     path: &Path,
     maximum: u64,
@@ -3618,6 +3649,45 @@ mod tests {
             "artifact_corrupt"
         );
         assert_eq!(fs::read(&source).unwrap(), b"safe weights");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_held_artifact_is_read_once_and_again_after_its_file_changes() {
+        let (directory, store) = store();
+        let source = directory.path().join("authorized");
+        fs::write(&source, b"safe weights").unwrap();
+        let sha = format!("{:x}", Sha256::digest(b"safe weights"));
+        let job = store
+            .start_import(
+                File::open(&source).unwrap(),
+                ImportRequest {
+                    expected_sha256: sha.clone(),
+                    expected_bytes: Some(12),
+                    maximum_bytes: 12,
+                },
+                0,
+            )
+            .unwrap();
+        assert_eq!(settled(&store, &job.id).await.state, JobState::Complete);
+        let reads = crate::identity::full_reads();
+        let first = store.hold(&sha).unwrap();
+        assert_eq!(crate::identity::full_reads(), reads + 1);
+        let second = store.hold(&sha).unwrap();
+        assert_eq!(crate::identity::full_reads(), reads + 1);
+        assert_eq!(second.artifact().sha256, sha);
+        drop((first, second));
+
+        fs::write(store.artifact_path(&sha), b"evil weights").unwrap();
+        assert_eq!(store.hold(&sha).err().unwrap().code(), "artifact_corrupt");
+        assert_eq!(crate::identity::full_reads(), reads + 2);
+        assert_eq!(store.hold(&sha).err().unwrap().code(), "artifact_corrupt");
+        assert_eq!(store.inspect().unwrap().artifacts[0].active_holds, 0);
+
+        fs::write(store.artifact_path(&sha), b"safe weights").unwrap();
+        let before = crate::identity::full_reads();
+        store.hold(&sha).unwrap();
+        assert_eq!(crate::identity::full_reads(), before + 1);
     }
 
     #[tokio::test]

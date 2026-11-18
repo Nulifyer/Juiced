@@ -80,6 +80,99 @@ fn assert_no_holds(store: &ArtifactStore) {
     );
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn a_set_is_read_once_for_publication_and_every_later_hold_until_a_member_changes() {
+    let (_directory, store) = store();
+    let spec = specification(&store).await;
+    let model = spec.members[1].artifact.clone();
+    let projector = spec.members[0].artifact.clone();
+    let reads = crate::identity::full_reads();
+    let published = store
+        .publish_set(spec, store.generation(), &operation())
+        .unwrap();
+    assert_eq!(crate::identity::full_reads(), reads + 2);
+    let held = store.hold_set(&published.id, &operation()).unwrap();
+    held.verify().unwrap();
+    let bound = store
+        .hold_binding_with(&model, Some(&published.id), true)
+        .unwrap();
+    bound.verify_set().unwrap();
+    assert_eq!(crate::identity::full_reads(), reads + 2);
+    drop((held, bound));
+
+    let changed: Vec<u8> = COMPANION_BYTES.iter().map(|byte| byte ^ 0x20).collect();
+    fs::write(store.artifact_path(&projector), &changed).unwrap();
+    let before = crate::identity::full_reads();
+    assert_eq!(
+        store
+            .hold_set(&published.id, &operation())
+            .err()
+            .unwrap()
+            .code(),
+        "artifact_hash_mismatch"
+    );
+    assert_eq!(crate::identity::full_reads(), before + 1);
+    assert_no_holds(&store);
+    fs::write(store.artifact_path(&projector), COMPANION_BYTES).unwrap();
+    store.hold_set(&published.id, &operation()).unwrap();
+    assert_eq!(crate::identity::full_reads(), before + 2);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_reopened_store_reuses_recorded_checksums_and_reads_only_changed_members() {
+    let (directory, store) = store();
+    let data = DirectoryLease::acquire(directory.path().join("data")).unwrap();
+    store.remember_checksums(Arc::new(crate::identity::FileChecksums::open(data.clone())));
+    let spec = specification(&store).await;
+    let members: Vec<_> = spec
+        .members
+        .iter()
+        .map(|member| store.artifact_path(&member.artifact))
+        .collect();
+    let published = store
+        .publish_set(spec, store.generation(), &operation())
+        .unwrap();
+    let (lease, scope, limits, policy) = (
+        store.lease.clone(),
+        store.scope.clone(),
+        store.limits.clone(),
+        store.policy,
+    );
+    drop(store);
+    let reopen = || {
+        for member in &members {
+            crate::identity::forget_in_process(member);
+        }
+        let store =
+            ArtifactStore::open_scoped(lease.clone(), limits.clone(), policy, scope.clone())
+                .unwrap();
+        store.remember_checksums(Arc::new(crate::identity::FileChecksums::open(data.clone())));
+        store
+    };
+
+    let restarted = reopen();
+    let reads = crate::identity::full_reads();
+    restarted.hold_set(&published.id, &operation()).unwrap();
+    assert_eq!(crate::identity::full_reads(), reads);
+    drop(restarted);
+
+    let bytes = fs::read(&members[1]).unwrap();
+    fs::write(&members[1], &bytes).unwrap();
+    let restarted = reopen();
+    restarted.hold_set(&published.id, &operation()).unwrap();
+    assert_eq!(crate::identity::full_reads(), reads + 1);
+    drop(restarted);
+
+    for member in &members {
+        crate::identity::forget_in_process(member);
+    }
+    let unrecorded = ArtifactStore::open_scoped(lease, limits, policy, scope).unwrap();
+    unrecorded.hold_set(&published.id, &operation()).unwrap();
+    assert_eq!(crate::identity::full_reads(), reads + 3);
+}
+
 #[tokio::test]
 async fn model_revision_references_update_whole_bindings_once_and_deduplicate_shared_content() {
     let (_directory, store) = store();
