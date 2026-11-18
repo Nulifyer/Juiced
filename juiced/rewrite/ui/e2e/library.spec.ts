@@ -2,7 +2,7 @@ import type { Locator, Page } from "@playwright/test";
 import { existsSync } from "node:fs";
 import { mkdir, symlink, writeFile } from "node:fs/promises";
 import { dirname, relative, resolve } from "node:path";
-import { api, closeInspector, expect, largeText, modelsTab, modelsView, noHorizontalOverflow, open, openModel, showAllModels, test } from "./support";
+import { api, closeInspector, expect, largeText, modelsTab, modelsView, navigate, noHorizontalOverflow, open, openModel, test } from "./support";
 
 const tinyRepo = "fixture-labs/Tiny-Chat-GGUF";
 const result = (page: Page, name: RegExp) => page.getByRole("list", { name: "Search results" }).getByRole("listitem").filter({ has: page.getByText(name) });
@@ -188,7 +188,11 @@ test.describe("Discover", () => {
       await expect(page.getByText("The artifact state changed")).toHaveCount(0);
       await expect(detail.getByRole("progressbar", { name: "Download progress" })).toBeVisible();
       await expect(detail).toContainText(/Downloading \d+%/);
-      await expect(detail.getByRole("option", { name: /Q4_K_M/ })).toContainText(/Not added|On demand/, { timeout: 20000 });
+      // The fixture's Q4_K_M bytes are not a model, so the row says why instead of offering an add step.
+      await expect(detail.getByRole("option", { name: /Q4_K_M/ })).toContainText("Not installed", { timeout: 20000 });
+      await expect(detail.getByText("Juiced can't tell which engine runs this file.")).toBeVisible();
+      await expect(detail.getByRole("button", { name: "Retry" })).toBeEnabled();
+      await expect(detail.getByRole("button", { name: /^(Add model|Install)$/ })).toHaveCount(0);
       await expect(detail.getByRole("progressbar")).toHaveCount(0);
       if (await detail.getByRole("button", { name: "Back to results" }).isVisible()) await detail.getByRole("button", { name: "Back to results" }).click();
       await expect(tiny.getByText("✓ On this machine", { exact: true })).toBeVisible();
@@ -196,8 +200,17 @@ test.describe("Discover", () => {
       if (await detail.count() === 0) await tiny.getByRole("button", { name: /Q4_K_M/ }).click();
       await expect(detail.getByRole("button", { name: "Download" })).toHaveCount(0);
       expect((await service.artifacts()).artifacts.some((item: any) => item.id === sha)).toBe(true);
+
+      await modelsTab(page, "Downloads").click();
+      const row = page.getByRole("list", { name: "Download list" }).getByRole("listitem", { name: "Tiny-Chat-GGUF Q4_K_M" });
+      await expect(row).toContainText("Not installed");
+      await expect(row.getByRole("button")).toHaveText(["Retry", "Remove"]);
+      await row.getByRole("button", { name: "Remove" }).click();
+      await expect(row, "Remove takes the download and its files away").toHaveCount(0);
+      await expect.poll(async () => (await service.artifacts()).artifacts.some((item: any) => item.id === sha), { timeout: 10000 }).toBe(false);
     } finally {
       await expect.poll(async () => (await service.artifacts()).jobs.every((job: any) => !job.writer_active), { timeout: 20000 }).toBe(true);
+      await service.removePulls("fixture-labs/Tiny-Chat-GGUF");
       await service.removeArtifact(sha);
     }
   });
@@ -208,21 +221,6 @@ async function view(page: Page, name: "Installed" | "Downloads") {
   await modelsView(page, name);
 }
 const table = (page: Page) => page.getByRole("table", { name: "Registered models" });
-const fileRow = (page: Page, name: string) => table(page).getByRole("row").filter({ has: page.getByRole("button", { name, exact: true }) });
-const fileDetails = (page: Page) => page.getByRole("complementary", { name: "File details" });
-async function openFile(page: Page, name: string) {
-  const unused = page.getByRole("group", { name: "Status filter" }).getByRole("button", { name: /^Not added \d+$/ });
-  if (await fileRow(page, name).count() === 0 && await unused.count()) await unused.click();
-  await fileRow(page, name).getByRole("button", { name: `Add ${name}` }).click();
-  await expect(fileDetails(page).getByRole("heading", { name, level: 2 })).toBeVisible();
-  return fileDetails(page);
-}
-async function closeFile(page: Page) {
-  const back = fileDetails(page).getByRole("button", { name: "Back to models" });
-  await (await back.isVisible() ? back : fileDetails(page).getByRole("button", { name: "Close file details" })).click();
-  await expect(fileDetails(page)).toHaveCount(0);
-}
-
 /** A disposable owned cache repository, so each browser project deletes its own files. */
 async function disposableRepo(hub: string, project: string) {
   const repo = `models--e2e--Disposable-${project}-GGUF`;
@@ -237,65 +235,67 @@ async function disposableRepo(hub: string, project: string) {
 }
 
 test.describe("Installed files", () => {
-  test("files no model uses show as Not added, link the models that use them and refuse unsafe deletes", async ({ page, request }, info) => {
+  test("files on disk are models, a file that can't be one says why, and Remove says what it deletes or why it can't", async ({ page, request }, info) => {
+    test.setTimeout(90000);
     const service = api(request);
     const fixture = await service.source() as any;
-    const qwen = `${fixture.cache_hub}/models--unsloth--Qwen3-4B-Instruct-2507-GGUF/snapshots/a6f3b0d5c1e2a4b7c9d8e0f1a2b3c4d5e6f70812/Qwen3-4B-Instruct-2507-Q8_0.gguf`;
-    const id = `e2e.cache-q8-${info.project.name}`;
-    await service.register({ id, model_file: qwen, command: fixture.command, args: fixture.args });
-    await page.route("**/v1/juiced/library/pulls", (route) => route.fulfill({ json: { schema_version: 1, data: [{ pull: "finished", state: "complete", error: null, repo: "unsloth/Qwen3-4B-Instruct-2507-GGUF", label: "Q4_K_M", files: [],
-      then: { kind: "add", id: "Qwen3-4B-Instruct-2507-Q4_K_M", policy: "on-demand", state: "failed", error: "artifact_deadline", message: "Artifact verification exceeded its deadline. Preserved files remain available for inspection." } }] } }));
+    const q4 = "Qwen3-4B-Instruct-2507-Q4_K_M", q8 = "Qwen3-4B-Instruct-2507-Q8_0";
+    const twin = `e2e.twin-${info.project.name}`, locked = `e2e.locked-${info.project.name}`;
+    await service.installEngine();
+    await service.json("/v1/juiced/library/local?fresh=true");
+    await expect.poll(async () => (await service.model(q8))?.policy, { timeout: 30000, message: "the service registers the file by itself" }).toBe("disabled");
+    await expect.poll(async () => (await service.model(q4))?.policy, { timeout: 30000 }).toBe("disabled");
+    const cache = `${fixture.cache_hub}/models--unsloth--Qwen3-4B-Instruct-2507-GGUF/snapshots/a6f3b0d5c1e2a4b7c9d8e0f1a2b3c4d5e6f70812`;
+    await service.register({ id: twin, model_file: `${cache}/${q8}.gguf`, command: fixture.command, args: fixture.args });
+    await service.register({ id: locked, model_file: `${fixture.library_root}/huggingface/hub/models--TheDrummer--Skyfall-31B-v4.2-GGUF/snapshots/d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f607/Skyfall-31B-v4.2-IQ4_NL.gguf`, command: fixture.command, args: fixture.args });
     try {
       await view(page, "Installed");
       await expect(page.getByText(/ GiB on disk/)).toBeVisible();
-      const row = fileRow(page, "Qwen3-4B-Instruct-2507-GGUF");
-      await expect(row, "unused files stay out of the Enabled list").toHaveCount(0);
-      await page.getByRole("button", { name: / GiB not added$/ }).click();
-      const status = page.getByRole("group", { name: "Status filter" });
-      await expect(status.getByRole("button", { name: /^Not added \d+$/ })).toHaveAttribute("aria-pressed", "true");
-      await expect(table(page).getByRole("button", { name: id, exact: true })).toHaveCount(0);
-      await expect(row).toContainText("unsloth · Q4_K_M · 2.3 GiB");
-      await expect(row).not.toContainText("Q8_0");
-      await expect(fileRow(page, "Skyfall-31B-v4.2-GGUF")).toContainText("read-only");
-      await page.getByRole("group", { name: "Service filter" }).getByRole("button", { name: /^All \d+$/ }).click();
-      await showAllModels(page);
-      await expect(table(page).getByRole("button", { name: id, exact: true })).toBeVisible();
-      await expect(row).toContainText("Not added");
-
-      const detail = await openFile(page, "Qwen3-4B-Instruct-2507-GGUF");
-      const quants = detail.getByRole("listbox", { name: "Quants on disk" });
-      await expect(quants.getByRole("option", { selected: true })).toContainText("Q4_K_M");
-      await expect(detail.getByRole("button", { name: "Delete Q4_K_M" })).toBeEnabled();
-      await expect(detail.getByLabel("Model name")).toHaveValue("Qwen3-4B-Instruct-2507-Q4_K_M");
-      await expect(detail.locator(".inspector-title"), "one quant is in use, so the heading doesn't call the repository Not added").not.toContainText("Not added");
-      await expect(quants.getByRole("option", { selected: true })).toContainText("Not added");
-      await expect(detail.getByText("No model", { exact: true })).toHaveCount(0);
-      await expect(detail.getByRole("status").filter({ hasText: "adding it failed" })).toHaveText("The download finished, but adding it failed. Checking the files took too long. Add the model again.");
-      await quants.getByRole("option", { name: /Q8_0/ }).click();
-      await expect(detail.getByRole("status").filter({ hasText: "adding it failed" })).toHaveCount(0);
-      await expect(detail.getByText("Q8_0 used by", { exact: true })).toBeVisible();
-      await expect(detail.getByRole("button", { name: "Delete Q8_0" })).toBeDisabled();
-      await expect(detail).toContainText(`Used by ${id}. Remove the model first.`);
+      await expect(page.getByRole("button", { name: /not added/i }), "no file waits to be added").toHaveCount(0);
+      const failures = page.locator(".install-failures");
+      await expect(failures).toContainText("on disk");
+      await expect(failures, "a model too large for the memory budget says so").toContainText("memory budget");
       await largeText(page);
-      await noHorizontalOverflow(page, "File details");
+      await noHorizontalOverflow(page, "Installed");
       await page.evaluate(() => { document.documentElement.style.fontSize = ""; });
 
-      await detail.getByRole("button", { name: id, exact: true }).click();
-      const inspector = page.getByRole("complementary", { name: "Model inspector" });
-      await expect(inspector.getByRole("heading", { name: id, level: 2 })).toBeVisible();
+      const inspector = await openModel(page, q4);
+      await expect(inspector.getByRole("radio", { name: "Disabled" })).toHaveAttribute("aria-checked", "true");
+      const quants = inspector.getByRole("region", { name: "Quants", exact: true }).getByRole("list", { name: "Quants of Qwen3-4B-Instruct-2507-GGUF" });
+      await expect(quants.getByRole("listitem").filter({ hasText: "Q8_0" }).first()).toContainText("Disabled");
       await inspector.getByRole("tab", { name: "Manage" }).click();
-      await expect(inspector.getByRole("list", { name: "Model files" })).toContainText("Qwen3-4B-Instruct-2507-Q8_0.gguf");
-      await expect(inspector).toContainText("Its files stay on disk and show as Not added");
+      await expect(inspector.getByRole("list", { name: "Model files" })).toContainText(`${q4}.gguf`);
+      await expect(inspector).toContainText(cache.split("/snapshots/")[0]!);
+      await inspector.getByRole("button", { name: "Remove model", exact: true }).click();
+      const confirm = page.getByRole("dialog", { name: `Remove ${q4}?` });
+      await expect(confirm).toContainText("Deletes 1 file and frees 2.3 GiB. Its settings go too.");
+      await confirm.getByRole("button", { name: "Cancel" }).click();
       await closeInspector(page);
 
-      const skyfall = await openFile(page, "Skyfall-31B-v4.2-GGUF");
-      await expect(skyfall.getByRole("button", { name: "Delete IQ4_NL" })).toBeDisabled();
-      await expect(skyfall).toContainText("This folder is mounted read-only.");
-      await closeFile(page);
-    } finally { await service.remove(id); }
+      const shared = await openModel(page, q8);
+      await shared.getByRole("tab", { name: "Manage" }).click();
+      await shared.getByRole("button", { name: "Remove model", exact: true }).click();
+      const keeps = page.getByRole("dialog", { name: `Remove ${q8}?` });
+      await expect(keeps).toContainText("Deletes no files. Its settings go too.");
+      await expect(keeps).toContainText(`${q8}.gguf stays. ${twin} uses it.`);
+      await largeText(page);
+      await noHorizontalOverflow(page, "Remove confirmation");
+      await page.evaluate(() => { document.documentElement.style.fontSize = ""; });
+      await keeps.getByRole("button", { name: "Cancel" }).click();
+      await closeInspector(page);
+
+      const refused = await openModel(page, locked);
+      await refused.getByRole("tab", { name: "Manage" }).click();
+      await expect(refused.getByRole("button", { name: "Remove model", exact: true })).toBeDisabled();
+      await expect(refused).toContainText("Skyfall-31B-v4.2-IQ4_NL.gguf is in a read-only folder");
+      await expect(refused).toContainText("Set the model to Disabled to keep it out of use.");
+      await closeInspector(page);
+      expect(await service.model(q4), "cancelled removals change nothing").toBeTruthy();
+      expect(existsSync(`${cache}/${q4}.gguf`)).toBe(true);
+    } finally { await service.remove(twin); await service.remove(locked); }
   });
 
-  test("removing a model leads to deleting its unused files after confirmation", async ({ page, request }, info) => {
+  test("removing a model deletes the files only it uses after one confirmation", async ({ page, request }, info) => {
     const service = api(request);
     const fixture = await service.source() as any;
     const disposable = await disposableRepo(fixture.cache_hub, info.project.name);
@@ -307,17 +307,13 @@ test.describe("Installed files", () => {
       await inspector.getByRole("tab", { name: "Manage" }).click();
       await expect(inspector.getByRole("list", { name: "Model files" })).toContainText("Disposable-Q4_K_M.gguf");
       await inspector.getByRole("button", { name: "Remove model", exact: true }).click();
-      await page.getByRole("dialog").getByRole("button", { name: "Remove model", exact: true }).click();
-      const detail = fileDetails(page);
-      await expect(detail.getByRole("heading", { name: disposable.name, level: 2 })).toBeVisible();
-      await expect(detail.getByRole("button", { name: "Delete Q4_K_M" })).toBeEnabled();
-      await detail.getByRole("button", { name: "Delete Q4_K_M" }).click();
-      const dialog = page.getByRole("dialog", { name: `Delete ${disposable.name} Q4_K_M?` });
-      await expect(dialog).toContainText("Removes 1 file (4.0 KiB) from disk.");
-      await dialog.getByRole("button", { name: "Delete", exact: true }).click();
-      await expect(page.getByRole("status").filter({ hasText: `Deleted ${disposable.name} Q4_K_M. Freed 4.0 KiB.` })).toBeVisible();
-      await expect(detail).toHaveCount(0);
-      await expect(fileRow(page, disposable.name)).toHaveCount(0);
+      const confirm = page.getByRole("dialog", { name: `Remove ${id}?` });
+      await expect(confirm).toContainText("Deletes 1 file and frees 4.0 KiB. Its settings go too.");
+      await confirm.getByRole("button", { name: "Remove model", exact: true }).click();
+      await expect(page.getByRole("status").filter({ hasText: `Removed ${id}. Freed 4.0 KiB.` })).toBeVisible();
+      await expect(inspector).toHaveCount(0);
+      await expect(table(page).getByRole("button", { name: id, exact: true })).toHaveCount(0);
+      expect(await service.model(id)).toBeUndefined();
       expect(existsSync(disposable.file)).toBe(false);
       expect(existsSync(disposable.blob)).toBe(false);
     } finally { await service.remove(id); }
@@ -325,7 +321,7 @@ test.describe("Installed files", () => {
 });
 
 test.describe("Downloads", () => {
-  test("a URL download needs only the link, reads its size, retries, lands unverified in Installed and can be deleted", async ({ page, request }, info) => {
+  test("a URL download needs only the link, reads its size, retries, and a file that is not a model is deleted under Storage", async ({ page, request }, info) => {
     const service = api(request);
     const fixture = await service.source();
     const name = `weights-${info.project.name}`;
@@ -360,13 +356,15 @@ test.describe("Downloads", () => {
     await expect(row).toHaveCount(0, { timeout: 15000 });
     await expect(modelsTab(page, "Downloads")).toHaveText("Downloads", { timeout: 10000 });
 
-    await modelsTab(page, "Installed").click();
-    const detail = await openFile(page, name);
-    await expect(detail).toContainText("Juiced storage");
-    await expect(detail).toContainText("Unverified");
-    await detail.getByRole("button", { name: /^Delete/ }).click();
-    await page.getByRole("dialog").getByRole("button", { name: "Delete", exact: true }).click();
-    await expect(fileRow(page, name)).toHaveCount(0);
+    // The fixture bytes are not a model, so the file is listed under Storage, where it can be deleted.
+    await navigate(page, "Engines & hardware");
+    await page.getByRole("tablist", { name: "Engines & hardware views" }).getByRole("tab", { name: "Storage" }).click();
+    const item = page.getByRole("list", { name: "Reclaimable items" }).getByRole("listitem", { name: `${name}.gguf` });
+    await expect(item).toContainText("Not a model");
+    await item.getByRole("checkbox").check();
+    await page.getByRole("region", { name: "Reclaim space" }).getByRole("button", { name: /^Review/ }).click();
+    await page.getByRole("dialog", { name: "Delete these files?" }).getByRole("button", { name: "Delete 1 item" }).click();
+    await expect(item).toHaveCount(0);
     await expect.poll(async () => (await service.artifacts()).artifacts.some((item: any) => item.id === fixture.sha256), { timeout: 10000 }).toBe(false);
   });
 

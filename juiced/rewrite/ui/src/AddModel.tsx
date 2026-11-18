@@ -12,23 +12,23 @@ type Install = { engine: string; backend: string; size: number | null };
 
 export const supportedFormats = "GGUF (llama.cpp, sd.cpp, parakeet.cpp, FUTO asr4all), whisper.cpp ggml, diffusion safetensors, Kokoro ONNX and Moonshine ORT.";
 
-/** An add or import failure; the format list for an unknown file stays behind a tip. */
+/** An install or import failure; the format list for an unknown file stays behind a tip. */
 export function AddError({ error, code }: { error: string; code?: string }) {
   if (!error) return null;
   return <p className="inline-error" role="alert">{error}{code === "unsupported_model_format" && <> <HelpTip label="Supported formats">{supportedFormats}</HelpTip></>}</p>;
 }
 
 export const policyLabel = "Loading policy";
-/** The service rehashes stored files when it adds them; past this size the wait is long enough to explain. */
+/** The service rehashes stored files when it registers them; past this size the wait is long enough to explain. */
 const LARGE = 16 * 1024 ** 3;
 
-/** Starts a download that the service adds with `policy` once it finishes. */
+/** Starts a download whose files become a model with `policy` once it finishes. */
 export type DownloadThenAdd = { disabled: boolean; start: (policy: Policy) => Promise<void> };
 
-/** Adds a source the service registers through its own route, such as a FastFlowLM checkpoint. */
+/** A source the service registers through its own route, such as a FastFlowLM checkpoint. */
 export type Register = (policy: Policy) => Promise<{ model: string | { id?: string }; backend: string }>;
 
-/** Policy choice, engine install and the Add model action for one ready source, or the download that adds it. */
+/** Policy choice and engine install for a download, or for a file the operator brought in (an upload, a linked file, a FastFlowLM checkpoint). */
 export function AddModel({ client, online, target, size, id, engine, ready, blocked, fallback, download, downloadLabel = "Download", register, onRegistered, onOpenModel, resetKey }: { client: Client; online: boolean; target: AddTarget | null; size?: number; id: string; engine?: string; ready: boolean; blocked?: string; fallback?: ReactNode; download?: DownloadThenAdd; downloadLabel?: string; register?: Register; onRegistered: () => Promise<void>; onOpenModel: (id: string) => void; resetKey: string }) {
   const [needs, setNeeds] = useState<Install | null>(null);
   const [installing, setInstalling] = useState<EngineJob | null>(null);
@@ -59,17 +59,17 @@ export function AddModel({ client, online, target, size, id, engine, ready, bloc
       }
       else {
         setCode(failure instanceof ApiError ? failure.code : undefined);
-        setError(failure instanceof ApiError && failure.code === "model_exists" ? "A model already has this name. Choose another name." : plainError(failure, "The model couldn't be added."));
+        setError(failure instanceof ApiError && failure.code === "model_exists" ? "A model already has this name. Choose another name." : plainError(failure, "The model couldn't be installed."));
       }
     } finally { setAdding(false); }
   }
-  if (added) return <div className="added"><p className="inline-success" role="status">Added {added.model}. {policyNames[added.policy]} on {backendNames[added.backend] ?? added.backend}.</p><div className="action-row"><Button variant="primary" onClick={() => onOpenModel(added.model)}>Open model</Button></div></div>;
+  if (added) return <div className="added"><p className="inline-success" role="status">Installed {added.model}. {policyNames[added.policy]} on {backendNames[added.backend] ?? added.backend}.</p><div className="action-row"><Button variant="primary" onClick={() => onOpenModel(added.model)}>Open model</Button></div></div>;
   return <>
     {(ready || download) && <div className="add-policy"><span className="field-label" id={label}>{policyLabel}</span><div className="segmented" role="radiogroup" aria-labelledby={label}>{(["disabled", "on-demand", "hot"] as Policy[]).map((value) => <button key={value} role="radio" aria-checked={policy === value} disabled={adding} onClick={() => setPolicy(value)}>{policyNames[value]}</button>)}</div></div>}
     {needs ? <div className="needs-engine"><p className="field-help">Needs the {needs.engine} {backendNames[needs.backend] ?? needs.backend} engine{needs.size ? ` (${bytes(needs.size)})` : ""}.</p>
-      {installing ? <><progress aria-label="Engine install progress" max={installing.total_bytes ?? 1} value={installing.total_bytes ? installing.downloaded_bytes : undefined} /><p className="field-help">Installing engine… {installing.state}</p></> : <Button variant="primary" disabled={!online || adding || !target} onClick={() => void add(needs)}>Install engine and add</Button>}</div>
-      : <div className="action-row wrap">{ready ? <Button variant="primary" disabled={!online || adding || (!register && (!target || !id)) || !!blocked} title={blocked} onClick={() => void add()}>{adding ? "Adding…" : "Add model"}</Button> : download ? <Button variant="primary" disabled={!online || adding || download.disabled} onClick={() => { setAdding(true); void download.start(policy).finally(() => setAdding(false)); }}>{downloadLabel}</Button> : fallback}</div>}
-    {adding && !installing && size !== undefined && size >= LARGE && <p className="field-help" role="status">Checking {bytes(size)} before adding. This takes a few minutes.</p>}
+      {installing ? <><progress aria-label="Engine install progress" max={installing.total_bytes ?? 1} value={installing.total_bytes ? installing.downloaded_bytes : undefined} /><p className="field-help">Installing engine… {installing.state}</p></> : <Button variant="primary" disabled={!online || adding || !target} onClick={() => void add(needs)}>Install engine and model</Button>}</div>
+      : <div className="action-row wrap">{ready ? <Button variant="primary" disabled={!online || adding || (!register && (!target || !id)) || !!blocked} title={blocked} onClick={() => void add()}>{adding ? "Installing…" : "Install"}</Button> : download ? <Button variant="primary" disabled={!online || adding || download.disabled} onClick={() => { setAdding(true); void download.start(policy).finally(() => setAdding(false)); }}>{downloadLabel}</Button> : fallback}</div>}
+    {adding && !installing && size !== undefined && size >= LARGE && <p className="field-help" role="status">Checking {bytes(size)} first. This takes a few minutes.</p>}
     <AddError error={error} code={code} />
   </>;
 }

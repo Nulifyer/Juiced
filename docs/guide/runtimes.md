@@ -55,7 +55,7 @@ the portable environment the native release used.
    A folder already on disk that holds `config.json` and the `.safetensors` files,
    such as a Hugging Face cache snapshot under an import root, can be added in
    place instead.
-2. Select **Add model**. Juiced installs vLLM on its CUDA or ROCm backend first
+2. Select **Install**. Juiced installs vLLM on its CUDA or ROCm backend first
    when it is missing.
 3. Load the model. The first start compiles kernels and can take several
    minutes; later starts reuse the compile cache.
@@ -156,7 +156,8 @@ published SHA-256.
 1. Open **Models**, then **Discover**, and pick the **Audio** or **3D** task.
 2. Download the model. ACE-Step, ThinkSound, TRELLIS and OpenMOSS models come as a
    set of files, and Juiced downloads all of them.
-3. Select **Add model**. If its engine is missing, select **Install engine and add**.
+3. The model is under **Installed** when the download finishes. Juiced installs
+   its engine first when it is missing.
 4. Try it in **Test services → Try a model**. An audio model makes a clip from a
    prompt and optional lyrics. A 3D model turns an object photo into a `.glb` file.
 

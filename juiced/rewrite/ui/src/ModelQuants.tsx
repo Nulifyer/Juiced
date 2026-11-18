@@ -12,7 +12,7 @@ import { useResource } from "./useResource";
 export type QuantRow =
   | { kind: "current"; key: string; label: string; bytes: number | null }
   | { kind: "added"; key: string; label: string; bytes: number | null; model: string; policy: string | null; shared: boolean }
-  | { kind: "file"; key: string; label: string; bytes: number | null; file: string }
+  | { kind: "pending"; key: string; label: string; bytes: number | null; failed: string | null }
   | { kind: "partial"; key: string; label: string; bytes: number | null; have: number; parts: number; file: string | null }
   | { kind: "remote"; key: string; label: string; bytes: number | null; file: string; progress: number | null };
 
@@ -24,11 +24,11 @@ export function quantRows(model: Pick<Model, "id">, models: Pick<Model, "id" | "
   for (const quant of group.quants) {
     const others = quant.usedBy.filter((id) => id !== model.id);
     if (!quant.complete && quant.usedBy.length === 0) {
-      // A split download that stopped part way can't be added; Discover fetches the missing parts.
+      // A split download that stopped part way is not a model; Discover fetches the missing parts.
       const remote = hub?.quants.find((entry) => entry.label === quant.label && entry.pullable);
       rows.push({ kind: "partial", key: `disk:${quant.file}`, label: quant.label, bytes: remote?.bytes ?? null, have: quant.files.length, parts: quant.parts, file: remote?.file ?? null });
     } else if (quant.usedBy.includes(model.id)) rows.push({ kind: "current", key: `disk:${quant.file}`, label: quant.label, bytes: quant.bytes });
-    else if (others.length === 0) rows.push({ kind: "file", key: `disk:${quant.file}`, label: quant.label, bytes: quant.bytes, file: quant.file });
+    else if (others.length === 0) rows.push({ kind: "pending", key: `disk:${quant.file}`, label: quant.label, bytes: quant.bytes, failed: quant.install && quant.install.state !== "pending" ? quant.install.message ?? "It couldn't be installed." : null });
     else for (const id of others) rows.push({ kind: "added", key: `disk:${quant.file}:${id}`, label: quant.label, bytes: quant.bytes, model: id, policy: models.find((entry) => entry.id === id)?.policy ?? null, shared: others.length > 1 });
   }
   const onDisk = new Set(group.files.map((file) => file.name));
@@ -42,7 +42,7 @@ export function quantRows(model: Pick<Model, "id">, models: Pick<Model, "id" | "
 }
 
 /** The other quants of a model: the ones on this machine and the ones Discover can download. */
-export function ModelQuants({ model, models, inventory, client, online, onOpenModel, onOpenFile, onDiscover }: { model: Model; models: Model[]; inventory: LocalInventory | null; client: Client; online: boolean; onOpenModel: (id: string) => void; onOpenFile: (group: string, quant: string) => void; onDiscover: (target: DiscoverTarget) => void }) {
+export function ModelQuants({ model, models, inventory, client, online, onOpenModel, onDiscover }: { model: Model; models: Model[]; inventory: LocalInventory | null; client: Client; online: boolean; onOpenModel: (id: string) => void; onDiscover: (target: DiscoverTarget) => void }) {
   const group = weightsGroup(model, inventory);
   const repo = group?.repo && group.repo.length <= 128 ? group.repo : null;
   const path = `juiced/library/search?${new URLSearchParams({ repo: repo ?? "", limit: "1" })}`;
@@ -65,19 +65,19 @@ export function ModelQuants({ model, models, inventory, client, online, onOpenMo
     : !others ? "No other quants."
     : null;
   return <section className="inspector-section model-quants" aria-label="Quants">
-    <div className="page-title"><h3>Quants</h3><HelpTip label="Quants">Other sizes of {group.name}. Each added quant is its own model with its own settings. Get opens Discover, where you choose the loading policy.</HelpTip></div>
+    <div className="page-title"><h3>Quants</h3><HelpTip label="Quants">Other sizes of {group.name}. Each quant on disk is its own model with its own settings. Get opens Discover, where you choose the loading policy.</HelpTip></div>
     <QuantList label={`Quants of ${group.name}`} items={rows.map((row): QuantItem => ({
-      key: row.key, label: row.label, bytes: row.bytes, current: row.kind === "current",
+      key: row.key, label: row.label, bytes: row.bytes, current: row.kind === "current", title: row.kind === "pending" ? row.failed ?? undefined : undefined,
       note: row.kind === "added" && row.shared ? row.model : null,
       progress: row.kind === "remote" ? row.progress : null,
-      state: row.kind === "current" ? quantWords.current : row.kind === "added" ? policyWord(row.policy) : row.kind === "file" ? quantWords.unadded : row.kind === "partial" ? quantWords.parts(row.have, row.parts) : row.progress !== null ? quantWords.downloading(row.progress) : "",
+      state: row.kind === "current" ? quantWords.current : row.kind === "added" ? policyWord(row.policy) : row.kind === "pending" ? row.failed ? quantWords.failed : quantWords.installing : row.kind === "partial" ? quantWords.parts(row.have, row.parts) : row.progress !== null ? quantWords.downloading(row.progress) : "",
       action: row.kind === "added" ? { label: "Open", name: `Open ${row.model}`, run: () => onOpenModel(row.model) }
         : row.kind === "partial" ? repo && row.file ? { label: "Finish", name: `Finish ${row.label}`, run: () => onDiscover({ repo, file: row.file! }) } : undefined
-        : row.kind === "file" ? { label: "Add", name: `Add ${row.label}`, run: () => onOpenFile(group.id, row.file) }
         : row.kind === "remote" && repo ? { label: row.progress !== null ? "View" : "Get", name: row.progress !== null ? `View ${row.label} in Discover` : `Get ${row.label}`, run: () => onDiscover({ repo, file: row.file }) }
         : undefined,
     }))} />
-    {repo && more > 0 && <button className="link-button model-quant-more" onClick={() => onDiscover({ repo })}>+{more} more in Discover</button>}
+    {repo && <button className="link-button model-quant-more" onClick={() => onDiscover({ repo })}>{more > 0 ? `+${more} more in Discover` : "More quants in Discover"}</button>}
+    {rows.map((row) => row.kind === "pending" && row.failed ? <p key={row.key} className="inline-warning">{row.label} isn't a model yet. {row.failed}</p> : null)}
     {note && <p className="field-help" role="status">{note}</p>}
     {repo && online && (search.error || (search.data && !search.data.offline && !reachable)) && <div className="action-row">{search.error && <p className="inline-error" role="alert">Couldn't check Hugging Face. {search.error}</p>}<Button disabled={search.loading} onClick={() => void search.reload()}>Retry</Button></div>}
   </section>;

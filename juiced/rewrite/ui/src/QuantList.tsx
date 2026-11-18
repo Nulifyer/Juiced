@@ -12,14 +12,15 @@ export type QuantItem = {
 /** The words every quant list uses for the same state. */
 export const quantWords = {
   current: "This model",
-  unadded: "Not added",
+  installing: "Installing",
+  failed: "Not installed",
   parts: (have: number, parts: number) => `${have} of ${parts} parts`,
   downloading: (percent: number) => `Downloading ${Math.round(percent)}%`,
 };
 
-/** A quant that is added as a model shows that model's loading policy. */
+/** A quant on disk is a model, so it shows that model's loading policy. */
 export function policyWord(policy: string | null | undefined, models = 1): string {
-  const word = policy && Object.hasOwn(policyNames, policy) ? policyNames[policy as Policy] : "Added";
+  const word = policy && Object.hasOwn(policyNames, policy) ? policyNames[policy as Policy] : "Installed";
   return models > 1 ? `${word} +${models - 1}` : word;
 }
 

@@ -1,10 +1,10 @@
 import { expect, test } from "bun:test";
 import { ApiError } from "../src/api";
 import { pullJobs } from "../src/Downloading";
-import { hubQuantState, quantUsers } from "../src/FindModels";
+import { diskQuant, hubQuantState, quantUsers } from "../src/FindModels";
 import { parseSearch } from "../src/libraryData";
 import { parseLocal, parsePulls } from "../src/localLibraryData";
-import { localQuantState } from "../src/LocalModels";
+import { installFailures } from "../src/LocalModels";
 import type { ArtifactJob } from "../src/management";
 import { plainError } from "../src/modelErrors";
 import { quantLabel } from "../src/Models";
@@ -13,25 +13,31 @@ import { policyWord } from "../src/QuantList";
 const local = parseLocal({ groups: [{ id: "hf:unsloth/Demo-GGUF", repo: "unsloth/Demo-GGUF", name: "Demo-GGUF",
   quants: [
     { label: "Q4_K_M", file: "f4", bytes: 40, files: ["f4"], used_by: ["demo", "demo-hybrid"] },
-    { label: "Q8_0", file: "f8", bytes: 80, files: ["f8"], used_by: [] },
+    { label: "Q8_0", file: "f8", bytes: 80, files: ["f8"], used_by: [], add: { path: "/f8" }, install: { state: "pending", error: null, message: null } },
+    { label: "Q6_K", file: "f6", bytes: 60, files: ["f6"], used_by: [], add: { path: "/f6" }, install: { state: "failed", error: "engine_not_installed", message: "Needs the llama.cpp cpu engine. Install it under Engines." } },
+    { label: "Q2_K", file: "f2", bytes: 20, files: ["f2"], used_by: [], add: { path: "/f2" }, install: { state: "unusable", error: "companion_file", message: "This file is a text encoder." } },
     { label: "UD-Q6_K_XL", file: "p1", parts: 3, complete: false, bytes: 6, files: ["p1"], used_by: [] },
   ],
-  files: [{ id: "f4", name: "Demo-Q4_K_M.gguf", used_by: ["demo", "demo-hybrid"] }, { id: "f8", name: "Demo-Q8_0.gguf" }, { id: "p1", name: "Demo-UD-Q6_K_XL-00001-of-00003.gguf", role: "shard" }] }] });
+  files: [{ id: "f4", name: "Demo-Q4_K_M.gguf", used_by: ["demo", "demo-hybrid"] }, { id: "f8", name: "Demo-Q8_0.gguf" }, { id: "f6", name: "Demo-Q6_K.gguf" }, { id: "f2", name: "Demo-Q2_K.gguf" }, { id: "p1", name: "Demo-UD-Q6_K_XL-00001-of-00003.gguf", role: "shard" }] }] });
 const models = [{ id: "demo", policy: "hot" as const }, { id: "demo-hybrid", policy: "disabled" as const }];
 const hub = parseSearch({ sources: { huggingface: { status: "ok" } }, data: [{ repo: "Unsloth/Demo-GGUF", name: "Demo-GGUF", quants: [
   { label: "Q4_K_M", file: "Demo-Q4_K_M.gguf", bytes: 40, local: { present: true } },
   { label: "Q8_0", file: "Demo-Q8_0.gguf", bytes: 80, local: { present: true } },
+  { label: "Q6_K", file: "Demo-Q6_K.gguf", bytes: 60, local: { present: true } },
   { label: "UD-Q6_K_XL", file: "UD-Q6_K_XL/Demo-UD-Q6_K_XL-00001-of-00003.gguf", parts: 3, bytes: 600, pullable: true, local: { present: false, present_files: 1 } },
   { label: "Q5_K_M", file: "Demo-Q5_K_M.gguf", bytes: 50, pullable: true, jobs: [{ id: "j", state: "downloading", downloaded_bytes: 25 }] },
   { label: "BF16", file: "Demo-BF16.gguf", bytes: 160, pullable: true },
 ] }] }).models[0]!;
 
-test("a quant reads the same on disk and in Discover", () => {
-  const group = local.groups[0]!;
-  expect(group.quants.map((quant) => localQuantState(quant, models))).toEqual(["Hot +1", "Not added", "1 of 3 parts"]);
-  expect(hub.quants.map((quant) => hubQuantState(quant, quantUsers(local, hub.repo, quant), models))).toEqual(["Hot +1", "Not added", "1 of 3 parts", "Downloading 50%", ""]);
-  expect(hub.quants.map((quant) => hubQuantState(quant, quantUsers(null, hub.repo, quant), []))).toEqual(["Not added", "Not added", "1 of 3 parts", "Downloading 50%", ""]);
-  expect(policyWord(null)).toBe("Added");
+test("a quant reads the same on disk and in Discover, and is never Not added", () => {
+  expect(hub.quants.map((quant) => hubQuantState(quant, quantUsers(local, hub.repo, quant), models, diskQuant(local, hub.repo, quant)))).toEqual(["Hot +1", "Installing", "Not installed", "1 of 3 parts", "Downloading 50%", ""]);
+  expect(hub.quants.map((quant) => hubQuantState(quant, quantUsers(null, hub.repo, quant), []))).toEqual(["Installing", "Installing", "Installing", "1 of 3 parts", "Downloading 50%", ""]);
+  expect(policyWord(null)).toBe("Installed");
+});
+
+test("Installed warns about files that should be models and leaves the rest to Storage", () => {
+  expect(installFailures(local)).toEqual([{ name: "Demo-GGUF Q6_K", message: "Needs the llama.cpp cpu engine. Install it under Engines." }]);
+  expect(installFailures(null)).toEqual([]);
 });
 
 test("a model row names its quant only when the model name doesn't", () => {

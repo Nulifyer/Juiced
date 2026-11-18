@@ -1,50 +1,37 @@
 import { expect, test } from "bun:test";
-import { addedSince, collapseFinished, nextStep, pullBytes } from "../src/Downloading";
+import { downloadRows, listed, pullBytes, rowActions } from "../src/Downloading";
 import type { ArtifactJob } from "../src/management";
-import type { LocalGroup, LocalInventory, PullView } from "../src/localLibraryData";
+import type { PullView } from "../src/localLibraryData";
 import { thenFailure } from "../src/modelErrors";
+import { keepNote, parseRemoval, removalSummary } from "../src/RemoveModel";
 
-const pull = (id: string, state = "complete"): PullView => ({ id, state, error: null, repo: "unsloth/Qwen3-0.6B-GGUF", label: "Q4_K_M", files: [{ file: "Qwen3-0.6B-Q4_K_M.gguf", bytes: 10, state: "present", downloaded: 10, job: null, source: null }], then: null });
-const group = (usedBy: string[]): LocalGroup => ({
-  id: "hf:unsloth/qwen3-0.6b-gguf", repo: "unsloth/Qwen3-0.6B-GGUF", name: "Qwen3-0.6B-GGUF", publisher: "unsloth", storage: ["huggingface_cache"], location: null, readOnly: false, bytes: 20, removableBytes: 0, usedBy,
-  quants: [
-    { label: "Q8_0", file: "f2", parts: 1, complete: true, bytes: 10, files: ["f2"], usedBy: [], removable: true, add: { path: "/b" } },
-    { label: "Q4_K_M", file: "f1", parts: 1, complete: true, bytes: 10, files: ["f1"], usedBy, removable: true, add: { path: "/a" } },
-  ],
-  files: [
-    { id: "f1", name: "Qwen3-0.6B-Q4_K_M.gguf", path: "/a", quant: "Q4_K_M", role: "model", bytes: 10, location: "/a", storage: "huggingface_cache", artifact: null, readOnly: false, removable: true, refusal: null, unverified: false, usedBy },
-    { id: "f2", name: "Qwen3-0.6B-Q8_0.gguf", path: "/b", quant: "Q8_0", role: "model", bytes: 10, location: "/b", storage: "huggingface_cache", artifact: null, readOnly: false, removable: true, refusal: null, unverified: false, usedBy: [] },
-  ],
-});
-const inventory = (usedBy: string[]): LocalInventory => ({ totalBytes: 20, removableBytes: 0, truncated: false, groups: [group(usedBy)] });
+const pull = (id: string, state = "complete", then: PullView["then"] = null): PullView => ({ id, state, error: null, repo: "unsloth/Qwen3-0.6B-GGUF", label: "Q4_K_M", files: [{ file: "Qwen3-0.6B-Q4_K_M.gguf", bytes: 10, state: state === "complete" ? "present" : "downloading", downloaded: 10, job: state === "complete" ? null : `job-${id}`, source: null }], then });
+const add = (state: "pending" | "done" | "failed", message: string | null = null) => ({ kind: "add" as const, model: "Qwen3-0.6B-Q4_K_M", policy: "on-demand", state, error: null, message });
+const job = (id: string, state: string, active = false, extra: Partial<ArtifactJob> = {}) => ({ id, state, revision: 1, error: null, source_url: `https://example.com/${id}.gguf`, downloaded_bytes: 4, writer_active: active, ...extra }) as ArtifactJob;
 
-test("a finished pull opens the model that uses its files, or adds the pulled quant", () => {
-  expect(nextStep(pull("a"), inventory([]))).toEqual({ kind: "add", group: "hf:unsloth/qwen3-0.6b-gguf", quant: "f1" });
-  expect(nextStep(pull("a"), inventory(["Qwen3-0.6B-Q4_K_M"]))).toEqual({ kind: "open", model: "Qwen3-0.6B-Q4_K_M" });
-  expect(nextStep(pull("a", "downloading"), inventory([]))).toBeNull();
-  expect(nextStep(pull("a"), null)).toBeNull();
+test("Downloads lists only what is in progress or failed", () => {
+  const pulls = [pull("done", "complete", add("done")), pull("bare"), pull("installing", "complete", add("pending")), pull("uninstalled", "complete", add("failed", "No engine.")), pull("running", "downloading", add("pending"))];
+  expect(pulls.map(listed)).toEqual([false, false, true, true, true]);
+  const jobs = [job("job-running", "downloading", true), job("url", "failed"), job("gone", "cancelled"), job("stored", "complete")];
+  const rows = downloadRows(pulls, jobs);
+  expect(rows.map((row) => [row.key, row.state])).toEqual([["pull:installing", "installing"], ["pull:uninstalled", "not-installed"], ["pull:running", "downloading"], ["job:url", "failed"]]);
+  expect(rows[1]!.note, "the row says why the model wasn't made").toBe("No engine.");
 });
 
-test("repeated finished pulls of one quant collapse into a row that dismisses them all", () => {
-  const row = (key: string, state: string, finished: boolean) => ({ key, title: "Qwen3-0.6B-GGUF Q4_K_M", state, finished, pulls: [key], jobs: [] as unknown[] });
-  const rows = collapseFinished([row("a", "downloading", false), row("b", "complete", true), row("c", "complete", true), row("d", "failed", true)]);
-  expect(rows.map((item) => item.key)).toEqual(["a", "b", "d"]);
-  expect(rows[1]!.pulls).toEqual(["b", "c"]);
+test("a row offers one way forward and one way out, never Dismiss", () => {
+  const rows = downloadRows([pull("installing", "complete", add("pending")), pull("uninstalled", "complete", add("failed")), pull("running", "downloading", add("pending"))], [job("job-running", "downloading", true)]);
+  expect(rows.map(rowActions)).toEqual([[], ["retry", "remove"], ["pause", "cancel"]]);
+  const dropped = { ...pull("dropped", "failed", add("failed")), error: "artifact_network" };
+  expect(rowActions({ pull: dropped, jobs: [] }), "a dropped connection keeps its bytes").toEqual(["resume", "remove"]);
+  expect(rowActions({ pull: { ...dropped, error: "artifact_hash_mismatch" }, jobs: [] })).toEqual(["retry", "remove"]);
+  expect(rowActions({ jobs: [job("paused", "paused")] })).toEqual(["resume", "remove"]);
+  expect(rowActions({ jobs: [job("pausing", "pausing", true)] })).toEqual(["cancel"]);
+  expect(rowActions({ jobs: [], engine: true })).toEqual([]);
 });
 
-test("a pull with a pending add offers nothing until the service settles it", () => {
-  const adding = { ...pull("a"), then: { kind: "add" as const, model: "Qwen3-0.6B-Q4_K_M", policy: "on-demand", state: "pending" as const, error: null, message: null } };
-  expect(nextStep(adding, inventory([]))).toBeNull();
-  const added = { ...adding, then: { ...adding.then, state: "done" as const, model: "Custom-Name" } };
-  expect(nextStep(added, { ...inventory([]), groups: [{ ...group([]), usedBy: ["Custom-Name"] }] })).toEqual({ kind: "open", model: "Custom-Name" });
-  expect(nextStep(added, inventory([])), "a removed model falls back to adding the files").toEqual({ kind: "add", group: "hf:unsloth/qwen3-0.6b-gguf", quant: "f1" });
-  const failed = { ...adding, then: { ...adding.then, state: "failed" as const, message: "No engine." } };
-  expect(nextStep(failed, inventory([]))).toEqual({ kind: "add", group: "hf:unsloth/qwen3-0.6b-gguf", quant: "f1" });
-  expect(addedSince(failed, inventory([])), "still not added").toBe(false);
-  expect(addedSince(failed, inventory(["Added-By-Hand"])), "a model added by hand settles the failed add").toBe(true);
-  expect(addedSince({ ...failed, then: { ...failed.then, state: "done" as const } }, inventory(["Added-By-Hand"]))).toBe(false);
-  expect(thenFailure(failed.then), "an unknown failure keeps the service's words").toBe("No engine.");
-  expect(thenFailure({ error: "artifact_deadline", message: "Artifact verification exceeded its deadline." })).toBe("Checking the files took too long. Add the model again.");
+test("a follow-up failure reads in plain words", () => {
+  expect(thenFailure({ error: null, message: "No engine." }), "an unknown failure keeps the service's words").toBe("No engine.");
+  expect(thenFailure({ error: "artifact_deadline", message: "Artifact verification exceeded its deadline." })).toBe("Checking the files took too long. Retry.");
 });
 
 test("a failed split pull counts the bytes its failed parts' jobs kept", () => {
@@ -54,7 +41,19 @@ test("a failed split pull counts the bytes its failed parts' jobs kept", () => {
     { file: "R-00002-of-00003.gguf", bytes: 500, state: "failed", downloaded: 0, job: null, source: source(2) },
     { file: "R-00003-of-00003.gguf", bytes: 200, state: "failed", downloaded: 0, job: null, source: source(3) },
   ] };
-  const job = (id: string, part: number, bytes: number) => ({ id, state: "failed", error: "artifact_network", source_url: source(part), downloaded_bytes: bytes, writer_active: false }) as ArtifactJob;
-  expect(pullBytes(failed, [job("a", 2, 190), job("b", 3, 130)])).toBe(326);
+  const part = (id: string, index: number, bytes: number) => ({ id, state: "failed", error: "artifact_network", source_url: source(index), downloaded_bytes: bytes, writer_active: false }) as ArtifactJob;
+  expect(pullBytes(failed, [part("a", 2, 190), part("b", 3, 130)])).toBe(326);
   expect(pullBytes(failed, [])).toBe(6);
+});
+
+test("the removal confirmation says what is deleted and what stays", () => {
+  const plan = parseRemoval({ model: "demo", revision: 7, removable: true, refusal: null, freed_bytes: 3 * 1024 ** 3, deletes: [{ name: "demo-Q8_0.gguf", bytes: 3 * 1024 ** 3 }],
+    keeps: [{ name: "mmproj.gguf", bytes: 1, reason: "shared", used_by: ["demo-vision"], location: "/data/hub/mmproj.gguf" }, { name: "linked.gguf", bytes: 1, reason: "linked", used_by: [], location: "/models/linked.gguf" }] });
+  expect(plan.revision).toBe(7);
+  expect(removalSummary(plan)).toBe("Deletes 1 file and frees 3.0 GiB.");
+  expect(plan.keeps.map(keepNote)).toEqual(["mmproj.gguf stays. demo-vision uses it.", "linked.gguf stays in /models. Juiced links it and didn't put it there."]);
+  expect(removalSummary({ deletes: 0, freedBytes: 0 })).toBe("Deletes no files.");
+  const refused = parseRemoval({ removable: false, refusal: { code: "model_files_read_only", message: "a.gguf is in a read-only folder." }, deletes: [], keeps: [] });
+  expect([refused.removable, refused.refusal]).toEqual([false, "a.gguf is in a read-only folder."]);
+  expect(() => parseRemoval({})).toThrow();
 });

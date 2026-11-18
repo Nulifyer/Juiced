@@ -13,7 +13,7 @@ much space each store uses, what is safe to delete, and how much room is left.
 | `/data/huggingface/hub` | Hugging Face cache Juiced owns | Only unused files you reclaim |
 | `/data/runtime-packages` | Installed engines (often a separate volume) | Only engines no model uses, when you reclaim them |
 | `/data/kv-cache` | Saved sessions and manual snapshots | Saved sessions are evicted to stay within the session budget |
-| `/data/acquisitions.json` | In-flight downloads, so they survive a restart | Entries leave when a download finishes or is dismissed |
+| `/data/acquisitions.json` | In-flight downloads, so they survive a restart | Entries leave when a download's model exists or the download is removed |
 | `/data/api-keys.json` | Access keys, stored as hashes | Only keys you revoke |
 | `/library/*` | Read-only weight mounts | Never |
 
@@ -32,8 +32,11 @@ too as **v0.9.2 settings**, kept for settings import.
 
 ## Reclaim space
 
-**Reclaim space** lists unused model files, partial downloads, engines no model
-uses, and v0.9.2 leftovers, largest first.
+**Reclaim space** lists files that are not models, partial downloads, engines no
+model uses, and v0.9.2 leftovers, largest first. A file that is not a model is a
+companion nothing uses (a projector or text encoder), part of an unfinished
+split download, or a file Juiced can't read as a model; its row gives the
+reason.
 
 1. Select the items to delete.
 2. Select **Review**. The button shows the selected size. The dialog shows the
@@ -45,8 +48,9 @@ Juiced refuses an item that a model registration, a running download, a running
 worker or a saved session still uses, and never deletes from a read-only library
 mount. If storage changed since the review, nothing is deleted; review again.
 
-To remove a model and its weights, use the model's page under **Models**. Files
-another model shares stay until the last model that uses them is removed.
+To remove a model and its files, use **Remove model** on the model's **Manage**
+tab under **Models**. Files another model shares stay until the last model that
+uses them is removed.
 **Models on disk** shows what removing each model would free.
 
 ## Free-space guard

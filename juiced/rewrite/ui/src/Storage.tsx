@@ -41,7 +41,7 @@ export function Storage({ client, online }: { client: Client; online: boolean })
     <div className="storage-columns">
       <Usage data={data} />
       <section className="panel" aria-label="Reclaim space">
-        <header className="panel-head"><h2>Reclaim space <HelpTip label="Reclaim space">Only files no model, download, running engine or saved session uses. Read-only library folders are never touched. Juiced shows what will be deleted before anything is.</HelpTip></h2>
+        <header className="panel-head"><h2>Reclaim space <HelpTip label="Reclaim space">Only files no model, download, running engine or saved session uses: companion files, partial downloads and files that can't be a model. Read-only library folders are never touched. Juiced shows what will be deleted before anything is.</HelpTip></h2>
           {rows.length > 0 && <Button variant="danger" disabled={!online || busy || selected.length === 0} onClick={() => void review()}>{selected.length ? `Review ${bytes(selectedBytes)}` : "Review"}</Button>}</header>
         {rows.length === 0 ? <p className="all-clear"><span className="status-dot good" /> Nothing to reclaim.</p> : <ul className="row-list reclaim-list" aria-label="Reclaimable items">
           {rows.map((row) => <ReclaimRow key={row.id} row={row} checked={selected.includes(row.id)} disabled={!online || busy} onToggle={() => toggle(row.id)} />)}
@@ -85,7 +85,7 @@ function ReclaimRow({ row, checked, disabled, onToggle }: { row: Reclaimable; ch
   const id = `reclaim-${row.id}`;
   return <li className={`reclaim-row ${row.reclaimable ? "" : "kept"}`} aria-label={row.title}>
     {row.reclaimable ? <label className="reclaim-hit" htmlFor={id}><input id={id} type="checkbox" checked={checked} disabled={disabled} onChange={onToggle} aria-label={`Select ${row.title}`} /></label> : <span className="reclaim-spacer" aria-hidden="true" />}
-    <label htmlFor={row.reclaimable ? id : undefined} className="row-main" title={row.path ?? undefined}><strong className="break-word">{row.title}</strong><span className="muted break-word">{[kindNames[row.kind] ?? row.kind, row.reclaimable ? place(row.path) : row.message].filter(Boolean).join(" · ")}</span></label>
+    <label htmlFor={row.reclaimable ? id : undefined} className="row-main" title={row.path ?? undefined}><strong className="break-word">{row.title}</strong><span className="muted break-word">{[kindNames[row.kind] ?? row.kind, row.reclaimable ? row.note ?? place(row.path) : row.message].filter(Boolean).join(" · ")}</span></label>
     <span className="row-meta numeric">{bytes(row.bytes)}</span>
   </li>;
 }
@@ -93,7 +93,7 @@ function ReclaimRow({ row, checked, disabled, onToggle }: { row: Reclaimable; ch
 function ModelUsageTable({ data }: { data: StorageView }) {
   if (data.models.length === 0) return null;
   return <section className="panel" aria-label="Models on disk">
-    <header className="panel-head"><h2>Models on disk <HelpTip label="Models on disk">Space each model's files take. Shared files stay until every model that uses them is removed. Remove a model from its page under Models; files in read-only library folders are never deleted.</HelpTip></h2></header>
+    <header className="panel-head"><h2>Models on disk <HelpTip label="Models on disk">Space each model's files take. Removing a model under Models deletes the files only it uses. Shared files stay until every model that uses them is removed; files in read-only library folders are never deleted.</HelpTip></h2></header>
     <div className="data-table stacked model-usage" role="table" aria-label="Models on disk">
       <div className="data-head" role="row"><span role="columnheader">Model</span><span role="columnheader" className="numeric">Size</span><span role="columnheader" className="numeric">Shared</span><span role="columnheader" className="numeric">Removal frees</span></div>
       {data.models.map((model) => <div className="data-row" role="row" key={model.model} aria-label={model.model}>

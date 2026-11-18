@@ -16,7 +16,7 @@ const messages: Record<string, string> = {
   artifact_size_mismatch: "The file was bigger than its stated size or the free space.",
   artifact_publication_uncertain: "Saving the file may not have finished. Its space stays reserved.",
   artifact_corrupt: "The file failed its check on the server.",
-  artifact_deadline: "Checking the files took too long. Add the model again.",
+  artifact_deadline: "Checking the files took too long. Retry.",
   artifact_io: "Storage failed on the server. Check its disk, then retry.",
   artifact_persistence: "Storage failed on the server. Check its disk, then retry.",
   storage_root_unavailable: "A storage folder moved or disappeared. Restore it, then retry.",

@@ -664,6 +664,10 @@ dialog textarea { margin-bottom: 4px; }
 .quant-chip.more { color: var(--muted); }
 .needs-engine progress { width: 120px; height: 6px; accent-color: var(--ring); }
 .needs-engine, .added { margin-top: 12px; display: grid; gap: 8px; }
+.remove-reason { flex-basis: 100%; margin: 0; }
+.remove-section .remove-reason { margin-top: 8px; }
+.install-failures { margin: 0 0 10px; }
+.on-disk-actions { margin-top: 12px; }
 .needs-engine progress { width: 100%; }
 .model-results.stale { opacity: .55; transition: opacity .15s; }
 .searching { font-size: .75rem; margin: -4px 0 6px; min-height: 1.125rem; }

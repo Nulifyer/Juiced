@@ -1,7 +1,7 @@
 export type Volume = { path: string; paths: string[]; roles: string[]; total_bytes: number; available_bytes: number; used_bytes: number; read_only: boolean; low: boolean };
 export type StorageWarning = { code: string; message: string; path?: string };
 export type Category = { id: string; title: string; bytes: number; reclaimable_bytes: number; truncated?: boolean };
-export type Reclaimable = { id: string; kind: string; title: string; path: string | null; bytes: number; reclaimable: boolean; refusal: string | null; message: string | null; references: string[] };
+export type Reclaimable = { id: string; kind: string; title: string; path: string | null; bytes: number; reclaimable: boolean; refusal: string | null; message: string | null; references: string[]; note: string | null };
 export type ModelUsage = { model: string; bytes: number; files: number; shared_bytes: number; read_only_bytes: number; removal_frees_bytes: number; shared_with: string[] };
 export type SessionCache = { bytes: number; session_bytes: number | null; budget_bytes: number | null; sessions: number | null; over_budget: boolean };
 export type StorageSummary = { volumes: Volume[]; warnings: StorageWarning[]; settings: { reserve_bytes: number; low_space_bytes: number } };
@@ -23,7 +23,7 @@ function volume(row: Record<string, unknown>): Volume {
 }
 
 function reclaimable(row: Record<string, unknown>): Reclaimable {
-  return { id: text(row.id), kind: text(row.kind), title: text(row.title) || text(row.id), path: typeof row.path === "string" ? row.path : null, bytes: count(row.bytes), reclaimable: row.reclaimable === true, refusal: typeof row.refusal === "string" ? row.refusal : null, message: typeof row.message === "string" ? row.message : null, references: texts(row.references) };
+  return { id: text(row.id), kind: text(row.kind), title: text(row.title) || text(row.id), path: typeof row.path === "string" ? row.path : null, bytes: count(row.bytes), reclaimable: row.reclaimable === true, refusal: typeof row.refusal === "string" ? row.refusal : null, message: typeof row.message === "string" ? row.message : null, references: texts(row.references), note: typeof row.note === "string" ? row.note : null };
 }
 
 function summary(value: Record<string, unknown>): StorageSummary {
@@ -91,7 +91,7 @@ export function place(path: string | null): string | null {
   return parts.length > 2 ? `…/${parts.slice(-2).join("/")}` : path;
 }
 
-export const kindNames: Record<string, string> = { file: "Unused file", partial: "Partial download", engine: "Unused engine", legacy: "v0.9.2 leftover", model: "Model" };
+export const kindNames: Record<string, string> = { file: "Not a model", partial: "Partial download", engine: "Unused engine", legacy: "v0.9.2 leftover", model: "Model" };
 
 export const roleNames: Record<string, string> = { data: "Data", models: "Models", engines: "Engines", session_cache: "Session cache", library: "Library" };
 

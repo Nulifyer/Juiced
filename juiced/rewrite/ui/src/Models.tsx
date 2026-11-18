@@ -2,9 +2,8 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { matchingModels } from "./modelPicker";
 import { wordsMatch } from "./search";
 import { bytes, bytesPair, hotFit, hotFitNote, hotOption, loadReason, offers, policyNames, services, stateLabel, taskNames, unloadReason, workerTone, type Model, type Policy, type Resources, type Service } from "./domain";
-import { Badge, Button, Dialog, Empty, HelpTip, Icon, Switch } from "./ui";
+import { Badge, Button, Empty, HelpTip, Icon, Switch } from "./ui";
 import { Client } from "./api";
-import { removalReason } from "./management";
 import { ContextInspector } from "./ContextInspector";
 import { QuantSync } from "./QuantSync";
 import { ArtifactRevisionInspector } from "./ArtifactRevisionInspector";
@@ -12,12 +11,13 @@ import { RuntimeInspector } from "./RuntimeInspector";
 import { ModelCheck } from "./ModelCheck";
 import { ModelUpdate } from "./ModelUpdate";
 import { ModelIdle, residencyNote } from "./Residency";
-import { ModelFiles, localQuantState, removalNote, unusedQuants, weightsGroup } from "./LocalModels";
+import { ModelFiles, installFailures, weightsGroup } from "./LocalModels";
+import { RemoveModel } from "./RemoveModel";
 import { ModelQuants } from "./ModelQuants";
 import type { DiscoverTarget } from "./FindModels";
 import { notify } from "./toast";
 import { useResource } from "./useResource";
-import type { LocalGroup, LocalInventory } from "./localLibraryData";
+import type { LocalInventory } from "./localLibraryData";
 
 export type Mutate = (path: string, body: unknown, success: string) => Promise<boolean>;
 
@@ -39,7 +39,7 @@ function workerFailure(code: string): string {
   return "The worker needs attention. Review its current state before retrying.";
 }
 
-type ListProps = { models: Model[]; selected?: string; onSelect: (id: string) => void; mode: "models" | "policy"; mutate: Mutate; busy: boolean; online: boolean; idleControl?: ReactNode; budgetControl?: ReactNode; files?: LocalGroup[]; inventory?: LocalInventory | null; selectedFile?: string; onSelectFile?: (id: string) => void; onDiscover?: () => void; client?: Client; resources?: Resources };
+type ListProps = { models: Model[]; selected?: string; onSelect: (id: string) => void; mode: "models" | "policy"; mutate: Mutate; busy: boolean; online: boolean; idleControl?: ReactNode; budgetControl?: ReactNode; inventory?: LocalInventory | null; onDiscover?: () => void; onEngines?: () => void; client?: Client; resources?: Resources };
 type SortKey = "name" | "state" | "memory";
 const placeholderClient = new Client("", "");
 
@@ -166,12 +166,6 @@ function RowAction({ model, mutate, disabled }: { model: Model; mutate: Mutate; 
   return <Button className="row-action" disabled={disabled || !!reason} title={reason ?? undefined} onClick={(event) => { event.stopPropagation(); void mutate(unload ? "unload" : "load", { model: model.id }, unload ? `Unloaded ${model.id}.` : `Loaded ${model.id}.`); }}>{unload ? "Unload" : "Load"}</Button>;
 }
 
-function fileMatches(group: LocalGroup, query: string) {
-  return wordsMatch(`${group.name} ${group.publisher ?? ""} ${group.quants.map((quant) => quant.label).join(" ")}`, query);
-}
-
-export const notAddedHelp = "Model files on disk that no model uses.";
-
 const genericLabels = new Set(["gguf", "bin", "onnx", "ort", "safetensors", "file"]);
 /** The quant a model runs, when its name doesn't already say so. */
 export function quantLabel(model: Pick<Model, "id">, inventory: LocalInventory | null | undefined): string | null {
@@ -179,21 +173,7 @@ export function quantLabel(model: Pick<Model, "id">, inventory: LocalInventory |
   return !label || genericLabels.has(label.toLowerCase()) || model.id.toLowerCase().includes(label.toLowerCase()) ? null : label;
 }
 
-function FileRow({ group, models, selected, listed, onSelect }: { group: LocalGroup; models: Model[]; selected: boolean; listed: boolean; onSelect: () => void }) {
-  const unused = unusedQuants(group);
-  const size = unused.length ? unused.reduce((sum, quant) => sum + quant.bytes, 0) : group.bytes;
-  const partial = unused.length > 0 && unused.every((quant) => !quant.add && quant.parts > 1 && !quant.complete);
-  const quants = unused.map((quant) => quant.parts > 1 && !quant.complete ? `${quant.label} (${localQuantState(quant, models)})` : quant.label).join(", ");
-  return <div className={`data-row model-row file-row ${selected ? "selected" : ""}`} role="row" onClick={onSelect}>
-    <div role="cell" className="model-identity picked"><span className="pick pick-space" aria-hidden="true" /><div className="identity-text"><button className="model-name" aria-pressed={selected} onClick={(event) => { event.stopPropagation(); onSelect(); }}><ModelName name={group.name} /></button><span className="model-meta">{[group.publisher, quants || null, bytes(size), group.readOnly ? "read-only" : null].filter(Boolean).join(" · ")}</span></div></div>
-    <div role="cell" className="model-state">{!listed && <span title={notAddedHelp}><Badge>Not added</Badge></span>}</div>
-    <div role="cell" />
-    <div role="cell" />
-    <div role="cell" className="row-end"><Button className="row-action" aria-label={`${partial ? "Finish" : "Add"} ${group.name}`} onClick={(event) => { event.stopPropagation(); onSelect(); }}>{partial ? "Finish" : "Add"}</Button></div>
-  </div>;
-}
-
-export function ModelList({ models, selected, onSelect, mode, mutate, busy, online, idleControl, budgetControl, files = [], inventory, selectedFile, onSelectFile, onDiscover, client, resources }: ListProps) {
+export function ModelList({ models, selected, onSelect, mode, mutate, busy, online, idleControl, budgetControl, inventory, onDiscover, onEngines, client, resources }: ListProps) {
   const [query, setQuery] = useState("");
   const [chosen, setChosen] = useState<Set<string>>(() => new Set());
   const [sort, setSort] = useState<{ key: SortKey; descending: boolean } | null>(null);
@@ -217,30 +197,27 @@ export function ModelList({ models, selected, onSelect, mode, mutate, busy, onli
   const [service, setService] = useState<Service | null>(null);
   const [dragging, setDragging] = useState("");
   const dragged = useRef("");
-  const [scope, setScopeState] = useState<"auto" | "enabled" | "disabled" | "files" | null>("auto");
+  const [scope, setScopeState] = useState<"auto" | "enabled" | "disabled" | null>("auto");
   // A row whose policy the operator just changed stays put, so it doesn't vanish under the filter.
   const [kept, setKept] = useState<ReadonlySet<string>>(() => new Set());
-  const setScope = (next: "enabled" | "disabled" | "files" | null) => { setScopeState(next); setKept(new Set()); if (next === "files") setService(null); };
+  const setScope = (next: "enabled" | "disabled" | null) => { setScopeState(next); setKept(new Set()); };
   const keep = (id: string) => setKept((current) => current.has(id) ? current : new Set([...current, id]));
   const served = service ? models.filter((model) => offers(model, service)) : models;
   const enabledCount = served.filter((model) => model.policy !== "disabled").length, disabledCount = served.length - enabledCount;
   // On the board a card dropped on Disabled would vanish under an Enabled filter, so the lanes show every model.
-  const scoped = mode !== "models" ? null : scope === "auto" ? (enabledCount > 0 && disabledCount > 0 ? "enabled" : models.length === 0 && files.length > 0 ? "files" : null) : scope === "files" && files.length === 0 ? null : scope;
-  const matches = scoped === "files" ? [] : matchingModels(served, query);
+  const scoped = mode !== "models" ? null : scope === "auto" ? (enabledCount > 0 && disabledCount > 0 ? "enabled" : null) : scope;
+  const matches = matchingModels(served, query);
   const searching = query.trim() !== "";
   const revealed = scoped === "enabled" && searching ? matches.filter((model) => model.policy === "disabled").length : 0;
   const visible = sortModels(scoped === null || (scoped === "enabled" && searching) ? matches : matches.filter((model) => kept.has(model.id) || (model.policy === "disabled") === (scoped === "disabled")), sort);
-  const scopeChips = mode === "models" && [enabledCount, disabledCount, files.length].filter((count) => count > 0).length > 1 ? <div className="chip-filter scope-filter" role="group" aria-label="Status filter">
+  const scopeChips = mode === "models" && enabledCount > 0 && disabledCount > 0 ? <div className="chip-filter scope-filter" role="group" aria-label="Status filter">
     {enabledCount > 0 && <button aria-pressed={scoped === "enabled"} onClick={() => setScope(scoped === "enabled" ? null : "enabled")}>Enabled <span>{enabledCount}</span></button>}
     {disabledCount > 0 && <button aria-pressed={scoped === "disabled"} onClick={() => setScope(scoped === "disabled" ? null : "disabled")}>Disabled <span>{disabledCount}</span></button>}
-    {files.length > 0 && <button aria-pressed={scoped === "files"} title={notAddedHelp} onClick={() => setScope(scoped === "files" ? null : "files")}>Not added <span>{files.length}</span></button>}
-    {files.length > 0 && <HelpTip label="Not added">{notAddedHelp} Add one to run it, or delete it to free space.</HelpTip>}
     {revealed > 0 && <span className="muted scope-note">{revealed} disabled match</span>}
   </div> : null;
   const onSort = (key: SortKey) => setSort((current) => current?.key === key ? (current.descending ? null : { key, descending: true }) : { key, descending: false });
   const allChosen = visible.length > 0 && visible.every((model) => chosen.has(model.id));
   const toggle = (id: string) => setChosen((current) => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; });
-  const visibleFiles = service === null && (scoped === null || scoped === "files" || searching) ? files.filter((group) => fileMatches(group, query)) : [];
   const chips = services.map(([id, label]) => [id, label, models.filter((model) => offers(model, id)).length] as const).filter(([, , count]) => count > 0);
   const filtered = service !== null && !chips.some(([id]) => id === service);
   useEffect(() => { if (filtered) setService(null); }, [filtered]);
@@ -250,19 +227,20 @@ export function ModelList({ models, selected, onSelect, mode, mutate, busy, onli
   const draggedModel = models.find((model) => model.id === dragging);
   const dragFit = draggedModel && draggedModel.policy !== "hot" ? hotFit(draggedModel, models, resources) : null;
   const updateAction = client && mode === "models" && models.length > 0 ? <span className="update-action"><Button variant="ghost" disabled={!online || checking} onClick={() => void checkUpdates()}>{checking ? "Checking…" : "Check for updates"}</Button><HelpTip label="Check for updates">Compares each Hugging Face model with its upstream files. Nothing is downloaded.</HelpTip></span> : null;
-  const disk = inventory && <span className="muted library-total">{bytes(inventory.totalBytes)} on disk{inventory.removableBytes > 0 && files.length > 0 && <> · <button className="link-button" onClick={() => setScope("files")}>{bytes(inventory.removableBytes)} not added</button></>}{inventory.truncated && <HelpTip label="disk use">Large folders are counted up to a limit.</HelpTip>}</span>;
-  const filesOnly = scoped === "files";
+  const disk = inventory && <span className="muted library-total">{bytes(inventory.totalBytes)} on disk{inventory.truncated && <HelpTip label="disk use">Large folders are counted up to a limit.</HelpTip>}</span>;
+  const failures = mode === "models" ? installFailures(inventory) : [];
   return <section className="inventory" aria-label="Model inventory">
     <div className="toolbar models-toolbar">
       <input type="search" aria-label="Search models" placeholder="Search models" value={query} onChange={(event) => { setQuery(event.target.value); setKept(new Set()); }} />
       {(disk || updateAction) && <div className="toolbar-side">{disk}{updateAction}</div>}
       {(disk || updateAction) && (chips.length > 1 || scopeChips) && <span className="toolbar-break" />}
-      {chips.length > 1 && <div className="chip-filter" role="group" aria-label="Service filter"><button aria-pressed={service === null && !filesOnly} onClick={() => { setService(null); if (filesOnly) setScope(null); }}>All <span>{models.length}</span></button>{chips.map(([id, label, count]) => <button key={id} aria-pressed={service === id} onClick={() => { setService(service === id ? null : id); if (filesOnly) setScope(null); }}>{label} <span>{count}</span></button>)}</div>}
+      {chips.length > 1 && <div className="chip-filter" role="group" aria-label="Service filter"><button aria-pressed={service === null} onClick={() => setService(null)}>All <span>{models.length}</span></button>{chips.map(([id, label, count]) => <button key={id} aria-pressed={service === id} onClick={() => setService(service === id ? null : id)}>{label} <span>{count}</span></button>)}</div>}
       {scopeChips}
       {budgetControl}
     </div>
     {mode === "models" && chosen.size > 0 && <BulkBar models={models} chosen={chosen} mutate={mutate} disabled={locked} onClear={() => setChosen(new Set())} onKeep={(ids) => setKept((current) => new Set([...current, ...ids]))} />}
-    {models.length === 0 && files.length === 0 ? <Empty title="No models yet">{onDiscover ? <><button className="link-button" onClick={onDiscover}>Find a model</button> to get started.</> : "Find a model in Discover to get started."}</Empty> : visible.length === 0 && visibleFiles.length === 0 ? <Empty title="No matches">Try another search or filter.</Empty> : mode === "policy" ? <div className="policy-board">
+    {failures.length > 0 && <p className="inline-warning install-failures" role="status">{failures.length === 1 ? `${failures[0]!.name} is on disk but isn't a model yet.` : `${failures.length} model files on disk aren't models yet.`} {failures[0]!.message}{failures[0]!.message.includes("Engines") && onEngines ? <> <button className="link-button" onClick={onEngines}>Open Engines</button></> : null}</p>}
+    {models.length === 0 ? <Empty title="No models yet">{onDiscover ? <><button className="link-button" onClick={onDiscover}>Find a model</button> to get started.</> : "Find a model in Discover to get started."}</Empty> : visible.length === 0 ? <Empty title="No matches">Try another search or filter.</Empty> : mode === "policy" ? <div className="policy-board">
       {(["hot", "on-demand", "disabled"] as Policy[]).map((policy) => <section className={`policy-lane ${dragging ? "droppable" : ""}`} key={policy} aria-label={`${policyNames[policy]} models`}
         onDragOver={(event) => { if (dragged.current) event.preventDefault(); }}
         onDrop={(event) => { event.preventDefault(); const model = models.find((item) => item.id === dragged.current); dragged.current = ""; setDragging(""); if (model && !(policy === "disabled" && model.active_requests > 0)) setPolicy(mutate, model, policy, client); }}>
@@ -275,7 +253,7 @@ export function ModelList({ models, selected, onSelect, mode, mutate, busy, onli
         </div>)}
       </section>)}
     </div> : <div className="data-table model-table" role="table" aria-label="Registered models">
-      <div className="data-head" role="row"><SortHeader label={filesOnly ? "Files no model uses" : "Model"} id="name" sort={sort} onSort={onSort} pick={filesOnly ? <span className="pick pick-space" aria-hidden="true" /> : <label className="pick-hit"><input type="checkbox" className="pick" aria-label="Select all shown models" checked={allChosen} onChange={() => setChosen(allChosen ? new Set() : new Set(visible.map((model) => model.id)))} /></label>} />{filesOnly ? <><span role="columnheader" /><span role="columnheader" /><span role="columnheader" /></> : <><SortHeader label="State" id="state" sort={sort} onSort={onSort} /><span role="columnheader">Policy</span><SortHeader label="Memory" id="memory" sort={sort} onSort={onSort} numeric /></>}<span role="columnheader"><span className="sr-only">Action</span></span></div>
+      <div className="data-head" role="row"><SortHeader label="Model" id="name" sort={sort} onSort={onSort} pick={<label className="pick-hit"><input type="checkbox" className="pick" aria-label="Select all shown models" checked={allChosen} onChange={() => setChosen(allChosen ? new Set() : new Set(visible.map((model) => model.id)))} /></label>} /><SortHeader label="State" id="state" sort={sort} onSort={onSort} /><span role="columnheader">Policy</span><SortHeader label="Memory" id="memory" sort={sort} onSort={onSort} numeric /><span role="columnheader"><span className="sr-only">Action</span></span></div>
       {visible.map((model) => <div className={`data-row model-row ${selected === model.id ? "selected" : ""} ${chosen.has(model.id) ? "chosen" : ""}`} role="row" key={model.id} onClick={() => onSelect(model.id)}>
         <div role="cell" className="model-identity picked"><label className="pick-hit" onClick={(event) => event.stopPropagation()}><input type="checkbox" className="pick" aria-label={`Select ${model.id}`} checked={chosen.has(model.id)} onChange={() => toggle(model.id)} /></label><div className="identity-text"><button className="model-name" data-model={model.id} aria-pressed={selected === model.id} onClick={(event) => { event.stopPropagation(); onSelect(model.id); }}><ModelName name={model.id} /></button><span className="model-meta"><span className="row-state"><span className={`status-dot ${workerTone(model)}`} />{stateLabel(model)}</span>{[...taskNames(model), quants.get(model.id)].filter(Boolean).join(" · ")}{updates.has(model.id) && <> · {client ? <ModelUpdate client={client} model={model} online={online} available compact onDone={() => { setChecked(null); void listed.reload(); }} /> : <span className="update-note">update available</span>}</>}</span></div></div>
         <div role="cell" className={`model-state ${model.error || !model.downloaded ? "tone-bad" : ""}`} title={residencyNote(model) ?? undefined}><span className={`status-dot ${workerTone(model)}`} />{stateLabel(model)}{model.loaded && model.active_requests > 0 ? <span className="muted"> · {model.active_requests}/{model.max_inflight} busy</span> : null}<LoadingNote model={model} /></div>
@@ -283,7 +261,6 @@ export function ModelList({ models, selected, onSelect, mode, mutate, busy, onli
         <div role="cell" className={`numeric ${model.loaded ? "" : "muted"}`}>{bytes(model.resident_bytes)}</div>
         <div role="cell" className="row-end"><RowAction model={model} mutate={mutate} disabled={locked} /></div>
       </div>)}
-      {visibleFiles.map((group) => <FileRow key={group.id} group={group} models={models} listed={filesOnly} selected={selectedFile === group.id} onSelect={() => onSelectFile?.(group.id)} />)}
     </div>}
   </section>;
 }
@@ -292,11 +269,10 @@ export const primaryRepo = (model: Model, inventory: LocalInventory | null): str
 
 type InspectorTab = "overview" | "settings" | "manage";
 
-export function Inspector({ model, models = [], resources, busy, online, onClose, onDirty, mutate, client, stopLoad, inventory = null, onRemoved, onOpenModel, onOpenFile, onDiscover }: { model: Model; models?: Model[]; resources?: Resources; busy: boolean; online: boolean; onClose: () => void; onDirty: (value: boolean) => void; mutate: Mutate; client: Client; stopLoad?: () => void; inventory?: LocalInventory | null; onRemoved?: () => void; onOpenModel?: (id: string) => void; onOpenFile?: (group: string, quant: string) => void; onDiscover?: (target: DiscoverTarget) => void }) {
+export function Inspector({ model, models = [], resources, busy, online, onClose, onDirty, mutate, client, stopLoad, inventory = null, onRemoved, onOpenModel, onDiscover }: { model: Model; models?: Model[]; resources?: Resources; busy: boolean; online: boolean; onClose: () => void; onDirty: (value: boolean) => void; mutate: Mutate; client: Client; stopLoad?: () => void; inventory?: LocalInventory | null; onRemoved?: () => void | Promise<void>; onOpenModel?: (id: string) => void; onDiscover?: (target: DiscoverTarget) => void }) {
   const [profileDirty, setProfileDirty] = useState(false);
   const [artifactDirty, setArtifactDirty] = useState(false);
   const [runtimeDirty, setRuntimeDirty] = useState(false);
-  const [confirmRemove, setConfirmRemove] = useState(false);
   const dirty = profileDirty || artifactDirty || runtimeDirty;
   useEffect(() => { onDirty(dirty); }, [dirty, onDirty]);
   const heading = useRef<HTMLHeadingElement>(null);
@@ -315,8 +291,6 @@ export function Inspector({ model, models = [], resources, busy, online, onClose
   const fit = hotFit(model, models, resources);
   const tabs = [["overview", "Overview", false], ["settings", "Settings", dirty], ["manage", "Manage", false]] as const;
   const pick = (index: number) => { const next = tabs[(index + tabs.length) % tabs.length]![0]; setTab(next); document.getElementById(`tab-${next}`)?.focus(); };
-  const removal = removalReason(model);
-  const remove = () => { setConfirmRemove(false); void mutate("delete", { model: model.id, expected_revision: model.revision }, `Removed ${model.id}. Its files stay on disk.`).then((removed) => { if (removed) onRemoved?.(); }); };
   const hint = !model.loaded ? loadBlocked : unloadBlocked;
   return <aside className="inspector" aria-label="Model inspector" onKeyDown={(event) => {
     if (event.key !== "Escape" || event.defaultPrevented || (event.target as HTMLElement).closest("[popover], dialog") || openPopover()) return;
@@ -359,7 +333,7 @@ export function Inspector({ model, models = [], resources, busy, online, onClose
         {dirty && <p className="field-help">Save or cancel your changes first.</p>}
       </section>
       <ModelCheck model={model} client={client} online={online} disabled={busy || dirty} />
-      {onOpenModel && onOpenFile && onDiscover && <ModelQuants model={model} models={models} inventory={inventory} client={client} online={online} onOpenModel={onOpenModel} onOpenFile={onOpenFile} onDiscover={onDiscover} />}
+      {onOpenModel && onDiscover && <ModelQuants model={model} models={models} inventory={inventory} client={client} online={online} onOpenModel={onOpenModel} onDiscover={onDiscover} />}
       </div>
       <div role="tabpanel" id="panel-settings" aria-labelledby="tab-settings" hidden={tab !== "settings"}>
       <ContextInspector model={model} client={client} online={online} busy={busy} policyDirty={artifactDirty || runtimeDirty} onDirty={setProfileDirty} mutate={mutate} advanced={advanced} />
@@ -370,10 +344,9 @@ export function Inspector({ model, models = [], resources, busy, online, onClose
       <div role="tabpanel" id="panel-manage" aria-labelledby="tab-manage" hidden={tab !== "manage"}>
       {advanced && <section className="inspector-section"><h3>Operations</h3><div className="chip-row">{model.operations.map((operation) => <code className="chip" key={operation}>{operation}</code>)}</div></section>}
       <ModelFiles model={model} inventory={inventory} />
-      <section className="inspector-section"><div className="action-row"><Button variant="danger" disabled={busy || !online || dirty || !!removal} onClick={() => setConfirmRemove(true)}>Remove model</Button><HelpTip label="Remove model">{removalNote(model, inventory)}</HelpTip></div>{removal && <p className="field-help">{removal}</p>}</section>
+      <section className="inspector-section remove-section">{tab === "manage" && <RemoveModel client={client} model={model.id} revision={model.revision} online={online} disabled={busy} blocked={dirty ? "Save or cancel your changes first." : undefined} onRemoved={() => onRemoved?.()} />}</section>
       </div>
     </div>
-    {confirmRemove && <Dialog title={`Remove ${model.id}?`} onClose={() => setConfirmRemove(false)}><p>Its settings go. Files stay on disk.</p><div className="dialog-actions"><Button onClick={() => setConfirmRemove(false)}>Cancel</Button><Button variant="danger" onClick={remove}>Remove model</Button></div></Dialog>}
   </aside>;
 }
 
