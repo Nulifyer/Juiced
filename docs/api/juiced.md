@@ -107,8 +107,12 @@ milliseconds), and the engine-reported `input_tokens`, `output_tokens`,
 `prompt_tokens_per_second` and `decode_tokens_per_second`; unknown values are
 `null`. Engines that report prompt reuse add `cached_tokens` and
 `prompt_processed_tokens`, and prompt-cache requests add `session_cache` with its
-`path` (`slot-hit`, `restored`, `cold` or `bypass`), `slot`, and `restore_ms` when
-restored. `protocol` names the sender: `openai`, `ollama`, `anthropic`,
+`path`, `slot`, and `restore_ms` when restored. `path` says what happened:
+`restored` (Juiced loaded a saved state first), `slot-hit` (the engine still
+held the start of the prompt: the same conversation, or at least 64 reused
+tokens), `cold` (the engine read the whole prompt) or `bypass` (the request set
+`"cache_prompt": false`). Juiced sets `slot-hit` and `cold` from the engine's
+`cached_tokens` once the request completes. `protocol` names the sender: `openai`, `ollama`, `anthropic`,
 `automatic1111`, `mcp`, `realtime`, `wyoming`, `console` (the Juiced console,
 detected by `Sec-Fetch-Site: same-origin`), `internal` (checks and Tune) or
 `native` (other Juiced routes). `key_name` is the API key's name, or
@@ -126,14 +130,25 @@ under other engine settings, and `null` while the model is not loaded. Juiced
 deletes saved states on its own in these cases, and never a `retained` one:
 
 - A later turn of the same conversation was saved.
-- A newer state from the same client, API and model opens with the same
-  messages, those messages are at least nine tenths of both requests and at
-  least 2048 bytes, and the older state came from a single request that nothing
-  continued.
+- A newer state from the same client, API and model opens with the same text,
+  that text is at least nine tenths of both requests and at least 1024 bytes,
+  and the older state came from a single request that nothing continued.
 - The model's worker started and the state was saved under other engine
   settings. This waits until a running Tune finishes.
 - The state was unused for `retention_days`, or a budget needed its space.
 - The model was removed.
+
+A request restores a saved state of the same client, API and model when the
+state is an earlier turn of the same conversation, or when the two start with
+the same text, the shared text is at least 1024 bytes, and reading it again
+would take at least twice as long as the restore. The shared text may end
+inside a message.
+
+Inference requests accept `X-Juiced-Cache: no-store`. The request reuses the
+slot and saved states but its own state is not saved. Any other value, or the
+header twice, returns `400 invalid_cache_directive`. `X-Juiced-Session`,
+`X-Juiced-Session-Id` or `X-Juiced-Thread-Id` names a conversation; a new name
+also restores a named conversation that starts with the same text.
 
 Requests the service sends itself for model checks, Tune trials and Barista test
 prompts are never saved. Their request records have `session_cache.key: null`.

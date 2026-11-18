@@ -39,7 +39,7 @@ Unix configuration-binding cases start through a parent-directory alias from a p
 
 Cache cases save actual fixture slot bytes, verify their checksum, restart the manager, restore and continue. They cover principal, credential epoch, protocol and session isolation; disabled policy; generation/revision conflicts; corruption; and retained, charged uncertain writes. Engine acknowledgement counters must be positive.
 
-Session cases enable automatic conversation snapshots, which ordinary fixtures turn off. The fixture's `--emulate-prompt-cache` mode keeps per-slot word tokens, honours `id_slot`, saves and restores them through `/slots`, and reports `prompt_n`, `cache_n` and `cached_tokens`. Conversation A, then B on one slot, then A again must restore with only the new turn processed. The same must hold after a service restart. Other cases cover header precedence, unload flush, count-budget eviction, `cache_prompt: false` bypass, identity-change discard, multi-slot affinity, the session routes under all prefixes and explicit-operation refusal.
+Session cases enable automatic conversation snapshots, which ordinary fixtures turn off. The fixture's `--emulate-prompt-cache` mode keeps per-slot word tokens, honours `id_slot`, saves and restores them through `/slots`, and reports `prompt_n`, `cache_n` and `cached_tokens`. Conversation A, then B on one slot, then A again must restore with only the new turn processed. The same must hold after a service restart. Other cases cover header precedence, unload flush, count-budget eviction, `cache_prompt: false` bypass, identity-change discard, multi-slot affinity, the session routes under all prefixes and explicit-operation refusal. Requests that share text only up to a point inside a message must restore the state that holds it, on one slot and after a restart, and text that differs from its start must not. A new named session must start from another named session with the same opening. A `x-juiced-cache: no-store` request must restore a saved state and save none. A failed request must keep its slot for the retry, and the record's path must follow the tokens the engine reports. A Tune run on a fixture with a GGUF header and `--report-timings` must leave saved conversations in place while its trials reload the model under other settings.
 
 Artifact cases use a controlled loopback HTTP source with chunked delivery, byte ranges and a stable validator. They exercise download/hash publication, pause/resume across manager restart, cancellation, quarantine/retry, generation conflicts, removal and source policy rejection. A managed-artifact case acquires weights, registers a model, loads and infers, restarts, then releases registration and worker holds before deletion. Inventory paging walks each section under every prefix, keeps off-page selections, and refuses stale views and malformed cursors without changing configuration or storage.
 
@@ -96,6 +96,19 @@ cargo test -p juiced-rust-tests --test real_engine --locked -- --ignored
 To include the Linux direct-worker parent-death proof, add `--test linux_parent_death` beside `--test real_engine` in the command above.
 
 An omitted prerequisite is an explicit test failure when the opt-in tests are requested. The normal fast suite reports these hardware/asset-dependent tests as ignored.
+
+## Conversation cache matrix
+
+`real_cache_matrix` measures what the conversation cache reuses on a real engine. Each row names what a client sends, what should be reused, and what the request record reports: path, input, cached and processed tokens, elapsed time and restore time. The rows cover continued, regenerated, edited and branched conversations, requests that share text inside a message, the chat, responses and completions APIs, streaming and cancelled replies, session headers, `cache_prompt: false`, two slots, budgets and kept states. `real_cache_restore_cost` prints restore time against prefill time for five state sizes. `real_cache_matrix_one_off_requests` compares one-off requests with and without `x-juiced-cache: no-store`.
+
+```bash
+JUICED_TEST_LLAMA_SERVER=/path/to/llama-server \
+JUICED_TEST_PREFIX_GGUF=/path/to/chat.gguf \
+TMPDIR=/path/on/disk \
+cargo test -p juiced-rust-tests --test real_cache_matrix --locked -- --ignored --nocapture --test-threads=1
+```
+
+The tests print the rows as Markdown tables and assert only that requests succeed, so the same run measures any build: set `JUICED_TEST_SERVER` to another `lemond` to compare. A chat GGUF such as Qwen3-0.6B is enough. `JUICED_TEST_MATRIX_LINES` sets the prompt size (default 60 lines, about 1,650 tokens) and `JUICED_TEST_MATRIX_CONTEXT` the context (default 12288). The engine's own RAM prompt cache is off unless `JUICED_TEST_MATRIX_CACHE_RAM` sets its size in MiB, because it restores short prompts on its own and would hide what Juiced does for states too large for it. Saved states go under `TMPDIR`; the default run writes about 4 GiB, so keep it off a RAM-backed `/tmp`.
 
 ## Tiny real-whisper pipeline
 

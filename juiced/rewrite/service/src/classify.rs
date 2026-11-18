@@ -100,7 +100,7 @@ pub(crate) async fn classify(
         Operation::Classify,
         priority,
         None,
-        None,
+        crate::sessions::Hint::default(),
     )
     .await?;
     if !response.status().is_success() {

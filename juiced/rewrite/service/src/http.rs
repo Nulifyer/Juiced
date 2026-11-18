@@ -1994,7 +1994,22 @@ pub(crate) fn request_session(headers: &HeaderMap) -> Result<Option<&str>, ApiEr
         .transpose()
 }
 
-pub(crate) fn automatic_session(headers: &HeaderMap) -> Result<Option<&str>, ApiError> {
+pub(crate) fn automatic_session(
+    headers: &HeaderMap,
+) -> Result<crate::sessions::Hint<'_>, ApiError> {
+    let mut directives = headers.get_all(crate::sessions::CACHE_HEADER).iter();
+    let no_store = match (directives.next(), directives.next()) {
+        (None, _) => false,
+        (Some(value), None) if value == crate::sessions::NO_STORE => true,
+        _ => {
+            return Err(ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "invalid_cache_directive",
+                "x-juiced-cache accepts only no-store, once.",
+            ));
+        }
+    };
+    let hint = |session| crate::sessions::Hint { session, no_store };
     for name in crate::sessions::SESSION_HEADERS {
         let mut values = headers.get_all(name).iter();
         let Some(value) = values.next() else {
@@ -2013,7 +2028,7 @@ pub(crate) fn automatic_session(headers: &HeaderMap) -> Result<Option<&str>, Api
             .filter(|value| {
                 !value.is_empty() && value.len() <= 512 && !value.chars().any(char::is_control)
             })
-            .map(Some)
+            .map(|session| hint(Some(session)))
             .ok_or_else(|| {
                 ApiError::new(
                     StatusCode::BAD_REQUEST,
@@ -2022,7 +2037,7 @@ pub(crate) fn automatic_session(headers: &HeaderMap) -> Result<Option<&str>, Api
                 )
             });
     }
-    Ok(None)
+    Ok(hint(None))
 }
 
 pub fn request_model(body: &[u8]) -> Result<std::borrow::Cow<'_, str>, ApiError> {
@@ -2054,7 +2069,7 @@ async fn forward(
     operation: Operation,
     priority: crate::admission::Priority,
     cache_context: Option<(&RequestContext, Option<&str>, &str)>,
-    automatic: Option<&str>,
+    automatic: crate::sessions::Hint<'_>,
 ) -> Result<Response, ApiError> {
     forward_prioritized(
         state.manager,
@@ -2072,7 +2087,7 @@ pub(crate) async fn forward_request(
     body: Bytes,
     operation: Operation,
     cache_context: Option<(&RequestContext, Option<&str>, &str)>,
-    automatic: Option<&str>,
+    automatic: crate::sessions::Hint<'_>,
 ) -> Result<Response, ApiError> {
     forward_prioritized(
         manager,
@@ -2090,7 +2105,7 @@ pub(crate) async fn forward_prioritized(
     operation: Operation,
     priority: crate::admission::Priority,
     cache_context: Option<(&RequestContext, Option<&str>, &str)>,
-    automatic: Option<&str>,
+    automatic: crate::sessions::Hint<'_>,
 ) -> Result<Response, ApiError> {
     let original_body = if operation == Operation::Chat && !manager.memory_protected() {
         crate::model_discovery::normalize_thinking(&body).map_or(body, Bytes::from)
