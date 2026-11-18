@@ -17,6 +17,10 @@ const LEAD_BLOCK_BYTES: usize = 256;
 const LEAD_BLOCKS: usize = 256;
 // Below about 500 tokens, re-reading a whole saved slot costs more than prefilling the shared part.
 pub const MINIMUM_SHARED_BYTES: u64 = 2048;
+/// The share of two requests' bytes that their common leading messages must cover before the
+/// newer saved state replaces the older one. At nine tenths, a client that continues the
+/// replaced request re-reads at most a ninth of what the kept state already holds.
+pub const SIBLING_SHARE: (u64, u64) = (9, 10);
 const RESERVATION_HEADROOM_BYTES: u64 = 64 * 1024 * 1024;
 const MINIMUM_BUDGET_BYTES: u64 = 64 * 1024 * 1024;
 const MAXIMUM_BUDGET_BYTES: u64 = 128 * 1024 * 1024 * 1024;
@@ -142,6 +146,7 @@ pub struct Key {
     chain: Vec<UnitDigest>,
     bytes: Vec<u64>,
     lead: Vec<UnitDigest>,
+    reply: bool,
 }
 
 impl Key {
@@ -154,11 +159,12 @@ impl Key {
             chain: vec![hash.finalize().into()],
             bytes: vec![0],
             lead: Vec::new(),
+            reply: false,
         }
     }
 
     pub fn prefix(operation: Operation, body: &[u8]) -> Option<Self> {
-        let (units, lead) = match operation {
+        let Request { units, lead, reply } = match operation {
             Operation::Chat => chat_units(body)?,
             Operation::Completion => completion_units(body)?,
             Operation::Responses => responses_units(body)?,
@@ -191,7 +197,14 @@ impl Key {
             chain,
             bytes,
             lead: lead_blocks(&lead),
+            reply,
         })
+    }
+
+    /// Whether the request already holds a reply or tool result, so it continues an earlier
+    /// exchange whatever the cache still knows of it.
+    pub fn carries_reply(&self) -> bool {
+        self.reply
     }
 
     pub fn units(&self) -> usize {
@@ -250,6 +263,23 @@ impl Key {
             .count()
     }
 
+    /// Whether a state saved for `self` can stand in for the state of `older`, a request that
+    /// nothing continued: the two open with the same messages, and those messages are at least
+    /// `SIBLING_SHARE` of each request and long enough to be worth restoring.
+    pub fn replaces_sibling(&self, older: &Self) -> bool {
+        // A lineage cut at its unit limit no longer knows the size of its whole request.
+        if older.units() >= LINEAGE_UNITS {
+            return false;
+        }
+        let (units, shared) = self.shared(older);
+        let covers = |key: &Self| {
+            key.bytes.last().is_some_and(|total| {
+                shared.saturating_mul(SIBLING_SHARE.1) >= total.saturating_mul(SIBLING_SHARE.0)
+            })
+        };
+        units > 0 && shared >= MINIMUM_SHARED_BYTES && covers(self) && covers(older)
+    }
+
     pub fn lineage(&self) -> Self {
         let units = self.chain.len().min(LINEAGE_UNITS);
         Self {
@@ -257,13 +287,15 @@ impl Key {
             chain: self.chain[..units].to_vec(),
             bytes: self.bytes[..units].to_vec(),
             lead: Vec::new(),
+            reply: false,
         }
     }
 
-    pub fn to_record(&self) -> LineageRecord {
+    pub fn to_record(&self, single: bool) -> LineageRecord {
         LineageRecord {
             chain: self.chain.iter().map(hex).collect(),
             bytes: self.bytes.clone(),
+            single,
         }
     }
 
@@ -284,6 +316,7 @@ impl Key {
             chain,
             bytes: record.bytes.clone(),
             lead: Vec::new(),
+            reply: false,
         })
     }
 }
@@ -293,7 +326,16 @@ impl Key {
 pub struct LineageRecord {
     pub chain: Vec<String>,
     pub bytes: Vec<u64>,
+    /// The state came from one request that continued no earlier one. Records written before
+    /// this was tracked read as false, so their states are never replaced by a sibling.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub single: bool,
 }
+
+/// Marks a request the service sends itself that nothing will continue, such as a model check
+/// or a Tune trial, so its state is never saved. No client can set it.
+#[derive(Clone, Copy)]
+pub(crate) struct OneShot;
 
 fn unhex(text: &str) -> Option<UnitDigest> {
     if text.len() != 64 {
@@ -385,6 +427,12 @@ pub fn with_slot(body: &[u8], slot: u32) -> Option<Vec<u8>> {
 
 type Unit = (UnitDigest, u64);
 
+struct Request {
+    units: Vec<Unit>,
+    lead: Vec<u8>,
+    reply: bool,
+}
+
 fn message_unit(message: &Value) -> Unit {
     (message_digest(message), canonical(message).len() as u64)
 }
@@ -406,20 +454,24 @@ fn lead_blocks(text: &[u8]) -> Vec<UnitDigest> {
         .collect()
 }
 
-fn chat_units(body: &[u8]) -> Option<(Vec<Unit>, Vec<u8>)> {
+fn chat_units(body: &[u8]) -> Option<Request> {
     #[derive(Deserialize)]
     struct Chat {
         messages: Vec<Value>,
     }
     let chat: Chat = serde_json::from_slice(body).ok()?;
     let lead = chat.messages.first().map(canonical).unwrap_or_default();
-    Some((
-        chat.messages.iter().map(message_unit).collect(),
-        lead.into_bytes(),
-    ))
+    Some(Request {
+        units: chat.messages.iter().map(message_unit).collect(),
+        lead: lead.into_bytes(),
+        reply: chat
+            .messages
+            .iter()
+            .any(|message| matches!(message["role"].as_str(), Some("assistant" | "tool"))),
+    })
 }
 
-fn responses_units(body: &[u8]) -> Option<(Vec<Unit>, Vec<u8>)> {
+fn responses_units(body: &[u8]) -> Option<Request> {
     #[derive(Deserialize)]
     struct Responses {
         input: Value,
@@ -439,22 +491,37 @@ fn responses_units(body: &[u8]) -> Option<(Vec<Unit>, Vec<u8>)> {
             instructions.len() as u64,
         ));
     }
+    let mut reply = false;
     match &request.input {
         Value::String(text) => units.extend(text_blocks(text)),
-        Value::Array(items) => units.extend(items.iter().map(message_unit)),
+        Value::Array(items) => {
+            units.extend(items.iter().map(message_unit));
+            reply = items.iter().any(|item| {
+                item["role"] == "assistant"
+                    || item["type"].as_str().is_some_and(|kind| kind != "message")
+            });
+        }
         _ => return None,
     }
-    Some((units, lead.into_bytes()))
+    Some(Request {
+        units,
+        lead: lead.into_bytes(),
+        reply,
+    })
 }
 
-fn completion_units(body: &[u8]) -> Option<(Vec<Unit>, Vec<u8>)> {
+fn completion_units(body: &[u8]) -> Option<Request> {
     #[derive(Deserialize)]
     struct Completion {
         prompt: Value,
     }
     let request: Completion = serde_json::from_slice(body).ok()?;
     match &request.prompt {
-        Value::String(text) => Some((text_blocks(text).collect(), Vec::new())),
+        Value::String(text) => Some(Request {
+            units: text_blocks(text).collect(),
+            lead: Vec::new(),
+            reply: false,
+        }),
         _ => None,
     }
 }
@@ -806,15 +873,15 @@ mod tests {
         let system_bytes = canonical(&system).len() as u64;
         assert_eq!(fresh.shared(&saved), (1, system_bytes));
         assert_eq!(saved.shared(&saved).0, 3);
-        let restored = Key::from_record(&saved.lineage().to_record()).unwrap();
+        let restored = Key::from_record(&saved.lineage().to_record(false)).unwrap();
         assert_eq!(restored.shared(&saved), saved.shared(&saved));
         assert_eq!(fresh.shared(&restored), (1, system_bytes));
         let header = Key::header("thread");
         assert_eq!(fresh.shared(&header), (0, 0));
-        let mut broken = saved.to_record();
+        let mut broken = saved.to_record(false);
         broken.chain[0].replace_range(0..2, "zz");
         assert!(Key::from_record(&broken).is_none());
-        broken = saved.to_record();
+        broken = saved.to_record(false);
         broken.bytes.pop();
         assert!(Key::from_record(&broken).is_none());
         let long = Key::prefix(
@@ -828,6 +895,91 @@ mod tests {
         .unwrap();
         assert_eq!(long.lineage().units(), LINEAGE_UNITS);
         assert!(long.extends(&long.lineage()));
+    }
+
+    #[test]
+    fn a_sibling_replaces_another_only_when_the_shared_opening_is_most_of_both() {
+        let ask = |system: &str, question: &str| {
+            Key::prefix(
+                Operation::Chat,
+                &chat(
+                    json!([{"role":"system","content":system},{"role":"user","content":question}]),
+                ),
+            )
+            .unwrap()
+        };
+        let long = "Exposed devices: porch light, hallway sensor. ".repeat(100);
+        let (first, second) = (ask(&long, "Porch on?"), ask(&long, "Garage open?"));
+        assert!(second.replaces_sibling(&first.lineage()));
+        assert!(first.replaces_sibling(&second.lineage()));
+
+        let short = "Be brief and kind. ".repeat(20);
+        assert!(short.len() < MINIMUM_SHARED_BYTES as usize);
+        assert!(!ask(&short, "One?").replaces_sibling(&ask(&short, "Two?").lineage()));
+
+        let medium = "House rules. ".repeat(200);
+        let essay = "Compare these two long drafts line by line. ".repeat(20);
+        let (brief, wordy) = (ask(&medium, "Lights?"), ask(&medium, &essay));
+        assert!(brief.shared(&wordy).1 >= MINIMUM_SHARED_BYTES);
+        assert!(!brief.replaces_sibling(&wordy.lineage()));
+        assert!(!wordy.replaces_sibling(&brief.lineage()));
+
+        assert!(
+            !ask(&long, "Porch on?")
+                .replaces_sibling(&ask(&long.replace("porch", "patio"), "Porch on?").lineage())
+        );
+        assert!(!first.replaces_sibling(&Key::header("thread")));
+        let huge = long.repeat(20);
+        let many = Key::prefix(
+            Operation::Chat,
+            &chat(Value::Array(
+                std::iter::once(json!({"role":"system","content":huge}))
+                    .chain(
+                        (0..LINEAGE_UNITS)
+                            .map(|index| json!({"role":"user","content":index.to_string()})),
+                    )
+                    .collect(),
+            )),
+        )
+        .unwrap();
+        let one = ask(&huge, "Porch on?");
+        assert!(many.replaces_sibling(&one.lineage()));
+        assert!(!one.replaces_sibling(&many.lineage()));
+
+        assert!(!first.carries_reply() && !many.carries_reply());
+        let turns = Key::prefix(
+            Operation::Chat,
+            &chat(json!([{"role":"system","content":long},{"role":"user","content":"Porch on?"},{"role":"assistant","content":"On."},{"role":"user","content":"Off?"}])),
+        )
+        .unwrap();
+        assert!(turns.carries_reply());
+        let responses = |input: Value| {
+            Key::prefix(
+                Operation::Responses,
+                &serde_json::to_vec(&json!({"model":"m","input":input})).unwrap(),
+            )
+            .unwrap()
+            .carries_reply()
+        };
+        assert!(!responses(json!([{"role":"user","content":"Porch on?"}])));
+        assert!(responses(
+            json!([{"role":"user","content":"Porch on?"},{"type":"function_call_output","call_id":"1","output":"on"}])
+        ));
+        assert!(responses(
+            json!([{"type":"message","role":"assistant","content":"On."},{"role":"user","content":"Off?"}])
+        ));
+
+        let record = first.lineage().to_record(true);
+        assert_eq!(serde_json::to_value(&record).unwrap()["single"], true);
+        assert!(
+            serde_json::to_value(first.lineage().to_record(false))
+                .unwrap()
+                .get("single")
+                .is_none()
+        );
+        let legacy: LineageRecord =
+            serde_json::from_value(json!({"chain": record.chain, "bytes": record.bytes})).unwrap();
+        assert!(!legacy.single);
     }
 
     #[test]

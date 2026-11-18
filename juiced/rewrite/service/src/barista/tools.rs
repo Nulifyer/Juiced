@@ -258,6 +258,18 @@ impl Context<'_> {
         content_type: Option<&str>,
         body: Option<Bytes>,
     ) -> Result<Raw> {
+        self.send_marked(method, path, content_type, body, false)
+            .await
+    }
+
+    async fn send_marked(
+        &self,
+        method: Method,
+        path: &str,
+        content_type: Option<&str>,
+        body: Option<Bytes>,
+        one_shot: bool,
+    ) -> Result<Raw> {
         let uri = if path.starts_with('/') {
             path.to_owned()
         } else {
@@ -277,6 +289,9 @@ impl Context<'_> {
         }
         if self.internal {
             request = request.extension(crate::connect::Internal);
+        }
+        if one_shot {
+            request = request.extension(crate::sessions::OneShot);
         }
         let request = request
             .extension(crate::connect::Probe)
@@ -348,6 +363,20 @@ impl Context<'_> {
     }
     pub(super) async fn post(&self, path: &str, body: Value) -> Result<Value> {
         self.send(Method::POST, path, Some(body)).await
+    }
+    /// Posts a generation request that nothing will continue, so its state is not saved to
+    /// the conversation cache.
+    pub(super) async fn post_once(&self, path: &str, body: Value) -> Result<Value> {
+        let raw = self
+            .send_marked(
+                Method::POST,
+                path,
+                Some("application/json"),
+                Some(Bytes::from(body.to_string())),
+                true,
+            )
+            .await?;
+        decode(raw)
     }
     pub(super) async fn post_bytes(
         &self,

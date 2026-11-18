@@ -24,6 +24,26 @@ When the disk budget is full, Juiced deletes the least recently used
 conversations first. With a number of days, it also deletes conversations unused
 for that long. With the field empty, conversations stay until space is needed.
 
+## What Juiced saves and deletes
+
+Juiced keeps only saved states that a later request can use.
+
+- A conversation keeps its latest turn. Each save replaces the earlier one.
+- One-off requests that open with the same messages keep one saved state, the
+  newest. This applies when those messages make up at least nine tenths of each
+  request and about 2 KiB or more. The kept state serves that opening to every
+  later request. A conversation that continued past its first request is never
+  replaced this way.
+- When a model starts, Juiced deletes its conversations saved under other engine
+  settings, because the engine can no longer restore them. Changed launch
+  settings, a Tune result you keep, a new engine build and new weights all change
+  the engine settings. While Tune tries settings, nothing is deleted until it
+  finishes. Conversations of a model that is only unloaded stay.
+- Juiced does not save its own requests: model checks, Tune trials and the test
+  prompts Barista sends. At startup it deletes states that earlier versions
+  saved for its checks and Tune trials.
+- Removing a model deletes its saved conversations.
+
 ## Keep or forget a conversation
 
 **Saved conversations** lists the conversations on disk, newest first, by a short
@@ -31,14 +51,17 @@ fingerprint.
 
 - Select the pin on a row to keep that conversation. Juiced never deletes a kept
   conversation automatically, but it still counts toward the budget. Select the
-  pin again to release it.
+  pin again to release it. A kept conversation stays as you pinned it: a later
+  turn is saved beside it, a similar request does not replace it, and a change
+  of engine settings does not delete it. It can be restored again when the
+  earlier settings return.
 - Select **Forget** to delete one conversation, or **Forget all** to delete every
   saved conversation, kept ones included. **Forget all** asks first and names the
   count. The next turn then processes the whole prompt again.
 
-**Engine changed** marks a conversation saved by a different engine build or
-launch settings. It cannot be restored and will be replaced. **Incomplete** marks
-a save that did not finish.
+**Engine changed** marks a conversation saved under other engine settings. It
+cannot be restored. Juiced deletes it when the model starts, unless it is kept.
+**Incomplete** marks a save that did not finish.
 
 From a script, `POST /v1/juiced/cache/sessions` takes
 `{"action":"retain","session":"<64-hex digest>","retained":true}`. The `configure`

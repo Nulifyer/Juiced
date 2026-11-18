@@ -2049,6 +2049,11 @@ impl Manager {
             .cloned()
     }
 
+    pub fn tuning(&self, id: &str) -> bool {
+        self.tune_view(id)
+            .is_some_and(|view| view["state"] == "running")
+    }
+
     pub fn set_tune(&self, id: &str, view: serde_json::Value) {
         self.tunes
             .lock()
@@ -4541,6 +4546,12 @@ impl Manager {
             let _ = self
                 .ready_events
                 .send((worker.spec.id.clone(), run.fingerprint.clone()));
+            // Tune loads the model under settings it may not keep, so states saved before it
+            // are judged against what it leaves running.
+            if !self.tuning(&worker.spec.id) {
+                self.drop_stale_sessions(&worker.spec.id, &run.fingerprint)
+                    .await;
+            }
         }
         Ok(())
     }
@@ -4895,6 +4906,7 @@ impl Manager {
 
     pub async fn start_hot(&self) {
         self.reclaim_sessions().await;
+        self.drop_service_sessions().await;
         for worker in self.worker_snapshot() {
             let state = worker.state.lock().await;
             if state.policy == Policy::Hot {
