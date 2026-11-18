@@ -106,6 +106,14 @@ Every report item is either fixed with evidence or listed below as decided other
 - Gate on the merge: 911 service tests, clippy, fmt; 177 UI unit tests, build; Playwright 381 passed / 21 skipped / 0 failed (3 projects). v0.11.15 (run 44208920979 green) deployed to stack 83: 4 Hot models loaded (the user added `Qwen3-Coder-Next-UD-Q4_K_XL` as Hot); production render (0 non-GET): 5 suggestions in one column at 1920 and 1440.
 - Open: helper-fable-lifecycle (download or remove; automatic registration; Downloads lists only active and failed) still running. From discover2: no NPU suggestion; rows go from one line to two with the detail open at 1440; two long select labels clip at 390; rows still say "Not added" / "Add model" until lifecycle lands.
 
+## Follow-ups (2026-11-18, v0.11.16)
+
+- helper-fable-lifecycle `8fd8e56b`, `89b8afdf` merged (dd327106) onto the Discover suggestions work: `auto_models.rs` registers unused complete model files as Disabled (startup, after a download, after an engine install, at most every 30 s while the catalog is listed); `model_removal.rs` with `GET /juiced/models/removal` and `POST /juiced/models/remove` deletes only files this model alone uses and refuses loaded, busy, alias-target, read-only and not-owned cases; pulls list only in-progress and failed, with `retry` and `remove` actions; the console has no Add model, Not added or Dismiss; non-model files show in Storage as "Not a model".
+- Merge: three textual conflicts (FindModels.tsx, library.spec.ts, add-model.spec.ts); two tests followed the other helper's screen (quant chip in a row, toast wording) and were updated.
+- Gate: 943 service tests, 336 rust-tests (32 ignored), clippy, fmt; 178 UI unit tests, tsc, build; Playwright full run 375 passed / 6 failed (the two tests above, 3 projects), then add-model and library specs 54 passed; release CI green.
+- v0.11.16 (run 44219455229) deployed to stack 83. Production before/after (GET): 55 -> 71 models; the 16 new ones are all Disabled (KAT-Coder x2, MiniCPM5 x2, Ornith, Qwen3.5-122B x2, Qwen3.5-4B, Qwen3.6-27B x2, Qwen3.6-35B, Skyfall x3, ThinkingCap x2); no existing model's policy or revision changed; 83 files, 1104944306483 bytes, none gone or resized; pulls list empty; 4 Hot models loaded. Render (0 non-GET): Installed filters "Enabled 7, Disabled 64", Downloads "Nothing downloading".
+- Open (from the helper): models on read-only or shared caches can only be Disabled; a Juiced 0.9 volume in a non-standard layout is registered before its settings import; the upload panel keeps one Install step; `POST /delete` with `expected_revision` keeps files; Barista downloads become Disabled models; scan failures retry on their own with no button.
+
 ## Next action
 
 None for this audit. Open from earlier ledgers: the later-work list in drop-in-replacement.md.
