@@ -23,7 +23,8 @@ async function select(page: Page) {
   await page.getByRole("combobox", { name: "Engine" }).selectOption("onnxruntime");
   await page.getByRole("searchbox", { name: "Search models" }).fill("tiny-classifier");
   const result = page.getByRole("list", { name: "Search results" }).getByRole("listitem").filter({ hasText: "Tiny-Classifier-ONNX" });
-  await result.getByRole("button", { name: /^ONNX · ONNX Runtime/ }).click();
+  await expect(result.locator(".result-quant")).toContainText("ONNX · ONNX Runtime");
+  await result.getByRole("button", { name: "Tiny-Classifier-ONNX", exact: true }).click();
   const detail = page.getByRole("complementary", { name: "Model detail" });
   await expect(detail.getByRole("heading", { name: "Tiny-Classifier-ONNX" })).toBeVisible();
   return detail;

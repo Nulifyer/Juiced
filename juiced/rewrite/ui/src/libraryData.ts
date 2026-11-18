@@ -139,12 +139,14 @@ export type Machine = { gpu: number | null; ram: number | null };
 export type Fit = "gpu" | "memory" | "npu" | "none" | "unknown";
 export type FitTone = "good" | "warning" | "bad" | "quiet";
 const gpuOnly = new Set(["vllm", "thenoise"]);
+/** Weights need room above their file size for context and compute buffers. */
+const headroom = 1.15;
 
 /** Where a quant of this size would run on this machine. */
 export function quantFit(bytes: number | null, engine: string | null | undefined, machine: Machine): Fit {
   if (engine === npuEngine) return bytes === null || machine.ram === null || bytes <= machine.ram ? "npu" : "none";
   if (bytes === null) return "unknown";
-  const needed = bytes * 1.15;
+  const needed = bytes * headroom;
   if (machine.gpu !== null && needed <= machine.gpu) return "gpu";
   if (engine && gpuOnly.has(engine)) return "none";
   return machine.ram !== null && needed <= machine.ram ? "memory" : "none";
@@ -189,4 +191,80 @@ export function filterResults(models: LibraryModel[], filters: ResultFilters, ma
   const smallest = (view: ResultView) => view.quants.reduce((least, quant) => quant.bytes !== null && quant.bytes < least ? quant.bytes : least, Infinity);
   const rank = filters.sort === "downloads" ? (view: ResultView) => -(view.model.downloads ?? -1) : smallest;
   return views.map((view, index) => ({ view, index })).sort((left, right) => rank(left.view) - rank(right.view) || left.index - right.index).map((entry) => entry.view);
+}
+
+/** Quants most repositories publish, in the order a row prefers them when nothing is recommended. */
+const preferred = ["Q4_K_M", "UD-Q4_K_XL", "Q4_K_S", "Q4_0", "Q5_K_M", "Q6_K", "Q8_0"];
+const fits = (quant: Quant, machine: Machine) => { const fit = quantFit(quant.bytes, quant.engine, machine); return fit === "gpu" || fit === "memory" || fit === "npu"; };
+
+/**
+ * The one quant a result row offers: what is on disk, then what is downloading, then the recommended
+ * quant, then a common quant that fits this machine, then the largest that fits, then the smallest.
+ */
+export function rowQuant(quants: Quant[], machine: Machine): Quant | undefined {
+  const bySize = [...quants].sort((left, right) => (left.bytes ?? Infinity) - (right.bytes ?? Infinity));
+  const fitting = bySize.filter((quant) => fits(quant, machine));
+  return quants.find((quant) => quant.present) ?? quants.find((quant) => progress(quant) !== null) ?? quants.find((quant) => quant.recommended)
+    ?? preferred.map((label) => fitting.find((quant) => quant.label.toUpperCase() === label)).find(Boolean)
+    ?? fitting.at(-1) ?? bySize[0];
+}
+
+/** The types Discover suggests models for, in the order it lists them. */
+export const suggestedTasks = ["chat", "embeddings", "transcription", "tts", "image"] as const;
+export const suggestionLimit = 6;
+const sideCap = 4 * GiB;
+export type Suggestion = { model: LibraryModel; quant: Quant };
+
+/**
+ * A short list of recommended models for this machine, from the catalog: for each type, the largest
+ * recommended quant that fits a share of GPU memory (RAM without a GPU). Chat gets two, one within
+ * half of that memory and one within an eighth; every other type gets one within an eighth. The
+ * eighth is capped at 4 GiB so those stay quick downloads. Models with a quant on disk or
+ * downloading, gated models and quants of unknown size are left out.
+ */
+export function suggest(models: LibraryModel[], machine: Machine): Suggestion[] {
+  const capacity = machine.gpu ?? machine.ram;
+  const main = capacity === null ? sideCap : capacity / 2, side = capacity === null ? sideCap : Math.min(capacity / 8, sideCap);
+  const known = machine.gpu !== null || machine.ram !== null;
+  const candidates = models.flatMap((model): Suggestion[] => {
+    if (model.source !== "catalog" || model.gated || model.quants.some((quant) => quant.present || quant.presentFiles > 0 || progress(quant) !== null)) return [];
+    const quant = model.quants.find((entry) => entry.recommended);
+    return quant && quant.bytes !== null && quant.pullable && (!known || fits(quant, machine)) ? [{ model, quant }] : [];
+  }).sort((left, right) => right.quant.bytes! - left.quant.bytes!);
+  const picked: Suggestion[] = [];
+  for (const task of suggestedTasks) for (const budget of task === "chat" ? [main, side] : [side]) {
+    const pick = candidates.find((entry) => entry.model.task === task && entry.quant.bytes! * headroom <= budget && !picked.includes(entry));
+    if (pick) picked.push(pick);
+  }
+  return picked.slice(0, suggestionLimit);
+}
+
+export type Search = { query: string; task: string | null; engine: string | null; fit: FitFilter | null; size: SizeBucket | null };
+/** Search text or any filter makes a search; without them Discover lists suggestions. Sort only orders results. */
+export const isSearch = (search: Search) => search.query.trim() !== "" || search.task !== null || search.engine !== null || search.fit !== null || search.size !== null;
+export const searchPageSize = 12;
+/** One page of a search. Type and engine go to the service; hardware and size narrow its pages here. */
+export function searchPath(search: Pick<Search, "query" | "task" | "engine">, cursor?: string): string {
+  const params = new URLSearchParams({ limit: String(searchPageSize) });
+  if (search.query.trim()) params.set("q", search.query.trim());
+  if (search.task) params.set("task", search.task);
+  if (search.engine) params.set("engine", search.engine);
+  if (cursor) params.set("cursor", cursor);
+  return `juiced/library/search?${params}`;
+}
+/** The catalog models of one suggested type, with the sizes `suggest` chooses by. */
+export const suggestionPath = (task: string) => `juiced/library/search?source=catalog&task=${task}&limit=20`;
+
+/** Pages of one search as a single result: models in page order, a repository listed once. */
+export function mergePages(pages: SearchResult[]): SearchResult | null {
+  const first = pages[0];
+  if (!first) return null;
+  const ids = new Set<string>(), repos = new Set<string>(), models: LibraryModel[] = [];
+  for (const model of pages.flatMap((page) => page.models)) {
+    const repo = model.repo.toLowerCase();
+    // Several catalog models share a repository; a hub entry repeats one only by repository.
+    if (model.source === "catalog" ? ids.has(model.id) : repos.has(repo)) continue;
+    ids.add(model.id); repos.add(repo); models.push(model);
+  }
+  return { ...first, models, next: pages.at(-1)!.next };
 }

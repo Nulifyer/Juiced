@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { filterResults, fitLabel, flmJob, flmResults, npuEngine, parseFlm, parseSearch, progress, quantFit, quantMatches, type LibraryModel, type ResultFilters } from "../src/libraryData";
+import { filterResults, fitLabel, flmJob, flmResults, isSearch, mergePages, npuEngine, parseFlm, parseSearch, progress, quantFit, quantMatches, rowQuant, searchPath, suggest, suggestedTasks, suggestionPath, type LibraryModel, type ResultFilters, type Search } from "../src/libraryData";
 
 test("checkpoint variants keep their engine, member files and hub credential state", () => {
   const result = parseSearch({
@@ -98,4 +98,80 @@ test("results sort by downloads or by their smallest matching quant", () => {
   expect(order("downloads"), "ties keep the service's order and unknown counts go last").toEqual(["a/small", "a/big", "a/mid", "a/unknown"]);
   expect(order("size")).toEqual(["a/small", "a/mid", "a/big", "a/unknown"]);
   expect(order("size", "large"), "size compares only the quants that pass the filters").toEqual(["a/mid", "a/big"]);
+});
+
+const catalogModel = (id: string, task: string, gib: number | null, extra: Record<string, unknown> = {}, local: Record<string, unknown> = {}) => parseSearch({ data: [{ id, repo: `catalog/${id}`, name: id, task, source: "catalog", ...extra, quants: [
+  { label: "Q2_K", file: `${id}-Q2_K.gguf`, bytes: gib === null ? null : gib * GiB / 2, pullable: true },
+  { label: "Q4_K_M", file: `${id}-Q4_K_M.gguf`, bytes: gib === null ? null : gib * GiB, recommended: true, pullable: true, local },
+] }] }).models[0]!;
+const picks = (models: LibraryModel[], machine: { gpu: number | null; ram: number | null }) => suggest(models, machine).map((entry) => `${entry.model.id} ${entry.quant.label}`);
+
+test("suggestions take the largest recommended quant of each type that fits a share of this machine", () => {
+  const models = [
+    catalogModel("chat-1", "chat", 1), catalogModel("chat-2.5", "chat", 2.5), catalogModel("chat-5", "chat", 5), catalogModel("chat-9", "chat", 9), catalogModel("chat-17", "chat", 17), catalogModel("chat-60", "chat", 60),
+    catalogModel("embed-0.6", "embeddings", 0.6), catalogModel("embed-8", "embeddings", 8),
+    catalogModel("whisper-1.5", "transcription", 1.5), catalogModel("whisper-3", "transcription", 3),
+    catalogModel("kokoro", "tts", 0.3), catalogModel("sd-turbo", "image", 1.9),
+    catalogModel("music", "audio-generation", 1), catalogModel("trellis", "3d", 1),
+  ];
+  expect(picks(models, { gpu: 24 * GiB, ram: 64 * GiB }), "half of 24 GiB for the first chat model, an eighth for the rest").toEqual(["chat-9 Q4_K_M", "chat-2.5 Q4_K_M", "embed-0.6 Q4_K_M", "whisper-1.5 Q4_K_M", "kokoro Q4_K_M", "sd-turbo Q4_K_M"]);
+  expect(picks(models, { gpu: 88 * GiB, ram: 107 * GiB }), "the eighth stops at 4 GiB however large the machine").toEqual(["chat-17 Q4_K_M", "chat-2.5 Q4_K_M", "embed-0.6 Q4_K_M", "whisper-3 Q4_K_M", "kokoro Q4_K_M", "sd-turbo Q4_K_M"]);
+  expect(picks(models, { gpu: 8 * GiB, ram: 16 * GiB }), "a small GPU gets no image model: none fits an eighth of it").toEqual(["chat-2.5 Q4_K_M", "embed-0.6 Q4_K_M", "kokoro Q4_K_M"]);
+  expect(picks(models, { gpu: null, ram: 32 * GiB }), "without a GPU, system memory counts").toEqual(["chat-9 Q4_K_M", "chat-2.5 Q4_K_M", "embed-0.6 Q4_K_M", "whisper-3 Q4_K_M", "kokoro Q4_K_M", "sd-turbo Q4_K_M"]);
+  expect(picks(models, { gpu: null, ram: null }), "an unknown machine gets only small models").toEqual(["chat-2.5 Q4_K_M", "chat-1 Q4_K_M", "embed-0.6 Q4_K_M", "whisper-3 Q4_K_M", "kokoro Q4_K_M", "sd-turbo Q4_K_M"]);
+  expect(suggest(models, { gpu: 24 * GiB, ram: 64 * GiB }).map((entry) => entry.model.task), "chat first, then the Type filter's order; audio and 3D are not suggested").toEqual(["chat", "chat", ...suggestedTasks.slice(1)]);
+});
+
+test("suggestions leave out what is on disk, downloading, gated, of unknown size or not from the catalog", () => {
+  const machine = { gpu: 24 * GiB, ram: 64 * GiB };
+  const downloading = catalogModel("chat-8", "chat", 8);
+  downloading.quants[0]!.jobs = [{ id: "job", state: "downloading", downloaded_bytes: 1, expected_bytes: 10 }];
+  const unpullable = catalogModel("chat-7", "chat", 7);
+  unpullable.quants[1]!.pullable = false;
+  const models = [
+    catalogModel("chat-9", "chat", 9, {}, { present: true }), catalogModel("chat-8.5", "chat", 8.5, {}, { present_files: 1 }), downloading, unpullable,
+    catalogModel("chat-6", "chat", 6, { gated: true }), catalogModel("chat-5", "chat", null), { ...catalogModel("chat-4", "chat", 4), source: "huggingface" as const },
+    catalogModel("chat-3", "chat", 3), catalogModel("chat-2", "chat", 2),
+  ];
+  expect(picks(models, machine)).toEqual(["chat-3 Q4_K_M", "chat-2 Q4_K_M"]);
+  expect(picks([catalogModel("big", "chat", 30)], machine), "nothing fits: no suggestion").toEqual([]);
+  expect(picks([{ ...catalogModel("thenoise", "image", 2), quants: catalogModel("thenoise", "image", 2).quants.map((entry) => ({ ...entry, engine: "thenoise" })) }], { gpu: null, ram: 64 * GiB }), "a GPU-only engine is not suggested without a GPU").toEqual([]);
+});
+
+test("a result row offers one quant: on disk, downloading, recommended, then the best fit", () => {
+  const machine = { gpu: 8 * GiB, ram: 32 * GiB };
+  const offered = (quants: ReturnType<typeof quant>[]) => rowQuant(quants, machine)?.label;
+  expect(offered([quant("Q2_K", 2), quant("Q4_K_M", 4), quant("Q8_0", 6), quant("F16", 12)]), "the common quant when it fits").toBe("Q4_K_M");
+  expect(offered([quant("Q2_K", 2), quant("Q4_K_M", 40), quant("Q8_0", 60)]), "a common quant that does not fit is passed over").toBe("Q2_K");
+  expect(offered([quant("IQ3_M", 3), quant("IQ4_XS", 5), quant("BF16", 50)]), "no common quant: the largest that fits").toBe("IQ4_XS");
+  expect(offered([quant("Q8_0", 60), quant("F16", 50)]), "nothing fits: the smallest").toBe("F16");
+  expect(offered([quant("Q4_K_M", 4), { ...quant("Q5_K_M", 5), recommended: true }])).toBe("Q5_K_M");
+  expect(offered([{ ...quant("Q4_K_M", 4), recommended: true }, { ...quant("Q6_K", 6), jobs: [{ id: "j", state: "downloading", downloaded_bytes: 0, expected_bytes: 6 }] }])).toBe("Q6_K");
+  expect(offered([{ ...quant("Q4_K_M", 4), recommended: true }, { ...quant("Q8_0", 6), present: true }]), "what is on disk comes first").toBe("Q8_0");
+  expect(offered([])).toBeUndefined();
+});
+
+test("a filter with no search text searches the service with that filter instead of narrowing the suggestions", () => {
+  const none: Search = { query: "", task: null, engine: null, fit: null, size: null };
+  expect(isSearch(none)).toBe(false);
+  expect(isSearch({ ...none, query: "  " }), "blank text is no search").toBe(false);
+  for (const filter of [{ task: "embeddings" }, { engine: "vllm" }, { fit: "gpu" as const }, { size: "small" as const }, { query: "qwen" }]) expect(isSearch({ ...none, ...filter }), JSON.stringify(filter)).toBe(true);
+  expect(searchPath({ ...none, task: "embeddings" })).toBe("juiced/library/search?limit=12&task=embeddings");
+  expect(searchPath({ ...none, engine: "onnxruntime", query: " tiny " })).toBe("juiced/library/search?limit=12&q=tiny&engine=onnxruntime");
+  expect(searchPath(none), "hardware and size are applied to the pages of a plain search").toBe("juiced/library/search?limit=12");
+  expect(searchPath({ ...none, task: "chat" }, "abc=="), "the next page keeps the filter").toBe("juiced/library/search?limit=12&task=chat&cursor=abc%3D%3D");
+  expect(searchPath({ ...none, task: "chat" })).not.toContain("source=catalog");
+  expect(suggestedTasks.map(suggestionPath)).toEqual(["chat", "embeddings", "transcription", "tts", "image"].map((task) => `juiced/library/search?source=catalog&task=${task}&limit=20`));
+});
+
+test("pages of one search merge in order and list a repository once", () => {
+  const page = (models: unknown[], next: string | null, generation = 1) => parseSearch({ artifact_generation: generation, data: models, page: { next_cursor: next } });
+  const merged = mergePages([
+    page([{ id: "whisper-tiny", repo: "ggerganov/whisper.cpp", source: "catalog" }, { id: "whisper-base", repo: "ggerganov/whisper.cpp", source: "catalog" }, { repo: "a/one" }], "c1", 7),
+    page([{ repo: "A/One" }, { repo: "ggerganov/whisper.cpp" }, { repo: "a/two" }], "c2", 9),
+    page([{ repo: "a/three" }], null, 9),
+  ])!;
+  expect(merged.models.map((item) => item.id)).toEqual(["whisper-tiny", "whisper-base", "a/one", "a/two", "a/three"]);
+  expect([merged.generation, merged.next], "the first page's state and the last page's cursor").toEqual([7, null]);
+  expect(mergePages([])).toBeNull();
 });

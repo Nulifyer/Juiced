@@ -159,6 +159,17 @@ export async function closeInspector(page: Page) {
   else await page.getByRole("button", { name: "Close model inspector", exact: true }).click();
 }
 
+/** Searches Discover and opens one model's detail panel, on the quant with this label when one is given. */
+export async function discoverModel(page: Page, query: string, name: string, quant?: RegExp) {
+  await page.getByRole("searchbox", { name: "Search models" }).fill(query);
+  const row = page.getByRole("list", { name: "Search results" }).getByRole("listitem").filter({ has: page.getByText(name, { exact: true }) });
+  await row.getByRole("button", { name, exact: true }).click();
+  const detail = page.getByRole("complementary", { name: "Model detail" });
+  await expect(detail.getByRole("heading", { name })).toBeVisible();
+  if (quant) await detail.getByRole("listbox").getByRole("option", { name: quant }).click();
+  return detail;
+}
+
 export async function noHorizontalOverflow(page: Page, label: string) {
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), `${label}: page fits the viewport`).toBe(true);
   const offenders = await page.locator("main").evaluate((main) => {

@@ -50,7 +50,7 @@ the portable environment the native release used.
 ## Run an original checkpoint on vLLM
 
 1. Download the checkpoint from **Models → Discover**: search for the repository,
-   select its **Checkpoint · vLLM** chip and **Download**. See
+   select the row that reads **Checkpoint · vLLM** and **Download**. See
    [download an original checkpoint](models.md#download-an-original-checkpoint).
    A folder already on disk that holds `config.json` and the `.safetensors` files,
    such as a Hugging Face cache snapshot under an import root, can be added in

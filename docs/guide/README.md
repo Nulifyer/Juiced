@@ -12,13 +12,14 @@ browser, open the service status menu, select **Connection settings** and choose
 
 1. Open `http://localhost:8080`, or your server's configured address.
 2. Select **Models**, then the **Discover** tab.
-3. Search for a model, for example `qwen3`, and select the **Chat** task.
-4. Select a quant chip, such as **Q4_K_M**, on a small GGUF model. The detail
-   panel lists every quant with its size and whether it fits this machine.
-5. Choose a **Loading policy**. **On demand** is selected by default and loads
-   the model on its first request.
-6. Select **Download**. The **Downloads** tab shows progress, errors, **Pause**
-   and **Retry**.
+3. Pick one of the models suggested for this machine and select **Download**.
+   Juiced fetches the quant shown and adds the model as **On demand**, which
+   loads it on its first request.
+4. For another model, search, for example `qwen3`, or set a filter such as the
+   **Chat** type. Select a model's name to open the detail panel. It lists every
+   quant with its size and whether it fits this machine, and lets you choose the
+   **Loading policy** before **Download**.
+5. The **Downloads** tab shows progress, errors, **Pause** and **Retry**.
 
 Download size describes the weights on disk. Runtime memory also includes
 context, engine buffers, and any companion files.

@@ -5,7 +5,7 @@ import { gpuMemory, parseSystemInfo } from "./hardware";
 import { AddModel, type AddTarget } from "./AddModel";
 import { UrlDownload } from "./UrlDownload";
 import { parseArtifactInventory } from "./management";
-import { engineNames, featured, filterResults, fitLabel, flmJob, flmResults, npuEngine as npu, parseFlm, parseSearch, progress, quantFit, quantKey, quantNames, searchEngines, sizeBuckets, sorts, tasks, type FitFilter, type LibraryModel, type Machine, type Quant, type SearchResult, type SizeBucket, type Sort } from "./libraryData";
+import { engineNames, featured, filterResults, fitLabel, flmJob, flmResults, isSearch, mergePages, npuEngine as npu, parseFlm, parseSearch, progress, quantFit, quantKey, quantNames, rowQuant, searchEngines, searchPath, sizeBuckets, sorts, suggest, suggestedTasks, suggestionPath, tasks, type FitFilter, type LibraryModel, type Machine, type Quant, type SearchResult, type SizeBucket, type Sort } from "./libraryData";
 import { Badge, Button, Empty, HelpTip, Icon, Menu } from "./ui";
 import { LocalProgress, ProjectorChoice, ServerFolder, localTarget, useLocalFile } from "./LocalFiles";
 import { splitPart } from "./localFilesData";
@@ -24,6 +24,9 @@ function modelId(file: string): string {
   const name = file.split(/[\\/]/).pop() ?? file;
   return (splitPart(name)?.prefix ?? name.replace(/\.(gguf|bin|safetensors|onnx)$/, "")).trim();
 }
+/** The name a downloaded quant is added under. */
+const pullId = (model: LibraryModel, quant: Quant) => quant.kind === "checkpoint" ? model.name : quant.kind === "bundle" && model.nativeId ? model.nativeId : modelId(quant.file);
+type Row = { model: LibraryModel; quants: Quant[]; quant: Quant | undefined };
 /** A repository to open on arrival, with one of its quants when `file` or `label` is set. */
 export type DiscoverTarget = { repo: string; file?: string; label?: string };
 
@@ -57,11 +60,14 @@ export function FindModels({ client, online, onRegistered, onOpenModel, onDownlo
   const [fitFilter, setFitFilter] = useState<FitFilter | null>(null);
   const [size, setSize] = useState<SizeBucket | null>(null);
   const [sort, setSort] = useState<Sort>("match");
-  const [result, setResult] = useState<SearchResult | null>(null);
+  const [searched, setSearched] = useState<SearchResult | null>(null);
+  const [catalog, setCatalog] = useState<SearchResult | null>(null);
+  const [picks, setPicks] = useState<{ id: string; quant: string }[]>([]);
+  const [moreBusy, setMoreBusy] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [hubPending, setHubPending] = useState(false);
-  const [selected, setSelected] = useState<{ repo: string; quant: string } | null>(null);
+  const [selected, setSelected] = useState<{ id: string; repo: string; quant: string } | null>(null);
   const wanted = useRef(initial);
   const [notice, setNotice] = useState("");
   const local = useLocalFile(client);
@@ -71,13 +77,14 @@ export function FindModels({ client, online, onRegistered, onOpenModel, onDownlo
   useLayoutEffect(() => {
     const list = quantList.current, option = list?.querySelector<HTMLElement>('[aria-selected="true"]');
     if (!list || !option) { listed.current = ""; return; }
-    const top = option.offsetTop - list.offsetTop, bottom = top + option.offsetHeight;
+    const top = option.offsetTop - list.offsetTop - list.clientTop, bottom = top + option.offsetHeight;
     // A row the operator clicked stays under the pointer; only a newly opened list centers its selection.
-    if (listed.current !== selected?.repo) list.scrollTop = top - list.clientHeight / 2 + option.offsetHeight / 2;
-    else if (top < list.scrollTop) list.scrollTop = top;
-    else if (bottom > list.scrollTop + list.clientHeight) list.scrollTop = bottom - list.clientHeight;
-    listed.current = selected?.repo ?? "";
-  }, [selected?.repo, selected?.quant]);
+    // Offsets are whole pixels over a fractional layout, so a row within a pixel of the edge counts as in view.
+    if (listed.current !== selected?.id) list.scrollTop = top - list.clientHeight / 2 + option.offsetHeight / 2;
+    else if (top < list.scrollTop - 1) list.scrollTop = top;
+    else if (bottom > list.scrollTop + list.clientHeight + 1) list.scrollTop = bottom - list.clientHeight;
+    listed.current = selected?.id ?? "";
+  }, [selected?.id, selected?.quant]);
   const [tick, setTick] = useState(0);
   const info = useResource(client, "system-info", parseSystemInfo, 0);
   const [npuBusy, setNpuBusy] = useState(false);
@@ -93,31 +100,35 @@ export function FindModels({ client, online, onRegistered, onOpenModel, onDownlo
   }, [flm.data, npuAdded, onRegistered]);
   const addedHere = useRef(new Set<string>());
   const npuOnly = engine === npu || fitFilter === "npu";
+  const active = isSearch({ query, task, engine, fit: fitFilter, size });
+  const result = active ? searched : catalog;
   const request = useRef<AbortController | null>(null);
   const lastKey = useRef("");
+  const cursors = useRef<string[]>([]);
+  const pagePath = (cursor?: string) => searchPath({ query, task, engine }, cursor);
   useEffect(() => {
-    const key = `${query.trim()}\u0000${task ?? ""}\u0000${engine ?? ""}\u0000${npuOnly}`;
+    const key = `${query.trim()}\u0000${task ?? ""}\u0000${engine ?? ""}\u0000${npuOnly}\u0000${active}`;
     const refreshOnly = key === lastKey.current;
     lastKey.current = key;
-    if (npuOnly) { request.current?.abort(); request.current = null; setLoading(false); setHubPending(false); return; }
+    if (npuOnly || !active) { request.current?.abort(); request.current = null; setLoading(false); setHubPending(false); if (!active) setSearched(null); return; }
     if (refreshOnly && request.current) return;
+    if (!refreshOnly) cursors.current = [];
     const timer = setTimeout(async () => {
       request.current?.abort();
       const controller = new AbortController(); request.current = controller;
       const limit = setTimeout(() => controller.abort(), searchTimeout);
       if (!refreshOnly) { setLoading(true); setHubPending(true); }
-      const params = new URLSearchParams({ limit: "12" });
-      if (query.trim()) params.set("q", query.trim());
-      if (task) params.set("task", task);
-      if (engine) params.set("engine", engine);
+      const pages = cursors.current;
       let full = false;
-      const fast = refreshOnly ? Promise.resolve() : client.request(`juiced/library/search?${params}&hub=false`, undefined, controller.signal).then((value) => {
-        if (!full && !controller.signal.aborted) { setResult(parseSearch(value)); setLoading(false); }
+      const fast = refreshOnly ? Promise.resolve() : client.request(`${pagePath()}&hub=false`, undefined, controller.signal).then((value) => {
+        if (!full && !controller.signal.aborted) { setSearched(parseSearch(value)); setLoading(false); }
       }).catch(() => undefined);
       try {
-        const next = parseSearch(await client.request(`juiced/library/search?${params}`, undefined, controller.signal));
+        const next = mergePages(await Promise.all([undefined, ...pages].map((cursor) => client.request(pagePath(cursor), undefined, controller.signal).then(parseSearch))))!;
         full = true;
-        if (!controller.signal.aborted) { setResult(next); setError(""); open(next); }
+        // A page added while this refresh ran would be dropped, so the refresh runs again with it.
+        if (cursors.current !== pages) setTick((value) => value + 1);
+        else if (!controller.signal.aborted) { setSearched(next); setError(""); open(next); }
       } catch (failure) {
         if (request.current === controller) setError(controller.signal.aborted ? "Hugging Face didn't answer in 45 seconds. Recommended and downloaded models are still listed." : plainError(failure, "Search failed."));
       } finally {
@@ -127,7 +138,26 @@ export function FindModels({ client, online, onRegistered, onOpenModel, onDownlo
       }
     }, refreshOnly ? 0 : 300);
     return () => clearTimeout(timer);
-  }, [client, query, task, engine, npuOnly, tick]);
+  }, [client, query, task, engine, npuOnly, active, tick]);
+  async function showMore() {
+    const cursor = searched?.next, key = lastKey.current;
+    if (!cursor || moreBusy) return;
+    setMoreBusy(true);
+    try {
+      const page = parseSearch(await client.request(pagePath(cursor)));
+      if (key !== lastKey.current) return;
+      cursors.current = [...cursors.current, cursor];
+      setSearched((current) => current && mergePages([current, page]));
+    } catch (failure) { setError(plainError(failure, "More models couldn't be loaded.")); } finally { setMoreBusy(false); }
+  }
+  useEffect(() => {
+    if (active) return;
+    const controller = new AbortController();
+    void Promise.all(suggestedTasks.map((type) => client.request(suggestionPath(type), undefined, controller.signal).then(parseSearch)))
+      .then((pages) => { if (!controller.signal.aborted) { setCatalog(mergePages(pages)); setError(""); } })
+      .catch((failure) => { if (!controller.signal.aborted) setError(plainError(failure, "Suggestions couldn't be loaded.")); });
+    return () => controller.abort();
+  }, [client, active, tick]);
   useEffect(() => () => request.current?.abort(), []);
   useEffect(() => { if (!notice) return; const timer = setTimeout(() => setNotice(""), 4000); return () => clearTimeout(timer); }, [notice]);
   const downloading = result?.models.some((model) => model.quants.some((quant) => progress(quant) !== null)) ?? false;
@@ -136,11 +166,13 @@ export function FindModels({ client, online, onRegistered, onOpenModel, onDownlo
     const timer = setInterval(() => setTick((value) => value + 1), 2000);
     return () => clearInterval(timer);
   }, [downloading]);
-  const choose = (next: { repo: string; quant: string } | null) => { if (next) local.clear(); setSelected(next); };
-  const pick = (item: LibraryModel, entry: Quant | undefined) => { if (entry) choose({ repo: item.repo, quant: quantKey(entry) }); };
+  const choose = (next: { id: string; repo: string; quant: string } | null) => { if (next) local.clear(); setSelected(next); };
+  const pick = (item: LibraryModel, entry: Quant | undefined) => { if (entry) choose({ id: item.id, repo: item.repo, quant: quantKey(entry) }); };
   function open(found: SearchResult) {
     const target = wanted.current;
-    const item = target && found.models.find((entry) => entry.repo.toLowerCase() === target.repo.toLowerCase());
+    const listed = target ? found.models.filter((entry) => entry.repo.toLowerCase() === target.repo.toLowerCase()) : [];
+    // Several catalog models share one repository; the one that lists the wanted file is opened.
+    const item = listed.find((entry) => entry.quants.some((quant) => quant.file === target?.file)) ?? listed[0];
     if (!target || !item) return;
     wanted.current = undefined;
     pick(item, item.quants.find((entry) => entry.file === target.file) ?? (target.label ? item.quants.find((entry) => entry.label === target.label) : undefined) ?? item.quants.find((entry) => entry.recommended) ?? featured(item.quants)[0]);
@@ -148,12 +180,20 @@ export function FindModels({ client, online, onRegistered, onOpenModel, onDownlo
   const gpu = info.data?.gpus.reduce((best, item) => Math.max(best, gpuMemory(item) ?? 0), 0) || null;
   const ram = info.data?.memory?.total_bytes ?? null;
   const machine = useMemo<Machine>(() => ({ gpu, ram }), [gpu, ram]);
-  const npuModels = useMemo(() => engine === null || engine === npu ? flmResults(flm.data, query, task) : [], [flm.data, query, task, engine]);
+  const machineKnown = info.data !== null || info.error !== "";
+  // The suggestions are chosen once, so a row neither moves nor leaves while its model downloads.
+  const chosen = useMemo(() => picks.length || !catalog || !machineKnown ? picks : suggest(catalog.models, machine).map((entry) => ({ id: entry.model.id, quant: quantKey(entry.quant) })), [picks, catalog, machineKnown, machine]);
+  useEffect(() => { if (chosen !== picks) setPicks(chosen); }, [chosen, picks]);
+  const npuModels = useMemo(() => active && (engine === null || engine === npu) ? flmResults(flm.data, query, task) : [], [active, flm.data, query, task, engine]);
   const found = useMemo(() => [...(npuOnly ? [] : result?.models ?? []), ...npuModels], [npuOnly, result, npuModels]);
-  const views = useMemo(() => filterResults(found, { fit: fitFilter, size, sort }, machine), [found, fitFilter, size, sort, machine]);
+  const rows = useMemo<Row[]>(() => active
+    ? filterResults(found, { fit: fitFilter, size, sort }, machine).map((view) => ({ ...view, quant: rowQuant(view.quants, machine) }))
+    : chosen.flatMap((entry) => { const item = catalog?.models.find((known) => known.id === entry.id), offered = item?.quants.find((known) => quantKey(known) === entry.quant); return item && offered ? [{ model: item, quants: item.quants, quant: offered }] : []; }),
+  [active, found, fitFilter, size, sort, machine, chosen, catalog]);
   const filtering = task !== null || engine !== null || fitFilter !== null || size !== null;
-  const clear = () => { setTask(null); setEngine(null); setFitFilter(null); setSize(null); };
-  const model = local.file ? undefined : found.find((item) => item.repo === selected?.repo);
+  const narrowed = fitFilter !== null || size !== null;
+  const clear = () => { setTask(null); setEngine(null); setFitFilter(null); setSize(null); setSelected(null); };
+  const model = local.file ? undefined : found.find((item) => item.id === selected?.id);
   const quant = model?.quants.find((item) => quantKey(item) === selected?.quant);
   const onNpu = model?.source === "flm";
   const job = onNpu && quant && flm.data ? flmJob(flm.data, quant.file) : undefined;
@@ -208,16 +248,27 @@ export function FindModels({ client, online, onRegistered, onOpenModel, onDownlo
   const settling = (!!pendingAdd && !!quant && progress(quant) === null) || (job?.state === "complete" && job.then?.state === "pending");
   const npuDone = job?.then?.state === "done" && job.then.model && users.includes(job.then.model) ? job.then.model : null;
   const addedModel = added ?? npuDone;
-  const status = [result || npuOnly ? `${views.length} model${views.length === 1 ? "" : "s"}` : null, npuOnly || !result ? null : hubPending ? "Searching Hugging Face…" : result.hub !== "ok" && result.hub !== "skipped" ? result.offline ? "Offline mode. Only recommended and downloaded models are listed." : "Hugging Face is unreachable. Only recommended and downloaded models are listed." : null].filter(Boolean).join(" · ");
-  return <div className={`find-models ${model || file ? "has-detail" : ""}`}>
-    <div className="find-main">
-      <div className="toolbar find-filters">
-        <input type="search" aria-label="Search models" placeholder="Search models, e.g. qwen3, llama, whisper" value={query} onChange={(event) => setQuery(event.target.value)} />
-        <select aria-label="Type" data-active={task !== null} value={task ?? ""} onChange={(event) => setTask(event.target.value || null)}><option value="">Any type</option>{tasks.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select>
+  const [starting, setStarting] = useState("");
+  async function start(item: LibraryModel, entry: Quant) {
+    setStarting(`${item.id}:${quantKey(entry)}`);
+    try { await (item.source === "flm" ? pullNpu(entry, "on-demand") : download(item, entry, "on-demand", { id: pullId(item, entry), engine: entry.engine === "thenoise" ? "thenoise" : undefined })); } finally { setStarting(""); }
+  }
+  const more = active && !npuOnly && !!searched?.next;
+  const suggesting = !active && !!catalog && machineKnown;
+  const count = `${rows.length} model${rows.length === 1 ? "" : "s"}`;
+  const hubNote = npuOnly || !result ? null : hubPending ? "Searching Hugging Face…" : result.hub !== "ok" && result.hub !== "skipped" ? result.offline ? "Offline mode. Only recommended and downloaded models are listed." : "Hugging Face is unreachable. Only recommended and downloaded models are listed." : null;
+  const status = active
+    ? [result || npuOnly ? more ? narrowed ? `${rows.length} of the first ${found.length} models match` : `First ${count}` : count : "Searching…", hubNote].filter(Boolean).join(" · ")
+    : suggesting ? hubNote ?? "" : "Finding models for this machine…";
+  return <div className={`find-models ${(model && quant) || file ? "has-detail" : ""}`}>
+    <div className="find-head">
+      <div className="find-filters" role="search">
+        <input type="search" aria-label="Search models" placeholder="Search models, e.g. qwen3, llama, whisper" value={query} onChange={(event) => { setQuery(event.target.value); setSelected(null); }} />
+        <select aria-label="Type" data-active={task !== null} value={task ?? ""} onChange={(event) => { setTask(event.target.value || null); setSelected(null); }}><option value="">Any type</option>{tasks.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select>
         <select aria-label="Engine" data-active={engine !== null} value={engine ?? ""} onChange={(event) => { setEngine(event.target.value || null); setSelected(null); }}><option value="">Any engine</option>{searchEngines.map(([id, label]) => <option key={id} value={id}>{label}</option>)}{flm.data?.available && <option value={npu}>FastFlowLM (NPU)</option>}</select>
-        <select aria-label="Hardware" data-active={fitFilter !== null} value={fitFilter ?? ""} onChange={(event) => setFitFilter((event.target.value || null) as FitFilter | null)}><option value="">Any hardware</option>{gpu !== null && <option value="gpu">Fits GPU</option>}<option value="memory">Fits memory</option>{flm.data?.available && <option value="npu">NPU</option>}</select>
-        <select aria-label="Size" data-active={size !== null} value={size ?? ""} onChange={(event) => setSize((event.target.value || null) as SizeBucket | null)}><option value="">Any size</option>{sizeBuckets.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select>
-        <select aria-label="Sort" data-active={sort !== "match"} value={sort} onChange={(event) => setSort(event.target.value as Sort)}>{sorts.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select>
+        <select aria-label="Hardware" data-active={fitFilter !== null} value={fitFilter ?? ""} onChange={(event) => { setFitFilter((event.target.value || null) as FitFilter | null); setSelected(null); }}><option value="">Any hardware</option>{gpu !== null && <option value="gpu">Fits GPU</option>}<option value="memory">Fits memory</option>{flm.data?.available && <option value="npu">NPU</option>}</select>
+        <select aria-label="Size" data-active={size !== null} value={size ?? ""} onChange={(event) => { setSize((event.target.value || null) as SizeBucket | null); setSelected(null); }}><option value="">Any size</option>{sizeBuckets.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select>
+        <select aria-label="Sort" data-active={active && sort !== "match"} disabled={!active} title={active ? undefined : "Sorts search results"} value={sort} onChange={(event) => setSort(event.target.value as Sort)}>{sorts.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select>
         <Menu label="Add a model file" trigger={<><Icon name="upload" size={14} /> Add file</>}>
           <button role="menuitem" disabled={!online} onClick={() => picker.current?.click()}>Upload from this computer…</button>
           <button role="menuitem" disabled={!online} onClick={() => setFolderOpen(true)}>Pick from the server…</button>
@@ -225,32 +276,58 @@ export function FindModels({ client, online, onRegistered, onOpenModel, onDownlo
         </Menu>
         <input ref={picker} type="file" multiple hidden accept=".gguf,.bin,.safetensors,.onnx" aria-label="Model file" onChange={(event) => { const picked = Array.from(event.target.files ?? []); event.target.value = ""; if (picked.length) { setSelected(null); void local.upload(picked); } }} />
       </div>
+      <div className="result-line">
+        {suggesting && !hubNote ? <><h2 className="suggested-title">Suggested for this machine</h2><HelpTip label="How suggestions are chosen">For each type, the largest recommended model that fits. The first chat model may use half of the GPU memory. A second chat model and one each for embeddings, speech and images may use an eighth, up to 4 GiB. Without a GPU, system memory counts. Models already on disk are left out.</HelpTip></> : <p className="searching muted" role="status">{status}</p>}
+        {filtering && <button className="link-button" onClick={clear}>Clear filters</button>}
+      </div>
       {urlOpen && <UrlDownload client={client} onClose={() => setUrlOpen(false)} onStarted={() => { setUrlOpen(false); notify("Download started. Follow it under Downloads."); onDownloads(); }} />}
       {folderOpen && <ServerFolder client={client} onClose={() => setFolderOpen(false)} onPick={(entry, mode) => { setFolderOpen(false); setSelected(null); void local.pick(entry, mode); }} />}
       {error && <div className="action-row"><p className="inline-error" role="alert">{error}</p><Button onClick={() => setTick((value) => value + 1)}>Retry</Button></div>}
-      {flm.data?.available && flm.data.listError && (engine === null || engine === npu) && <p className="inline-error" role="alert">FastFlowLM couldn't list its models.</p>}
+      {active && flm.data?.available && flm.data.listError && (engine === null || engine === npu) && <p className="inline-error" role="alert">FastFlowLM couldn't list its models.</p>}
       {npuOnly && flm.data?.problems.map((problem) => <p className="inline-warning" key={problem}>{problem}</p>)}
-      <div className="result-line"><p className="searching muted" role="status">{status}</p>{filtering && <button className="link-button" onClick={clear}>Clear filters</button>}</div>
-      {!npuOnly && !result ? <p className="muted" role="status">{loading ? "Searching…" : ""}</p> : views.length === 0 ? <Empty title="No models found">{filtering ? "No model matches every filter." : "Try a shorter search."}</Empty> : <ul className={`model-results ${loading ? "stale" : ""}`} aria-label="Search results" aria-busy={loading}>
-        {views.map(({ model: item, quants }) => { const shown = featured(quants); return <li key={`${item.source}:${item.repo}`} className={`model-result ${item.repo === selected?.repo ? "selected" : ""}`}>
-          <div className="result-head">
-            <strong className="break-word">{item.name}</strong>
-            {item.source === "catalog" && <Badge tone="good">Recommended</Badge>}
-            {item.quants.some((entry) => entry.present) && <Badge tone="good">✓ On this machine</Badge>}
-            <span className="muted result-meta">{[item.publisher, item.task && (taskNames[item.task] ?? item.task), compact(item.downloads) && `${compact(item.downloads)} downloads`, item.source === "flm" ? "NPU" : null].filter(Boolean).join(" · ")}</span>
-          </div>
-          <div className="quant-chips" role="group" aria-label={`${item.name} quants`}>
-            {item.quants.length === 0 ? <span className="muted">No downloadable files found</span> : shown.map((entry) => {
-              const percent = progress(entry);
-              return <button key={quantKey(entry)} className={`quant-chip ${entry.present ? "present" : ""}`} aria-pressed={item.repo === selected?.repo && quantKey(entry) === selected?.quant} onClick={() => pick(item, entry)} title={entry.kind === "checkpoint" ? `${entry.files.length} files for ${engineNames[entry.engine ?? ""] ?? entry.engine}` : entry.file}>
-                {entry.present && <span aria-label="Downloaded">✓ </span>}{entry.label}{entry.kind === "checkpoint" && entry.engine && <span className="quant-engine"> · {engineNames[entry.engine] ?? entry.engine}</span>}<span className="muted"> {bytes(entry.bytes)}</span>{entry.recommended && <span className="quant-star" aria-label="Suggested">★</span>}
-                {percent !== null && <span className="quant-progress" style={{ width: `${percent}%` }} />}
-              </button>;
-            })}
-            {item.quants.length > shown.length && <button className="quant-chip more" onClick={() => pick(item, quants.find((entry) => entry.recommended) ?? shown[0] ?? item.quants[0])}>+{item.quants.length - shown.length} more</button>}
-          </div>
-        </li>; })}
+    </div>
+    <div className="find-main">
+      {(active ? !npuOnly && !result : !suggesting) ? null : rows.length === 0 ? active
+        ? more && narrowed ? <Empty title={`No match in the first ${found.length} models`}>More models may match. <button className="link-button" disabled={moreBusy} onClick={() => void showMore()}>{moreBusy ? "Searching…" : "Search more"}</button></Empty>
+          : <Empty title="No models found">{filtering ? "No model matches every filter." : "Try a shorter search."}</Empty>
+        : <Empty title="No suggestions">{catalog?.models.some((item) => item.quants.length > 0) ? "Every recommended model that fits this machine is already on it. Search for more." : "Model sizes are unknown without Hugging Face. Search lists recommended and downloaded models."}</Empty>
+      : <ul className={`model-results ${loading ? "stale" : ""}`} aria-label={active ? "Search results" : "Suggested models"} aria-busy={loading}>
+        {rows.map(({ model: item, quant: entry }) => {
+          const users = entry ? quantUsers(inventory, item.repo, entry) : [];
+          const percent = entry ? progress(entry) : null;
+          const where = entry ? quantFit(entry.bytes, entry.engine, machine) : "unknown";
+          const [fitText, fitTone] = fitLabel(where, entry?.engine, machine);
+          const have = entry?.present ? entry : item.quants.find((known) => known.present);
+          const label = (known: Quant) => known.label === "Unknown" && known.file ? baseName(known.file) : known.label;
+          const state = entry ? hubQuantState(entry, users, registered) : "";
+          const direct = !!entry && !entry.present && entry.presentFiles === 0 && entry.pullable && !(item.gated && !result?.authenticated) && where !== "none";
+          const name = `${item.name}${entry ? ` ${label(entry)}` : ""}`;
+          return <li key={`${item.source}:${item.id}`} className={`model-result ${item.id === selected?.id ? "selected" : ""}`}>
+            <div className="result-name">
+              <button className="result-open" disabled={!entry} onClick={() => pick(item, entry)}><strong className="break-word">{item.name}</strong></button>
+              {active && item.source === "catalog" && <Badge tone="good">Recommended</Badge>}
+              {have && <Badge tone="good">{have === entry ? "✓ On disk" : `✓ ${label(have)} on disk`}</Badge>}
+            </div>
+            <div className="result-facts">
+              <span className="muted result-meta">{[item.publisher, item.task && (taskNames[item.task] ?? item.task), item.source === "flm" ? "NPU" : null].filter(Boolean).join(" · ")}{!!item.downloads && <span className="result-downloads"> · {compact(item.downloads)} downloads</span>}</span>
+              {entry ? <span className="result-quant" title={entry.kind === "checkpoint" ? `${entry.files.length} files for ${engineNames[entry.engine ?? ""] ?? entry.engine}` : entry.file}>
+                <span className={`status-dot ${fitTone}`} role="img" aria-label={fitText} title={fitText} />
+                <span className="result-label">{label(entry)}{entry.kind === "checkpoint" && entry.engine && <span className="muted"> · {engineNames[entry.engine] ?? entry.engine}</span>}</span>
+                <span className="muted numeric">{entry.bytes === null ? "" : bytes(entry.bytes)}</span>
+                {state && percent === null && <span className="muted">{state}</span>}
+              </span> : <span className="muted result-quant">No downloadable files</span>}
+              {item.quants.length > 1 ? <button className="link-button result-count" onClick={() => pick(item, entry)}>{item.quants.length} {item.source === "flm" ? "sizes" : "quants"}</button> : <span className="result-count" />}
+            </div>
+            <div className="result-action">{!entry ? null
+              : percent !== null ? <span className="muted result-progress" role="status">{quantWords.downloading(percent)}</span>
+              : users.length ? <Button className="row-action" aria-label={`Open model ${users[0]}`} onClick={() => onOpenModel(users[0]!)}>Open model</Button>
+              : direct ? <Button className="row-action" aria-label={`Download ${name}`} disabled={!online || starting !== ""} onClick={() => void start(item, entry)}>Download</Button>
+              : <Button className="row-action" aria-label={`View ${name}`} onClick={() => pick(item, entry)}>View</Button>}</div>
+            {percent !== null && <span className="quant-progress" style={{ width: `${percent}%` }} />}
+          </li>;
+        })}
       </ul>}
+      {more && rows.length > 0 && <div className="results-more"><Button disabled={moreBusy} onClick={() => void showMore()}>{moreBusy ? "Loading…" : "Show more"}</Button></div>}
     </div>
     {file && <aside className="inspector find-detail" aria-label="Model detail">
       <div className="inspector-top"><Button variant="ghost" className="back-button" onClick={local.clear}><Icon name="back" /> Back to results</Button><Button variant="ghost" className="close-inspector" aria-label="Close detail" onClick={local.clear}><Icon name="close" /></Button></div>

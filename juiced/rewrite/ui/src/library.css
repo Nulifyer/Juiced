@@ -1,9 +1,6 @@
 .page-intro { margin: -4px 0 14px; font-size: .8rem; max-width: 720px; }
 .link-button { border: 0; background: none; padding: 0; color: var(--ring); font: inherit; text-decoration: underline; text-underline-offset: 2px; }
 .link-button:hover { color: var(--foreground); }
-.result-title { border: 0; background: none; padding: 0; text-align: left; min-width: 0; }
-.result-title:hover strong { text-decoration: underline; text-underline-offset: 2px; }
-.result-size { margin-left: auto; font-size: .75rem; }
 .library-total { font-size: .75rem; }
 .inventory .library-total { margin-left: auto; display: inline-flex; align-items: center; white-space: nowrap; }
 .chip-filter .library-total { padding-left: 4px; }
@@ -15,11 +12,6 @@
 .file-list { list-style: none; margin: 4px 0 12px; padding: 0; font-size: .75rem; }
 .file-list li { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 10px; padding: 5px 0; border-top: 1px solid var(--border); }
 .delete-row { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
-.downloaded-list .model-result { display: grid; grid-template-columns: minmax(220px, 38%) minmax(0, 1fr); align-items: center; gap: 4px 18px; padding: 8px 12px; }
-.downloaded-list .model-result .quant-chips { margin: 0; }
-.has-detail .downloaded-list .model-result { grid-template-columns: minmax(0, 1fr); }
-@media (max-width: 760px) { .downloaded-list .model-result { grid-template-columns: minmax(0, 1fr); } }
-.quant-chip .quant-engine { color: var(--muted); font-size: .75rem; }
 .checkpoint-files { margin: 4px 0 12px; font-size: .75rem; }
 .checkpoint-files .field-label { display: inline-flex; align-items: center; gap: 4px; }
 .checkpoint-files ul { list-style: none; margin: 6px 0 0; padding: 0; max-height: 180px; overflow-y: auto; border-top: 1px solid var(--border); }
@@ -79,8 +71,6 @@ ul.quant-rows .quant-row:last-child { border-bottom: 1px solid var(--border); }
 .download-row .inline-warning { grid-column: 1 / -1; margin: 0; font-size: .78rem; }
 .download-leftovers { display: flex; align-items: center; gap: 4px; max-width: 900px; }
 .find-detail .facts { margin: 8px 0; }
-.model-result { padding-block: 8px; }
-@media (min-width: 761px) { .result-head .result-meta { flex-basis: auto; margin-left: auto; text-align: right; } }
 @media (max-width: 700px) {
   .models-toolbar .chip-filter { flex-wrap: nowrap; max-width: 100%; overflow-x: auto; scrollbar-width: none; }
   .models-toolbar .chip-filter button { flex: none; }
@@ -96,14 +86,68 @@ ul.quant-rows .quant-row:last-child { border-bottom: 1px solid var(--border); }
   .model-table .file-row [role="cell"]:nth-child(5) { grid-row: 1; grid-column: 2; align-self: center; }
   .model-table .file-row .pick-space { display: none; }
 }
-.find-filters select { flex: 0 1 auto; min-width: 0; padding-right: 26px; font-size: .8rem; }
-.find-filters select[data-active="true"] { border-color: var(--ring); color: var(--foreground); background: var(--selected); }
-.result-line { display: flex; align-items: baseline; gap: 10px; min-height: 1.125rem; margin: -4px 0 6px; font-size: .75rem; }
-.result-line .searching { margin: 0; min-height: 0; }
 .toolbar .scope-filter .help-trigger { margin-left: -4px; align-self: center; border: 0; padding: 0; border-radius: 4px; min-height: 24px; }
-@media (max-width: 700px) {
-  .find-filters { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+/* Discover. The search bar spans the page above the list and the detail panel, so opening the panel narrows only the list. */
+.find-models { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-areas: "head" "main"; column-gap: 20px; align-items: start; container: discover / inline-size; }
+.find-models.has-detail { grid-template-columns: minmax(0, 1fr) minmax(280px, 340px); grid-template-areas: "head head" "main detail"; }
+.find-head { grid-area: head; min-width: 0; }
+.find-main { grid-area: main; min-width: 0; container: results / inline-size; }
+.find-models > .find-detail { grid-area: detail; }
+.find-filters { display: grid; grid-template-columns: minmax(0, 1fr) 140px 168px 148px 128px 148px auto; gap: 8px; align-items: center; }
+.find-filters input[type="search"], .find-filters select { width: 100%; min-width: 0; }
+.find-filters select { padding-right: 26px; font-size: .8rem; text-overflow: ellipsis; }
+.find-filters select[data-active="true"] { border-color: var(--ring); color: var(--foreground); background: var(--selected); }
+.find-filters .menu-trigger { justify-content: center; min-height: var(--control); white-space: nowrap; }
+.result-line { display: flex; align-items: center; gap: 6px 10px; min-height: 28px; margin: 4px 0; font-size: .75rem; }
+.result-line .searching { margin: 0; }
+.result-line .suggested-title { margin: 0; font-size: .8rem; font-weight: 550; }
+.result-line .help-trigger { border: 0; padding: 0; border-radius: 4px; min-height: 24px; }
+.find-head > .action-row, .find-head > .inline-error, .find-head > .inline-warning { margin: 0 0 8px; }
+.model-results { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto auto; column-gap: 16px; border-top: 1px solid var(--border); font-size: .8rem; }
+.model-results.stale { opacity: .55; transition: opacity .15s; }
+@media (prefers-reduced-motion: reduce) { .model-results.stale { transition: none; } }
+.model-result { position: relative; display: grid; grid-template-columns: subgrid; grid-column: 1 / -1; align-items: center; min-height: 44px; padding: 5px 8px; border-bottom: 1px solid var(--border); }
+.model-result.selected { background: var(--selected); }
+.result-name { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; }
+.result-open { border: 0; background: none; padding: 0; text-align: left; min-width: 0; min-height: 24px; color: inherit; font: inherit; }
+.result-open strong { font-weight: 550; font-size: .85rem; }
+.result-open:hover:not(:disabled) strong { text-decoration: underline; text-underline-offset: 2px; }
+.result-facts { display: contents; }
+.result-meta, .result-count { font-size: .75rem; }
+.result-meta { text-align: right; }
+.result-quant { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 280px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.result-quant .result-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.result-quant .muted { font-size: .75rem; }
+.result-count { white-space: nowrap; min-height: 24px; }
+/* A fixed action width: a wider label would narrow the row's text and rewrap it mid-download. */
+.result-action { display: flex; justify-content: flex-end; width: 104px; }
+.result-action .row-action { width: 100%; min-height: 28px; padding: 3px 10px; }
+.result-progress { width: 100%; font-size: .75rem; text-align: center; font-variant-numeric: tabular-nums; }
+.results-more { display: flex; justify-content: center; padding: 12px 0; }
+/* Each select's track follows its longest option, so no chosen filter is cut off. */
+@container discover (max-width: 1040px) {
+  .find-filters { grid-template-columns: 113fr 136fr 109fr 98fr 124fr auto; gap: 8px 6px; }
   .find-filters input[type="search"] { grid-column: 1 / -1; }
-  .find-filters select { width: 100%; padding-left: 8px; padding-right: 20px; font-size: .75rem; text-overflow: ellipsis; }
-  .find-filters .menu-trigger { justify-content: center; min-height: var(--control); }
+  .find-filters select { padding-left: 8px; padding-right: 22px; font-size: .75rem; }
 }
+@container discover (max-width: 700px) {
+  .find-filters { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+}
+@container results (max-width: 900px) {
+  .model-results { grid-template-columns: minmax(0, 1fr) auto; column-gap: 12px; }
+  .model-result { padding-block: 7px; row-gap: 2px; }
+  .result-name { grid-column: 1; grid-row: 1; }
+  .result-facts { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 12px; grid-column: 1; grid-row: 2; min-width: 0; }
+  .result-meta { text-align: left; }
+  .result-count:empty { display: none; }
+  .result-action { grid-column: 2; grid-row: 1 / span 2; }
+}
+@container results (max-width: 520px) {
+  .result-downloads { display: none; }
+  .result-action { width: 92px; }
+}
+@media (max-width: 960px) {
+  .find-models.has-detail { grid-template-columns: minmax(0, 1fr); grid-template-areas: "head" "detail"; }
+  .find-models.has-detail .find-main { display: none; }
+}
+@media (pointer: coarse) { .result-action .row-action, .result-open, .result-count { min-height: 44px; } }

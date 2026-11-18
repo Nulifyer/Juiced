@@ -5,10 +5,14 @@ with the loading policy you want.
 
 ## Find and download a model
 
-1. Open **Models → Discover**.
-2. Search by name, for example `qwen3`, `llama` or `whisper`. Narrow the results
-   with the filters beside the search box. They combine, and **Clear filters**
-   resets them.
+1. Open **Models → Discover**. It opens on up to six models suggested for this
+   machine. **Download** on a row fetches the quant shown and adds the model as
+   **On demand**. See [suggested models](#suggested-models).
+2. For anything else, search by name, for example `qwen3`, `llama` or `whisper`,
+   or set a filter beside the search box. Search text or any filter replaces the
+   suggestions with results from Juiced's catalog, Hugging Face and this
+   machine. Filters combine, and **Clear filters** resets them. With no search
+   text and no filter, the suggestions return.
 
    | Filter | Choices |
    |---|---|
@@ -16,12 +20,22 @@ with the loading policy you want.
    | **Any engine** | The engine that runs it, such as llama.cpp, vLLM or FastFlowLM |
    | **Any hardware** | **Fits GPU**, **Fits memory** (GPU or system memory) or **NPU** |
    | **Any size** | The size of a quant, from **Under 2 GiB** to **Over 24 GiB** |
-   | **Best match** | The order: **Most downloads** or **Smallest first** |
+   | **Best match** | The order of search results: **Most downloads** or **Smallest first** |
 
-   With a hardware or size filter, each result lists only the quants that match.
-3. Select a quant chip on a result. **Recommended** marks a model from Juiced's
-   catalog, ★ marks the suggested quant, and **✓ On this machine** means a quant
-   is already downloaded. **+N more** opens the full quant list.
+   With a hardware or size filter, each result offers a quant that matches.
+   Results load 12 repositories at a time. When there are more, the count reads
+   **First 12 models** and **Show more** loads the next page. Hardware and size
+   are checked against the loaded pages only, so the count then reads, for
+   example, **3 of the first 24 models match**. **Search more** appears when no
+   loaded model matches yet.
+3. Each result is one row: the model, one quant with its size and a fit dot, and
+   one action. The quant is the one on disk if there is one, then the
+   recommended one, then a common quant that fits this machine. **Recommended**
+   marks a model from Juiced's catalog. **Download** fetches that quant and adds
+   the model as **On demand**. A row marked **✓ On disk** offers **Open model**
+   or **View** instead. **View** also replaces **Download** for a quant that is
+   too big for this machine, gated or not downloadable. Select the model's name
+   or **N quants** to open the detail panel with every quant.
 4. In the detail panel, compare the quants. Each row shows a fit dot, the quant,
    its state on this machine and its size. The state reads the same as under
    **Installed**: a loading policy when a model uses the quant, **Not added**
@@ -45,7 +59,22 @@ use less storage and memory, with some loss of precision. Juiced downloads
 published quants. It does not convert or quantize weights.
 
 If Hugging Face cannot be reached, Discover shows recommended and downloaded
-models only.
+models only, and no suggestions, because model sizes are unknown.
+
+### Suggested models
+
+The suggestions come from Juiced's catalog and are chosen for this machine. For
+each type, Juiced takes the largest recommended quant that fits a share of the
+GPU memory, or of system memory when there is no GPU:
+
+| Suggestion | Share of memory |
+|---|---|
+| First chat model | Half |
+| Second chat model, embeddings, speech to text, text to speech, images | An eighth, at most 4 GiB |
+
+A quant fits when its file size plus 15% is within the share. Models with a quant
+already on disk or downloading are left out, as are gated models. The list is
+chosen when Discover opens and does not reorder while a model downloads.
 
 ## Add the model
 
@@ -69,11 +98,13 @@ See [choose loading policies](loading-policy.md) and
 
 On a machine with an AMD XDNA 2 NPU and FastFlowLM installed, Discover lists
 FastFlowLM's chat models as results, marked **FastFlowLM · Chat · NPU**. Each
-result is a model family and each chip is one of its sizes, such as `1b` or `4b`.
+result is a model family. Its row offers one size, such as `4b`, and **N sizes**
+opens the rest.
 Pick **NPU** in **Any hardware** or **FastFlowLM (NPU)** in **Any engine** to see
 only those.
 
-1. Select a size chip on a result.
+1. Select **Download** on a result to fetch the size shown as **On demand**, or
+   select the model's name to open the detail panel and pick another size.
 2. In the detail panel, choose a **Loading policy**.
 3. Select **Download**. Juiced adds the model with that policy when the download
    finishes. A size that is already downloaded offers **Add model** instead.
@@ -94,8 +125,8 @@ Some engines run a model's original folder instead of a GGUF file:
 1. Open **Models → Discover** and search, for example `Qwen3-0.6B`. Pick an engine
    in **Any engine** to see only what it runs. The **Classify** type lists text
    classifiers.
-2. A checkpoint shows as one chip, such as **Checkpoint · vLLM**. Select it to see
-   every file, the total size, the license and the engine. READMEs, images and
+2. A checkpoint's row reads, for example, **Checkpoint · vLLM**. Select the
+   model's name to see every file, the total size, the license and the engine. READMEs, images and
    other formats are skipped.
 3. Choose a **Loading policy** and select **Download**. The files download at the
    repository's current commit and appear as one row under **Downloads**.

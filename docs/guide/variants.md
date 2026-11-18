@@ -5,7 +5,7 @@ models. A model family can have several repositories, formats and quants. Check
 what each candidate contains before you download it.
 
 1. Open **Models → Discover** and search for the model family or publisher.
-2. Select a quant chip to open the detail panel. Check the publisher and license.
+2. Select the model's name to open the detail panel. Check the publisher and license.
    Similar model names do not prove a common origin, license or behavior.
 3. Compare the quants in the list. Each shows a fit dot, its state on this
    machine and its size. **This machine** spells out the fit for the selected one. Pick one that an installed engine can run, or check that

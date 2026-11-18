@@ -1,5 +1,5 @@
 import type { APIRequestContext, Page } from "@playwright/test";
-import { api, closeInspector, expect, modelsView, navigate, open, test, toasts, tryModel } from "./support";
+import { api, closeInspector, discoverModel, expect, modelsView, navigate, open, test, toasts, tryModel } from "./support";
 
 const repo = "fixture-labs/Tiny-Chat-GGUF";
 const file = "Tiny-Chat-Q8_0.gguf";
@@ -40,9 +40,7 @@ function library(request: APIRequestContext) {
 async function selectQuant(page: Page) {
   await open(page);
   await modelsView(page, "Discover");
-  await result(page).getByRole("button", { name: /Q8_0/ }).click();
-  const detail = page.getByRole("complementary", { name: "Model detail" });
-  await expect(detail.getByRole("heading", { name: "Tiny-Chat-GGUF" })).toBeVisible();
+  const detail = await discoverModel(page, "tiny-chat", "Tiny-Chat-GGUF", /Q8_0/);
   await expect(detail.getByRole("listbox", { name: "Quants" }).getByRole("option", { selected: true })).toContainText("Q8_0");
   return detail;
 }
@@ -55,7 +53,7 @@ test("Download asks for the loading policy first, installs the engine when neede
   const engineReady = !!fixture.cpuEngine(await fixture.engines());
   try {
     const detail = await selectQuant(page);
-    await expect(result(page).getByText("✓ On this machine", { exact: true })).toHaveCount(0);
+    await expect(result(page).getByText("✓ On disk", { exact: true })).toHaveCount(0);
     await expect(detail.getByRole("radiogroup", { name: "Loading policy" }).getByRole("radio", { name: "On demand" })).toHaveAttribute("aria-checked", "true");
     await expect(detail.getByRole("button", { name: "Add model" })).toHaveCount(0);
     const pulling = page.waitForRequest((outgoing) => outgoing.method() === "POST" && new URL(outgoing.url()).pathname === "/v1/juiced/library/pull");
