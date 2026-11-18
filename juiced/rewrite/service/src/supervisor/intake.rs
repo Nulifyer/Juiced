@@ -774,6 +774,16 @@ impl Manager {
             .map_err(|_| interrupted())?
     }
 
+    /// Reads a file the local scan listed; those lie under the import roots or Juiced's own
+    /// data folder.
+    pub(super) async fn scanned_import(&self, raw: &str) -> Result<Linked, ApiError> {
+        let roots = self.scan_roots().await;
+        let raw = raw.to_owned();
+        tokio::task::spawn_blocking(move || inspect_file(&roots, &raw).map(|(linked, _)| linked))
+            .await
+            .map_err(|_| interrupted())?
+    }
+
     pub async fn import_path(
         self: &Arc<Self>,
         request: ImportPathRequest,

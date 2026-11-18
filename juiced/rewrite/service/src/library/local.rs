@@ -212,9 +212,11 @@ fn role_of(path: &str) -> &'static str {
     } else if lower.contains("vae/") || name.contains("vae") || name.starts_with("ae.") {
         "vae"
     } else if lower.contains("text_encoder")
-        || ["t5xxl", "umt5", "clip_l", "clip_g", "clip-l", "clip-g"]
-            .iter()
-            .any(|marker| name.contains(marker))
+        || [
+            "t5xxl", "t5-v1_1", "umt5", "clip_l", "clip_g", "clip-l", "clip-g",
+        ]
+        .iter()
+        .any(|marker| name.contains(marker))
     {
         "text_encoder"
     } else if name.ends_with(".json") && name.contains("token") {

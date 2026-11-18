@@ -193,7 +193,16 @@ pub struct ModelAdd {
     /// split diffusion safetensors); otherwise it must name the detected engine.
     #[serde(default)]
     pub engine: Option<String>,
+    /// Set by the service when it registers a file it found on disk: any scanned folder is
+    /// readable, a taken default name gets a suffix, and a file that only serves another
+    /// model is refused.
+    #[serde(skip)]
+    pub automatic: bool,
 }
+
+const UNIQUE_SUFFIXES: std::ops::RangeInclusive<u32> = 2..=9;
+/// GGUF architectures that only feed another model, so they are never a model of their own.
+const COMPANION_ARCHITECTURES: &[&str] = &["t5encoder", "clip"];
 
 fn invalid(code: &'static str, message: &'static str) -> ApiError {
     ApiError::new(StatusCode::BAD_REQUEST, code, message)
@@ -204,6 +213,22 @@ fn archive_failure(error: ArchiveError) -> &'static str {
 }
 
 impl Manager {
+    /// The first of `id`, `id-2` … `id-9` that no model or alias has taken; `id` when all are.
+    async fn free_id(&self, id: String) -> String {
+        let config = self.config.lock().await;
+        let taken = |candidate: &str| {
+            config.models.iter().any(|model| model.id == candidate)
+                || config.aliases.entries.contains_key(candidate)
+        };
+        if !taken(&id) {
+            return id;
+        }
+        UNIQUE_SUFFIXES
+            .map(|suffix| format!("{id}-{suffix}"))
+            .find(|candidate| !taken(candidate))
+            .unwrap_or(id)
+    }
+
     pub(super) async fn host(
         &self,
     ) -> Result<(Arc<crate::hardware::Snapshot>, crate::hardware::Inventory), ApiError> {
@@ -410,6 +435,7 @@ impl Manager {
             let result = manager.run_install(&running, policy, expected).await;
             if result.is_ok() {
                 manager.resume_native_adoption();
+                manager.retry_local_models();
             }
             running.update(|status| {
                 match result {
@@ -691,7 +717,11 @@ impl Manager {
             model_file,
             companions,
         ) = if let Some(path) = request.path.as_deref() {
-            let linked = self.linked_import(path).await?;
+            let linked = if request.automatic {
+                self.scanned_import(path).await?
+            } else {
+                self.linked_import(path).await?
+            };
             if models::is_projector(&linked.format) {
                 return Err(super::companion_sets::projector_needs_model().into());
             }
@@ -906,6 +936,20 @@ impl Manager {
             }
             other => other,
         };
+        if request.automatic
+            && let models::ModelFormat::Gguf { declared, .. } = &format
+            && declared
+                .architecture
+                .as_deref()
+                .is_some_and(|architecture| COMPANION_ARCHITECTURES.contains(&architecture))
+        {
+            return Err(ApiError::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "companion_file",
+                "This file is a text encoder or projector for another model, not a model.",
+            )
+            .into());
+        }
         let format = select_engine(format, request.engine.as_deref())?;
         let companion_arguments =
             models::companion_arguments(&format, &companions).map_err(|error| match error {
@@ -944,6 +988,11 @@ impl Manager {
                         "No file name is recorded for this artifact. Provide an explicit id.",
                     )
                 })?,
+        };
+        let id = if request.automatic {
+            self.free_id(id).await
+        } else {
+            id
         };
         if id.trim().is_empty()
             || id.trim() != id
@@ -1101,6 +1150,23 @@ impl Manager {
                 )
             })?;
         spec.companions = in_place;
+        {
+            let config = self.config.lock().await;
+            if config.admission.memory.mode == crate::admission::MemoryMode::Legacy
+                && spec.resident_bytes > config.resident_budget_bytes
+            {
+                return Err(ApiError::new(
+                    StatusCode::CONFLICT,
+                    "model_exceeds_memory_budget",
+                    format!(
+                        "Needs about {} of memory, more than the {} memory budget. Raise the budget under Loading policy.",
+                        crate::disk::human(spec.resident_bytes),
+                        crate::disk::human(config.resident_budget_bytes)
+                    ),
+                )
+                .into());
+            }
+        }
         let mut view = self.register(spec).await?;
         if let Some(policy) = request.policy.filter(|policy| *policy != Policy::Disabled) {
             view = self.set_policy(&id, policy, view.revision).await?;

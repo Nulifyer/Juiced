@@ -30,6 +30,8 @@ mod options;
 pub use options::{OptionsApply, OptionsError, SettingsChange};
 mod artifact_inventory;
 mod artifact_revision;
+mod auto_models;
+mod model_removal;
 mod runtime_selection;
 pub use runtime_selection::{RuntimeChange, RuntimeReply};
 mod cache_reply;
@@ -46,6 +48,7 @@ pub use intake::{ImportListQuery, ImportPathRequest, UploadQuery};
 mod local_library;
 mod model_updates;
 pub use local_library::LocalDelete;
+pub use model_removal::ModelRemoval;
 pub use storage::Reclaim;
 mod fit;
 pub use fit::FitQuery;
@@ -1903,6 +1906,7 @@ pub struct Manager {
     engine_jobs: engines::EngineJobs,
     native_adoption: native_adoption::Status,
     flm_jobs: flm::FlmJobs,
+    auto_models: auto_models::AutoModels,
     engine_releases: crate::engines::ReleaseEndpoints,
     runtime_packages: std::sync::OnceLock<Arc<crate::runtime_packages::Store>>,
     runtime_importing: AtomicBool,
@@ -2383,6 +2387,7 @@ impl Manager {
             engine_jobs: engines::EngineJobs::default(),
             native_adoption: native_adoption::Status::default(),
             flm_jobs: flm::FlmJobs::default(),
+            auto_models: auto_models::AutoModels::default(),
             engine_releases: crate::engines::ReleaseEndpoints::from_environment(),
             runtime_packages,
             runtime_importing: AtomicBool::new(false),

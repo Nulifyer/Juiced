@@ -103,7 +103,7 @@ fn fingerprint(registrations: &[Registered], generation: Option<u64>, roots: &[P
 }
 
 impl Manager {
-    async fn scan_roots(&self) -> Vec<PathBuf> {
+    pub(super) async fn scan_roots(&self) -> Vec<PathBuf> {
         let mut roots = self.canonical_import_roots().await;
         if let Some(owned) = self
             .config_path
@@ -225,10 +225,26 @@ impl Manager {
                 files.push(file.clone());
             }
         }
+        let deleted = self.delete_listed(files, roots, true).await;
+        self.library.invalidate_local();
+        drop(config);
+        let (deleted, freed, _) = deleted?;
+        Ok(json!({"schema_version": 1, "deleted": deleted, "freed_bytes": freed}))
+    }
+
+    /// Deletes inventory files and the sets that hold only them. With `strict` the first
+    /// failure stops the work; otherwise a file that can't be deleted is returned as kept.
+    async fn delete_listed(
+        &self,
+        files: Vec<crate::library::LocalInventoryFile>,
+        roots: Vec<PathBuf>,
+        strict: bool,
+    ) -> Result<(Vec<String>, u64, Vec<String>), ApiError> {
         let store = self.artifacts.clone();
-        let deleted = tokio::task::spawn_blocking(move || -> Result<Value, ApiError> {
+        tokio::task::spawn_blocking(move || {
             let mut freed = 0u64;
             let mut deleted = Vec::new();
+            let mut kept = Vec::new();
             let artifacts: Vec<&str> = files
                 .iter()
                 .filter_map(|file| file.artifact.as_deref())
@@ -250,18 +266,19 @@ impl Manager {
                         .iter()
                         .any(|member| artifacts.contains(&member.artifact.as_str()))
                 }) {
-                    store
+                    let removed = store
                         .remove_set(&set.id, store.generation())
-                        .map_err(ApiError::from)?;
+                        .map_err(ApiError::from);
+                    if strict {
+                        removed?;
+                    }
                 }
             }
             for file in &files {
-                match (file.storage, &file.artifact, &store) {
-                    (LocalStorage::ArtifactStore, Some(artifact), Some(store)) => {
-                        store
-                            .remove(artifact, store.generation())
-                            .map_err(ApiError::from)?;
-                    }
+                let removed = match (file.storage, &file.artifact, &store) {
+                    (LocalStorage::ArtifactStore, Some(artifact), Some(store)) => store
+                        .remove(artifact, store.generation())
+                        .map_err(ApiError::from),
                     (LocalStorage::HuggingfaceCache, _, _) => {
                         crate::library::remove_cache_file(file, &roots).map_err(|_| {
                             failure(
@@ -272,19 +289,49 @@ impl Manager {
                                     file.name
                                 ),
                             )
-                        })?;
+                        })
                     }
-                    _ => return Err(interrupted()),
+                    _ => Err(interrupted()),
+                };
+                match removed {
+                    Ok(()) => {
+                        freed = freed.saturating_add(file.bytes);
+                        deleted.push(file.id.clone());
+                    }
+                    Err(error) if strict => return Err(error),
+                    Err(_) => kept.push(file.id.clone()),
                 }
-                freed = freed.saturating_add(file.bytes);
-                deleted.push(file.id.clone());
             }
-            Ok(json!({"schema_version": 1, "deleted": deleted, "freed_bytes": freed}))
+            Ok((deleted, freed, kept))
         })
         .await
-        .map_err(|_| interrupted());
+        .map_err(|_| interrupted())?
+    }
+
+    /// Deletes the named files that nothing uses any more; the rest are returned as kept.
+    pub(super) async fn delete_unused(
+        &self,
+        ids: &[String],
+    ) -> Result<(Vec<String>, u64, Vec<String>), ApiError> {
+        let roots = self.scan_roots().await;
+        // The configuration lock keeps a registration from claiming a file between the
+        // in-use check and its removal.
+        let config = self.config.lock().await;
+        let inventory = self.local_with(&config, roots.clone(), true).await?;
+        let mut files = Vec::new();
+        let mut kept = Vec::new();
+        for id in ids {
+            match inventory.file(id) {
+                Some(file) if file.refusal.is_none() => files.push(file.clone()),
+                Some(_) => kept.push(id.clone()),
+                None => {}
+            }
+        }
+        let result = self.delete_listed(files, roots, false).await;
         self.library.invalidate_local();
         drop(config);
-        deleted?
+        let (deleted, freed, failed) = result?;
+        kept.extend(failed);
+        Ok((deleted, freed, kept))
     }
 }

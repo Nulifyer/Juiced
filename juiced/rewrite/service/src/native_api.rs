@@ -234,6 +234,23 @@ fn registry() -> &'static Registry {
     REGISTRY.get_or_init(Registry::default)
 }
 
+/// Library pulls a native download still drives; it registers their files itself.
+pub(crate) fn active_pulls() -> std::collections::BTreeSet<String> {
+    registry()
+        .jobs
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .iter()
+        .filter(|job| !job.snapshot().complete)
+        .filter_map(|job| {
+            job.pull
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .clone()
+        })
+        .collect()
+}
+
 impl Registry {
     fn prune(&self) {
         let mut jobs = self.jobs.lock().unwrap_or_else(|error| error.into_inner());
@@ -623,12 +640,14 @@ pub(crate) async fn register_download(
     let retry = |backend: Option<String>| ModelAdd {
         artifact: request.artifact.clone(),
         artifact_set: request.artifact_set.clone(),
+        parts: request.parts.clone(),
+        projector: request.projector.clone(),
         id: request.id.clone(),
         policy: request.policy,
         backend,
-        path: None,
+        path: request.path.clone(),
         engine: request.engine.clone(),
-        ..ModelAdd::default()
+        automatic: request.automatic,
     };
     let failure = match manager.add_model(retry(None)).await {
         Err(AddModelError::NotInstalled(body)) => body,

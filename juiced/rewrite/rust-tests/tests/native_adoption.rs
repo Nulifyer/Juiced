@@ -715,6 +715,20 @@ async fn first_boot_adopts_a_native_volume_in_place_and_restarts_idempotently() 
         .collect();
     assert_eq!(roles, BTreeSet::from(["encoder", "vae"]));
 
+    // The volume holds one quant no native model uses; once adoption is done it becomes a
+    // Disabled model like any other file on disk.
+    for _ in 0..200 {
+        let catalog = server.get("juiced/catalog").await;
+        if catalog["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|model| model["id"] == "Writer-Q8_0")
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
     let generation = saved_generation(&server);
     server.restart().await;
     let state = adopted(&server).await;
@@ -743,6 +757,7 @@ async fn first_boot_adopts_a_native_volume_in_place_and_restarts_idempotently() 
             ("Picture-Q8_0", "disabled"),
             ("Retired-Hybrid", "disabled"),
             ("Writer-IQ4_NL", "on-demand"),
+            ("Writer-Q8_0", "disabled"),
             ("kokoro-v1", "hot"),
         ])
     );

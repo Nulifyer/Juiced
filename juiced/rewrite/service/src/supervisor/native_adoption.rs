@@ -52,6 +52,26 @@ impl Status {
             .unwrap_or_else(|error| error.into_inner())
             .clone()
     }
+    /// Scheduled or running, so nothing else should register the files it is about to.
+    pub(super) fn busy(&self) -> bool {
+        self.running.load(Ordering::Acquire) || self.view()["state"] == "starting"
+    }
+    /// Weights and companion files of native models adoption has not registered yet.
+    pub(super) fn unregistered_weights(&self) -> Vec<PathBuf> {
+        self.view()["models"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|model| model["outcome"] != "registered")
+            .flat_map(|model| {
+                let companions = model["companions"].as_array().into_iter().flatten();
+                std::iter::once(&model["weights"])
+                    .chain(companions)
+                    .filter_map(|file| file["path"].as_str().map(PathBuf::from))
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
     fn begin(&self) -> Option<Running<'_>> {
         self.running
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -167,6 +187,8 @@ impl Manager {
                 });
             }
         }
+        drop(_running);
+        self.register_local_models();
     }
 
     async fn adopt_native(

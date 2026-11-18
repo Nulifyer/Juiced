@@ -232,5 +232,13 @@ async fn update_downloads_new_upstream_files_and_moves_the_model_with_its_settin
             .clone()
     };
     assert_eq!(references(&new), json!(["model:updating"]));
-    assert_eq!(references(&old), json!([]));
+    // Nothing else uses the replaced file, so it is deleted instead of becoming a second model.
+    assert!(
+        artifacts["artifacts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|artifact| artifact["id"] != old.as_str()),
+        "{artifacts}"
+    );
 }

@@ -57,6 +57,7 @@ const NETWORK_RESUMES: [Duration; 6] = [
     Duration::from_secs(300),
 ];
 const NETWORK_ERROR: &str = "artifact_network";
+const REMOVE_ATTEMPTS: usize = 40;
 
 struct CachedLocal {
     key: u64,
@@ -170,6 +171,14 @@ pub(crate) fn valid_file(value: &str) -> bool {
 
 fn library_error(status: StatusCode, code: &'static str, message: &str) -> ApiError {
     ApiError::new(status, code, message)
+}
+
+fn removal_interrupted() -> ApiError {
+    library_error(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "library_pull_interrupted",
+        "Removing the download was interrupted. Retry.",
+    )
 }
 
 fn hub_api_error(error: HubError) -> ApiError {
@@ -299,6 +308,9 @@ struct PullRecord {
     set: Option<PlannedSet>,
     checkpoint: Option<checkpoint::Kind>,
     follow_up: Option<follow_up::Saved>,
+    /// Finished with nothing left to do here: it asked for no model, or one made another
+    /// way runs its files.
+    released: bool,
 }
 
 impl PullRecord {
@@ -430,6 +442,7 @@ pub struct Library {
     journal: std::sync::OnceLock<Arc<crate::acquisitions::Journal>>,
     updates: Mutex<(u64, BTreeMap<String, bool>)>,
     following: Mutex<BTreeSet<String>>,
+    finished: tokio::sync::Notify,
 }
 
 impl Library {
@@ -465,7 +478,13 @@ impl Library {
             journal: std::sync::OnceLock::new(),
             updates: Mutex::new((0, BTreeMap::new())),
             following: Mutex::new(BTreeSet::new()),
+            finished: tokio::sync::Notify::new(),
         }
+    }
+
+    /// Resolves each time a download stops running, finished or failed.
+    pub(crate) async fn pull_finished(&self) {
+        self.finished.notified().await;
     }
 
     pub(crate) fn hub(&self) -> &Hub {
@@ -619,19 +638,220 @@ impl Library {
             .collect()
     }
 
+    /// Downloads in progress or failed. A finished one whose model exists is no longer
+    /// listed; `pull_view` still answers for it until its slot is reused or a restart.
     pub fn pulls_view(&self) -> Value {
         let pulls = self.pulls.lock().unwrap_or_else(|error| error.into_inner());
         let data: Vec<Value> = pulls
             .iter()
             .rev()
-            .map(|record| {
-                record
-                    .lock()
-                    .unwrap_or_else(|error| error.into_inner())
-                    .view()
+            .filter_map(|record| {
+                let record = record.lock().unwrap_or_else(|error| error.into_inner());
+                (!record.settled()).then(|| record.view())
             })
             .collect();
         json!({"schema_version": 1, "data": data})
+    }
+
+    /// Digests of the files listed downloads still own, which nothing else may register.
+    pub(crate) fn claimed_artifacts(&self) -> BTreeSet<String> {
+        self.pulls
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .iter()
+            .flat_map(|record| {
+                let record = record.lock().unwrap_or_else(|error| error.into_inner());
+                if record.settled() {
+                    return Vec::new();
+                }
+                record
+                    .parts
+                    .iter()
+                    .map(|part| part.request.expected_sha256.clone())
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// Takes finished downloads that will never settle on their own off the list: a model
+    /// made another way runs their files, or they asked for no model and `kept` does not name
+    /// them. They stay readable by id for the client that started them.
+    pub(crate) fn release_finished(
+        &self,
+        used: impl Fn(&str) -> bool,
+        kept: impl Fn(&str) -> bool,
+    ) {
+        for record in self
+            .pulls
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .iter()
+        {
+            let mut record = record.lock().unwrap_or_else(|error| error.into_inner());
+            if record.state().0 != "complete" || record.follow_up_pending() || record.settled() {
+                continue;
+            }
+            let installed = record
+                .parts
+                .first()
+                .is_some_and(|part| used(&part.request.expected_sha256));
+            let idle = record.follow_up.is_none() && !kept(&record.id);
+            if !installed && !idle {
+                continue;
+            }
+            record.released = true;
+        }
+    }
+
+    /// Runs a finished download's failed follow-up again.
+    pub fn retry_follow_up(&self, id: &str) -> Result<Value, ApiError> {
+        self.with_pull(id, |record| {
+            let failed = record
+                .follow_up
+                .as_ref()
+                .is_some_and(|saved| saved.outcome.state == FollowUpState::Failed);
+            if record.state().0 != "complete" || !failed {
+                return Err(library_error(
+                    StatusCode::CONFLICT,
+                    "library_pull_not_failed",
+                    "Only a finished download whose model wasn't created can be retried.",
+                ));
+            }
+            if let Some(saved) = &mut record.follow_up {
+                saved.outcome = FollowUpOutcome::default();
+            }
+            self.persist(record);
+            Ok(record.view())
+        })
+        .unwrap_or_else(|| {
+            Err(library_error(
+                StatusCode::NOT_FOUND,
+                "library_pull_not_found",
+                "No library acquisition with this identifier is retained.",
+            ))
+        })
+    }
+
+    /// Removes a download that is not running: cancels its transfers, deletes their partial
+    /// files and the finished files nothing else uses, and forgets it.
+    pub async fn remove_pull(
+        &self,
+        store: Arc<ArtifactStore>,
+        id: &str,
+    ) -> Result<Value, ApiError> {
+        let (digests, set) = self
+            .with_pull(id, |record| {
+                if record.follow_up_pending() && record.state().0 == "complete" {
+                    return Err(library_error(
+                        StatusCode::CONFLICT,
+                        "library_pull_active",
+                        "This download is finishing. Wait for it before removing it.",
+                    ));
+                }
+                Ok((
+                    record
+                        .parts
+                        .iter()
+                        .map(|part| part.request.expected_sha256.clone())
+                        .collect::<BTreeSet<String>>(),
+                    record.set.as_ref().map(|set| set.id.clone()),
+                ))
+            })
+            .unwrap_or_else(|| {
+                Err(library_error(
+                    StatusCode::NOT_FOUND,
+                    "library_pull_not_found",
+                    "No library acquisition with this identifier is retained.",
+                ))
+            })?;
+        let others: BTreeSet<String> = self
+            .pulls
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .iter()
+            .flat_map(|record| {
+                let record = record.lock().unwrap_or_else(|error| error.into_inner());
+                // A finished download that is no longer listed claims nothing.
+                if record.id == id || record.settled() {
+                    return Vec::new();
+                }
+                record
+                    .parts
+                    .iter()
+                    .map(|part| part.request.expected_sha256.clone())
+                    .collect()
+            })
+            .collect();
+        let poll = self.poll;
+        let owned: BTreeSet<String> = digests.difference(&others).cloned().collect();
+        let cancel = {
+            let (store, digests) = (store.clone(), owned.clone());
+            move || {
+                let presence = store.presence(&digests).map_err(ApiError::from)?;
+                let mut running = false;
+                for job in presence.jobs.values().flatten() {
+                    match job.state {
+                        JobState::Complete => {}
+                        JobState::Cancelled => {
+                            let _ = store.forget_job(&job.id, job.revision);
+                        }
+                        JobState::Cancelling => running = true,
+                        _ => {
+                            running = true;
+                            match store.cancel(&job.id, job.revision) {
+                                Ok(_) | Err(ArtifactError::Conflict) => {}
+                                Err(error) => return Err(ApiError::from(error)),
+                            }
+                        }
+                    }
+                }
+                Ok::<_, ApiError>(running)
+            }
+        };
+        let mut settled = false;
+        for _ in 0..REMOVE_ATTEMPTS {
+            let cancel = cancel.clone();
+            let running = tokio::task::spawn_blocking(cancel)
+                .await
+                .map_err(|_| removal_interrupted())??;
+            if !running {
+                settled = true;
+                break;
+            }
+            tokio::time::sleep(poll).await;
+        }
+        if !settled {
+            return Err(library_error(
+                StatusCode::CONFLICT,
+                "library_pull_active",
+                "The download is still stopping. Retry in a moment.",
+            ));
+        }
+        let freed = tokio::task::spawn_blocking(move || {
+            let mut freed = 0u64;
+            if let Some(set) = &set {
+                let _ = store.remove_set(set, store.generation());
+            }
+            for digest in &owned {
+                let bytes = store
+                    .stored_path(digest)
+                    .and_then(|path| std::fs::metadata(path).ok())
+                    .map_or(0, |metadata| metadata.len());
+                if store.remove(digest, store.generation()).is_ok() {
+                    freed = freed.saturating_add(bytes);
+                }
+            }
+            freed
+        })
+        .await
+        .map_err(|_| removal_interrupted())?;
+        self.pulls
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .retain(|record| record.lock().unwrap_or_else(|error| error.into_inner()).id != id);
+        self.forget_saved(id);
+        self.invalidate_local();
+        Ok(json!({"pull": id, "removed": true, "freed_bytes": freed}))
     }
 
     pub fn dismiss_pull(&self, id: &str) -> Result<Value, ApiError> {
@@ -1399,6 +1619,7 @@ impl Library {
                 then,
                 outcome: FollowUpOutcome::default(),
             }),
+            released: false,
         }));
         let view = {
             let record = record.lock().unwrap_or_else(|error| error.into_inner());
@@ -1423,6 +1644,7 @@ impl Library {
             let snapshot: Vec<(usize, PartStatus, DownloadRequest)> = {
                 let record = record.lock().unwrap_or_else(|error| error.into_inner());
                 if record.terminal() {
+                    self.finished.notify_one();
                     return;
                 }
                 record
@@ -1482,6 +1704,7 @@ impl Library {
                     set.state = state;
                 }
                 self.persist(&record);
+                self.finished.notify_one();
                 return;
             }
             tokio::time::sleep(self.poll).await;

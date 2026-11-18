@@ -1226,6 +1226,7 @@ async fn resuming_a_failed_pull_continues_its_dropped_part_and_its_follow_up() {
                 },
                 outcome: FollowUpOutcome::failed("download_failed", "The download didn't finish."),
             }),
+            released: false,
         })));
     assert_eq!(library.pull_view("failedpull").unwrap()["state"], "failed");
     let resumed = library.resume_pull(store.clone(), "failedpull").unwrap();
@@ -1511,6 +1512,7 @@ async fn add_intent_is_journaled_with_its_pull_and_holds_it_until_settled() {
     drop(library);
 
     let restarted = self::library(&fixture, SourcePolicy::AllowLoopbackHttp, None);
+    let journal_again = journal.clone();
     restarted.attach_journal(journal);
     restarted.recover(store.clone()).await;
     assert_eq!(
@@ -1524,5 +1526,235 @@ async fn add_intent_is_journaled_with_its_pull_and_holds_it_until_settled() {
     assert_eq!(settled["then"]["state"], "done");
     assert_eq!(settled["then"]["model"], "tiny");
     assert!(restarted.pending_follow_ups().is_empty());
-    restarted.dismiss_pull(&id).unwrap();
+    assert!(
+        restarted.pulls_view()["data"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    drop(restarted);
+
+    let again = self::library(&fixture, SourcePolicy::AllowLoopbackHttp, None);
+    again.attach_journal(journal_again);
+    again.recover(store.clone()).await;
+    assert_eq!(
+        again.pull_view(&id).unwrap_err().code,
+        "library_pull_not_found",
+        "a restart forgets a download whose model exists"
+    );
+}
+
+#[tokio::test]
+async fn a_finished_pull_leaves_the_list_once_its_model_exists_and_a_failed_one_can_retry() {
+    let fixture = fixture().await;
+    let directory = tempfile::tempdir().unwrap();
+    let store = store(&directory, SourcePolicy::AllowLoopbackHttp);
+    let library = library(&fixture, SourcePolicy::AllowLoopbackHttp, None);
+    let mut request = tiny_pull();
+    request.expected_generation = store.generation();
+    request.then = Some(AddWhenDone {
+        id: None,
+        policy: crate::config::Policy::Disabled,
+        engine: None,
+    });
+    let started = library.pull(store.clone(), request).await.unwrap();
+    let id = started["pull"].as_str().unwrap().to_owned();
+    assert_eq!(started["then"]["policy"], "disabled");
+    let finished = wait_for_pull(&library, &id).await;
+    assert_eq!(finished["state"], "complete");
+    let digest = finished["files"][0]["sha256"].as_str().unwrap().to_owned();
+    let listed = |library: &Library| library.pulls_view()["data"].as_array().unwrap().len();
+    assert_eq!(listed(&library), 1, "registering is still pending");
+    assert!(library.claimed_artifacts().contains(&digest));
+    assert_eq!(
+        library.retry_follow_up(&id).unwrap_err().code,
+        "library_pull_not_failed"
+    );
+
+    assert!(library.claim_follow_up(&id));
+    library.settle_follow_up(
+        &id,
+        FollowUpOutcome::failed("engine_not_installed", "No engine."),
+    );
+    assert_eq!(listed(&library), 1, "a failed registration stays listed");
+    assert!(library.claimed_artifacts().contains(&digest));
+    assert_eq!(library.engine_blocked_follow_ups(false), vec![id.clone()]);
+    assert!(library.engine_blocked_follow_ups(true).is_empty());
+    let retried = library.retry_follow_up(&id).unwrap();
+    assert_eq!(retried["then"]["state"], "pending");
+    assert_eq!(library.pending_follow_ups(), vec![id.clone()]);
+
+    assert!(library.claim_follow_up(&id));
+    library.settle_follow_up(&id, FollowUpOutcome::done("Tiny-Q4_K_M"));
+    assert_eq!(
+        listed(&library),
+        0,
+        "the model exists, so the download is gone"
+    );
+    assert!(library.claimed_artifacts().is_empty());
+    assert_eq!(
+        library.pull_view(&id).unwrap()["then"]["model"],
+        "Tiny-Q4_K_M",
+        "the client that started it can still read how it ended"
+    );
+}
+
+#[tokio::test]
+async fn finished_pulls_without_a_model_leave_the_list_unless_one_is_still_wanted() {
+    let fixture = fixture().await;
+    let directory = tempfile::tempdir().unwrap();
+    let store = store(&directory, SourcePolicy::AllowLoopbackHttp);
+    let library = library(&fixture, SourcePolicy::AllowLoopbackHttp, None);
+    let listed = |library: &Library| library.pulls_view()["data"].as_array().unwrap().len();
+    let mut request = tiny_pull();
+    request.expected_generation = store.generation();
+    let started = library.pull(store.clone(), request).await.unwrap();
+    let id = started["pull"].as_str().unwrap().to_owned();
+    let finished = wait_for_pull(&library, &id).await;
+    assert_eq!(finished["state"], "complete");
+    let digest = finished["files"][0]["sha256"].as_str().unwrap().to_owned();
+    library.release_finished(|_| false, |pull| pull == id);
+    assert_eq!(listed(&library), 1, "its owner still drives it");
+    assert!(library.claimed_artifacts().contains(&digest));
+    library.release_finished(|_| false, |_| false);
+    assert_eq!(listed(&library), 0);
+    assert!(library.claimed_artifacts().is_empty());
+    assert_eq!(
+        library.pull_view(&id).unwrap()["state"],
+        "complete",
+        "the client that started it can still read how it ended"
+    );
+
+    let mut request = tiny_pull();
+    request.expected_generation = store.generation();
+    request.then = Some(AddWhenDone {
+        id: None,
+        policy: crate::config::Policy::Disabled,
+        engine: None,
+    });
+    let started = library.pull(store.clone(), request).await.unwrap();
+    let id = started["pull"].as_str().unwrap().to_owned();
+    assert_eq!(wait_for_pull(&library, &id).await["state"], "complete");
+    assert!(library.claim_follow_up(&id));
+    library.settle_follow_up(&id, FollowUpOutcome::failed("model_exists", "Taken."));
+    library.release_finished(|_| false, |_| false);
+    assert_eq!(
+        listed(&library),
+        1,
+        "a failed registration waits for a retry"
+    );
+    library.release_finished(|_| true, |_| false);
+    assert_eq!(listed(&library), 0, "a model made by hand settles it");
+}
+
+#[tokio::test]
+async fn removing_a_download_cancels_it_and_deletes_only_its_own_files() {
+    let fixture = fixture().await;
+    let directory = tempfile::tempdir().unwrap();
+    let store = store(&directory, SourcePolicy::AllowLoopbackHttp);
+    let library = library(&fixture, SourcePolicy::AllowLoopbackHttp, None);
+    // An earlier download of the same file that already left the list claims nothing.
+    let mut earlier = tiny_pull();
+    earlier.expected_generation = store.generation();
+    let earlier = library.pull(store.clone(), earlier).await.unwrap();
+    let earlier = earlier["pull"].as_str().unwrap().to_owned();
+    let finished = wait_for_pull(&library, &earlier).await;
+    assert_eq!(finished["state"], "complete");
+    library.release_finished(|_| false, |_| false);
+    let digest = finished["files"][0]["sha256"].as_str().unwrap().to_owned();
+    store.remove(&digest, store.generation()).unwrap();
+
+    hold(&fixture, true);
+    let mut request = tiny_pull();
+    request.expected_generation = store.generation();
+    request.then = Some(AddWhenDone {
+        id: None,
+        policy: crate::config::Policy::Disabled,
+        engine: None,
+    });
+    let started = library.pull(store.clone(), request).await.unwrap();
+    let id = started["pull"].as_str().unwrap().to_owned();
+    assert_eq!(started["files"][0]["sha256"], digest.as_str());
+    let removed = library.remove_pull(store.clone(), &id).await.unwrap();
+    assert_eq!(removed["removed"], true);
+    hold(&fixture, false);
+    assert!(library.pull_view(&id).is_err());
+    assert!(library.pulls_view()["data"].as_array().unwrap().is_empty());
+    let digests = BTreeSet::from([digest.clone()]);
+    let presence = store.presence(&digests).unwrap();
+    assert!(presence.artifacts.is_empty());
+    assert!(
+        presence
+            .jobs
+            .values()
+            .flatten()
+            .all(|job| !job.writer_active)
+    );
+    assert_eq!(
+        library
+            .remove_pull(store.clone(), &id)
+            .await
+            .unwrap_err()
+            .code,
+        "library_pull_not_found"
+    );
+
+    let mut request = tiny_pull();
+    request.expected_generation = store.generation();
+    request.then = Some(AddWhenDone {
+        id: None,
+        policy: crate::config::Policy::Disabled,
+        engine: None,
+    });
+    let started = library.pull(store.clone(), request).await.unwrap();
+    let id = started["pull"].as_str().unwrap().to_owned();
+    assert_eq!(wait_for_pull(&library, &id).await["state"], "complete");
+    assert_eq!(
+        library
+            .remove_pull(store.clone(), &id)
+            .await
+            .unwrap_err()
+            .code,
+        "library_pull_active",
+        "registering is still pending"
+    );
+    assert!(library.claim_follow_up(&id));
+    library.settle_follow_up(
+        &id,
+        FollowUpOutcome::failed("engine_not_installed", "No engine."),
+    );
+    store
+        .reference(&digest, "model:other", true, store.generation())
+        .unwrap();
+    let kept = library.remove_pull(store.clone(), &id).await.unwrap();
+    assert_eq!(kept["freed_bytes"], 0, "a file a model references stays");
+    assert!(
+        store
+            .presence(&digests)
+            .unwrap()
+            .artifacts
+            .contains_key(&digest)
+    );
+    store
+        .reference(&digest, "model:other", false, store.generation())
+        .unwrap();
+
+    let mut request = tiny_pull();
+    request.expected_generation = store.generation();
+    request.then = Some(AddWhenDone {
+        id: None,
+        policy: crate::config::Policy::Disabled,
+        engine: None,
+    });
+    let started = library.pull(store.clone(), request).await.unwrap();
+    let id = started["pull"].as_str().unwrap().to_owned();
+    assert_eq!(wait_for_pull(&library, &id).await["state"], "complete");
+    assert!(library.claim_follow_up(&id));
+    library.settle_follow_up(
+        &id,
+        FollowUpOutcome::failed("unsupported_model_format", "Unknown."),
+    );
+    let freed = library.remove_pull(store.clone(), &id).await.unwrap();
+    assert!(freed["freed_bytes"].as_u64().unwrap() > 0, "{freed}");
+    assert!(store.presence(&digests).unwrap().artifacts.is_empty());
 }

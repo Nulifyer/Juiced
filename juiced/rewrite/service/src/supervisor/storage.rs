@@ -82,6 +82,8 @@ struct Candidate {
     references: Vec<String>,
     /// Owned Hugging Face cache files a model removal also deletes.
     files: Vec<String>,
+    /// Why a model file no model uses could not become a model.
+    note: Option<String>,
 }
 
 impl Candidate {
@@ -90,6 +92,7 @@ impl Candidate {
             "id": self.id, "kind": self.kind, "title": self.title, "path": self.path,
             "bytes": self.bytes, "reclaimable": self.refusal.is_none(),
             "refusal": self.refusal, "message": self.message, "references": self.references,
+            "note": self.note,
         })
     }
 }
@@ -114,6 +117,7 @@ struct Scan {
     import_roots: Vec<PathBuf>,
     artifact_root: Option<PathBuf>,
     journal_degraded: bool,
+    notes: BTreeMap<String, String>,
 }
 
 fn refusal_message(refusal: &str, references: &[String]) -> String {
@@ -184,6 +188,7 @@ impl Scan {
                     path: Some(file.location.display().to_string()),
                     bytes: file.bytes,
                     references: file.used_by.clone(),
+                    note: self.notes.get(&file.id).cloned(),
                     ..Candidate::default()
                 };
                 match file.refusal {
@@ -579,12 +584,17 @@ impl Manager {
             .views()
             .iter()
             .any(|job| !matches!(job["state"].as_str(), Some("complete" | "failed")));
+        let inventory = self.local_library(fresh).await.ok();
         Scan {
             root: self.storage_root(),
             settings: config.storage.clone(),
             configuration_generation: config.generation,
             models,
-            inventory: self.local_library(fresh).await.ok(),
+            notes: inventory
+                .as_ref()
+                .map(|inventory| self.local_notes(inventory))
+                .unwrap_or_default(),
+            inventory,
             transfers,
             leftovers,
             pulls,
