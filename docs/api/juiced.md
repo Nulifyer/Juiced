@@ -91,6 +91,7 @@ limits. Unknown or unrecorded qualification is not a successful test.
 | `GET /v1/juiced/preparation` | Retained legacy job records; `?id=` reads bounded output and `?cache=1` lists retained weights. Producer planning/creation/resume is retired with HTTP410 `feature_retired` |
 | `GET /v1/juiced/transfers` | Acquisition jobs and their state |
 | `GET /v1/juiced/cache` | Cache settings, snapshots, and operational state |
+| `GET`/`POST /v1/juiced/cache/sessions` | The conversation cache: settings, per-model mode and slots, and up to 256 saved states (operator). `POST` takes `configure`, `forget` or `retain` |
 | `GET /v1/juiced/admission` | Pending work, reservations, allocations, and uncertain termination |
 | `GET /v1/juiced/requests` | Bounded request metadata for diagnostics; `?limit=N` (1 to 1000, default 128) |
 | `GET`/`POST /v1/juiced/requests/capture` | Opt-in body capture state; `POST {"enabled":true}` turns it on (operator) |
@@ -116,6 +117,28 @@ without a key. Records are newest first. The service keeps the last 1000 records
 or 7 days, whichever is less, in `request-history.json` in the configuration
 directory, so history survives a restart. Request IDs continue after restored
 ones. A record with `"captured": true` has a capture.
+
+Each `GET /v1/juiced/cache/sessions` row carries `session` (a digest, never
+text), `kind`, `protocol`, `model`, `principal`, `state`, `bytes`,
+`last_used_unix_ms`, `retained`, `expires_unix_ms` and `execution_current`:
+`true` when the running worker can restore the state, `false` when it was saved
+under other engine settings, and `null` while the model is not loaded. Juiced
+deletes saved states on its own in these cases, and never a `retained` one:
+
+- A later turn of the same conversation was saved.
+- A newer state from the same client, API and model opens with the same
+  messages, those messages are at least nine tenths of both requests and at
+  least 2048 bytes, and the older state came from a single request that nothing
+  continued.
+- The model's worker started and the state was saved under other engine
+  settings. This waits until a running Tune finishes.
+- The state was unused for `retention_days`, or a budget needed its space.
+- The model was removed.
+
+Requests the service sends itself for model checks, Tune trials and Barista test
+prompts are never saved. Their request records have `session_cache.key: null`.
+States with `principal: "juiced-internal"` come from earlier versions and are
+deleted at startup.
 
 Capture is off by default, memory only and operator only. While on, the service
 keeps the last 20 requests' bodies, each capped at 64 KiB. Each capture has
