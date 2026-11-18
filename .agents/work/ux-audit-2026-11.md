@@ -136,6 +136,13 @@ Every report item is either fixed with evidence or listed below as decided other
 - Gate: 179 UI unit tests, tsc, build; Playwright model-settings, sessions, library 72 passed (3 projects); release CI green. v0.11.19 (run 44250175155) deployed to stack 83: 3 Hot models loaded; 71 models, 83 files, 29 cache states and all policies unchanged; cache settings unchanged (16 GiB total, 4 GiB per model, 7 days). Production render (0 non-GET): first suggestion "Qwen3 Coder 30B A3B Instruct UD-Q8_K_XL 33.5 GiB" (was Q4_K_M 17.3 GiB); Cache limits show Disk budget 16 and Per model 4.
 - helper-fable-digest stopped at a Claude API rate limit with no changes; restarted as helper-fable-digest2 (remember file digests by stamp so add, startup and load stop re-reading model files).
 
+## Follow-ups (2026-11-18, v0.11.20)
+
+- helper-fable-digest2 `3c301976` (merged): a model file's SHA-256 is reused while device, inode, size, mtime and ctime are unchanged (`identity/checksums.rs`; `hold`, `verify_set_members`, `VerifiedFile::open_remembered`); first sight, downloads, uploads and duplicate-target publication still read the bytes; a digest is remembered only when the read began after the tick of the file's newest timestamp. Helper timings on 2 GiB files: add stored 3.22 -> 1.73 s, add 2-part 4.41 -> 1.30 s, load stored 1.73 -> 0.10 s, second linked load 2.10 -> 0.05 s.
+- Primary agent change: the helper persisted digests to `<data>/file-checksums.json` by default, beyond the user-approved "re-read after a restart". Now opt-in with `JUICED_REMEMBER_CHECKSUMS=1`; default keeps digests in process only. Offered to the user for the homelab; not set.
+- Gate: 957 service tests, clippy, fmt; rust-tests checksums, engines, session_cache 38 passed (helper: full set 351 passed); release CI green. v0.11.20 (run 44255636164) deployed to stack 83: unavailable for 91 s (60 s on earlier deploys; image pull and startup not separated); 3 Hot models loaded; 71 models, 83 files, 29 cache states and policies unchanged.
+- Cleanup at the user's request (host disk 99%): 51 worktrees under `~/.t3/worktrees/Juiced/` removed and pruned; 96 merged `helper-*` and `t3/*` local branches deleted. The first digest helper (reported failed at a rate limit) had resumed and was duplicating the merged work; cancelled, its 4 changed files kept as commit 92bbaecf on local branch `helper-fable-digest`.
+
 ## Next action
 
 None for this audit. Open from earlier ledgers: the later-work list in drop-in-replacement.md.
