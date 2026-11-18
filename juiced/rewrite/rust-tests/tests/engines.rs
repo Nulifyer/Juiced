@@ -1652,3 +1652,226 @@ async fn remove_deletes_only_this_models_files_and_refuses_with_a_reason() {
     mode.set_mode(0o755);
     std::fs::set_permissions(&mounted, mode).unwrap();
 }
+
+/// Bytes the service process has read from files since it started.
+fn service_read_bytes(server: &Server) -> u64 {
+    std::fs::read_to_string(format!("/proc/{}/io", server.pid()))
+        .unwrap()
+        .lines()
+        .find_map(|line| line.strip_prefix("rchar: "))
+        .unwrap()
+        .parse()
+        .unwrap()
+}
+
+#[tokio::test]
+async fn adding_stored_files_reads_each_of_them_once() {
+    const PART: usize = 16 * 1024 * 1024;
+    let server = engine_server_with(|config| {
+        config["upload_max_bytes"] = json!(PART);
+    })
+    .await;
+    install_llama(&server).await;
+    let padded = |mut bytes: Vec<u8>, fill: u8| {
+        bytes.resize(PART, fill);
+        bytes
+    };
+    let upload = async |name: &str, bytes: Vec<u8>| {
+        let (status, uploaded) = upload_file(&server, name, &bytes).await;
+        assert_eq!(status, StatusCode::OK, "{uploaded}");
+        uploaded["artifact"].as_str().unwrap().to_owned()
+    };
+    // The first add reads the engine's own files; later ones reuse those digests.
+    let warm = upload("Warm-Q4_0.gguf", metadata_gguf(1024)).await;
+    let (status, added) = server
+        .post("juiced/models/add", json!({"artifact": warm}))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{added}");
+
+    let single = upload("Single-Q4_0.gguf", padded(metadata_gguf(4096), 1)).await;
+    let before = service_read_bytes(&server);
+    let (status, added) = server
+        .post("juiced/models/add", json!({"artifact": single}))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{added}");
+    let read = service_read_bytes(&server) - before;
+    assert!(
+        (PART as u64..2 * PART as u64).contains(&read),
+        "adding one file read {read} bytes"
+    );
+
+    let mut parts = Vec::new();
+    for part in 1..=2 {
+        let name = format!("Split-Q4_0-{part:05}-of-00002.gguf");
+        parts.push(upload(&name, padded(split_part(part, 2), part as u8 + 1)).await);
+    }
+    let before = service_read_bytes(&server);
+    let (status, added) = server
+        .post("juiced/models/add", json!({"parts": parts}))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{added}");
+    let read = service_read_bytes(&server) - before;
+    assert!(
+        (2 * PART as u64..3 * PART as u64).contains(&read),
+        "adding two parts read {read} bytes"
+    );
+}
+
+async fn timed_post(server: &Server, suffix: &str, body: Value) -> (StatusCode, Value, Duration) {
+    let started = std::time::Instant::now();
+    let response = reqwest::Client::builder()
+        .no_proxy()
+        .timeout(Duration::from_secs(1800))
+        .build()
+        .unwrap()
+        .post(format!("{}/v1/{suffix}", server.base))
+        .bearer_auth(ADMIN_KEY)
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    let status = response.status();
+    let value = response.json().await.unwrap_or(Value::Null);
+    (status, value, started.elapsed())
+}
+
+async fn copied_artifact(server: &Server, path: &Path) -> String {
+    let (status, copied, _) = timed_post(
+        server,
+        "juiced/library/import-path",
+        json!({"path":path,"mode":"copy"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{copied}");
+    let id = copied["job"]["id"].as_str().unwrap().to_owned();
+    loop {
+        let job = server.get(&format!("juiced/artifacts/jobs/{id}")).await;
+        if job["state"] == "complete" {
+            return job["artifact"].as_str().unwrap().to_owned();
+        }
+        assert_ne!(job["state"], "failed", "{job}");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+async fn uploaded_artifact(server: &Server, path: &Path) -> String {
+    let file = tokio::fs::File::open(path).await.unwrap();
+    let size = file.metadata().await.unwrap().len();
+    let uploaded: Value = reqwest::Client::builder()
+        .no_proxy()
+        .timeout(Duration::from_secs(1800))
+        .build()
+        .unwrap()
+        .post(format!(
+            "{}/v1/juiced/library/upload?filename={}&size={size}",
+            server.base,
+            path.file_name().unwrap().to_str().unwrap()
+        ))
+        .bearer_auth(ADMIN_KEY)
+        .header("content-type", "application/octet-stream")
+        .header("content-length", size)
+        .body(reqwest::Body::from(file))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    uploaded["artifact"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{uploaded}"))
+        .to_owned()
+}
+
+fn sparse_model(path: &Path, header: &[u8], bytes: u64) {
+    let mut file = std::fs::File::create(path).unwrap();
+    file.write_all(header).unwrap();
+    file.set_len(bytes).unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires JUICED_TEST_LARGE_MODEL_BYTES; prints how long add, restart and load take for large stored, split and linked models"]
+async fn large_model_add_restart_and_load_timings() {
+    let bytes: u64 = std::env::var("JUICED_TEST_LARGE_MODEL_BYTES")
+        .unwrap()
+        .parse()
+        .unwrap();
+    let imports = tempfile::tempdir().unwrap();
+    let root = std::fs::canonicalize(imports.path()).unwrap();
+    let import_root = root.clone();
+    let mut server = engine_server_with(move |config| {
+        config["import_roots"] = json!([import_root]);
+        config["resident_budget_bytes"] = json!(1u64 << 40);
+        config["upload_max_bytes"] = json!(1u64 << 40);
+        config["startup_timeout_ms"] = json!(600_000);
+        config["request_timeout_ms"] = json!(600_000);
+    })
+    .await;
+    install_llama(&server).await;
+    let gib = bytes as f64 / (1u64 << 30) as f64;
+    let report = |step: &str, elapsed: Duration| {
+        println!(
+            "timing {step}: {:.2} s ({:.2} s/GiB)",
+            elapsed.as_secs_f64(),
+            elapsed.as_secs_f64() / gib
+        );
+    };
+
+    sparse_model(&root.join("Stored-Q4_0.gguf"), &metadata_gguf(2048), bytes);
+    for part in 1..=2 {
+        sparse_model(
+            &root.join(format!("Split-Q4_0-{part:05}-of-00002.gguf")),
+            &split_part(part, 2),
+            bytes / 2,
+        );
+    }
+    sparse_model(&root.join("Linked-Q4_0.gguf"), &metadata_gguf(4096), bytes);
+
+    let stored = copied_artifact(&server, &root.join("Stored-Q4_0.gguf")).await;
+    let mut parts = Vec::new();
+    for part in 1..=2 {
+        parts.push(
+            uploaded_artifact(
+                &server,
+                &root.join(format!("Split-Q4_0-{part:05}-of-00002.gguf")),
+            )
+            .await,
+        );
+    }
+    for (step, body) in [
+        (
+            "add stored",
+            json!({"artifact":stored,"id":"stored","policy":"on-demand"}),
+        ),
+        (
+            "add split",
+            json!({"parts":parts,"id":"split","policy":"on-demand"}),
+        ),
+        (
+            "add linked",
+            json!({"path":root.join("Linked-Q4_0.gguf"),"id":"linked","policy":"on-demand"}),
+        ),
+    ] {
+        let (status, added, elapsed) = timed_post(&server, "juiced/models/add", body).await;
+        assert_eq!(status, StatusCode::OK, "{step}: {added}");
+        report(step, elapsed);
+    }
+    for round in ["first", "second"] {
+        for model in ["stored", "split", "linked"] {
+            let (status, loaded, elapsed) =
+                timed_post(&server, "load", json!({"model":model})).await;
+            assert_eq!(status, StatusCode::OK, "{model}: {loaded}");
+            report(&format!("{round} load {model}"), elapsed);
+            let (status, unloaded, _) = timed_post(&server, "unload", json!({"model":model})).await;
+            assert_eq!(status, StatusCode::OK, "{model}: {unloaded}");
+        }
+    }
+    let started = std::time::Instant::now();
+    server.server.restart().await;
+    report("restart", started.elapsed());
+    for model in ["stored", "split", "linked"] {
+        let (status, loaded, elapsed) = timed_post(&server, "load", json!({"model":model})).await;
+        assert_eq!(status, StatusCode::OK, "{model}: {loaded}");
+        report(&format!("load {model} after restart"), elapsed);
+    }
+}

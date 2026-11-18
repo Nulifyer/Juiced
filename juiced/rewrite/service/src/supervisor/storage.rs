@@ -34,6 +34,7 @@ const ENGINE_DIRECTORIES: &[&str] = &[PACKAGE_STORE, "engine-staging", "bundled-
 const CONFIG_ENTRIES: &[&str] = &[
     "config.json",
     crate::acquisitions::FILENAME,
+    crate::identity::CHECKSUMS_FILENAME,
     crate::native_store::descriptor::STORE_ROOT,
     crate::storage::CONTROL_FILE,
 ];

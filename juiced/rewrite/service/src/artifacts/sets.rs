@@ -316,22 +316,25 @@ impl ArtifactStore {
             if source.metadata()?.len() != expected.bytes {
                 return Err(ArtifactError::SizeMismatch);
             }
-            let file =
-                VerifiedFile::from_file_checked(lease.path(), source, operation.deadline, || {
+            let file = VerifiedFile::from_file_checked(
+                lease.path(),
+                source,
+                operation.deadline,
+                self.checksums(),
+                || {
                     operation.io_check()?;
                     if self.stopping.load(Ordering::Acquire) {
                         return Err(io::Error::from(io::ErrorKind::Interrupted));
                     }
                     Ok(())
-                })
-                .map_err(|error| match error.kind() {
-                    io::ErrorKind::TimedOut => ArtifactError::Deadline,
-                    io::ErrorKind::Interrupted => ArtifactError::Stop,
-                    _ if crate::storage::is_root_unavailable(&error) => {
-                        ArtifactError::RootUnavailable
-                    }
-                    _ => ArtifactError::Corrupt,
-                })?;
+                },
+            )
+            .map_err(|error| match error.kind() {
+                io::ErrorKind::TimedOut => ArtifactError::Deadline,
+                io::ErrorKind::Interrupted => ArtifactError::Stop,
+                _ if crate::storage::is_root_unavailable(&error) => ArtifactError::RootUnavailable,
+                _ => ArtifactError::Corrupt,
+            })?;
             self.verify_mutation()?;
             if file.digest() != id || file.bytes() != expected.bytes {
                 return Err(ArtifactError::HashMismatch);
@@ -523,7 +526,8 @@ impl ArtifactStore {
                 ArtifactError::SetUnsupported
             });
         }
-        // Holding a set rehashes every member, so a time limit would refuse any large model.
+        // A member seen for the first time is read in full, so a time limit would refuse any
+        // large model.
         let operation = SetOperation::unbounded(Arc::new(AtomicBool::new(false)));
         let held = Arc::new(self.hold_set(id, &operation)?);
         let primary = held.primary();
