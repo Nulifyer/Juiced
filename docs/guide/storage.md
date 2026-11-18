@@ -15,7 +15,7 @@ much space each store uses, what is safe to delete, and how much room is left.
 | `/data/kv-cache` | Saved sessions and manual snapshots | Saved sessions are evicted to stay within the session budget |
 | `/data/acquisitions.json` | In-flight downloads, so they survive a restart | Entries leave when a download's model exists or the download is removed |
 | `/data/api-keys.json` | Access keys, stored as hashes | Only keys you revoke |
-| `/data/file-checksums.json` | Checksums of model files already read in full | Never. You can delete it to make Juiced read every file again |
+| `/data/file-checksums.json` | Checksums of model files already read in full, only with `JUICED_REMEMBER_CHECKSUMS=1` | Never. You can delete it to make Juiced read every file again |
 | `/library/*` | Read-only weight mounts | Never |
 
 Logs stay in memory and in the container log; they use no space on `/data`.
@@ -34,24 +34,24 @@ too as **v0.9.2 settings**, kept for settings import.
 ## Model file checksums
 
 Juiced computes a model file's SHA-256 by reading the whole file the first time
-it uses the file. It saves the result in `/data/file-checksums.json` and reuses
-it while the file keeps the same inode, size, modification time and change time.
-Adding, starting and loading a model then skip the read, also after a restart.
+it uses the file after it starts. It reuses the result while the file keeps the
+same inode, size, modification time and change time, so adding and loading a
+model do not read the file again.
 
 If any of those four details changes, Juiced reads the file again. It refuses a
 stored file whose content no longer matches its checksum. Juiced always reads a
 download or upload in full when it arrives, and reads a file linked from a
 library mount on its first load.
 
-A saved checksum does not catch a change that leaves all four details untouched,
-such as silent disk corruption. To check every file again, stop Juiced, delete
-`/data/file-checksums.json` and start it. To check every file after each
-restart, set the environment variable `JUICED_REMEMBER_CHECKSUMS=0`. Reading
-takes about one second per GiB, so a start with 68 GiB of stored models then
-takes about a minute.
+By default the checksums are kept only while Juiced runs, so every start reads
+each stored model once. Reading takes about one second per GiB, so a start with
+68 GiB of stored models takes about a minute.
 
-The first start after updating from a release without this file reads every
-stored model once.
+To skip that read, set the environment variable `JUICED_REMEMBER_CHECKSUMS=1`.
+Juiced then saves the checksums in `/data/file-checksums.json` and reuses them
+after a restart. A saved checksum does not catch a change that leaves all four
+details untouched, such as silent disk corruption. To check every file again,
+stop Juiced, delete `/data/file-checksums.json` and start it.
 
 ## Reclaim space
 

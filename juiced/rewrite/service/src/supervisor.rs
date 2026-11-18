@@ -2209,7 +2209,8 @@ impl Manager {
         let mut cache_notice = None;
         let checksums = config_root
             .as_ref()
-            .filter(|_| !std::env::var("JUICED_REMEMBER_CHECKSUMS").is_ok_and(|value| value == "0"))
+            // Opt in: a saved checksum is trusted across restarts on the file's stamp alone.
+            .filter(|_| std::env::var("JUICED_REMEMBER_CHECKSUMS").is_ok_and(|value| value == "1"))
             .map(|root| Arc::new(crate::identity::FileChecksums::open(root.clone())));
         let (live_roots, cache, artifacts, native_settings) = if let Some(root) = &config_root {
             root.verify()?;

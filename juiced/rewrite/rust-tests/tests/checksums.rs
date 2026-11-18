@@ -68,6 +68,9 @@ async fn a_stored_model_is_read_once_until_it_changes_or_remembering_is_turned_o
         config["upload_max_bytes"] = json!(BYTES);
     })
     .await;
+    server.stop();
+    server.set_environment("JUICED_REMEMBER_CHECKSUMS", "1");
+    server.start().await;
     warm(&server).await;
     let original = weights(0x5a);
     let artifact = format!("{:x}", Sha256::digest(&original));
@@ -172,6 +175,9 @@ async fn a_linked_model_is_read_on_first_load_and_again_only_after_it_changes() 
         config["models"].as_array_mut().unwrap().push(model);
     })
     .await;
+    server.stop();
+    server.set_environment("JUICED_REMEMBER_CHECKSUMS", "1");
+    server.start().await;
     warm(&server).await;
 
     let (status, reply, read) = load(&server, "linked").await;

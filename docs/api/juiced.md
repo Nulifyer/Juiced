@@ -244,14 +244,15 @@ restart and resume from committed bytes; `GET /v1/downloads` and
 `GET /v1/juiced/library/pulls` list them again after the restart.
 
 Adding, starting and loading a model verify its files by SHA-256. Juiced reads a
-file in full the first time, saves the result in `/data/file-checksums.json` and
-reuses it while the file keeps the same inode, size, modification time and
+file in full the first time after it starts and
+reuses the result while the file keeps the same inode, size, modification time and
 change time. It reads a changed file again and refuses a stored file whose
 content no longer matches: `artifact_corrupt` or `artifact_hash_mismatch` when
 adding, `model_artifact_changed` when loading. An artifact set's
 `content_verification: "required-on-acquire"` means every hold of the set
-passes this check. Set `JUICED_REMEMBER_CHECKSUMS=0` to keep checksums only
-until the service stops.
+passes this check. Checksums are kept until the service stops; set
+`JUICED_REMEMBER_CHECKSUMS=1` to save them in the data folder and reuse them
+after a restart.
 
 ## Search and download models
 
