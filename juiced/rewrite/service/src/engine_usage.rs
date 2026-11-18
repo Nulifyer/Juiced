@@ -127,11 +127,19 @@ pub fn observe(tail: &[u8]) -> Observation {
         let prompt = count(timings, &["prompt_n"])?;
         prompt.checked_add(count(timings, &["cache_n"]).unwrap_or(0))
     });
+    let input_tokens = usage
+        .as_ref()
+        .and_then(|usage| count(usage, &["prompt_tokens", "input_tokens"]))
+        .or(timing_input);
+    // Replies without engine timings, such as the responses format, still say how much of
+    // the prompt came from the cache.
+    let detailed_cache = usage.as_ref().and_then(|usage| {
+        ["prompt_tokens_details", "input_tokens_details"]
+            .iter()
+            .find_map(|details| count(usage.get(*details)?, &["cached_tokens"]))
+    });
     Observation {
-        input_tokens: usage
-            .as_ref()
-            .and_then(|usage| count(usage, &["prompt_tokens", "input_tokens"]))
-            .or(timing_input),
+        input_tokens,
         output_tokens: usage
             .as_ref()
             .and_then(|usage| count(usage, &["completion_tokens", "output_tokens"]))
@@ -148,15 +156,12 @@ pub fn observe(tail: &[u8]) -> Observation {
             .and_then(|timings| rate(timings, "prompt_per_second")),
         prompt_processed_tokens: timings
             .as_ref()
-            .and_then(|timings| count(timings, &["prompt_n"])),
+            .and_then(|timings| count(timings, &["prompt_n"]))
+            .or_else(|| input_tokens?.checked_sub(detailed_cache?)),
         cached_tokens: timings
             .as_ref()
             .and_then(|timings| count(timings, &["cache_n"]))
-            .or_else(|| {
-                usage.as_ref().and_then(|usage| {
-                    count(usage.get("prompt_tokens_details")?, &["cached_tokens"])
-                })
-            }),
+            .or(detailed_cache),
     }
 }
 
@@ -216,6 +221,14 @@ mod tests {
         assert_eq!(
             observe(details.to_string().as_bytes()).cached_tokens,
             Some(6)
+        );
+        let responses = json!({"usage":{"input_tokens":1649,"output_tokens":4,"input_tokens_details":{"cached_tokens":1631}}});
+        let observed = observe(responses.to_string().as_bytes());
+        assert_eq!(observed.cached_tokens, Some(1631));
+        assert_eq!(observed.prompt_processed_tokens, Some(18));
+        assert_eq!(
+            observe(reply.to_string().as_bytes()).prompt_processed_tokens,
+            None
         );
         assert!(observe(b"{\"choices\":[]}").is_empty());
         assert!(observe(b"{\"timings\":{\"predicted_per_second\":").is_empty());

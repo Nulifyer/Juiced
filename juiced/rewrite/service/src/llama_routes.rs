@@ -99,7 +99,15 @@ pub(crate) async fn rerank(
         ));
     }
     let priority = request_priority(&context, &headers)?;
-    forward_prioritized(state.manager, body, Operation::Rerank, priority, None, None).await
+    forward_prioritized(
+        state.manager,
+        body,
+        Operation::Rerank,
+        priority,
+        None,
+        crate::sessions::Hint::default(),
+    )
+    .await
 }
 
 pub(crate) async fn tokenize(

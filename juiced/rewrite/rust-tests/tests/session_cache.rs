@@ -289,7 +289,8 @@ async fn continued_conversations_and_small_shared_openings_are_each_kept() {
     let mut first = new_conversation(&system, "Turn on the porch.");
     let reply = chat(&server, &first, None).await;
     first.push(json!({"role":"assistant","content":reply["choices"][0]["message"]["content"]}));
-    turn(&server, &mut first, "Thanks. And the hallway?").await;
+    let follow = "Thanks. And the hallway? ".to_owned() + &"Check each sensor twice. ".repeat(16);
+    turn(&server, &mut first, &follow).await;
     settled(&server, 1).await;
     let mut second = new_conversation(&system, "Is the garage open?");
     let reply = chat(&server, &second, None).await;
@@ -319,8 +320,8 @@ async fn continued_conversations_and_small_shared_openings_are_each_kept() {
     assert!(processed(&returning) <= 6, "{returning}");
     settled(&server, 4).await;
 
-    let brief = "Answer in one short sentence. ".repeat(40);
-    assert!(brief.len() < 2048);
+    let brief = "Answer in one short sentence. ".repeat(30);
+    assert!(brief.len() < 1024);
     for (count, question) in ["One?", "Two?", "Three?"].into_iter().enumerate() {
         chat(&server, &new_conversation(&brief, question), None).await;
         settled(&server, 5 + count).await;
@@ -1119,4 +1120,327 @@ async fn unload_waits_for_a_save_in_flight_instead_of_stranding_it() {
     let view = sessions(&server).await;
     assert_eq!(view["totals"]["sessions"], 1, "{view}");
     assert_eq!(view["sessions"][0]["state"], "saved", "{view}");
+}
+
+fn rules(live: &str) -> String {
+    format!("{}Live note: {live}", "Static household rule. ".repeat(200))
+}
+
+const RULE_WORDS: u64 = 600;
+
+#[tokio::test]
+async fn a_message_that_changes_near_its_end_restores_the_state_that_holds_its_opening() {
+    let mut server = session_server(1, fast()).await;
+    let first = chat(
+        &server,
+        &new_conversation(&rules("3 GiB free."), "Lights?"),
+        None,
+    )
+    .await;
+    assert_eq!(cached(&first), 0);
+    settled(&server, 1).await;
+    chat(&server, &new_conversation(&pirate(), "A tale?"), None).await;
+    settled(&server, 2).await;
+
+    let changed = chat(
+        &server,
+        &new_conversation(&rules("4 GiB free."), "Fans?"),
+        None,
+    )
+    .await;
+    let record = last_record(&server).await;
+    assert_eq!(record["session_cache"]["path"], "restored", "{record}");
+    assert!(cached(&changed) >= RULE_WORDS, "{changed}");
+    assert!(processed(&changed) <= 10, "{changed}");
+    settled(&server, 2).await;
+
+    let resident = chat(
+        &server,
+        &new_conversation(&rules("5 GiB free."), "Heating?"),
+        None,
+    )
+    .await;
+    let record = last_record(&server).await;
+    assert_eq!(record["session_cache"]["path"], "slot-hit", "{record}");
+    assert!(record["session_cache"]["restore_ms"].is_null(), "{record}");
+    assert!(cached(&resident) >= RULE_WORDS, "{resident}");
+    settled(&server, 2).await;
+
+    chat(&server, &new_conversation(&pirate(), "Another tale?"), None).await;
+    settled(&server, 2).await;
+    server.restart().await;
+    let after_restart = chat(
+        &server,
+        &new_conversation(&rules("6 GiB free."), "Blinds?"),
+        None,
+    )
+    .await;
+    let record = last_record(&server).await;
+    assert_eq!(record["session_cache"]["path"], "restored", "{record}");
+    assert!(cached(&after_restart) >= RULE_WORDS, "{after_restart}");
+    settled(&server, 2).await;
+
+    let early = |live: &str| {
+        format!(
+            "Live note: {live} {}",
+            "Static household rule. ".repeat(200)
+        )
+    };
+    chat(&server, &new_conversation(&early("3 GiB"), "Lights?"), None).await;
+    settled(&server, 3).await;
+    chat(&server, &new_conversation(&pirate(), "A third tale?"), None).await;
+    settled(&server, 3).await;
+    let unrelated = chat(&server, &new_conversation(&early("4 GiB"), "Lights?"), None).await;
+    let record = last_record(&server).await;
+    assert_eq!(record["session_cache"]["path"], "cold", "{record}");
+    assert!(record["session_cache"]["restore_ms"].is_null(), "{record}");
+    assert!(cached(&unrelated) <= 3, "{unrelated}");
+}
+
+#[tokio::test]
+async fn a_long_document_restores_for_another_question_behind_a_short_system_prompt() {
+    let server = session_server(1, fast()).await;
+    let document = "The meter in area nine feeds the relay. ".repeat(120);
+    let ask = |question: &str| {
+        new_conversation(
+            "Answer from the document.",
+            &format!("{document}Question: {question}"),
+        )
+    };
+    let words = document.split_whitespace().count() as u64;
+    chat(&server, &ask("Which area?"), None).await;
+    settled(&server, 1).await;
+    chat(&server, &new_conversation(&pirate(), "A tale?"), None).await;
+    settled(&server, 2).await;
+    let other = chat(&server, &ask("What feeds the relay?"), None).await;
+    let record = last_record(&server).await;
+    assert_eq!(record["session_cache"]["path"], "restored", "{record}");
+    assert!(cached(&other) >= words, "{other}");
+    assert!(processed(&other) <= 8, "{other}");
+
+    let brief = "Short note about the meter. ".repeat(20);
+    assert!(brief.len() < 1024);
+    let small = |question: &str| new_conversation("Answer briefly.", &format!("{brief}{question}"));
+    chat(&server, &small("One?"), None).await;
+    chat(&server, &new_conversation(&pirate(), "Another tale?"), None).await;
+    let short = chat(&server, &small("Two?"), None).await;
+    let record = last_record(&server).await;
+    assert_eq!(record["session_cache"]["path"], "cold", "{record}");
+    assert!(cached(&short) <= 3, "{short}");
+}
+
+#[tokio::test]
+async fn a_new_named_session_restores_a_named_session_that_shares_its_opening() {
+    let server = session_server(1, fast()).await;
+    let system = devices();
+    let words = system.split_whitespace().count() as u64;
+    let named = ("x-juiced-session", "thread-one");
+    let mut first = new_conversation(&system, "Turn on the porch.");
+    let reply = chat(&server, &first, Some(named)).await;
+    first.push(json!({"role":"assistant","content":reply["choices"][0]["message"]["content"]}));
+    first.push(json!({"role":"user","content":"And the hallway?"}));
+    settled(&server, 1).await;
+    chat(
+        &server,
+        &conversation("tides"),
+        Some(("x-juiced-session", "other")),
+    )
+    .await;
+    settled(&server, 2).await;
+
+    let fresh = chat(
+        &server,
+        &new_conversation(&system, "Is the garage open?"),
+        Some(("x-juiced-session", "thread-two")),
+    )
+    .await;
+    let record = last_record(&server).await;
+    assert_eq!(record["session_cache"]["key"], "header", "{record}");
+    assert_eq!(record["session_cache"]["path"], "restored", "{record}");
+    assert!(cached(&fresh) > words, "{fresh}");
+    settled(&server, 3).await;
+
+    chat(
+        &server,
+        &conversation("tides"),
+        Some(("x-juiced-session", "other")),
+    )
+    .await;
+    let own = chat(&server, &first, Some(named)).await;
+    let record = last_record(&server).await;
+    assert_eq!(record["session_cache"]["path"], "restored", "{record}");
+    assert!(processed(&own) <= 6, "{own}");
+    settled(&server, 3).await;
+
+    let unnamed = chat(&server, &new_conversation(&system, "Dim the porch."), None).await;
+    let record = last_record(&server).await;
+    assert_eq!(record["session_cache"]["key"], "prefix", "{record}");
+    assert_eq!(record["session_cache"]["path"], "slot-hit", "{record}");
+    assert!(cached(&unnamed) > words, "{unnamed}");
+}
+
+#[tokio::test]
+async fn no_store_requests_use_saved_states_and_save_none() {
+    let server = session_server(1, fast()).await;
+    let system = devices();
+    let words = system.split_whitespace().count() as u64;
+    let no_store = Some(("x-juiced-cache", "no-store"));
+    chat(
+        &server,
+        &new_conversation(&system, "Turn on the porch."),
+        None,
+    )
+    .await;
+    let view = settled(&server, 1).await;
+    let saved = view["sessions"][0]["session"].clone();
+    chat(&server, &new_conversation(&pirate(), "A tale?"), None).await;
+    settled(&server, 2).await;
+
+    let once = chat(
+        &server,
+        &new_conversation(&system, "Is the garage open?"),
+        no_store,
+    )
+    .await;
+    let record = last_record(&server).await;
+    assert_eq!(record["session_cache"]["path"], "restored", "{record}");
+    assert!(cached(&once) > words, "{once}");
+    let view = sessions(&server).await;
+    assert_eq!(model_row(&view)["slots"][0]["state"], "holding", "{view}");
+
+    let again = chat(
+        &server,
+        &new_conversation(&system, "Lock the hallway."),
+        no_store,
+    )
+    .await;
+    let record = last_record(&server).await;
+    assert_eq!(record["session_cache"]["path"], "slot-hit", "{record}");
+    assert_eq!(record["session_cache"]["saved_previous"], false, "{record}");
+    assert!(cached(&again) > words, "{again}");
+    chat(&server, &new_conversation(&pirate(), "Another tale?"), None).await;
+    let view = settled(&server, 2).await;
+    assert!(
+        view["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row["session"] == saved),
+        "{view}"
+    );
+
+    for values in [vec!["keep"], vec!["no-store", "no-store"]] {
+        let mut request = server
+            .client
+            .post(format!("{}/v1/chat/completions", server.base))
+            .bearer_auth(server.read_key().unwrap())
+            .json(&json!({"model":MODEL,"messages":conversation("deserts")}));
+        for value in values {
+            request = request.header("x-juiced-cache", value);
+        }
+        let response = request.send().await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let error: Value = response.json().await.unwrap();
+        assert_eq!(error["error"]["code"], "invalid_cache_directive", "{error}");
+    }
+}
+
+#[tokio::test]
+async fn a_failed_request_keeps_its_slot_and_the_record_says_what_the_engine_reused() {
+    let server = session_server(3, json!({"mode":"memory"})).await;
+    chat(&server, &new_conversation(&pirate(), "A tale?"), None).await;
+    let taken = last_record(&server).await["session_cache"]["slot"].clone();
+    let messages = new_conversation(&devices(), "Turn on the porch.");
+    let failed = server
+        .client
+        .post(format!("{}/v1/chat/completions", server.base))
+        .bearer_auth(server.read_key().unwrap())
+        .json(&json!({"model":MODEL,"messages":messages,"fixture_status":500}))
+        .send()
+        .await
+        .unwrap();
+    assert!(!failed.status().is_success());
+    let record = last_record(&server).await;
+    let slot = record["session_cache"]["slot"].clone();
+    assert_ne!(slot, taken, "{record}");
+    assert_eq!(record["session_cache"]["path"], "cold", "{record}");
+
+    let retried = chat(&server, &messages, None).await;
+    let record = last_record(&server).await;
+    assert_eq!(record["session_cache"]["slot"], slot, "{record}");
+    assert_eq!(record["session_cache"]["path"], "slot-hit", "{record}");
+    assert!(processed(&retried) <= 2, "{retried}");
+
+    // Too short for Juiced to match, yet the engine's one slot still holds a hundred tokens.
+    let server = session_server(1, fast()).await;
+    let letters = |tail: &str| new_conversation(&format!("{}{tail}", "k ".repeat(100)), "Go on.");
+    chat(&server, &letters("one"), None).await;
+    let unseen = chat(&server, &letters("two"), None).await;
+    let record = last_record(&server).await;
+    assert!(cached(&unseen) >= 100, "{unseen}");
+    assert_eq!(record["session_cache"]["path"], "slot-hit", "{record}");
+    assert!(record["session_cache"]["restore_ms"].is_null(), "{record}");
+}
+
+#[tokio::test]
+async fn tune_trials_under_other_settings_leave_saved_conversations_restorable() {
+    let server = Server::configured(true, |config| {
+        configure(config, 1, fast());
+        let shaped = std::path::Path::new(config["models"][0]["model_file"].as_str().unwrap())
+            .with_file_name("shaped.gguf");
+        std::fs::write(&shaped, shaped_gguf()).unwrap();
+        config["models"][0]["model_file"] = json!(shaped);
+        // Tune compares the speeds an engine reports; the prompt-cache emulation reports none.
+        let args = config["models"][0]["args"].as_array_mut().unwrap();
+        args.retain(|argument| argument != "--emulate-prompt-cache");
+        args.push(json!("--report-timings"));
+        config["request_timeout_ms"] = json!(10000);
+        config["resident_budget_bytes"] = json!(8u64 << 30);
+    })
+    .await;
+    let mut a = conversation("orchards");
+    let first = chat(&server, &a, None).await;
+    a.push(json!({"role":"assistant","content":first["choices"][0]["message"]["content"]}));
+    let view = settled(&server, 1).await;
+    let saved = view["sessions"][0]["session"].clone();
+    assert_eq!(view["sessions"][0]["execution_current"], true, "{view}");
+
+    let (status, started) = server
+        .post(&format!("models/{MODEL}/tune"), json!({}))
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{started}");
+    let mut under_trial_settings = false;
+    let mut tune = Value::Null;
+    for _ in 0..6000 {
+        tune = server.get(&format!("models/{MODEL}/tune")).await;
+        let view = sessions(&server).await;
+        let rows = view["sessions"].as_array().unwrap();
+        assert!(
+            rows.iter().any(|row| row["session"] == saved),
+            "{tune} {view}"
+        );
+        under_trial_settings |= rows
+            .iter()
+            .any(|row| row["session"] == saved && row["execution_current"] == false);
+        if tune["state"] != "running" {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    assert_eq!(tune["state"], "done", "{tune}");
+    assert!(
+        tune["result"]["measurements"]["candidates"]
+            .as_array()
+            .is_some_and(|trials| trials.len() >= 2),
+        "{tune}"
+    );
+    assert!(
+        under_trial_settings,
+        "no trial ran under other settings: {tune}"
+    );
+    assert_eq!(tune["result"]["arguments"], json!([]), "{tune}");
+
+    turn(&server, &mut a, "After Tune?").await;
+    let record = last_record(&server).await;
+    assert_eq!(record["session_cache"]["path"], "restored", "{record}");
 }

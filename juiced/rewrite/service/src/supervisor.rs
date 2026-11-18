@@ -1691,7 +1691,8 @@ impl Drop for RequestLease {
             && record
                 .status
                 .is_some_and(|status| (200..300).contains(&status));
-        if let Some(ticket) = self.session.take() {
+        if let Some(mut ticket) = self.session.take() {
+            ticket.record.observe(&record.usage);
             record.session_cache = Some(ticket.record);
             ticket.settle(&self.manager, &self.worker, completed, &record.usage);
         }

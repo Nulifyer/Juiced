@@ -30,11 +30,13 @@ conversations stay until space is needed.
 Juiced keeps only saved states that a later request can use.
 
 - A conversation keeps its latest turn. Each save replaces the earlier one.
-- One-off requests that open with the same messages keep one saved state, the
-  newest. This applies when those messages make up at least nine tenths of each
-  request and about 2 KiB or more. The kept state serves that opening to every
+- One-off requests that open with the same text keep one saved state, the
+  newest. This applies when the shared text makes up at least nine tenths of
+  each request and 1 KiB or more. The kept state serves that opening to every
   later request. A conversation that continued past its first request is never
   replaced this way.
+- A request sent with `X-Juiced-Cache: no-store` is not saved. See
+  [skip saving one-off requests](#skip-saving-one-off-requests).
 - When a model starts, Juiced deletes its conversations saved under other engine
   settings, because the engine can no longer restore them. Changed launch
   settings, a Tune result you keep, a new engine build and new weights all change
@@ -82,35 +84,50 @@ when the engine cannot use the chosen mode, for example
 
 **Recent turns** shows the last turns sent to llama.cpp models:
 
-- **Still loaded**: the engine still held this conversation or its opening messages.
-- **Restored from disk**: Juiced first loaded a saved conversation with the same
-  opening messages.
-- No badge: the whole prompt was processed, because nothing was cached or the
+- **Still loaded**: the engine still held the start of this prompt.
+- **Restored from disk**: Juiced first loaded a saved conversation that starts
+  the same way.
+- No badge: the engine read the whole prompt, because nothing was cached or the
   client turned caching off with `"cache_prompt": false`.
+
+The badge reports what the engine did. A turn counts as **Still loaded** when
+the engine reused the same conversation, or at least 64 tokens of any prompt it
+still held. Fewer reused tokens are the template header that every prompt of a
+model shares, so that turn has no badge.
 
 **Diagnostics → Requests** shows the same detail for every request.
 
 ## Start new conversations warm
 
-Most clients send the same long system prompt at the start of every
-conversation. Home Assistant, the Barista assistant and character cards are
-examples. In **Memory and disk** mode, Juiced remembers the opening messages of
-each saved conversation. When a new conversation opens with the same messages,
-Juiced restores that saved state first. The engine then processes only the new
-messages. This also works after other clients used the slots, and after an
-unload or restart.
+Most clients send the same long text at the start of every request. Home
+Assistant, the Barista assistant and character cards send a system prompt.
+Other clients send one long document and then a question. In
+**Memory and disk** mode, Juiced remembers how each saved conversation starts.
+When a new request starts with the same text, Juiced restores that saved state
+first. The engine then reads only the text that follows. This also works after
+other clients used the slots, and after an unload or restart.
 
-- Juiced restores a saved state only if the shared opening messages amount to
-  about 2 KiB of request text or more. Below that, processing the prompt costs
-  less than the restore.
-- If several saved states share the same opening messages, Juiced restores the
-  smallest one.
+- The shared text can end anywhere, also inside a message. A system prompt that
+  ends with the date, or a document followed by a different question, reuses
+  everything before the first difference. Text that differs from its first
+  line shares nothing.
+- Juiced restores a saved state only if the shared text is 1 KiB or more, about
+  250 tokens, and reading it again would take at least twice as long as the
+  restore. Juiced measures both on each model. In a test a restore took about
+  50 ms plus 0.3 ms per MiB of state: 0.06 seconds for 14 MiB and 0.38 seconds
+  for 1.1 GiB. The CPU engine in that test reads 22 to 55 tokens in that time.
+  An engine that reads 5,000 tokens a second needs about 2 KiB of shared text
+  before the smallest restore pays.
+- A saved state of the same conversation is always restored.
+- If several saved states share the same text, Juiced restores the smallest
+  one.
 - With several slots, Juiced sends a request to the slot that already holds its
-  opening messages. If the request's first message changed partway, Juiced reuses
-  that client's own slot instead of evicting another client.
+  opening text. A request that failed or was cancelled keeps its slot, so a
+  retry continues where the engine stopped.
 - The engine checks the actual tokens, so a restored state never changes the
-  reply. Juiced keeps the message fingerprints in `session-lineage.json` next to
-  the configuration. The file holds digests, not message text.
+  reply. Juiced keeps the fingerprints in `session-lineage.json` next to the
+  configuration. The file holds digests, not message text. Conversations saved
+  by an earlier version match by whole messages until their next save.
 
 Hybrid models such as Qwen3.5 and Qwen3.6 MoE keep recurrent state. They can
 reuse a prompt only up to a point where llama.cpp saved a checkpoint, which is
@@ -119,6 +136,43 @@ partway, for example with the current time, free memory or live device states,
 these models process it again from the beginning. Keep changing values out of
 the system prompt, or put them in a later message. Barista keeps live figures
 out of its system prompt and reads them with `juiced_status`.
+
+## Fit long conversations in the budget
+
+A saved state grows with the conversation. A 43,000-token conversation on
+Qwen3-Coder-Next takes about 2.25 GiB. Each model may use 4 GiB of the disk
+budget, so two conversations of that length do not both stay saved. The one
+used less recently is deleted, and its next turn reads the whole prompt again.
+
+To alternate between long conversations on one model, raise the model's share
+of the budget. `POST /v1/juiced/cache/sessions` with the `configure` action
+takes `model_budget_bytes` in `settings`, up to `budget_bytes`. While Juiced
+saves a state it reserves a quarter more than the state's expected size, so two
+conversations of 2.25 GiB need 5.2 GiB. A model with two slots is another way:
+each slot keeps one conversation in memory.
+
+A conversation larger than the model's share is never saved. A kept
+conversation holds its space, so a full budget of kept conversations saves
+nothing new.
+
+## Skip saving one-off requests
+
+A client that sends requests nothing will continue, such as a batch job or a
+title generator, can mark them:
+
+```http
+X-Juiced-Cache: no-store
+```
+
+The request still reuses what the engine holds and can restore a saved state.
+Juiced does not save its own state, so it writes nothing to disk and the next
+request does not wait for a save. In a test, four one-off requests of 1,600
+tokens sent back to back took 22.9 seconds and wrote 734 MiB, because three of
+them waited for the save before them. With the header they took 17.8 seconds
+and wrote nothing. Any other value returns `400 invalid_cache_directive`.
+
+`"cache_prompt": false` in the request body is stricter: the engine reads the
+whole prompt and Juiced neither restores nor saves.
 
 ## Name a conversation from a client
 
@@ -133,7 +187,8 @@ X-Juiced-Session-Id: your-stable-session-id
 ```
 
 Juiced also reads `X-Juiced-Session` and `X-Juiced-Thread-Id`. Use a different ID
-for each conversation. Session IDs do not authenticate users. A saved
+for each conversation. A new ID starts from another named conversation of the
+same client when both start with the same text. Session IDs do not authenticate users. A saved
 conversation is bound to the API key, protocol, model and engine launch settings
 that made it. A different key or a changed setting starts the conversation cold.
 

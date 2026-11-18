@@ -8,11 +8,15 @@ const LISTED_SESSIONS: usize = 256;
 const LINEAGE_FILE: &str = "session-lineage.json";
 const LINEAGE_FILE_BYTES: u64 = 16 * 1024 * 1024;
 const LINEAGE_STALE: usize = 64;
+/// A rate read from fewer prompt tokens or state bytes than these is mostly fixed cost.
+const RATED_PROMPT_TOKENS: u64 = 256;
+const RATED_STATE_BYTES: u64 = 16 * 1024 * 1024;
 
-/// The leading message digests of each saved prefix session. A snapshot identity names only
-/// a conversation's last digest, so without these a new conversation that repeats a saved
-/// system prompt cannot find the state that already holds it. The file is advisory: identity
-/// and execution checks still gate every restore, and the engine reuses only matching tokens.
+/// The leading message digests and text blocks of each saved session. A snapshot identity
+/// names only a conversation's last digest, so without these a request that repeats part of
+/// a saved one, such as its system prompt, cannot find the state that already holds it. The
+/// file is advisory: identity and execution checks still gate every restore, and the engine
+/// reuses only matching tokens.
 pub(super) struct Lineages {
     sessions: Mutex<std::collections::HashMap<String, Lineage>>,
     root: Option<crate::storage::DirectoryLease>,
@@ -58,18 +62,15 @@ impl Lineages {
         }
     }
 
-    fn shared_with(&self, key: &Key) -> std::collections::HashMap<String, usize> {
-        if key.kind != KeyKind::Prefix {
-            return std::collections::HashMap::new();
-        }
+    /// Saved states that open like `key`, with the request bytes each shares with it.
+    fn shared_with(&self, key: &Key) -> std::collections::HashMap<String, u64> {
         self.sessions
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .iter()
             .filter_map(|(id, saved)| {
-                let (units, bytes) = key.shared(&saved.key);
-                (units > 0 && bytes >= crate::sessions::MINIMUM_SHARED_BYTES)
-                    .then(|| (id.clone(), units))
+                let bytes = key.shared_bytes(&saved.key);
+                (bytes >= crate::sessions::MINIMUM_SHARED_BYTES).then(|| (id.clone(), bytes))
             })
             .collect()
     }
@@ -116,15 +117,13 @@ impl Lineages {
         if sessions.len() > listed.len() + LINEAGE_STALE {
             sessions.retain(|known, _| listed.contains(known));
         }
-        if key.kind == KeyKind::Prefix {
-            sessions.insert(
-                id.to_owned(),
-                Lineage {
-                    key: Arc::new(key.lineage()),
-                    single,
-                },
-            );
-        }
+        sessions.insert(
+            id.to_owned(),
+            Lineage {
+                key: Arc::new(key.lineage()),
+                single,
+            },
+        );
         if let Some(root) = &self.root {
             let file = LineageFile {
                 schema_version: 1,
@@ -143,7 +142,40 @@ pub(super) struct SlotTable {
     shape_bound: std::sync::OnceLock<Option<u64>>,
     learned_bytes_per_token: AtomicU64,
     learned_overhead_bytes: AtomicU64,
+    /// Tokens and bytes of the largest state this worker has saved.
+    largest_save: Mutex<Option<(u64, u64)>>,
+    prefill_tokens_per_second: Rate,
+    restore_bytes_per_second: Rate,
     sequence: AtomicU64,
+}
+
+/// A running average of an observed rate; zero until the first observation.
+#[derive(Default)]
+struct Rate(AtomicU64);
+
+impl Rate {
+    fn observe(&self, rate: f64) {
+        if !rate.is_finite() || rate <= 0.0 {
+            return;
+        }
+        let _ = self
+            .0
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |bits| {
+                let known = f64::from_bits(bits);
+                Some(
+                    if known > 0.0 {
+                        (known + rate) / 2.0
+                    } else {
+                        rate
+                    }
+                    .to_bits(),
+                )
+            });
+    }
+
+    fn get(&self) -> Option<f64> {
+        Some(f64::from_bits(self.0.load(Ordering::Acquire))).filter(|rate| *rate > 0.0)
+    }
 }
 
 impl SlotTable {
@@ -155,7 +187,17 @@ impl SlotTable {
             shape_bound: std::sync::OnceLock::new(),
             learned_bytes_per_token: AtomicU64::new(0),
             learned_overhead_bytes: AtomicU64::new(0),
+            largest_save: Mutex::new(None),
+            prefill_tokens_per_second: Rate::default(),
+            restore_bytes_per_second: Rate::default(),
             sequence: AtomicU64::new(0),
+        }
+    }
+
+    fn rates(&self) -> crate::sessions::Rates {
+        crate::sessions::Rates {
+            prefill_tokens_per_second: self.prefill_tokens_per_second.get(),
+            restore_bytes_per_second: self.restore_bytes_per_second.get(),
         }
     }
 
@@ -199,6 +241,10 @@ struct Holder {
     /// The request extended an earlier one from the same client, so this is a conversation
     /// and no sibling's state may replace it.
     continued: bool,
+    /// The request completed, so the slot holds all of it. Otherwise the engine may hold any
+    /// part: the slot stays first choice for a retry, but nothing is saved from it or assumed
+    /// about what it holds.
+    settled: bool,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -211,11 +257,25 @@ pub struct SessionRecord {
     pub saved_previous: bool,
 }
 
+impl SessionRecord {
+    /// Corrects the path chosen before the request ran with what the engine reports it reused.
+    pub(super) fn observe(&mut self, usage: &crate::engine_usage::Observation) {
+        let Some(cached) = usage.cached_tokens else {
+            return;
+        };
+        self.path = match self.path {
+            "cold" if cached >= crate::sessions::REUSED_TOKENS_FLOOR => "slot-hit",
+            "slot-hit" if cached == 0 => "cold",
+            path => path,
+        };
+    }
+}
+
 pub(super) struct Ticket {
     entry: Option<OwnedMutexGuard<SlotEntry>>,
     slot: u32,
     pending: Option<Holder>,
-    persistent: bool,
+    save: bool,
     pub(super) record: SessionRecord,
 }
 
@@ -232,16 +292,23 @@ impl Ticket {
         };
         entry.last_used = unix_time_ms();
         entry.dirty = None;
-        entry.holder = None;
+        entry.holder = self.pending.take();
         if !completed {
             return;
         }
-        if let Some(mut holder) = self.pending.take() {
+        if let Some(rate) = usage.prompt_tokens_per_second.filter(|_| {
+            usage
+                .prompt_processed_tokens
+                .is_some_and(|tokens| tokens >= RATED_PROMPT_TOKENS)
+        }) {
+            worker.sessions.prefill_tokens_per_second.observe(rate);
+        }
+        if let Some(holder) = entry.holder.as_mut() {
+            holder.settled = true;
             holder.tokens = usage
                 .input_tokens
                 .map(|input| input.saturating_add(usage.output_tokens.unwrap_or(0)));
-            entry.holder = Some(holder);
-            if self.persistent {
+            if self.save {
                 let sequence = worker.sessions.sequence.fetch_add(1, Ordering::AcqRel) + 1;
                 entry.dirty = Some(sequence);
                 manager.schedule_session_save(worker.clone(), self.slot, sequence);
@@ -253,10 +320,18 @@ impl Ticket {
 struct Found {
     id: String,
     identity: SnapshotIdentity,
-    units: usize,
-    /// The saved state is this conversation at an earlier or the same turn, not a sibling
-    /// that only opens with the same messages.
-    exact: bool,
+    /// Request bytes the saved state shares with the request.
+    shared: u64,
+    charged: u64,
+}
+
+#[derive(Default)]
+struct Search {
+    /// The saved state worth restoring over what the slot holds.
+    restore: Option<Found>,
+    /// A saved state is this conversation at an earlier turn, or at this turn after it was
+    /// continued before.
+    continued: bool,
 }
 
 #[derive(Serialize)]
@@ -414,7 +489,7 @@ impl Manager {
         lease: &mut RequestLease,
         operation: Operation,
         body: &axum::body::Bytes,
-        header: Option<&str>,
+        hint: crate::sessions::Hint<'_>,
         context: Option<&RequestContext>,
     ) -> Result<Option<axum::body::Bytes>, ApiError> {
         let worker = lease.worker.clone();
@@ -434,8 +509,8 @@ impl Manager {
         let key = context
             .filter(|_| operation != Operation::Embeddings && !bypass)
             .and_then(|_| {
-                header
-                    .map(Key::header)
+                hint.session
+                    .map(|session| Key::header(session, operation, body))
                     .or_else(|| Key::prefix(operation, body))
             });
         let scope = key.as_ref().zip(context).and_then(|(key, context)| {
@@ -481,33 +556,39 @@ impl Manager {
             record.saved_previous = matches!(saved, Ok(Ok(())));
             entry.dirty = None;
         }
-        let (held_units, extends_held) = entry
+        let held = entry
             .holder
             .as_ref()
             .zip(request)
-            .filter(|(held, (scope, _))| held.scope == **scope)
-            .map_or((0, false), |(held, (_, key))| {
-                (
-                    held.key.common_units(key),
-                    key.extends(&held.key) && (held.continued || key.units() > held.key.units()),
-                )
-            });
+            .filter(|(held, (scope, _))| held.settled && held.scope == **scope);
+        let held_bytes = held.map_or(0, |(held, (_, key))| held.key.shared_bytes(key));
+        let extends_held = held.is_some_and(|(held, (_, key))| {
+            key.extends(&held.key) && (held.continued || key.units() > held.key.units())
+        });
+        if held_bytes > 0 {
+            record.path = "slot-hit";
+        }
         let mut continued = extends_held || key.as_ref().is_some_and(Key::carries_reply);
         if persistent && let Some((scope, key)) = request {
             let found = self
-                .find_session(scope, key, lease.fingerprint.clone())
+                .find_session(
+                    scope,
+                    key,
+                    lease.fingerprint.clone(),
+                    held_bytes,
+                    worker.sessions.rates(),
+                )
                 .await;
-            continued |= found.as_ref().is_some_and(|found| {
-                found.exact
-                    && (found.units < key.units() || !self.session_lineage.single(&found.id))
-            });
-            if let Some(found) = found.filter(|found| found.units > held_units) {
+            continued |= found.continued;
+            if let Some(found) = found.restore {
                 entry.holder = None;
                 entry.dirty = None;
+                record.path = "cold";
                 let started = Instant::now();
                 let manager = self.clone();
                 let owner = worker.clone();
                 let lent = cell.clone();
+                let state_bytes = found.charged;
                 let restored = tokio::spawn(async move {
                     manager
                         .session_restore(&owner, slot, &found, Some(lent))
@@ -515,15 +596,17 @@ impl Manager {
                 })
                 .await;
                 if matches!(restored, Ok(Ok(()))) {
+                    let elapsed = started.elapsed();
                     record.path = "restored";
-                    record.restore_ms =
-                        Some(started.elapsed().as_millis().min(u64::MAX as u128) as u64);
+                    record.restore_ms = Some(elapsed.as_millis().min(u64::MAX as u128) as u64);
+                    if state_bytes >= RATED_STATE_BYTES {
+                        worker
+                            .sessions
+                            .restore_bytes_per_second
+                            .observe(state_bytes as f64 / elapsed.as_secs_f64());
+                    }
                 }
-            } else if held_units > 0 {
-                record.path = "slot-hit";
             }
-        } else if held_units > 0 {
-            record.path = "slot-hit";
         }
         lease._physical = cell
             .lock()
@@ -540,8 +623,9 @@ impl Manager {
                 key,
                 tokens: None,
                 continued,
+                settled: false,
             }),
-            persistent,
+            save: persistent && !hint.no_store,
             record,
         });
         Ok((multi && operation != Operation::Embeddings)
@@ -550,31 +634,49 @@ impl Manager {
             .map(axum::body::Bytes::from))
     }
 
-    async fn find_session(&self, scope: &Scope, key: &Key, fingerprint: Arc<str>) -> Option<Found> {
-        let cache = self.cache.clone()?;
+    /// Looks for a saved state that holds more of the request than the `held` bytes its slot
+    /// already does. A state of this conversation is always worth restoring; one that only
+    /// opens alike must repay its restore.
+    async fn find_session(
+        &self,
+        scope: &Scope,
+        key: &Key,
+        fingerprint: Arc<str>,
+        held: u64,
+        rates: crate::sessions::Rates,
+    ) -> Search {
+        let Some(cache) = self.cache.clone() else {
+            return Search::default();
+        };
         let scope = scope.clone();
         let settings = self.session_settings();
+        let turns = key.units();
         let candidates = key
             .candidates()
-            .map(|(units, digest)| (digest, units))
+            .map(|(units, digest)| (digest, (units, key.unit_bytes(units))))
             .collect::<std::collections::HashMap<_, _>>();
         let shared = self.session_lineage.shared_with(key);
+        let lineage = self.session_lineage.clone();
         tokio::task::spawn_blocking(move || {
-            let rows = cache
-                .session_rows(
-                    &scope.protocol,
-                    |identity| {
-                        identity.principal == scope.principal
-                            && identity.credential_epoch == *scope.credential_epoch
-                            && identity.protocol == scope.protocol
-                    },
-                    false,
-                )
-                .ok()?;
-            let mut best: Option<(Found, u64)> = None;
+            let mut search = Search::default();
+            let Ok(rows) = cache.session_rows(
+                &scope.protocol,
+                |identity| {
+                    identity.principal == scope.principal
+                        && identity.credential_epoch == *scope.credential_epoch
+                        && identity.protocol == scope.protocol
+                },
+                false,
+            ) else {
+                return search;
+            };
+            let mut latest_turn = 0;
             for row in rows {
                 let exact = candidates.get(&row.identity.session_digest).copied();
-                let Some(units) = exact.max(shared.get(&row.id).copied()) else {
+                let Some(bytes) = exact
+                    .map(|(_, bytes)| bytes)
+                    .max(shared.get(&row.id).copied())
+                else {
                     continue;
                 };
                 if row.state != crate::cache::SnapshotState::Saved {
@@ -586,28 +688,35 @@ impl Manager {
                     }
                     continue;
                 }
-                // Equal shared units diverge at the same message, so the smaller state restores
-                // the same reusable prefix faster.
-                if best.as_ref().is_none_or(|(best, charged)| {
-                    (units, std::cmp::Reverse(row.charged))
-                        > (best.units, std::cmp::Reverse(*charged))
-                }) {
-                    best = Some((
-                        Found {
-                            id: row.id,
-                            identity: row.identity,
-                            units,
-                            exact: exact.is_some(),
-                        },
-                        row.charged,
-                    ));
+                if let Some((units, _)) = exact
+                    && units > latest_turn
+                {
+                    latest_turn = units;
+                    search.continued = units < turns || !lineage.single(&row.id);
+                }
+                let pays = bytes > held
+                    && (exact.is_some()
+                        || crate::sessions::worth_restoring(bytes - held, row.charged, rates));
+                // Equal shared bytes diverge at the same place, so the smaller state restores
+                // the same reusable opening faster.
+                if pays
+                    && search.restore.as_ref().is_none_or(|best| {
+                        (bytes, std::cmp::Reverse(row.charged))
+                            > (best.shared, std::cmp::Reverse(best.charged))
+                    })
+                {
+                    search.restore = Some(Found {
+                        id: row.id,
+                        identity: row.identity,
+                        shared: bytes,
+                        charged: row.charged,
+                    });
                 }
             }
-            best.map(|(found, _)| found)
+            search
         })
         .await
-        .ok()
-        .flatten()
+        .unwrap_or_default()
     }
 
     async fn session_restore(
@@ -745,11 +854,18 @@ impl Manager {
             .and_then(|(_, options)| options?.context_tokens)
             .map(u64::from);
         let known = shape.is_some() || learned.is_some();
+        let observed = worker
+            .sessions
+            .largest_save
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .map(|(tokens, bytes)| bytes.div_ceil(tokens));
         let bound = crate::sessions::reservation(
             holder.tokens,
             context,
             shape,
             learned,
+            observed,
             worker
                 .sessions
                 .learned_overhead_bytes
@@ -814,6 +930,15 @@ impl Manager {
             acknowledgement["n_written"].as_u64(),
         ) && tokens > 0
         {
+            let mut largest = worker
+                .sessions
+                .largest_save
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            if largest.is_none_or(|(most, _)| tokens >= most) {
+                *largest = Some((tokens, bytes));
+            }
+            drop(largest);
             // A known KV shape already bounds per-token growth; what it misses is fixed state
             // such as recurrent layers and context checkpoints, which must not scale with tokens.
             match shape {
@@ -1467,6 +1592,44 @@ mod tests {
             .collect::<Vec<_>>();
         sessions.sort();
         sessions
+    }
+
+    #[test]
+    fn a_record_names_the_path_the_engine_reports_not_the_one_expected() {
+        let settled = |path: &'static str, cached: Option<u64>| {
+            let mut record = SessionRecord {
+                path,
+                key: Some(KeyKind::Prefix),
+                slot: 0,
+                restore_ms: None,
+                saved_previous: false,
+            };
+            record.observe(&crate::engine_usage::Observation {
+                cached_tokens: cached,
+                ..Default::default()
+            });
+            record.path
+        };
+        let floor = crate::sessions::REUSED_TOKENS_FLOOR;
+        assert_eq!(settled("cold", Some(41_223)), "slot-hit");
+        assert_eq!(settled("cold", Some(floor)), "slot-hit");
+        assert_eq!(settled("cold", Some(floor - 1)), "cold");
+        assert_eq!(settled("cold", None), "cold");
+        assert_eq!(settled("slot-hit", Some(0)), "cold");
+        assert_eq!(settled("slot-hit", Some(3)), "slot-hit");
+        assert_eq!(settled("slot-hit", None), "slot-hit");
+        assert_eq!(settled("restored", Some(0)), "restored");
+        assert_eq!(settled("bypass", Some(500)), "bypass");
+
+        let rate = Rate::default();
+        assert_eq!(rate.get(), None);
+        for ignored in [0.0, -4.0, f64::NAN, f64::INFINITY] {
+            rate.observe(ignored);
+        }
+        assert_eq!(rate.get(), None);
+        rate.observe(200.0);
+        rate.observe(400.0);
+        assert_eq!(rate.get(), Some(300.0));
     }
 
     #[test]
