@@ -5,7 +5,7 @@ The browser console and model API share HTTP port `8080`.
 
 ## Start a local server
 
-The example pins `v0.11.19`, the release used for this guide. Check the
+The example pins `v0.11.20`, the release used for this guide. Check the
 [Juiced releases](https://github.com/Nulifyer/Juiced/releases) before selecting
 another version. Keep the selected tag or digest in your deployment definition.
 
@@ -14,7 +14,7 @@ docker run -d --name juiced \
   -p 127.0.0.1:8080:8080 \
   -v juiced-data:/data \
   --restart unless-stopped \
-  ghcr.io/nulifyer/juiced:v0.11.19
+  ghcr.io/nulifyer/juiced:v0.11.20
 ```
 
 1. Open `http://localhost:8080`.
