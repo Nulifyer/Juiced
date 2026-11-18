@@ -99,6 +99,13 @@ Every report item is either fixed with evidence or listed below as decided other
 - Memory: Q6 reservation 70.5 GiB plus 7.7 GiB of Hot models against the 80 GiB budget. Not loaded by the primary agent; offered to the user.
 - Open: add reads a set twice and a load rehashes the model's main file; caching digests by file stamp (as `identity::file_digest` does) is proposed, waiting on the user.
 
+## Follow-ups (2026-11-18, v0.11.15)
+
+- User: no "Add model" or "Dismiss" ("I should download a model/quant to my local storage, or I should be removing it. Downloading is a temp-status"); Discover should be one column with filters that do not move and open on a short suggested list. Decisions taken from those words (the question dialog was dismissed): unregistered usable files become Disabled models automatically; Remove deletes a model's files after one confirmation.
+- helper-fable-discover2 `6ce1a4e5`, `67f05bd4` (fast-forwarded): one search bar above list and detail (same place in every state), a one-column row list (one quant, size, fit, one action per model), up to six suggestions by default (`suggest` in libraryData.ts; on-disk models left out), search text or any filter searches the service, Show more follows `next_cursor`, new `source=catalog` on `/juiced/library/search`. Causes fixed: an 1800 px two-column rule; the bar inside the column the detail narrows; the bar hidden under 960 px with a detail; selection by repository left an empty detail column or blank page for catalog models sharing a repository (seen on production with Whisper).
+- Gate on the merge: 911 service tests, clippy, fmt; 177 UI unit tests, build; Playwright 381 passed / 21 skipped / 0 failed (3 projects). v0.11.15 (run 44208920979 green) deployed to stack 83: 4 Hot models loaded (the user added `Qwen3-Coder-Next-UD-Q4_K_XL` as Hot); production render (0 non-GET): 5 suggestions in one column at 1920 and 1440.
+- Open: helper-fable-lifecycle (download or remove; automatic registration; Downloads lists only active and failed) still running. From discover2: no NPU suggestion; rows go from one line to two with the detail open at 1440; two long select labels clip at 390; rows still say "Not added" / "Add model" until lifecycle lands.
+
 ## Next action
 
 None for this audit. Open from earlier ledgers: the later-work list in drop-in-replacement.md.
