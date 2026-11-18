@@ -3,8 +3,40 @@ use std::{
     fs::{File, OpenOptions},
     io::{self, Read},
     path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
     time::{Instant, SystemTime},
 };
+
+static FILES_READ: AtomicU64 = AtomicU64::new(0);
+static BYTES_READ: AtomicU64 = AtomicU64::new(0);
+static FILES_REUSED: AtomicU64 = AtomicU64::new(0);
+
+#[cfg(test)]
+thread_local! {
+    static THREAD_READS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Whole-file reads this thread has hashed, so a test can prove a digest was reused.
+#[cfg(test)]
+pub(crate) fn thread_reads() -> u64 {
+    THREAD_READS.with(std::cell::Cell::get)
+}
+
+fn count_read(bytes: u64) {
+    FILES_READ.fetch_add(1, Ordering::Relaxed);
+    BYTES_READ.fetch_add(bytes, Ordering::Relaxed);
+    #[cfg(test)]
+    THREAD_READS.with(|reads| reads.set(reads.get() + 1));
+}
+
+/// Checksums computed by reading a file and checksums reused, since the service started.
+pub fn verification() -> serde_json::Value {
+    serde_json::json!({
+        "files_read": FILES_READ.load(Ordering::Relaxed),
+        "bytes_read": BYTES_READ.load(Ordering::Relaxed),
+        "files_reused": FILES_REUSED.load(Ordering::Relaxed),
+    })
+}
 
 pub struct VerifiedFile {
     path: PathBuf,
@@ -53,6 +85,17 @@ impl VerifiedFile {
         if !before.is_file() || before.file_type().is_symlink() {
             return Err(io::Error::other("Identity requires a regular file"));
         }
+        if let Some(digest) = cached_digest(&before) {
+            let verified = Self {
+                path: path.to_owned(),
+                file,
+                digest,
+                bytes: before.len(),
+                modified: before.modified()?,
+            };
+            verified.verify_current()?;
+            return Ok(verified);
+        }
         let mut hash = Sha256::new();
         let mut buffer = [0u8; 65536];
         let mut bytes = 0u64;
@@ -87,6 +130,7 @@ impl VerifiedFile {
         }
         check()?;
         verified.verify_current()?;
+        count_read(bytes);
         #[cfg(unix)]
         if stamp::Stamp::of(&verified.file.metadata()?) == stamp::Stamp::of(&before) {
             stamp::remember(stamp::Stamp::of(&before), &verified.digest);
@@ -126,15 +170,10 @@ impl VerifiedFile {
 pub fn file_digest(path: &Path, deadline: Instant) -> io::Result<String> {
     #[cfg(unix)]
     {
-        let before = stamp::Stamp::of(&std::fs::metadata(std::fs::canonicalize(path)?)?);
-        if let Some(digest) = stamp::cached(&before) {
+        if let Some(digest) = cached_digest(&std::fs::metadata(std::fs::canonicalize(path)?)?) {
             return Ok(digest);
         }
-        let verified = VerifiedFile::open(path, deadline)?;
-        if stamp::Stamp::of(&verified.file.metadata()?) == before {
-            stamp::remember(before, &verified.digest);
-        }
-        Ok(verified.digest)
+        Ok(VerifiedFile::open(path, deadline)?.digest)
     }
     #[cfg(not(unix))]
     {
@@ -145,7 +184,9 @@ pub fn file_digest(path: &Path, deadline: Instant) -> io::Result<String> {
 pub(crate) fn cached_digest(metadata: &std::fs::Metadata) -> Option<String> {
     #[cfg(unix)]
     {
-        stamp::cached(&stamp::Stamp::of(metadata))
+        let digest = stamp::cached(&stamp::Stamp::of(metadata))?;
+        FILES_REUSED.fetch_add(1, Ordering::Relaxed);
+        Some(digest)
     }
     #[cfg(not(unix))]
     {

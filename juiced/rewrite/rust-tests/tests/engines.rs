@@ -1652,3 +1652,132 @@ async fn remove_deletes_only_this_models_files_and_refuses_with_a_reason() {
     mode.set_mode(0o755);
     std::fs::set_permissions(&mounted, mode).unwrap();
 }
+
+fn sparse_model(path: &Path, header: &[u8], bytes: u64) {
+    let mut file = std::fs::File::create(path).unwrap();
+    file.write_all(header).unwrap();
+    file.set_len(bytes).unwrap();
+}
+
+/// Prints how long adding, loading and restarting take for generated model files of
+/// `JUICED_TEST_DIGEST_GIB` GiB each: three stored split parts and one linked file.
+#[tokio::test]
+#[ignore = "requires JUICED_TEST_DIGEST_GIB; writes three files of that size"]
+async fn large_model_digest_timing() {
+    let gib: f64 = std::env::var("JUICED_TEST_DIGEST_GIB")
+        .expect("JUICED_TEST_DIGEST_GIB")
+        .parse()
+        .unwrap();
+    let bytes = (gib * (1u64 << 30) as f64) as u64;
+    let imports = tempfile::tempdir().unwrap();
+    let root = std::fs::canonicalize(imports.path()).unwrap();
+    let import_root = root.clone();
+    let mut server = engine_server_with(|config| {
+        config["import_roots"] = json!([import_root]);
+        config["upload_max_bytes"] = json!(bytes);
+        config["request_timeout_ms"] = json!(600_000);
+        config["startup_timeout_ms"] = json!(600_000);
+        config["resident_budget_bytes"] = json!(1u64 << 40);
+    })
+    .await;
+    install_llama(&server).await;
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    let report = |label: &str, started: std::time::Instant| {
+        eprintln!(
+            "digest-timing {label}: {:.2}s",
+            started.elapsed().as_secs_f64()
+        );
+    };
+    let post = async |server: &Server, path: &str, body: Value| -> Value {
+        let response = client
+            .post(format!("{}/v1/{path}", server.base))
+            .bearer_auth(ADMIN_KEY)
+            .json(&body)
+            .send()
+            .await
+            .unwrap();
+        let status = response.status();
+        let value: Value = response.json().await.unwrap();
+        assert!(status.is_success(), "{path}: {value}");
+        value
+    };
+
+    let mut digests = Vec::new();
+    for part in 1..=3u32 {
+        let name = format!("Large-Q4_K_M-{part:05}-of-00003.gguf");
+        let path = root.join(&name);
+        sparse_model(&path, &split_part(part, 3), bytes);
+        let file = tokio::fs::File::open(&path).await.unwrap();
+        let body = reqwest::Body::wrap_stream(futures_util::stream::unfold(
+            file,
+            |mut file| async move {
+                let mut chunk = vec![0u8; 1 << 20];
+                match file.read(&mut chunk).await {
+                    Ok(0) => None,
+                    Ok(read) => {
+                        chunk.truncate(read);
+                        Some((Ok::<_, std::io::Error>(chunk), file))
+                    }
+                    Err(error) => Some((Err(error), file)),
+                }
+            },
+        ));
+        let uploaded: Value = client
+            .post(format!(
+                "{}/v1/juiced/library/upload?filename={name}&size={bytes}",
+                server.base
+            ))
+            .bearer_auth(ADMIN_KEY)
+            .header("content-type", "application/octet-stream")
+            .body(body)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        digests.push(uploaded["artifact"].as_str().expect("uploaded part").to_owned());
+        std::fs::remove_file(path).unwrap();
+    }
+
+    let started = std::time::Instant::now();
+    post(
+        &server,
+        "juiced/models/add",
+        json!({"parts": digests, "id": "stored", "policy": "on-demand"}),
+    )
+    .await;
+    report(&format!("add stored set (3 x {gib} GiB)"), started);
+
+    let linked = root.join("Linked-Q4_K_M.gguf");
+    sparse_model(&linked, &metadata_gguf(2048), bytes * 3);
+    let started = std::time::Instant::now();
+    post(
+        &server,
+        "juiced/models/add",
+        json!({"path": linked, "id": "linked", "policy": "on-demand"}),
+    )
+    .await;
+    report(&format!("add linked file ({} GiB)", gib * 3.0), started);
+
+    for round in ["first", "second"] {
+        for model in ["stored", "linked"] {
+            let started = std::time::Instant::now();
+            post(&server, "load", json!({"model": model})).await;
+            report(&format!("{round} load {model}"), started);
+            post(&server, "unload", json!({"model": model})).await;
+        }
+    }
+
+    for round in ["first", "second"] {
+        let started = std::time::Instant::now();
+        server.server.restart().await;
+        report(&format!("{round} restart"), started);
+        for model in ["stored", "linked"] {
+            let started = std::time::Instant::now();
+            post(&server, "load", json!({"model": model})).await;
+            report(&format!("load {model} after {round} restart"), started);
+            post(&server, "unload", json!({"model": model})).await;
+        }
+    }
+}

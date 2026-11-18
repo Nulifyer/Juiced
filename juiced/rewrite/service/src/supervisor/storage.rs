@@ -664,6 +664,7 @@ impl Manager {
             return Ok(json!({
                 "schema_version": 1, "summary": true, "settings": scan.settings,
                 "volumes": volume_rows, "warnings": warnings,
+                "verification": crate::identity::verification(),
             }));
         }
         let root = scan.root.clone();
@@ -875,7 +876,7 @@ impl Manager {
             "schema_version": 1, "summary": false, "revision": revision,
             "configuration_generation": scan.configuration_generation,
             "generated_at_unix_ms": unix_time_ms(), "settings": scan.settings,
-            "root": scan.root,
+            "root": scan.root, "verification": crate::identity::verification(),
             "volumes": volumes, "warnings": warnings, "categories": categories,
             "models": models, "shared": shared, "unreferenced": unreferenced,
             "partials": of("partial").map(Candidate::json).collect::<Vec<_>>(),

@@ -1304,8 +1304,17 @@ impl ArtifactStore {
 
     pub fn hold(self: &Arc<Self>, id: &str) -> Result<ArtifactLease, ArtifactError> {
         let held = self.reserve_lease(id)?;
-        let (bytes, digest) = hash(&held.path, self.limits.maximum_artifact_bytes)?;
-        if bytes != held.artifact.bytes || digest != held.artifact.sha256 {
+        let source = regular(&held.path)?;
+        if source.metadata()?.len() > self.limits.maximum_artifact_bytes {
+            return Err(ArtifactError::Limit);
+        }
+        let verified =
+            crate::identity::VerifiedFile::from_file_checked(&held.path, source, None, || Ok(()))
+                .map_err(|error| match error.kind() {
+                    io::ErrorKind::Other => ArtifactError::Corrupt,
+                    _ => ArtifactError::from(error),
+                })?;
+        if verified.bytes() != held.artifact.bytes || verified.digest() != held.artifact.sha256 {
             return Err(ArtifactError::Corrupt);
         }
         self.lease.verify()?;
@@ -2482,11 +2491,6 @@ fn regular(path: &Path) -> Result<File, ArtifactError> {
         return Err(ArtifactError::Corrupt);
     }
     Ok(file)
-}
-
-fn hash(path: &Path, maximum: u64) -> Result<(u64, String), ArtifactError> {
-    let (_, _, bytes, digest) = hash_checked(path, maximum, || Ok(()))?;
-    Ok((bytes, digest))
 }
 
 fn hash_checked(
