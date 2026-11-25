@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="juiced/ui/public/juiced-icon.svg" alt="Juiced" width="112" height="112">
+<img src="docs/icon.svg" alt="Juiced" width="112" height="112">
 
 # Juiced
 

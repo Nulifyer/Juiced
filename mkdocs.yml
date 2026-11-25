@@ -9,8 +9,8 @@ plugins:
 
 theme:
   name: material
-  logo: assets/juiced-icon.svg
-  favicon: assets/juiced-icon.svg
+  logo: icon.svg
+  favicon: icon.svg
   features:
     - navigation.footer
     - navigation.tracking
