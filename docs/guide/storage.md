@@ -86,7 +86,7 @@ threshold, the Dashboard shows **Low disk space** under **Needs attention**.
 Both thresholds are set in `config.json`:
 
 ```json
-"storage": { "reserve_bytes": 2147483648, "low_space_bytes": 21474836480 }
+{ "storage": { "reserve_bytes": 2147483648, "low_space_bytes": 21474836480 } }
 ```
 
 The defaults are a 2 GiB reserve and a 20 GiB warning. Restart Juiced after

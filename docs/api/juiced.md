@@ -181,7 +181,7 @@ The Juiced container explicitly uses `8080`.
 `?summary=1` returns only `volumes`, `warnings` and `settings` without measuring
 directories, for frequent polling. The full view:
 
-```json
+```text
 {
   "schema_version": 1, "summary": false, "revision": "9f3c0d2a41b7e655",
   "settings": {"reserve_bytes": 2147483648, "low_space_bytes": 21474836480},
